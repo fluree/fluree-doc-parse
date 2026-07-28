@@ -1,0 +1,223 @@
+{
+ "width": 1189,
+ "height": 1683,
+ "parsing_res_list": [
+  {
+   "block_label": "paragraph_title",
+   "block_content": "Gartner",
+   "block_bbox": [
+    126,
+    18,
+    327,
+    69
+   ],
+   "block_id": 0,
+   "block_order": 1,
+   "group_id": 0,
+   "block_polygon_points": [
+    [
+     126.0,
+     18.0
+    ],
+    [
+     327.0,
+     18.0
+    ],
+    [
+     327.0,
+     69.0
+    ],
+    [
+     126.0,
+     69.0
+    ]
+   ]
+  },
+  {
+   "block_label": "figure_title",
+   "block_content": "Table 3: Typical Correspondence Between Hype Cycle Profile Fields",
+   "block_bbox": [
+    131,
+    122,
+    827,
+    153
+   ],
+   "block_id": 1,
+   "block_order": null,
+   "group_id": 1,
+   "block_polygon_points": [
+    [
+     131.0,
+     122.0
+    ],
+    [
+     827.0,
+     122.0
+    ],
+    [
+     827.0,
+     153.0
+    ],
+    [
+     131.0,
+     153.0
+    ]
+   ]
+  },
+  {
+   "block_label": "table",
+   "block_content": "<table><tr><td>Hype Cycle Section</td><td>Maturity Level</td><td>Time to Plateau</td><td>Market Penetration as Percentage of Target Audience</td></tr><tr><td>On the Rise</td><td>Embryonic or Emerging</td><td>More than 10 years or five to 10 years</td><td>Less than 1% of target audience or 1% to 5% of target audience</td></tr><tr><td>At the Peak</td><td>Emerging or Adolescent</td><td>More than 10 years, five to 10 years or two to five years</td><td>1% to 5% of target audience or 5% to 20% of target audience</td></tr><tr><td>Sliding Into the Trough</td><td>Emerging or Adolescent</td><td>Five to 10 years, two to five years or less than two years</td><td>1% to 5% of target audience or 5% to 20% of target audience</td></tr><tr><td>Climbing the Slope</td><td>Adolescent or Early Mainstream</td><td>Two to five years or less than two years</td><td>5% to 20% of target audience or 20% to 50% of target audience</td></tr><tr><td>Entering the Plateau</td><td>Early Mainstream or Mature Mainstream (rarely used)</td><td>Less than two years</td><td>20% to 50% of target audience or more than 50% of target audience (rarely used)</td></tr></table>",
+   "block_bbox": [
+    133,
+    160,
+    1056,
+    1290
+   ],
+   "block_id": 2,
+   "block_order": null,
+   "group_id": 2,
+   "block_polygon_points": [
+    [
+     133.0,
+     160.0
+    ],
+    [
+     1056.0,
+     160.0
+    ],
+    [
+     1056.0,
+     1290.0
+    ],
+    [
+     133.0,
+     1290.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "Source: Gartner (March 2021)",
+   "block_bbox": [
+    131,
+    1317,
+    424,
+    1347
+   ],
+   "block_id": 3,
+   "block_order": null,
+   "group_id": 3,
+   "block_polygon_points": [
+    [
+     131.0,
+     1317.0
+    ],
+    [
+     424.0,
+     1317.0
+    ],
+    [
+     424.0,
+     1347.0
+    ],
+    [
+     131.0,
+     1347.0
+    ]
+   ]
+  },
+  {
+   "block_label": "footer",
+   "block_content": "Gartner, Inc. | G00733622",
+   "block_bbox": [
+    126,
+    1536,
+    358,
+    1564
+   ],
+   "block_id": 4,
+   "block_order": null,
+   "group_id": 4,
+   "block_polygon_points": [
+    [
+     126.0,
+     1536.0
+    ],
+    [
+     358.0,
+     1536.0
+    ],
+    [
+     358.0,
+     1564.0
+    ],
+    [
+     126.0,
+     1564.0
+    ]
+   ]
+  },
+  {
+   "block_label": "number",
+   "block_content": "Page 13 of 15",
+   "block_bbox": [
+    934,
+    1537,
+    1064,
+    1564
+   ],
+   "block_id": 5,
+   "block_order": null,
+   "group_id": 5,
+   "block_polygon_points": [
+    [
+     934.0,
+     1537.0
+    ],
+    [
+     1064.0,
+     1537.0
+    ],
+    [
+     1064.0,
+     1564.0
+    ],
+    [
+     934.0,
+     1564.0
+    ]
+   ]
+  },
+  {
+   "block_label": "footer",
+   "block_content": "This research note is restricted to the personal use of Anderson.Tucker@gartner.com.",
+   "block_bbox": [
+    123,
+    1604,
+    815,
+    1628
+   ],
+   "block_id": 6,
+   "block_order": null,
+   "group_id": 6,
+   "block_polygon_points": [
+    [
+     123.0,
+     1604.0
+    ],
+    [
+     815.0,
+     1604.0
+    ],
+    [
+     815.0,
+     1628.0
+    ],
+    [
+     123.0,
+     1628.0
+    ]
+   ]
+  }
+ ]
+}

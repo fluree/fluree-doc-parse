@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fluree-doc-model",
+    "crates/fluree-doc-markdown",
+    "crates/fluree-doc-docx",
+    "crates/fluree-doc-html",
+    "crates/fluree-doc-pptx",
+    "crates/fluree-doc-pdf",
+    "crates/fluree-doc-cli",
+]
+# Standalone exploration probe: keeps its own deps (incl. the renderer) and is
+# not part of the shipped workspace.
+exclude = ["spike/hayro-spike"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+fluree-doc-model = { path = "crates/fluree-doc-model" }
+fluree-doc-markdown = { path = "crates/fluree-doc-markdown" }
+fluree-doc-docx = { path = "crates/fluree-doc-docx" }
+fluree-doc-html = { path = "crates/fluree-doc-html" }
+fluree-doc-pptx = { path = "crates/fluree-doc-pptx" }
+clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+hayro = "0.7"
+hayro-syntax = "0.7"
+hayro-interpret = "0.7"
+kurbo = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-normalization = "0.1"
+
+[profile.release]
+opt-level = 3

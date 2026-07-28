@@ -1,0 +1,22 @@
+[package]
+name = "fluree-doc-pdf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fluree-doc-model.workspace = true
+hayro-syntax.workspace = true
+hayro-interpret.workspace = true
+kurbo.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-normalization.workspace = true
+hayro = { version = "0.7", optional = true }
+png = { version = "0.17", optional = true }
+
+[features]
+# Rasterising a page. Off by default so a consumer that only parses does not
+# build a renderer; on for anything drawing highlights, which must get its
+# pixels from the same parse that produced the coordinates.
+render = ["dep:hayro", "dep:png"]

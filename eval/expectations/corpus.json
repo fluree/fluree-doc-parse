@@ -1,0 +1,19 @@
+{
+  "_comment": "Expectations for eval/corpus. Sources: 'measured' = observed on Apple M4 Max 2026-07-25; 'asserted' = required by design, must hold regardless of measurement.",
+  "corpus": "eval/corpus",
+  "documents": 6,
+  "pages": 223,
+  "checks": {
+    "T0.1_parsed_ok":        { "expect": 6,     "op": "eq",  "source": "asserted" },
+    "T0.2_panics":           { "expect": 0,     "op": "eq",  "source": "asserted" },
+    "T0.5_pages_per_sec":    { "expect": 300,   "op": "gte", "source": "measured", "observed": 411.7 },
+    "T1.2_unicode_rate_pct": { "expect": 99.5,  "op": "gte", "source": "measured", "observed": 99.730 },
+    "T1.4_ligatures_nfkc":   { "expect": 0,     "op": "eq",  "source": "asserted" },
+    "T1.5_faux_bold_removed":{ "expect": 1,     "op": "gte", "source": "measured", "observed": 3518,
+                               "note": "CJK docs in this corpus use faux-bold overprint; zero would mean the pass regressed" }
+  },
+  "spans": [
+    { "doc": "jp_stat.pdf", "text": "検討会の構成", "expect_matches": 1,
+      "note": "raw extraction doubles every glyph; a match here proves dedup + normalization work end to end" }
+  ]
+}

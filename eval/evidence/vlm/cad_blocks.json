@@ -1,0 +1,440 @@
+{
+ "width": 1224,
+ "height": 1584,
+ "parsing_res_list": [
+  {
+   "block_label": "header",
+   "block_content": "DDA0008J",
+   "block_bbox": [
+    114,
+    119,
+    274,
+    152
+   ],
+   "block_id": 0,
+   "block_order": null,
+   "group_id": 0,
+   "block_polygon_points": [
+    [
+     114.0,
+     119.0
+    ],
+    [
+     274.0,
+     119.0
+    ],
+    [
+     274.0,
+     152.0
+    ],
+    [
+     114.0,
+     152.0
+    ]
+   ]
+  },
+  {
+   "block_label": "header_image",
+   "block_content": "",
+   "block_bbox": [
+    494,
+    73,
+    593,
+    144
+   ],
+   "block_id": 1,
+   "block_order": null,
+   "group_id": 1,
+   "block_polygon_points": [
+    [
+     494.0,
+     73.0
+    ],
+    [
+     593.0,
+     73.0
+    ],
+    [
+     593.0,
+     144.0
+    ],
+    [
+     494.0,
+     144.0
+    ]
+   ]
+  },
+  {
+   "block_label": "header",
+   "block_content": "PACKAGE OUTLINE",
+   "block_bbox": [
+    814,
+    72,
+    1111,
+    104
+   ],
+   "block_id": 2,
+   "block_order": null,
+   "group_id": 2,
+   "block_polygon_points": [
+    [
+     814.0,
+     72.0
+    ],
+    [
+     1111.0,
+     72.0
+    ],
+    [
+     1111.0,
+     104.0
+    ],
+    [
+     814.0,
+     104.0
+    ]
+   ]
+  },
+  {
+   "block_label": "header",
+   "block_content": "PowerPAD $ ^{™} $ SOIC - 1.7 mm max height",
+   "block_bbox": [
+    637,
+    123,
+    1112,
+    153
+   ],
+   "block_id": 3,
+   "block_order": null,
+   "group_id": 3,
+   "block_polygon_points": [
+    [
+     637.0,
+     123.0
+    ],
+    [
+     1112.0,
+     123.0
+    ],
+    [
+     1112.0,
+     153.0
+    ],
+    [
+     637.0,
+     153.0
+    ]
+   ]
+  },
+  {
+   "block_label": "header",
+   "block_content": "PLASTIC SMALL OUTLINE",
+   "block_bbox": [
+    905,
+    164,
+    1110,
+    186
+   ],
+   "block_id": 4,
+   "block_order": null,
+   "group_id": 4,
+   "block_polygon_points": [
+    [
+     905.0,
+     164.0
+    ],
+    [
+     1109.0,
+     164.0
+    ],
+    [
+     1109.0,
+     185.0
+    ],
+    [
+     905.0,
+     185.0
+    ]
+   ]
+  },
+  {
+   "block_label": "image",
+   "block_content": "",
+   "block_bbox": [
+    169,
+    237,
+    1119,
+    1253
+   ],
+   "block_id": 5,
+   "block_order": null,
+   "group_id": 5,
+   "block_polygon_points": [
+    [
+     169.0,
+     237.0
+    ],
+    [
+     1119.0,
+     237.0
+    ],
+    [
+     1119.0,
+     1253.0
+    ],
+    [
+     169.0,
+     1253.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "PowerPAD is a trademark of Texas Instruments.",
+   "block_bbox": [
+    775,
+    1263,
+    1118,
+    1284
+   ],
+   "block_id": 6,
+   "block_order": null,
+   "group_id": 6,
+   "block_polygon_points": [
+    [
+     775.0,
+     1263.0
+    ],
+    [
+     1117.0,
+     1263.0
+    ],
+    [
+     1117.0,
+     1283.0
+    ],
+    [
+     775.0,
+     1283.0
+    ]
+   ]
+  },
+  {
+   "block_label": "paragraph_title",
+   "block_content": "NOTES:",
+   "block_bbox": [
+    112,
+    1282,
+    180,
+    1303
+   ],
+   "block_id": 7,
+   "block_order": 1,
+   "group_id": 7,
+   "block_polygon_points": [
+    [
+     112.0,
+     1282.0
+    ],
+    [
+     179.0,
+     1282.0
+    ],
+    [
+     179.0,
+     1302.0
+    ],
+    [
+     112.0,
+     1302.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "1. All linear dimensions are in millimeters. Any dimensions in parenthesis are for reference only. Dimensioning and tolerancing per ASME Y14.5M.",
+   "block_bbox": [
+    111,
+    1318,
+    1045,
+    1357
+   ],
+   "block_id": 8,
+   "block_order": null,
+   "group_id": 8,
+   "block_polygon_points": [
+    [
+     111.0,
+     1318.0
+    ],
+    [
+     1045.0,
+     1318.0
+    ],
+    [
+     1045.0,
+     1357.0
+    ],
+    [
+     111.0,
+     1357.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "2. This drawing is subject to change without notice.",
+   "block_bbox": [
+    111,
+    1355,
+    494,
+    1374
+   ],
+   "block_id": 9,
+   "block_order": null,
+   "group_id": 9,
+   "block_polygon_points": [
+    [
+     111.0,
+     1355.0
+    ],
+    [
+     111.0,
+     1373.0
+    ],
+    [
+     493.0,
+     1373.0
+    ],
+    [
+     493.0,
+     1355.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "3. This dimension does not include mold flash, protrusions, or gate burrs. Mold flash, protrusions, or gate burrs shall not exceed 0.15 mm per side.",
+   "block_bbox": [
+    111,
+    1372,
+    997,
+    1409
+   ],
+   "block_id": 10,
+   "block_order": null,
+   "group_id": 10,
+   "block_polygon_points": [
+    [
+     111.0,
+     1372.0
+    ],
+    [
+     997.0,
+     1372.0
+    ],
+    [
+     997.0,
+     1409.0
+    ],
+    [
+     111.0,
+     1409.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "4. This dimension does not include interlead flash. Interlead flash shall not exceed 0.25 mm per side.",
+   "block_bbox": [
+    111,
+    1407,
+    858,
+    1428
+   ],
+   "block_id": 11,
+   "block_order": null,
+   "group_id": 11,
+   "block_polygon_points": [
+    [
+     111.0,
+     1407.0
+    ],
+    [
+     858.0,
+     1407.0
+    ],
+    [
+     858.0,
+     1428.0
+    ],
+    [
+     111.0,
+     1428.0
+    ]
+   ]
+  },
+  {
+   "block_label": "vision_footnote",
+   "block_content": "5. Reference JEDEC registration MS-012, variation BA.",
+   "block_bbox": [
+    112,
+    1427,
+    528,
+    1447
+   ],
+   "block_id": 12,
+   "block_order": null,
+   "group_id": 12,
+   "block_polygon_points": [
+    [
+     112.0,
+     1427.0
+    ],
+    [
+     112.0,
+     1446.0
+    ],
+    [
+     527.0,
+     1446.0
+    ],
+    [
+     527.0,
+     1427.0
+    ]
+   ]
+  },
+  {
+   "block_label": "footer_image",
+   "block_content": "",
+   "block_bbox": [
+    535,
+    1490,
+    743,
+    1565
+   ],
+   "block_id": 13,
+   "block_order": null,
+   "group_id": 13,
+   "block_polygon_points": [
+    [
+     535.0,
+     1490.0
+    ],
+    [
+     743.0,
+     1490.0
+    ],
+    [
+     743.0,
+     1565.0
+    ],
+    [
+     535.0,
+     1565.0
+    ]
+   ]
+  }
+ ]
+}

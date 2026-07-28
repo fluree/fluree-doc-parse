@@ -1,0 +1,10 @@
+[package]
+name = "fluree-doc-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Document element model and DoCO/Markdown/XHTML emitters, independent of any source format"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

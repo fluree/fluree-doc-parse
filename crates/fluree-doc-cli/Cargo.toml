@@ -1,0 +1,36 @@
+[package]
+name = "fluree-doc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Library + binary, so the command surface can be mounted as a subcommand of a
+# larger Fluree CLI without duplicating the definitions here.
+[lib]
+name = "fluree_doc_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fdoc"
+path = "src/main.rs"
+
+[dependencies]
+fluree-doc-pdf = { path = "../fluree-doc-pdf", features = ["render"] }
+fluree-doc-model.workspace = true
+fluree-doc-markdown.workspace = true
+fluree-doc-docx.workspace = true
+fluree-doc-html.workspace = true
+fluree-doc-pptx.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hayro-syntax.workspace = true
+hayro = "0.7"
+png = "0.17"
+toml = "1.1.3"
+toml_edit = { version = "0.25.13", default-features = false, features = ["display", "parse"] }
+ureq = { version = "3.3.0", features = ["json"] }
+rsa = "0.9"
+sha2 = { version = "0.10", features = ["oid"] }
+base64 = "0.22"

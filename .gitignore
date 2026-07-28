@@ -1,0 +1,18 @@
+target/
+**/target/
+eval/out/
+*.png.tmp
+.DS_Store
+.fluree/
+.fluree-memory/
+internal/
+eval/corpus-gaps/
+# Fetched by eval/fetch-corpus.sh — publisher terms do not permit
+# redistribution. The two government documents in eval/corpus/ are tracked.
+eval/corpus/ti_*.pdf
+eval/corpus/cn_arxiv.pdf
+docs/book/
+eval/llm-tier/work/
+# Hand-off notes for another team: written fresh per hand-off, not a
+# maintained document, and never part of the published tree.
+SOLO-HANDOFF.md

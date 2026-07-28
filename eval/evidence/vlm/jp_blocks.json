@@ -1,0 +1,254 @@
+{
+ "width": 1190,
+ "height": 1683,
+ "parsing_res_list": [
+  {
+   "block_label": "header",
+   "block_content": "（別紙2）",
+   "block_bbox": [
+    921,
+    204,
+    1010,
+    230
+   ],
+   "block_id": 0,
+   "block_order": null,
+   "group_id": 0,
+   "block_polygon_points": [
+    [
+     921.0,
+     204.0
+    ],
+    [
+     1010.0,
+     204.0
+    ],
+    [
+     1010.0,
+     230.0
+    ],
+    [
+     921.0,
+     230.0
+    ]
+   ]
+  },
+  {
+   "block_label": "paragraph_title",
+   "block_content": "検討会の構成",
+   "block_bbox": [
+    477,
+    239,
+    630,
+    267
+   ],
+   "block_id": 1,
+   "block_order": 1,
+   "group_id": 1,
+   "block_polygon_points": [
+    [
+     477.0,
+     239.0
+    ],
+    [
+     630.0,
+     239.0
+    ],
+    [
+     630.0,
+     267.0
+    ],
+    [
+     477.0,
+     267.0
+    ]
+   ]
+  },
+  {
+   "block_label": "table",
+   "block_content": "<table><tr><td>小田切 亘</td><td>所沢市 危機管理室 主査</td></tr><tr><td>川島 修</td><td>株式会社エフエム東京 執行役員 技術局長</td></tr><tr><td>北郷 裕美</td><td>大正大学 社会共生学部 教授</td></tr><tr><td>木村 達郎</td><td>国分寺市 総務部 防災安全課長</td></tr><tr><td>小松 和也</td><td>一般社団法人日本コミュニティ放送協会 関東地区協議会 副会長\\n中央エフエム株式会社 代表取締役</td></tr><tr><td>佐藤 祥太</td><td>練馬区 区長室 広聴広報課 庶務係 主査</td></tr><tr><td>鈴木 大助</td><td>文京区 総務部 防災課長</td></tr><tr><td>成清 善一</td><td>日本放送協会 技術局 計画管理部 副部長</td></tr><tr><td>西村 克敏</td><td>北区 危機管理室 防災・危機管理課 主査</td></tr><tr><td>藤井 威生</td><td>電気通信大学 先端ワイヤレス・コミュニケーション研究センター 教授</td></tr><tr><td colspan=\"2\">物江 耕一郎 足立区 危機管理部 総合防災対策室 総事対策課長</td></tr></table>",
+   "block_bbox": [
+    179,
+    359,
+    1042,
+    1142
+   ],
+   "block_id": 2,
+   "block_order": null,
+   "group_id": 2,
+   "block_polygon_points": [
+    [
+     179.0,
+     359.0
+    ],
+    [
+     1042.0,
+     359.0
+    ],
+    [
+     1042.0,
+     1142.0
+    ],
+    [
+     179.0,
+     1142.0
+    ]
+   ]
+  },
+  {
+   "block_label": "text",
+   "block_content": "物江 耕一朗 足立区 危機管理部 総合防災対策室 災害対策課長",
+   "block_bbox": [
+    177,
+    1128,
+    835,
+    1156
+   ],
+   "block_id": 3,
+   "block_order": 2,
+   "group_id": 3,
+   "block_polygon_points": [
+    [
+     177.0,
+     1128.0
+    ],
+    [
+     835.0,
+     1128.0
+    ],
+    [
+     835.0,
+     1156.0
+    ],
+    [
+     177.0,
+     1156.0
+    ]
+   ]
+  },
+  {
+   "block_label": "text",
+   "block_content": "（五十音顺、敬称略）",
+   "block_bbox": [
+    810,
+    1221,
+    1010,
+    1247
+   ],
+   "block_id": 4,
+   "block_order": 3,
+   "group_id": 4,
+   "block_polygon_points": [
+    [
+     810.0,
+     1221.0
+    ],
+    [
+     1010.0,
+     1221.0
+    ],
+    [
+     1010.0,
+     1247.0
+    ],
+    [
+     810.0,
+     1247.0
+    ]
+   ]
+  },
+  {
+   "block_label": "text",
+   "block_content": "【事務局】",
+   "block_bbox": [
+    177,
+    1328,
+    274,
+    1355
+   ],
+   "block_id": 5,
+   "block_order": 4,
+   "group_id": 5,
+   "block_polygon_points": [
+    [
+     177.0,
+     1328.0
+    ],
+    [
+     274.0,
+     1328.0
+    ],
+    [
+     274.0,
+     1355.0
+    ],
+    [
+     177.0,
+     1355.0
+    ]
+   ]
+  },
+  {
+   "block_label": "text",
+   "block_content": "総務省 関東総合通信局 放送部 放送課",
+   "block_bbox": [
+    186,
+    1364,
+    615,
+    1391
+   ],
+   "block_id": 6,
+   "block_order": 5,
+   "group_id": 6,
+   "block_polygon_points": [
+    [
+     186.0,
+     1364.0
+    ],
+    [
+     615.0,
+     1364.0
+    ],
+    [
+     615.0,
+     1391.0
+    ],
+    [
+     186.0,
+     1391.0
+    ]
+   ]
+  },
+  {
+   "block_label": "text",
+   "block_content": "株式会社NHKテクノロジーズ ファシリティ技術本部 公共システム技術部",
+   "block_bbox": [
+    187,
+    1401,
+    966,
+    1427
+   ],
+   "block_id": 7,
+   "block_order": 6,
+   "group_id": 7,
+   "block_polygon_points": [
+    [
+     187.0,
+     1401.0
+    ],
+    [
+     966.0,
+     1401.0
+    ],
+    [
+     966.0,
+     1427.0
+    ],
+    [
+     187.0,
+     1427.0
+    ]
+   ]
+  }
+ ]
+}

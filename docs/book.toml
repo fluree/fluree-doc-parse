@@ -1,0 +1,16 @@
+[book]
+title = "fluree-doc-parse"
+authors = ["Fluree"]
+language = "en"
+src = "."
+
+[output.html]
+git-repository-url = "https://github.com/fluree/fluree-doc-parse"
+edit-url-template = "https://github.com/fluree/fluree-doc-parse/edit/main/docs/{path}"
+default-theme = "rust"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true

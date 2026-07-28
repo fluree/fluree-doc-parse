@@ -1,0 +1,11 @@
+[package]
+name = "fluree-doc-docx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DOCX (OOXML) to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+quick-xml = "0.36"
+zip = { version = "2", default-features = false, features = ["deflate"] }

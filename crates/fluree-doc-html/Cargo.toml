@@ -1,0 +1,11 @@
+[package]
+name = "fluree-doc-html"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTML to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+html5ever = "0.39"
+markup5ever_rcdom = "0.39"
