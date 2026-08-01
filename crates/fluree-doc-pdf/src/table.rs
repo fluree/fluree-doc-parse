@@ -672,13 +672,23 @@ fn detect_group(rules: &[Rule], page: usize) -> Vec<Grid> {
     // which was 4 of the 17 documents scoring TEDS 0.000.
     let ys = boundaries(&h_lines, &v_lines, span_x, span_y);
     let xs = boundaries(&v_lines, &h_lines, span_y, span_x);
-    if ys.len() < MIN_GRID_LINES || xs.len() < 2 {
+    if ys.len() < 2 || xs.len() < 2 {
         return Vec::new();
     }
     // One-column tables are legitimate (boxed competency lists and forms),
     // but require a sustained stack of ruled rows. This keeps ordinary boxes
     // and callouts out of the table path.
     if xs.len() == 2 && (ys.len() < 4 || v_lines.len() != 2) {
+        return Vec::new();
+    }
+    // The mirror case: one row of cells ruled side by side — a letterhead or
+    // title banner. Rejecting one-row grids outright left the banner's rules
+    // to cluster into whatever table sat below it, and that table's column
+    // boundaries then sliced the banner's text mid-word. `is_banner` carries
+    // the test; the extra condition here is that the page's horizontals be
+    // just the banner's own two, since a third belongs to something else that
+    // the page-wide hypothesis has folded in.
+    if ys.len() == 2 && (!is_banner(&xs, &ys, rules) || h_lines.len() != 2) {
         return Vec::new();
     }
 
@@ -753,6 +763,38 @@ fn band_columns(ys: &[f64], rules: &[Rule]) -> Option<Vec<f64>> {
     (xs.len() >= 2).then_some(xs)
 }
 
+/// Is this single row of cells a banner — a letterhead or title block?
+///
+/// One row is a table only when something encloses it: several columns, and a
+/// vertical rule running the height of the band to close the box. Enclosure is
+/// what separates a banner from a caption's underlines, which draw a short
+/// rule beneath each word. Their endpoints cluster into a dozen column
+/// boundaries and their two baselines into a top and a bottom, so on
+/// boundaries alone a row of underlined words is indistinguishable from a
+/// letterhead — and one such page turned its real table into twelve empty
+/// cells. Nothing encloses an underline.
+fn is_banner(xs: &[f64], ys: &[f64], rules: &[Rule]) -> bool {
+    if ys.len() != 2 || xs.len() < 4 {
+        return false;
+    }
+    // The vertical has to stand inside the box it closes. Accepting one
+    // anywhere on the page that merely spans the same heights let a
+    // decorative bar in a margin vouch for a row it never touched, which
+    // called every entry of a ruled table of contents a banner.
+    let mid = (ys[0] + ys[1]) / 2.0;
+    let (lo, hi) = (
+        xs[0] - EDGE_TOLERANCE,
+        xs[xs.len() - 1] + EDGE_TOLERANCE,
+    );
+    rules.iter().any(|r| {
+        r.orientation == Orientation::Vertical
+            && r.bbox.y0 <= mid
+            && r.bbox.y1 >= mid
+            && r.bbox.x0 >= lo
+            && r.bbox.x1 <= hi
+    })
+}
+
 /// Vertical gap between consecutive row boundaries, as a multiple of the median
 /// row height, above which the rules belong to *different* tables.
 ///
@@ -776,22 +818,53 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
     let median = sorted[sorted.len() / 2].max(1.0);
     heights.push(0.0);
 
+    // Height alone misses the gap between two tables that happen to sit close
+    // together: a letterhead banner directly above a data table cleared the
+    // rules but not 3.5x the median row, so the two clustered into one grid
+    // and the banner's text was cut at the data table's columns. A band that
+    // no vertical rule crosses is the whitespace between two ruled boxes, not
+    // a tall row — the same evidence the leading/trailing trim already uses.
+    //
+    // The band must sit *directly* between two crossed bands. Asking only for
+    // some crossed band somewhere above and somewhere below is far weaker than
+    // it reads: one decorative vertical at the top of the page and another
+    // further down leave every band in between looking like a gap, which split
+    // a ruled table of contents into one table per entry. Two boxes with
+    // whitespace between them touch that whitespace on both sides.
+    let vs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Vertical)
+        .collect();
+    let crossed: Vec<bool> = ys
+        .windows(2)
+        .map(|w| {
+            let mid = (w[0] + w[1]) / 2.0;
+            vs.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
+        })
+        .collect();
+    let is_gap = |i: usize| {
+        i > 0 && i + 1 < crossed.len() && !crossed[i] && crossed[i - 1] && crossed[i + 1]
+    };
+
     let mut out = Vec::new();
     let mut start = 0usize;
     for i in 0..ys.len() - 1 {
         let is_last = i + 2 == ys.len();
-        let too_tall = (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP;
+        let too_tall = (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP || is_gap(i);
         if too_tall || is_last {
             // A band that is itself too tall is the gap: end the table before it.
             let end = if too_tall { i } else { i + 1 };
             if end > start {
                 let sub: Vec<f64> = ys[start..=end].to_vec();
-                if sub.len() >= MIN_GRID_LINES {
-                    // Recompute columns from the rules inside this band only.
-                    // Tables stacked on one page rarely share a column layout —
-                    // three stacked tables with 5, 4 and 4 columns saw a
-                    // page-wide `xs` report 8 for all of them.
-                    let band_xs = band_columns(&sub, rules).unwrap_or_else(|| xs.clone());
+                // Recompute columns from the rules inside this band only.
+                // Tables stacked on one page rarely share a column layout —
+                // three stacked tables with 5, 4 and 4 columns saw a
+                // page-wide `xs` report 8 for all of them.
+                let band_xs = band_columns(&sub, rules).unwrap_or_else(|| xs.clone());
+                // A single band stands alone only as a banner: several columns
+                // across one row. Two columns over one row is a box, and the
+                // rules around a paragraph are not a table.
+                if sub.len() >= MIN_GRID_LINES || is_banner(&band_xs, &sub, rules) {
                     out.push(Grid {
                         page,
                         bbox: BBox {
@@ -811,7 +884,7 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
         }
     }
     // Nothing split out: fall back to the whole span.
-    if out.is_empty() && ys.len() >= MIN_GRID_LINES {
+    if out.is_empty() && (ys.len() >= MIN_GRID_LINES || is_banner(&xs, &ys, rules)) {
         out.push(Grid {
             page,
             bbox: BBox {
@@ -1888,6 +1961,103 @@ mod header_tests {
         // Run covers the whole grid -> falls back to the single-row logic;
         // all-text rows keep the presumed single header.
         assert_eq!(g.header_rows(&rows, &[], &fills), 1);
+    }
+
+    /// A letterhead: one row of fields ruled side by side, closed top and
+    /// bottom, with verticals shutting the box. Rejecting one-row grids left
+    /// these rules to cluster into the table below, whose columns then cut the
+    /// letterhead's text mid-word.
+    #[test]
+    fn a_closed_one_row_banner_is_a_table() {
+        let rules = vec![
+            h(36.0, 98.0, 54.0),
+            h(99.0, 326.0, 54.0),
+            h(326.0, 457.0, 54.0),
+            h(458.0, 506.0, 54.0),
+            h(507.0, 555.0, 54.0),
+            h(36.0, 98.0, 100.0),
+            h(99.0, 326.0, 100.0),
+            h(326.0, 457.0, 100.0),
+            h(458.0, 506.0, 100.0),
+            h(507.0, 555.0, 100.0),
+            v(54.0, 100.0, 35.0),
+            v(54.0, 100.0, 98.0),
+        ];
+        let gs = detect(&rules, 0);
+        assert_eq!(gs.len(), 1, "the banner is one grid");
+        assert_eq!(gs[0].rows(), 1);
+        assert_eq!(gs[0].cols(), 5, "five fields across");
+    }
+
+    /// The same two baselines and the same scatter of column edges, drawn as
+    /// underlines beneath separate words. Nothing encloses them, so they are
+    /// not a banner — on one page this shape displaced the page's real table.
+    #[test]
+    fn unenclosed_underlines_are_not_a_banner() {
+        let rules = vec![
+            h(210.0, 248.0, 631.0),
+            h(263.0, 331.0, 631.0),
+            h(346.0, 401.0, 631.0),
+            h(416.0, 459.0, 631.0),
+            h(156.0, 195.0, 693.0),
+            h(217.0, 295.0, 693.0),
+            h(316.0, 379.0, 693.0),
+            h(402.0, 456.0, 693.0),
+        ];
+        assert!(
+            detect(&rules, 0).iter().all(|g| g.rows() > 1),
+            "underlines with no verticals are not a one-row table"
+        );
+    }
+
+    /// A banner sitting directly above a data table, closer than the
+    /// height-based split gap. The band between them is crossed by no vertical
+    /// — that, not the distance, is what says they are two tables.
+    #[test]
+    fn a_banner_splits_from_the_table_beneath_it() {
+        let mut rules = vec![
+            // Banner: 3 fields, closed box, y 54-100.
+            h(36.0, 200.0, 54.0),
+            h(200.0, 400.0, 54.0),
+            h(400.0, 555.0, 54.0),
+            h(36.0, 200.0, 100.0),
+            h(200.0, 400.0, 100.0),
+            h(400.0, 555.0, 100.0),
+            v(54.0, 100.0, 36.0),
+            v(54.0, 100.0, 200.0),
+        ];
+        // Data table below, rows 16pt tall — the 46pt banner is under the
+        // 3.5x median gap, so height alone would keep them as one grid.
+        for i in 0..5 {
+            let y = 139.0 + 16.0 * i as f64;
+            rules.push(h(100.0, 400.0, y));
+        }
+        rules.push(v(139.0, 203.0, 100.0));
+        rules.push(v(139.0, 203.0, 250.0));
+        rules.push(v(139.0, 203.0, 400.0));
+        let gs = detect(&rules, 0);
+        assert_eq!(gs.len(), 2, "banner and table are separate grids");
+        assert_eq!(gs[0].rows(), 1, "the banner keeps its own single row");
+        assert_eq!(gs[0].cols(), 3, "and its own columns, not the table's");
+        assert!(gs[1].rows() > 1, "the data table keeps its rows");
+    }
+
+    /// Every band of a table ruled with horizontals alone is uncrossed. Only a
+    /// band with ruled bands on *both* sides is the whitespace between two
+    /// tables; asking merely for some vertical somewhere above and below split
+    /// a ruled table of contents into one table per entry.
+    #[test]
+    fn a_horizontally_ruled_table_is_not_split_into_rows() {
+        let mut rules = vec![v(50.0, 108.0, 54.0)]; // decoration near the top
+        for i in 0..6 {
+            let y = 126.0 + 24.0 * i as f64;
+            rules.push(h(68.0, 127.0, y));
+            rules.push(h(127.0, 341.0, y));
+            rules.push(h(341.0, 373.0, y));
+        }
+        let gs = detect(&rules, 0);
+        assert_eq!(gs.len(), 1, "one table, not one grid per entry");
+        assert!(gs[0].rows() > 1, "its entries stay in one grid");
     }
 
     #[test]

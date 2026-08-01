@@ -5,15 +5,15 @@ stands, how to reproduce that in about ten minutes, and which documents carry
 the deficit. [`eval/TEST_PLAN.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/TEST_PLAN.md)
 remains the full record; this is the working face of it.
 
-Measured 2026-07-28 on opendataloader-bench, 200 documents.
+Measured 2026-08-01 on opendataloader-bench, 200 documents.
 
 ## Where we stand
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse-cascade** | **0.929711** | 0.9440 | 0.9411 | 0.8734 | ~1.5¹ |
+| 1 | **fluree-doc-parse-cascade** | **0.933319** | 0.9483 | 0.9440 | 0.8758 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.889638** | 0.9195 | 0.8441 | 0.8131 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.892169** | 0.9229 | 0.8470 | 0.8132 | **~0.009**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -104,9 +104,9 @@ Per-document scores land in
 
 ## The next points are in headings
 
-The deterministic engine beats nutrient on tables by a distance (TEDS 0.8441
-vs 0.7081) and narrowly loses on headings (MHS 0.8131 vs 0.8190). Summed per
-document against nutrient: TEDS **+5.71**, NID −0.63, MHS **−0.47**. Heading
+The deterministic engine beats nutrient on tables by a distance (TEDS 0.8470
+vs 0.7081) and narrowly loses on headings (MHS 0.8132 vs 0.8190). Summed per
+document against nutrient: TEDS **+5.83**, NID −0.42, MHS **−0.63**. Heading
 work remains the largest quality opportunity, but no longer blocks the
 deterministic lead.
 
@@ -115,7 +115,7 @@ docling on each:
 
 | | overall | places |
 |---|---|---|
-| today | 0.889638 | 3rd |
+| today | 0.892169 | 3rd |
 | top-20 closed **halfway** | ~0.900 | 3rd, clear of nutrient |
 | top-20 closed fully | ~0.907 | 2nd, just above hybrid |
 | every document's MHS at best-of-three | ~0.912 | 2nd |

@@ -44,9 +44,10 @@ without one, and for anything that loads a document into a graph it is one of
 the more valuable facts on the page. It costs 0.0421 there.
 
 The trade in full: 21 documents change, every one of them downward, summing to
-0.385 — which over 200 documents is 0.0019 on the overall. Tier 1 goes from
-0.891562 to 0.889638 and stays third, ahead of the next engine by 0.0046. Tier
-3 goes from 0.931645 to 0.929711 and stays first by 0.023.
+0.385 — which over 200 documents is 0.0019 on the overall. Measured when the
+change landed, tier 1 went from 0.891562 to 0.889638 and tier 3 from 0.931645
+to 0.929711. Both kept their places, and later work has since carried both
+past the figures they started from.
 
 We would make the same trade again. A link is content.
 

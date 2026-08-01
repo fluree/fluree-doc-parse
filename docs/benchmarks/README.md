@@ -21,13 +21,13 @@ The headline `overall` is the mean of those three per document.
 
 ## Where we stand
 
-Measured 2026-07-28 on the full 200 documents.
+Measured 2026-08-01 on the full 200 documents.
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.929711** | 0.9440 | 0.9411 | 0.8734 | ~1.5¹ |
+| 1 | **fluree-doc-parse** (cascade) | **0.933319** | 0.9483 | 0.9440 | 0.8758 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.889638** | 0.9195 | 0.8441 | 0.8131 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.892169** | 0.9229 | 0.8470 | 0.8132 | **~0.009**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -35,15 +35,15 @@ Measured 2026-07-28 on the full 200 documents.
 | 8 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
 
 The deterministic engine — no model, no GPU, no API key — places third, and
-the cascade places first by 0.023.
+the cascade places first by 0.027.
 
 By [tier](../getting-started/tiers.md):
 
 | tier | adds | overall | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction and layout | 0.889638 | 8 ms, CPU |
-| 2 | layout-detector arbitration | 0.896694 | ~0.2 s, CPU |
-| 3 | deep reading of pixels-only content | 0.929711 | ~1.5 s across the corpus¹ |
+| 1 | deterministic extraction and layout | 0.892169 | 8 ms, CPU |
+| 2 | layout-detector arbitration | 0.899404 | ~0.2 s, CPU |
+| 3 | deep reading of pixels-only content | 0.933319 | ~1.5 s across the corpus¹ |
 
 ¹ The harness prints 0.010 s/document for the cascade, which is only the Rust
 pass reading cached model output. Honestly: 87 of 200 documents escalate and

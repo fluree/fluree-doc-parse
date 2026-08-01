@@ -50,6 +50,27 @@ Where a ruled grid can be grouped more than one way, the grouping chosen is
 **whichever survives trimming** — the interpretation that still looks like a
 table after empty edge rows and columns are removed.
 
+A page's ruling is not one table, and distance is a poor way to tell where one
+ends. Two tables are split apart at a row band **no vertical rule crosses**:
+the whitespace between two ruled boxes. The band has to sit directly between
+two crossed bands, because in a table ruled with horizontals alone every band
+is uncrossed, and splitting on those alone turns a ruled table of contents into
+one table per entry.
+
+## Banners
+
+A letterhead is a single row of fields ruled side by side, and it is a table.
+Treating one row as too few left its ruling to be grouped with the table below
+it, whose columns then cut the letterhead's text mid-word — a document number
+split across two cells, a company name losing its second line.
+
+One row counts as a table only when a **closed box** encloses it: three or
+more columns, and a vertical rule standing *inside* the box's own x-range. The
+enclosure is the whole test. A caption's underlines — a short rule beneath each
+word — produce the same two baselines and the same scatter of column edges, and
+on boundaries alone are indistinguishable from a letterhead; nothing encloses
+them. Nor does a decorative rule in a margin vouch for a row it never touched.
+
 ## Merges
 
 Spanning cells are detected from which boundaries are *not* drawn across a
