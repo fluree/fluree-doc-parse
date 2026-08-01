@@ -50,10 +50,19 @@ Four line kinds, and they answer different questions:
 | `ROUTE` | a page or region the text layer cannot read |
 | `TABLE` | a table whose detected structure disagrees with itself |
 | `HEADING` | a page whose hierarchy rests on nothing but font size |
+| `FIGURE` | a page whose text sits mostly inside its drawings |
 | `COLUMN` | a page laid out in panels a page-wide projection cannot see |
 
-`ROUTE`, `TABLE` and `HEADING` escalate on their own evidence once a reader is
-configured. **`COLUMN` does not**, and the report says so where it fires:
+`ROUTE`, `TABLE`, `HEADING` and `FIGURE` escalate on their own evidence once a
+reader is configured.
+
+`FIGURE` is the one that recognises a *designed* page — an infographic, a
+magazine spread, a cover — rather than a defective one. It is where reading
+order, heading rank and figure boundaries are all inferred from geometry that
+was never arranged to be read linearly, and so where every geometric inference
+is least trustworthy at once. Measured, ordinary reports and handbooks sit at
+0-1% and compositions at 40-90%; the threshold is 30%, and six of the 200
+evaluation documents cross it. **`COLUMN` does not**, and the report says so where it fires:
 
 ```
 report  COLUMN  p8 3 column(s) found, 2 gutter(s) visible only in a band covering 44% of rows

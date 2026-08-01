@@ -86,6 +86,7 @@ pub fn run(path: &Path) -> i32 {
         // readable, one table on it is not.
         let mut suspects = Vec::new();
         let mut doubt: Vec<fluree_doc_pdf::heading::Doubt> = Vec::new();
+        let mut figure_doubt: Vec<fluree_doc_pdf::figure::Doubt> = Vec::new();
         {
             if let (Ok(mut d), Some(raw)) = (
                 extract_file(f),
@@ -96,6 +97,7 @@ pub fn run(path: &Path) -> i32 {
                 let ol = fluree_doc_pdf::outline::extract(&raw);
                 let a = fluree_doc_pdf::document::analyze_with(&mut d, &ol, &opts_for(f));
                 doubt = a.suspect_headings.clone();
+                figure_doubt = a.suspect_figures.clone();
                 tables_total += a.tables;
                 tables_suspect += a.suspect_tables.len();
                 for s in &a.suspect_tables {
@@ -124,6 +126,14 @@ pub fn run(path: &Path) -> i32 {
                     d.corroborated
                 );
             }
+        }
+        for d in &figure_doubt {
+            println!(
+                "{name}\tFIGURE\tp{} {:.0}% of the page's text sits inside its drawings ({} chars)",
+                d.page + 1,
+                d.share * 100.0,
+                d.chars
+            );
         }
         let mut column_doubt = false;
         for p in &doc.pages {

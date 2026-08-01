@@ -303,6 +303,27 @@ mod tests {
 /// digit-insensitively: each digit run in the pattern matches any digit run
 /// in the cell.
 pub fn scrub_cell(cell: &str, furniture: &[(String, bool)]) -> String {
+    scrub(cell, furniture, true)
+}
+
+/// As [`scrub_cell`], for text that already went through positional furniture
+/// removal.
+///
+/// The difference is the bare-number rule. A cell holding nothing but digits
+/// the width of the running folio is taken to *be* the folio, because a grid
+/// took its glyphs before furniture detection ran and nothing else can tell.
+/// A block did not: a running number was removed from it by position, and a
+/// bare number that survived that is content.
+///
+/// A table of contents is where this matters. Its page references are the
+/// same width as the folio and are numbers by nature — every one of them was
+/// being deleted, so a contents page came out as a list of titles pointing
+/// nowhere.
+pub fn scrub_block(text: &str, furniture: &[(String, bool)]) -> String {
+    scrub(text, furniture, false)
+}
+
+fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: bool) -> String {
     let mut out = cell.to_string();
     for (pat, digits_vary) in furniture {
         if pat.is_empty() {
@@ -346,6 +367,9 @@ pub fn scrub_cell(cell: &str, furniture: &[(String, bool)]) -> String {
         // the pattern actually carries: a four-digit label is not a
         // three-digit page number.
         if segs.iter().all(|s| s.is_empty()) {
+            if !bare_number_is_furniture {
+                continue;
+            }
             let t = out.trim();
             let width = pat.chars().filter(char::is_ascii_digit).count();
             if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) && t.chars().count() == width

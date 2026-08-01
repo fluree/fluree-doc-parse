@@ -71,6 +71,49 @@ score *below* flash's 134k. Transcription is perception, not deduction.
 the integration takes row and column structure from the model and keeps cell
 text from the glyph layer.
 
+## Re-measured 2026-07-30, on the newer models
+
+Same 115 crops, same prompt, thinking LOW. Scored on the 107 tables every run
+returned a table for, so these compare to each other rather than to the table
+above.
+
+| engine | recall | fab% | out+think tokens | $/1k tables |
+|---|---|---|---|---|
+| ours (deterministic) | 95.9% | 0.1 | — | — |
+| **gemini-3.6-flash** | **98.8%** | **0.1** | 95,437 | 8.73 |
+| gemini-3-flash-preview *(the configured default)* | 97.9% | 1.0 | 133,804 | 4.43 |
+| **gemini-3.5-flash-lite** | 97.7% | 1.0 | **58,541** | **1.78** |
+| gemini-2.5-pro | 97.5% | 1.2 | 504,925 | 50.41 |
+| gemini-2.5-flash-lite | 95.6% | 2.0 | 106,777 | 0.66 |
+
+Two results worth acting on. **3.6-flash is the best measured on both axes**,
+on 71% of the tokens the default spends. **3.5-flash-lite matches the default
+within noise on 44% of its output tokens**, for 2.5x less — and its 2.5
+ancestor was rejected here at 2.0% fabrication, which two generations halved.
+
+The default is unchanged. It is a *preview* model priced at $0.50/$3.00 per
+million against $1.50/$7.50 for the generally-available tier, with no announced
+retirement; whatever replaces that pricing is the reason to move, and the
+choice between the two candidates is a quality-versus-cost decision about a
+corpus rather than a fact about the models.
+
+`gemini-3-flash-preview` is not a rolling alias for the latest. On identical
+crops it reads worse than 3.6-flash and spends 40% more output tokens, which a
+pointer to 3.6 would not.
+
+**Reasoning is 57% of the billed output** on the pipeline's own workload, and
+the price sheet bills it at the output rate — so the thinking cap is a cost
+decision as much as a quality one.
+
+A measurement error worth recording, because it looked like a decisive result:
+the first run of this comparison returned 1.4% recall and 76% fabrication for
+three unrelated models. The crops were misaligned — the old `crops.py` matched
+renders by filename, the renderer's naming had changed, and a fallback sorted
+filenames and indexed by page number, so page 28 got the 28th name in
+`p0, p1, p10, p11, p2` order. Nothing failed; the numbers just looked like a
+model comparison. `crops.py` now calls the pipeline's own crop path, and a
+manifest entry yielding no crop fails the run.
+
 ## The arbiter is what makes this safe
 
 `rubric.accept()` decides whether an escalated reading replaces ours. With

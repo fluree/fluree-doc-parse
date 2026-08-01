@@ -45,6 +45,10 @@ pub struct DocoOptions {
     /// When present, every element is stamped `doc:sourceDocument → {iri}` —
     /// the retract-on-rerun tag a re-extraction targets.
     pub doc_iri: Option<String>,
+    /// Pages carrying content nothing transcribed. Emitted on the document
+    /// node as `doc:unreadPages`, so a consumer can tell an empty page from a
+    /// page that was not read.
+    pub unread: Vec<crate::element::UnreadPage>,
     /// Page sizes, in PDF user units, for sources that have pages.
     ///
     /// Emitted on the document node as `doc:pages`. A `doc:bbox` cannot be
@@ -272,6 +276,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     };
 
     let doc_idx = em.node("element", "doco:Document", Some("html"));
+    if !opts.unread.is_empty() {
+        em.nodes[doc_idx].insert(
+            "doc:unreadPages".into(),
+            json!({ "@type": "@json", "@value": opts.unread }),
+        );
+    }
     if !opts.pages.is_empty() {
         // A JSON literal rather than a node per page: these are the page's
         // measurements, not things a graph should grow edges to.
@@ -565,6 +575,7 @@ mod tests {
             base_iri: "urn:test".into(),
             doc_iri: Some("urn:test:doc".into()),
             pages: Vec::new(),
+            unread: Vec::new(),
         }
     }
 

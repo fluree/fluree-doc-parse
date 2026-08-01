@@ -83,3 +83,23 @@ between headings is scored alongside the headings themselves.
 Do not tune levels against that metric. The levels exist because
 `doco:SectionTitle` carries a real one that consumers need — a product
 judgement, not a benchmark result.
+
+## Which bookmark is this heading?
+
+An outline entry is matched to a heading by normalised title, and a title is
+not a key. One benefits handbook carries **122 duplicated titles among 447
+bookmarks** — "Overview" appears under four parents at four different depths,
+and the text alone cannot say which one a given heading is. Keeping the
+shallowest was the old answer: safe, and wrong three times out of four.
+
+Every entry now carries where it points, and the heading's own page decides.
+Nearest page first, then nearest stated position.
+
+Most files write `/Fit`, which names a page and no position — of two documents
+checked, 456 of 456 bookmarks resolved to a page and none to a position. So
+the page carries this nearly always, and that is already enough: sections
+repeat across a book, not within a page.
+
+Entries that resolve to nothing keep the old rule. A bookmark naming no
+destination cannot be placed, and promoting is still safer than burying a real
+section.

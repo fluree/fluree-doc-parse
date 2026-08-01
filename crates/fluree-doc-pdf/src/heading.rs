@@ -409,6 +409,37 @@ pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
         .unwrap_or(10.0)
 }
 
+/// Choose which of several same-titled bookmarks this block is.
+///
+/// Nearest page first, then nearest stated position. An entry naming no page
+/// cannot be placed, so it only wins when nothing else matched — the old
+/// behaviour, kept for files whose bookmarks resolve to nothing.
+fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
+    if entries.len() == 1 {
+        return Some(entries[0].level);
+    }
+    let placed: Vec<&&OutlineItem> = entries.iter().filter(|e| e.page.is_some()).collect();
+    if placed.is_empty() {
+        // No destinations to choose by: promoting is safer than burying a
+        // real section, which is what this did before destinations existed.
+        return entries.iter().map(|e| e.level).min();
+    }
+    placed
+        .iter()
+        .min_by(|x, y| {
+            let d = |e: &OutlineItem| {
+                (
+                    e.page.map_or(usize::MAX, |p| p.abs_diff(b.page)),
+                    e.y.map_or(f64::MAX, |v| (v - b.bbox.y0).abs()),
+                )
+            };
+            let (dx, dy) = (d(x), d(y));
+            dx.0.cmp(&dy.0)
+                .then(dx.1.partial_cmp(&dy.1).unwrap_or(std::cmp::Ordering::Equal))
+        })
+        .map(|e| e.level)
+}
+
 /// Detect headings across a document.
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
     let body = body_font_size(pages);
@@ -421,10 +452,10 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             // is not the document title.
             .take_while(|b| b.text().split_whitespace().count() <= MAX_HEADING_WORDS)
             .enumerate()
-            .find_map(|(i, b)| {
+            .filter(|(i, b)| {
                 let text = b.text();
                 if b.marker.is_some() || b.lines.len() > 3 || !title_like(&text) {
-                    return None;
+                    return false;
                 }
                 let gap_after = blocks
                     .get(i + 1)
@@ -436,23 +467,37 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                 let normalized = text.trim().trim_end_matches(':').to_lowercase();
                 let contents_title =
                     matches!(normalized.as_str(), "contents" | "table of contents");
-                (prominent_size || isolated_largest || contents_title).then_some(i)
+                prominent_size || isolated_largest || contents_title
             })
+            // The largest of the candidates, not the first. A cover commonly
+            // sets the publisher or programme above the title in smaller type
+            // — "Arizona State University" over "Sustainability Impact
+            // Review", at 17.9pt against 29.6 — and taking the first in
+            // reading order crowns the kicker. The title is then ranked among
+            // the ordinary font-size tiers and lands *below* the line above
+            // it, which reads as an inverted hierarchy to everything
+            // downstream.
+            //
+            // Ties keep the earlier block: where two lines share the largest
+            // style, the first is the title and the second is its subtitle.
+            .fold(None, |best: Option<(usize, &Block)>, (i, b)| match best {
+                Some((_, prev)) if prev.font_size >= b.font_size => best,
+                _ => Some((i, b)),
+            })
+            .map(|(i, _)| i)
     });
 
-    // Outline titles by normalized text. Duplicate titles ("Overview" under
-    // several parents) keep the shallowest level: promoting is safer than
-    // burying a real section.
-    let mut by_title: HashMap<String, usize> = HashMap::new();
+    // Outline entries by normalized title. A title is not a key: one book
+    // carries 122 duplicated bookmark titles among 447, and "Overview" under
+    // four parents is four different depths. Every entry is kept, and the
+    // heading's own page decides which one it is.
+    let mut by_title: HashMap<String, Vec<&OutlineItem>> = HashMap::new();
     for it in outline {
         let k = norm(&it.title);
         if k.is_empty() {
             continue;
         }
-        by_title
-            .entry(k)
-            .and_modify(|l| *l = (*l).min(it.level))
-            .or_insert(it.level);
+        by_title.entry(k).or_default().push(it);
     }
 
     // Distinct heading-sized fonts, largest first, for the typography fallback.
@@ -531,8 +576,16 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             }
 
             // 1. Outline match wins outright — the author named this heading,
-            // so the shape tests do not apply.
-            if let Some(&level) = by_title.get(&norm(&text)) {
+            // so the shape tests do not apply. Where the title is ambiguous,
+            // the destination decides: the entry landing on this page, and
+            // among those the one whose stated position is nearest the block.
+            // Most files write `/Fit`, which names a page and no position, so
+            // the page alone carries this most of the time — and that is
+            // already enough to tell the fourth "Overview" from the first.
+            if let Some(level) = by_title
+                .get(&norm(&text))
+                .and_then(|entries| pick_entry(entries, b))
+            {
                 out.push(Heading {
                     page: b.page,
                     block_index: block_idx,
@@ -920,6 +973,8 @@ mod tests {
         let outline = vec![OutlineItem {
             title: "Introduction".into(),
             level: 2,
+            page: None,
+            y: None,
         }];
         let h = detect(&pages, &outline);
         assert_eq!(h.len(), 1);
@@ -1211,5 +1266,59 @@ mod tests {
             ("doco:Paragraph", "layout"),
         ];
         assert!(doubt(&kinds).is_none());
+    }
+
+    fn bookmark(title: &str, level: usize, page: Option<usize>, y: Option<f64>) -> OutlineItem {
+        OutlineItem {
+            title: title.into(),
+            level,
+            page,
+            y,
+        }
+    }
+
+    #[test]
+    fn a_repeated_bookmark_title_is_resolved_by_where_it_points() {
+        // One benefits handbook carries 122 duplicated titles among 447
+        // bookmarks. "Overview" under four parents is four different depths,
+        // and the title alone cannot say which one a heading is.
+        let entries = [
+            bookmark("Overview", 2, Some(4), None),
+            bookmark("Overview", 5, Some(40), None),
+            bookmark("Overview", 3, Some(21), None),
+        ];
+        let refs: Vec<&OutlineItem> = entries.iter().collect();
+        let mut b = blk("Overview", 12.0, 100);
+        b.page = 20;
+        assert_eq!(pick_entry(&refs, &b), Some(3), "nearest page wins");
+        b.page = 3;
+        assert_eq!(pick_entry(&refs, &b), Some(2));
+        b.page = 39;
+        assert_eq!(pick_entry(&refs, &b), Some(5));
+    }
+
+    #[test]
+    fn a_stated_position_breaks_a_tie_within_a_page() {
+        let entries = [
+            bookmark("Overview", 2, Some(4), Some(80.0)),
+            bookmark("Overview", 4, Some(4), Some(500.0)),
+        ];
+        let refs: Vec<&OutlineItem> = entries.iter().collect();
+        let mut b = blk("Overview", 12.0, 100);
+        b.page = 4;
+        b.bbox.y0 = 470.0;
+        assert_eq!(pick_entry(&refs, &b), Some(4));
+    }
+
+    #[test]
+    fn bookmarks_that_point_nowhere_still_promote_rather_than_bury() {
+        // Most files write `/Fit`, and some resolve to nothing at all. With
+        // no destination to choose by, the shallowest level is the safe read.
+        let entries = [
+            bookmark("Overview", 4, None, None),
+            bookmark("Overview", 2, None, None),
+        ];
+        let refs: Vec<&OutlineItem> = entries.iter().collect();
+        assert_eq!(pick_entry(&refs, &blk("Overview", 12.0, 100)), Some(2));
     }
 }

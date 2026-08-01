@@ -66,6 +66,45 @@ pub mod line;
 pub mod link;
 pub mod outline;
 pub mod overlay;
+
+/// Pages the router says carry content, which the final element stream does
+/// not hold.
+///
+/// Called after the tiers, because "unread" is only true once whatever was
+/// going to read it has run. The router's verdict alone is not the answer: a
+/// page that escalated and came back is read, and a page nobody escalated is
+/// not.
+///
+/// Routing is not consulted for every page — it is not free, and a page with
+/// a normal amount of text cannot be one of these. Only pages the output is
+/// nearly empty for are asked about.
+pub fn unread_pages(
+    doc: &Document,
+    elements: &[fluree_doc_model::Element],
+) -> Vec<fluree_doc_model::UnreadPage> {
+    /// Characters a page's elements must fall below to be worth asking the
+    /// router about. A page holding real prose is not an unread page whatever
+    /// the router would say.
+    const NEARLY_EMPTY: usize = 40;
+    let mut out = Vec::new();
+    for p in &doc.pages {
+        let text: usize = elements
+            .iter()
+            .filter(|e| e.page == p.index)
+            .map(|e| e.text.trim().chars().count())
+            .sum();
+        if text >= NEARLY_EMPTY {
+            continue;
+        }
+        if let route::Route::Vlm(reason) = route::decide(p).0 {
+            out.push(fluree_doc_model::UnreadPage {
+                index: p.index,
+                reason: format!("{reason:?}"),
+            });
+        }
+    }
+    out
+}
 #[cfg(feature = "render")]
 pub mod render;
 pub mod route;

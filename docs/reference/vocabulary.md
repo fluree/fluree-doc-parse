@@ -66,6 +66,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:evidence` | all | [which signal classified it](../concepts/provenance.md) |
 | `doc:sourceDocument` | all, with `--doc-iri` | the document IRI to retract by |
 | `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height}]`, PDF units |
+| `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 
 **Structure**
 

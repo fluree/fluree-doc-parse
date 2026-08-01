@@ -83,6 +83,27 @@ needs the ratio between the page's own units and the pixels it rendered to,
 and this is the only place that denominator appears. Sources with no geometry
 — Markdown, DOCX — omit the key rather than reporting a zeroed size.
 
+## Pages nothing read
+
+```json
+{ "@type": "doco:Document",
+  "doc:unreadPages": { "@type": "@json",
+                       "@value": [ { "pageIndex": 0, "reason": "NearBlank" } ] } }
+```
+
+Present only when a page carries content the output does not hold — a scan, a
+vector drawing, glyphs whose Unicode cannot be trusted — and no reader
+supplied it. Without this an empty page and an unread page look identical;
+one document of engineering drawings produced 126 bytes of XHTML with nothing
+saying 99% of it was missing.
+
+`reason` is the router's verdict: `Scanned`, `NearBlank` or `BrokenText`.
+Escalating the page clears the entry, because then something did read it.
+
+Deliberately not an element. A marker element would have to carry text to be
+visible, and inventing text puts characters into the projection that every
+`nif:beginIndex` in the graph is counted against.
+
 ## Sections are explicit
 
 The flat element list becomes a tree here. A `doco:Section` node is minted per

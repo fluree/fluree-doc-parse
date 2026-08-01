@@ -161,6 +161,54 @@ const MARKER_OUTDENT_TOLERANCE: f64 = 2.0;
 /// Markers are punctuation (`•`, `-`, `■`), numbers (`3.`, `(2)`), roman
 /// numerals (`iv.`) or a single letter (`a)`). Two or more letters that do
 /// not spell a roman numeral are a word.
+/// Characters used as bullets, and only those.
+///
+/// Geometric shapes and the typographic bullets. Dashes are deliberately
+/// absent: a line opening with an en dash is as likely to be a range, a
+/// dialogue dash or a torn compound as a list item, and treating it as a
+/// bullet deletes the character from text where it belonged.
+const BULLETS: &[char] = &[
+    '\u{2022}', // •
+    '\u{25AA}', // ▪
+    '\u{25AB}', // ▫
+    '\u{25A0}', // ■
+    '\u{25A1}', // □
+    '\u{25CF}', // ●
+    '\u{25CB}', // ○
+    '\u{25E6}', // ◦
+    '\u{2023}', // ‣
+    '\u{2219}', // ∙
+    '\u{00B7}', // ·
+    '\u{2043}', // ⁃
+    '\u{25B8}', // ▸
+    '\u{25AC}', // ▬
+];
+
+/// A bullet the layout pass read as the first character of its own line,
+/// rather than as a marker standing apart from it.
+///
+/// A marker is normally pulled out before blocks form, because a bullet's
+/// baseline sits slightly below the first line of its own text and it would
+/// otherwise cut the paragraph in three. Where the producer sets the bullet
+/// *inside* the text run there is nothing to pull out — the line simply
+/// begins with it — and the list read as a paragraph beginning with a square.
+///
+/// Returns the text with the bullet and the space after it removed.
+pub fn strip_leading_bullet(text: &str) -> Option<&str> {
+    let t = text.trim_start();
+    let mut chars = t.chars();
+    let first = chars.next()?;
+    if !BULLETS.contains(&first) {
+        return None;
+    }
+    let rest = chars.as_str();
+    // A bullet with nothing after it is a marker block, handled elsewhere; a
+    // bullet run together with its word is more likely a glyph that happens
+    // to look like one.
+    let stripped = rest.strip_prefix([' ', '\u{00A0}', '\t'])?.trim_start();
+    (!stripped.is_empty()).then_some(stripped)
+}
+
 fn marker_shaped(text: &str) -> bool {
     let t = text.trim().trim_end_matches(['.', ')', ']', ':', '(', '[']);
     let letters = t.chars().filter(|c| c.is_alphabetic()).count();
@@ -745,5 +793,40 @@ mod tests {
             .collect();
         let m = modal_leading(&[page]);
         assert!((m - 1.5).abs() < 0.06, "expected ~1.5, got {m}");
+    }
+
+    #[test]
+    fn a_bullet_inside_the_text_run_still_marks_a_list() {
+        assert_eq!(
+            strip_leading_bullet("\u{25A0} Advanced batteries could be key"),
+            Some("Advanced batteries could be key")
+        );
+        assert_eq!(
+            strip_leading_bullet("\u{2022}\u{00A0}Non-breaking space"),
+            Some("Non-breaking space")
+        );
+    }
+
+    #[test]
+    fn a_dash_is_not_a_bullet() {
+        // An opening en dash is as likely a range, a dialogue dash or a torn
+        // compound, and stripping it deletes a character that belonged.
+        assert_eq!(strip_leading_bullet("\u{2013} 2019 saw a decline"), None);
+        assert_eq!(strip_leading_bullet("- plain hyphen"), None);
+    }
+
+    #[test]
+    fn a_bullet_run_into_its_word_is_left_alone() {
+        // No space after it: more likely a glyph that looks like a bullet
+        // than a marker.
+        assert_eq!(strip_leading_bullet("\u{25A0}Advanced"), None);
+        assert_eq!(strip_leading_bullet("\u{25A0}"), None);
+        assert_eq!(strip_leading_bullet("\u{25A0}   "), None);
+    }
+
+    #[test]
+    fn ordinary_prose_is_untouched() {
+        assert_eq!(strip_leading_bullet("Advanced batteries"), None);
+        assert_eq!(strip_leading_bullet(""), None);
     }
 }

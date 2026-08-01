@@ -34,6 +34,10 @@ pub struct Analysis {
     /// see `heading::doubt`.
     /// One entry per page whose hierarchy is doubtful; empty when none is.
     pub suspect_headings: Vec<heading::Doubt>,
+    /// Pages whose text sits mostly inside their drawings — a designed
+    /// layout, where geometry was never arranged to be read linearly.
+    /// Reported, never acted on here; see `figure::doubt`.
+    pub suspect_figures: Vec<figure::Doubt>,
     pub leading: f64,
     pub body_font: f32,
     pub furniture_removed: usize,
@@ -842,7 +846,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // reach them before deciding which blocks belong to it.
         let block_boxes: Vec<(crate::geom::BBox, usize)> =
             blocks.iter().map(|b| (b.bbox, b.lines.len())).collect();
-        figure::attach(&mut figures, &block_boxes, page.width);
+        figure::attach(&mut figures, &block_boxes, (page.width, page.height));
         // Which figure each block falls in, if any. A block counts as inside
         // when most of it is: a caption sitting just below the drawing is
         // part of the figure, a paragraph merely overlapping its margin is
@@ -887,13 +891,20 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 ),
                 _ if figure_of.is_some() => ("doco:Figure", None, "fills"),
                 None if b.marker.is_some() => ("doco:ListItem", None, "marker"),
+                // A bullet the producer set inside the text run rather than
+                // beside it. The marker pass cannot pull out what was never
+                // separate, so the list read as paragraphs opening with a
+                // square.
+                None if block::strip_leading_bullet(&text).is_some() => {
+                    ("doco:ListItem", None, "bullet")
+                }
                 None => ("doco:Paragraph", None, "layout"),
                 Some(_) => unreachable!("weak figure heading has figure membership"),
             };
             // A footer that merged into a unique line on one page escapes
             // the cross-page furniture match (singletons cannot repeat);
             // known furniture texts are stripped as substrings instead.
-            let scrubbed = furniture::scrub_cell(&text, &furniture_texts);
+            let scrubbed = furniture::scrub_block(&text, &furniture_texts);
             // A block composed of furniture joined by punctuation ("Title:
             // Subtitle" as a one-off page header) scrubs down to the joiner
             // alone; carrying that residue forward can even leave a bare ":"
@@ -904,7 +915,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if scrubbed.is_empty() || residue {
                 continue;
             }
-            let text = scrubbed;
+            let text = match block::strip_leading_bullet(&scrubbed) {
+                Some(without) if kind == "doco:ListItem" => without.to_string(),
+                _ => scrubbed,
+            };
             page_elements.push(Element {
                 id: String::new(),
                 kind: kind.into(),
@@ -1133,9 +1147,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
 
+    let suspect_figures = (0..raw.pages.len())
+        .filter_map(|p| figure::doubt(&elements, p))
+        .collect();
+
     Analysis {
         elements,
         suspect_headings,
+        suspect_figures,
         suspect_tables,
         leading,
         body_font,

@@ -22,6 +22,32 @@ document wrapper.
 </body></html>
 ```
 
+## Headings that admit they are guesses
+
+```html
+<h1>Sustainability Impact Review</h1>
+<h6 class="doco-level-uncertain">From waste to new beginnings</h6>
+```
+
+A level from the bookmark outline, a numbering scheme, or the document's own
+title is something the author declared. A level from font size or weight is
+this library's reading of how the page looks — often right, never a fact.
+Those carry `class="doco-level-uncertain"`.
+
+The point is to make a downstream pass affordable. A model adjudicating a
+bounded set of doubtful headings costs a fraction of one re-reading the
+document, and where the file declares its structure the set is nearly empty:
+
+| document | outline entries | headings | uncertain |
+|---|---|---|---|
+| a benefits handbook | 447 | 491 | 81 |
+| a report with bookmarks | 9 | 14 | 4 |
+| a magazine with none | 0 | 33 | 30 |
+
+The same fact is in [`json`](json.md) and [`doco`](doco.md) as
+`evidence` — `outline`, `numbering` and `title` are declared, `font-size` and
+`bold` are inferred.
+
 ## Links
 
 A PDF's link annotations are read and emitted as `<a href>` around the words
@@ -35,6 +61,20 @@ A jump to elsewhere in the document becomes `href="#page=12"` — 1-based, the
 fragment convention PDF viewers use. Anchors on a picture, or inside a table
 cell, have nowhere to go here and appear only in [`json`](json.md) and
 [`doco`](doco.md). See [Markdown's account](markdown.md#links) for the rest.
+
+## Pages nothing read
+
+A page carrying content the output does not hold gets a comment:
+
+```html
+<!-- fluree-doc-parse: page 1 carries content no reader transcribed
+     (NearBlank). This output is missing it. -->
+```
+
+A comment rather than text, so extracting text from this file does not read a
+sentence this library wrote as though the document had said it. The
+machine-readable form is [`doc:unreadPages`](doco.md). Escalating the page
+clears it.
 
 ## Why this exists
 

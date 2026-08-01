@@ -1,6 +1,6 @@
 //! Markdown and XHTML emission from the element model.
 
-use crate::element::{Element, Link};
+use crate::element::{Element, Link, Notes};
 
 /// Split an element's text at its located link anchors.
 ///
@@ -66,6 +66,23 @@ fn md_linked(e: &Element) -> String {
     out
 }
 
+/// Was this heading's *depth* inferred from typography rather than stated by
+/// the document?
+///
+/// A level from the bookmark outline, from a numbering scheme, or from the
+/// document's own title is something the author declared. A level from font
+/// size or weight is this library's reading of how the page looks, and on a
+/// document that declares nothing it is a guess — an accurate one often
+/// enough to be worth making, and never one to present as fact.
+///
+/// Marking them is what makes a downstream pass affordable: a model
+/// adjudicating a bounded set of doubtful headings costs a fraction of one
+/// re-reading the document, and on a file that does declare its structure the
+/// set is empty.
+fn level_is_inferred(e: &Element) -> bool {
+    e.kind == "doco:SectionTitle" && matches!(e.evidence, "font-size" | "bold")
+}
+
 /// An element's text, escaped for XHTML, with its links as `<a href>`.
 ///
 /// Kept out of [`to_xhtml`] so that escaping happens per segment: escaping the
@@ -99,6 +116,16 @@ fn html_linked(e: &Element) -> String {
 /// carry the content). A drop-in for such a worker: downstream text
 /// extraction and NER see the same shape they see today.
 pub fn to_xhtml(elements: &[Element]) -> String {
+    to_xhtml_with(elements, &Notes::default())
+}
+
+/// As [`to_xhtml`], with document-level notes emitted in band.
+///
+/// The note is an HTML comment. It has to travel with the markup — a warning
+/// on stderr is gone by the time anyone reads the file — but it must not be
+/// text, because a consumer extracting text would then read a sentence this
+/// library wrote as though the document had said it.
+pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
     fn esc(s: &str) -> String {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -121,7 +148,15 @@ pub fn to_xhtml(elements: &[Element]) -> String {
         match e.kind.as_str() {
             "doco:SectionTitle" => {
                 let l = e.level.unwrap_or(1).clamp(1, 6);
-                out.push_str(&format!("<h{l}>{}</h{l}>\n", html_linked(e)));
+                out.push_str(&format!(
+                    "<h{l}{}>{}</h{l}>\n",
+                    if level_is_inferred(e) {
+                        " class=\"doco-level-uncertain\""
+                    } else {
+                        ""
+                    },
+                    html_linked(e)
+                ));
             }
             "doco:ListItem" => {
                 if !in_list {
@@ -261,6 +296,9 @@ pub fn to_xhtml(elements: &[Element]) -> String {
     if open_figure.is_some() {
         out.push_str("</figure>\n");
     }
+    if let Some(note) = notes.summary() {
+        out.push_str(&format!("<!-- {} -->\n", note.replace("--", "—")));
+    }
     out.push_str("</body></html>\n");
     out
 }
@@ -306,6 +344,15 @@ fn md_cell(text: &str) -> String {
 /// A consumer that needs the spans should read `doco` or `xhtml`, which carry
 /// them properly; see [`crate::merges`].
 pub fn to_markdown(elements: &[Element]) -> String {
+    to_markdown_with(elements, &Notes::default())
+}
+
+/// As [`to_markdown`], with document-level notes emitted in band.
+///
+/// An HTML comment, which Markdown passes through and no renderer shows —
+/// visible to anything reading the file, invisible in the rendered document,
+/// and not part of the prose.
+pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
     let mut out = String::new();
     for e in elements {
         match e.kind.as_str() {
@@ -333,6 +380,9 @@ pub fn to_markdown(elements: &[Element]) -> String {
             "doco:ListItem" => out.push_str(&format!("- {}\n", md_linked(e))),
             _ => out.push_str(&format!("{}\n\n", md_linked(e))),
         }
+    }
+    if let Some(note) = notes.summary() {
+        out.push_str(&format!("\n<!-- {} -->\n", note.replace("--", "—")));
     }
     out
 }
@@ -443,6 +493,81 @@ mod tests {
     fn a_span_past_the_end_of_the_text_is_skipped_rather_than_panicking() {
         let e = para("short", vec![Link::uri("https://e.org").spanning(2, 99)]);
         assert_eq!(to_markdown(&[e]).trim(), "short");
+    }
+
+    #[test]
+    fn an_unread_page_is_declared_in_band_but_is_not_text() {
+        use crate::element::{Notes, UnreadPage};
+        let notes = Notes {
+            unread: vec![UnreadPage {
+                index: 0,
+                reason: "NearBlank".into(),
+            }],
+        };
+        let e = para("MASTER DRAWING", vec![]);
+        let x = to_xhtml_with(std::slice::from_ref(&e), &notes);
+        assert!(
+            x.contains("<!-- fluree-doc-parse: page 1 carries content"),
+            "{x}"
+        );
+        // A comment, so extracting text from the markup does not read a
+        // sentence this library wrote as though the document had said it.
+        assert!(!x.contains("<p>fluree-doc-parse"));
+        assert!(to_markdown_with(&[e], &notes).contains("<!-- fluree-doc-parse:"));
+    }
+
+    #[test]
+    fn a_level_read_off_the_page_says_so_and_a_declared_one_does_not() {
+        let mut inferred = para("From waste to new beginnings", vec![]);
+        inferred.kind = "doco:SectionTitle".into();
+        inferred.level = Some(6);
+        inferred.evidence = "font-size";
+        assert!(to_xhtml(std::slice::from_ref(&inferred))
+            .contains("<h6 class=\"doco-level-uncertain\">"));
+
+        // The author stated these, one way or another.
+        for declared in ["outline", "numbering", "title"] {
+            let mut e = para("1. Empowerment", vec![]);
+            e.kind = "doco:SectionTitle".into();
+            e.level = Some(1);
+            e.evidence = declared;
+            let x = to_xhtml(std::slice::from_ref(&e));
+            assert!(x.contains("<h1>"), "{declared}: {x}");
+            assert!(!x.contains("doco-level-uncertain"), "{declared}");
+        }
+    }
+
+    #[test]
+    fn a_healthy_document_says_nothing() {
+        let e = para("body", vec![]);
+        let quiet = crate::element::Notes::default();
+        assert!(!to_xhtml_with(std::slice::from_ref(&e), &quiet).contains("fluree-doc-parse"));
+        assert!(!to_markdown_with(&[e], &quiet).contains("fluree-doc-parse"));
+        assert_eq!(quiet.summary(), None);
+    }
+
+    #[test]
+    fn several_unread_pages_are_listed_once_each_with_their_reasons() {
+        use crate::element::{Notes, UnreadPage};
+        let n = Notes {
+            unread: vec![
+                UnreadPage {
+                    index: 4,
+                    reason: "Scanned".into(),
+                },
+                UnreadPage {
+                    index: 0,
+                    reason: "NearBlank".into(),
+                },
+                UnreadPage {
+                    index: 6,
+                    reason: "Scanned".into(),
+                },
+            ],
+        };
+        let s = n.summary().unwrap();
+        assert!(s.contains("pages 1, 5, 7"), "{s}");
+        assert!(s.contains("NearBlank, Scanned"), "{s}");
     }
 
     #[test]

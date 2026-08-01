@@ -62,6 +62,20 @@ transcribed from a visible page has no link markup, so every address we
 recover is counted as an insertion error — see [where our output differs from
 the reference](../benchmarks/where-we-differ.md).
 
+## Pages nothing read
+
+A page carrying content the output does not hold gets a comment:
+
+```html
+<!-- fluree-doc-parse: page 1 carries content no reader transcribed
+     (NearBlank). This output is missing it. -->
+```
+
+A comment rather than text, so extracting text from this file does not read a
+sentence this library wrote as though the document had said it. The
+machine-readable form is [`doc:unreadPages`](doco.md). Escalating the page
+clears it.
+
 ## What it loses
 
 Everything geometric. No pages, no bounding boxes, no
@@ -115,7 +129,11 @@ rather than after, which keeps headers and footers out of the grid entirely.
 
 ## Known roughness
 
-Bullet glyphs that the layout pass read as inline text rather than list
-markers stay inline, as in the `• Wide supply range…` line above. The marker
-detector requires a marker to be marker-shaped rather than merely short, so a
-multi-column bullet run set as flowing text stays a paragraph.
+A bullet run together with its first word — no space after the glyph — stays
+inline. So does a line opening with a dash: an en dash is as likely to be a
+range, a dialogue dash or a torn compound as a list marker, and stripping it
+would delete a character that belonged to the text.
+
+A bullet the producer set *inside* the text run, which the marker pass cannot
+pull out because it was never separate, is now recognised: the item becomes a
+list item and the glyph is dropped.

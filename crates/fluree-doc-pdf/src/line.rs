@@ -267,6 +267,18 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
     // Tolerance for "flush against the cut", in font-size units.
     const FLUSH: f64 = 1.5;
 
+    /// Widest ink gap between the two halves, in font-size units, for them to
+    /// be one line the cut bisected.
+    ///
+    /// This is what separates the two cases, and being near the cut is not.
+    /// A bisected line's halves are adjacent — the cut fell inside a word or
+    /// at a space — while two columns are held apart by the gutter. Measured:
+    /// `…Wide Input R|ange, Step-Down…` sits at 0.03 and `Table of|Contents`
+    /// at 0.30, against 2.1-2.7 for every two-column row on the pages this
+    /// got wrong. A justified space can stretch, so the bound is set well
+    /// above a word and still far below the narrowest gutter seen.
+    const MAX_JOIN_GAP: f64 = 0.75;
+
     /// Largest fraction of a column's lines that may look like spanning
     /// fragments before we conclude they are not.
     ///
@@ -302,6 +314,7 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
                 (r.bbox.x0 - cut).abs() <= fs * FLUSH
                     && left_edges.iter().any(|(x1, y0, _, rot)| {
                         (x1 - cut).abs() < fs * FLUSH
+                            && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
                             && (y0 - r.bbox.y0).abs() < fs * 0.5
                             && *rot == r.rotation_bucket
                     })
@@ -321,6 +334,7 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
             }
             let matches = left_edges.iter().any(|(x1, y0, _, rot)| {
                 (x1 - cut).abs() < fs * FLUSH
+                    && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
                     && (y0 - r.bbox.y0).abs() < fs * 0.5
                     && *rot == r.rotation_bucket
             });
@@ -943,5 +957,89 @@ mod tests {
             vec![0, 1],
             "offset->bbox chain must stay intact"
         );
+    }
+
+    /// A line, positioned, for the rejoin tests.
+    fn ln(text: &str, x0: f64, x1: f64, y: f64, size: f32) -> Line {
+        Line {
+            text: text.into(),
+            bbox: BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + f64::from(size),
+            },
+            page: 0,
+            rotation_bucket: 0,
+            glyphs: Vec::new(),
+            font_size: size,
+            bold: false,
+        }
+    }
+
+    #[test]
+    fn a_bisected_line_rejoins_but_two_columns_do_not() {
+        let cols = vec![
+            crate::column::Column {
+                x0: 27.0,
+                x1: 303.0,
+            },
+            crate::column::Column {
+                x0: 303.0,
+                x1: 585.0,
+            },
+        ];
+        // The genuine case: the cut fell inside a word, so the halves are
+        // adjacent — measured at 0.5pt on a 15pt title.
+        let mut split = vec![
+            vec![ln(", Wide Input R", 60.0, 301.5, 100.0, 15.0)],
+            vec![ln("ange, Step-Down", 302.0, 500.0, 100.0, 15.0)],
+        ];
+        rejoin_spanning_lines(&mut split, &cols);
+        assert_eq!(split[1].len(), 0, "a bisected title belongs to one line");
+
+        // Two columns: same baseline, both flush to the cut, but held apart
+        // by the gutter — measured at 24pt on 10pt text.
+        let mut columns = vec![
+            vec![ln(
+                "…anode and a cathode. During use, the",
+                27.0,
+                291.1,
+                249.8,
+                10.0,
+            )],
+            vec![ln(
+                "overseas mines with controversial",
+                315.4,
+                560.0,
+                249.8,
+                10.0,
+            )],
+        ];
+        rejoin_spanning_lines(&mut columns, &cols);
+        assert_eq!(columns[1].len(), 1, "a gutter is not a word space");
+        assert_eq!(columns[0].len(), 1);
+    }
+
+    #[test]
+    fn a_word_space_at_the_cut_still_rejoins() {
+        // `Table of|Contents` measured 3.55pt on 12pt text: a space, not a
+        // gutter, so the two halves are one line.
+        let cols = vec![
+            crate::column::Column {
+                x0: 27.0,
+                x1: 303.0,
+            },
+            crate::column::Column {
+                x0: 303.0,
+                x1: 585.0,
+            },
+        ];
+        let mut v = vec![
+            vec![ln("Table of", 240.0, 301.2, 80.0, 12.0)],
+            vec![ln("Contents", 304.8, 380.0, 80.0, 12.0)],
+        ];
+        rejoin_spanning_lines(&mut v, &cols);
+        assert_eq!(v[1].len(), 0);
     }
 }

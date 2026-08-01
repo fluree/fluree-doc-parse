@@ -179,3 +179,66 @@ impl Element {
         self.bbox.unwrap_or_default()
     }
 }
+
+/// A page whose content nothing read.
+///
+/// The router can tell that a page carries content the text layer does not
+/// hold — a scan, a vector drawing, glyphs whose Unicode cannot be trusted.
+/// When no reader then supplies it, the honest output is *empty for that
+/// page*, and a consumer cannot tell that apart from a page that was blank.
+/// One report produced 126 bytes of XHTML for a whole document of drawings
+/// with nothing in it saying so.
+///
+/// Carried beside the elements rather than as one of them. A marker element
+/// would have to hold text to be visible, and inventing text puts characters
+/// into the projection that every `nif:beginIndex` in the graph is counted
+/// against.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UnreadPage {
+    /// 0-based physical page, the same space as [`Element::page`].
+    #[serde(rename = "pageIndex")]
+    pub index: usize,
+    /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`.
+    pub reason: String,
+}
+
+/// Facts about a document that are not elements of it.
+///
+/// Additive: the emitters take this where they can carry it, and their
+/// existing signatures stay valid with an empty one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Notes {
+    pub unread: Vec<UnreadPage>,
+}
+
+impl Notes {
+    pub fn is_empty(&self) -> bool {
+        self.unread.is_empty()
+    }
+
+    /// One line a human or a model can act on, or `None` when nothing is
+    /// wrong. Deliberately prose: it ends up in a comment, and a comment
+    /// nobody understands is not a warning.
+    pub fn summary(&self) -> Option<String> {
+        if self.unread.is_empty() {
+            return None;
+        }
+        let mut pages: Vec<String> = self
+            .unread
+            .iter()
+            .map(|u| (u.index + 1).to_string())
+            .collect();
+        pages.sort_by_key(|p| p.parse::<usize>().unwrap_or(0));
+        let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
+        reasons.sort_unstable();
+        reasons.dedup();
+        Some(format!(
+            "fluree-doc-parse: page{} {} carr{} content no reader transcribed ({}). \
+             This output is missing it.",
+            if pages.len() == 1 { "" } else { "s" },
+            pages.join(", "),
+            if pages.len() == 1 { "ies" } else { "y" },
+            reasons.join(", ")
+        ))
+    }
+}

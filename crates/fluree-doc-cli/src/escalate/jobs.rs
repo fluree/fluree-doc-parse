@@ -86,6 +86,17 @@ pub(crate) fn crops_for(f: &Path, bytes: &[u8], doc: &Document, on_column_doubt:
         // choice the caller makes about their corpus rather than one the
         // page can make for them — `escalation.on_column_doubt` in the
         // config, or FDOC_ESCALATE_COLUMNS for a single run.
+        // A page whose text sits inside its drawings is a designed layout,
+        // and a designed layout is where every geometric inference this
+        // library makes is least trustworthy at once — reading order, heading
+        // rank, figure boundaries. Recognising it and handing it to a reader
+        // is cheaper than decoding it, and correct more often.
+        for d in &a.suspect_figures {
+            match jobs.iter_mut().find(|(pi, _)| *pi == d.page) {
+                Some((_, slot)) => *slot = None,
+                None => jobs.push((d.page, None)),
+            }
+        }
         if on_column_doubt || std::env::var_os("FDOC_ESCALATE_COLUMNS").is_some() {
             for p in &doc.pages {
                 if fluree_doc_pdf::column::doubt(&p.glyphs).is_some() {

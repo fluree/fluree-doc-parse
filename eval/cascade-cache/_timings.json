@@ -1088,5 +1088,65 @@
   "hinted": true,
   "links": false,
   "chars": 3725
+ },
+ "01030000000039_p0_full": {
+  "s": 12.34,
+  "in": 1429,
+  "out": 512,
+  "think": 0,
+  "kind": "full",
+  "hinted": false,
+  "links": false,
+  "chars": 1705
+ },
+ "01030000000040_p0_full": {
+  "s": 15.97,
+  "in": 1429,
+  "out": 497,
+  "think": 0,
+  "kind": "full",
+  "hinted": false,
+  "links": false,
+  "chars": 2526
+ },
+ "01030000000042_p0_full": {
+  "s": 19.44,
+  "in": 1429,
+  "out": 596,
+  "think": 0,
+  "kind": "full",
+  "hinted": false,
+  "links": false,
+  "chars": 2792
+ },
+ "01030000000043_p0_full": {
+  "s": 18.78,
+  "in": 1429,
+  "out": 423,
+  "think": 0,
+  "kind": "full",
+  "hinted": false,
+  "links": false,
+  "chars": 1903
+ },
+ "01030000000070_p0_full": {
+  "s": 10.17,
+  "in": 1429,
+  "out": 344,
+  "think": 0,
+  "kind": "full",
+  "hinted": false,
+  "links": false,
+  "chars": 948
+ },
+ "01030000000075_p0_full": {
+  "s": 14.28,
+  "in": 1429,
+  "out": 599,
+  "think": 0,
+  "kind": "full",
+  "hinted": false,
+  "links": false,
+  "chars": 2504
  }
 }

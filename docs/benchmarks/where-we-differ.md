@@ -73,6 +73,37 @@ This is why the engine
 in the deterministic path: their sequence is real information about the page,
 and only a reader that can see the drawing may assert a different one.
 
+## Composed pages, where the metric cannot see the gain
+
+**Cost: none. And that is the finding.**
+
+A page whose text sits inside its drawings is a designed layout, and it now
+earns a reading. Six documents in the corpus qualify; escalating all six moved
+the overall score by nothing at all — not a rounding difference, the same
+number to sixteen digits.
+
+The readings are plainly better. One page's chart extracts deterministically
+as draw-order rubble with a fabricated value in it:
+
+```
+reference   100  22  3780  32  20  60  17  30  40  57
+ours        July 2020: No Challenge 32, Small Challenge 30, Big Challenge 38
+```
+
+`3780` is not on the page. It is the segment label `37` fused with the axis
+tick `80` — two numbers that happen to be drawn near each other. The reading
+instead pairs every value with its category and series, which is what the
+chart says.
+
+Another page's bar chart has no glyph layer at all: fifteen data values that
+the deterministic pass cannot see and the reading recovers in full.
+
+The metric registers none of this, because its answer key was itself
+transcribed in page order — so a reading that pairs a label with its value
+agrees with the key no more often than one that does not. The score is
+neither evidence for this change nor against it, which is worth stating
+plainly rather than quoting "no regression" as though it were a result.
+
 ## How to read this list
 
 It is short on purpose, and it is not a general excuse. Two rules keep it

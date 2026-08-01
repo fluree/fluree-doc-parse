@@ -244,11 +244,89 @@ const LABEL_MAX_WIDTH: f64 = 0.45;
 /// the tick label below it, each reachable only once the other is claimed.
 /// Only short blocks are absorbed, so a paragraph beside the chart stays
 /// prose however close it is set.
-pub fn attach(figures: &mut [Figure], blocks: &[(BBox, usize)], page_width: f64) {
+///
+/// The reach is fixed at the drawing's own size for the whole walk. Chaining
+/// is meant to cross a label's width, not to compound: a reach that grows with
+/// the region turns "near the chart" into "anywhere on the page" after a few
+/// rounds.
+/// A page whose text is mostly inside its drawings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Doubt {
+    pub page: usize,
+    /// Share of the page's text characters sitting inside a figure region.
+    pub share: f64,
+    /// Characters on the page, so a caller can see how much is at stake.
+    pub chars: usize,
+}
+
+/// Least text on a page before the share means anything. A caption under a
+/// photograph is entirely inside a figure and entirely correct.
+const MIN_PAGE_CHARS: usize = 200;
+
+/// Share of a page's text inside drawings above which the page is a designed
+/// layout rather than a column of prose.
+///
+/// This is a *recognition* signal, not a defect report. A page built as a
+/// composition — an infographic, a magazine spread, a report cover — is where
+/// reading order, heading rank and figure boundaries are all inferred from
+/// geometry that was never arranged to be read linearly, and it is where a
+/// deterministic pass is least trustworthy. That the text landed inside the
+/// drawings is the most direct evidence available that the page is one of
+/// those.
+///
+/// Measured: the two documents a field report faulted sit at 42% and 92%,
+/// against 0-1% for ordinary reports, papers and handbooks. On the
+/// 200-document evaluation corpus this flags six.
+const MIN_FIGURE_SHARE: f64 = 0.30;
+
+/// Pages where the drawings hold most of the text.
+///
+/// Reported, never acted on here — the same contract as
+/// [`crate::heading::doubt`] and [`crate::column::doubt`]. Whether a page this
+/// describes is worth a reader is a decision about a corpus, not a page.
+pub fn doubt(elements: &[fluree_doc_model::Element], page: usize) -> Option<Doubt> {
+    let (mut total, mut inside) = (0usize, 0usize);
+    for e in elements.iter().filter(|e| e.page == page) {
+        let n = e.text.trim().chars().count();
+        total += n;
+        if e.figure.is_some() {
+            inside += n;
+        }
+    }
+    if total < MIN_PAGE_CHARS {
+        return None;
+    }
+    let share = inside as f64 / total as f64;
+    (share >= MIN_FIGURE_SHARE).then_some(Doubt {
+        page,
+        share,
+        chars: total,
+    })
+}
+
+pub fn attach(figures: &mut [Figure], blocks: &[(BBox, usize)], page: (f64, f64)) {
+    let (page_width, page_height) = page;
     let max_w = page_width * LABEL_MAX_WIDTH;
+    // The same bound detection applies: a region this large is the page, not a
+    // drawing on it. Detection already refuses to *find* one, and attachment
+    // must not be able to grow one either.
+    let too_big = |b: &BBox| {
+        page_width > 0.0
+            && page_height > 0.0
+            && b.width() / page_width > MAX_PAGE_FRACTION
+            && b.height() / page_height > MAX_PAGE_FRACTION
+    };
     for f in figures.iter_mut() {
+        // Measured once, from the drawing. Recomputing it inside the loop made
+        // growth self-feeding: each absorbed label enlarged the region, the
+        // enlarged region reached further, and the next iteration pulled in a
+        // block that was never near the drawing at all. One page's banner
+        // graphic — 585x138 of a 612x792 page — swallowed every paragraph
+        // below it, and the whole page came out as figure fragments with no
+        // prose at all. A label is near the drawing; it is not near the
+        // accumulated blob.
+        let reach = f.bbox.width().min(f.bbox.height()) * LABEL_REACH;
         loop {
-            let reach = f.bbox.width().min(f.bbox.height()) * LABEL_REACH;
             let mut grew = false;
             for (b, _) in blocks {
                 if b.width() > max_w {
@@ -260,10 +338,22 @@ pub fn attach(figures: &mut [Figure], blocks: &[(BBox, usize)], page_width: f64)
                     continue;
                 }
                 let (x0, y0, x1, y1) = (f.bbox.x0, f.bbox.y0, f.bbox.x1, f.bbox.y1);
-                f.bbox.x0 = x0.min(b.x0);
-                f.bbox.y0 = y0.min(b.y0);
-                f.bbox.x1 = x1.max(b.x1);
-                f.bbox.y1 = y1.max(b.y1);
+                let grown = BBox {
+                    x0: x0.min(b.x0),
+                    y0: y0.min(b.y0),
+                    x1: x1.max(b.x1),
+                    y1: y1.max(b.y1),
+                };
+                // Absorption chains, and chaining walks: each claimed label
+                // extends the region, and the next label is measured from the
+                // extended edge. Down a column of short blocks that walk
+                // crosses the page — a banner graphic 138pt tall reached
+                // y=768 of a 792pt page and every paragraph under it became a
+                // figure fragment. The bound is what stops the walk.
+                if too_big(&grown) {
+                    continue;
+                }
+                f.bbox = grown;
                 if f.bbox.x0 < x0 || f.bbox.y0 < y0 || f.bbox.x1 > x1 || f.bbox.y1 > y1 {
                     grew = true;
                 }
@@ -363,5 +453,83 @@ mod tests {
             bb(480.0, 80.0, 510.0, 200.0),
         ]);
         assert_eq!(detect(&f, &[], 0, (612.0, 792.0)).len(), 2);
+    }
+
+    /// A banner graphic across the top of a text page, as one report draws it:
+    /// 585x138 of a 612x792 page.
+    fn banner() -> Vec<Figure> {
+        vec![Figure {
+            bbox: bb(0.0, 18.0, 585.0, 156.0),
+            page: 0,
+            shapes: 43,
+        }]
+    }
+
+    #[test]
+    fn a_banner_does_not_walk_down_the_page() {
+        // Short blocks every 40pt down the page — a column of headings and
+        // captions. Each is within reach of the last, so absorption chains,
+        // and the chain used to cross the whole page: the region reached
+        // y=768 and every paragraph under the banner came out as a figure
+        // fragment with no prose emitted at all.
+        let blocks: Vec<(BBox, usize)> = (0..16)
+            .map(|i| {
+                (
+                    bb(
+                        27.0,
+                        200.0 + 40.0 * i as f64,
+                        160.0,
+                        210.0 + 40.0 * i as f64,
+                    ),
+                    i,
+                )
+            })
+            .collect();
+        let mut figs = banner();
+        attach(&mut figs, &blocks, (612.0, 792.0));
+        let grown = figs[0].bbox;
+        assert!(
+            grown.height() / 792.0 <= MAX_PAGE_FRACTION,
+            "figure grew to {:.0}pt of a 792pt page",
+            grown.height()
+        );
+    }
+
+    #[test]
+    fn a_chart_still_collects_the_labels_around_it() {
+        // The case attachment exists for: a drawing with its tick and value
+        // labels set just outside it.
+        let mut figs = vec![Figure {
+            bbox: bb(100.0, 300.0, 300.0, 460.0),
+            page: 0,
+            shapes: 12,
+        }];
+        let blocks = vec![
+            (bb(96.0, 470.0, 150.0, 480.0), 0),  // tick label below
+            (bb(210.0, 470.0, 260.0, 480.0), 1), // another tick
+            (bb(120.0, 285.0, 180.0, 295.0), 2), // value label above
+        ];
+        attach(&mut figs, &blocks, (612.0, 792.0));
+        assert!(
+            figs[0].bbox.y1 >= 480.0,
+            "labels below the axis belong to it"
+        );
+        assert!(
+            figs[0].bbox.y0 <= 285.0,
+            "labels above the bars belong to it"
+        );
+    }
+
+    #[test]
+    fn prose_beside_a_chart_stays_prose() {
+        let mut figs = vec![Figure {
+            bbox: bb(100.0, 300.0, 300.0, 460.0),
+            page: 0,
+            shapes: 12,
+        }];
+        // A full-measure paragraph: wider than a label can be.
+        let blocks = vec![(bb(27.0, 470.0, 560.0, 520.0), 0)];
+        attach(&mut figs, &blocks, (612.0, 792.0));
+        assert_eq!(figs[0].bbox.y1, 460.0, "a paragraph is not a label");
     }
 }

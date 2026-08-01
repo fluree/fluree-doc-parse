@@ -50,7 +50,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             eprintln!("error: reading stdin: {e}");
             return 1;
         }
-        return match convert_bytes(data, "stdin", cfg, args, pages.as_deref()) {
+        return match convert_bytes(data, "stdin", cfg, args, pages.as_deref(), quiet) {
             Ok(out) => write_out(&out, args.output.as_deref()),
             Err(e) => {
                 eprintln!("error: stdin: {e}");
@@ -171,6 +171,7 @@ fn convert_path(
             stem,
             args,
             Vec::new(),
+            &fluree_doc_model::Notes::default(),
         ));
     }
     if ext_is(pdf, &["html", "htm", "xhtml"]) {
@@ -180,22 +181,35 @@ fn convert_path(
             stem,
             args,
             Vec::new(),
+            &fluree_doc_model::Notes::default(),
         ));
     }
     // Word's macro-enabled and template variants are the same OOXML
     // package with a different extension.
     if ext_is(pdf, &["docx", "docm", "dotx", "dotm"]) {
         let els = fluree_doc_docx::parse(&data).map_err(|e| e.to_string())?;
-        return Ok(render(&els, stem, args, Vec::new()));
+        return Ok(render(
+            &els,
+            stem,
+            args,
+            Vec::new(),
+            &fluree_doc_model::Notes::default(),
+        ));
     }
     if ext_is(pdf, &["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"]) {
         let els = fluree_doc_pptx::parse(&data).map_err(|e| e.to_string())?;
-        return Ok(render(&els, stem, args, Vec::new()));
+        return Ok(render(
+            &els,
+            stem,
+            args,
+            Vec::new(),
+            &fluree_doc_model::Notes::default(),
+        ));
     }
     if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
         return convert_image(data, stem, cfg, args, quiet);
     }
-    convert_bytes(data, common::stem_of(pdf), cfg, args, pages)
+    convert_bytes(data, common::stem_of(pdf), cfg, args, pages, quiet)
 }
 
 /// A bare image: one page of pixels, and only the deep reader can read it.
@@ -276,7 +290,13 @@ fn convert_image(
             }
         );
     }
-    Ok(render(&elements, stem, args, sizes))
+    Ok(render(
+        &elements,
+        stem,
+        args,
+        sizes,
+        &fluree_doc_model::Notes::default(),
+    ))
 }
 
 /// Emit an element stream in the requested format. Shared by every source.
@@ -285,10 +305,11 @@ fn render(
     stem: &str,
     args: &ConvertArgs,
     pages: Vec<fluree_doc_model::PageSize>,
+    notes: &fluree_doc_model::Notes,
 ) -> String {
     match args.format {
-        Format::Md => fluree_doc_pdf::document::to_markdown(elements),
-        Format::Xhtml => fluree_doc_pdf::document::to_xhtml(elements),
+        Format::Md => fluree_doc_model::to_markdown_with(elements, notes),
+        Format::Xhtml => fluree_doc_model::to_xhtml_with(elements, notes),
         Format::Json => serde_json::to_string_pretty(elements).unwrap(),
         Format::Doco => {
             let opts = fluree_doc_pdf::doco::DocoOptions {
@@ -298,6 +319,7 @@ fn render(
                     .unwrap_or_else(|| format!("urn:fluree-doc-parse:{stem}")),
                 doc_iri: args.doc_iri.clone(),
                 pages,
+                unread: notes.unread.clone(),
             };
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }
@@ -311,6 +333,7 @@ fn convert_bytes(
     cfg: &TierConfig,
     args: &ConvertArgs,
     pages: Option<&[usize]>,
+    quiet: bool,
 ) -> Result<String, String> {
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
@@ -386,7 +409,15 @@ fn convert_bytes(
             height: p.height,
         })
         .collect();
-    Ok(render(&a.elements, stem, args, sizes))
+    // After the tiers: a page is unread only once whatever was going to read
+    // it has run.
+    let notes = fluree_doc_model::Notes {
+        unread: fluree_doc_pdf::unread_pages(&doc, &a.elements),
+    };
+    if let (Some(note), false) = (notes.summary(), quiet) {
+        eprintln!("warning: {note}");
+    }
+    Ok(render(&a.elements, stem, args, sizes, &notes))
 }
 
 /// One output path per input, keeping stem names unless a stem repeats —

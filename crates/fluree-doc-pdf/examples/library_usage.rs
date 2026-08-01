@@ -54,6 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             base_iri: "urn:fluree-doc-parse:example".into(),
             doc_iri: None,
             pages: Vec::new(),
+            unread: Vec::new(),
         },
     );
 
