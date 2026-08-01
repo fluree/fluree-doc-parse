@@ -45,6 +45,17 @@ pub struct DocoOptions {
     /// When present, every element is stamped `doc:sourceDocument → {iri}` —
     /// the retract-on-rerun tag a re-extraction targets.
     pub doc_iri: Option<String>,
+    /// The document's running header and footer text, emitted once on the
+    /// document node.
+    ///
+    /// Furniture is removed from the body because a line repeating on every
+    /// page is noise *there*. It is not noise about the document: a
+    /// controlled procedure puts its owner, title and number in exactly that
+    /// block, and a three-page one repeats them on all three, so stripping
+    /// the repetition strips the identity. Declared here rather than kept in
+    /// the text, which would put it back into the body it was removed from
+    /// and shift every character offset in the graph.
+    pub running_text: Vec<String>,
     /// Pages carrying content nothing transcribed. Emitted on the document
     /// node as `doc:unreadPages`, so a consumer can tell an empty page from a
     /// page that was not read.
@@ -276,6 +287,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     };
 
     let doc_idx = em.node("element", "doco:Document", Some("html"));
+    if !opts.running_text.is_empty() {
+        em.nodes[doc_idx].insert(
+            "doc:runningText".into(),
+            json!({ "@type": "@json", "@value": opts.running_text }),
+        );
+    }
     if !opts.unread.is_empty() {
         em.nodes[doc_idx].insert(
             "doc:unreadPages".into(),
@@ -576,6 +593,7 @@ mod tests {
             doc_iri: Some("urn:test:doc".into()),
             pages: Vec::new(),
             unread: Vec::new(),
+            running_text: Vec::new(),
         }
     }
 

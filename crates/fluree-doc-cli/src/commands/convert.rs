@@ -320,6 +320,7 @@ fn render(
                 doc_iri: args.doc_iri.clone(),
                 pages,
                 unread: notes.unread.clone(),
+                running_text: notes.running_text.clone(),
             };
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }
@@ -413,6 +414,14 @@ fn convert_bytes(
     // it has run.
     let notes = fluree_doc_model::Notes {
         unread: fluree_doc_pdf::unread_pages(&doc, &a.elements),
+        // A bare page number identifies nothing; the rest of the running
+        // block is the document's own name for itself.
+        running_text: a
+            .furniture
+            .iter()
+            .filter(|(text, _)| text.chars().any(char::is_alphabetic))
+            .map(|(text, _)| text.clone())
+            .collect(),
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {note}");

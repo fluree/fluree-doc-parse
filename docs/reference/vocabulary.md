@@ -67,6 +67,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:sourceDocument` | all, with `--doc-iri` | the document IRI to retract by |
 | `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height}]`, PDF units |
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
+| `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
 
 **Structure**
 

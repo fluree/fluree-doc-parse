@@ -55,6 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             doc_iri: None,
             pages: Vec::new(),
             unread: Vec::new(),
+            running_text: Vec::new(),
         },
     );
 

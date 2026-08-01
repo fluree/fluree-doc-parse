@@ -209,11 +209,14 @@ pub struct UnreadPage {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Notes {
     pub unread: Vec<UnreadPage>,
+    /// Running header and footer text, kept once because it identifies the
+    /// document even though it is noise inside the body.
+    pub running_text: Vec<String>,
 }
 
 impl Notes {
     pub fn is_empty(&self) -> bool {
-        self.unread.is_empty()
+        self.unread.is_empty() && self.running_text.is_empty()
     }
 
     /// One line a human or a model can act on, or `None` when nothing is

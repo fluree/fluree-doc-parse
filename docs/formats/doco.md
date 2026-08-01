@@ -83,6 +83,28 @@ needs the ratio between the page's own units and the pixels it rendered to,
 and this is the only place that denominator appears. Sources with no geometry
 — Markdown, DOCX — omit the key rather than reporting a zeroed size.
 
+## What the pages say about the document
+
+```json
+{ "@type": "doco:Document",
+  "doc:runningText": { "@type": "@json",
+                       "@value": [ "CHURCH &", "DWIGHT",
+                                   "TM004361 Rev:005 Production" ] } }
+```
+
+The header and footer text [furniture detection](../design/furniture.md)
+removed from the body, kept once here.
+
+Repetition is what makes a line noise *inside* the body and exactly what makes
+it identify the document. A controlled procedure puts its owner, title and
+number in a block on every page — on a three-page one, all three — so removing
+the repetition removes the identity, and the document comes out anonymous.
+
+Kept on the document node rather than in the text, because putting it back in
+the body would restore what was removed from it and shift every character
+offset in the graph. Bare page numbers are excluded: a folio identifies
+nothing.
+
 ## Pages nothing read
 
 ```json

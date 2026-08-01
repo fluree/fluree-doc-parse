@@ -89,3 +89,19 @@ removed from it, so there is nothing to judge, and that is the guard that
 keeps a financial statement's figures intact.
 
 [`arbiter::scrub_furniture`]: ../integration/escalation-tiers.md
+
+## Removed from the body, kept about the document
+
+Repetition is what makes a line noise inside the body, and exactly what makes
+it identify the document. A controlled procedure — an SOP, a test method, a
+form — puts its owner, title and number in a block printed on every page. On a
+three-page one they repeat three times, which is indistinguishable from a
+running header, and stripping them leaves the document anonymous: one test
+method lost `CHURCH &`, `DWIGHT`, its title and its document number in a
+single pass.
+
+So the text is removed from the body and declared once on the document node as
+[`doc:runningText`](../formats/doco.md). Not restored into the body, which
+would put back what was removed from it and shift every character offset in
+the graph, and not merely dropped. Bare page numbers are excluded — a folio
+identifies nothing.

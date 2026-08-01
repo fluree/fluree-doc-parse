@@ -503,6 +503,7 @@ mod tests {
                 index: 0,
                 reason: "NearBlank".into(),
             }],
+            running_text: Vec::new(),
         };
         let e = para("MASTER DRAWING", vec![]);
         let x = to_xhtml_with(std::slice::from_ref(&e), &notes);
@@ -550,6 +551,7 @@ mod tests {
     fn several_unread_pages_are_listed_once_each_with_their_reasons() {
         use crate::element::{Notes, UnreadPage};
         let n = Notes {
+            running_text: Vec::new(),
             unread: vec![
                 UnreadPage {
                     index: 4,
