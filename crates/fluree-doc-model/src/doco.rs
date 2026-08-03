@@ -17,7 +17,11 @@
 //!   walk the XHTML consumer performs on `h1`-`h6`.
 //! - Consecutive list items group under a `doco:List`; tables carry
 //!   `doc:TableCell` children with row/column indices, header labels,
-//!   and cell values.
+//!   and cell values. Cells whose text appears verbatim in the projection
+//!   also carry `nif:beginIndex`/`nif:endIndex` (and `nif:isString`), so a
+//!   consumer can scope work to a table *row* instead of the whole table;
+//!   a value synthesised by merge denormalisation has no place in the
+//!   projection and carries no offsets rather than wrong ones.
 //! - Text rides on `nif:isString`, with a display `rdfs:label` truncated to
 //!   [`LABEL_MAX_CHARS`]; `nif:beginIndex`/`nif:endIndex` are character
 //!   offsets into the plain-text projection ([`to_text`]) so entity mentions
@@ -33,6 +37,7 @@
 
 use crate::element::{Element, Target};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
 /// Display-label budget: full text lives in `nif:isString`, the label is a
 /// preview for graph canvases.
@@ -102,23 +107,68 @@ pub fn to_text(elements: &[Element]) -> String {
 /// difference, silently.
 pub fn projection_text(e: &Element) -> String {
     match (&e.cells, e.kind.as_str()) {
-        (Some(rows), "doco:Table") => rows
-            .iter()
-            .map(|r| {
-                r.iter()
-                    .map(|c| c.trim())
-                    .collect::<Vec<_>>()
-                    .join("\t")
-                    .trim_end()
-                    .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string(),
+        (Some(rows), "doco:Table") => table_projection(rows).0,
         (None, "doco:Table") => strip_tags(&e.text).trim().to_string(),
         _ => e.text.trim().to_string(),
     }
+}
+
+/// A table's projection text together with each non-empty cell's char span
+/// within it.
+///
+/// One function builds both because they must agree exactly: the projection
+/// is rows of trimmed cells tab-joined (row trailing whitespace dropped,
+/// rows newline-joined, the whole trimmed), and a span computed by any
+/// second walk drifts from it silently. Spans are keyed `(row, column)` in
+/// the RAW grid — the same indices the cell-emission loop iterates — and
+/// exist only for cells whose trimmed text is non-empty, i.e. the cells
+/// that actually appear in the projection.
+pub fn table_projection(
+    rows: &[Vec<String>],
+) -> (String, BTreeMap<(usize, usize), (usize, usize)>) {
+    let mut out = String::new();
+    let mut cursor = 0usize; // chars, not bytes
+    let mut spans: BTreeMap<(usize, usize), (usize, usize)> = BTreeMap::new();
+    for (r, row) in rows.iter().enumerate() {
+        if r > 0 {
+            out.push('\n');
+            cursor += 1;
+        }
+        let mut row_str = String::new();
+        let mut row_cursor = 0usize;
+        for (c, cell) in row.iter().enumerate() {
+            if c > 0 {
+                row_str.push('\t');
+                row_cursor += 1;
+            }
+            let t = cell.trim();
+            if !t.is_empty() {
+                let len = t.chars().count();
+                spans.insert((r, c), (cursor + row_cursor, cursor + row_cursor + len));
+                row_cursor += len;
+            }
+            row_str.push_str(t);
+        }
+        // Trailing empty cells left only tabs; drop them. Spans are
+        // unaffected — a non-empty cell's text is never trailing
+        // whitespace.
+        let trimmed_row = row_str.trim_end();
+        out.push_str(trimmed_row);
+        cursor += trimmed_row.chars().count();
+    }
+    // The final trim: leading whitespace exists only when leading rows
+    // were entirely empty, so surviving spans just shift left by the
+    // trimmed char count.
+    let lead = out.chars().count() - out.trim_start().chars().count();
+    let text = out.trim().to_string();
+    if lead > 0 {
+        let shifted = spans
+            .into_iter()
+            .map(|(k, (b, e))| (k, (b - lead, e - lead)))
+            .collect();
+        return (text, shifted);
+    }
+    (text, spans)
 }
 
 /// Minimal tag stripper for model-arbitrated tables whose text is HTML.
@@ -384,9 +434,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(table, &text);
                 em.set_provenance(table, e);
+                let mut table_start = None;
                 if !text.is_empty() {
                     let (s, t) = offsets_for(&text);
                     em.set_offsets(table, s, t);
+                    table_start = Some(s);
                 }
                 // A table's projection joins cells with tabs, so an anchor
                 // offset into the element's own text indexes nothing here.
@@ -399,12 +451,15 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 // the *last* header row: rows above it in a stacked header
                 // are spanning banners, not column labels. Empty cells are
                 // not materialised.
-                if let Some(rows) = &e.cells {
+                if let Some(raw_rows) = &e.cells {
+                    // Where each raw cell's text sits inside the table's
+                    // projection block — the anchor for per-cell offsets.
+                    let cell_spans = table_projection(raw_rows).1;
                     // Each cell becomes an entity that must describe itself,
                     // so merged values are filled down here — a cell blanked
                     // by the rowspan convention would otherwise lose its row
                     // context entirely.
-                    let mut rows = rows.clone();
+                    let mut rows = raw_rows.clone();
                     if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some()
                     {
                         let ncols = rows.first().map(Vec::len).unwrap_or(0);
@@ -471,6 +526,24 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             }
                             em.nodes[cell_idx]
                                 .insert("doc:cellValue".into(), Value::String(value.into()));
+                            // Offsets only when the projection really shows
+                            // this value at (r, c): merge denormalisation can
+                            // synthesise or rejoin values (fill-down copies,
+                            // fragment joins), and those have no span to
+                            // point at. `nif:isString` rides along so the
+                            // offset invariant — a span slices the
+                            // projection to the node's text — holds for
+                            // cells exactly as for every other node.
+                            if let (Some(s), Some(&(b, t))) = (table_start, cell_spans.get(&(r, c)))
+                            {
+                                let raw =
+                                    raw_rows.get(r).and_then(|row| row.get(c)).map(|c| c.trim());
+                                if raw == Some(value) {
+                                    em.set_offsets(cell_idx, s + b, s + t);
+                                    em.nodes[cell_idx]
+                                        .insert("nif:isString".into(), Value::String(value.into()));
+                                }
+                            }
                             em.attach(table, cell_idx);
                         }
                     }
@@ -687,6 +760,70 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Revenue\t10"));
+    }
+
+    #[test]
+    fn table_cells_carry_offsets_into_the_projection() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["".into(), "2023".into(), "2024".into()],
+            vec!["Revenue".into(), "10".into(), "".into()],
+            vec!["Cost".into(), "7".into(), "8".into()],
+        ]);
+        // A paragraph before the table so cell offsets must include the
+        // table's own start in the document projection, not just the
+        // in-table position.
+        let els = vec![el("doco:Paragraph", "Intro paragraph.", None), t];
+        let projection = to_text(&els);
+        let g = graph(&els);
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), 5, "five non-empty data cells");
+        for cell in &cells {
+            let s = cell["nif:beginIndex"].as_u64().unwrap() as usize;
+            let e = cell["nif:endIndex"].as_u64().unwrap() as usize;
+            let slice: String = projection.chars().skip(s).take(e - s).collect();
+            assert_eq!(&slice, cell["doc:cellValue"].as_str().unwrap());
+            assert_eq!(&slice, cell["nif:isString"].as_str().unwrap());
+        }
+        // Same-row cells sit on one projection line: no newline between
+        // the row header's end and its neighbour's start.
+        let rev = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Revenue")
+            .unwrap();
+        let ten = cells.iter().find(|c| c["doc:cellValue"] == "10").unwrap();
+        let between: String = {
+            let from = rev["nif:endIndex"].as_u64().unwrap() as usize;
+            let to = ten["nif:beginIndex"].as_u64().unwrap() as usize;
+            projection.chars().skip(from).take(to - from).collect()
+        };
+        assert_eq!(between, "\t");
+    }
+
+    #[test]
+    fn filled_down_cells_carry_no_offsets() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["H1".into(), "H2".into()],
+            vec!["Alpha".into(), "1".into()],
+            vec!["".into(), "2".into()],
+        ]);
+        // Row 2's first cell continues Alpha from the row above.
+        t.merged_down = Some(vec![false, false, false, false, true, false]);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let filled = cells
+            .iter()
+            .find(|c| c["doc:rowIndex"] == json!(1) && c["doc:columnIndex"] == json!(0))
+            .expect("filled-down cell");
+        assert_eq!(filled["doc:cellValue"], "Alpha");
+        assert!(
+            filled.get("nif:beginIndex").is_none(),
+            "a synthesised value has no place in the projection"
+        );
+        // Its projected neighbour still carries offsets.
+        let two = cells.iter().find(|c| c["doc:cellValue"] == "2").unwrap();
+        assert!(two.get("nif:beginIndex").is_some());
     }
 
     #[test]
