@@ -558,7 +558,16 @@ fn replace_read_pages(
         match text {
             Some(text) => out.push(Element {
                 id: String::new(),
-                kind: "doco:Section".into(),
+                // A whole-page VLM reading is a block of prose, so it is a
+                // text-bearing leaf like every other one this crate emits
+                // (`overlay.rs`, `link.rs`, `document.rs`). It was
+                // `doco:Section`, which in DoCO is a *container* holding a
+                // `doco:SectionTitle` — and consumers treat it as one:
+                // Solo's embedder recurses into a Section's children for
+                // text and never reads the node's own `nif:isString`, so an
+                // escalated page produced zero chunks and failed the run
+                // with "empty document body?" while carrying the full text.
+                kind: "doco:Paragraph".into(),
                 page,
                 bbox: elements
                     .iter()
@@ -632,7 +641,9 @@ pub fn splice_with_page(
                         text = promoted;
                     }
                     let mut el = elements[i].clone();
-                    el.kind = "doco:Section".into();
+                    // Same reasoning as the whole-page substitution above: a
+                    // spliced region reading is text-bearing, not a container.
+                    el.kind = "doco:Paragraph".into();
                     el.text = text;
                     el.provenance = "vlm";
                     el.evidence = if is_chart {
@@ -928,6 +939,32 @@ mod tests {
             els.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(),
             ["elem-00001", "elem-00002", "elem-00003"]
         );
+    }
+
+    /// A substituted reading must stay a text-bearing leaf.
+    ///
+    /// It was emitted as `doco:Section`, which in DoCO is a container that
+    /// holds a `doco:SectionTitle`. Consumers act on that: Solo's embedder
+    /// recurses into a Section's children looking for text and never reads
+    /// the node's own body, so an escalated page yielded zero chunks and
+    /// failed the workflow reporting "empty document body?" — while the
+    /// element carried the entire page.
+    #[test]
+    fn a_substituted_page_stays_a_text_bearing_leaf() {
+        let mut els = vec![on_page(0, "first page"), on_page(1, "second page")];
+        splice(
+            &mut els,
+            "doc",
+            &OneReading("p1_full", "the whole of page two"),
+            None,
+        );
+        let replaced = &els[1];
+        assert_eq!(replaced.text, "the whole of page two");
+        assert_eq!(
+            replaced.kind, "doco:Paragraph",
+            "a VLM page reading is prose, not a section container"
+        );
+        assert_ne!(replaced.kind, "doco:Section");
     }
 
     #[test]
