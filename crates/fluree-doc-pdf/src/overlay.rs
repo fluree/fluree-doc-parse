@@ -106,12 +106,35 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
     None
 }
 
+/// NFKC-fold one character, the same normalisation [`crate::line`] applies
+/// when it builds line text.
+///
+/// Line text is normalised on the way into the projection; glyph text keeps
+/// whatever the font's ToUnicode said. So the two spell the same character
+/// differently — a font emitting MICRO SIGN (U+00B5) against a projection
+/// carrying GREEK SMALL LETTER MU (U+03BC), or a ﬁ ligature glyph standing
+/// for the two letters it draws. Comparing raw, every such span failed to
+/// resolve and the caller drew no highlight at all.
+///
+/// Per character rather than over the whole string on purpose: the flattened
+/// string maps position→glyph, and a whole-string normalisation could compose
+/// across a glyph boundary and desynchronise that mapping.
+fn fold(c: char) -> impl Iterator<Item = char> {
+    use unicode_normalization::UnicodeNormalization;
+    c.to_string().nfkc().collect::<Vec<_>>().into_iter()
+}
+
 /// Locate a string among a page's glyphs, preferring a match inside `within`.
 ///
 /// Glyph text carries no synthetic spaces, so the needle is compared with
-/// whitespace removed — the same reason link anchors are matched that way.
+/// whitespace removed — the same reason link anchors are matched that way —
+/// and NFKC-folded so it meets the projection's normalisation (see [`fold`]).
 fn glyph_range_for(page: &Page, needle: &str, within: BBox) -> Option<(usize, usize)> {
-    let squeezed: String = needle.chars().filter(|c| !c.is_whitespace()).collect();
+    let squeezed: String = needle
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(fold)
+        .collect();
     if squeezed.is_empty() {
         return None;
     }
@@ -120,7 +143,7 @@ fn glyph_range_for(page: &Page, needle: &str, within: BBox) -> Option<(usize, us
     let mut flat = String::new();
     let mut owner: Vec<usize> = Vec::new();
     for (i, g) in page.glyphs.iter().enumerate() {
-        for c in g.text.chars().filter(|c| !c.is_whitespace()) {
+        for c in g.text.chars().filter(|c| !c.is_whitespace()).flat_map(fold) {
             flat.push(c);
             owner.push(i);
         }
@@ -194,6 +217,41 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert_eq!(r[0].x0, 0.0);
         assert_eq!(r[0].x1, 10.0);
+    }
+
+    /// A font's ToUnicode and the text projection legitimately spell the
+    /// same character differently — the projection is NFKC-normalised on
+    /// the way in, glyph text is not. Comparing raw, "0.22 μm" (GREEK MU,
+    /// as the projection carries it) never located the glyphs drawing
+    /// "0.22 µm" (MICRO SIGN, as the font emits it), so the span resolved
+    /// to no highlight at all and a reviewer saw an unannotated page.
+    #[test]
+    fn micro_sign_glyphs_match_a_greek_mu_needle() {
+        let within = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 200.0,
+            y1: 20.0,
+        };
+        // Glyphs spell it with MICRO SIGN; the needle with GREEK MU.
+        let page = page_of(&[("0.22\u{b5}m", 0.0, 0.0)]);
+        assert_eq!(
+            glyph_range_for(&page, "0.22 \u{3bc}m", within),
+            Some((0, 5)),
+            "micro-sign glyphs must match a Greek-mu needle"
+        );
+        // A ligature glyph stands for the letters it draws.
+        assert!(
+            glyph_range_for(&page_of(&[("\u{fb01}lter", 0.0, 0.0)]), "filter", within).is_some(),
+            "ligature glyph must match its spelled-out needle"
+        );
+        // Different text still finds nothing — the match keeps its teeth.
+        assert!(glyph_range_for(
+            &page_of(&[("0.45\u{b5}m", 0.0, 0.0)]),
+            "0.22 \u{3bc}m",
+            within
+        )
+        .is_none());
     }
 
     #[test]
