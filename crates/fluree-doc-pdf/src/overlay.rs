@@ -162,7 +162,12 @@ fn glyph_range_for(page: &Page, needle: &str, within: BBox) -> Option<(usize, us
             return Some((a, b));
         }
         best.get_or_insert((a, b));
-        from = at + 1;
+        // Advance one CHARACTER, not one byte: `flat` is UTF-8, and a
+        // byte step lands inside a multibyte character, so the next
+        // slice panics. Latent until NFKC folding let micro-sign
+        // needles match at all — then a page whose text contains µ
+        // brought the whole run down.
+        from = at + flat[at..].chars().next().map_or(1, char::len_utf8);
         if from >= flat.len() {
             break;
         }
@@ -252,6 +257,29 @@ mod tests {
             within
         )
         .is_none());
+    }
+
+    /// The needle scan walks `flat` looking for further occurrences.
+    /// Advancing by a byte lands inside a multibyte character and the
+    /// next slice panics — which took down a whole extraction run once
+    /// micro-sign needles started matching. Two occurrences with a µ
+    /// between them force the loop past that boundary.
+    #[test]
+    fn scanning_past_a_match_never_splits_a_character() {
+        let within = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 500.0,
+            y1: 20.0,
+        };
+        // "ab" appears twice, with a micro sign in between; finding the
+        // first match must not panic while looking for the second.
+        let page = page_of(&[("ab\u{b5}ab", 0.0, 0.0)]);
+        assert!(glyph_range_for(&page, "ab", within).is_some());
+        // A needle that appears only AFTER the multibyte character is
+        // reachable — the scan must actually get there.
+        let page = page_of(&[("\u{b5}xy", 0.0, 0.0)]);
+        assert!(glyph_range_for(&page, "xy", within).is_some());
     }
 
     #[test]
