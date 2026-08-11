@@ -782,10 +782,7 @@ fn is_banner(xs: &[f64], ys: &[f64], rules: &[Rule]) -> bool {
     // decorative bar in a margin vouch for a row it never touched, which
     // called every entry of a ruled table of contents a banner.
     let mid = (ys[0] + ys[1]) / 2.0;
-    let (lo, hi) = (
-        xs[0] - EDGE_TOLERANCE,
-        xs[xs.len() - 1] + EDGE_TOLERANCE,
-    );
+    let (lo, hi) = (xs[0] - EDGE_TOLERANCE, xs[xs.len() - 1] + EDGE_TOLERANCE);
     rules.iter().any(|r| {
         r.orientation == Orientation::Vertical
             && r.bbox.y0 <= mid
