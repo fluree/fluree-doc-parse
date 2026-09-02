@@ -534,7 +534,19 @@ fn replace_read_pages(
     readings: &dyn TierBackend,
     page_text: &[Vec<String>],
 ) {
+    // Pages in document order: every page an element sits on, plus every
+    // page a reading exists for. The second set matters exactly when the
+    // first misses a page — a scan yields no elements at all, and taking
+    // the page list from the elements alone made a full-page reading of it
+    // vanish: the one page the reader was asked to read was the one page
+    // never visited. `page_text` is the page count when the caller has one.
     let mut order: Vec<usize> = elements.iter().map(|e| e.page).collect();
+    order.extend((0..page_text.len()).filter(|page| {
+        readings
+            .read(stem, &format!("p{page}_full"))
+            .is_some_and(|blocks| !blocks.is_empty())
+    }));
+    order.sort_unstable();
     order.dedup();
     if order.is_empty() {
         return;
@@ -892,6 +904,48 @@ mod tests {
                 }]
             })
         }
+    }
+
+    /// A scanned page has no deterministic elements, so the page list taken
+    /// from the elements never contained it and its reading was dropped.
+    /// With the page count known, the reading stands in for the page.
+    #[test]
+    fn a_full_page_reading_lands_on_a_page_with_no_elements() {
+        let mut elements: Vec<Element> = Vec::new();
+        splice_with_page(
+            &mut elements,
+            "scan",
+            &OneReading("p0_full", "# Santa Fe New Mexican\n\nthe whole page"),
+            None,
+            &[Vec::new()],
+        );
+        assert_eq!(elements.len(), 1);
+        assert_eq!(elements[0].page, 0);
+        assert_eq!(elements[0].evidence, "page-tier");
+        assert!(elements[0].text.contains("the whole page"));
+
+        // Without a page count nothing changes: the caller offered no pages,
+        // so there is nothing to place a reading on.
+        let mut none: Vec<Element> = Vec::new();
+        splice_with_page(&mut none, "scan", &OneReading("p0_full", "x"), None, &[]);
+        assert!(none.is_empty());
+    }
+
+    /// A read page keeps its place among pages that were read
+    /// deterministically.
+    #[test]
+    fn a_read_page_keeps_its_place_between_unread_neighbours() {
+        let mut elements = vec![on_page(0, "first page"), on_page(2, "third page")];
+        splice_with_page(
+            &mut elements,
+            "doc",
+            &OneReading("p1_full", "the scanned middle page"),
+            None,
+            &[Vec::new(), Vec::new(), Vec::new()],
+        );
+        let pages: Vec<usize> = elements.iter().map(|e| e.page).collect();
+        assert_eq!(pages, vec![0, 1, 2]);
+        assert_eq!(elements[1].evidence, "page-tier");
     }
 
     fn on_page(page: usize, text: &str) -> Element {
