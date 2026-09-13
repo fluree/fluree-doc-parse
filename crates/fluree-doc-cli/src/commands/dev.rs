@@ -330,32 +330,29 @@ pub(crate) fn pair(pdf: &Path, needle: &str) {
 }
 
 /// Report detected page furniture. T2.7 in eval/TEST_PLAN.md.
+///
+/// Read from the pipeline's own analysis rather than from a re-run of the
+/// detector over every assembled line: grids take their glyphs before the
+/// furniture pass sees a page, so a detector fed every line reported
+/// strippings — a flow sheet's clock labels as page numbers — that the
+/// pipeline never made.
 pub(crate) fn furn(pdf: &Path) {
-    let mut doc = extract_file(pdf).expect("extract");
-    let mut pages: Vec<(Vec<fluree_doc_pdf::Line>, f64)> = Vec::new();
-    for p in &mut doc.pages {
-        dedup::remove_faux_bold(&mut p.glyphs, 8);
-        pages.push((line::assemble_page(&p.glyphs), p.height));
-    }
-    let found = furniture::detect(&pages);
+    let data = std::fs::read(pdf).expect("read");
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone())).expect("parse");
+    let ol = outline::extract(&raw);
+    let mut doc = fluree_doc_pdf::extract_bytes(data).expect("extract");
+    let a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for(pdf));
     // Group by (kind, text) so every distinct piece of furniture is visible -
     // reporting one example per kind hid the watermark behind the footer.
     let mut seen: std::collections::BTreeMap<(String, String), usize> = Default::default();
-    let (mut total, mut body) = (0usize, 0usize);
-    for (pi, marks) in found.iter().enumerate() {
-        total += pages[pi].0.len();
-        body += pages[pi].0.len() - marks.len();
-        for (li, kind) in marks {
-            let t: String = pages[pi].0[*li].text.chars().take(66).collect();
-            *seen.entry((format!("{kind:?}"), t)).or_default() += 1;
-        }
+    for (_, text, kind) in &a.furniture_marks {
+        let t: String = text.chars().take(66).collect();
+        *seen.entry((format!("{kind:?}"), t)).or_default() += 1;
     }
     println!(
-        "{} pages, {} lines, {} body lines after stripping ({} removed)",
-        pages.len(),
-        total,
-        body,
-        total - body
+        "{} pages, {} lines removed as furniture",
+        doc.pages.len(),
+        a.furniture_removed
     );
     let mut rows: Vec<_> = seen.into_iter().collect();
     rows.sort_by_key(|((k, _), n)| (k.clone(), std::cmp::Reverse(*n)));
@@ -364,10 +361,44 @@ pub(crate) fn furn(pdf: &Path) {
     }
     let singles = rows.iter().filter(|(_, n)| *n == 1).count();
     if singles > 0 {
-        println!("  (+{singles} distinct single-occurrence variants)");
+        println!("  ({singles} more seen once)");
     }
-    if rows.is_empty() {
-        println!("  (none detected)");
+    let with: Vec<(usize, &str)> = a
+        .folios
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| f.as_deref().map(|f| (i, f)))
+        .collect();
+    let mut distinct: Vec<&str> = with.iter().map(|(_, f)| *f).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if with.is_empty() {
+        println!("no folio: no page-number line covers enough pages");
+    } else {
+        let sample: Vec<String> = with
+            .iter()
+            .take(4)
+            .map(|(i, f)| format!("p{} {f:?}", i + 1))
+            .collect();
+        println!(
+            "folio on {} of {} pages ({} distinct): {}{}",
+            with.len(),
+            doc.pages.len(),
+            distinct.len(),
+            sample.join(", "),
+            if with.len() > 4 { ", …" } else { "" }
+        );
+        let missing: Vec<String> = a
+            .folios
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.is_none())
+            .take(12)
+            .map(|(i, _)| format!("p{}", i + 1))
+            .collect();
+        if !missing.is_empty() {
+            println!("  none on {}", missing.join(" "));
+        }
     }
 }
 
@@ -780,9 +811,24 @@ pub(crate) fn tables(pdf: &Path, page: Option<usize>) {
         dedup::remove_faux_bold(&mut p.glyphs, 8);
         for g in grids.iter_mut() {
             g.trim_to_content(&p.glyphs);
-            println!("grid on p{}: {} cols x {} rows", g.page, g.cols(), g.rows());
+            let spanning = g.split_by_alignment(&p.glyphs);
+            println!(
+                "grid on p{}: {} cols x {} rows{}",
+                g.page,
+                g.cols(),
+                g.rows(),
+                if spanning.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (columns from alignment; rows {spanning:?} span them)")
+                }
+            );
             let cells = g.cell_texts(&p.glyphs);
             for r in 0..g.rows() {
+                if spanning.contains(&r) {
+                    println!("  | {}", g.row_text(&p.glyphs, r));
+                    continue;
+                }
                 let row: Vec<&str> = (0..g.cols())
                     .map(|c| cells[r * g.cols() + c].as_str())
                     .collect();

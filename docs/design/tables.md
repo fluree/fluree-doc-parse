@@ -57,6 +57,22 @@ two crossed bands, because in a table ruled with horizontals alone every band
 is uncrossed, and splitting on those alone turns a ruled table of contents into
 one table per entry.
 
+## A one-column grid reads its columns from its text
+
+A key/value list ruled with horizontals only — a billing summary's `MS-DRG …
+207`, `DRG Weight … 9.1742` — draws no vertical, so its grid is one column
+and every row read label and value as one cell. The column is there all the
+same: a gap of empty space that runs down the rows with text on both sides of
+it. A one-column grid of three or more rows is scanned for such gaps, and
+each becomes a boundary at its midpoint. Two guards keep prose out: a gap
+must be free in nearly every row, and most rows must set text on both sides
+of it, or it is the ragged right of short lines.
+
+A row whose text runs across a cut — a boxed notice welded in above the
+list, a banner spanning it — is read whole into its first cell and marked
+`merged_left` across the row, rather than having its words dealt out by which
+side of the cut they fell.
+
 ## Banners
 
 A letterhead is a single row of fields ruled side by side, and it is a table.

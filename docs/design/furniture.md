@@ -121,3 +121,11 @@ beside them, which never change, are not, and a flow sheet's `16:00` row
 label — which repeats at a stable position on hundreds of pages and takes six
 values between them — is a clock. The page-number line that covers the most
 pages supplies it.
+
+The folio is read from the page's edges over *every* glyph, not from the
+lines left after grids took theirs. A form's key/value grid that runs down
+into the footer band takes the footer's glyphs with it — the furniture pass
+never sees the line, and the page had no folio although it printed one. The
+edge bands are where pagination lives, and assembling them a second time is
+cheap. `fdoc dev furniture` reports what the pipeline stripped and which
+pages carry a folio.

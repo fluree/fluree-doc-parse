@@ -74,6 +74,7 @@ project = "my-project"          # optional; read from the key when absent
 | `model` | passed to the provider unchanged |
 | `concurrency` | crops read at once |
 | `on_column_doubt` | also escalate pages that read across their panels |
+| `max_crops` | most crops one document sends; past it the most valuable are read and the rest keep their deterministic reading (default 200, `0` for no limit) |
 | `gemini.credentials` | path to the service-account JSON key |
 | `gemini.project` | overrides the project named in the key |
 
@@ -108,6 +109,25 @@ lives in a corpus's configuration.
 
 ```bash
 fdoc config set escalation.on_column_doubt true
+```
+
+## How much one document may send
+
+`fdoc convert` says what it is about to pay for before the first call:
+
+```
+note: chart.pdf: 21 crop(s) to read with gemini-3-flash-preview
+```
+
+and `fdoc triage <file>` prints the same count as a `CROPS` line without
+sending anything. Past `max_crops` the most valuable crops are read — a
+scanned page before a doubted table — and the rest keep their deterministic
+reading, with a note saying how many were left. The deterministic pass is
+complete on its own, so the limit truncates rather than fails; see [how many
+readings a document asks for](../concepts/escalation.md#how-many-readings-a-document-asks-for).
+
+```bash
+fdoc config set escalation.max_crops 500
 ```
 
 Editing through `fdoc config set` preserves comments and any key this build

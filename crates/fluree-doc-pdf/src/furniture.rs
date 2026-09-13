@@ -17,7 +17,7 @@ use std::collections::HashMap;
 /// Fraction of page height from the top/bottom edge within which a line is
 /// eligible to be furniture. Wide enough for multi-line headers and for a
 /// footer/watermark pair sitting as low as 0.91 and 0.95 of page height.
-const EDGE_BAND: f64 = 0.18;
+pub const EDGE_BAND: f64 = 0.18;
 
 /// Fraction of pages a repeated line must appear on. Deliberately low: a
 /// document may change its running head between front matter and body, and a

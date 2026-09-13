@@ -99,7 +99,7 @@ pub(crate) fn crops_for(f: &Path, bytes: &[u8], doc: &Document, on_column_doubt:
         }
         if on_column_doubt || std::env::var_os("FDOC_ESCALATE_COLUMNS").is_some() {
             for p in &doc.pages {
-                if fluree_doc_pdf::column::doubt(&p.glyphs).is_some() {
+                if fluree_doc_pdf::document::column_doubt(p, &a).is_some() {
                     match jobs.iter_mut().find(|(pi, _)| *pi == p.index) {
                         Some((_, slot)) => *slot = None,
                         None => jobs.push((p.index, None)),

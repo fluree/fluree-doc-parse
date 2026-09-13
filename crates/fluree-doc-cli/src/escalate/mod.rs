@@ -113,6 +113,26 @@ pub(crate) fn read_document(
     if jobs.is_empty() {
         return Ok(Readings::default());
     }
+    // Say what is about to be paid for, before the first call. A chart of
+    // a thousand templated tables asked for a reading each and printed
+    // nothing for six minutes.
+    let planned = fluree_doc_pdf::escalate::crop_count(&jobs);
+    eprintln!(
+        "note: {}: {planned} crop(s) to read with {}",
+        file.display(),
+        config.model()
+    );
+    let max = config.escalation.max_crops;
+    let jobs = if max > 0 && planned > max {
+        let (kept, dropped) = fluree_doc_pdf::escalate::within_budget(doc, jobs, max);
+        eprintln!(
+            "note: {}: reading the {max} most valuable and leaving {dropped} to the deterministic pass — raise `escalation.max_crops` (0 for no limit) to read them all",
+            file.display()
+        );
+        kept
+    } else {
+        jobs
+    };
     let crops = render::render_crops(pdf, &jobs);
     if crops.is_empty() {
         return Ok(Readings::default());

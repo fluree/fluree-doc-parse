@@ -64,6 +64,16 @@ pub struct Escalation {
     /// configuration.
     #[serde(default)]
     pub on_column_doubt: bool,
+    /// Most crops one document may send to the reader. Past it, the most
+    /// valuable crops are read and the rest keep their deterministic
+    /// reading, with a note saying how many. Zero means no limit.
+    ///
+    /// The deterministic pass is complete on its own; every crop only
+    /// improves on it. So the limit truncates rather than fails, and the
+    /// default is sized for a report, not a thousand-table chart — which
+    /// is the document that needs it.
+    #[serde(default = "default_max_crops")]
+    pub max_crops: usize,
     #[serde(default)]
     pub gemini: Gemini,
 }
@@ -85,6 +95,10 @@ fn default_concurrency() -> usize {
     6
 }
 
+fn default_max_crops() -> usize {
+    200
+}
+
 impl Default for Escalation {
     fn default() -> Self {
         Escalation {
@@ -93,6 +107,7 @@ impl Default for Escalation {
             model: None,
             concurrency: default_concurrency(),
             on_column_doubt: false,
+            max_crops: default_max_crops(),
             gemini: Gemini::default(),
         }
     }
@@ -327,6 +342,11 @@ enabled = true
 # exactly the pages that need it. `fdoc triage <file>` reports which pages
 # this would add, without sending anything.
 # on_column_doubt = false
+
+# Most crops one document may send. Past it the most valuable are read and
+# the rest keep their deterministic reading, with a note. 0 means no limit.
+# `fdoc triage <file>` prints the count a document would send.
+# max_crops = 200
 
 [escalation.gemini]
 # Path to a Google service-account JSON key with the Vertex AI User role.

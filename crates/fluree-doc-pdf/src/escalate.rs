@@ -184,7 +184,7 @@ pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> 
     // on the corpus, and nothing on the page says which kind you have.
     if on_column_doubt {
         for p in &doc.pages {
-            if crate::column::doubt(&p.glyphs).is_some() {
+            if crate::document::column_doubt(p, analysis).is_some() {
                 match jobs.iter_mut().find(|(pi, _)| *pi == p.index) {
                     Some((_, slot)) => *slot = None,
                     None => jobs.push((p.index, None)),

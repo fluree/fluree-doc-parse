@@ -87,6 +87,8 @@ pub fn run(path: &Path) -> i32 {
         let mut suspects = Vec::new();
         let mut doubt: Vec<fluree_doc_pdf::heading::Doubt> = Vec::new();
         let mut figure_doubt: Vec<fluree_doc_pdf::figure::Doubt> = Vec::new();
+        let mut column_doubts: Vec<(usize, fluree_doc_pdf::column::Doubt)> = Vec::new();
+        let mut crops = 0usize;
         {
             if let (Ok(mut d), Some(raw)) = (
                 extract_file(f),
@@ -95,9 +97,23 @@ pub fn run(path: &Path) -> i32 {
                     .and_then(|b| hayro_syntax::Pdf::new(std::sync::Arc::new(b)).ok()),
             ) {
                 let ol = fluree_doc_pdf::outline::extract(&raw);
-                let a = fluree_doc_pdf::document::analyze_with(&mut d, &ol, &opts_for(f));
+                // Anchors on, so the crop count below is the one a reader
+                // would be handed. Heading doubt does not count them.
+                let mut ropts = opts_for(f);
+                ropts.emit_anchors = true;
+                let a = fluree_doc_pdf::document::analyze_with(&mut d, &ol, &ropts);
                 doubt = a.suspect_headings.clone();
                 figure_doubt = a.suspect_figures.clone();
+                column_doubts = d
+                    .pages
+                    .iter()
+                    .filter_map(|p| {
+                        fluree_doc_pdf::document::column_doubt(p, &a).map(|c| (p.index, c))
+                    })
+                    .collect();
+                crops = fluree_doc_pdf::escalate::crop_count(&fluree_doc_pdf::escalate::crops_for(
+                    &d, &a, false,
+                ));
                 tables_total += a.tables;
                 tables_suspect += a.suspect_tables.len();
                 for s in &a.suspect_tables {
@@ -136,15 +152,17 @@ pub fn run(path: &Path) -> i32 {
                 d.chars
             );
         }
-        let mut column_doubt = false;
-        for p in &doc.pages {
-            if let Some(c) = fluree_doc_pdf::column::doubt(&p.glyphs) {
-                column_doubt = true;
-                println!(
-                    "{name}\tCOLUMN\tp{} {} column(s) found, {} gutter(s) visible only in a band covering {:.0}% of rows",
-                    p.index + 1, c.found, c.missed, c.band * 100.0
-                );
-            }
+        let column_doubt = !column_doubts.is_empty();
+        for (page, c) in &column_doubts {
+            println!(
+                "{name}\tCOLUMN\tp{} {} column(s) found, {} gutter(s) visible only in a band covering {:.0}% of rows",
+                page + 1, c.found, c.missed, c.band * 100.0
+            );
+        }
+        // What a configured reader would be handed, before anything is
+        // sent: the number a consumer's cap is measured against.
+        if crops > 0 {
+            println!("{name}\tCROPS\t{crops} crop(s) would be read by a configured reader");
         }
         // The report is only useful if it says what to do about it. These
         // pages are the ones that read across their panels, and they do not

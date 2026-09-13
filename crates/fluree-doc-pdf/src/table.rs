@@ -212,6 +212,139 @@ impl Grid {
             .collect()
     }
 
+    /// Derive columns for a one-column grid from the alignment of its text.
+    ///
+    /// A key/value list ruled with horizontals only — a billing summary's
+    /// `MS-DRG … 207`, `DRG Weight … 9.1742` — draws no vertical, so its grid
+    /// is one column and every row reads label and value as one cell. The
+    /// column is there all the same: a gap of empty space that runs down
+    /// the rows with text on both sides of it. Each such gap becomes a
+    /// boundary at its midpoint.
+    ///
+    /// Returns the rows whose text crosses a new boundary — a boxed notice
+    /// or a banner welded into the grid — so the caller can mark them as
+    /// spanning rather than let them read as two cells. Empty when nothing
+    /// was split.
+    pub fn split_by_alignment(&mut self, glyphs: &[crate::glyph::Glyph]) -> Vec<usize> {
+        if self.cols() != 1 || self.rows() < ALIGNED_SPLIT_MIN_ROWS {
+            return Vec::new();
+        }
+        let rows = self.rows();
+        let mut ink: Vec<Vec<(f64, f64)>> = vec![Vec::new(); rows];
+        let mut sizes: Vec<f32> = Vec::new();
+        for g in glyphs {
+            let Some(b) = g.bbox else { continue };
+            if g.text.trim().is_empty() || !g.is_horizontal() {
+                continue;
+            }
+            if let Some((r, _)) = self.cell_at((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5) {
+                ink[r].push((b.x0, b.x1));
+                sizes.push(g.font_size);
+            }
+        }
+        let text_rows: Vec<usize> = (0..rows).filter(|r| !ink[*r].is_empty()).collect();
+        if text_rows.len() < ALIGNED_SPLIT_MIN_ROWS {
+            return Vec::new();
+        }
+        sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let font = sizes[sizes.len() / 2].max(1.0) as f64;
+        let min_gap = (font * ALIGNED_SPLIT_GAP_EMS).max(ALIGNED_SPLIT_GAP_MIN);
+        let (x0, x1) = (self.xs[0], self.xs[1]);
+
+        // Walk the width in one-point steps; a step is free when almost no
+        // row inks it.
+        let covered_at = |x: f64| {
+            text_rows
+                .iter()
+                .filter(|r| ink[**r].iter().any(|(a, b)| *a <= x && x <= *b))
+                .count()
+        };
+        let allowed = text_rows.len() * ALIGNED_SPLIT_CROSSING_PCT / 100;
+        let mut gaps: Vec<(f64, f64)> = Vec::new();
+        let mut start: Option<f64> = None;
+        let mut x = x0;
+        while x <= x1 {
+            let free = covered_at(x) <= allowed;
+            match (free, start) {
+                (true, None) => start = Some(x),
+                (false, Some(s)) => {
+                    gaps.push((s, x - 1.0));
+                    start = None;
+                }
+                _ => {}
+            }
+            x += 1.0;
+        }
+        if let Some(s) = start {
+            gaps.push((s, x1));
+        }
+        let mut cuts: Vec<f64> = Vec::new();
+        for (s, e) in gaps {
+            if e - s < min_gap {
+                continue;
+            }
+            // Text on both sides in most rows, or the gap is a margin.
+            let both = text_rows
+                .iter()
+                .filter(|r| {
+                    ink[**r].iter().any(|(_, b)| *b < s) && ink[**r].iter().any(|(a, _)| *a > e)
+                })
+                .count();
+            if both * 100 < text_rows.len() * ALIGNED_SPLIT_BOTH_SIDES_PCT {
+                continue;
+            }
+            cuts.push((s + e) / 2.0);
+        }
+        if cuts.is_empty() {
+            return Vec::new();
+        }
+        // A row spans a cut when its text runs across it: ink on both sides
+        // with no more than a word space between — a glyph straddling the
+        // cut, or a word gap that happens to fall on it.
+        let spanning: Vec<usize> = (0..rows)
+            .filter(|r| {
+                cuts.iter().any(|c| {
+                    let left = ink[*r]
+                        .iter()
+                        .filter(|(a, _)| *a < *c)
+                        .map(|(_, b)| *b)
+                        .fold(f64::MIN, f64::max);
+                    let right = ink[*r]
+                        .iter()
+                        .filter(|(_, b)| *b > *c)
+                        .map(|(a, _)| *a)
+                        .fold(f64::MAX, f64::min);
+                    left > f64::MIN && right < f64::MAX && right - left < min_gap
+                })
+            })
+            .collect();
+        let mut xs = vec![x0];
+        xs.extend(cuts);
+        xs.push(x1);
+        self.xs = xs;
+        spanning
+    }
+
+    /// The text of one row read across the whole grid, ignoring columns —
+    /// for a row that spans them.
+    pub fn row_text(&self, glyphs: &[crate::glyph::Glyph], row: usize) -> String {
+        let inside: Vec<crate::glyph::Glyph> = glyphs
+            .iter()
+            .filter(|g| {
+                g.bbox.is_some() && !g.text.trim().is_empty() && g.is_horizontal() && {
+                    let (x, y) = g.center();
+                    self.cell_at(x, y).is_some_and(|(r, _)| r == row)
+                }
+            })
+            .cloned()
+            .collect();
+        crate::line::assemble(&inside)
+            .iter()
+            .map(|l| l.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub fn cols(&self) -> usize {
         self.xs.len().saturating_sub(1)
     }
@@ -1050,6 +1183,20 @@ fn merged_rows(g: &Grid, cells: &[String]) -> bool {
     }
     false
 }
+
+/// Rows a one-column grid needs before its text alignment is read for
+/// columns; see [`Grid::split_by_alignment`].
+const ALIGNED_SPLIT_MIN_ROWS: usize = 3;
+/// Narrowest gap, in ems of the grid's text, that separates two columns.
+const ALIGNED_SPLIT_GAP_EMS: f64 = 1.5;
+/// Narrowest gap in points, whatever the type size.
+const ALIGNED_SPLIT_GAP_MIN: f64 = 12.0;
+/// Share of text rows whose ink may cross a gap and leave it a gap: a boxed
+/// notice or banner spanning the list.
+const ALIGNED_SPLIT_CROSSING_PCT: usize = 20;
+/// Share of text rows that must set text on both sides of a gap for it to
+/// be a column boundary rather than the ragged right of short rows.
+const ALIGNED_SPLIT_BOTH_SIDES_PCT: usize = 60;
 
 /// Horizontal overlap, as a fraction of the narrower box, above which two
 /// grids sit in the same column band.
@@ -2491,6 +2638,121 @@ mod header_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_one_column_list_with_aligned_values_splits_into_two() {
+        use crate::glyph::Glyph;
+        // Labels at x=46, values at x=227, six rows 15pt apart, plus a
+        // notice line spanning the width in row 0.
+        let mut glyphs = Vec::new();
+        let mut put = |text: &str, x: f64, y: f64| {
+            let mut cx = x;
+            for (i, ch) in text.chars().enumerate() {
+                glyphs.push(Glyph {
+                    text: ch.to_string(),
+                    bbox: Some(BBox {
+                        x0: cx,
+                        y0: y - 7.0,
+                        x1: cx + 4.0,
+                        y1: y + 2.0,
+                    }),
+                    page: 0,
+                    origin: (cx, y),
+                    rotation_deg: 0.0,
+                    font_size: 8.4,
+                    weight: None,
+                    advance: Some(4.5),
+                    draw_index: i,
+                });
+                cx += 4.5;
+            }
+        };
+        put(
+            "SYNTHETIC DATA — every figure on this page is fabricated for testing purposes only",
+            50.0,
+            230.0,
+        );
+        for (i, (k, v)) in [
+            ("MS-DRG", "207 — Respiratory System"),
+            ("MDC", "04 — Respiratory"),
+            ("DRG Weight", "9.1742"),
+            ("GMLOS", "18.5 days"),
+            ("AMLOS", "23.7 days"),
+            ("SOI", "4 (Extreme)"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 259.0 + 15.0 * i as f64;
+            put(k, 46.0, y);
+            put(v, 227.0, y);
+        }
+        let mut g = Grid {
+            page: 0,
+            xs: vec![40.0, 572.0],
+            ys: (0..8)
+                .map(|i| 222.0 + 15.0 * i as f64 + if i > 0 { 33.0 } else { 0.0 })
+                .collect(),
+            bbox: BBox {
+                x0: 40.0,
+                y0: 222.0,
+                x1: 572.0,
+                y1: 360.0,
+            },
+        };
+        // Row 0 is the tall notice band 222..255; rows 1.. are the list.
+        g.ys = vec![222.0, 255.0, 270.0, 285.0, 300.0, 315.0, 330.0, 345.0];
+        let spanning = g.split_by_alignment(&glyphs);
+        assert_eq!(g.cols(), 2, "xs = {:?}", g.xs);
+        assert!(g.xs[1] > 120.0 && g.xs[1] < 227.0, "cut at {}", g.xs[1]);
+        assert_eq!(spanning, vec![0], "the notice row spans the cut");
+        let cells = g.cell_texts(&glyphs);
+        assert_eq!(cells[2], "MS-DRG");
+        assert_eq!(cells[3], "207 — Respiratory System");
+    }
+
+    #[test]
+    fn a_ragged_right_is_not_a_column() {
+        use crate::glyph::Glyph;
+        // Short labels only: the empty space right of them is a margin.
+        let mut glyphs = Vec::new();
+        for (i, k) in ["Alpha", "Beta", "Gamma", "Delta"].iter().enumerate() {
+            let y = 259.0 + 15.0 * i as f64;
+            let mut cx = 46.0;
+            for (j, ch) in k.chars().enumerate() {
+                glyphs.push(Glyph {
+                    text: ch.to_string(),
+                    bbox: Some(BBox {
+                        x0: cx,
+                        y0: y - 7.0,
+                        x1: cx + 4.0,
+                        y1: y + 2.0,
+                    }),
+                    page: 0,
+                    origin: (cx, y),
+                    rotation_deg: 0.0,
+                    font_size: 8.4,
+                    weight: None,
+                    advance: Some(4.5),
+                    draw_index: j,
+                });
+                cx += 4.5;
+            }
+        }
+        let mut g = Grid {
+            page: 0,
+            xs: vec![40.0, 572.0],
+            ys: vec![252.0, 267.0, 282.0, 297.0, 312.0],
+            bbox: BBox {
+                x0: 40.0,
+                y0: 252.0,
+                x1: 572.0,
+                y1: 312.0,
+            },
+        };
+        assert!(g.split_by_alignment(&glyphs).is_empty());
+        assert_eq!(g.cols(), 1);
+    }
 
     fn h(x0: f64, x1: f64, y: f64) -> Rule {
         Rule {

@@ -35,6 +35,14 @@ const MIN_FILLS: usize = 3;
 /// bars do not.
 const MAX_SHARED_X: f64 = 0.6;
 
+/// A fill at least this fraction of its cluster's width wide is a box
+/// around text, not a shape in a drawing…
+const PANEL_WIDTH: f64 = 0.9;
+
+/// …provided it is a strip: at least this many times wider than tall. A
+/// plot's background rectangle spans its cluster too, and is not one.
+const STRIP_ASPECT: f64 = 4.0;
+
 /// Largest a figure may be, as a fraction of the page. Beyond this the fills
 /// are page furniture — a full-bleed background or a cover panel — not a
 /// chart sitting in a column of text.
@@ -194,6 +202,24 @@ pub fn detect(fills: &[Fill], rules: &[Rule], page: usize, size: (f64, f64)) -> 
             shared = shared.max(n);
         }
         if shared as f64 / group.len() as f64 > MAX_SHARED_X {
+            continue;
+        }
+        // Strips, not a drawing. A section's header panel with its accent
+        // bar and the identification box beneath it are three shapes, and
+        // two of them are strips running the whole width of the cluster.
+        // A chart's shapes are not: bars stop at their values, wedges at
+        // their share, and a plot's background is as tall as it is wide.
+        // When half the shapes are strips spanning the cluster, the cluster
+        // is a stack of boxes around text, and the text is headings and
+        // fields — not labels.
+        let strips = group
+            .iter()
+            .filter(|&&i| {
+                let f = boxes[i];
+                f.width() >= b.width() * PANEL_WIDTH && f.width() >= f.height() * STRIP_ASPECT
+            })
+            .count();
+        if strips * 2 >= group.len() {
             continue;
         }
         // A ruled table's shading is bounded by its rules rather than crossed
@@ -372,6 +398,30 @@ mod tests {
 
     fn bb(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
         BBox { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn a_plot_with_a_spanning_background_is_still_a_figure() {
+        // Nested plot areas as tall as they are wide, plus two markers.
+        let f = fills(&[
+            bb(132.0, 382.0, 524.0, 518.0),
+            bb(141.0, 405.0, 503.0, 535.0),
+            bb(152.0, 426.0, 515.0, 535.0),
+            bb(293.0, 570.0, 299.0, 575.0),
+            bb(327.0, 570.0, 331.0, 575.0),
+        ]);
+        assert_eq!(detect(&f, &[], 0, (612.0, 792.0)).len(), 1);
+    }
+
+    #[test]
+    fn a_stack_of_boxes_around_text_is_not_a_figure() {
+        // A header panel, its accent bar, and an identification box below.
+        let f = fills(&[
+            bb(46.0, 100.0, 578.0, 163.0),
+            bb(46.0, 100.0, 55.0, 163.0),
+            bb(40.0, 171.0, 572.0, 216.0),
+        ]);
+        assert!(detect(&f, &[], 0, (612.0, 792.0)).is_empty());
     }
 
     fn fills(v: &[BBox]) -> Vec<Fill> {

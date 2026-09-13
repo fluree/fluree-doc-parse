@@ -15,6 +15,7 @@
 use crate::block::{self, Block};
 use crate::dedup;
 use crate::extract::Document as RawDoc;
+use crate::extract::Page;
 use crate::heading::{self, Evidence};
 use crate::line::{self, Line};
 use crate::outline::OutlineItem;
@@ -54,6 +55,9 @@ pub struct Analysis {
     /// pages; see [`furniture::detect_with_folios`]. Indexed by page
     /// position.
     pub folios: Vec<Option<String>>,
+    /// Every line removed as furniture, as `(page, text, kind)` — the record
+    /// of what the pass above actually stripped, for a tool explaining it.
+    pub furniture_marks: Vec<(usize, String, furniture::Furniture)>,
     pub tables: usize,
     /// Wall clock per stage; see [`StageTimings`].
     pub timings: StageTimings,
@@ -365,6 +369,10 @@ pub struct AnalyzeOptions {
     pub table_conf_debug: bool,
 }
 
+/// Drawn grids a document may hold before a reading per table stops being
+/// earned; see the table-confidence anchors in [`analyze_with`].
+const TRUSTED_RULING_TABLES: usize = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GridSource {
     Ruled,
@@ -376,6 +384,9 @@ enum GridSource {
 struct PageLayout {
     grids: Vec<Grid>,
     grid_sources: Vec<GridSource>,
+    /// Per grid, rows whose text crosses a column boundary read from
+    /// alignment rather than drawn; see [`Grid::split_by_alignment`].
+    spanning_rows: Vec<Vec<usize>>,
     prose_columns: Vec<Vec<Line>>,
     route: crate::route::Route,
     missing_tables: Vec<crate::geom::BBox>,
@@ -635,6 +646,15 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
 
+        // A one-column grid — a key/value list ruled with horizontals only —
+        // reads its columns from where its text sits.
+        let spanning_rows: Vec<Vec<usize>> = timed(&mut timings.tables, || {
+            grids
+                .iter_mut()
+                .map(|g| g.split_by_alignment(&p.glyphs))
+                .collect()
+        });
+
         flat_lines.push((cols.iter().flatten().cloned().collect(), p.height));
         if opts.table_conf_debug {
             for (ti, g) in grids.iter().enumerate() {
@@ -695,6 +715,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         layouts.push(PageLayout {
             grids,
             grid_sources,
+            spanning_rows,
             prose_columns: cols,
             route,
             missing_tables: missing,
@@ -702,9 +723,35 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let (marks, folios) = timed(&mut timings.furniture, || {
-        furniture::detect_with_folios(&flat_lines)
+    let marks = timed(&mut timings.furniture, || furniture::detect(&flat_lines));
+    // The folio is read from the page's edges over *every* glyph, not from
+    // the lines left after grids took theirs: a form's key/value grid that
+    // runs down into the footer band takes the footer's glyphs with it, and
+    // on those pages the page number was never seen at all. The edge bands
+    // are where pagination lives, and assembling them again is cheap.
+    let folios = timed(&mut timings.furniture, || {
+        let edges: Vec<(Vec<Line>, f64)> = raw
+            .pages
+            .iter()
+            .map(|p| {
+                let band = p.height * furniture::EDGE_BAND;
+                let edge: Vec<Glyph> = p
+                    .glyphs
+                    .iter()
+                    .filter(|g| g.origin.1 < band || g.origin.1 > p.height - band)
+                    .cloned()
+                    .collect();
+                (line::assemble_page(&edge), p.height)
+            })
+            .collect();
+        furniture::detect_with_folios(&edges).1
     });
+    let mut furniture_marks: Vec<(usize, String, furniture::Furniture)> = Vec::new();
+    for (pi, m) in marks.iter().enumerate() {
+        for (li, kind) in m {
+            furniture_marks.push((pi, flat_lines[pi].0[*li].text.clone(), *kind));
+        }
+    }
 
     // Furniture texts for cell scrubbing: grids capture their glyphs before
     // the cross-page furniture pass runs, so a footer crossing a table region
@@ -837,6 +884,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     }
 
     let mut elements = Vec::new();
+    let ruled_tables = layouts
+        .iter()
+        .flat_map(|l| l.grid_sources.iter())
+        .filter(|s| **s == GridSource::Ruled)
+        .count();
+
     let mut n = 0usize;
     let mut tables = 0usize;
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
@@ -994,7 +1047,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect()
                 })
                 .collect();
-            let merges = g.merges(&raw.pages[pi].rules, &raw.pages[pi].fills);
+            let mut merges = g.merges(&raw.pages[pi].rules, &raw.pages[pi].fills);
+            // A row whose text crosses an alignment-derived boundary is one
+            // cell across the row — a boxed notice over a key/value list.
+            // Its text is read whole into the first cell, since the cut
+            // would otherwise deal its words out by which side they fell.
+            let cols = g.cols();
+            let mut rows = rows;
+            for &r in &layout.spanning_rows[gi] {
+                rows[r][0] =
+                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &furniture_texts);
+                for (c, cell) in rows[r].iter_mut().enumerate().skip(1) {
+                    cell.clear();
+                    merges.continues_left[r * cols + c] = true;
+                }
+            }
             let header_rows = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
@@ -1049,6 +1116,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         if opts.emit_anchors {
             for (ti, g) in layout.grids.iter().enumerate() {
                 if layout.demoted_tables[ti] {
+                    continue;
+                }
+                // A document with this many drawn grids is a chart or a
+                // ledger built from one template, and its ruling is the
+                // template's: a reading per table would cost a reading per
+                // page of an 800-page record to confirm what the rules
+                // already say. Escalation is earned per table by an
+                // inferred structure or a disagreeing one, not by count.
+                if layout.grid_sources[ti] == GridSource::Ruled
+                    && ruled_tables > TRUSTED_RULING_TABLES
+                {
                     continue;
                 }
                 // Ruled grids anchor too since the structure arbiter arrived:
@@ -1199,9 +1277,40 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         furniture_removed,
         furniture: furniture_texts,
         folios,
+        furniture_marks,
         tables,
         timings,
     }
+}
+
+/// Column doubt over a page's prose: its glyphs outside every table.
+///
+/// [`column::doubt`] sees a gutter that exists only over a band of rows and
+/// asks whether the page has columns the page-wide pass missed. A table is
+/// exactly that shape — its columns are gutters that exist only over its
+/// rows — and on a chart of flow sheets every page answered yes. The
+/// tables are already read as tables; the doubt is about the prose.
+pub fn column_doubt(page: &Page, analysis: &Analysis) -> Option<crate::column::Doubt> {
+    let tables: Vec<crate::geom::BBox> = analysis
+        .elements
+        .iter()
+        .filter(|e| e.page == page.index && e.kind == "doco:Table")
+        .filter_map(|e| e.bbox)
+        .map(|b| page.from_display(b))
+        .collect();
+    if tables.is_empty() {
+        return crate::column::doubt(&page.glyphs);
+    }
+    let prose: Vec<Glyph> = page
+        .glyphs
+        .iter()
+        .filter(|g| {
+            let (x, y) = g.center();
+            !tables.iter().any(|t| t.contains(x, y))
+        })
+        .cloned()
+        .collect();
+    crate::column::doubt(&prose)
 }
 
 #[cfg(test)]

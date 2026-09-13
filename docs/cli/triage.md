@@ -51,10 +51,14 @@ Four line kinds, and they answer different questions:
 | `TABLE` | a table whose detected structure disagrees with itself |
 | `HEADING` | a page whose hierarchy rests on nothing but typography — and not on a style the document repeats as a heading across its pages |
 | `FIGURE` | a page whose text sits mostly inside its drawings |
-| `COLUMN` | a page laid out in panels a page-wide projection cannot see |
+| `COLUMN` | a page whose prose — its text outside every table — is laid out in panels a page-wide projection cannot see |
+| `CROPS` | how many crops a configured reader would be handed for the document |
 
 `ROUTE`, `TABLE`, `HEADING` and `FIGURE` escalate on their own evidence once a
-reader is configured.
+reader is configured. `CROPS` is the sum of what they and the table anchors
+would send — the number a consumer's cap is measured against, printed before
+anything is paid for. It is capped in `fdoc convert` by
+[`escalation.max_crops`](config.md#how-much-one-document-may-send).
 
 `FIGURE` is the one that recognises a *designed* page — an infographic, a
 magazine spread, a cover — rather than a defective one. It is where reading

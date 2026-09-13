@@ -64,6 +64,18 @@ revised by a [later tier](escalation.md). Keeping the list flat means an
 arbitration pass can promote a paragraph to a heading without restructuring
 anything; the tree is derived once, at emission.
 
+## Figures
+
+A `doco:Figure` is text found inside a drawing — a chart's labels, gathered
+so a reader does not pair them by position. The drawing is recognised from
+its fills: several touching shapes that are not row banding and not a
+table's shading. A stack of strips is not a drawing either. A section's
+header panel, its accent bar and the identification box beneath it are three
+touching shapes, and the text inside them is headings and fields; when half
+of a cluster's shapes are strips spanning it, the cluster is boxes around
+text and the text stays prose. A plot's background rectangle spans its
+cluster too, but is as tall as it is wide, and the plot stays a figure.
+
 ## Tables
 
 `cells` is row-major `Vec<Vec<String>>`. Two extra fields carry what the

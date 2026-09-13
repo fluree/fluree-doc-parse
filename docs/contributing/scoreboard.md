@@ -222,6 +222,11 @@ nobody pays for them twice.
   corroborates its aligned tables: 183 lost three headings and its list, MHS
   0.41 → 0.26. The strip is confined to fills no taller than a fifth of the
   page.
+- **Calling any cluster of page-spanning fills a text panel.** Header panels
+  are strips as wide as their cluster; so is a plot's background rectangle,
+  and without an aspect condition (a strip is at least four times wider than
+  tall) one deck's chart (075) lost its figure and its labels read as a list,
+  NID −0.0004. With the condition the change is benchmark-neutral.
 - **Splitting a ruled grid at every change in vertical-rule coverage.** The
   defect was a horizontals-only key/value list borrowing the columns of the
   ruled table beneath it. Splitting at every crossed/uncrossed transition

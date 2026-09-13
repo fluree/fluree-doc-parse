@@ -113,14 +113,33 @@ document cannot repeat anything, so this changes nothing about how one is
 read; over the 819-page chart it took the pages escalated for heading doubt
 from 290 to none. `fdoc triage` reports the count discounted as `template`.
 
+## Tables in a templated document
+
+A table anchors for a reading — a ruled grid's reading drops out when its
+shape agrees with ours, and wins when it does not. Measured on reports with a
+few tables each, that is cheap insurance. On a chart of fifteen hundred small
+templated tables it is fifteen hundred crops to confirm what the rules already
+say, and a reading per table stops being earned.
+
+So past thirty-two drawn grids in one document, ruled grids no longer anchor.
+What still does: a grid whose structure was inferred rather than drawn, a
+table a layout detector saw that no grid covers, and a page the router sent.
+On the 819-page chart this takes the crop count from 1,351 to 21. The
+evaluation corpus has no document with more than three tables, so it cannot
+measure this either way.
+
+Column doubt is measured over a page's prose — its glyphs outside every
+table. A table is exactly what the signal looks for, gutters that exist only
+over a band of rows, and on a chart of flow sheets every page answered yes
+for a table it had already read as one.
+
 ## How many readings a document asks for
 
-Every table anchors for a reading — a ruled grid's reading drops out when its
-shape agrees with ours, and wins when it does not — so a chart with fifteen
-hundred small templated tables asks for fifteen hundred table crops. A
-consumer paying per reading needs a ceiling, and a ceiling that fails the
-document is the wrong kind: the deterministic reading is already complete, and
-every crop only improves on it.
+`fdoc triage` prints, per document, the crops a configured reader would be
+handed, as a `CROPS` line, and `fdoc convert` prints the same count before
+the first call. A consumer paying per reading needs a ceiling, and a ceiling
+that fails the document is the wrong kind: the deterministic reading is
+already complete, and every crop only improves on it.
 
 The library's `escalate::within_budget` keeps the most valuable crops up to a
 count and reports how many it left out, ranked by what would be lost without
@@ -128,8 +147,10 @@ each: whole pages the router sent — a scan, a near-blank page — where nothin
 else reads the page; routed regions; tables the deterministic pass found no
 structure for; tables it found but does not trust; and last, whole pages asked
 for on a doubt about their hierarchy or layout, whose every word the
-deterministic pass already has. A cap should truncate, with a warning, never
-fail.
+deterministic pass already has. `fdoc convert` applies it at
+[`escalation.max_crops`](../cli/config.md#how-much-one-document-may-send)
+and says how many crops it left to the deterministic pass. A cap truncates,
+with a note, and never fails.
 
 ## Where escalation is wrong
 
