@@ -49,7 +49,7 @@ Four line kinds, and they answer different questions:
 |---|---|
 | `ROUTE` | a page or region the text layer cannot read |
 | `TABLE` | a table whose detected structure disagrees with itself |
-| `HEADING` | a page whose hierarchy rests on nothing but font size |
+| `HEADING` | a page whose hierarchy rests on nothing but typography — and not on a style the document repeats as a heading across its pages |
 | `FIGURE` | a page whose text sits mostly inside its drawings |
 | `COLUMN` | a page laid out in panels a page-wide projection cannot see |
 

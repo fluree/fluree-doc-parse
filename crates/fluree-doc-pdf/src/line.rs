@@ -387,14 +387,16 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
     let mut groups: Vec<(Vec<usize>, i32, bool)> = Vec::new();
     for (bucket, mut idxs) in buckets {
         // For 90°/270° runs the roles of x and y swap: the text advances along
-        // y and lines stack along x.
-        let vertical = bucket.rem_euclid(180) == 90;
+        // y and lines stack along x — and which way along y depends on the
+        // bucket, see `Advance`.
+        let adv = Advance::of(bucket);
+        let vertical = adv.vertical();
         idxs.sort_by(|&a, &b| {
             // Origin, not bbox: outline-less space glyphs have no box but do
             // have a pen position, and they must stay in sequence.
             let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
             if vertical {
-                cmp(oa.0, ob.0).then(cmp(ob.1, oa.1))
+                cmp(oa.0, ob.0).then(cmp(adv.at(oa), adv.at(ob)))
             } else {
                 cmp(oa.1, ob.1).then(cmp(oa.0, ob.0))
             }
@@ -418,11 +420,7 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
             }
             idxs[start..i].sort_by(|&a, &b| {
                 let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
-                if vertical {
-                    cmp(ob.1, oa.1)
-                } else {
-                    cmp(oa.0, ob.0)
-                }
+                cmp(adv.at(oa), adv.at(ob))
             });
             start = i;
         }
@@ -435,7 +433,7 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
             }
             let prev = *cur.last().unwrap();
             if same_line(&glyphs[prev], &glyphs[i], vertical)
-                && !block_gap(&glyphs[prev], &glyphs[i], vertical)
+                && !block_gap(&glyphs[prev], &glyphs[i], adv)
             {
                 cur.push(i);
             } else {
@@ -450,8 +448,8 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
     // Text is built only after every group exists, because the space threshold
     // is derived from the whole column's gap distribution, not fixed.
     let ratio = adaptive_space_ratio(glyphs, &groups);
-    for (idxs, bucket, vertical) in &groups {
-        if let Some(l) = build_line(glyphs, idxs, *bucket, *vertical, ratio) {
+    for (idxs, bucket, _) in &groups {
+        if let Some(l) = build_line(glyphs, idxs, *bucket, ratio) {
             lines.push(l);
         }
     }
@@ -483,6 +481,64 @@ fn cmp(a: f64, b: f64) -> std::cmp::Ordering {
     a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal)
 }
 
+/// The direction a rotation bucket's text advances in.
+///
+/// Rotated text runs along y, and which way along y is the bucket: at 90°
+/// (an axis title read bottom to top) the pen climbs the page, at 270° (a
+/// `/Rotate 90` page drawn upright, a spine label) it descends. Ordering
+/// both by descending y read every descending run backwards — `Cascadia`
+/// came out `aidacsaC` — and measuring both as if descending put every gap
+/// on an ascending run below zero, so its words ran together. The advance
+/// coordinate `at` increases in reading direction whichever way that is,
+/// and every sort and gap in assembly is expressed through it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Advance {
+    Right,
+    Up,
+    Down,
+}
+
+impl Advance {
+    fn of(bucket: i32) -> Self {
+        match bucket.rem_euclid(360) {
+            90 => Advance::Up,
+            270 => Advance::Down,
+            _ => Advance::Right,
+        }
+    }
+
+    fn vertical(self) -> bool {
+        self != Advance::Right
+    }
+
+    /// A point's position along the advance axis, increasing as text reads.
+    fn at(self, (x, y): (f64, f64)) -> f64 {
+        match self {
+            Advance::Right => x,
+            Advance::Down => y,
+            Advance::Up => -y,
+        }
+    }
+
+    /// Where a glyph's ink begins along the advance axis.
+    fn start(self, b: &BBox) -> f64 {
+        match self {
+            Advance::Right => b.x0,
+            Advance::Down => b.y0,
+            Advance::Up => -b.y1,
+        }
+    }
+
+    /// Where a glyph's ink ends along the advance axis.
+    fn end(self, b: &BBox) -> f64 {
+        match self {
+            Advance::Right => b.x1,
+            Advance::Down => b.y1,
+            Advance::Up => -b.y0,
+        }
+    }
+}
+
 fn same_line(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     // Compare baselines, not boxes.
     let delta = if vertical {
@@ -498,15 +554,11 @@ fn same_line(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
 /// separate blocks — a column gutter, a table cell boundary, or a header's
 /// left and right groups. Splitting here is what stops `www.ti.com` and
 /// `SLFS022K` becoming one token (defect L1).
-fn block_gap(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
+fn block_gap(a: &Glyph, b: &Glyph, adv: Advance) -> bool {
     let (Some(ba), Some(bb)) = (a.bbox, b.bbox) else {
         return false;
     };
-    let gap = if vertical {
-        bb.y0 - ba.y1
-    } else {
-        bb.x0 - ba.x1
-    };
+    let gap = adv.start(&bb) - adv.end(&ba);
     let scale = a.font_size.max(b.font_size).max(1.0) as f64;
     gap > scale * BLOCK_GAP_RATIO
 }
@@ -618,16 +670,11 @@ fn adaptive_space_ratio(glyphs: &[Glyph], groups: &[(Vec<usize>, i32, bool)]) ->
 /// Word gaps in letter-spaced text sit this far above the letter gaps.
 const TRACKING_WORD_FACTOR: f64 = 1.5;
 
-fn build_line(
-    glyphs: &[Glyph],
-    idxs: &[usize],
-    bucket: i32,
-    vertical: bool,
-    space_ratio: f64,
-) -> Option<Line> {
+fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -> Option<Line> {
     if idxs.is_empty() {
         return None;
     }
+    let adv = Advance::of(bucket);
     // Letter-spaced (tracked) display text defeats the ordinary space rule:
     // when *every* letter gap exceeds the threshold, the line comes out as
     // "H O W C A N" (a poster headline set in tracked caps). Tracked text still
@@ -646,11 +693,11 @@ fn build_line(
             // is sometimes typed with real space characters between letters,
             // and the geometry must be measured through them.
             if let (Some(b), Some(a)) = (g.bbox, g.advance) {
-                let start = if vertical { b.y0 } else { b.x0.min(g.origin.0) };
+                let start = adv.start(&b).min(adv.at(g.origin));
                 if let Some(pe) = prev {
                     gaps.push((start - pe) / g.font_size.max(1.0) as f64);
                 }
-                prev = Some(if vertical { b.y1 } else { g.origin.0 + a });
+                prev = Some(adv.at(g.origin) + a);
                 drawn += 1;
                 if g.text.chars().count() == 1 && g.text.chars().all(char::is_alphabetic) {
                     letters += 1;
@@ -679,14 +726,9 @@ fn build_line(
         sizes.push(g.font_size);
         match g.bbox {
             Some(b) => {
-                let start = if vertical { b.y0 } else { b.x0 };
                 // Prefer the pen position over the glyph box for the *start*
                 // too, so a left side bearing does not manufacture a gap.
-                let start = if vertical {
-                    start
-                } else {
-                    start.min(g.origin.0)
-                };
+                let start = adv.start(&b).min(adv.at(g.origin));
                 // Geometric fallback: many PDFs position words without emitting
                 // a space character at all, so a wide gap has to become one.
                 if let Some(pe) = prev_end {
@@ -719,13 +761,9 @@ fn build_line(
                 // and swallowing the following space — `of the` became `ofthe`
                 // on 296 occurrences across the corpus against 56 in ground
                 // truth. Falls back to the ink box when no advance is known.
-                prev_end = Some(if vertical {
-                    b.y1
-                } else {
-                    match g.advance {
-                        Some(a) => g.origin.0 + a,
-                        None => b.x1,
-                    }
+                prev_end = Some(match g.advance {
+                    Some(a) => adv.at(g.origin) + a,
+                    None => adv.end(&b),
                 });
                 bbox = Some(match bbox {
                     Some(acc) => acc.union(&b),
@@ -851,6 +889,77 @@ mod tests {
             cols[0].iter().all(|l| !l.text.contains('b')),
             "left column must not absorb right-column text"
         );
+    }
+
+    #[test]
+    fn text_running_down_the_page_reads_forwards() {
+        // A `/Rotate 90` page drawn upright, or a spine label: the pen
+        // descends the page, so the glyph lowest on the page is the last
+        // letter, not the first. Baseline direction (0, +1) in a y-down
+        // frame is -90°.
+        let word = "Cascadia";
+        let glyphs: Vec<Glyph> = word
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let y = 40.0 + i as f64 * 6.0;
+                Glyph {
+                    text: c.to_string(),
+                    bbox: Some(BBox {
+                        x0: 770.0,
+                        y0: y,
+                        x1: 778.0,
+                        y1: y + 6.0,
+                    }),
+                    page: 0,
+                    origin: (770.0, y),
+                    rotation_deg: -90.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(6.0),
+                    draw_index: i,
+                }
+            })
+            .collect();
+        let lines = assemble(&glyphs);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Cascadia");
+    }
+
+    #[test]
+    fn text_running_up_the_page_keeps_its_word_gaps() {
+        // An axis title read bottom to top: the pen climbs. Two words with a
+        // word gap between them come out as two words, and letters within
+        // a word do not gain spaces from their ink boxes.
+        let mut glyphs = Vec::new();
+        let mut y = 300.0;
+        for (wi, word) in ["of", "the"].iter().enumerate() {
+            if wi > 0 {
+                y -= 4.0; // a word space, ~0.4 em
+            }
+            for c in word.chars() {
+                glyphs.push(Glyph {
+                    text: c.to_string(),
+                    bbox: Some(BBox {
+                        x0: 100.0,
+                        y0: y - 5.0,
+                        x1: 108.0,
+                        y1: y - 1.0, // narrow ink inside a 6pt advance
+                    }),
+                    page: 0,
+                    origin: (100.0, y),
+                    rotation_deg: 90.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(6.0),
+                    draw_index: glyphs.len(),
+                });
+                y -= 6.0;
+            }
+        }
+        let lines = assemble(&glyphs);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "of the");
     }
 
     #[test]

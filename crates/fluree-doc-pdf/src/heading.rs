@@ -443,6 +443,25 @@ fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
 /// Detect headings across a document.
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
     let body = body_font_size(pages);
+    // Numbered lines that recur, by their text; see the check in the loop
+    // below. Counted as occurrences rather than pages: a form answers
+    // several items on one page with the same code. A contents entry does
+    // not repeat the section it points to — it carries a page number the
+    // section does not, and its own text differs.
+    let repeated_numbered: std::collections::HashSet<String> = {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for b in pages.iter().flatten() {
+            let text = b.text();
+            if numbering_depth(&text).is_some() {
+                *seen.entry(norm(&text)).or_default() += 1;
+            }
+        }
+        seen.into_iter()
+            .filter(|(_, n)| *n >= REPEATED_NUMBERING)
+            .map(|(t, _)| t)
+            .collect()
+    };
+
     let document_title = pages.first().and_then(|blocks| {
         let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
         blocks
@@ -454,7 +473,12 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             .enumerate()
             .filter(|(i, b)| {
                 let text = b.text();
-                if b.marker.is_some() || b.lines.len() > 3 || !title_like(&text) {
+                if b.marker.is_some()
+                    || b.lines.len() > 3
+                    || !title_like(&text)
+                    || (numbering_depth(&text).is_some()
+                        && repeated_numbered.contains(&norm(&text)))
+                {
                     return false;
                 }
                 let gap_after = blocks
@@ -597,6 +621,16 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                 continue;
             }
             if !title_like(&text) {
+                continue;
+            }
+            // A numbered title occurs once in a document: sections are not
+            // repeated. A numbered line that recurs is a code — `03 —
+            // Partial/Moderate assistance`, an assessment form's answer,
+            // set larger than the item it answers and numbered like a
+            // section, and an `h1` every one of the dozen times it
+            // appeared. Every detector below is a guess about typography,
+            // and none of them gets a line the numbering has already read.
+            if numbering_depth(&text).is_some() && repeated_numbered.contains(&norm(&text)) {
                 continue;
             }
             // 2. A display word followed by a lettered item is a structural
@@ -772,6 +806,63 @@ pub struct Doubt {
     /// Headings resting on an outline entry or a numbering pattern rather
     /// than on relative font size, which is a guess about intent.
     pub corroborated: usize,
+    /// Headings set in a style the document repeats as a heading across
+    /// its pages — a template's block labels — and so discounted from
+    /// `density`; see [`template_levels`].
+    pub template: usize,
+}
+
+/// Distinct pages a heading's text must recur on, as a heading, before the
+/// style it is set in counts as a template style.
+///
+/// Three, not two: one repeat is a section title that happens to share its
+/// wording with a later one. Three pages carrying the same title in the
+/// same style is a form.
+const TEMPLATE_MIN_PAGES: usize = 3;
+
+/// A numbered line set this many times in one document is a code, not a
+/// section title. Sections are not repeated; a form's answers are.
+const REPEATED_NUMBERING: usize = 2;
+
+/// The heading levels a document uses for its template.
+///
+/// A chart, a form, a report generated from one layout puts the same block
+/// labels on every page — `Assessment & Plan`, `Reason for Encounter` —
+/// set bold or large, corroborated by nothing on the page: no outline, no
+/// numbering. Judged page by page that is the weakest hierarchy there is,
+/// and every page of an 800-page chart escalated for it. Judged across the
+/// pages it is the strongest: a label that recurs as a heading on page
+/// after page in one style is a heading by construction, and so is
+/// everything else the document sets in that style. Repetition across pages
+/// is corroboration — the same evidence furniture detection rests on.
+///
+/// `titles` is every heading in the document as `(page, level, text)`; the
+/// result is the set of levels whose style carries a title recurring on at
+/// least [`TEMPLATE_MIN_PAGES`] pages. Empty for a single-page document,
+/// which is why this cannot change how one is read.
+pub fn template_levels<'a>(
+    titles: impl Iterator<Item = (usize, Option<usize>, &'a str)>,
+) -> std::collections::HashSet<usize> {
+    let mut pages_by_text: HashMap<String, (Vec<usize>, Option<usize>)> = HashMap::new();
+    for (page, level, text) in titles {
+        let key = norm(text);
+        if key.is_empty() {
+            continue;
+        }
+        let e = pages_by_text.entry(key).or_insert((Vec::new(), level));
+        e.0.push(page);
+    }
+    let mut levels = std::collections::HashSet::new();
+    for (mut pages, level) in pages_by_text.into_values() {
+        pages.sort_unstable();
+        pages.dedup();
+        if pages.len() >= TEMPLATE_MIN_PAGES {
+            if let Some(l) = level {
+                levels.insert(l);
+            }
+        }
+    }
+    levels
 }
 
 /// Report a doubtful hierarchy, or `None` when it looks sound.
@@ -784,15 +875,25 @@ pub fn doubt(kinds: &[(&str, &str)]) -> Option<Doubt> {
 
 /// As [`doubt`], recording which page the ratio was measured over.
 pub fn doubt_on_page(page: usize, kinds: &[(&str, &str)]) -> Option<Doubt> {
+    doubt_on_page_with(page, kinds, &[])
+}
+
+/// As [`doubt_on_page`], with `template` marking, per entry of `kinds`, a
+/// title set in one of the document's [`template_levels`]. Those are
+/// corroborated by the document's other pages and do not count toward the
+/// density; a page that is half template labels is a form, not a doubt.
+/// An empty `template` marks nothing.
+pub fn doubt_on_page_with(page: usize, kinds: &[(&str, &str)], template: &[bool]) -> Option<Doubt> {
     // Splice anchors are addresses, not content. Counting them changes the
     // ratio according to whether the caller happens to have asked for them,
     // so two callers looking at the same document disagreed about whether to
     // doubt it — and the one that routes escalation was the one that had
     // them.
-    let kinds: Vec<(&str, &str)> = kinds
+    let kinds: Vec<(&str, &str, bool)> = kinds
         .iter()
-        .filter(|(_, e)| !matches!(*e, "route" | "table-confidence" | "table-missing"))
-        .copied()
+        .enumerate()
+        .filter(|(_, (_, e))| !matches!(*e, "route" | "table-confidence" | "table-missing"))
+        .map(|(i, (k, e))| (*k, *e, template.get(i).copied().unwrap_or(false)))
         .collect();
     let elements = kinds.len();
     if elements < 4 {
@@ -800,20 +901,21 @@ pub fn doubt_on_page(page: usize, kinds: &[(&str, &str)]) -> Option<Doubt> {
         // paragraph is 50% headings and perfectly correct.
         return None;
     }
-    let titles: Vec<&(&str, &str)> = kinds
+    let titles: Vec<&(&str, &str, bool)> = kinds
         .iter()
-        .filter(|(k, _)| *k == "doco:SectionTitle")
+        .filter(|(k, _, _)| *k == "doco:SectionTitle")
         .collect();
     if titles.is_empty() {
         return None;
     }
-    let density = titles.len() as f64 / elements as f64;
+    let template = titles.iter().filter(|(_, _, t)| *t).count();
+    let density = (titles.len() - template) as f64 / elements as f64;
     if density <= DOUBTFUL_DENSITY {
         return None;
     }
     let corroborated = titles
         .iter()
-        .filter(|(_, e)| matches!(*e, "outline" | "numbering" | "sequence"))
+        .filter(|(_, e, _)| matches!(*e, "outline" | "numbering" | "sequence"))
         .count();
     Some(Doubt {
         page,
@@ -821,6 +923,7 @@ pub fn doubt_on_page(page: usize, kinds: &[(&str, &str)]) -> Option<Doubt> {
         elements,
         density,
         corroborated,
+        template,
     })
 }
 
@@ -1256,6 +1359,107 @@ mod tests {
         ];
         let d = doubt(&kinds).expect("density is high");
         assert_eq!(d.corroborated, 3);
+    }
+
+    #[test]
+    fn a_style_the_document_repeats_as_a_heading_is_a_template() {
+        // Three pages carry the same bold block labels; a fourth uses the
+        // same style for labels of its own. All of it is the template.
+        let titles = [
+            (0, Some(3), "Assessment & Plan"),
+            (1, Some(3), "Assessment & Plan"),
+            (2, Some(3), "Assessment & Plan"),
+            (3, Some(3), "Reason for Encounter"),
+            (0, Some(1), "Progress Note — Day 1"),
+            (1, Some(1), "Progress Note — Day 2"),
+        ];
+        let levels = template_levels(titles.into_iter());
+        assert!(levels.contains(&3));
+        assert!(
+            !levels.contains(&1),
+            "a unique title per page is not a template"
+        );
+    }
+
+    #[test]
+    fn two_pages_sharing_a_title_are_not_yet_a_template() {
+        let titles = [(0, Some(2), "Summary"), (5, Some(2), "Summary")];
+        assert!(template_levels(titles.into_iter()).is_empty());
+    }
+
+    #[test]
+    fn template_titles_do_not_count_toward_doubt() {
+        let kinds = [
+            ("doco:SectionTitle", "bold"),
+            ("doco:Paragraph", "prose"),
+            ("doco:SectionTitle", "bold"),
+            ("doco:Paragraph", "prose"),
+            ("doco:SectionTitle", "bold"),
+            ("doco:SectionTitle", "bold"),
+        ];
+        assert!(
+            doubt_on_page(0, &kinds).is_some(),
+            "two thirds of the page is uncorroborated titles"
+        );
+        let template = [true, false, true, false, false, false];
+        assert_eq!(
+            doubt_on_page_with(0, &kinds, &template),
+            None,
+            "two of four titles are the template: a third of the page is left, below the threshold"
+        );
+        let d = doubt_on_page_with(0, &kinds, &[true, false, false, false, false, false]);
+        assert!(
+            d.is_some(),
+            "one template title of four leaves half the page in doubt"
+        );
+        assert_eq!(d.unwrap().template, 1);
+    }
+
+    #[test]
+    fn template_marks_are_aligned_with_the_unfiltered_kinds() {
+        // The anchor is dropped before the ratio; the mark for the title
+        // after it must still find that title.
+        let kinds = [
+            ("doco:Figure", "table-confidence"),
+            ("doco:SectionTitle", "bold"),
+            ("doco:Paragraph", "prose"),
+            ("doco:SectionTitle", "bold"),
+            ("doco:Paragraph", "prose"),
+        ];
+        let template = [false, true, false, true, false];
+        assert_eq!(doubt_on_page_with(0, &kinds, &template), None);
+    }
+
+    #[test]
+    fn a_numbered_line_repeated_across_pages_is_a_code_not_a_section() {
+        // An assessment form answers every item with a coded value, set
+        // larger than the body, on page after page.
+        let page = |item: &str| {
+            vec![
+                blk(item, 7.6, 1),
+                blk("03 — Partial/Moderate assistance", 9.0, 1),
+                blk("Some body text follows here.", 7.6, 3),
+                blk("More body text follows here.", 7.6, 3),
+            ]
+        };
+        let pages = vec![
+            page("GG0170B — Sit to lying"),
+            page("GG0170C — Lying to sitting"),
+            page("GG0170D — Sit to stand"),
+        ];
+        let hs = detect(&pages, &[]);
+        assert!(
+            !hs.iter().any(|h| h.text.starts_with("03 —")),
+            "the repeated answer was promoted: {hs:?}"
+        );
+        // Two answers on one page are the same form.
+        let mut one_page = page("GG0170B — Sit to lying");
+        one_page.extend(page("GG0170C — Lying to sitting"));
+        let hs = detect(&[one_page], &[]);
+        assert!(!hs.iter().any(|h| h.text.starts_with("03 —")));
+        // Once is a section.
+        let hs = detect(&[page("GG0170B — Sit to lying")], &[]);
+        assert!(hs.iter().any(|h| h.text.starts_with("03 —")));
     }
 
     #[test]

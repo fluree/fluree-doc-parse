@@ -57,11 +57,23 @@ impl BBox {
 ///
 /// Only sources with pages have these. Markdown and DOCX declare structure
 /// and no geometry, so they report none rather than a zeroed size.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct PageSize {
     /// 0-based physical position, the same space as `Element::page`.
     #[serde(rename = "pageIndex")]
     pub index: usize,
     pub width: f64,
     pub height: f64,
+    /// The page number printed on the page — its folio — where the source
+    /// has a running page number and this page carries it. Emitted as
+    /// `doc:folio`.
+    ///
+    /// Running furniture is stripped from the body and declared once on the
+    /// document, because a line that repeats on every page says nothing
+    /// about any one of them. The page number is the exception: it is the
+    /// one piece of furniture that identifies a *page*, and it is what a
+    /// consumer needs to put a shuffled or duplicated scan back in its
+    /// printed order. A string, not a number: front matter is `iv`.
+    #[serde(rename = "folio", skip_serializing_if = "Option::is_none")]
+    pub folio: Option<String>,
 }

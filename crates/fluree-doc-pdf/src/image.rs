@@ -199,6 +199,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
             fills: Vec::new(),
             width,
             height,
+            rotation: 0,
         }],
     })
 }

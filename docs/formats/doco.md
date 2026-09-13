@@ -75,13 +75,25 @@ declared structure](../concepts/geometry-vs-declared.md).
 { "@id": "urn:fluree-doc-parse:report/element/0",
   "@type": "doco:Document",
   "doc:pages": { "@type": "@json",
-                 "@value": [ { "pageIndex": 0, "width": 612.0, "height": 792.0 } ] } }
+                 "@value": [ { "pageIndex": 0, "width": 612.0, "height": 792.0 },
+                             { "pageIndex": 1, "width": 612.0, "height": 792.0,
+                               "folio": "2" } ] } }
 ```
 
 A `doc:bbox` cannot be placed on a rendered page without these: the consumer
 needs the ratio between the page's own units and the pixels it rendered to,
 and this is the only place that denominator appears. Sources with no geometry
 — Markdown, DOCX — omit the key rather than reporting a zeroed size.
+
+The size is the page *as displayed*. A page that displays sideways — a
+`/Rotate 90` page, a landscape table bound into a portrait document — is read
+in the frame where its text is upright, and its elements' boxes are mapped
+back to the displayed frame, so a box and a page render always agree.
+
+`folio` is the page number printed on the page, where the document numbers
+its pages: the one piece of [running furniture](../design/furniture.md) that
+identifies a page rather than the document. A string, because front matter is
+`iv`. Absent on pages that carry no page number.
 
 ## What the pages say about the document
 
@@ -103,7 +115,8 @@ the repetition removes the identity, and the document comes out anonymous.
 Kept on the document node rather than in the text, because putting it back in
 the body would restore what was removed from it and shift every character
 offset in the graph. Bare page numbers are excluded: a folio identifies
-nothing.
+nothing about the document — it identifies a page, and lives on the page's
+entry in `doc:pages`.
 
 ## Pages nothing read
 

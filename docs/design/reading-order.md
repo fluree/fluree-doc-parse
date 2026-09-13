@@ -25,6 +25,30 @@ escalate](../concepts/escalation.md#where-escalation-is-wrong): the
 deterministic path recovers that text with its orientation intact, and a VLM
 returns the drawing as one opaque image.
 
+Within a bucket, text is read the way it runs. An axis title at 90° climbs the
+page; a spine label, or a `/Rotate 90` page whose content was drawn upright,
+descends it. Both are assembled along their own direction of advance, so
+neither comes out backwards, and word gaps are measured from the pen advance
+in every orientation.
+
+### A page that is all one rotation is a turned page
+
+A viewer honours `/Rotate`, and so does the glyph transform here. A page whose
+content was drawn upright and then rotated for display arrives with every
+glyph in one non-horizontal bucket — which is exactly what a viewer shows, and
+exactly what a person turns the page to read. When at least 85% of a page's
+text glyphs share one quarter-turn bucket, the page is turned as a whole
+before anything reads it: glyphs, rules, fills and images are mapped into the
+frame where the text is upright, and lines, tables and headings are found
+there. Left unturned, such a page assembled as one rotated run per column,
+every string reversed, and its table as one seven-point-wide figure.
+
+The output's boxes are always in the displayed frame. The turn is recorded on
+the page and undone on every element's box on the way out, so a box drawn on
+a page render lands where the text is. The threshold is deliberately high: a
+page that mixes a sideways table with upright prose is not a turned page, and
+its rotated run is read as one by the bucketing above.
+
 ## Columns: empty, not wide
 
 In a two-column layout the columns share baselines, so line assembly would

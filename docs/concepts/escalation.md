@@ -91,6 +91,46 @@ figure, chart or table title box is caption-like, and becomes a
 judgement alone costs more than it gains; requiring a second independent
 reading confines it to blocks both readers call float furniture.
 
+## Templates are not doubt
+
+A page half of whose elements are headings, none corroborated by an outline
+or a numbering pattern, has a hierarchy resting on typography alone, and
+escalates as a whole page. Measured per page, because the ratio does not
+survive averaging over a document.
+
+Judged per page alone, though, a templated document escalates everywhere. A
+medical chart sets `Assessment & Plan`, `Reason for Encounter` and an author
+line in bold on every note, on every one of its eight hundred pages; nothing on
+any page corroborates them, and each page in turn looked like the weakest
+hierarchy there is. The deterministic pass reads those headings correctly —
+they are the template.
+
+So repetition across pages is corroboration, the same evidence furniture
+detection rests on. A heading whose text recurs as a heading on three or more
+pages marks its style as one of the document's template styles, and every
+heading in a template style is discounted from the page's ratio. A single-page
+document cannot repeat anything, so this changes nothing about how one is
+read; over the 819-page chart it took the pages escalated for heading doubt
+from 290 to none. `fdoc triage` reports the count discounted as `template`.
+
+## How many readings a document asks for
+
+Every table anchors for a reading — a ruled grid's reading drops out when its
+shape agrees with ours, and wins when it does not — so a chart with fifteen
+hundred small templated tables asks for fifteen hundred table crops. A
+consumer paying per reading needs a ceiling, and a ceiling that fails the
+document is the wrong kind: the deterministic reading is already complete, and
+every crop only improves on it.
+
+The library's `escalate::within_budget` keeps the most valuable crops up to a
+count and reports how many it left out, ranked by what would be lost without
+each: whole pages the router sent — a scan, a near-blank page — where nothing
+else reads the page; routed regions; tables the deterministic pass found no
+structure for; tables it found but does not trust; and last, whole pages asked
+for on a doubt about their hierarchy or layout, whose every word the
+deterministic pass already has. A cap should truncate, with a warning, never
+fail.
+
 ## Where escalation is wrong
 
 For mechanical drawings it loses information. On a package outline, a VLM

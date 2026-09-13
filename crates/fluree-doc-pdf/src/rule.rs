@@ -135,6 +135,47 @@ pub fn checkboxes(fills: &[Fill]) -> Vec<BBox> {
         .collect()
 }
 
+/// A shape at least this fraction of the page's width wide is the page's
+/// own decoration.
+const PAGE_DECORATION_WIDTH: f64 = 0.98;
+
+/// A full-width fill taller than this fraction of the page is a background,
+/// not a band, and is left alone.
+const PAGE_BAND_HEIGHT: f64 = 0.2;
+
+/// Drop the page's own bands: fills and horizontal rules that run the full
+/// width of the page. Returns how many were removed.
+///
+/// A header band, a footer band and the line drawn under a running head all
+/// span the page edge to edge. Nothing a table or a chart draws does — they
+/// sit inside the margins — yet to every detector downstream these are the
+/// same primitives. Two header bands and a title box beneath them clustered
+/// into a three-shape "figure" whose text was the page's banner heading; the
+/// line under a running head corroborated the head's own two columns of
+/// patient identifiers as an aligned table on dozens of pages of a chart.
+/// Neither is a reading of content, and the evidence is the same in both:
+/// the shape is as wide as the page and no taller than a band.
+///
+/// A full-page background fill is as wide, and stays. It fools nothing —
+/// too large to be a figure, too large to be a row — and a slide deck's
+/// aligned tables lean on it as the fill spanning them.
+pub fn strip_page_decoration(
+    rules: &mut Vec<Rule>,
+    fills: &mut Vec<Fill>,
+    page_width: f64,
+    page_height: f64,
+) -> usize {
+    if page_width <= 0.0 || page_height <= 0.0 {
+        return 0;
+    }
+    let full = page_width * PAGE_DECORATION_WIDTH;
+    let band = page_height * PAGE_BAND_HEIGHT;
+    let before = rules.len() + fills.len();
+    rules.retain(|r| r.orientation != Orientation::Horizontal || r.bbox.width() < full);
+    fills.retain(|f| f.bbox.width() < full || f.bbox.height() > band);
+    before - rules.len() - fills.len()
+}
+
 /// Drop a drawn layout lattice: full-bleed rules at a constant pitch on both
 /// axes. Returns how many were removed.
 ///
@@ -228,6 +269,51 @@ pub fn strip_layout_lattice(rules: &mut Vec<Rule>, page_width: f64, page_height:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_wide_bands_and_lines_are_decoration() {
+        let band = |y0: f64, y1: f64, x0: f64, x1: f64| Fill {
+            bbox: BBox { x0, y0, x1, y1 },
+            page: 0,
+        };
+        let mut fills = vec![
+            band(0.0, 30.0, 0.0, 612.0),
+            band(100.0, 112.0, 40.0, 572.0),
+            band(0.0, 792.0, 0.0, 612.0),
+        ];
+        let mut rules = vec![
+            Rule {
+                bbox: BBox {
+                    x0: 0.0,
+                    y0: 70.0,
+                    x1: 612.0,
+                    y1: 71.0,
+                },
+                orientation: Orientation::Horizontal,
+                page: 0,
+            },
+            Rule {
+                bbox: BBox {
+                    x0: 40.0,
+                    y0: 200.0,
+                    x1: 572.0,
+                    y1: 201.0,
+                },
+                orientation: Orientation::Horizontal,
+                page: 0,
+            },
+        ];
+        assert_eq!(
+            strip_page_decoration(&mut rules, &mut fills, 612.0, 792.0),
+            2
+        );
+        assert_eq!(
+            fills.len(),
+            2,
+            "the zebra band inside the margins and the page background stay"
+        );
+        assert_eq!(rules.len(), 1, "the table rule inside the margins stays");
+    }
 
     fn rule(o: Orientation, axis: f64, from: f64, to: f64) -> Rule {
         let bbox = match o {

@@ -65,7 +65,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:bbox` | PDF elements | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | all | [which signal classified it](../concepts/provenance.md) |
 | `doc:sourceDocument` | all, with `--doc-iri` | the document IRI to retract by |
-| `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height}]`, PDF units |
+| `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
 

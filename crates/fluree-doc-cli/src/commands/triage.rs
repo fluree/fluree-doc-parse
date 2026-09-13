@@ -118,12 +118,13 @@ pub fn run(path: &Path) -> i32 {
             heading_doubt += 1;
             for d in &doubt {
                 println!(
-                    "{name}\tHEADING\tp{} {} of {} elements are titles ({:.0}%), {} corroborated",
+                    "{name}\tHEADING\tp{} {} of {} elements are titles ({:.0}% in doubt), {} corroborated, {} template",
                     d.page + 1,
                     d.titles,
                     d.elements,
                     d.density * 100.0,
-                    d.corroborated
+                    d.corroborated,
+                    d.template
                 );
             }
         }

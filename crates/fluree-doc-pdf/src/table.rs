@@ -729,6 +729,19 @@ fn band_columns(ys: &[f64], rules: &[Rule]) -> Option<Vec<f64>> {
     let inside: Vec<Rule> = rules
         .iter()
         .filter(|r| r.bbox.y1 >= lo && r.bbox.y0 <= hi)
+        // A vertical must cross one of the band's rows to rule its columns.
+        // The tolerance that admits a horizontal drawn a hair outside the
+        // band also admitted the verticals of the *next* table down, whose
+        // top rule is this band's last boundary: they begin exactly where
+        // it ends, and every column of that table was imposed on rows it
+        // never touched.
+        .filter(|r| {
+            r.orientation != Orientation::Vertical
+                || ys.windows(2).any(|w| {
+                    let mid = (w[0] + w[1]) / 2.0;
+                    r.bbox.y0 <= mid && r.bbox.y1 >= mid
+                })
+        })
         .copied()
         .collect();
     let hs: Vec<&Rule> = inside
@@ -842,13 +855,58 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
     let is_gap = |i: usize| {
         i > 0 && i + 1 < crossed.len() && !crossed[i] && crossed[i - 1] && crossed[i + 1]
     };
+    // A run of bands no vertical crosses, next to bands verticals do cross,
+    // is a different structure: a key/value list ruled with horizontals
+    // only, sitting above a fully ruled table. The leading and trailing
+    // trims already refuse uncrossed bands at a grid's ends on this
+    // evidence; a run in the middle was taking its columns from the ruled
+    // table below it, which cut every label of the list a few characters
+    // in. The run keeps its own rows and derives its own columns — from
+    // its horizontals alone, one column — rather than borrowing.
+    //
+    // Both runs must be at least two rows. A single crossed band is a
+    // banner or one boxed entry, and a ruled table of contents alternates
+    // those with unruled entries all the way down; cutting at every change
+    // made a table of each pair. Two structures each several rows tall are
+    // two tables.
+    //
+    // And the uncrossed run must have no columns of its own. The defect is
+    // borrowing: a run ruled with continuous horizontals has nothing to
+    // say about columns and takes the neighbour's. A run whose horizontals
+    // are segmented states its own columns from their endpoints, borrows
+    // nothing, and was never cut wrongly — separating it only manufactures
+    // a table where the whole-span reading had found none.
+    let run_bounds = |i: usize| {
+        let mut lo = i;
+        while lo > 0 && crossed[lo - 1] == crossed[i] {
+            lo -= 1;
+        }
+        let mut hi = i;
+        while hi + 1 < crossed.len() && crossed[hi + 1] == crossed[i] {
+            hi += 1;
+        }
+        (lo, hi)
+    };
+    let borrows = |i: usize| {
+        let (lo, hi) = run_bounds(i);
+        band_columns(&ys[lo..=hi + 1], rules).is_none_or(|xs| xs.len() <= 2)
+    };
+    let changes_after = |i: usize| {
+        if i + 1 >= crossed.len() || crossed[i] == crossed[i + 1] {
+            return false;
+        }
+        let (a, b) = (run_bounds(i), run_bounds(i + 1));
+        let uncrossed = if crossed[i] { i + 1 } else { i };
+        a.1 - a.0 >= 1 && b.1 - b.0 >= 1 && borrows(uncrossed)
+    };
 
     let mut out = Vec::new();
     let mut start = 0usize;
     for i in 0..ys.len() - 1 {
         let is_last = i + 2 == ys.len();
         let too_tall = (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP || is_gap(i);
-        if too_tall || is_last {
+        let ends_run = !too_tall && changes_after(i);
+        if too_tall || is_last || ends_run {
             // A band that is itself too tall is the gap: end the table before it.
             let end = if too_tall { i } else { i + 1 };
             if end > start {
@@ -875,7 +933,7 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
                     });
                 }
             }
-            if too_tall {
+            if too_tall || ends_run {
                 start = i + 1;
             }
         }

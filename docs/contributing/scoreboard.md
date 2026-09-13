@@ -209,6 +209,26 @@ nobody pays for them twice.
   again, but `footer`/`header` labels also overlap genuine headings. Cascade
   overall fell from 0.932297 to 0.928067 and MHS from 0.8775 to 0.8636, with
   major regressions on 107 and 156, so the veto was reverted.
+- **A heading may not share its row with a block to its left.** Meant for a
+  form's coded answers (`03 — Partial/Moderate assistance` beside its item),
+  it also vetoed a numbered heading in a two-column paper whose left column
+  had a line on the same baseline: 189 lost its only heading (MHS 0.78 → 0),
+  183 and 184 fell too, −0.0013 overall. Replaced by the rule that a
+  numbered title set twice in one document is a code, which is benchmark-
+  neutral and reads the form.
+- **Stripping a full-page background fill as page decoration.** Header and
+  footer *bands* are safely stripped (nothing inside the margins is as wide
+  as the page), but a slide deck's page-sized background fill is what
+  corroborates its aligned tables: 183 lost three headings and its list, MHS
+  0.41 → 0.26. The strip is confined to fills no taller than a fifth of the
+  page.
+- **Splitting a ruled grid at every change in vertical-rule coverage.** The
+  defect was a horizontals-only key/value list borrowing the columns of the
+  ruled table beneath it. Splitting at every crossed/uncrossed transition
+  also cut a ruled table of contents into a table per pair of entries (044,
+  NID 1.0 → 0.87). Requiring both sides to be at least two rows and the
+  uncrossed run to have no columns of its own keeps the fix and loses the
+  regression.
 
 ## Rules
 

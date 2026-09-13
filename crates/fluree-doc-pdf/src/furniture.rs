@@ -68,13 +68,39 @@ fn signature(text: &str) -> String {
 ///
 /// `pages` is one Vec<Line> per page, each paired with that page's height.
 pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<HashMap<usize, Furniture>> {
+    detect_with_folios(pages).0
+}
+
+/// Of the digit runs a page-number line carries, the one that is the page
+/// number must take at least this many distinct values per page it appears
+/// on. A footer's `Page 352` differs on nearly every page; the `16:00` row
+/// label of a flow sheet repeats at a stable position on hundreds of pages
+/// with six values between them, and is a clock, not a folio.
+const FOLIO_DISTINCT_SHARE: f64 = 0.25;
+
+/// As [`detect`], also returning each page's printed page number — its
+/// folio — where the document has one.
+///
+/// Furniture is stripped from the body because a line that repeats on every
+/// page says nothing about any one of them. The page number is the one
+/// exception: it is the piece of furniture that identifies a *page*, and a
+/// consumer reassembling a shuffled, duplicated chart from its footers has
+/// no other way to. The folio is the digit run that varies most across the
+/// occurrences of the most widespread page-number line; `Page 3 of 15`
+/// yields `3`, and a footer carrying an MRN and an account number beside
+/// the page number yields the page number. `None` on a page where the line
+/// is absent or the document has no page-number line.
+pub fn detect_with_folios(
+    pages: &[(Vec<Line>, f64)],
+) -> (Vec<HashMap<usize, Furniture>>, Vec<Option<String>>) {
     let n_pages = pages.len();
     let mut out: Vec<HashMap<usize, Furniture>> = vec![HashMap::new(); n_pages];
+    let mut folios: Vec<Option<String>> = vec![None; n_pages];
     if n_pages < MIN_PAGES {
         // Repetition is the only evidence we have; too few pages means we
         // cannot distinguish a running head from a one-off line, and guessing
         // would strip real content.
-        return out;
+        return (out, folios);
     }
 
     // signature -> occurrences (page, line index, relative y)
@@ -105,6 +131,11 @@ pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<HashMap<usize, Furniture>> {
     }
 
     let needed = ((n_pages as f64 * MIN_PAGE_FRACTION).ceil() as usize).max(MIN_PAGES);
+
+    // The page-number group the folios come from: (pages it covers, distinct
+    // values of its varying run), then the per-page values.
+    type FolioSource = ((usize, usize), Vec<(usize, String)>);
+    let mut folio_source: Option<FolioSource> = None;
 
     for (sig, occ) in groups {
         if sig.trim().is_empty() {
@@ -163,9 +194,84 @@ pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<HashMap<usize, Furniture>> {
                 out[*pi].insert(*li, kind);
             }
         }
+
+        if kind == Furniture::PageNumber {
+            let stable: Vec<(usize, &str)> = occ
+                .iter()
+                .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
+                .map(|o| (o.0, o.3.as_str()))
+                .collect();
+            if let Some((distinct, values)) = folio_run(&stable) {
+                let score = (pages_seen.len(), distinct);
+                if folio_source.as_ref().is_none_or(|(best, _)| score > *best) {
+                    folio_source = Some((score, values));
+                }
+            }
+        }
     }
 
-    out
+    if let Some((_, values)) = folio_source {
+        for (pi, v) in values {
+            // First occurrence on the page wins: a layout that prints the
+            // number in both header and footer says it twice.
+            folios[pi].get_or_insert(v);
+        }
+    }
+
+    (out, folios)
+}
+
+/// The digit runs of a line, in order.
+fn digit_runs(text: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut cur = String::new();
+    for c in text.chars() {
+        if c.is_ascii_digit() {
+            cur.push(c);
+        } else if !cur.is_empty() {
+            runs.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        runs.push(cur);
+    }
+    runs
+}
+
+/// Which digit run of a page-number line is the page number, and its value
+/// on each page.
+///
+/// The occurrences share a signature, so they carry the same number of
+/// runs; the folio is the run with the most distinct values across pages —
+/// the `352` of `MRN-2093471 | ACCT-40218563 Page 352`, not the constants
+/// beside it. `None` when no run varies enough to be a page number (see
+/// [`FOLIO_DISTINCT_SHARE`]): a clock label that repeats at one position
+/// carries digits that change, but not once per page.
+fn folio_run(occ: &[(usize, &str)]) -> Option<(usize, Vec<(usize, String)>)> {
+    let runs: Vec<Vec<String>> = occ.iter().map(|(_, t)| digit_runs(t)).collect();
+    let n_runs = runs.iter().map(Vec::len).min()?;
+    let mut pages: Vec<usize> = occ.iter().map(|o| o.0).collect();
+    pages.sort_unstable();
+    pages.dedup();
+    let mut best: Option<(usize, usize)> = None; // (distinct, run index)
+    for j in 0..n_runs {
+        let mut vals: Vec<&str> = runs.iter().map(|r| r[j].as_str()).collect();
+        vals.sort_unstable();
+        vals.dedup();
+        if best.is_none_or(|(d, _)| vals.len() > d) {
+            best = Some((vals.len(), j));
+        }
+    }
+    let (distinct, j) = best?;
+    if distinct < 2 || (distinct as f64) < (pages.len() as f64) * FOLIO_DISTINCT_SHARE {
+        return None;
+    }
+    let values = occ
+        .iter()
+        .zip(&runs)
+        .map(|((pi, _), r)| (*pi, r[j].clone()))
+        .collect();
+    Some((distinct, values))
 }
 
 fn classify(rel_y: f64, digits_vary: bool) -> Furniture {
@@ -225,6 +331,61 @@ mod tests {
         let pages = doc(10, |i| vec![line(&format!("Page {} of 10", i + 1), 950.0)]);
         let r = detect(&pages);
         assert_eq!(r[3].get(&0), Some(&Furniture::PageNumber));
+    }
+
+    #[test]
+    fn the_folio_is_the_digit_run_that_varies() {
+        let pages = doc(10, |i| {
+            vec![line(
+                &format!("MRN-2093471 | ACCT-40218563   Page {}", i + 1),
+                950.0,
+            )]
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(marks[3].get(&0), Some(&Furniture::PageNumber));
+        let got: Vec<Option<String>> = folios;
+        assert_eq!(got[0].as_deref(), Some("1"));
+        assert_eq!(got[9].as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn page_n_of_m_yields_n() {
+        let pages = doc(10, |i| vec![line(&format!("Page {} of 10", i + 1), 950.0)]);
+        let (_, folios) = detect_with_folios(&pages);
+        assert_eq!(folios[4].as_deref(), Some("5"));
+    }
+
+    #[test]
+    fn a_clock_label_with_few_values_is_not_a_folio() {
+        // Six clock times cycling at one position across many pages: the
+        // digits vary, but not once per page.
+        let times = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"];
+        let pages = doc(30, |i| vec![line(times[i % 6], 60.0)]);
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(marks[0].get(&0), Some(&Furniture::PageNumber));
+        assert!(folios.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn the_widest_page_number_line_supplies_the_folio() {
+        // A footer on every page and a clock label on most: the footer's
+        // number is the page's.
+        let times = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"];
+        let pages = doc(30, |i| {
+            vec![
+                line(times[i % 6], 60.0),
+                line(&format!("Report — Page {}", i + 1), 950.0),
+            ]
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        assert_eq!(folios[7].as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn a_document_without_page_numbers_has_no_folios() {
+        let pages = doc(10, |_| vec![line("Running head", 20.0)]);
+        let (_, folios) = detect_with_folios(&pages);
+        assert!(folios.iter().all(Option::is_none));
     }
 
     #[test]

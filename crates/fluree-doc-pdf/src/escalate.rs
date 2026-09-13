@@ -239,6 +239,90 @@ pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> 
     jobs
 }
 
+/// How many readings a job list asks for: one per whole page, one per
+/// region.
+pub fn crop_count(jobs: &CropJobs) -> usize {
+    jobs.iter()
+        .map(|(_, regions)| regions.as_ref().map_or(1, Vec::len))
+        .sum()
+}
+
+/// The `max_crops` most valuable crops of a job list, in page order, and
+/// how many were left out.
+///
+/// A consumer paying per reading needs a ceiling, and a ceiling that fails
+/// the document is the wrong kind: the deterministic reading is already
+/// complete, and every crop only improves on it. So the cap truncates.
+/// What it keeps is ranked by what would be lost without it:
+///
+/// 1. whole pages the router sent — a scan, a near-blank page, glyphs
+///    whose Unicode cannot be trusted — where nothing else reads the page;
+/// 2. routed regions, the same loss confined to part of a page;
+/// 3. tables the deterministic pass found no structure for;
+/// 4. tables it found but does not trust;
+/// 5. whole pages asked for on a doubt about their hierarchy or layout,
+///    whose every word the deterministic pass already has.
+///
+/// Within a rank, earlier pages first. A whole-page job that superseded
+/// region crops on its page is one crop and is kept or dropped as one.
+pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJobs, usize) {
+    let total = crop_count(&jobs);
+    if total <= max_crops {
+        return (jobs, 0);
+    }
+    // One entry per crop.
+    struct Ranked {
+        rank: u8,
+        order: usize,
+        page: usize,
+        region: Option<(String, BBox)>,
+    }
+    let mut crops: Vec<Ranked> = Vec::new();
+    for (order, (page, regions)) in jobs.into_iter().enumerate() {
+        match regions {
+            None => {
+                let routed = doc.pages.iter().find(|p| p.index == page).is_some_and(|p| {
+                    matches!(crate::route::decide(p).0, crate::route::Route::Vlm(_))
+                });
+                crops.push(Ranked {
+                    rank: if routed { 0 } else { 4 },
+                    order,
+                    page,
+                    region: None,
+                });
+            }
+            Some(list) => {
+                for (tag, bbox) in list {
+                    let rank = match tag.chars().next() {
+                        Some('r') => 1,
+                        Some('n') => 2,
+                        _ => 3,
+                    };
+                    crops.push(Ranked {
+                        rank,
+                        order,
+                        page,
+                        region: Some((tag, bbox)),
+                    });
+                }
+            }
+        }
+    }
+    crops.sort_by_key(|c| (c.rank, c.order));
+    let dropped = crops.len() - max_crops;
+    crops.truncate(max_crops);
+    crops.sort_by_key(|c| c.order);
+    let mut out: CropJobs = Vec::new();
+    for Ranked { page, region, .. } in crops {
+        match (out.last_mut(), region) {
+            (Some((p, Some(list))), Some(r)) if *p == page => list.push(r),
+            (_, Some(r)) => out.push((page, Some(vec![r]))),
+            (_, None) => out.push((page, None)),
+        }
+    }
+    (out, dropped)
+}
+
 /// Render every job to PNG bytes, in page order.
 pub fn render_crops(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
     let pages = pdf.pages();
@@ -508,6 +592,88 @@ mod tests {
             bbox: None,
             png: Vec::new(),
         }
+    }
+
+    fn page(index: usize, glyphs: usize, scanned: bool) -> crate::extract::Page {
+        let bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 600.0,
+            y1: 800.0,
+        };
+        crate::extract::Page {
+            index,
+            glyphs: (0..glyphs)
+                .map(|i| crate::glyph::Glyph {
+                    text: "a".into(),
+                    bbox: Some(BBox {
+                        x0: i as f64,
+                        y0: 0.0,
+                        x1: i as f64 + 1.0,
+                        y1: 10.0,
+                    }),
+                    page: index,
+                    origin: (i as f64, 10.0),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(1.0),
+                    draw_index: i,
+                })
+                .collect(),
+            images: if scanned {
+                vec![crate::extract::ImagePlacement { bbox, texty: true }]
+            } else {
+                Vec::new()
+            },
+            rules: Vec::new(),
+            fills: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+        }
+    }
+
+    fn region(tag: &str) -> (String, BBox) {
+        (
+            tag.into(),
+            BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 10.0,
+                y1: 10.0,
+            },
+        )
+    }
+
+    #[test]
+    fn the_budget_keeps_what_would_otherwise_be_lost() {
+        let doc = Document {
+            pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
+        };
+        // A scanned page, a page escalated on heading doubt, and a page
+        // with one untrusted table and one missing one.
+        let jobs: CropJobs = vec![
+            (0, None),
+            (1, None),
+            (2, Some(vec![region("t0"), region("n0")])),
+        ];
+        assert_eq!(crop_count(&jobs), 4);
+        let (kept, dropped) = within_budget(&doc, jobs.clone(), 2);
+        assert_eq!(dropped, 2);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0].0, 0, "the scanned page is read before anything");
+        assert!(kept[0].1.is_none());
+        assert_eq!(kept[1].0, 2);
+        assert_eq!(
+            kept[1].1.as_ref().unwrap()[0].0,
+            "n0",
+            "a missing table before a doubted one"
+        );
+
+        let (all, none) = within_budget(&doc, jobs, 4);
+        assert_eq!(none, 0);
+        assert_eq!(crop_count(&all), 4);
     }
 
     #[test]

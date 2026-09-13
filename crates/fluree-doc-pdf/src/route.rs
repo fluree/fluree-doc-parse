@@ -231,6 +231,7 @@ mod tests {
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,
+            rotation: 0,
         }
     }
 

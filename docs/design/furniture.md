@@ -104,4 +104,20 @@ So the text is removed from the body and declared once on the document node as
 [`doc:runningText`](../formats/doco.md). Not restored into the body, which
 would put back what was removed from it and shift every character offset in
 the graph, and not merely dropped. Bare page numbers are excluded — a folio
-identifies nothing.
+identifies nothing about the document.
+
+## The folio identifies the page
+
+It does identify a page, and it is the one piece of furniture that does. A
+chart assembled from a shuffled, duplicated scan carries its original page
+number in every footer and nowhere else; strip the footer and the order is
+gone. So the page number is kept per page rather than per document: each
+entry of [`doc:pages`](../formats/doco.md) carries `folio`, the printed
+number, where the document has one.
+
+Which digits are the page number is decided by variation. A footer's digits
+that change on nearly every page are the folio; the MRN and account number
+beside them, which never change, are not, and a flow sheet's `16:00` row
+label — which repeats at a stable position on hundreds of pages and takes six
+values between them — is a clock. The page-number line that covers the most
+pages supplies it.

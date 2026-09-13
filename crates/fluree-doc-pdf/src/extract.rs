@@ -47,11 +47,90 @@ pub struct Page {
     /// Larger filled areas — header shading and zebra striping, which mark row
     /// structure in tables drawn without vertical rules.
     pub fills: Vec<Fill>,
-    /// Rendered page size in PDF units. Needed to express positions as a
+    /// Page size in PDF units, in the frame the glyphs are in — the reading
+    /// frame (see [`Page::rotation`]). Needed to express positions as a
     /// fraction of page height, which is how furniture detection compares
     /// positions across pages of differing size.
     pub width: f64,
     pub height: f64,
+    /// Quarter turns, in degrees counter-clockwise (0, 90, 180 or 270), the
+    /// page as displayed was turned to bring its text upright. Every
+    /// coordinate on this page — glyphs, rules, fills, images, `width` and
+    /// `height` — is in that turned frame, the *reading frame*.
+    ///
+    /// Zero for nearly every page. Non-zero when the page displays sideways
+    /// or upside down: a `/Rotate 90` page whose content was drawn upright,
+    /// a landscape table bound into a portrait document. Read in the
+    /// display frame such a page is all one rotation bucket, its strings
+    /// come out reversed and its tables as one thin figure — a viewer
+    /// shows exactly that, and a person turns the page. This is the turn.
+    ///
+    /// The output's boxes are always in the display frame, which is the
+    /// frame a page render has; [`Page::to_display`] maps back.
+    pub rotation: i32,
+}
+
+impl Page {
+    /// Page size as displayed — the frame the output's boxes are in.
+    pub fn display_size(&self) -> (f64, f64) {
+        if self.rotation % 180 == 0 {
+            (self.width, self.height)
+        } else {
+            (self.height, self.width)
+        }
+    }
+
+    /// A reading-frame point in the display frame.
+    pub fn to_display_point(&self, (x, y): (f64, f64)) -> (f64, f64) {
+        // The reading frame is `width` x `height`; the display frame is
+        // `display_size()`. Each case inverts the turn `read_upright` made.
+        match self.rotation.rem_euclid(360) {
+            90 => (self.height - y, x),
+            180 => (self.width - x, self.height - y),
+            270 => (y, self.width - x),
+            _ => (x, y),
+        }
+    }
+
+    /// A display-frame point in the reading frame.
+    pub fn from_display_point(&self, (x, y): (f64, f64)) -> (f64, f64) {
+        match self.rotation.rem_euclid(360) {
+            90 => (y, self.height - x),
+            180 => (self.width - x, self.height - y),
+            270 => (self.width - y, x),
+            _ => (x, y),
+        }
+    }
+
+    /// A reading-frame box in the display frame.
+    pub fn to_display(&self, b: BBox) -> BBox {
+        if self.rotation.rem_euclid(360) == 0 {
+            return b;
+        }
+        let (ax, ay) = self.to_display_point((b.x0, b.y0));
+        let (bx, by) = self.to_display_point((b.x1, b.y1));
+        BBox {
+            x0: ax.min(bx),
+            y0: ay.min(by),
+            x1: ax.max(bx),
+            y1: ay.max(by),
+        }
+    }
+
+    /// A display-frame box in the reading frame.
+    pub fn from_display(&self, b: BBox) -> BBox {
+        if self.rotation.rem_euclid(360) == 0 {
+            return b;
+        }
+        let (ax, ay) = self.from_display_point((b.x0, b.y0));
+        let (bx, by) = self.from_display_point((b.x1, b.y1));
+        BBox {
+            x0: ax.min(bx),
+            y0: ay.min(by),
+            x1: ax.max(bx),
+            y1: ay.max(by),
+        }
+    }
 }
 
 pub struct Document {
@@ -598,9 +677,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             settings.clone(),
         );
         interpret_page(page, &mut ctx, &mut dev);
-        synthesize_missing_boxes(&mut dev.glyphs);
-        ink.push(dev.ink);
-        pages.push(Page {
+        let mut page = Page {
             index,
             glyphs: dev.glyphs,
             images: dev.images,
@@ -608,11 +685,132 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             fills: dev.fills,
             width: w as f64,
             height: h as f64,
-        });
+            rotation: 0,
+        };
+        read_upright(&mut page);
+        synthesize_missing_boxes(&mut page.glyphs);
+        ink.push(dev.ink);
+        pages.push(page);
     }
     infer_weights(&mut pages, &ink);
 
     Ok(Document { pages })
+}
+
+/// Share of a page's text glyphs that must sit in one non-horizontal
+/// quarter-turn bucket before the page is read in that bucket's frame.
+///
+/// High on purpose: a page is turned as a whole, and a page that mixes a
+/// sideways table with upright prose is not sideways — its rotated run is
+/// handled as one by line assembly, and turning the page would rotate the
+/// prose instead. Only a page whose text all runs one way is a turned page.
+const UPRIGHT_SHARE: f64 = 0.85;
+
+/// Fewer text glyphs than this and the page's orientation is not evidenced:
+/// a lone rotated label on an otherwise empty page is a label, not a page.
+const UPRIGHT_MIN_GLYPHS: usize = 12;
+
+/// Turn a page whose text runs one non-horizontal way into the frame where
+/// it reads upright.
+///
+/// A `/Rotate 90` page whose content was drawn upright displays sideways —
+/// a viewer honours the rotation, and so does the glyph transform here, so
+/// the page arrives with every glyph in the −90° bucket. Left there it is
+/// assembled as one rotated run per column: every string reversed, the
+/// tables one seven-point-wide figure. A person reading that page turns
+/// it; this does the same, once, for every coordinate the page carries, and
+/// records the turn in [`Page::rotation`] so the output's boxes can be
+/// mapped back to the display frame.
+///
+/// Decided per page from the glyphs themselves, not from `/Rotate`: the
+/// rotation entry is already applied by the time the glyphs exist, and the
+/// same reading problem arises without it — a landscape drawing bound into
+/// a portrait document and drawn sideways carries no `/Rotate` at all.
+fn read_upright(page: &mut Page) {
+    let mut by_bucket: [usize; 4] = [0; 4];
+    let mut total = 0usize;
+    for g in &page.glyphs {
+        if g.text.trim().is_empty() {
+            continue;
+        }
+        total += 1;
+        match g.rotation_bucket().rem_euclid(360) {
+            0 => by_bucket[0] += 1,
+            90 => by_bucket[1] += 1,
+            180 => by_bucket[2] += 1,
+            270 => by_bucket[3] += 1,
+            _ => {}
+        }
+    }
+    if total < UPRIGHT_MIN_GLYPHS {
+        return;
+    }
+    let (dominant, count) = by_bucket
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, n)| **n)
+        .map(|(i, n)| (i, *n))
+        .unwrap_or((0, 0));
+    if dominant == 0 || (count as f64) < (total as f64) * UPRIGHT_SHARE {
+        return;
+    }
+    // The glyphs' baselines run at `bucket` degrees counter-clockwise from
+    // horizontal; turning the page by the opposite amount puts them at 0.
+    // Text in the 270° bucket (baseline pointing down the page as
+    // displayed) needs a quarter turn counter-clockwise; text in the 90°
+    // bucket a quarter turn clockwise, which is 270° counter-clockwise.
+    let turn = match dominant {
+        1 => 270,
+        2 => 180,
+        _ => 90,
+    };
+    let (w, h) = (page.width, page.height);
+    let point = |(x, y): (f64, f64)| -> (f64, f64) {
+        match turn {
+            90 => (y, w - x),
+            180 => (w - x, h - y),
+            _ => (h - y, x),
+        }
+    };
+    let rect = |b: BBox| -> BBox {
+        let (ax, ay) = point((b.x0, b.y0));
+        let (bx, by) = point((b.x1, b.y1));
+        BBox {
+            x0: ax.min(bx),
+            y0: ay.min(by),
+            x1: ax.max(bx),
+            y1: ay.max(by),
+        }
+    };
+    for g in page.glyphs.iter_mut() {
+        g.origin = point(g.origin);
+        g.bbox = g.bbox.map(rect);
+        let mut deg = g.rotation_deg + turn as f32;
+        while deg > 180.0 {
+            deg -= 360.0;
+        }
+        g.rotation_deg = deg;
+    }
+    for r in page.rules.iter_mut() {
+        r.bbox = rect(r.bbox);
+        if turn != 180 {
+            r.orientation = match r.orientation {
+                rule::Orientation::Horizontal => rule::Orientation::Vertical,
+                rule::Orientation::Vertical => rule::Orientation::Horizontal,
+            };
+        }
+    }
+    for f in page.fills.iter_mut() {
+        f.bbox = rect(f.bbox);
+    }
+    for i in page.images.iter_mut() {
+        i.bbox = rect(i.bbox);
+    }
+    if turn != 180 {
+        page.width = h;
+        page.height = w;
+    }
+    page.rotation = turn;
 }
 
 /// Ascent above the baseline as a fraction of font size, for synthesized
@@ -721,6 +919,7 @@ mod tests {
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,
+            rotation: 0,
         }
     }
 

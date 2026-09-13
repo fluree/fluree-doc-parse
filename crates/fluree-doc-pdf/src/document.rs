@@ -50,6 +50,10 @@ pub struct Analysis {
     /// always does. Handing the same list to [`crate::arbiter::scrub_furniture`]
     /// is what makes the two paths agree.
     pub furniture: Vec<(String, bool)>,
+    /// Each page's printed page number, where the document numbers its
+    /// pages; see [`furniture::detect_with_folios`]. Indexed by page
+    /// position.
+    pub folios: Vec<Option<String>>,
     pub tables: usize,
     /// Wall clock per stage; see [`StageTimings`].
     pub timings: StageTimings,
@@ -487,6 +491,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // consumer of `rules` — grids, column rulers, row banding — would
         // otherwise take it for structure.
         crate::rule::strip_layout_lattice(&mut p.rules, p.width, p.height);
+        crate::rule::strip_page_decoration(&mut p.rules, &mut p.fills, p.width, p.height);
         // `Deterministic` is the right stand-in when nobody asks: both
         // consumers act only on `VlmRegions`, and both are unreachable in the
         // configurations that skip the call.
@@ -697,7 +702,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let marks = timed(&mut timings.furniture, || furniture::detect(&flat_lines));
+    let (marks, folios) = timed(&mut timings.furniture, || {
+        furniture::detect_with_folios(&flat_lines)
+    });
 
     // Furniture texts for cell scrubbing: grids capture their glyphs before
     // the cross-page furniture pass runs, so a footer crossing a table region
@@ -1135,14 +1142,33 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
 
     // Per page. Averaged over a document the ratio disappears: a deck whose
     // stat pages are four fifths headings reads 0.36 across all its pages.
+    //
+    // But judged across pages first: a heading style the document repeats
+    // — the block labels of a templated chart, on every one of its
+    // hundreds of pages — is corroborated by that repetition, and a page
+    // full of such labels is not in doubt. Without this every page of such
+    // a chart escalated for a hierarchy the deterministic pass already read
+    // correctly.
+    let template = heading::template_levels(
+        elements
+            .iter()
+            .filter(|e| e.kind == "doco:SectionTitle")
+            .map(|e| (e.page, e.level, e.text.as_str())),
+    );
     let mut suspect_headings = Vec::new();
     for page in 0..raw.pages.len() {
-        let kinds: Vec<(&str, &str)> = elements
+        let on_page: Vec<&Element> = elements.iter().filter(|e| e.page == page).collect();
+        let kinds: Vec<(&str, &str)> = on_page
             .iter()
-            .filter(|e| e.page == page)
             .map(|e| (e.kind.as_str(), e.evidence))
             .collect();
-        if let Some(d) = heading::doubt_on_page(page, &kinds) {
+        let marks: Vec<bool> = on_page
+            .iter()
+            .map(|e| {
+                e.kind == "doco:SectionTitle" && e.level.is_some_and(|l| template.contains(&l))
+            })
+            .collect();
+        if let Some(d) = heading::doubt_on_page_with(page, &kinds, &marks) {
             suspect_headings.push(d);
         }
     }
@@ -1150,6 +1176,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let suspect_figures = (0..raw.pages.len())
         .filter_map(|p| figure::doubt(&elements, p))
         .collect();
+
+    // Everything above worked in each page's reading frame. The output's
+    // boxes are in the display frame — the one a page render has — so a
+    // page that was turned to be read has its boxes turned back here, once,
+    // at the single point every element passes through.
+    for e in elements.iter_mut() {
+        if let (Some(b), Some(p)) = (e.bbox, raw.pages.get(e.page)) {
+            if p.rotation != 0 {
+                e.bbox = Some(p.to_display(b));
+            }
+        }
+    }
 
     Analysis {
         elements,
@@ -1160,6 +1198,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         body_font,
         furniture_removed,
         furniture: furniture_texts,
+        folios,
         tables,
         timings,
     }

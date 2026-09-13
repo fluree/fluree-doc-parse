@@ -141,10 +141,16 @@ impl<'a> SpanResolver<'a> {
             .indexes
             .entry(page_index)
             .or_insert_with(|| PageIndex::build(page));
-        let (a, b) = glyph_range_in(index, page, &wanted, element.rect())?;
+        // The element's box is in the display frame and the glyphs are in
+        // the page's reading frame; on a turned page the two differ.
+        let within = page.from_display(element.rect());
+        let (a, b) = glyph_range_in(index, page, &wanted, within)?;
         Some(Highlight {
             page: page_index,
-            rects: rects_for_glyph_range(&page.glyphs, a, b),
+            rects: rects_for_glyph_range(&page.glyphs, a, b)
+                .into_iter()
+                .map(|r| page.to_display(r))
+                .collect(),
             text: wanted,
         })
     }
@@ -472,6 +478,7 @@ mod tests {
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,
+            rotation: 0,
         }
     }
 

@@ -235,6 +235,7 @@ fn convert_image(
             index: p.index,
             width: p.width,
             height: p.height,
+            folio: None,
         })
         .collect();
     let mut elements: Vec<Element> = Vec::new();
@@ -404,10 +405,14 @@ fn convert_bytes(
         .pages
         .iter()
         .filter(|p| pages.is_none_or(|keep| keep.contains(&p.index)))
-        .map(|p| fluree_doc_model::PageSize {
-            index: p.index,
-            width: p.width,
-            height: p.height,
+        .map(|p| {
+            let (width, height) = p.display_size();
+            fluree_doc_model::PageSize {
+                index: p.index,
+                width,
+                height,
+                folio: a.folios.get(p.index).cloned().flatten(),
+            }
         })
         .collect();
     // After the tiers: a page is unread only once whatever was going to read
