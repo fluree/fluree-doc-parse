@@ -206,6 +206,17 @@ fn convert_path(
             &fluree_doc_model::Notes::default(),
         ));
     }
+    // A workbook: each sheet is a page, its islands of cells are tables.
+    if ext_is(pdf, &["xlsx", "xlsm", "xltx", "xltm"]) {
+        let els = fluree_doc_xlsx::parse(&data).map_err(|e| e.to_string())?;
+        return Ok(render(
+            &els,
+            stem,
+            args,
+            Vec::new(),
+            &fluree_doc_model::Notes::default(),
+        ));
+    }
     if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
         return convert_image(data, stem, cfg, args, quiet);
     }

@@ -31,6 +31,7 @@ fdoc convert notes.md    -f doco
 fdoc convert report.docx -f doco
 fdoc convert page.html   -f doco
 fdoc convert deck.pptx   -f doco
+fdoc convert book.xlsx   -f doco
 ```
 
 The graph has the same shape from all five sources. One difference matters:

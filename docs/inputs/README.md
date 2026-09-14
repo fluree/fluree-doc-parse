@@ -1,6 +1,6 @@
 # Input formats
 
-Five sources, one [element model](../concepts/element-model.md). The format is
+Six sources, one [element model](../concepts/element-model.md). The format is
 detected from the file extension; `-` reads a PDF from stdin.
 
 ```bash
@@ -9,21 +9,22 @@ fdoc convert notes.md
 fdoc convert page.html
 fdoc convert report.docx
 fdoc convert deck.pptx
+fdoc convert book.xlsx
 ```
 
 ## What each reader knows
 
-| | [PDF](pdf.md) | [DOCX](office-and-web.md) | [PPTX](office-and-web.md) | [HTML](office-and-web.md) | [Markdown](office-and-web.md) |
-|---|:--:|:--:|:--:|:--:|:--:|
-| structure is | measured | declared | declared | declared | declared |
-| bounding boxes | ✅ | — | — | — | — |
-| pages | ✅ | — | slides | — | — |
-| headings | inferred | ✅ | ✅ | ✅ | ✅ |
-| tables | inferred | ✅ | ✅ + charts | ✅ | ✅ |
-| lists | inferred | ✅ | ✅ | ✅ | ✅ |
-| forms | ✅ AcroForm | — | — | — | — |
-| can escalate | ✅ | — | — | — | — |
-| can fail | ✅ | ✅ | ✅ | — | — |
+| | [PDF](pdf.md) | [DOCX](office-and-web.md) | [PPTX](office-and-web.md) | [XLSX](office-and-web.md) | [HTML](office-and-web.md) | [Markdown](office-and-web.md) |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| structure is | measured | declared | declared | measured from the grid | declared | declared |
+| bounding boxes | ✅ | — | — | — | — | — |
+| pages | ✅ | — | slides | sheets | — | — |
+| headings | inferred | ✅ | ✅ | sheet names, titled blocks | ✅ | ✅ |
+| tables | inferred | ✅ | ✅ + charts | ✅ | ✅ | ✅ |
+| lists | inferred | ✅ | ✅ | — | ✅ | ✅ |
+| forms | ✅ AcroForm | — | — | — | — | — |
+| can escalate | ✅ | — | — | — | — | — |
+| can fail | ✅ | ✅ | ✅ | ✅ | — | — |
 
 The two axes that matter are **geometry** and **certainty**, and they trade
 against each other. PDF is the only source with coordinates, and the only one
@@ -33,7 +34,7 @@ structure](../concepts/geometry-vs-declared.md).
 
 ## Detection
 
-By extension: `.pdf`, `.md`/`.markdown`, `.html`/`.htm`, `.docx`, `.pptx`,
+By extension: `.pdf`, `.md`/`.markdown`, `.html`/`.htm`, `.docx`, `.pptx`, `.xlsx`,
 and plain text. A PDF-only command given another format fails cleanly rather
 than producing empty output.
 
@@ -41,6 +42,7 @@ than producing empty output.
 
 - **PDF** — real pages, 0-based.
 - **PPTX** — slides are pages, so `page` is the slide index.
+- **XLSX** — sheets are pages, so `page` is the sheet's index in the workbook.
 - **DOCX, HTML, Markdown** — no pagination; `page` is `0` throughout. A DOCX
   has page breaks only once something lays it out, and that something is not
   this.

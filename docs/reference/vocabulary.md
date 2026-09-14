@@ -114,7 +114,8 @@ The physical index is always defined and always unique, and it is what a
 renderer needs to fetch the page.
 
 The same field carries the slide index for PPTX and the sheet index for
-paginationless sources, which `pageNumber` would misdescribe.
+XLSX, and `0` for paginationless sources, which `pageNumber` would
+misdescribe.
 
 ## IRI shapes
 

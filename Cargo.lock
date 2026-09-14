@@ -470,6 +470,7 @@ dependencies = [
  "fluree-doc-model",
  "fluree-doc-pdf",
  "fluree-doc-pptx",
+ "fluree-doc-xlsx",
  "hayro",
  "hayro-syntax",
  "png 0.17.16",
@@ -533,6 +534,15 @@ dependencies = [
 
 [[package]]
 name = "fluree-doc-pptx"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "quick-xml",
+ "zip",
+]
+
+[[package]]
+name = "fluree-doc-xlsx"
 version = "0.1.0"
 dependencies = [
  "fluree-doc-model",

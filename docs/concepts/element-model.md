@@ -1,6 +1,6 @@
 # The element model
 
-Every reader — PDF, Markdown, HTML, DOCX, PPTX — produces a flat
+Every reader — PDF, Markdown, HTML, DOCX, PPTX, XLSX — produces a flat
 `Vec<Element>` in reading order. Every output format is a projection of that
 list. Nothing else is shared between a reader and an emitter, which is what
 lets a Markdown consumer avoid compiling a PDF engine.

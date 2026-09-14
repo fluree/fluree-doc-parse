@@ -57,7 +57,7 @@ aws s3 cp s3://bucket/report.pdf - | fdoc convert - -f doco > report.jsonld
 ```
 
 **Stdin is PDF only.** The other readers identify a format from the file, so
-DOCX, PPTX, HTML and Markdown need a real path. Write them to a temp file, or
+DOCX, PPTX, XLSX, HTML and Markdown need a real path. Write them to a temp file, or
 route by extension:
 
 ```bash

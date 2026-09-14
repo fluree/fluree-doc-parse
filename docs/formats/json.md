@@ -29,7 +29,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `type` | yes | DoCO class |
 | `page` | yes | 0-based; `0` for formats without pages |
 | `text` | yes | NFKC-normalized |
-| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx` |
+| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx` |
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |
 | `level` | headings | 1–6 |

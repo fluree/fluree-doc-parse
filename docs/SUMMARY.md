@@ -24,7 +24,7 @@
 
 - [Input formats](inputs/README.md)
   - [PDF](inputs/pdf.md)
-  - [DOCX, PPTX, HTML, Markdown](inputs/office-and-web.md)
+  - [DOCX, PPTX, XLSX, HTML, Markdown](inputs/office-and-web.md)
   - [Images](inputs/images.md)
 
 - [CLI reference](cli/README.md)

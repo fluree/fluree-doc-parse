@@ -2,7 +2,7 @@
 
 Adaptive document parsing: a deterministic Rust engine first, with
 model-arbitrated upgrade tiers a document walks through only as far as it
-needs. PDF, Markdown, HTML, DOCX, PPTX or a raster image in; Markdown, XHTML,
+needs. PDF, Markdown, HTML, DOCX, PPTX, XLSX or a raster image in; Markdown, XHTML,
 JSON, plain text or a DoCO JSON-LD graph out.
 
 | tier | adds | overall¹ | typical cost/document |
@@ -42,6 +42,8 @@ fdoc convert report.docx -f doco              # DOCX in, same graph out
 fdoc convert page.html  -f doco              # HTML in, same graph out
 fdoc convert deck.pptx  -f doco              # PPTX in, slides become pages
                                              #   (charts become tables)
+fdoc convert book.xlsx  -f doco              # XLSX in, sheets become pages
+                                             #   (blocks of cells become tables)
 fdoc convert document.pdf -f xhtml           # XHTML
 fdoc convert document.pdf -f json            # DoCO-typed elements + bboxes
 fdoc convert document.pdf -f doco            # DoCO JSON-LD graph (sections,
@@ -94,7 +96,7 @@ and the negative results kept on record are in
 
 ## One element model, five outputs
 
-PDF, Markdown, HTML, DOCX, PPTX and raster images all converge on one element
+PDF, Markdown, HTML, DOCX, PPTX, XLSX and raster images all converge on one element
 model, so every source produces the same DoCO graph. PDF is the geometric
 path — structure inferred from glyph and rule positions, with escalation to
 model tiers where the inference is weak. The others declare their structure,
@@ -128,6 +130,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-docx` — DOCX (OOXML) reader
 - `crates/fluree-doc-html` — HTML reader
 - `crates/fluree-doc-pptx` — PPTX (OOXML) reader
+- `crates/fluree-doc-xlsx` — XLSX (OOXML) reader
 - `crates/fluree-doc-pdf` — extraction, layout, routing, arbitration
 - `crates/fluree-doc-cli` — the `fdoc` binary
 - `bench-adapter/` — opendataloader-bench engine adapters (incl. hybrid tiers)

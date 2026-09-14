@@ -55,7 +55,7 @@ up, so it appears in [`json`](json.md) and [`doco`](doco.md) and not here.
 Anchors inside table cells are the same — a pipe table has no room for one.
 
 Markdown and HTML sources carry their own links through unchanged, so
-`fdoc convert notes.md` round-trips them. DOCX and PPTX do not yet.
+`fdoc convert notes.md` round-trips them. DOCX, PPTX and XLSX do not yet.
 
 **This costs benchmark score, and is emitted anyway.** Ground truth
 transcribed from a visible page has no link markup, so every address we

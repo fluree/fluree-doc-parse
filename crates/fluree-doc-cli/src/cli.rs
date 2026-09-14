@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Adaptive document parsing: text and structure (headings, tables, lists,
-/// forms) from PDF, Markdown, HTML, DOCX and PPTX.
+/// forms) from PDF, Markdown, HTML, DOCX, PPTX and XLSX.
 ///
 /// PDF structure is inferred from layout, with per-page signals telling you
 /// which pages would benefit from model-tier escalation; the other formats
@@ -31,7 +31,7 @@ pub struct Cli {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF, Markdown, HTML, DOCX and PPTX. PDF structure is inferred
+    /// Reads PDF, Markdown, HTML, DOCX, PPTX and XLSX. PDF structure is inferred
     /// from layout; the others declare theirs and carry no geometry.
     ///
     /// Examples:

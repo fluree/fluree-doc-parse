@@ -6,7 +6,7 @@ Convert documents to Markdown, XHTML, JSON, DoCO JSON-LD or plain text.
 fdoc convert <FILE|DIR|->... [options]
 ```
 
-Reads PDF, Markdown, HTML, DOCX and PPTX. PDF structure is inferred from
+Reads PDF, Markdown, HTML, DOCX, PPTX and XLSX. PDF structure is inferred from
 layout; the others declare theirs and carry no geometry. See [Input
 formats](../inputs/README.md).
 

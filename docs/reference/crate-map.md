@@ -7,7 +7,8 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-markdown  Markdown reader
       ├── fluree-doc-html      HTML reader
       ├── fluree-doc-docx      DOCX reader
-      └── fluree-doc-pptx      PPTX reader
+      ├── fluree-doc-pptx      PPTX reader
+      └── fluree-doc-xlsx      XLSX reader
                 │
                 └── fluree-doc-model   element model + emitters (source-agnostic)
 ```
@@ -25,6 +26,7 @@ engine.**
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>` |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts |
+| `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
 | `fluree-doc-cli` | argument parsing and the commands |
 

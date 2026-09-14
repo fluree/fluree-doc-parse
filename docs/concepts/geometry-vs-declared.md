@@ -67,13 +67,16 @@ readable. Do not use it to decide whether a position is real.
 
 `page` is 0-based, and formats without pagination report `0` throughout.
 PPTX is the interesting middle case: slides *are* pages, so `page` is the
-slide index, but slides still carry no bounding boxes.
+slide index, but slides still carry no bounding boxes. XLSX is the other:
+sheets are pages, and a cell has an exact row and column but says nothing
+about what it is, so the [workbook reader](../inputs/office-and-web.md#xlsx)
+measures shape — which cells sit together — and nothing else.
 
 ## What this means for you
 
 | you want | source |
 |---|---|
-| text and structure | any of the five |
+| text and structure | any of the six |
 | coordinates, overlay, page rendering | PDF only |
 | certainty about structure | the declared formats |
-| the same graph shape regardless | all five, by construction |
+| the same graph shape regardless | all six, by construction |
