@@ -39,6 +39,14 @@ const MIN_SENTENCE_WORD_CHARS: usize = 4;
 /// than a handful of them is a page of labels.
 const MAX_BOLD_HEADINGS_PER_PAGE: usize = 10;
 
+/// Most bare-number section candidates a page may hold before the numbering
+/// on it is judged to be a coding scheme rather than an outline. Sections are
+/// coarse — a page holds a few — where a questionnaire answers every item
+/// with a code, `0 — Never`, `2 — Somewhat agree`, twenty-odd to the page. The repeated-text check below catches an answer
+/// given more than once; an answer given once looks exactly like a section,
+/// and only the company it keeps tells them apart.
+const MAX_BARE_NUMBERED_PER_PAGE: usize = 10;
+
 /// Headings are short. Applies to every signal.
 const MAX_HEADING_CHARS: usize = 200;
 
@@ -213,6 +221,16 @@ fn bare_numbering_is_corroborated(text: &str, block: &Block, body_size: f32) -> 
     if !label.chars().all(|c| c.is_ascii_digit()) {
         return true;
     }
+    // Sections count from one. A bare zero is a code — `0 — Not started` —
+    // or a torn fragment of a time.
+    if label.chars().all(|c| c == '0') {
+        return false;
+    }
+    // A number set as a superscript is a footnote's: `95 Ibid.` opens with
+    // its reference mark, not a section number.
+    if block.lines.first().is_some_and(|l| l.opens_with_script) {
+        return false;
+    }
     if block.font_size < body_size * 0.95 {
         return false;
     }
@@ -232,6 +250,17 @@ fn bare_numbering_is_corroborated(text: &str, block: &Block, body_size: f32) -> 
             .1
             >= 2
     })
+}
+
+/// A numbered line whose label is a bare integer — `5 Results`, `2 — Never`
+/// — as opposed to `5.` or `5.3`: the weakest numbering form, the one
+/// [`bare_numbering_is_corroborated`] exists for.
+fn has_bare_number_label(text: &str) -> bool {
+    numbering_depth(text) == Some(1)
+        && text
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Shape tests every heading candidate must pass, regardless of which signal
@@ -462,6 +491,34 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             .collect()
     };
 
+    // A section number names one section. A bare number that labels two
+    // different titles in one document — `1 — Yes`, `1 — Supplier on file`,
+    // `1 — Weekly` — is a code, and so is every
+    // line it labels, including the ones set only once. This is the
+    // document-wide half of the form test; the page cap below is the other.
+    let shared_bare_numbers: std::collections::HashSet<String> = {
+        let mut titles: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+        for b in pages.iter().flatten() {
+            let text = b.text();
+            if has_bare_number_label(&text) {
+                let label = text.split_whitespace().next().unwrap_or("").to_string();
+                titles.entry(label).or_default().insert(norm(&text));
+            }
+        }
+        titles
+            .into_iter()
+            .filter(|(_, t)| t.len() >= 2)
+            .map(|(label, _)| label)
+            .collect()
+    };
+    let coded = |text: &str| -> bool {
+        has_bare_number_label(text)
+            && text
+                .split_whitespace()
+                .next()
+                .is_some_and(|label| shared_bare_numbers.contains(label))
+    };
+
     let document_title = pages.first().and_then(|blocks| {
         let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
         blocks
@@ -575,6 +632,13 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
         // Suppress headings after a contents marker on the same page: the
         // entries below it are the table of contents, not sections.
         let toc_from = blocks.iter().position(|b| is_toc_marker(&b.text()));
+        // A page of coded answers: bare numbers by the dozen are a scheme,
+        // not an outline, and none of them is a section.
+        let page_is_coded = blocks
+            .iter()
+            .filter(|b| has_bare_number_label(&b.text()))
+            .count()
+            > MAX_BARE_NUMBERED_PER_PAGE;
         for (block_idx, b) in blocks.iter().enumerate() {
             if toc_from.is_some_and(|i| block_idx > i) {
                 continue;
@@ -649,9 +713,14 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                 });
                 continue;
             }
-            // 3. Numbering states its own depth.
+            // 3. Numbering states its own depth — unless the block is a
+            // list's item, whose number counts off from the item before it.
             if let Some(depth) = numbering_depth(&text) {
-                if !bare_numbering_is_corroborated(&text, b, body) {
+                if b.marker.is_some()
+                    || !bare_numbering_is_corroborated(&text, b, body)
+                    || coded(&text)
+                    || (page_is_coded && has_bare_number_label(&text))
+                {
                     continue;
                 }
                 out.push(Heading {
@@ -947,6 +1016,7 @@ mod tests {
             glyphs: vec![],
             font_size: fs,
             bold: false,
+            opens_with_script: false,
         };
         Block {
             lines: vec![l; lines.max(1)],
@@ -1050,6 +1120,104 @@ mod tests {
         assert_eq!(headings.len(), 1);
         assert_eq!(headings[0].text, "Replace");
         assert_eq!(headings[0].evidence, Evidence::Sequence);
+    }
+
+    #[test]
+    fn a_footnote_number_is_not_a_section_number() {
+        let mut b = blk("95 Ibid.", 10.0, 1);
+        assert!(bare_numbering_is_corroborated("95 Ibid.", &b, 10.0));
+        b.lines[0].opens_with_script = true;
+        assert!(!bare_numbering_is_corroborated("95 Ibid.", &b, 10.0));
+    }
+
+    #[test]
+    fn a_list_item_is_not_a_numbered_section() {
+        let mut b = blk("1. Label four plastic bags", 10.0, 1);
+        assert_eq!(detect(&[vec![b.clone()]], &[]).len(), 1);
+        b.marker = Some("1.".into());
+        assert!(detect(&[vec![b]], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_bare_zero_numbers_nothing() {
+        assert!(!bare_numbering_is_corroborated(
+            "0 — Not started",
+            &blk("0 — Not started", 10.0, 1),
+            10.0
+        ));
+        assert!(bare_numbering_is_corroborated(
+            "1 — Yes",
+            &blk("1 — Yes", 10.0, 1),
+            10.0
+        ));
+    }
+
+    #[test]
+    fn a_bare_number_naming_two_titles_is_a_code() {
+        // Sections are numbered once. Where `1` labels two different lines,
+        // neither is a section — nor is the `1` set only once on a later
+        // page that a page cap would never reach.
+        let pages = vec![
+            vec![blk("1 — Yes", 10.0, 1), blk("2 — Weekly", 10.0, 1)],
+            vec![blk("1 — Supplier on file", 10.0, 1)],
+            vec![blk("3 — Approved with changes", 10.0, 1)],
+        ];
+        let h = detect(&pages, &[]);
+        let numbered: Vec<&str> = h
+            .iter()
+            .filter(|h| h.evidence == Evidence::Numbering)
+            .map(|h| h.text.as_str())
+            .collect();
+        assert_eq!(
+            numbered,
+            vec!["2 — Weekly", "3 — Approved with changes"],
+            "{h:?}"
+        );
+
+        // A paper's sections, each number once: untouched.
+        let pages = vec![
+            vec![
+                blk("1 Introduction", 10.0, 1),
+                blk("2 Related Work", 10.0, 1),
+            ],
+            vec![blk("3 Method", 10.0, 1)],
+        ];
+        let h = detect(&pages, &[]);
+        assert_eq!(h.len(), 3);
+        assert!(h.iter().all(|h| h.evidence == Evidence::Numbering));
+    }
+
+    #[test]
+    fn a_page_of_coded_answers_is_not_an_outline() {
+        // A questionnaire answers every item with `code — label`, each
+        // answer given once on the page. One at a time each is a numbered
+        // section; a dozen to the page they are a coding scheme.
+        let answers = [
+            "1 — Yes",
+            "2 — Somewhat agree",
+            "3 — Weekly",
+            "4 — Approved with changes",
+            "5 — Pending review",
+            "6 — Supplier on file",
+            "7 — Delivered late",
+            "8 — Returned unused",
+            "9 — Not applicable",
+            "11 — Partially complete",
+            "12 — Under warranty",
+            "13 — Awaiting parts",
+        ];
+        let page: Vec<Block> = answers.iter().map(|a| blk(a, 10.0, 1)).collect();
+        let h = detect(&[page], &[]);
+        assert!(
+            h.iter().all(|h| h.evidence != Evidence::Numbering),
+            "coded answers must not be numbered sections: {h:?}"
+        );
+
+        // The same lines three to a page are sections.
+        let page: Vec<Block> = answers[..3].iter().map(|a| blk(a, 10.0, 1)).collect();
+        let h = detect(&[page], &[]);
+        assert_eq!(h.len(), 3);
+        assert!(h.iter().all(|h| h.evidence == Evidence::Numbering));
     }
 
     #[test]

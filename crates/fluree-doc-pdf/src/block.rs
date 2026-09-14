@@ -24,8 +24,18 @@ const PARAGRAPH_FACTOR: f64 = 1.35;
 
 /// Relative font-size change that forces a break regardless of spacing. A
 /// heading set 2pt larger than body text must not absorb the paragraph under
-/// it.
+/// it. Loose, because the lines of one paragraph do not measure alike: a
+/// paper set in 11pt reads 10.9 on one line and 11.1 on the next, and a
+/// line whose median lands on an inline bold run reads 10.7.
 const FONT_SIZE_TOLERANCE: f64 = 0.12;
+
+/// The smallest size step a typesetter makes on purpose — half a point,
+/// 5.6% at 9pt — and a break on its own, but only across a line that was
+/// ended by hand. A service log sets each code as a short 9pt label over
+/// its 8.5pt description at body leading, and three separate entries read as
+/// one paragraph under the loose tolerance; between two full lines the same
+/// step is the jitter above.
+const SIZE_STEP: f64 = 0.05;
 
 /// Left-edge shift, as a fraction of font size, that may indicate a new block.
 const INDENT_TOLERANCE: f64 = 1.0;
@@ -44,6 +54,11 @@ const FULL_LINE_FRACTION: f64 = 0.85;
 
 /// Fallback when a document is too short to establish a modal leading.
 const DEFAULT_LEADING: f64 = 1.2;
+
+/// Fewest lines a block needs before its ragged right edge is read as hand
+/// line breaks. Two lines are a wrapped title as often as a form, and a title
+/// broken by hand in two must stay one heading.
+const MIN_HARD_BREAK_LINES: usize = 3;
 
 /// Longest text still considered a marker rather than content. Bullets (`■`,
 /// `-`), list numbers (`1.`, `iv.`) and footnote references are all short.
@@ -256,7 +271,34 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
 
 /// Group one page's lines into blocks, given the document's modal leading.
 pub fn assemble(lines: &[Line], leading: f64) -> Vec<Block> {
-    assemble_with_marks(lines, leading, &[])
+    assemble_with_marks(lines, leading, &[], &[])
+}
+
+/// The fill a line sits in: the smallest one that spans it horizontally and
+/// holds its vertical centre. `None` on bare paper.
+///
+/// A row's shading is drawn once per row, so two lines under different fills
+/// are two rows however close their baselines. A form that sets each item
+/// on its own shaded band, with the item's label wrapped onto two lines
+/// inside it, can leave the gap between bands a hundredth under the break
+/// threshold, and whether two items merge then comes down to rounding. The
+/// smallest containing fill wins so a box drawn *inside* a larger panel
+/// still separates its rows.
+fn band_of(l: &Line, bands: &[BBox]) -> Option<usize> {
+    let fs = (l.font_size as f64).max(1.0);
+    let cy = (l.bbox.y0 + l.bbox.y1) * 0.5;
+    bands
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| {
+            b.x0 <= l.bbox.x0 + fs && b.x1 >= l.bbox.x1 - fs && b.y0 <= cy && cy <= b.y1
+        })
+        .min_by(|(_, a), (_, b)| {
+            a.height()
+                .partial_cmp(&b.height())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
 }
 
 /// How far left of a line's start a checkbox may sit and still introduce it,
@@ -275,9 +317,15 @@ fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
     })
 }
 
-/// Assemble blocks, treating each supplied checkbox as a list marker: the
-/// line it introduces starts its own block and carries the marker.
-pub fn assemble_with_marks(lines: &[Line], leading: f64, checkboxes: &[BBox]) -> Vec<Block> {
+/// Assemble blocks, treating each supplied checkbox as a list marker — the
+/// line it introduces starts its own block and carries the marker — and each
+/// supplied fill as a band no block crosses; see [`band_of`].
+pub fn assemble_with_marks(
+    lines: &[Line],
+    leading: f64,
+    checkboxes: &[BBox],
+    bands: &[BBox],
+) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
     let right_edge = lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
     let left_edge = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
@@ -302,6 +350,7 @@ pub fn assemble_with_marks(lines: &[Line], leading: f64, checkboxes: &[BBox]) ->
 
     // Lines a checkbox introduces, by index into `lines`.
     let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
+    let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
     let mut marked: Vec<usize> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
         if cur.is_empty() {
@@ -311,11 +360,15 @@ pub fn assemble_with_marks(lines: &[Line], leading: f64, checkboxes: &[BBox]) ->
             cur.push(l.clone());
             continue;
         }
-        // A checkbox always begins a new option, however the geometry reads.
-        if !ticked[i] && continues(cur.last().unwrap(), l, leading, right_edge, span) {
+        // A checkbox always begins a new option, however the geometry reads,
+        // and a fill's edge is a row's edge.
+        if !ticked[i]
+            && band[i] == band[i - 1]
+            && continues(cur.last().unwrap(), l, leading, right_edge, span)
+        {
             cur.push(l.clone());
         } else {
-            blocks.push(build(std::mem::take(&mut cur)));
+            blocks.extend(split_hard_breaks(build(std::mem::take(&mut cur))));
             if ticked[i] {
                 marked.push(blocks.len());
             }
@@ -323,7 +376,7 @@ pub fn assemble_with_marks(lines: &[Line], leading: f64, checkboxes: &[BBox]) ->
         }
     }
     if !cur.is_empty() {
-        blocks.push(build(cur));
+        blocks.extend(split_hard_breaks(build(cur)));
     }
     for i in marked {
         if let Some(b) = blocks.get_mut(i) {
@@ -406,6 +459,12 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     if rel > FONT_SIZE_TOLERANCE {
         return false;
     }
+    let full =
+        |l: &Line| (l.bbox.x1 - (right_edge - span * (1.0 - FULL_LINE_FRACTION))) >= -f64::EPSILON;
+    let prev_full = full(prev);
+    if rel > SIZE_STEP && !(prev_full && full(next)) {
+        return false;
+    }
 
     let dy = (next.bbox.y0 - prev.bbox.y0) / fs;
     if dy <= 0.0 {
@@ -421,15 +480,135 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     // full line ended because it ran out of room, so the next line continues
     // the same paragraph however its left edge moves.
     let indent = (next.bbox.x0 - prev.bbox.x0).abs() / fs;
-    if indent > INDENT_TOLERANCE {
-        let prev_full =
-            (prev.bbox.x1 - (right_edge - span * (1.0 - FULL_LINE_FRACTION))) >= -f64::EPSILON;
-        if !prev_full {
-            return false;
-        }
+    if indent > INDENT_TOLERANCE && !prev_full {
+        return false;
     }
 
     true
+}
+
+/// Width of a line's first word plus the space before it, estimated from the
+/// line's own average character width.
+fn first_word_width(l: &Line) -> f64 {
+    let chars = l.text.chars().count().max(1) as f64;
+    let first = l
+        .text
+        .split_whitespace()
+        .next()
+        .map_or(0, |w| w.chars().count()) as f64;
+    l.bbox.width() / chars * (first + 1.0)
+}
+
+/// The ordinal a line opens with — `1.`, `12)` — as an ordered list sets its
+/// items, with the label's text.
+fn ordinal_prefix(text: &str) -> Option<(u32, &str)> {
+    let t = text.trim_start();
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 || digits > 3 {
+        return None;
+    }
+    let rest = t[digits..].strip_prefix(['.', ')'])?;
+    if !rest.starts_with([' ', '\t', '\u{00A0}']) {
+        return None;
+    }
+    let label = &t[..t.len() - rest.len()];
+    Some((t[..digits].parse().ok()?, label))
+}
+
+/// Split a block whose lines were ended by hand into one block per line.
+///
+/// A checklist sets one field per line — `Site access: [X] Badge`, `Visitor
+/// log signed: [ ] Yes [X] No.` — at body leading with nothing between the
+/// lines, and a page of fields read as one paragraph a consumer could not
+/// take apart. The spacing says paragraph; the right edge
+/// says otherwise. A wrapping typesetter ends a line only when the next word
+/// does not fit, so in a wrapped paragraph no line but the last leaves room
+/// for the word that follows it. Where most lines do, the breaks were put
+/// there: a form, an address, a poem, a listing.
+///
+/// Room is measured against the block's own right edge, which is never
+/// wider than the margin the text wrapped at, so the test errs toward
+/// keeping a paragraph whole. Centred and hanging-indented text, whose left
+/// edges vary, is left alone, and so is a block of fewer than
+/// [`MIN_HARD_BREAK_LINES`].
+///
+/// Lines of such a block that count off in sequence — `1. Label four
+/// plastic bags`, `2. Weigh 20 g of air-dry soil` — are an ordered list's
+/// items: each starts its own block whether or not the line above it left
+/// room, and carries its label as the marker. A step read as a block of its
+/// own would otherwise pass for a numbered section, which is the one thing a
+/// line that counts off from the line above it cannot be.
+pub fn split_hard_breaks(b: Block) -> Vec<Block> {
+    if b.lines.len() < MIN_HARD_BREAK_LINES {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let left = b.lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    if b.lines.iter().any(|l| l.bbox.x0 - left > fs) {
+        return vec![b];
+    }
+    let right = b.lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let ends_early: Vec<bool> = b
+        .lines
+        .windows(2)
+        .map(|w| {
+            let (cur, next) = (&w[0], &w[1]);
+            // A hyphen at the end is a wrap by definition.
+            !cur.text.ends_with('-') && right - cur.bbox.x1 >= first_word_width(next)
+        })
+        .collect();
+    let early = ends_early.iter().filter(|e| **e).count();
+    if early * 2 <= ends_early.len() {
+        return vec![b];
+    }
+    // Lines counting off from the one before: `Some(label)` where the line
+    // continues a sequence, or opens one that the next numbered line
+    // continues.
+    let ordinals: Vec<Option<(u32, String)>> = b
+        .lines
+        .iter()
+        .map(|l| ordinal_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
+        .collect();
+    let mut counted: Vec<Option<String>> = vec![None; b.lines.len()];
+    let mut prev: Option<(usize, u32)> = None;
+    for (i, o) in ordinals.iter().enumerate() {
+        if let Some((n, label)) = o {
+            if let Some((j, m)) = prev {
+                if *n == m + 1 {
+                    counted[i] = Some(label.clone());
+                    if counted[j].is_none() {
+                        counted[j] = ordinals[j].as_ref().map(|(_, l)| l.clone());
+                    }
+                }
+            }
+            prev = Some((i, *n));
+        }
+    }
+    let Block {
+        lines,
+        marker,
+        gap_above,
+        ..
+    } = b;
+    let mut out: Vec<Block> = Vec::new();
+    let mut cur: Vec<Line> = Vec::new();
+    let n = lines.len();
+    for (i, l) in lines.into_iter().enumerate() {
+        cur.push(l);
+        let breaks = ends_early.get(i).copied().unwrap_or(false)
+            || counted.get(i + 1).is_some_and(|c| c.is_some());
+        if breaks || i + 1 == n {
+            let start = i + 1 - cur.len();
+            let mut piece = build(std::mem::take(&mut cur));
+            piece.marker = counted[start].clone();
+            out.push(piece);
+        }
+    }
+    if out[0].marker.is_none() {
+        out[0].marker = marker;
+    }
+    out[0].gap_above = gap_above;
+    out
 }
 
 /// Whether a poster-like display word governs the lettered item below it.
@@ -518,6 +697,7 @@ mod tests {
             glyphs: vec![],
             font_size: fs,
             bold: false,
+            opens_with_script: false,
         }
     }
 
@@ -563,7 +743,7 @@ mod tests {
                 y1: i as f64 * 11.0 + 7.0,
             })
             .collect();
-        let b = assemble_with_marks(&lines, 1.2, &boxes);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
         assert_eq!(b.len(), 3, "one block per option, got {b:?}");
         assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{2610}")));
     }
@@ -581,7 +761,7 @@ mod tests {
             x1: 407.0,
             y1: 7.0,
         }];
-        let b = assemble_with_marks(&lines, 1.2, &boxes);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
         assert_eq!(b.len(), 1);
         assert!(b[0].marker.is_none());
     }
@@ -665,6 +845,219 @@ mod tests {
             1,
             "hanging indent is wrapping, not a paragraph break"
         );
+    }
+
+    #[test]
+    fn a_half_point_step_across_a_short_line_is_a_break() {
+        // A 9pt code label directly above the 8.5pt description it introduces:
+        // the spacing is body leading and the left edges agree, so only the
+        // size step separates them. Both directions: the full description
+        // line is followed by the next short label.
+        let mut label = l("A-100", 10.0, 0.0, 9.0);
+        label.bbox.x1 = 35.0;
+        let mut next = l("A-110", 10.0, 32.0, 9.0);
+        next.bbox.x1 = 35.0;
+        let lines = vec![
+            label,
+            l(
+                "A-100: Site survey — perimeter and access roads",
+                10.0,
+                14.0,
+                8.5,
+            ),
+            next,
+        ];
+        assert_eq!(assemble(&lines, 1.48).len(), 3);
+    }
+
+    #[test]
+    fn size_jitter_between_full_lines_is_not_a_break() {
+        // One paragraph of an 11pt paper: the lines measure 11.1 and 10.7,
+        // and both run to the margin.
+        let lines = vec![
+            l(
+                "ious benchmarks, outperforming established",
+                10.0,
+                0.0,
+                11.1,
+            ),
+            l(
+                "models like Llama 2 and Mistral 7B in reason-",
+                10.0,
+                13.5,
+                10.7,
+            ),
+            l(
+                "ing, mathematics, and the MMLU framework.",
+                10.0,
+                27.0,
+                11.1,
+            ),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn hand_broken_lines_that_count_off_are_list_items() {
+        // A lab's steps, one per line, the fourth long enough to reach the
+        // block's edge. Every step is its own block with its number as the
+        // marker — including the fifth, which the full fourth line would
+        // otherwise have kept.
+        let mut lines = vec![
+            l("1. Label four plastic bags", 60.0, 0.0, 9.0),
+            l("2. Weigh 20 g of air-dry soil into each plastic bag.", 60.0, 14.0, 9.0),
+            l("3. Weigh 0.1 gram of designated liming material onto weighing paper.", 60.0, 28.0, 9.0),
+            l("4. Add the liming material to the soil and mix thoroughly to distribute evenly in the soil.", 60.0, 42.0, 9.0),
+            l("5. Add a few mL of water to each bag and mix.", 60.0, 56.0, 9.0),
+            l("6. Close the bags to start incubation.", 60.0, 70.0, 9.0),
+        ];
+        for line in &mut lines {
+            line.bbox.x1 = line.bbox.x0 + line.text.chars().count() as f64 * 4.2;
+        }
+        let b = assemble(&lines, 1.48);
+        assert_eq!(b.len(), 6, "{b:?}");
+        assert_eq!(b[0].marker.as_deref(), Some("1."));
+        assert_eq!(b[4].marker.as_deref(), Some("5."));
+        assert!(b[4].text().starts_with("5. Add a few"));
+    }
+
+    #[test]
+    fn an_ordinal_opens_a_line_only_before_a_space() {
+        assert_eq!(ordinal_prefix("1. Label four"), Some((1, "1.")));
+        assert_eq!(ordinal_prefix("12) Twelve"), Some((12, "12)")));
+        assert_eq!(ordinal_prefix("1.5 mL of water"), None);
+        assert_eq!(ordinal_prefix("2024. The year"), None);
+        assert_eq!(ordinal_prefix("Label four"), None);
+    }
+
+    #[test]
+    fn lines_under_different_fills_are_different_rows() {
+        // Two form items, each a label wrapped onto two lines inside its own
+        // shaded band. The gap between bands is just under the paragraph
+        // threshold, so without the bands the four lines read as one item.
+        let lines = vec![
+            l("Q12 — Satisfied with the onboarding", 47.0, 0.0, 7.5),
+            l("materials", 47.0, 11.0, 7.5),
+            l("Q13 — Would recommend the program to", 47.0, 25.0, 7.5),
+            l("a colleague", 47.0, 36.0, 7.5),
+        ];
+        assert_eq!(assemble(&lines, 1.48).len(), 1, "no bands: one block");
+        let bands = vec![
+            BBox {
+                x0: 43.0,
+                y0: -4.0,
+                x1: 569.0,
+                y1: 21.0,
+            },
+            BBox {
+                x0: 43.0,
+                y0: 21.0,
+                x1: 569.0,
+                y1: 46.0,
+            },
+        ];
+        let b = assemble_with_marks(&lines, 1.48, &[], &bands);
+        assert_eq!(b.len(), 2, "one block per band, got {b:?}");
+        assert!(b[0].text().starts_with("Q12") && b[0].text().ends_with("materials"));
+        assert!(b[1].text().starts_with("Q13"));
+    }
+
+    #[test]
+    fn a_box_around_a_whole_paragraph_does_not_split_it() {
+        let lines = vec![
+            l("first line of", 10.0, 0.0, 10.0),
+            l("the paragraph", 10.0, 12.0, 10.0),
+        ];
+        let bands = vec![BBox {
+            x0: 0.0,
+            y0: -5.0,
+            x1: 400.0,
+            y1: 30.0,
+        }];
+        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands).len(), 1);
+    }
+
+    #[test]
+    fn hand_broken_lines_become_one_block_each() {
+        // A checklist: one field per line, body leading, nothing between the
+        // lines but a ragged right edge with room for the next word.
+        let mut lines = vec![
+            l("Site access: [X] Badge [ ] Escort", 50.0, 0.0, 7.5),
+            l("Hard hat issued: [X] Yes [ ] No", 50.0, 11.0, 7.5),
+            l("Visitor log signed: [ ] Yes [X] No.", 50.0, 22.0, 7.5),
+            l(
+                "Hazards briefed: [X] Yes [ ] No. If Yes list: working at height, live cables",
+                50.0,
+                33.0,
+                7.5,
+            ),
+        ];
+        // Widths in proportion to the text, at 3.5pt a character.
+        for line in &mut lines {
+            line.bbox.x1 = line.bbox.x0 + line.text.chars().count() as f64 * 3.5;
+        }
+        let b = assemble(&lines, 1.48);
+        assert_eq!(b.len(), 4, "one block per field, got {b:?}");
+        assert!(b[2].text().starts_with("Visitor log signed"));
+    }
+
+    #[test]
+    fn a_wrapped_paragraph_keeps_its_lines() {
+        // Every line but the last reaches the edge: the next word never fit.
+        let mut lines = vec![
+            l(
+                "The quick brown fox jumps over the lazy dog and",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "keeps running through the long and winding field",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            l(
+                "until the evening comes and the light goes out of",
+                10.0,
+                24.0,
+                10.0,
+            ),
+            l("the sky.", 10.0, 36.0, 10.0),
+        ];
+        for line in &mut lines {
+            line.bbox.x1 = line.bbox.x0 + line.text.chars().count() as f64 * 5.0;
+        }
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn centred_lines_are_not_hand_breaks() {
+        // A title set centred over three lines: the left edges wander, and
+        // that is the layout, not a form.
+        let mut lines = vec![
+            l("Very Long Document Titles", 80.0, 0.0, 16.0),
+            l("A Study of", 120.0, 19.0, 16.0),
+            l("in Practice", 118.0, 38.0, 16.0),
+        ];
+        for line in &mut lines {
+            line.bbox.x1 = line.bbox.x0 + line.text.chars().count() as f64 * 8.0;
+        }
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn two_hand_broken_lines_stay_together() {
+        // Below the line minimum: a two-line title broken by hand must remain
+        // one heading.
+        let mut lines = vec![
+            l("Deep Learning for", 10.0, 0.0, 16.0),
+            l("Document Understanding at Scale", 10.0, 19.0, 16.0),
+        ];
+        for line in &mut lines {
+            line.bbox.x1 = line.bbox.x0 + line.text.chars().count() as f64 * 8.0;
+        }
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
     }
 
     #[test]

@@ -9,7 +9,7 @@
 
 use crate::commands::common::{opts_for, pdfs_in, CROP_MARGIN, VLM_RENDER_SCALE};
 use fluree_doc_pdf::{
-    block, dedup, extract_file, furniture, heading, line, outline, overlay, PageText,
+    block, dedup, extract_file, furniture, heading, line, outline, overlay, rule, PageText,
 };
 use std::path::{Path, PathBuf};
 
@@ -573,11 +573,17 @@ fn pipeline(pdf: &Path) -> Doc {
     let mut doc = extract_file(pdf).expect("extract");
     let mut cols_per_page: Vec<Vec<Vec<fluree_doc_pdf::Line>>> = Vec::new();
     let mut flat: Vec<(Vec<fluree_doc_pdf::Line>, f64)> = Vec::new();
+    let mut fills_per_page: Vec<Vec<fluree_doc_pdf::geom::BBox>> = Vec::new();
     for p in &mut doc.pages {
         dedup::remove_faux_bold(&mut p.glyphs, 8);
+        // The page's own bands and lattice are not structure, here as in
+        // the pipeline; what remains marks checkboxes and row bands.
+        rule::strip_layout_lattice(&mut p.rules, p.width, p.height);
+        rule::strip_page_decoration(&mut p.rules, &mut p.fills, p.width, p.height);
         let cols = line::assemble_columns(&p.glyphs);
         flat.push((cols.iter().flatten().cloned().collect(), p.height));
         cols_per_page.push(cols);
+        fills_per_page.push(p.fills.iter().map(|f| f.bbox).collect());
     }
     let marks = furniture::detect(&flat);
     let bare: Vec<Vec<fluree_doc_pdf::Line>> = flat.iter().map(|(l, _)| l.clone()).collect();
@@ -601,9 +607,11 @@ fn pipeline(pdf: &Path) -> Doc {
             idx += col.len();
             body_lines += kept.len();
             // Per column: "was this line wrapped?" is judged against the
-            // column's own right edge, not the page's.
+            // column's own right edge, not the page's. The page's fills mark
+            // checkboxes and row bands, as they do in the pipeline.
+            let checkboxes = rule::checkboxes(&doc.pages[pi].fills);
             out.extend(
-                block::assemble(&kept, leading)
+                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi])
                     .into_iter()
                     .flat_map(block::split_structural_prefix),
             );

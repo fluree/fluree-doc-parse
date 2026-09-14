@@ -20,6 +20,25 @@ tells you how far down the ladder it came from.
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
+## Numbering that is not an outline
+
+A bare integer — `5 Results`, `2 — Never` — is the weakest numbering form,
+and a questionnaire is made of it: every item answered with a code,
+`0 — Never`, `2 — Somewhat agree`, twenty-odd to the page, each set larger
+than the item it answers and numbered like a section.
+Three tests keep them out, none of which touches `5.3.1`:
+
+- **A numbered title occurs once.** An answer given more than once in a
+  document is a code; so is every line labelled with a bare number that
+  names two *different* titles (`1 — Yes`, `1 — Supplier on file`).
+- **Sections are coarse.** A page holding more than ten bare-number
+  candidates is a coding scheme, whatever each line looks like on its own.
+- **Sections count from one**, and a number set as a superscript is a
+  footnote's: `95 Ibid.` opens with its reference mark.
+
+A block that carries a list marker is a list's item, and its number counts
+off from the item before it, so numbering evidence is never read from one.
+
 ## The outline tree
 
 **The signal no benchmarked engine uses.** A PDF's outline (bookmark) tree is

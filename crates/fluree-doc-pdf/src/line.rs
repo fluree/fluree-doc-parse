@@ -62,6 +62,39 @@ fn is_spaceless_script(c: char) -> bool {
 /// have different tops but share a baseline.
 const BASELINE_TOLERANCE: f64 = 0.3;
 
+/// Largest size, as a fraction of its neighbour's, at which a glyph can be a
+/// superscript or subscript rather than text of the same run.
+const SCRIPT_SIZE_RATIO: f64 = 0.85;
+
+/// Smallest size, as a fraction of its neighbour's, at which a glyph can be
+/// its script. Scripts are set at half to four fifths of the base; a glyph
+/// a third the size is another run — a body line beside a 33pt display word,
+/// whose baseline sits well within the display word's shift tolerance.
+const SCRIPT_MIN_RATIO: f64 = 0.45;
+
+/// Furthest a script glyph's baseline may sit from its neighbour's, in the
+/// neighbour's font-size units. Superscripts are raised a third to a half of
+/// the size; subscripts are lowered about a quarter.
+const SCRIPT_SHIFT: f64 = 0.7;
+
+/// Fraction of a script glyph's ink that must fall inside the neighbour's
+/// line box for the two to share a line.
+const SCRIPT_OVERLAP: f64 = 0.4;
+
+/// Furthest a script may sit from the base glyph it annotates along the
+/// line, in the larger size: a superscript follows its base directly, and a
+/// footnote's number precedes its text by no more than a word space.
+const SCRIPT_REACH: f64 = 0.5;
+
+/// How far a script may tuck back under the preceding glyph's overhang.
+const SCRIPT_OVERHANG: f64 = 0.3;
+
+/// Longest gap, in the script's own size, between glyphs of one script run.
+const SCRIPT_RUN_GAP: f64 = 0.5;
+
+/// Baseline clusters on either side of a script run that may hold its base.
+const SCRIPT_WINDOW: usize = 4;
+
 /// Gap, as a fraction of font size, above which glyphs sharing a baseline
 /// belong to *different* blocks rather than the same line.
 ///
@@ -86,6 +119,11 @@ pub struct Line {
     pub font_size: f32,
     /// True when most of the line's glyphs are bold.
     pub bold: bool,
+    /// The first inked glyph is a superscript or subscript: a footnote's
+    /// number, an affiliation mark. Set from the glyph sizes at assembly,
+    /// where the fact is still visible — the text reads `95 Ibid.` either
+    /// way.
+    pub opens_with_script: bool,
 }
 
 impl Line {
@@ -412,18 +450,24 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
         //
         // Within a baseline cluster, re-sort along the advance axis. Clusters
         // are anchored at their first glyph — not chained pairwise — so jitter
-        // cannot drift a cluster across genuinely distinct rows.
-        let mut start = 0;
-        for i in 1..=idxs.len() {
-            if i < idxs.len() && same_line(&glyphs[idxs[start]], &glyphs[idxs[i]], vertical) {
-                continue;
+        // cannot drift a cluster across genuinely distinct rows. Scripts sit
+        // off their baseline by design and form clusters of their own; they
+        // are moved into the cluster of the text they annotate afterwards.
+        let mut clusters: Vec<Vec<usize>> = Vec::new();
+        for &g in &idxs {
+            match clusters.last_mut() {
+                Some(c) if shares_baseline(&glyphs[c[0]], &glyphs[g], vertical) => c.push(g),
+                _ => clusters.push(vec![g]),
             }
-            idxs[start..i].sort_by(|&a, &b| {
+        }
+        attach_scripts(&mut clusters, glyphs, vertical, adv);
+        for c in &mut clusters {
+            c.sort_by(|&a, &b| {
                 let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
                 cmp(adv.at(oa), adv.at(ob))
             });
-            start = i;
         }
+        let idxs: Vec<usize> = clusters.into_iter().flatten().collect();
 
         let mut cur: Vec<usize> = Vec::new();
         for i in idxs {
@@ -432,7 +476,7 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 continue;
             }
             let prev = *cur.last().unwrap();
-            if same_line(&glyphs[prev], &glyphs[i], vertical)
+            if joins_line(&glyphs[prev], &glyphs[i], vertical, adv)
                 && !block_gap(&glyphs[prev], &glyphs[i], adv)
             {
                 cur.push(i);
@@ -539,7 +583,8 @@ impl Advance {
     }
 }
 
-fn same_line(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
+/// Two glyphs sit on one baseline, within jitter.
+fn shares_baseline(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     // Compare baselines, not boxes.
     let delta = if vertical {
         a.origin.0 - b.origin.0
@@ -548,6 +593,159 @@ fn same_line(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     };
     let scale = a.font_size.max(b.font_size).max(1.0) as f64;
     delta.abs() < scale * BASELINE_TOLERANCE
+}
+
+/// Consecutive glyphs belong to one line: on one baseline, or a script
+/// beside the text it annotates.
+fn joins_line(a: &Glyph, b: &Glyph, vertical: bool, adv: Advance) -> bool {
+    shares_baseline(a, b, vertical)
+        || (script_attached(a, b, vertical) && script_adjacent(a, b, adv))
+}
+
+/// Gap along the advance axis from the end of `a` to the start of `b`, in
+/// pen space where a glyph has no ink.
+fn forward_gap(a: &Glyph, b: &Glyph, adv: Advance) -> f64 {
+    let end_a = match a.bbox {
+        Some(ba) => adv.end(&ba),
+        None => adv.at(a.origin) + a.advance.unwrap_or(0.0),
+    };
+    let start_b = match b.bbox {
+        Some(bb) => adv.start(&bb),
+        None => adv.at(b.origin),
+    };
+    start_b - end_a
+}
+
+/// A script sits beside its base — within half a size along the line, and
+/// never behind it. Size and shift alone cannot tell a script from a small
+/// line set near a large one: a 7pt line four and a half points above an
+/// 11pt title is, by those measures, the title's superscript, and reading
+/// it as one interleaved the two rows and tore every word of the small line
+/// apart. A backwards pen jump is the next row beginning.
+fn script_adjacent(a: &Glyph, b: &Glyph, adv: Advance) -> bool {
+    let size = a.font_size.max(b.font_size).max(1.0) as f64;
+    let gap = forward_gap(a, b, adv);
+    gap >= -size * SCRIPT_OVERHANG && gap <= size * SCRIPT_REACH
+}
+
+/// Move script runs into the cluster of the text they annotate.
+///
+/// A cluster holds one baseline, so a line's superscripts form a cluster
+/// above it and its subscripts one below. Each such cluster is split into
+/// runs along the line — `9`, `95`, `HH` — and a run joins a neighbouring
+/// cluster of larger text when it is script-sized against that text, shifted
+/// and overlapping as a script is, and adjacent to one of its glyphs. A small
+/// line that merely sits near a large one touches none of its glyphs and
+/// stays where it is.
+fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool, adv: Advance) {
+    let size_of = |c: &[usize]| {
+        c.iter()
+            .map(|&i| glyphs[i].font_size)
+            .fold(0.0f32, f32::max)
+    };
+    for s in 0..clusters.len() {
+        if clusters[s].is_empty() {
+            continue;
+        }
+        let small = size_of(&clusters[s]) as f64;
+        let lo = s.saturating_sub(SCRIPT_WINDOW);
+        let hi = (s + SCRIPT_WINDOW).min(clusters.len() - 1);
+        let bases: Vec<usize> = (lo..=hi)
+            .filter(|&b| b != s && !clusters[b].is_empty())
+            .filter(|&b| {
+                let big = size_of(&clusters[b]) as f64;
+                (SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&(small / big.max(1.0)))
+            })
+            .collect();
+        if bases.is_empty() {
+            continue;
+        }
+        let mut members = std::mem::take(&mut clusters[s]);
+        members.sort_by(|&a, &b| cmp(adv.at(glyphs[a].origin), adv.at(glyphs[b].origin)));
+        let mut runs: Vec<Vec<usize>> = Vec::new();
+        for g in members {
+            match runs.last_mut() {
+                Some(r)
+                    if forward_gap(&glyphs[*r.last().unwrap()], &glyphs[g], adv)
+                        <= small * SCRIPT_RUN_GAP =>
+                {
+                    r.push(g)
+                }
+                _ => runs.push(vec![g]),
+            }
+        }
+        let mut kept: Vec<usize> = Vec::new();
+        for run in runs {
+            let first = &glyphs[run[0]];
+            let last = &glyphs[*run.last().unwrap()];
+            let base = bases.iter().copied().find(|&b| {
+                clusters[b].iter().any(|&i| {
+                    let g = &glyphs[i];
+                    (script_attached(g, first, vertical) && script_adjacent(g, first, adv))
+                        || (script_attached(last, g, vertical) && script_adjacent(last, g, adv))
+                })
+            });
+            match base {
+                Some(b) => clusters[b].extend(run),
+                None => kept.extend(run),
+            }
+        }
+        clusters[s] = kept;
+    }
+}
+
+/// A superscript or subscript belongs to the line it annotates.
+///
+/// `cm³/s` sets its exponent smaller and half a size above the baseline —
+/// past the baseline tolerance — so the `3` fell out of its line and became a
+/// one-character paragraph on every line that used the unit, while the line
+/// it came from read `cm/s`. A script glyph is smaller than its neighbour, its
+/// baseline is shifted by less than the neighbour's size, and its ink sits
+/// inside the neighbour's line box. A smaller line set *beneath* fails the
+/// last test: its ink starts below the neighbour's descenders. Whether it
+/// is *beside* the neighbour is [`script_adjacent`]'s question.
+fn script_attached(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
+    let (big, small) = if a.font_size >= b.font_size {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let size = big.font_size.max(1.0) as f64;
+    let ratio = small.font_size as f64 / size;
+    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) {
+        return false;
+    }
+    let (baseline, shift, ink) = if vertical {
+        (
+            big.origin.0,
+            small.origin.0 - big.origin.0,
+            small.bbox.map(|b| (b.x0, b.x1)),
+        )
+    } else {
+        (
+            big.origin.1,
+            small.origin.1 - big.origin.1,
+            small.bbox.map(|b| (b.y0, b.y1)),
+        )
+    };
+    if shift.abs() > size * SCRIPT_SHIFT {
+        return false;
+    }
+    // Outline-less — an explicit space set in the script's size: the shift
+    // alone decides, and the neighbouring glyphs settle the line.
+    let Some((lo, hi)) = ink else {
+        return true;
+    };
+    // The line box: a full size above the baseline to a quarter below it,
+    // in page space where y grows downward. A vertical run's box is
+    // symmetric, because which side is "up" depends on the run's direction.
+    let (box_lo, box_hi) = if vertical {
+        (baseline - size, baseline + size)
+    } else {
+        (baseline - size, baseline + size * 0.25)
+    };
+    let overlap = hi.min(box_hi) - lo.max(box_lo);
+    overlap >= (hi - lo).max(f64::EPSILON) * SCRIPT_OVERLAP
 }
 
 /// True when two glyphs on one baseline are separated by enough space to be
@@ -804,6 +1002,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         .filter(|&&i| glyphs[i].weight.unwrap_or(400) >= 600)
         .count();
     let bold = weighted > 0 && heavy * 2 > weighted;
+    let opens_with_script = idxs
+        .iter()
+        .map(|&i| &glyphs[i])
+        .find(|g| g.bbox.is_some())
+        .is_some_and(|g| g.font_size as f64 <= font_size as f64 * SCRIPT_SIZE_RATIO);
 
     Some(Line {
         text,
@@ -813,6 +1016,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         glyphs: idxs.to_vec(),
         font_size,
         bold,
+        opens_with_script,
     })
 }
 
@@ -866,6 +1070,158 @@ mod tests {
     fn splits_on_new_line() {
         let v = vec![g("a", 0.0, 0.0, 5.0, 0.0), g("b", 0.0, 20.0, 5.0, 0.0)];
         assert_eq!(assemble(&v).len(), 2);
+    }
+
+    /// A glyph set at `size` with its baseline at `baseline`, cap height
+    /// seven tenths of the size.
+    fn sized(text: &str, x: f64, baseline: f64, size: f32) -> Glyph {
+        let cap = size as f64 * 0.7;
+        Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: baseline - cap,
+                x1: x + size as f64 * 0.5,
+                y1: baseline,
+            }),
+            page: 0,
+            origin: (x, baseline),
+            rotation_deg: 0.0,
+            font_size: size,
+            weight: None,
+            advance: Some(size as f64 * 0.5),
+            draw_index: 0,
+        }
+    }
+
+    #[test]
+    fn a_superscript_joins_its_line() {
+        // `cm³/s`: the exponent is 80% of the size and raised half a size —
+        // past the baseline tolerance, so it fell out of its line and became
+        // a one-character paragraph on its own.
+        let v = vec![
+            sized("c", 0.0, 10.0, 10.0),
+            sized("m", 5.0, 10.0, 10.0),
+            sized("3", 10.0, 5.0, 8.0),
+            sized("/", 14.0, 10.0, 10.0),
+            sized("s", 19.0, 10.0, 10.0),
+        ];
+        let lines = assemble(&v);
+        assert_eq!(
+            lines.len(),
+            1,
+            "the exponent must stay on its line: {lines:?}"
+        );
+        assert_eq!(lines[0].text, "cm3/s");
+        assert_eq!(
+            lines[0].font_size, 10.0,
+            "one small glyph does not move the median"
+        );
+    }
+
+    #[test]
+    fn a_footnote_opens_with_its_script_number() {
+        let v = vec![
+            sized("9", 0.0, 6.0, 7.0),
+            sized("5", 3.5, 6.0, 7.0),
+            sized("I", 8.0, 10.0, 10.0),
+            sized("b", 13.0, 10.0, 10.0),
+        ];
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "95Ib");
+        assert!(lines[0].opens_with_script);
+        assert!(!assemble(&v[2..])[0].opens_with_script);
+    }
+
+    #[test]
+    fn a_body_line_beside_a_display_word_is_not_its_script() {
+        // A 33pt chapter word with 10.5pt body text wrapped around it: the
+        // body line 13pt above the word's baseline is within the shift a
+        // 33pt script could have, but nothing a third the size is a script.
+        let v = vec![
+            sized("R", 100.0, 168.0, 33.0),
+            sized("e", 120.0, 168.0, 33.0),
+            sized("a", 360.0, 155.0, 10.5),
+            sized("s", 365.0, 155.0, 10.5),
+        ];
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+    }
+
+    #[test]
+    fn a_superscript_ahead_in_order_does_not_shed_the_subscripts() {
+        // `p²N₍HH₎ = …`: the superscript's origin sorts first, so it opens the
+        // baseline cluster. The subscripts sit a quarter below the text and
+        // three quarters below the superscript — the cluster must be judged
+        // against the text, not the mark that happened to come first.
+        let v = vec![
+            sized("p", 0.0, 10.0, 10.0),
+            sized("2", 5.0, 5.0, 7.0),
+            sized("N", 9.0, 10.0, 10.0),
+            sized("H", 14.0, 12.5, 7.0),
+            sized("H", 17.5, 12.5, 7.0),
+        ];
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].text, "p2NHH");
+    }
+
+    #[test]
+    fn a_small_row_beside_a_large_row_is_not_its_script() {
+        // A page's right-hand column sets `Region: North` at 7.4pt four and
+        // a half points above the 11.5pt title `Quarterly Review` in the
+        // left column, and a 7pt line right under the small one. By size and
+        // shift the small rows are the title's scripts; by position they
+        // touch none of its glyphs. Every row must come out whole.
+        let mut v = Vec::new();
+        for (k, c) in "Region: North".chars().enumerate() {
+            v.push(sized(&c.to_string(), 340.0 + k as f64 * 3.7, 196.16, 7.4));
+        }
+        for (k, c) in "Quarterly Review".chars().enumerate() {
+            v.push(sized(&c.to_string(), 47.0 + k as f64 * 5.75, 200.66, 11.5));
+        }
+        for (k, c) in "Summary".chars().enumerate() {
+            v.push(sized(&c.to_string(), 341.0 + k as f64 * 3.5, 205.8, 7.0));
+        }
+        let lines = assemble(&v);
+        let mut texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        texts.sort_unstable();
+        assert_eq!(
+            texts,
+            vec!["Quarterly Review", "Region: North", "Summary"],
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_subscript_joins_its_line() {
+        // H₂O: lowered a quarter of the size.
+        let v = vec![
+            sized("H", 0.0, 10.0, 10.0),
+            sized("2", 5.0, 12.5, 7.0),
+            sized("O", 9.0, 10.0, 10.0),
+        ];
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "H2O");
+    }
+
+    #[test]
+    fn a_smaller_line_set_beneath_stays_separate() {
+        // A 7pt line 6.5pt under a 10pt one: within the script shift, but its
+        // ink starts below the larger line's descenders, so it is a line of
+        // its own.
+        let v = vec![
+            sized("A", 0.0, 10.0, 10.0),
+            sized("B", 5.0, 10.0, 10.0),
+            sized("a", 0.0, 16.5, 7.0),
+            sized("b", 4.0, 16.5, 7.0),
+        ];
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].text, "AB");
+        assert_eq!(lines[1].text, "ab");
     }
 
     #[test]
@@ -1083,6 +1439,7 @@ mod tests {
             glyphs: Vec::new(),
             font_size: size,
             bold: false,
+            opens_with_script: false,
         }
     }
 

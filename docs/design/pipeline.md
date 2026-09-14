@@ -68,6 +68,35 @@ This pattern — derive the norm from the document, then judge relative to it �
 recurs throughout. Font size for headings, gap width for word breaks, and rule
 length for table edges all work the same way, for the same reason.
 
+## Breaks the spacing does not show
+
+Leading is the main paragraph signal, not the only one. Three others end a
+block where the spacing says it continues, each learned from a document that
+read wrong without it.
+
+**A fill's edge is a row's edge.** A form can shade each item on its own
+band, with the item's label wrapped onto two lines inside it, and leave the
+gap between bands a hundredth under the paragraph threshold, so whether two
+items merge comes down to rounding. Two lines under different
+fills are two rows however close their baselines; a box drawn around a whole
+paragraph contains every line and separates nothing.
+
+**A ragged right edge is a set of hand breaks.** A checklist sets one field
+per line at body leading, and a page of fields read as one paragraph. A wrapping typesetter ends a line only when the next word does not
+fit, so in a wrapped paragraph no line but the last leaves room for the word
+that follows it. Where most lines of a left-aligned block of three or more
+do, the breaks were put there — a form, an address, a listing — and each line
+is a block. Lines of such a block that count off in sequence (`1. Label four
+plastic bags`, `2. Weigh 20 g of soil`) are an ordered list's items and carry
+their numbers as markers, so a step never passes for a numbered section.
+Centred text is exempt: its left edge wanders, and that is the layout.
+
+**A size step across a hand-ended line.** The lines of one paragraph do not
+measure alike — an 11pt paper reads 10.9 on one line and 11.1 on the next —
+so the size tolerance between full lines is loose. Across a line that was
+ended by hand it is the smallest step a typesetter makes, half a point: a
+service log's 9pt code label over its 8.5pt description.
+
 ## Then: routing and arbitration
 
 The elements from stage 7 are the deterministic result. Everything after is

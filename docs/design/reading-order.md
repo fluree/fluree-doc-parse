@@ -49,6 +49,29 @@ a page render lands where the text is. The threshold is deliberately high: a
 page that mixes a sideways table with upright prose is not a turned page, and
 its rotated run is read as one by the bucketing above.
 
+## A superscript stays on its line
+
+Lines are grouped by baseline, and a superscript is set off its baseline by
+design: `cm³/s` raises its exponent half a size, past the tolerance, so the
+`3` fell out of its line and became a one-character paragraph — on every line
+that used the unit, while the line it came from read `cm/s`.
+
+A script glyph is smaller than its neighbour (half to four fifths of the
+size), its baseline is shifted by less than the neighbour's size, its ink
+sits inside the neighbour's line box — and it sits *beside* one of the
+neighbour's glyphs, within half a size along the line. The last condition is
+load-bearing: a 7pt line four and a half points above an 11pt title is, by
+size and shift alone, the title's superscript, and reading it as one
+interleaved the two rows and tore every word of the small line apart. Lines
+are clustered by baseline first; a script run then moves into the cluster of
+the text it touches. A smaller line set *beneath* fails the overlap test,
+because its ink starts below the neighbour's descenders; body text wrapped
+around a 33pt display word fails the size test, because nothing a third the
+size is a script. The exponent joins its line as plain text — `cm3/s`, as
+any text extractor reads it — and the line remembers that it opened with a
+script glyph, which is how `95 Ibid.` is known to be a footnote and not
+section ninety-five.
+
 ## Columns: empty, not wide
 
 In a two-column layout the columns share baselines, so line assembly would
