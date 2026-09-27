@@ -82,6 +82,7 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
         figure: None,
         links: None,
         turn: None,
+        message: None,
         provenance: "html",
         evidence: "html",
     }
@@ -100,29 +101,153 @@ fn text_of(h: &Handle) -> (String, Vec<Link>) {
 
 fn collect(h: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
     for child in h.children.borrow().iter() {
-        match &child.data {
-            NodeData::Text { contents } => out.push_str(&contents.borrow()),
-            NodeData::Element { .. } => {
-                let Some(tag) = tag_of(child) else { continue };
-                if SKIP.contains(&tag.as_str()) {
-                    continue;
-                }
-                if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
-                    out.push(' ');
-                }
-                // Recorded around the recursion: an anchor's text is whatever
-                // its subtree contributes, and nesting is legal markup.
-                let start = out.chars().count();
-                collect(child, out, anchors);
-                if tag == "a" {
-                    if let Some(href) = attr_of(child, "href").filter(|h| !h.trim().is_empty()) {
-                        anchors.push((start, out.chars().count(), href));
-                    }
+        collect_node(child, out, anchors);
+    }
+}
+
+/// One node's contribution to the text [`collect`] gathers.
+fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
+    match &node.data {
+        NodeData::Text { contents } => out.push_str(&contents.borrow()),
+        NodeData::Element { .. } => {
+            let Some(tag) = tag_of(node) else { return };
+            if SKIP.contains(&tag.as_str()) {
+                return;
+            }
+            if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
+                out.push(' ');
+            }
+            // Recorded around the recursion: an anchor's text is whatever
+            // its subtree contributes, and nesting is legal markup.
+            let start = out.chars().count();
+            collect(node, out, anchors);
+            if tag == "a" {
+                if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
+                    anchors.push((start, out.chars().count(), href));
                 }
             }
-            _ => {}
         }
+        _ => {}
     }
+}
+
+/// Elements that lay out as blocks. Everything else, text included, flows
+/// inline within the nearest one.
+const BLOCK: &[&str] = &[
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "caption",
+    "center",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "legend",
+    "li",
+    "main",
+    "menu",
+    "ol",
+    "p",
+    "pre",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+];
+
+fn is_block(tag: &str) -> bool {
+    BLOCK.contains(&tag) || SKIP.contains(&tag)
+}
+
+/// Does anything under this node lay out as a block?
+fn holds_block(h: &Handle) -> bool {
+    h.children.borrow().iter().any(|c| match tag_of(c) {
+        Some(t) if SKIP.contains(&t.as_str()) => false,
+        Some(t) => is_block(&t) || holds_block(c),
+        None => false,
+    })
+}
+
+/// Content that flows inline: text, and elements with no block inside.
+fn is_inline(h: &Handle) -> bool {
+    match tag_of(h) {
+        Some(t) => !is_block(&t) && !holds_block(h),
+        None => true,
+    }
+}
+
+/// A paragraph from a run of inline siblings, when it has any text.
+fn flush_run(run: &mut Vec<Handle>, out: &mut Vec<Element>) {
+    let mut raw = String::new();
+    let mut anchors = Vec::new();
+    for node in run.drain(..) {
+        collect_node(&node, &mut raw, &mut anchors);
+    }
+    let (text, links) = squeeze(&raw, &anchors);
+    if !text.is_empty() {
+        out.push(linked("doco:Paragraph", text, None, links));
+    }
+}
+
+/// Walk a container's children, reading each run of inline content set
+/// directly in it as a paragraph.
+///
+/// A page built of `<div>`s, and nearly every email, sets its text straight
+/// in the container with no `<p>` around it, which a walk that emits only
+/// named blocks drops whole. A browser lays each such run out in an
+/// anonymous block, and so does this: runs end at a block child, and at two
+/// `<br>` in a row, which is how that markup separates paragraphs.
+fn walk_container(h: &Handle, out: &mut Vec<Element>) {
+    let mut run: Vec<Handle> = Vec::new();
+    let mut last_br = false;
+    for c in children_of(h) {
+        if !is_inline(&c) {
+            flush_run(&mut run, out);
+            last_br = false;
+            walk(&c, out);
+            continue;
+        }
+        let blank =
+            matches!(&c.data, NodeData::Text { contents } if contents.borrow().trim().is_empty());
+        if tag_of(&c).as_deref() == Some("br") {
+            if last_br {
+                flush_run(&mut run, out);
+                last_br = false;
+                continue;
+            }
+            last_br = true;
+        } else if !blank {
+            last_br = false;
+        }
+        run.push(c);
+    }
+    flush_run(&mut run, out);
 }
 
 /// An element's text excluding nested block containers, so a list item that
@@ -253,6 +378,9 @@ fn walk(h: &Handle, out: &mut Vec<Element>) {
                 }
                 return;
             }
+            // A quotation or a caption that holds paragraphs of its own is a
+            // container of them, not one paragraph run together.
+            "blockquote" | "figcaption" | "dd" | "dt" if holds_block(h) => {}
             "p" | "pre" | "blockquote" | "figcaption" | "dd" | "dt" => {
                 let (text, links) = text_of(h);
                 if !text.is_empty() {
@@ -263,9 +391,7 @@ fn walk(h: &Handle, out: &mut Vec<Element>) {
             _ => {}
         }
     }
-    for c in children_of(h) {
-        walk(&c, out);
-    }
+    walk_container(h, out);
 }
 
 /// Every `tr` under a node, at any depth — `thead`/`tbody`/`tfoot` are
@@ -411,6 +537,51 @@ mod tests {
         assert_eq!(els[0].level, Some(1));
         // Inline markup styles a phrase; it does not divide one.
         assert_eq!(els[1].text, "Body text here.");
+    }
+
+    fn texts(e: &[Element]) -> Vec<&str> {
+        e.iter().map(|x| x.text.as_str()).collect()
+    }
+
+    #[test]
+    fn text_set_straight_in_a_container_is_read() {
+        // How a div-built page, and nearly every email, sets its text.
+        let els = parse(
+            "<body><div>Hi Ada,<div><br></div><div>The pilot starts <b>in May</b>.</div>\
+             <div>Thanks<br>Ben</div>Loose text<p>A paragraph</p>after it</div></body>",
+        );
+        assert_eq!(
+            texts(&els),
+            vec![
+                "Hi Ada,",
+                "The pilot starts in May.",
+                "Thanks Ben",
+                "Loose text",
+                "A paragraph",
+                "after it"
+            ]
+        );
+        assert!(kinds(&els).iter().all(|k| *k == "doco:Paragraph"));
+    }
+
+    #[test]
+    fn two_line_breaks_in_a_row_end_a_paragraph() {
+        let els = parse("<div>One line<br>still one<br><br>Two</div>");
+        assert_eq!(texts(&els), vec!["One line still one", "Two"]);
+    }
+
+    #[test]
+    fn a_quotation_holding_paragraphs_is_their_container() {
+        let els = parse("<blockquote><p>First.</p><div>Second.</div></blockquote><blockquote>Short one.</blockquote>");
+        assert_eq!(texts(&els), vec!["First.", "Second.", "Short one."]);
+    }
+
+    #[test]
+    fn a_link_in_loose_text_keeps_its_anchor() {
+        let els = parse("<div>See <a href=\"https://example.org/q\">the quote</a> today.</div>");
+        let l = &els[0].links.as_ref().unwrap()[0];
+        assert_eq!(l.span(), Some((4, 13)));
+        assert_eq!(l.href(), "https://example.org/q");
     }
 
     #[test]

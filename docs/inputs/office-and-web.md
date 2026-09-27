@@ -112,6 +112,12 @@ Nesting resolves **innermost wins**. A `<p>` inside a `<td>` inside a
 the text, the same double-emission the PDF engine guards against when a grid's
 glyphs would also become prose.
 
+Text set straight in a container, with no `<p>` around it, is read the way a
+browser lays it out: each run of it between blocks is a paragraph, and two
+`<br>` in a row end one. That is how pages built from `<div>`s, and nearly
+all email, set their text. A `<blockquote>` that holds paragraphs of its own
+is their container rather than one paragraph run together.
+
 Infallible: HTML is defined so that every byte sequence parses.
 
 ## Markdown
