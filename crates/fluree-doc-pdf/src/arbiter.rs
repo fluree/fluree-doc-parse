@@ -594,6 +594,7 @@ fn replace_read_pages(
                 merged_left: None,
                 figure: None,
                 links: None,
+                turn: None,
                 provenance: "vlm",
                 evidence: "page-tier",
             }),
@@ -963,6 +964,7 @@ mod tests {
             merged_left: None,
             figure: None,
             links: None,
+            turn: None,
             provenance: "rust",
             evidence: "layout",
         }

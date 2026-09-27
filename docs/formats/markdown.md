@@ -14,6 +14,7 @@ read without tooling, and the one an LLM consumes best.
 |---|---|
 | `doco:SectionTitle` | `#` … `######`, from `level` |
 | `doco:Paragraph` | a paragraph, blank-line separated |
+| a [transcript](../inputs/transcripts.md) turn | `**Ada Park** (04:32): words`, the speaker in bold and the turn's start time |
 | `doco:List` / `ListItem` | `- ` items |
 | `doco:Table` | a pipe table with a header separator row |
 | `doco:Figure` | a paragraph (an [anchor](../integration/anchors.md) token, where enabled) |

@@ -97,6 +97,7 @@ let els = fluree_doc_html::parse(&src);           // &str
 let els = fluree_doc_docx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_pptx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_xlsx::parse(&bytes)?;        // &[u8]
+let els = fluree_doc_transcript::parse(&bytes)?;  // &[u8], WebVTT or SubRip
 ```
 
 Those elements have `bbox: None` — see [Measured vs declared

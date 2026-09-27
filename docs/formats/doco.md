@@ -179,6 +179,33 @@ shape this format fails to represent. That is not true of
 text — so where completeness matters more than fidelity to the drawn spans,
 this is the format to read.
 
+## Transcripts say who spoke and when
+
+```json
+{
+  "@type": "doco:Paragraph",
+  "doc:speaker": "Ada Park",
+  "doc:startMs": 272404,
+  "doc:endMs": 279512,
+  "doc:evidence": "vtt",
+  "nif:beginIndex": 146,
+  "nif:endIndex": 193,
+  "nif:isString": "Ada Park: I want to say this is my last review."
+}
+```
+
+A turn read from a [transcript](../inputs/transcripts.md) carries its
+speaker and where it sits in the recording, in place of the `doc:bbox` a
+page would give it. The times are integers, in milliseconds from the start
+of the recording, so "what was said in the fifth minute" is a numeric
+comparison in any query language.
+
+`doc:speaker` is the name as the file writes it, unresolved: `Speaker 2`
+stays `Speaker 2`. The same name opens `nif:isString`, followed by `": "`, so
+the speaker's mention spans `nif:beginIndex` to `nif:beginIndex` plus the
+length of the name. That is the span to link to a person record. The times
+never appear in the text, so they never become entities.
+
 ## Links are nodes
 
 A hyperlink becomes its own node, referenced from the element whose text

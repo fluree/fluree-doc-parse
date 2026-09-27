@@ -25,6 +25,7 @@
 - [Input formats](inputs/README.md)
   - [PDF](inputs/pdf.md)
   - [DOCX, PPTX, XLSX, HTML, Markdown](inputs/office-and-web.md)
+  - [Transcripts: WebVTT, SubRip](inputs/transcripts.md)
   - [Images](inputs/images.md)
 
 - [CLI reference](cli/README.md)

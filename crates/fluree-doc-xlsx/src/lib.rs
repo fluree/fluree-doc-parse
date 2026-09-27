@@ -1060,6 +1060,7 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
         merged_left: None,
         figure: None,
         links: None,
+        turn: None,
         provenance: "xlsx",
         evidence: "xlsx",
     }

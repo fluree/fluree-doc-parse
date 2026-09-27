@@ -50,7 +50,12 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             eprintln!("error: reading stdin: {e}");
             return 1;
         }
-        return match convert_bytes(data, "stdin", cfg, args, pages.as_deref(), quiet) {
+        let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
+            convert_transcript(&data, "stdin", args, quiet)
+        } else {
+            convert_bytes(data, "stdin", cfg, args, pages.as_deref(), quiet)
+        };
+        return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
             Err(e) => {
                 eprintln!("error: stdin: {e}");
@@ -162,6 +167,11 @@ fn convert_path(
 ) -> Result<String, String> {
     let data = std::fs::read(pdf).map_err(|e| e.to_string())?;
     let stem = common::stem_of(pdf);
+    // A transcript by its content before anything by its name: `.vtt` has no
+    // registered type on most systems, so it arrives renamed as often as not.
+    if fluree_doc_transcript::Format::sniff(&data).is_some() || ext_is(pdf, &["vtt", "srt"]) {
+        return convert_transcript(&data, stem, args, quiet);
+    }
     // Structural formats: the source declares what a PDF makes us infer, so
     // these readers map rather than measure and carry no geometry.
     if ext_is(pdf, &["md", "markdown", "txt", "text"]) {
@@ -223,6 +233,29 @@ fn convert_path(
     convert_bytes(data, common::stem_of(pdf), cfg, args, pages, quiet)
 }
 
+/// A meeting transcript or a caption file: one paragraph per speaker turn.
+///
+/// A transcript with no cues converts to nothing, and says so, because that
+/// output is otherwise indistinguishable from a file that was not read.
+fn convert_transcript(
+    data: &[u8],
+    stem: &str,
+    args: &ConvertArgs,
+    quiet: bool,
+) -> Result<String, String> {
+    let elements = fluree_doc_transcript::parse(data).map_err(|e| e.to_string())?;
+    if elements.is_empty() && !quiet {
+        eprintln!("note: {stem}: the transcript holds no cues, so the output is empty");
+    }
+    Ok(render(
+        &elements,
+        stem,
+        args,
+        Vec::new(),
+        &fluree_doc_model::Notes::default(),
+    ))
+}
+
 /// A bare image: one page of pixels, and only the deep reader can read it.
 ///
 /// Every other source has a deterministic reading to fall back on. This one
@@ -275,6 +308,7 @@ fn convert_image(
                 merged_left: None,
                 figure: None,
                 links: None,
+                turn: None,
                 provenance: "rust",
                 evidence: "layout",
             });

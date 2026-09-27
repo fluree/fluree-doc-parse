@@ -22,6 +22,7 @@ fluree-doc-docx.workspace = true
 fluree-doc-html.workspace = true
 fluree-doc-pptx.workspace = true
 fluree-doc-xlsx.workspace = true
+fluree-doc-transcript.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 serde.workspace = true

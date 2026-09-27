@@ -69,6 +69,14 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
 
+**Transcript turns**
+
+| property | on | value |
+|---|---|---|
+| `doc:speaker` | [transcript](../inputs/transcripts.md) turns that name one | the speaker as the file names them, unresolved |
+| `doc:startMs` | transcript turns | integer, milliseconds from the start of the recording to the turn's start |
+| `doc:endMs` | transcript turns | integer, milliseconds from the start of the recording to the turn's end |
+
 **Structure**
 
 | property | on | value |

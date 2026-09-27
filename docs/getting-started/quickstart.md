@@ -32,9 +32,10 @@ fdoc convert report.docx -f doco
 fdoc convert page.html   -f doco
 fdoc convert deck.pptx   -f doco
 fdoc convert book.xlsx   -f doco
+fdoc convert call.vtt    -f doco
 ```
 
-The graph has the same shape from all five sources. One difference matters:
+The graph has the same shape from every source. One difference matters:
 non-PDF elements have **no `bbox` field at all**, because those formats
 declare structure rather than placing it. See [Measured vs declared
 structure](../concepts/geometry-vs-declared.md).

@@ -93,6 +93,29 @@ impl Link {
     }
 }
 
+/// A stretch of speech: who said it, and where it sits in the recording.
+///
+/// The speaker is also written into the element's text, as `"<speaker>: "`
+/// before the words. The text projection is what an extractor reads and what
+/// every character offset counts against, and a claim with its author
+/// attached is a different fact from the bare words. So the label always
+/// occupies the first `speaker.chars().count()` characters of `text`, and a
+/// consumer linking it to a person record needs no other offsets.
+///
+/// Times are kept here and nowhere in the text: a timestamp in the prose is
+/// read as a time the speaker mentioned.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Turn {
+    /// The speaker as the source names them (`"Ada Park"`, `"Speaker 2"`),
+    /// unresolved. Absent for captions that name no one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+    /// Milliseconds from the start of the recording to the first word.
+    pub start_ms: u64,
+    /// Milliseconds from the start of the recording to the end of the last.
+    pub end_ms: u64,
+}
+
 /// A DoCO-typed document element — the model every source format produces
 /// and every emitter consumes.
 ///
@@ -160,6 +183,10 @@ pub struct Element {
     /// the text in one pass.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<Link>>,
+    /// Who said this and when, for elements read from a recording's
+    /// transcript. Absent everywhere else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<Turn>,
     /// Which engine produced this element. Always `"rust"` here; the VLM tier
     /// emits the same shape with `"vlm"`.
     pub provenance: &'static str,

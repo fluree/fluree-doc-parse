@@ -60,6 +60,7 @@ impl Reader {
             merged_left: None,
             figure: None,
             links: None,
+            turn: None,
             provenance: "markdown",
             evidence: "markdown",
         }

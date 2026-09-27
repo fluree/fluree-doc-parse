@@ -15,7 +15,7 @@ configure it — not in the sense that you cannot audit it.
 |---|---|
 | `rust` | the deterministic PDF engine |
 | `vlm` | spliced in from a model tier |
-| `markdown` / `html` / `docx` / `pptx` / `xlsx` | the corresponding reader |
+| `markdown` / `html` / `docx` / `pptx` / `xlsx` / `vtt` / `srt` | the corresponding reader |
 
 So `provenance` answers "which reader", and for PDF specifically it
 distinguishes deterministic output from escalated output.
@@ -65,7 +65,10 @@ From the escalation path:
 
 And from the declared formats: `markdown`, `html`, `docx`, `pptx`, `xlsx`. These are
 the honest ones — an element marked `docx` was not inferred at all, and no
-amount of escalation would improve it.
+amount of escalation would improve it. `vtt` and `srt` are nearly so: the
+file declares the words, the times and usually the speaker, and what the
+reader decides is where one turn ends and the next begins — see
+[Transcripts](../inputs/transcripts.md#turns).
 
 ## Reading it
 

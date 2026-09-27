@@ -470,6 +470,7 @@ dependencies = [
  "fluree-doc-model",
  "fluree-doc-pdf",
  "fluree-doc-pptx",
+ "fluree-doc-transcript",
  "fluree-doc-xlsx",
  "hayro",
  "hayro-syntax",
@@ -539,6 +540,13 @@ dependencies = [
  "fluree-doc-model",
  "quick-xml",
  "zip",
+]
+
+[[package]]
+name = "fluree-doc-transcript"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
 ]
 
 [[package]]

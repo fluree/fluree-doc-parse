@@ -2,7 +2,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Adaptive document parsing: text and structure (headings, tables, lists,
-/// forms) from PDF, Markdown, HTML, DOCX, PPTX and XLSX.
+/// forms) from PDF, Markdown, HTML, DOCX, PPTX and XLSX, and speaker turns
+/// from WebVTT and SubRip transcripts.
 ///
 /// PDF structure is inferred from layout, with per-page signals telling you
 /// which pages would benefit from model-tier escalation; the other formats
@@ -31,8 +32,9 @@ pub struct Cli {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF, Markdown, HTML, DOCX, PPTX and XLSX. PDF structure is inferred
-    /// from layout; the others declare theirs and carry no geometry.
+    /// Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, and WebVTT and SubRip
+    /// transcripts. PDF structure is inferred from layout; the others declare
+    /// theirs and carry no geometry.
     ///
     /// Examples:
     ///   fdoc convert report.pdf
@@ -146,7 +148,8 @@ pub enum Format {
 
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
-    /// Input documents: files, directories, or `-` for stdin (PDF)
+    /// Input documents: files, directories, or `-` for stdin (a PDF or a
+    /// transcript)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 

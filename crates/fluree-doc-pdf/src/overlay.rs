@@ -497,6 +497,7 @@ mod tests {
             merged_left: None,
             figure: None,
             links: None,
+            turn: None,
             provenance: "rust",
             evidence: "layout",
         }

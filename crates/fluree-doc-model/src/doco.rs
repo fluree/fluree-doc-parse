@@ -267,6 +267,16 @@ impl<'a> Emitter<'a> {
             );
         }
         self.nodes[idx].insert("doc:evidence".into(), Value::String(e.evidence.into()));
+        // A recording places an element in time rather than on a page.
+        // Plain integers, so "what was said between minute 4 and 5" is a
+        // numeric comparison in any query language.
+        if let Some(t) = &e.turn {
+            if let Some(s) = &t.speaker {
+                self.nodes[idx].insert("doc:speaker".into(), Value::String(s.clone()));
+            }
+            self.nodes[idx].insert("doc:startMs".into(), json!(t.start_ms));
+            self.nodes[idx].insert("doc:endMs".into(), json!(t.end_ms));
+        }
     }
 
     fn set_offsets(&mut self, idx: usize, start: usize, end: usize) {
@@ -655,6 +665,7 @@ mod tests {
             merged_left: None,
             figure: None,
             links: None,
+            turn: None,
             provenance: "rust",
             evidence: "layout",
         }
@@ -889,6 +900,24 @@ mod tests {
 
         let id = link[0]["@id"].as_str().unwrap();
         assert_eq!(para[0]["doc:link"][0], id);
+    }
+
+    #[test]
+    fn a_turn_carries_its_speaker_and_times_and_its_text_carries_no_time() {
+        let mut e = el("doco:Paragraph", "Ada Park: Renewal is at risk.", None);
+        e.bbox = None;
+        e.turn = Some(crate::element::Turn {
+            speaker: Some("Ada Park".into()),
+            start_ms: 272_404,
+            end_ms: 279_000,
+        });
+        let g = graph(std::slice::from_ref(&e));
+        let p = &find(&g, "doco:Paragraph")[0];
+        assert_eq!(p["doc:speaker"], "Ada Park");
+        assert_eq!(p["doc:startMs"], json!(272_404));
+        assert_eq!(p["doc:endMs"], json!(279_000));
+        assert!(p.get("doc:bbox").is_none());
+        assert_eq!(to_text(&[e]), "Ada Park: Renewal is at risk.\n");
     }
 
     #[test]

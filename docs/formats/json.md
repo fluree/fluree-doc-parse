@@ -29,7 +29,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `type` | yes | DoCO class |
 | `page` | yes | 0-based; `0` for formats without pages |
 | `text` | yes | NFKC-normalized |
-| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx` |
+| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt` |
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |
 | `level` | headings | 1–6 |
@@ -40,6 +40,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `merged_down` | tables | row-major continuation flags |
 | `merged_left` | tables | row-major continuation flags |
 | `links` | where the source has any | hyperlinks over this element's text |
+| `turn` | [transcripts](../inputs/transcripts.md) | `{speaker?, start_ms, end_ms}`: who spoke and when |
 
 Absent fields are **omitted**, not null. `bbox` in particular: an element with
 no geometry has no `bbox` key, and this is load-bearing — see [Measured vs
@@ -77,6 +78,24 @@ its extent inside it is unknown.
 
 The array arrives sorted by `begin` and non-overlapping, so it can be spliced
 into the text in one pass.
+
+## Transcript turns carry who and when
+
+```json
+{
+  "id": "elem-00004",
+  "type": "doco:Paragraph",
+  "page": 0,
+  "text": "Ada Park: I want to say this is my last review.",
+  "turn": { "speaker": "Ada Park", "start_ms": 272404, "end_ms": 279512 },
+  "provenance": "vtt",
+  "evidence": "vtt"
+}
+```
+
+`speaker` is absent for captions that name no one. When present, it also
+opens `text`, followed by `": "`. Times are milliseconds from the start of
+the recording. See [Transcripts](../inputs/transcripts.md).
 
 ## Figures come in groups
 

@@ -8,7 +8,8 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-html      HTML reader
       ├── fluree-doc-docx      DOCX reader
       ├── fluree-doc-pptx      PPTX reader
-      └── fluree-doc-xlsx      XLSX reader
+      ├── fluree-doc-xlsx      XLSX reader
+      └── fluree-doc-transcript  WebVTT and SubRip reader
                 │
                 └── fluree-doc-model   element model + emitters (source-agnostic)
 ```
@@ -21,12 +22,13 @@ engine.**
 
 | crate | contains |
 |---|---|
-| `fluree-doc-model` | `Element`, `Link`, `Target`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
+| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>` |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>` |
+| `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
 | `fluree-doc-cli` | argument parsing and the commands |
 

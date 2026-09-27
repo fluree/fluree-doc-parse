@@ -1,6 +1,6 @@
 //! Markdown and XHTML emission from the element model.
 
-use crate::element::{Element, Link, Notes};
+use crate::element::{Element, Link, Notes, Turn};
 
 /// Split an element's text at its located link anchors.
 ///
@@ -66,6 +66,44 @@ fn md_linked(e: &Element) -> String {
     out
 }
 
+/// A recording offset as a clock reading: `04:32`, or `1:04:32` past the
+/// hour.
+fn clock(ms: u64) -> String {
+    let s = ms / 1000;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
+/// A transcript turn's speaker label and the words after it, when its text
+/// opens with the label the way the transcript reader writes it.
+fn speaker_and_words<'a>(e: &'a Element, t: &'a Turn) -> Option<(&'a str, &'a str)> {
+    let s = t.speaker.as_deref()?;
+    let words = e.text.strip_prefix(s)?.strip_prefix(": ")?;
+    Some((s, words))
+}
+
+/// A transcript turn for a person to read: the speaker in bold and where in
+/// the recording the turn starts.
+///
+/// The one projection that shows the time. The text and the graph leave it
+/// out because an extractor reading `04:32` in the prose takes it for a time
+/// the speaker mentioned; Markdown is for people, and a person wants to know
+/// where to scrub to.
+fn md_turn(e: &Element, t: &Turn) -> String {
+    let at = clock(t.start_ms);
+    match speaker_and_words(e, t) {
+        Some((s, words)) => format!(
+            "**{}** ({at}): {words}",
+            s.replace('*', "\\*").replace('_', "\\_")
+        ),
+        None => format!("({at}) {}", e.text),
+    }
+}
+
 /// Was this heading's *depth* inferred from typography rather than stated by
 /// the document?
 ///
@@ -109,6 +147,34 @@ fn html_linked(e: &Element) -> String {
         }
     }
     out
+}
+
+/// A transcript turn as a paragraph whose attributes say who spoke and when.
+///
+/// The text nodes read exactly as the element's text does, speaker label
+/// included, so text pulled from the markup matches the text projection; the
+/// `<b>` only marks where the label ends. Times ride on attributes and never
+/// in the text, for the same reason they stay out of the projection.
+fn html_turn(e: &Element, t: &Turn) -> String {
+    fn esc(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+    let mut attrs = String::new();
+    if let Some(s) = &t.speaker {
+        attrs.push_str(&format!(" data-speaker=\"{}\"", esc(s)));
+    }
+    attrs.push_str(&format!(
+        " data-start-ms=\"{}\" data-end-ms=\"{}\"",
+        t.start_ms, t.end_ms
+    ));
+    let body = match speaker_and_words(e, t) {
+        Some((s, words)) => format!("<b>{}</b>: {}", esc(s), esc(words)),
+        None => esc(&e.text),
+    };
+    format!("<p{attrs}>{body}</p>\n")
 }
 
 /// Render elements to XHTML, matching the contract a downstream extraction
@@ -287,7 +353,10 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                 }
                 out.push_str(&format!("<span>{}</span>\n", html_linked(e)));
             }
-            _ => out.push_str(&format!("<p>{}</p>\n", html_linked(e))),
+            _ => match &e.turn {
+                Some(t) => out.push_str(&html_turn(e, t)),
+                None => out.push_str(&format!("<p>{}</p>\n", html_linked(e))),
+            },
         }
     }
     if in_list {
@@ -378,7 +447,10 @@ pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
                 }
             }
             "doco:ListItem" => out.push_str(&format!("- {}\n", md_linked(e))),
-            _ => out.push_str(&format!("{}\n\n", md_linked(e))),
+            _ => match &e.turn {
+                Some(t) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
+                None => out.push_str(&format!("{}\n\n", md_linked(e))),
+            },
         }
     }
     if let Some(note) = notes.summary() {
@@ -407,6 +479,7 @@ mod tests {
             merged_left: None,
             figure: None,
             links: (!links.is_empty()).then_some(links),
+            turn: None,
             provenance: "rust",
             evidence: "layout",
         }
@@ -570,6 +643,60 @@ mod tests {
         let s = n.summary().unwrap();
         assert!(s.contains("pages 1, 5, 7"), "{s}");
         assert!(s.contains("NearBlank, Scanned"), "{s}");
+    }
+
+    fn turn(text: &str, speaker: Option<&str>, start_ms: u64) -> Element {
+        let mut e = para(text, vec![]);
+        e.turn = Some(Turn {
+            speaker: speaker.map(Into::into),
+            start_ms,
+            end_ms: start_ms + 4000,
+        });
+        e
+    }
+
+    #[test]
+    fn a_turn_shows_a_reader_of_markdown_who_spoke_and_when() {
+        let e = turn(
+            "Ada Park: The pilot starts in May.",
+            Some("Ada Park"),
+            272_404,
+        );
+        assert_eq!(
+            to_markdown(&[e]).trim(),
+            "**Ada Park** (04:32): The pilot starts in May."
+        );
+        let e = turn("Today we look at rocks.", None, 3_723_000);
+        assert_eq!(
+            to_markdown(&[e]).trim(),
+            "(1:02:03) Today we look at rocks."
+        );
+    }
+
+    #[test]
+    fn a_turn_in_xhtml_keeps_its_text_and_carries_time_on_attributes() {
+        let e = turn("Ada Park: Q&A <later>", Some("Ada Park"), 1_000);
+        let x = to_xhtml(&[e]);
+        assert!(
+            x.contains(
+                "<p data-speaker=\"Ada Park\" data-start-ms=\"1000\" data-end-ms=\"5000\">\
+                 <b>Ada Park</b>: Q&amp;A &lt;later&gt;</p>"
+            ),
+            "{x}"
+        );
+    }
+
+    #[test]
+    fn a_turn_serializes_beside_the_text_and_is_absent_elsewhere() {
+        let v = serde_json::to_value(turn("Ada Park: Hi.", Some("Ada Park"), 1000)).unwrap();
+        assert_eq!(
+            v["turn"],
+            serde_json::json!({"speaker": "Ada Park", "start_ms": 1000, "end_ms": 5000})
+        );
+        assert!(serde_json::to_value(para("x", vec![]))
+            .unwrap()
+            .get("turn")
+            .is_none());
     }
 
     #[test]

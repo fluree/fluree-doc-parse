@@ -12,7 +12,7 @@ pub mod geom;
 pub mod merges;
 
 pub use doco::{to_doco, to_text, DocoOptions};
-pub use element::{Element, Link, Notes, Target, UnreadPage};
+pub use element::{Element, Link, Notes, Target, Turn, UnreadPage};
 pub use emit::{to_markdown, to_markdown_with, to_xhtml, to_xhtml_with};
 pub use geom::{BBox, PageSize};
 pub use merges::{denormalize, Merges};

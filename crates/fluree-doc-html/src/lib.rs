@@ -81,6 +81,7 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
         merged_left: None,
         figure: None,
         links: None,
+        turn: None,
         provenance: "html",
         evidence: "html",
     }

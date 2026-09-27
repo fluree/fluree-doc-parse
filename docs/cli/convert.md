@@ -6,15 +6,16 @@ Convert documents to Markdown, XHTML, JSON, DoCO JSON-LD or plain text.
 fdoc convert <FILE|DIR|->... [options]
 ```
 
-Reads PDF, Markdown, HTML, DOCX, PPTX and XLSX. PDF structure is inferred from
-layout; the others declare theirs and carry no geometry. See [Input
-formats](../inputs/README.md).
+Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, and WebVTT and SubRip
+transcripts. PDF structure is inferred from layout; the others declare theirs
+and carry no geometry. See [Input formats](../inputs/README.md).
 
 ```bash
 fdoc convert report.pdf                       # Markdown to stdout
 fdoc convert report.pdf -f doco -o out.jsonld
 fdoc convert ./corpus/ --out-dir ./out -j 8
 cat report.pdf | fdoc convert -
+fdoc convert call.vtt -f doco                 # a transcript: one paragraph per turn
 ```
 
 ## Options
