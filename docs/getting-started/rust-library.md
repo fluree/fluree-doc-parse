@@ -98,6 +98,8 @@ let els = fluree_doc_docx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_pptx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_xlsx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_transcript::parse(&bytes)?;  // &[u8], WebVTT or SubRip
+let email = fluree_doc_email::parse(&bytes)?;     // &[u8], .eml or .msg
+let els = &email.elements;                        //   plus email.info, email.attachments
 ```
 
 Those elements have `bbox: None` — see [Measured vs declared

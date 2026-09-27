@@ -11,12 +11,16 @@ Every term the [DoCO output](../formats/doco.md) emits.
 | `nif` | `http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#` |
 | `po` | `http://www.essepuntato.it/2008/12/pattern#` |
 | `rdfs` | `http://www.w3.org/2000/01/rdf-schema#` |
+| `dcterms` | `http://purl.org/dc/terms/` |
+| `xsd` | `http://www.w3.org/2001/XMLSchema#` |
 
 `doco`, `nif` and `po` are public ontologies — the Document Components
 Ontology, the NLP Interchange Format, and the Pattern ontology. `po:contains`
 is not optional decoration: DoCO is defined as an extension of the Pattern
 ontology, and that is the containment property it specifies. `rdfs` carries
-one term, `rdfs:label`, rather than an ontology of its own.
+one term, `rdfs:label`, rather than an ontology of its own. `dcterms` is
+Dublin Core, for what a document says about itself: its title, creator and
+dates. `xsd` types those dates, so a store compares them as times.
 
 `doc` is the single Fluree namespace, covering what those four do not.
 
@@ -34,8 +38,10 @@ one term, `rdfs:label`, rather than an ontology of its own.
 | `doco:Figure` | [anchor](../integration/anchors.md) placeholders for escalated regions |
 | `doc:TableCell` | one cell of a table |
 | `doc:Link` | one hyperlink, with its anchor and target |
+| `doc:Message` | one message of an [email](../inputs/email.md); contains its elements |
+| `doc:Mailbox` | a sender or recipient, one per address in the document |
 
-That is the complete set — eleven types, and no others are emitted. Notably
+That is the complete set — thirteen types, and no others are emitted. Notably
 **`doco:Caption` and `doco:FrontMatter` are not produced.** DoCO defines both
 and an earlier design assigned them, but caption classification measured
 −0.0004 against the benchmark twice (its ground truth blesses prominent
@@ -68,6 +74,10 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
+| `doc:attachments` | `doco:Document` | JSON literal: `[{filename?, contentType, size, inline?}]`, the files the document carries |
+| `dcterms:title` | `doco:Document` | the title the document declares: an email's subject |
+| `dcterms:creator` | `doco:Document` | who made it, as the document names them: an email's sender |
+| `dcterms:created` / `dcterms:modified` | `doco:Document` | `xsd:dateTime`: when it was made, or an email sent |
 
 **Transcript turns**
 
@@ -99,6 +109,19 @@ A consumer should therefore not branch on either type expecting to see it.
 Exactly one of `doc:linkTarget` and `doc:linkPage` appears on a `doc:Link`.
 The offsets are absent where the annotation covers something with no text of
 its own — an image, a whole table cell.
+
+**Email messages**
+
+| property | on | value |
+|---|---|---|
+| `doc:from`, `doc:to`, `doc:cc`, `doc:bcc` | `doc:Message` | mailbox nodes (IRI-coerced) |
+| `doc:sentAt` | `doc:Message` | `xsd:dateTime`: with an offset for the file's own message, without for a quoted one |
+| `doc:subject` | `doc:Message` | the subject line |
+| `doc:messageId` | `doc:Message` | `Message-ID`, without angle brackets |
+| `doc:inReplyTo`, `doc:references` | `doc:Message` | the identifiers of the messages it answers and the thread before it |
+| `doc:quoted` | `doc:Message` | `true` for a message quoted or forwarded inside another |
+| `doc:address` | `doc:Mailbox` | the email address, as written |
+| `doc:name` | `doc:Mailbox` | the display name, as written |
 
 **Table cells**
 

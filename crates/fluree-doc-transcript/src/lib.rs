@@ -403,6 +403,7 @@ fn element(text: String, turn: Option<Turn>, format: Format) -> Element {
         figure: None,
         links: None,
         turn,
+        message: None,
         provenance: format.tag(),
         evidence: format.tag(),
     }

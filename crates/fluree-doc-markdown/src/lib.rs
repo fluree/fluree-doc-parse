@@ -61,6 +61,7 @@ impl Reader {
             figure: None,
             links: None,
             turn: None,
+            message: None,
             provenance: "markdown",
             evidence: "markdown",
         }

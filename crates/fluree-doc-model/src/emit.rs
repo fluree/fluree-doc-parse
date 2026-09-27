@@ -1,6 +1,7 @@
 //! Markdown and XHTML emission from the element model.
 
 use crate::element::{Element, Link, Notes, Turn};
+use crate::message::Message;
 
 /// Split an element's text at its located link anchors.
 ///
@@ -102,6 +103,46 @@ fn md_turn(e: &Element, t: &Turn) -> String {
         ),
         None => format!("({at}) {}", e.text),
     }
+}
+
+/// A message's header for a person to read: one header line to a line, and
+/// a rule above a quoted message so a thread reads as its messages.
+fn md_message(e: &Element, m: &Message) -> String {
+    let lines = e
+        .text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("  \n");
+    if m.quoted {
+        format!("---\n\n{lines}")
+    } else {
+        lines
+    }
+}
+
+/// A message's header as a paragraph whose attributes name the sender and
+/// the time, and a rule above one that is quoted.
+fn html_message(e: &Element, m: &Message) -> String {
+    let attr = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    };
+    let mut attrs = String::new();
+    if let Some(f) = m.from.first() {
+        attrs.push_str(&format!(" data-from=\"{}\"", attr(&f.display())));
+    }
+    if let Some(d) = &m.date {
+        attrs.push_str(&format!(" data-sent-at=\"{}\"", attr(d)));
+    }
+    format!(
+        "{}<p{attrs}>{}</p>\n",
+        if m.quoted { "<hr/>\n" } else { "" },
+        html_linked(e)
+    )
 }
 
 /// Was this heading's *depth* inferred from typography rather than stated by
@@ -353,9 +394,10 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                 }
                 out.push_str(&format!("<span>{}</span>\n", html_linked(e)));
             }
-            _ => match &e.turn {
-                Some(t) => out.push_str(&html_turn(e, t)),
-                None => out.push_str(&format!("<p>{}</p>\n", html_linked(e))),
+            _ => match (&e.turn, &e.message) {
+                (Some(t), _) => out.push_str(&html_turn(e, t)),
+                (None, Some(m)) => out.push_str(&html_message(e, m)),
+                (None, None) => out.push_str(&format!("<p>{}</p>\n", html_linked(e))),
             },
         }
     }
@@ -447,9 +489,10 @@ pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
                 }
             }
             "doco:ListItem" => out.push_str(&format!("- {}\n", md_linked(e))),
-            _ => match &e.turn {
-                Some(t) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
-                None => out.push_str(&format!("{}\n\n", md_linked(e))),
+            _ => match (&e.turn, &e.message) {
+                (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
+                (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
+                (None, None) => out.push_str(&format!("{}\n\n", md_linked(e))),
             },
         }
     }
@@ -480,6 +523,7 @@ mod tests {
             figure: None,
             links: (!links.is_empty()).then_some(links),
             turn: None,
+            message: None,
             provenance: "rust",
             evidence: "layout",
         }
@@ -576,7 +620,7 @@ mod tests {
                 index: 0,
                 reason: "NearBlank".into(),
             }],
-            running_text: Vec::new(),
+            ..Default::default()
         };
         let e = para("MASTER DRAWING", vec![]);
         let x = to_xhtml_with(std::slice::from_ref(&e), &notes);
@@ -624,7 +668,6 @@ mod tests {
     fn several_unread_pages_are_listed_once_each_with_their_reasons() {
         use crate::element::{Notes, UnreadPage};
         let n = Notes {
-            running_text: Vec::new(),
             unread: vec![
                 UnreadPage {
                     index: 4,
@@ -639,6 +682,7 @@ mod tests {
                     reason: "Scanned".into(),
                 },
             ],
+            ..Default::default()
         };
         let s = n.summary().unwrap();
         assert!(s.contains("pages 1, 5, 7"), "{s}");

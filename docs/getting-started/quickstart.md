@@ -33,6 +33,7 @@ fdoc convert page.html   -f doco
 fdoc convert deck.pptx   -f doco
 fdoc convert book.xlsx   -f doco
 fdoc convert call.vtt    -f doco
+fdoc convert reply.eml   -f doco
 ```
 
 The graph has the same shape from every source. One difference matters:

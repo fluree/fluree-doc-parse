@@ -2,8 +2,9 @@
 
 Adaptive document parsing: a deterministic Rust engine first, with
 model-arbitrated upgrade tiers a document walks through only as far as it
-needs. PDF, Markdown, HTML, DOCX, PPTX, XLSX, a raster image or a meeting
-transcript in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD graph out.
+needs. PDF, Markdown, HTML, DOCX, PPTX, XLSX, a raster image, a meeting
+transcript or an email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD
+graph out.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
@@ -46,6 +47,8 @@ fdoc convert book.xlsx  -f doco              # XLSX in, sheets become pages
                                              #   (blocks of cells become tables)
 fdoc convert call.vtt   -f doco              # WebVTT or SubRip in, one paragraph
                                              #   per speaker turn, with who and when
+fdoc convert reply.eml  -f doco              # .eml or .msg in, the thread split
+                                             #   into its messages
 fdoc convert document.pdf -f xhtml           # XHTML
 fdoc convert document.pdf -f json            # DoCO-typed elements + bboxes
 fdoc convert document.pdf -f doco            # DoCO JSON-LD graph (sections,
@@ -99,7 +102,7 @@ and the negative results kept on record are in
 
 ## One element model, five outputs
 
-PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts and raster images all converge on one element
+PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email and raster images all converge on one element
 model, so every source produces the same DoCO graph. PDF is the geometric
 path — structure inferred from glyph and rule positions, with escalation to
 model tiers where the inference is weak. The others declare their structure,
@@ -135,6 +138,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-pptx` — PPTX (OOXML) reader
 - `crates/fluree-doc-xlsx` — XLSX (OOXML) reader
 - `crates/fluree-doc-transcript` — WebVTT and SubRip transcript reader
+- `crates/fluree-doc-email` — email reader (`.eml`, `.msg`)
 - `crates/fluree-doc-pdf` — extraction, layout, routing, arbitration
 - `crates/fluree-doc-cli` — the `fdoc` binary
 - `bench-adapter/` — opendataloader-bench engine adapters (incl. hybrid tiers)

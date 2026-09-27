@@ -10,9 +10,11 @@ pub mod element;
 pub mod emit;
 pub mod geom;
 pub mod merges;
+pub mod message;
 
 pub use doco::{to_doco, to_text, DocoOptions};
-pub use element::{Element, Link, Notes, Target, Turn, UnreadPage};
+pub use element::{Attachment, DocumentInfo, Element, Link, Notes, Target, Turn, UnreadPage};
 pub use emit::{to_markdown, to_markdown_with, to_xhtml, to_xhtml_with};
 pub use geom::{BBox, PageSize};
 pub use merges::{denormalize, Merges};
+pub use message::{Mailbox, Message};

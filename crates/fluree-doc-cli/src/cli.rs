@@ -2,8 +2,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Adaptive document parsing: text and structure (headings, tables, lists,
-/// forms) from PDF, Markdown, HTML, DOCX, PPTX and XLSX, and speaker turns
-/// from WebVTT and SubRip transcripts.
+/// forms) from PDF, Markdown, HTML, DOCX, PPTX and XLSX, speaker turns from
+/// WebVTT and SubRip transcripts, and threads from email.
 ///
 /// PDF structure is inferred from layout, with per-page signals telling you
 /// which pages would benefit from model-tier escalation; the other formats
@@ -32,9 +32,9 @@ pub struct Cli {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, and WebVTT and SubRip
-    /// transcripts. PDF structure is inferred from layout; the others declare
-    /// theirs and carry no geometry.
+    /// Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip
+    /// transcripts, and email (.eml, .msg). PDF structure is inferred from
+    /// layout; the others declare theirs and carry no geometry.
     ///
     /// Examples:
     ///   fdoc convert report.pdf
@@ -148,8 +148,8 @@ pub enum Format {
 
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
-    /// Input documents: files, directories, or `-` for stdin (a PDF or a
-    /// transcript)
+    /// Input documents: files, directories, or `-` for stdin (a PDF, a
+    /// transcript or an email)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 
@@ -214,6 +214,14 @@ pub struct ConvertArgs {
     /// Never call a model, whatever the config says
     #[arg(long)]
     pub no_escalate: bool,
+
+    /// Save each email's attachments under DIR/<email stem>/, to convert
+    /// on their own
+    ///
+    /// An attachment is a document of its own. Without this flag the
+    /// output describes the attachments and does not include them.
+    #[arg(long, value_name = "DIR")]
+    pub attachments: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]

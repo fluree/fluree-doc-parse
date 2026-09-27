@@ -14,7 +14,7 @@ pub(crate) fn pdfs_in(dir: &Path) -> Vec<PathBuf> {
             p.extension().and_then(|x| x.to_str()).is_some_and(|x| {
                 [
                     "pdf", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "xlsx", "vtt",
-                    "srt",
+                    "srt", "eml", "msg",
                 ]
                 .iter()
                 .chain(fluree_doc_pdf::image::EXTENSIONS.iter())
@@ -343,6 +343,7 @@ mod tests {
             figure: None,
             links: None,
             turn: None,
+            message: None,
             provenance: "rust",
             evidence: "font-size",
         }

@@ -29,7 +29,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `type` | yes | DoCO class |
 | `page` | yes | 0-based; `0` for formats without pages |
 | `text` | yes | NFKC-normalized |
-| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt` |
+| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt`, `eml`, `msg` |
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |
 | `level` | headings | 1–6 |
@@ -41,6 +41,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `merged_left` | tables | row-major continuation flags |
 | `links` | where the source has any | hyperlinks over this element's text |
 | `turn` | [transcripts](../inputs/transcripts.md) | `{speaker?, start_ms, end_ms}`: who spoke and when |
+| `message` | [email](../inputs/email.md), on the element opening each message | the message's header: `from`, `to`, `cc`, `date`, `subject`, … |
 
 Absent fields are **omitted**, not null. `bbox` in particular: an element with
 no geometry has no `bbox` key, and this is load-bearing — see [Measured vs
@@ -96,6 +97,30 @@ into the text in one pass.
 `speaker` is absent for captions that name no one. When present, it also
 opens `text`, followed by `": "`. Times are milliseconds from the start of
 the recording. See [Transcripts](../inputs/transcripts.md).
+
+## Email messages carry their header
+
+```json
+{
+  "id": "elem-00005",
+  "type": "doco:Paragraph",
+  "page": 0,
+  "text": "On Fri, Jul 17, 2026 at 10:05 AM Kai Moreno <kai@example.com> wrote:",
+  "message": {
+    "from": [ { "name": "Kai Moreno", "address": "kai@example.com" } ],
+    "date": "2026-07-17T10:05:00",
+    "quoted": true
+  },
+  "provenance": "eml",
+  "evidence": "eml"
+}
+```
+
+`message` is on the first element of each message in an email; the elements
+after it, up to the next that carries one, are that message's body. The
+document's attachments and its title, creator and date are not in this
+output; they are in [`doco`](doco.md#emails-are-threads-of-messages). See
+[Email](../inputs/email.md).
 
 ## Figures come in groups
 

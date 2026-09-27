@@ -20,14 +20,17 @@ insertable into a [Fluree](https://flur.ee) ledger as-is.
     "nif":      "http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#",
     "po":       "http://www.essepuntato.it/2008/12/pattern#",
     "po:contains": { "@type": "@id" },
-    "rdfs":     "http://www.w3.org/2000/01/rdf-schema#"
+    "rdfs":     "http://www.w3.org/2000/01/rdf-schema#",
+    "dcterms":  "http://purl.org/dc/terms/",
+    "xsd":      "http://www.w3.org/2001/XMLSchema#"
   },
   "@graph": [ … ]
 }
 ```
 
-One Fluree namespace, `doc:`, plus three public ontologies and `rdfs` for the
-display label. `doco` is the Document Components Ontology; `po` is the Pattern
+One Fluree namespace, `doc:`, plus three public ontologies, `rdfs` for the
+display label, and Dublin Core (`dcterms`) for what a document declares about
+itself, with `xsd` typing its dates. `doco` is the Document Components Ontology; `po` is the Pattern
 ontology DoCO extends, and `po:contains` is the containment property DoCO
 itself specifies; `nif` is the NLP Interchange Format, whose character offsets
 are the join point with annotation and NER tooling. Everything
@@ -205,6 +208,51 @@ stays `Speaker 2`. The same name opens `nif:isString`, followed by `": "`, so
 the speaker's mention spans `nif:beginIndex` to `nif:beginIndex` plus the
 length of the name. That is the span to link to a person record. The times
 never appear in the text, so they never become entities.
+
+## Emails are threads of messages
+
+```json
+{ "@type": "doco:Document",
+  "dcterms:title": "RE: Pilot",
+  "dcterms:creator": ["Lena Holt <lena@example.com>"],
+  "dcterms:created": { "@value": "2026-07-17T13:48:00-05:00", "@type": "xsd:dateTime" },
+  "doc:attachments": { "@type": "@json",
+                       "@value": [ { "filename": "quote.pdf",
+                                     "contentType": "application/pdf", "size": 48213 } ] } }
+
+{ "@id": "urn:fluree-doc-parse:reply/message/7",
+  "@type": "doc:Message",
+  "doc:from": ["urn:fluree-doc-parse:reply/mailbox/2"],
+  "doc:to":   ["urn:fluree-doc-parse:reply/mailbox/3"],
+  "doc:sentAt": { "@value": "2026-07-17T13:48:00-05:00", "@type": "xsd:dateTime" },
+  "doc:subject": "RE: Pilot",
+  "doc:messageId": "3@example.com",
+  "doc:inReplyTo": ["2@example.com"],
+  "po:contains": [ "…/element/8", "…/element/9" ] }
+
+{ "@id": "urn:fluree-doc-parse:reply/mailbox/2",
+  "@type": "doc:Mailbox",
+  "doc:address": "lena@example.com",
+  "doc:name": "Lena Holt" }
+```
+
+An [email](../inputs/email.md) is split into its messages: the file's own
+and each one quoted in its body. Each is a `doc:Message` under the body,
+side by side in reading order rather than nested as the quoting nests them,
+so every message in a thread is one step from its sender. A message
+contains its elements, starting with the paragraph that holds its header as
+the text shows it.
+
+Every sender and recipient is a `doc:Mailbox`, one per address in the
+document, so every message a person sent or received points at the same
+node. `doc:address` is the value to join on when linking a mailbox to a
+contact record. Mailboxes are minted per document, like every other node,
+so re-extracting one email never touches another's. A mailbox written with
+a name and no address, as a quoted Outlook header often has, joins the
+addressed mailbox of the same name when the document has one.
+
+A quoted message's `doc:sentAt` has no offset, because the line that quotes
+it states none. The file's own always has one.
 
 ## Links are nodes
 

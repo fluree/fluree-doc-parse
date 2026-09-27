@@ -35,14 +35,16 @@
 //!   while the physical index is always defined and always unique. For
 //!   paginationless sources it is the slide or sheet index.
 
-use crate::element::{Element, Target};
+use crate::element::{Attachment, DocumentInfo, Element, Target};
+use crate::message::{Mailbox, Message};
 use serde_json::{json, Map, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Display-label budget: full text lives in `nif:isString`, the label is a
 /// preview for graph canvases.
 const LABEL_MAX_CHARS: usize = 100;
 
+#[derive(Default)]
 pub struct DocoOptions {
     /// Prefix for minted element IRIs: `{base_iri}/section/{n}` and
     /// `{base_iri}/element/{n}`, one shared counter in emission order.
@@ -73,6 +75,12 @@ pub struct DocoOptions {
     /// is the only place the denominator appears. Empty for sources with no
     /// geometry.
     pub pages: Vec<crate::geom::PageSize>,
+    /// What the document says about itself, emitted on the document node in
+    /// Dublin Core terms.
+    pub info: DocumentInfo,
+    /// Files the document carries. Described on the document node as
+    /// `doc:attachments`; their content is theirs to convert.
+    pub attachments: Vec<Attachment>,
 }
 
 /// The plain-text projection: each text-bearing element's trimmed text in
@@ -200,6 +208,11 @@ struct Emitter<'a> {
     counter: usize,
     /// (id-index of open section, its level)
     open_sections: Vec<(usize, usize)>,
+    /// The `doc:Message` node the current email message's elements go into.
+    open_message: Option<usize>,
+    /// Mailbox IRIs by address (lower-cased), or by name for a mailbox
+    /// written without one.
+    mailboxes: HashMap<String, String>,
     body_idx: usize,
 }
 
@@ -232,12 +245,118 @@ impl<'a> Emitter<'a> {
         self.children[parent].push(child_iri);
     }
 
-    /// The innermost open section, else the body.
+    /// The innermost open section, else the open message, else the body.
     fn current_parent(&self) -> usize {
         self.open_sections
             .last()
             .map(|(i, _)| *i)
+            .or(self.open_message)
             .unwrap_or(self.body_idx)
+    }
+
+    /// Mint a `doc:Mailbox` node for every sender and recipient in the
+    /// document, one per address.
+    ///
+    /// A node rather than a string on the message, so that a person can be
+    /// found by address: every message they sent or received in this
+    /// document points at the same node, and `doc:address` is the value a
+    /// contact record joins on. Minted per document, like every other node
+    /// here, so re-extracting one document never touches another's. A
+    /// mailbox written with a name alone, as a quoted Outlook header often
+    /// is, joins the addressed mailbox of the same name when there is one.
+    fn register_mailboxes(&mut self, elements: &[Element]) {
+        let all: Vec<Mailbox> = elements
+            .iter()
+            .filter_map(|e| e.message.as_deref())
+            .flat_map(|m| m.from.iter().chain(&m.to).chain(&m.cc).chain(&m.bcc))
+            .cloned()
+            .collect();
+        let (addressed, named): (Vec<&Mailbox>, Vec<&Mailbox>) =
+            all.iter().partition(|m| m.address.is_some());
+        for m in addressed.into_iter().chain(named) {
+            let key = mailbox_key(m);
+            if key.is_empty() || self.mailboxes.contains_key(&key) {
+                continue;
+            }
+            if m.address.is_none() {
+                if let Some(iri) = m.name.as_deref().and_then(|n| self.mailbox_by_name(n)) {
+                    self.mailboxes.insert(key, iri);
+                    continue;
+                }
+            }
+            let idx = self.node("mailbox", "doc:Mailbox", None);
+            if let Some(a) = &m.address {
+                self.nodes[idx].insert("doc:address".into(), Value::String(a.clone()));
+            }
+            if let Some(n) = &m.name {
+                self.nodes[idx].insert("doc:name".into(), Value::String(n.clone()));
+            }
+            let iri = self.nodes[idx]["@id"].as_str().unwrap().to_string();
+            self.mailboxes.insert(key, iri);
+        }
+    }
+
+    fn mailbox_by_name(&self, name: &str) -> Option<String> {
+        self.nodes
+            .iter()
+            .find(|n| {
+                n["@type"] == "doc:Mailbox"
+                    && n.get("doc:address").is_some()
+                    && n.get("doc:name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| v.eq_ignore_ascii_case(name))
+            })
+            .map(|n| n["@id"].as_str().unwrap().to_string())
+    }
+
+    /// Open a `doc:Message` for an element that starts one, and describe it.
+    ///
+    /// Messages sit side by side under the body, in reading order, rather
+    /// than nested the way the quoting nests them: a thread is a sequence
+    /// of messages, each by its own sender, and "everything Ada wrote" is
+    /// then one step from each of them. Sections a message's own headings
+    /// open stay inside it.
+    fn open_message(&mut self, m: &Message) {
+        self.open_sections.clear();
+        let idx = self.node("message", "doc:Message", None);
+        for (key, boxes) in [
+            ("doc:from", &m.from),
+            ("doc:to", &m.to),
+            ("doc:cc", &m.cc),
+            ("doc:bcc", &m.bcc),
+        ] {
+            let iris: Vec<Value> = boxes
+                .iter()
+                .filter_map(|b| self.mailboxes.get(&mailbox_key(b)).cloned())
+                .map(Value::String)
+                .collect();
+            if !iris.is_empty() {
+                self.nodes[idx].insert(key.into(), Value::Array(iris));
+            }
+        }
+        if let Some(d) = &m.date {
+            self.nodes[idx].insert("doc:sentAt".into(), date_time(d));
+        }
+        if let Some(s) = &m.subject {
+            self.nodes[idx].insert("doc:subject".into(), Value::String(s.clone()));
+        }
+        if let Some(id) = &m.message_id {
+            self.nodes[idx].insert("doc:messageId".into(), Value::String(id.clone()));
+        }
+        for (key, ids) in [
+            ("doc:inReplyTo", &m.in_reply_to),
+            ("doc:references", &m.references),
+        ] {
+            if !ids.is_empty() {
+                self.nodes[idx].insert(key.into(), json!(ids));
+            }
+        }
+        if m.quoted {
+            self.nodes[idx].insert("doc:quoted".into(), Value::Bool(true));
+        }
+        let body = self.body_idx;
+        self.attach(body, idx);
+        self.open_message = Some(idx);
     }
 
     fn set_text(&mut self, idx: usize, text: &str) {
@@ -336,6 +455,27 @@ impl<'a> Emitter<'a> {
     }
 }
 
+/// The key a mailbox is minted under: its address, case folded, or its name
+/// where it has no address.
+fn mailbox_key(m: &Mailbox) -> String {
+    match (&m.address, &m.name) {
+        (Some(a), _) => a.to_lowercase(),
+        (None, Some(n)) => format!("name:{}", n.to_lowercase()),
+        (None, None) => String::new(),
+    }
+}
+
+/// An ISO 8601 timestamp as a typed literal, so a store compares it as a
+/// time rather than a string. A bare date is an `xsd:date`.
+fn date_time(v: &str) -> Value {
+    let ty = if v.contains('T') {
+        "xsd:dateTime"
+    } else {
+        "xsd:date"
+    };
+    json!({ "@value": v, "@type": ty })
+}
+
 pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     let mut em = Emitter {
         opts,
@@ -343,6 +483,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         children: Vec::new(),
         counter: 0,
         open_sections: Vec::new(),
+        open_message: None,
+        mailboxes: HashMap::new(),
         body_idx: 0,
     };
 
@@ -367,9 +509,31 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             json!({ "@type": "@json", "@value": opts.pages }),
         );
     }
+    let info = &opts.info;
+    if let Some(t) = &info.title {
+        em.nodes[doc_idx].insert("dcterms:title".into(), Value::String(t.clone()));
+    }
+    if !info.creators.is_empty() {
+        em.nodes[doc_idx].insert("dcterms:creator".into(), json!(info.creators));
+    }
+    for (key, value) in [
+        ("dcterms:created", &info.created),
+        ("dcterms:modified", &info.modified),
+    ] {
+        if let Some(v) = value {
+            em.nodes[doc_idx].insert(key.into(), date_time(v));
+        }
+    }
+    if !opts.attachments.is_empty() {
+        em.nodes[doc_idx].insert(
+            "doc:attachments".into(),
+            json!({ "@type": "@json", "@value": opts.attachments }),
+        );
+    }
     let body_idx = em.node("element", "doco:BodyMatter", Some("body"));
     em.body_idx = body_idx;
     em.attach(doc_idx, body_idx);
+    em.register_mailboxes(elements);
 
     // Character cursor into the `to_text` projection.
     let mut cursor = 0usize;
@@ -388,6 +552,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     for e in elements {
         if open_list.is_some() && e.kind != "doco:ListItem" {
             open_list = None;
+        }
+        if let Some(m) = &e.message {
+            open_list = None;
+            em.open_message(m);
         }
         match e.kind.as_str() {
             "doco:SectionTitle" => {
@@ -628,12 +796,20 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
             "nif": "http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#",
             "doc": "https://ns.flur.ee/doc#",
+            "dcterms": "http://purl.org/dc/terms/",
+            "xsd": "http://www.w3.org/2001/XMLSchema#",
             // Containment edges must ingest as IRI references, not literals.
             "po:contains": { "@type": "@id" },
             // A link's anchor is a node of the graph, and its target is an
             // address rather than a string about one.
             "doc:link": { "@type": "@id" },
             "doc:linkTarget": { "@type": "@id" },
+            // A message's sender and recipients are the graph's mailbox
+            // nodes.
+            "doc:from": { "@type": "@id" },
+            "doc:to": { "@type": "@id" },
+            "doc:cc": { "@type": "@id" },
+            "doc:bcc": { "@type": "@id" },
         },
         "@graph": graph,
     });
@@ -666,6 +842,7 @@ mod tests {
             figure: None,
             links: None,
             turn: None,
+            message: None,
             provenance: "rust",
             evidence: "layout",
         }
@@ -678,6 +855,7 @@ mod tests {
             pages: Vec::new(),
             unread: Vec::new(),
             running_text: Vec::new(),
+            ..Default::default()
         }
     }
 

@@ -1,6 +1,6 @@
 # The element model
 
-Every reader — PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts — produces a flat
+Every reader — PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email — produces a flat
 `Vec<Element>` in reading order. Every output format is a projection of that
 list. Nothing else is shared between a reader and an emitter, which is what
 lets a Markdown consumer avoid compiling a PDF engine.
@@ -23,6 +23,7 @@ pub struct Element {
     pub figure: Option<String>,           // shared id for fragments of one drawing
     pub links: Option<Vec<Link>>,         // hyperlinks over this element's text
     pub turn: Option<Turn>,               // transcripts: speaker, start_ms, end_ms
+    pub message: Option<Box<Message>>,    // email: the header of the message this opens
     pub provenance: &'static str,         // "rust" | "vlm"
     pub evidence: &'static str,           // which signal classified it
 }

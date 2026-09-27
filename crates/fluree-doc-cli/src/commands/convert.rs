@@ -52,6 +52,8 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         }
         let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
             convert_transcript(&data, "stdin", args, quiet)
+        } else if fluree_doc_email::Format::sniff(&data).is_some() {
+            convert_email(&data, "stdin", args, quiet)
         } else {
             convert_bytes(data, "stdin", cfg, args, pages.as_deref(), quiet)
         };
@@ -172,6 +174,11 @@ fn convert_path(
     if fluree_doc_transcript::Format::sniff(&data).is_some() || ext_is(pdf, &["vtt", "srt"]) {
         return convert_transcript(&data, stem, args, quiet);
     }
+    // An email by its content too: a saved message is `.eml`, `.mht`, `.txt`
+    // or nothing at all, depending on who saved it.
+    if fluree_doc_email::Format::sniff(&data).is_some() || ext_is(pdf, &["eml", "msg"]) {
+        return convert_email(&data, stem, args, quiet);
+    }
     // Structural formats: the source declares what a PDF makes us infer, so
     // these readers map rather than measure and carry no geometry.
     if ext_is(pdf, &["md", "markdown", "txt", "text"]) {
@@ -256,6 +263,90 @@ fn convert_transcript(
     ))
 }
 
+/// An email: each message of its thread, and its attachments described.
+///
+/// An attachment is a document of its own, so it is not in this output.
+/// `--attachments DIR` saves the files for converting on their own; without
+/// it, the note on stderr says what was left out.
+fn convert_email(
+    data: &[u8],
+    stem: &str,
+    args: &ConvertArgs,
+    quiet: bool,
+) -> Result<String, String> {
+    let email = fluree_doc_email::parse(data).map_err(|e| e.to_string())?;
+    let count = email.attachments.len();
+    let plural = if count == 1 { "" } else { "s" };
+    match &args.attachments {
+        Some(dir) if count > 0 => {
+            let dir = dir.join(stem);
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+            let mut taken = std::collections::HashSet::new();
+            for (i, a) in email.attachments.iter().enumerate() {
+                let path = dir.join(file_name(a.info.filename.as_deref(), i, &mut taken));
+                std::fs::write(&path, &a.bytes)
+                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
+            }
+            if !quiet {
+                eprintln!(
+                    "note: {stem}: {count} attachment{plural} saved to {}",
+                    dir.display()
+                );
+            }
+        }
+        None if count > 0 && !quiet => {
+            let names: Vec<String> = email
+                .attachments
+                .iter()
+                .map(|a| {
+                    a.info
+                        .filename
+                        .clone()
+                        .unwrap_or_else(|| a.info.content_type.clone())
+                })
+                .collect();
+            eprintln!(
+                "note: {stem}: {count} attachment{plural} not converted ({}); \
+                 pass --attachments DIR to save them",
+                names.join(", ")
+            );
+        }
+        _ => {}
+    }
+    Ok(render(
+        &email.elements,
+        stem,
+        args,
+        Vec::new(),
+        &email.notes(),
+    ))
+}
+
+/// A safe, unique file name for an attachment: its own name with any path
+/// taken off, or a numbered stand-in, and unique within its email.
+fn file_name(
+    name: Option<&str>,
+    index: usize,
+    taken: &mut std::collections::HashSet<String>,
+) -> String {
+    let base = name
+        .and_then(|n| n.rsplit(['/', '\\']).next())
+        .map(|n| n.trim().trim_start_matches('.').to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| format!("attachment-{}", index + 1));
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while !taken.insert(candidate.clone()) {
+        candidate = match base.rsplit_once('.') {
+            Some((stem, ext)) => format!("{stem} ({n}).{ext}"),
+            None => format!("{base} ({n})"),
+        };
+        n += 1;
+    }
+    candidate
+}
+
 /// A bare image: one page of pixels, and only the deep reader can read it.
 ///
 /// Every other source has a deterministic reading to fall back on. This one
@@ -309,6 +400,7 @@ fn convert_image(
                 figure: None,
                 links: None,
                 turn: None,
+                message: None,
                 provenance: "rust",
                 evidence: "layout",
             });
@@ -367,6 +459,8 @@ fn render(
                 pages,
                 unread: notes.unread.clone(),
                 running_text: notes.running_text.clone(),
+                info: notes.info.clone(),
+                attachments: notes.attachments.clone(),
             };
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }
@@ -472,6 +566,7 @@ fn convert_bytes(
             .filter(|(text, _)| text.chars().any(char::is_alphabetic))
             .map(|(text, _)| text.clone())
             .collect(),
+        ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {note}");

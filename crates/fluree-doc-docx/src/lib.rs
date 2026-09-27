@@ -225,6 +225,7 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
         figure: None,
         links: None,
         turn: None,
+        message: None,
         provenance: "docx",
         evidence: "docx",
     }

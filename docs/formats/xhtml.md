@@ -93,6 +93,7 @@ lossy in a specific way worth knowing:
 | `doco:SectionTitle` | `<h1>`–`<h6>` | nothing |
 | `doco:Paragraph` | `<p>` | nothing |
 | a [transcript](../inputs/transcripts.md) turn | `<p data-speaker="…" data-start-ms="…" data-end-ms="…">`, the label in `<b>` | nothing |
+| an [email](../inputs/email.md) message's header | `<p data-from="…" data-sent-at="…">`, with `<hr/>` above each quoted message | the other header fields, which are in the text |
 | `doco:ListItem` | `<li>` | nothing |
 | figure fragment | `<span>` | that it is prose at all |
 | `doco:Table` | `<table>` | sub-header bands; merges survive as `rowspan`/`colspan` |

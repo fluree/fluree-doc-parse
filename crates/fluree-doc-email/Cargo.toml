@@ -1,0 +1,12 @@
+[package]
+name = "fluree-doc-email"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Email (.eml, .msg) to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-html.workspace = true
+encoding_rs = "0.8"
+cfb = "0.15"

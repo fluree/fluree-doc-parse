@@ -9,26 +9,28 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-docx      DOCX reader
       ├── fluree-doc-pptx      PPTX reader
       ├── fluree-doc-xlsx      XLSX reader
-      └── fluree-doc-transcript  WebVTT and SubRip reader
+      ├── fluree-doc-transcript  WebVTT and SubRip reader
+      └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
                 │
                 └── fluree-doc-model   element model + emitters (source-agnostic)
 ```
 
-Every reader depends on `fluree-doc-model` and on nothing else of ours. That
-is the point of the split: **a Markdown or DOCX consumer never compiles a PDF
-engine.**
+Every reader depends on `fluree-doc-model`, and on no other reader but one:
+the email reader reads HTML bodies with the HTML reader. That is the point of
+the split: **a Markdown or DOCX consumer never compiles a PDF engine.**
 
 ## The crates
 
 | crate | contains |
 |---|---|
-| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
+| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>` |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
+| `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
 | `fluree-doc-cli` | argument parsing and the commands |
 
@@ -70,6 +72,8 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | html5ever | spec-compliant HTML parsing | MIT OR Apache-2.0 |
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |
+| cfb | Outlook `.msg` containers | MIT |
+| encoding_rs | email charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |
 | unicode-normalization | NFKC | MIT OR Apache-2.0 |

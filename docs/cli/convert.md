@@ -6,8 +6,8 @@ Convert documents to Markdown, XHTML, JSON, DoCO JSON-LD or plain text.
 fdoc convert <FILE|DIR|->... [options]
 ```
 
-Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, and WebVTT and SubRip
-transcripts. PDF structure is inferred from layout; the others declare theirs
+Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip transcripts,
+and email (`.eml`, `.msg`). PDF structure is inferred from layout; the others declare theirs
 and carry no geometry. See [Input formats](../inputs/README.md).
 
 ```bash
@@ -16,6 +16,7 @@ fdoc convert report.pdf -f doco -o out.jsonld
 fdoc convert ./corpus/ --out-dir ./out -j 8
 cat report.pdf | fdoc convert -
 fdoc convert call.vtt -f doco                 # a transcript: one paragraph per turn
+fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 ```
 
 ## Options
@@ -29,6 +30,7 @@ fdoc convert call.vtt -f doco                 # a transcript: one paragraph per 
 | `-j`, `--jobs <N>` | parallel workers for batch (`0` = one per core) |
 | `--base-iri <IRI>` | base for minted element IRIs in `-f doco`. Default `urn:fluree-doc-parse:<stem>` |
 | `--doc-iri <IRI>` | stamp every `-f doco` element with `doc:sourceDocument` |
+| `--attachments <DIR>` | save each email's attachments under `DIR/<email name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
 | `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
 | `--structure-results <DIR>` | table-structure readings. Env: `FDOC_STRUCTURE_RESULTS` |

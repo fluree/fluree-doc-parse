@@ -374,6 +374,7 @@ mod tests {
             figure: None,
             links: None,
             turn: None,
+            message: None,
             provenance: "rust",
             evidence: "layout",
         }

@@ -57,6 +57,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         // it — a configured key on the machine that ran it must not be able
         // to change the number.
         no_escalate: true,
+        attachments: None,
     }
 }
 

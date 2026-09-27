@@ -187,6 +187,11 @@ pub struct Element {
     /// transcript. Absent everywhere else.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn: Option<Turn>,
+    /// The header of the message this element opens, on the first element of
+    /// each message in an email. The elements after it, up to the next that
+    /// carries one, are that message's body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<Box<crate::message::Message>>,
     /// Which engine produced this element. Always `"rust"` here; the VLM tier
     /// emits the same shape with `"vlm"`.
     pub provenance: &'static str,
@@ -229,6 +234,54 @@ pub struct UnreadPage {
     pub reason: String,
 }
 
+/// What a document says about itself: its title, who made it, and when.
+///
+/// Declared, never inferred. An email states its subject, sender and date in
+/// its headers; a guess at a PDF's title from its largest line would be a
+/// reading of the page, and that belongs in the elements.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct DocumentInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// As the document names them: a display name, or `Name <address>`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub creators: Vec<String>,
+    /// ISO 8601. An email's is when it was sent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+}
+
+impl DocumentInfo {
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.creators.is_empty()
+            && self.created.is_none()
+            && self.modified.is_none()
+    }
+}
+
+/// A file carried inside a document, described.
+///
+/// Only described: an attachment is a document of its own, which its own
+/// reader reads, and its bytes are the parsing reader's to hand back beside
+/// the elements. What the element model keeps is that it is there.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    /// The MIME type the document declares for it.
+    pub content_type: String,
+    /// In bytes, decoded.
+    pub size: usize,
+    /// Shown in the body, as an image pasted into a message is, rather than
+    /// attached to it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub inline: bool,
+}
+
 /// Facts about a document that are not elements of it.
 ///
 /// Additive: the emitters take this where they can carry it, and their
@@ -239,11 +292,16 @@ pub struct Notes {
     /// Running header and footer text, kept once because it identifies the
     /// document even though it is noise inside the body.
     pub running_text: Vec<String>,
+    pub info: DocumentInfo,
+    pub attachments: Vec<Attachment>,
 }
 
 impl Notes {
     pub fn is_empty(&self) -> bool {
-        self.unread.is_empty() && self.running_text.is_empty()
+        self.unread.is_empty()
+            && self.running_text.is_empty()
+            && self.info.is_empty()
+            && self.attachments.is_empty()
     }
 
     /// One line a human or a model can act on, or `None` when nothing is
