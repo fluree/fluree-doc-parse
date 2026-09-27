@@ -7,11 +7,11 @@ JSON, plain text or a DoCO JSON-LD graph out.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.889638 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.896694 | ~0.2 s (CPU) |
-| 3 | deep reading of pixels-only content and doubted structure | **0.929711** | ~1.5 s² |
+| 1 | deterministic extraction + layout | 0.892169 | **8 ms** (CPU) |
+| 2 | layout-detector arbitration (headings, table regions) | 0.899404 | ~0.2 s (CPU) |
+| 3 | deep reading of pixels-only content and doubted structure | **0.933319** | ~1.5 s² |
 
-¹ 200-document public evaluation corpus, measured 2026-07-28 — the standings
+¹ 200-document public evaluation corpus, measured 2026-08-01 — the standings
 [below](#where-it-stands). Every rung reproduces from the committed
 model-output caches with no GPU and no API key.
 
@@ -67,7 +67,8 @@ yourself — see [`fdoc config`](docs/cli/config.md).
 
 ## Where it stands
 
-Measured 2026-07-28 on
+Measured 2026-08-01, and reproduced to the last digit after the 2026-09-13
+changes, on
 [opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench):
 200 public PDFs with hand-checked ground truth, scored by a harness neither
 written nor tuned by this project. NID scores reading order and text, TEDS
@@ -76,9 +77,9 @@ The top 8 of the 17 engines scored:
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.929711** | 0.9440 | 0.9411 | 0.8734 | ~1.5 |
+| 1 | **fluree-doc-parse** (cascade) | **0.933319** | 0.9483 | 0.9440 | 0.8758 | ~1.5 |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.889638** | 0.9195 | 0.8441 | 0.8131 | **~0.009** |
+| 3 | **fluree-doc-parse** (deterministic) | **0.892169** | 0.9229 | 0.8470 | 0.8132 | **~0.009** |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -86,7 +87,7 @@ The top 8 of the 17 engines scored:
 | 8 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
 
 The deterministic engine — no model, no GPU, no API key — places third on its
-own. The timing footnotes (both `s/doc` figures deserve them) and the caveats
+own, and the cascade places first by 0.027. The timing footnotes (both `s/doc` figures deserve them) and the caveats
 that belong with these numbers are on
 [the benchmarks page](docs/benchmarks/README.md) — including
 [where our output is better than the reference](docs/benchmarks/where-we-differ.md)
