@@ -41,7 +41,9 @@ pub enum Commands {
     ///   fdoc convert report.pdf --format json -o report.json
     ///   fdoc convert ./docs/ --out-dir ./out -j 8
     ///   cat report.pdf | fdoc convert -
-    Convert(ConvertArgs),
+    // Boxed: the options of `convert` are several times the size of any
+    // other command's, and every command would carry them.
+    Convert(Box<ConvertArgs>),
 
     /// Extract AcroForm fields: name, type, value, bbox (JSON)
     ///
@@ -149,7 +151,7 @@ pub enum Format {
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
-    /// transcript or an email)
+    /// transcript, an email, a media asset or a declared record)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 
@@ -222,6 +224,17 @@ pub struct ConvertArgs {
     /// output describes the attachments and does not include them.
     #[arg(long, value_name = "DIR")]
     pub attachments: Option<PathBuf>,
+
+    /// Read XML and JSON records, and media assets, as these source
+    /// formats declare
+    ///
+    /// A JSON file holding one declaration or a list of them; repeatable.
+    /// A record one of them recognises is read as that format says: its
+    /// content fields as the document, the others as facts about it. A
+    /// media asset (AXF) no declaration recognises is read as its title
+    /// and its captions.
+    #[arg(long, value_name = "FILE")]
+    pub source_format: Vec<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]

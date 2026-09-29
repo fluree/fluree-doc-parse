@@ -58,6 +58,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         // to change the number.
         no_escalate: true,
         attachments: None,
+        source_format: Vec::new(),
     }
 }
 

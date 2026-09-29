@@ -14,7 +14,7 @@ pub(crate) fn pdfs_in(dir: &Path) -> Vec<PathBuf> {
             p.extension().and_then(|x| x.to_str()).is_some_and(|x| {
                 [
                     "pdf", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "xlsx", "vtt",
-                    "srt", "eml", "msg",
+                    "srt", "eml", "msg", "axf",
                 ]
                 .iter()
                 .chain(fluree_doc_pdf::image::EXTENSIONS.iter())
@@ -24,6 +24,23 @@ pub(crate) fn pdfs_in(dir: &Path) -> Vec<PathBuf> {
         .collect();
     v.sort();
     v
+}
+
+/// Files named as records in a directory: `.xml` and `.json`.
+///
+/// Kept apart from [`pdfs_in`], which lists what is always a document. A
+/// record is one only when a source format was declared for the run.
+pub(crate) fn records_in(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|x| x.to_str())
+                .is_some_and(|x| x.eq_ignore_ascii_case("xml") || x.eq_ignore_ascii_case("json"))
+        })
+        .collect()
 }
 
 pub(crate) fn stem_of(pdf: &Path) -> &str {
