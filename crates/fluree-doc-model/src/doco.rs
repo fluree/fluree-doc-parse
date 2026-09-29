@@ -35,7 +35,9 @@
 //!   while the physical index is always defined and always unique. For
 //!   paginationless sources it is the slide or sheet index.
 
-use crate::element::{Attachment, DocumentInfo, Element, Target};
+use crate::element::{
+    Attachment, DocumentInfo, Element, Property, PropertyValue, SourceField, Target,
+};
 use crate::message::{Mailbox, Message};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -81,6 +83,13 @@ pub struct DocoOptions {
     /// Files the document carries. Described on the document node as
     /// `doc:attachments`; their content is theirs to convert.
     pub attachments: Vec<Attachment>,
+    /// The fields of the record the document was read from, emitted on the
+    /// document node as `doc:sourceFields`.
+    ///
+    /// The declared properties are statements of the graph, and a consumer
+    /// asks the graph for them. This is the record as the source held it,
+    /// order and unmapped fields included, which no set of statements keeps.
+    pub fields: Vec<SourceField>,
 }
 
 /// The plain-text projection: each text-bearing element's trimmed text in
@@ -396,6 +405,10 @@ impl<'a> Emitter<'a> {
             self.nodes[idx].insert("doc:startMs".into(), json!(t.start_ms));
             self.nodes[idx].insert("doc:endMs".into(), json!(t.end_ms));
         }
+        // A record places an element in a field.
+        if let Some(path) = &e.source_path {
+            self.nodes[idx].insert("doc:sourcePath".into(), Value::String(path.clone()));
+        }
     }
 
     fn set_offsets(&mut self, idx: usize, start: usize, end: usize) {
@@ -476,6 +489,81 @@ fn date_time(v: &str) -> Value {
     json!({ "@value": v, "@type": ty })
 }
 
+/// A typed literal's value as JSON writes that type: a number as a number,
+/// a truth value as one, anything else as its text.
+///
+/// `"266000"` typed `xsd:int` is a string that claims to be a number. A
+/// store takes it at its type and then finds a string where it keeps
+/// numbers, and the statement it accepted is one it cannot read back. A
+/// value that is not of its claimed type stays text, which is at least
+/// what it is.
+fn typed_value(value: &str, datatype: &str) -> Value {
+    let Some(local) = datatype.strip_prefix("http://www.w3.org/2001/XMLSchema#") else {
+        return Value::String(value.to_string());
+    };
+    let v = value.trim();
+    let parsed = match local {
+        "integer" | "int" | "long" | "short" | "byte" | "nonNegativeInteger"
+        | "positiveInteger" | "unsignedInt" | "unsignedLong" => {
+            v.parse::<i64>().ok().map(Value::from)
+        }
+        "decimal" | "double" | "float" => v
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        "boolean" => match v {
+            "true" | "1" => Some(Value::Bool(true)),
+            "false" | "0" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        _ => None,
+    };
+    parsed.unwrap_or_else(|| Value::String(value.to_string()))
+}
+
+/// State `properties` on `node`, each under its own IRI.
+///
+/// A property stated twice has two values, in the order they were stated,
+/// and one when both say the same: a city given by its name and by its code
+/// is one city.
+/// A key the node already holds is left alone: the emitter's own statements
+/// (`@id`, `@type`, the Dublin Core terms) are not a record's to overwrite,
+/// and a property spelled as an absolute IRI never collides with their
+/// prefixed names.
+fn state_properties(node: &mut Map<String, Value>, properties: &[Property]) {
+    let mut stated: Vec<(&str, Vec<Value>)> = Vec::new();
+    for p in properties {
+        let value = match &p.value {
+            PropertyValue::Literal {
+                value,
+                datatype: Some(datatype),
+            } => json!({ "@value": typed_value(value, datatype), "@type": datatype }),
+            PropertyValue::Literal {
+                value,
+                datatype: None,
+            } => Value::String(value.clone()),
+            PropertyValue::Iri { iri } => json!({ "@id": iri }),
+        };
+        match stated.iter_mut().find(|(k, _)| *k == p.property) {
+            Some((_, values)) if values.contains(&value) => {}
+            Some((_, values)) => values.push(value),
+            None => stated.push((&p.property, vec![value])),
+        }
+    }
+    for (property, mut values) in stated {
+        if node.contains_key(property) {
+            continue;
+        }
+        let value = if values.len() == 1 {
+            values.remove(0)
+        } else {
+            Value::Array(values)
+        };
+        node.insert(property.to_string(), value);
+    }
+}
+
 pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     let mut em = Emitter {
         opts,
@@ -528,6 +616,18 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         em.nodes[doc_idx].insert(
             "doc:attachments".into(),
             json!({ "@type": "@json", "@value": opts.attachments }),
+        );
+    }
+    if let Some(class) = &info.class {
+        // Beside `doco:Document`, not instead of it: the structure is a
+        // document's whatever the record describes.
+        em.nodes[doc_idx].insert("@type".into(), json!(["doco:Document", class]));
+    }
+    state_properties(&mut em.nodes[doc_idx], &info.properties);
+    if !opts.fields.is_empty() {
+        em.nodes[doc_idx].insert(
+            "doc:sourceFields".into(),
+            json!({ "@type": "@json", "@value": opts.fields }),
         );
     }
     let body_idx = em.node("element", "doco:BodyMatter", Some("body"));
@@ -843,6 +943,7 @@ mod tests {
             links: None,
             turn: None,
             message: None,
+            source_path: None,
             provenance: "rust",
             evidence: "layout",
         }
@@ -1106,5 +1207,169 @@ mod tests {
         let link = find(&g, "doc:Link");
         assert_eq!(link[0]["doc:linkPage"], 11);
         assert!(link[0].get("doc:linkTarget").is_none());
+    }
+
+    fn document_of(elements: &[Element], o: &DocoOptions) -> Value {
+        let v: Value = serde_json::from_str(&to_doco(elements, o)).unwrap();
+        v["@graph"][0].clone()
+    }
+
+    #[test]
+    fn an_element_read_from_a_field_says_which() {
+        let mut e = el("doco:Paragraph", "Eight programs end.", None);
+        e.source_path = Some("/record/lead".into());
+        let g = graph(&[e, el("doco:Paragraph", "No field.", None)]);
+        let ps = find(&g, "doco:Paragraph");
+        assert_eq!(ps[0]["doc:sourcePath"], "/record/lead");
+        assert!(ps[1].get("doc:sourcePath").is_none());
+    }
+
+    #[test]
+    fn a_declared_class_stands_beside_the_document_class() {
+        let mut o = opts();
+        o.info.class = Some("https://example.org/model#Article".into());
+        let doc = document_of(&[], &o);
+        assert_eq!(
+            doc["@type"],
+            json!(["doco:Document", "https://example.org/model#Article"])
+        );
+        // Undeclared, the type stays the plain string consumers match on.
+        assert_eq!(document_of(&[], &opts())["@type"], "doco:Document");
+    }
+
+    #[test]
+    fn declared_properties_are_statements_of_the_document() {
+        let lit = |property: &str, value: &str, datatype: Option<&str>| Property {
+            property: property.into(),
+            value: PropertyValue::Literal {
+                value: value.into(),
+                datatype: datatype.map(Into::into),
+            },
+        };
+        let mut o = opts();
+        o.info.properties = vec![
+            lit("https://example.org/model#recordId", "48213", None),
+            lit(
+                "https://example.org/model#published",
+                "2025-04-12T06:26:14.821Z",
+                Some("http://www.w3.org/2001/XMLSchema#dateTime"),
+            ),
+            Property {
+                property: "https://example.org/model#theme".into(),
+                value: PropertyValue::Iri {
+                    iri: "https://example.org/id/economy".into(),
+                },
+            },
+            lit("https://example.org/model#theme", "Unlisted theme", None),
+            Property {
+                property: "https://example.org/model#theme".into(),
+                value: PropertyValue::Iri {
+                    iri: "https://example.org/id/economy".into(),
+                },
+            },
+        ];
+        let doc = document_of(&[], &o);
+        assert_eq!(doc["https://example.org/model#recordId"], "48213");
+        assert_eq!(
+            doc["https://example.org/model#published"],
+            json!({
+                "@value": "2025-04-12T06:26:14.821Z",
+                "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+            })
+        );
+        // Stated twice, two values, in the order stated; a concept is a node
+        // and a value the list does not hold stays what was written. The
+        // same value stated again, by another field, is stated once.
+        assert_eq!(
+            doc["https://example.org/model#theme"],
+            json!([{ "@id": "https://example.org/id/economy" }, "Unlisted theme"])
+        );
+    }
+
+    #[test]
+    fn a_typed_number_is_written_as_a_number() {
+        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        let lit = |property: &str, value: &str, datatype: &str| Property {
+            property: format!("https://example.org/model#{property}"),
+            value: PropertyValue::Literal {
+                value: value.into(),
+                datatype: Some(format!("{XSD}{datatype}")),
+            },
+        };
+        let mut o = opts();
+        o.info.properties = vec![
+            lit("duration", "266000", "int"),
+            lit("rate", "29.97", "decimal"),
+            lit("aired", "true", "boolean"),
+            lit("day", "2026-04-24", "date"),
+            // Claims a type it is not of: stays the text it is.
+            lit("count", "many", "integer"),
+        ];
+        let doc = document_of(&[], &o);
+        let value =
+            |property: &str| doc[format!("https://example.org/model#{property}")]["@value"].clone();
+        assert_eq!(value("duration"), json!(266000));
+        assert_eq!(value("rate"), json!(29.97));
+        assert_eq!(value("aired"), json!(true));
+        assert_eq!(value("day"), json!("2026-04-24"));
+        assert_eq!(value("count"), json!("many"));
+    }
+
+    #[test]
+    fn a_property_cannot_overwrite_what_the_emitter_states() {
+        let mut o = opts();
+        o.info.title = Some("The title".into());
+        o.info.properties = vec![Property {
+            property: "dcterms:title".into(),
+            value: PropertyValue::Literal {
+                value: "Another".into(),
+                datatype: None,
+            },
+        }];
+        assert_eq!(document_of(&[], &o)["dcterms:title"], "The title");
+    }
+
+    #[test]
+    fn the_source_record_is_kept_in_its_own_order() {
+        use crate::element::FieldRole;
+        let mut theme = SourceField::new("/record/theme", FieldRole::Enum, "Economy");
+        theme.property = Some("https://example.org/model#theme".into());
+        theme.iri = Some("https://example.org/id/economy".into());
+        let mut o = opts();
+        o.fields = vec![
+            SourceField::new("/record/id", FieldRole::Unmapped, "48213"),
+            SourceField::content("/record/body"),
+            theme,
+        ];
+        let doc = document_of(&[], &o);
+        assert_eq!(doc["doc:sourceFields"]["@type"], "@json");
+        assert_eq!(
+            doc["doc:sourceFields"]["@value"],
+            json!([
+                { "path": "/record/id", "role": "unmapped", "value": "48213" },
+                { "path": "/record/body", "role": "content" },
+                {
+                    "path": "/record/theme",
+                    "role": "enum",
+                    "value": "Economy",
+                    "property": "https://example.org/model#theme",
+                    "iri": "https://example.org/id/economy",
+                },
+            ])
+        );
+        assert!(document_of(&[], &opts()).get("doc:sourceFields").is_none());
+    }
+
+    #[test]
+    fn a_field_that_is_a_payload_is_cut_and_says_so() {
+        use crate::element::FieldRole;
+        let long = "x".repeat(SourceField::VALUE_MAX_CHARS + 1);
+        let f = SourceField::new("Meta:RAWDATA", FieldRole::Unmapped, &long);
+        assert!(f.truncated);
+        assert_eq!(
+            f.value.unwrap().chars().count(),
+            SourceField::VALUE_MAX_CHARS
+        );
+        assert!(!SourceField::new("Meta:TITLE", FieldRole::Unmapped, "short").truncated);
     }
 }

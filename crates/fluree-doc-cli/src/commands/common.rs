@@ -344,6 +344,7 @@ mod tests {
             links: None,
             turn: None,
             message: None,
+            source_path: None,
             provenance: "rust",
             evidence: "font-size",
         }

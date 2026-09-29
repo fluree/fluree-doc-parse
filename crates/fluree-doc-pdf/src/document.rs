@@ -996,6 +996,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 links: None,
                 turn: None,
                 message: None,
+                source_path: None,
                 provenance: "rust",
                 evidence,
             });
@@ -1040,6 +1041,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     links: None,
                     turn: None,
                     message: None,
+                    source_path: None,
                     provenance: "rust",
                     evidence: "layout-demoted",
                 });
@@ -1108,6 +1110,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 links: None,
                 turn: None,
                 message: None,
+                source_path: None,
                 provenance: "rust",
                 evidence: "rules",
             });
@@ -1161,6 +1164,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     links: None,
                     turn: None,
                     message: None,
+                    source_path: None,
                     provenance: "rust",
                     evidence: "table-confidence",
                 });
@@ -1188,6 +1192,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     links: None,
                     turn: None,
                     message: None,
+                    source_path: None,
                     provenance: "rust",
                     evidence: "table-missing",
                 });
@@ -1218,6 +1223,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         links: None,
                         turn: None,
                         message: None,
+                        source_path: None,
                         provenance: "rust",
                         evidence: "route",
                     });
@@ -1371,6 +1377,7 @@ mod tests {
             links: None,
             turn: None,
             message: None,
+            source_path: None,
             provenance: "rust",
             evidence: if table { "rules" } else { "layout" },
         }

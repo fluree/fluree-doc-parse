@@ -401,6 +401,7 @@ fn convert_image(
                 links: None,
                 turn: None,
                 message: None,
+                source_path: None,
                 provenance: "rust",
                 evidence: "layout",
             });
@@ -461,6 +462,7 @@ fn render(
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
+                fields: notes.fields.clone(),
             };
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }
