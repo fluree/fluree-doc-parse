@@ -489,6 +489,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluree-doc-axf"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "fluree-doc-record",
+ "quick-xml",
+]
+
+[[package]]
 name = "fluree-doc-cli"
 version = "0.1.0"
 dependencies = [
