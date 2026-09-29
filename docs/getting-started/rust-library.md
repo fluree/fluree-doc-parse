@@ -105,6 +105,35 @@ let els = &email.elements;                        //   plus email.info, email.at
 Those elements have `bbox: None` — see [Measured vs declared
 structure](../concepts/geometry-vs-declared.md).
 
+A record and a media asset are read in two steps: the file into a `Record`,
+then the record into a document by a source format.
+
+```rust
+use fluree_doc_record::{convert, recognise, Recognition, SourceFormat};
+
+// An XML or JSON record, read as a declared format says.
+let formats = vec![SourceFormat::from_json(&declaration)?];  // &str, JSON
+let record = fluree_doc_record::read(&bytes)?;               // &[u8], XML or JSON
+let doc = match recognise(&record, &formats) {
+    Recognition::Known(format) => convert(&record, format),
+    Recognition::Ambiguous(_) => return Err("more than one format claims it".into()),
+    Recognition::Unknown => return Err("no declared format is this record's".into()),
+};
+
+// A media asset (AXF), read as what every asset has.
+let record = fluree_doc_axf::read(&bytes)?;                  // &[u8]
+let doc = convert(&record, &fluree_doc_axf::default_format(&record));
+
+let els = &doc.elements;     // each with its source_path
+let notes = &doc.notes;      // document info and the record's fields, for the emitters
+let said = &doc.warnings;    // what in the record did not fit its declaration
+```
+
+`convert` does not fail: a value that does not fit its declaration is
+stated as written and listed in `warnings`. See
+[Records](../inputs/records.md) and
+[Media assets](../inputs/media-assets.md).
+
 ## What is a compatibility surface
 
 Most of `fluree-doc-pdf` is `pub` for a mechanical reason: `fdoc` is a
@@ -143,8 +172,10 @@ stable — the same promise [`fdoc dev`](../cli/dev.md) makes about its output.
 ## Errors
 
 `extract_file` and `extract_bytes` return `Result<Document, ExtractError>`.
-`ExtractError`, `DocxError` and `PptxError` all implement
+`ExtractError`, `DocxError`, `PptxError`, `RecordError` and `AxfError` all implement
 `std::error::Error`, so they compose with `?`, `Box<dyn Error>` and `anyhow`.
+`SourceFormat::from_json` returns its error as a `String`: the message says
+what is wrong with the declaration, and names it.
 
 `fluree_doc_markdown::parse` and `fluree_doc_html::parse` are infallible —
 both formats are defined so that every byte sequence is a valid parse.

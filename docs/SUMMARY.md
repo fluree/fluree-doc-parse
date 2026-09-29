@@ -27,6 +27,8 @@
   - [DOCX, PPTX, XLSX, HTML, Markdown](inputs/office-and-web.md)
   - [Transcripts: WebVTT, SubRip](inputs/transcripts.md)
   - [Email: .eml, .msg](inputs/email.md)
+  - [Records: declared XML and JSON](inputs/records.md)
+  - [Media assets: AXF](inputs/media-assets.md)
   - [Images](inputs/images.md)
 
 - [CLI reference](cli/README.md)

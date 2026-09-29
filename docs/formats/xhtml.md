@@ -94,12 +94,16 @@ lossy in a specific way worth knowing:
 | `doco:Paragraph` | `<p>` | nothing |
 | a [transcript](../inputs/transcripts.md) turn | `<p data-speaker="…" data-start-ms="…" data-end-ms="…">`, the label in `<b>` | nothing |
 | an [email](../inputs/email.md) message's header | `<p data-from="…" data-sent-at="…">`, with `<hr/>` above each quoted message | the other header fields, which are in the text |
+| a [media asset](../inputs/media-assets.md)'s turn | `<p data-start-ms="…" data-end-ms="…">`, with `data-speaker` where the captions name one | the track it was read from |
+| a media asset's section title | `<h1>` or `<h2>` | the section's start and end, and the track |
+| an element read from a [record](../inputs/records.md) | the tag of its class | the field it was read from |
 | `doco:ListItem` | `<li>` | nothing |
 | figure fragment | `<span>` | that it is prose at all |
 | `doco:Table` | `<table>` | sub-header bands; merges survive as `rowspan`/`colspan` |
 | `doco:Figure` | `<figure data-figure="…">` | **that it is an escalation anchor** |
 | `doco:Section` | — | containment is implicit in heading order |
 | — | — | page, bbox, evidence: nowhere to put them |
+| — | — | what a record states about the document: its declared class and properties, its title and dates, the list of its fields |
 
 Consecutive figure fragments sharing a `figure` id are wrapped in one
 `<figure>` element, which is the one piece of grouping this format keeps that

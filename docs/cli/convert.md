@@ -7,7 +7,8 @@ fdoc convert <FILE|DIR|->... [options]
 ```
 
 Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip transcripts,
-and email (`.eml`, `.msg`). PDF structure is inferred from layout; the others declare theirs
+email (`.eml`, `.msg`), media assets (AXF), and XML and JSON records a
+source format is declared for. PDF structure is inferred from layout; the others declare theirs
 and carry no geometry. See [Input formats](../inputs/README.md).
 
 ```bash
@@ -17,6 +18,11 @@ fdoc convert ./corpus/ --out-dir ./out -j 8
 cat report.pdf | fdoc convert -
 fdoc convert call.vtt -f doco                 # a transcript: one paragraph per turn
 fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
+fdoc convert episode.axf -f doco              # a media asset: its title and what was said
+fdoc convert article.xml -f doco \
+     --source-format news-article.json        # a record, read as its format declares
+fdoc convert episode.axf -f md \
+     --source-format formats.json             # an asset, read as the archive's format declares
 ```
 
 ## Options
@@ -31,6 +37,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--base-iri <IRI>` | base for minted element IRIs in `-f doco`. Default `urn:fluree-doc-parse:<stem>` |
 | `--doc-iri <IRI>` | stamp every `-f doco` element with `doc:sourceDocument` |
 | `--attachments <DIR>` | save each email's attachments under `DIR/<email name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) |
+| `--source-format <FILE>` | read XML and JSON records, and media assets, as these source formats declare. A JSON file holding one declaration or a list of them; repeatable. See [Records](../inputs/records.md#the-declaration) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
 | `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
 | `--structure-results <DIR>` | table-structure readings. Env: `FDOC_STRUCTURE_RESULTS` |
@@ -38,8 +45,48 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
 
-The last four wire the [escalation
+`--layout-boxes`, `--tier-results`, `--structure-results` and
+`--emit-anchors` wire the [escalation
 tiers](../integration/escalation-tiers.md); without them you get tier 1.
+
+## Source formats
+
+```bash
+fdoc convert article.xml --source-format news-article.json -f doco
+fdoc convert ./records/ --out-dir out \
+     --source-format formats/articles.json --source-format formats/stories.json
+```
+
+A [source format](../inputs/records.md) declares what the fields of a kind
+of record are. `--source-format` names a JSON file that holds one
+declaration or a list of them, and may be given several times. Every
+declaration is checked when it is read, and one that is wrong is an error
+for every record it was passed for.
+
+| input | without `--source-format` | with it |
+|---|---|---|
+| a media asset (AXF) | read as its title, its dates and its captions | read as the declaration that recognises it says; as its title, dates and captions when none does |
+| an XML or JSON record | not read: `fdoc` has no reader for it | read as the declaration that recognises it says; when none does, an error for a file named `.xml` or `.json` |
+| a directory | scanned for supported documents, `.axf` among them | scanned for `.xml` and `.json` as well |
+
+A file named `.xml` or `.json`, or read from stdin, was passed as a record.
+One that no declaration recognises, or that is not well-formed, is an error
+and not a fallback, because the declarations were passed to say what the
+inputs are. So is a file named `.xml` or `.json` that opens with neither
+`<` nor `{`, a JSON list most often: `not a record: a record is one XML
+element or one JSON object, and this file opens with neither`.
+
+A file with any other name that opens with `<` or `{` is read as a record
+when a declaration recognises it, and is left to the other readers when
+none does. So an HTML page in the same run is still read as an HTML page.
+
+A record or an asset that more than one declaration recognises is an error
+whatever its name, and the message names the declarations that claim it.
+
+What in a record does not fit its declaration, such as a value a list does
+not hold or a date that is not one, is stated as written and reported on
+stderr as a `note:`. The record is still read, and the exit code is `0`.
+`-q` silences the notes.
 
 ## Escalation
 
@@ -62,10 +109,16 @@ page of a long document costs one crop rather than all of them.
 
 ## Inputs
 
-Files, directories, or `-` for stdin. **Stdin is PDF only** — the other
-readers identify the format by extension.
+Files, directories, or `-` for stdin. **Stdin reads what is recognised by
+its content**: a PDF, a transcript, an email, a media asset, or a record
+when `--source-format` is given. The other readers identify the format by
+extension.
 
-Directories are scanned for supported documents. Multiple inputs are allowed;
+Directories are scanned for supported documents, `.axf` among them. With
+`--source-format` given they are scanned for `.xml` and `.json` as well,
+and without it they are not. Keep the declarations outside the directories
+you convert: a declaration is a `.json` file, and one found there is taken
+for a record that no declaration recognises. Multiple inputs are allowed;
 with more than one you need `--out-dir` rather than `--output`.
 
 ## Output naming
