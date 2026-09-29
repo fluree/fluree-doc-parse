@@ -1,0 +1,14 @@
+[package]
+name = "fluree-doc-record"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Declared records (XML, JSON) to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-transcript.workspace = true
+quick-xml = "0.36"
+serde.workspace = true
+serde_json.workspace = true
+unicode-normalization.workspace = true

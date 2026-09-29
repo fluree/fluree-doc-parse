@@ -585,6 +585,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluree-doc-record"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "fluree-doc-transcript",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "fluree-doc-transcript"
 version = "0.1.0"
 dependencies = [
