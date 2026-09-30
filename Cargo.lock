@@ -489,12 +489,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluree-doc-axf"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "fluree-doc-record",
+ "quick-xml",
+]
+
+[[package]]
 name = "fluree-doc-cli"
 version = "0.1.0"
 dependencies = [
  "base64",
  "clap",
  "clap_complete",
+ "fluree-doc-axf",
  "fluree-doc-docx",
  "fluree-doc-email",
  "fluree-doc-html",
@@ -502,6 +512,7 @@ dependencies = [
  "fluree-doc-model",
  "fluree-doc-pdf",
  "fluree-doc-pptx",
+ "fluree-doc-record",
  "fluree-doc-transcript",
  "fluree-doc-xlsx",
  "hayro",
@@ -582,6 +593,18 @@ dependencies = [
  "fluree-doc-model",
  "quick-xml",
  "zip",
+]
+
+[[package]]
+name = "fluree-doc-record"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "fluree-doc-transcript",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "unicode-normalization",
 ]
 
 [[package]]

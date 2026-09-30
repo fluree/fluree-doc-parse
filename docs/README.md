@@ -4,11 +4,14 @@ Adaptive document parsing: a deterministic Rust engine first, with
 model-arbitrated upgrade tiers a document walks through only as far as it
 needs.
 
-PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts and email all converge on **one element model**, so
+PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email, media assets and
+declared records all converge on **one element model**, so
 every source produces the same output — the same Markdown, the same DoCO
 graph, the same character offsets. PDF is the geometric path, where structure
 is inferred from where glyphs and ruling lines actually sit. The others
-declare their structure, so those readers map rather than measure.
+declare their structure, so those readers map rather than measure. A record
+exported by a content system, in XML or JSON, is read by a
+[declaration](inputs/records.md) of what its fields are.
 
 ## What you get
 
@@ -50,7 +53,8 @@ declare their structure, so those readers map rather than measure.
 - [Output formats](formats/README.md) — Markdown, XHTML, JSON, DoCO JSON-LD,
   text; what each one guarantees
 - [Input formats](inputs/README.md) — PDF, DOCX, PPTX, XLSX, HTML, Markdown,
-  WebVTT and SubRip transcripts, email, and what each reader can and cannot know
+  WebVTT and SubRip transcripts, email, AXF media assets, declared XML and
+  JSON records, and what each reader can and cannot know
 - [Examples](examples/README.md) — chunking for retrieval, locating text on
   the page, tables, batch runs, sizing a deployment, form fields
 - [CLI reference](cli/README.md) — every `fdoc` command, flag by flag

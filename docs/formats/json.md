@@ -29,7 +29,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `type` | yes | DoCO class |
 | `page` | yes | 0-based; `0` for formats without pages |
 | `text` | yes | NFKC-normalized |
-| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt`, `eml`, `msg` |
+| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt`, `eml`, `msg`, `xml`, `json`, `axf` |
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |
 | `level` | headings | 1–6 |
@@ -40,8 +40,9 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `merged_down` | tables | row-major continuation flags |
 | `merged_left` | tables | row-major continuation flags |
 | `links` | where the source has any | hyperlinks over this element's text |
-| `turn` | [transcripts](../inputs/transcripts.md) | `{speaker?, start_ms, end_ms}`: who spoke and when |
+| `turn` | [transcripts](../inputs/transcripts.md), [media assets](../inputs/media-assets.md) | `{speaker?, start_ms, end_ms}`: who spoke and when. On a media asset's section title, when the section starts and ends |
 | `message` | [email](../inputs/email.md), on the element opening each message | the message's header: `from`, `to`, `cc`, `date`, `subject`, … |
+| `sourcePath` | [records](../inputs/records.md), [media assets](../inputs/media-assets.md) | the field or track the element was read from |
 
 Absent fields are **omitted**, not null. `bbox` in particular: an element with
 no geometry has no `bbox` key, and this is load-bearing — see [Measured vs
@@ -121,6 +122,31 @@ after it, up to the next that carries one, are that message's body. The
 document's attachments and its title, creator and date are not in this
 output; they are in [`doco`](doco.md#emails-are-threads-of-messages). See
 [Email](../inputs/email.md).
+
+## Records carry their field
+
+```json
+{
+  "id": "elem-00003",
+  "type": "doco:Paragraph",
+  "page": 0,
+  "text": "The city announced the closure on Thursday.",
+  "sourcePath": "/record/body",
+  "provenance": "xml",
+  "evidence": "declared"
+}
+```
+
+`sourcePath` is where in the record the element was read from: an
+XPath-like path in XML, a JSON Pointer in JSON (`/text/0`), a field or a
+track in a media asset (`Meta:MAINTITLE`, `Stratum:CLOSED_CAPTION`). A
+field that holds several paragraphs gives several elements with one path.
+
+What the record states about the document is not in this output: its
+class, its declared properties, its title and dates, and the list of its
+fields are in [`doco`](doco.md#records-say-which-field). See
+[Records](../inputs/records.md) and
+[Media assets](../inputs/media-assets.md).
 
 ## Figures come in groups
 

@@ -86,6 +86,10 @@ turns:
   a new one, are read once.
 - A cue that tags two voices becomes two turns.
 
+A dash at the start of a cue is left as written in a `.vtt` or `.srt` file.
+It is read as a change of voice only for captions handed over by a
+container; see [Media assets](media-assets.md#a-change-of-voice).
+
 The same rules and thresholds apply to both formats. As Rust constants they
 are `PAUSE_MS`, `LONG_TURN_MS` and `MAX_TURN_MS` in `fluree-doc-transcript`.
 

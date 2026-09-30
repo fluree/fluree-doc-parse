@@ -10,27 +10,36 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-pptx      PPTX reader
       ├── fluree-doc-xlsx      XLSX reader
       ├── fluree-doc-transcript  WebVTT and SubRip reader
-      └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
+      ├── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
+      ├── fluree-doc-record    declared records, XML and JSON (uses the
+      │                        transcript reader)
+      └── fluree-doc-axf       AXF media asset reader (uses the record reader)
                 │
                 └── fluree-doc-model   element model + emitters (source-agnostic)
 ```
 
-Every reader depends on `fluree-doc-model`, and on no other reader but one:
-the email reader reads HTML bodies with the HTML reader. That is the point of
+Every reader depends on `fluree-doc-model`, and on no other reader but
+three. The email reader reads HTML bodies with the HTML reader. The record
+reader groups the captions of a track into turns with the transcript
+reader, so that a turn is the same thing from a caption file and from a
+media asset. The AXF reader reads the container and hands its record to the
+record reader, which makes the document. That is the point of
 the split: **a Markdown or DOCX consumer never compiles a PDF engine.**
 
 ## The crates
 
 | crate | contains |
 |---|---|
-| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
+| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Property`, `PropertyValue`, `SourceField`, `FieldRole`, `Attachment`, `Notes`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>` |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>` |
-| `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
+| `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff`; `caption_turns(&[Caption]) -> Vec<(Turn, String)>`, for captions handed over by a container |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
+| `fluree-doc-record` | `read(&[u8]) -> Result<Record, RecordError>`, XML or JSON, also `xml::read(&str)` and `json::read(&str)`; `sniff(&[u8]) -> Option<Syntax>`; `SourceFormat::from_json(&str) -> Result<SourceFormat, String>`; `recognise(&Record, &[SourceFormat]) -> Recognition`; `convert(&Record, &SourceFormat) -> Converted`: elements, notes, warnings |
+| `fluree-doc-axf` | `read(&[u8]) -> Result<Record, AxfError>`; `sniff(&[u8]) -> bool`; `default_format(&Record) -> SourceFormat`, for an asset no format is declared for |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
 | `fluree-doc-cli` | argument parsing and the commands |
 
@@ -71,12 +80,12 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | png | encoding rendered pages | MIT OR Apache-2.0 |
 | html5ever | spec-compliant HTML parsing | MIT OR Apache-2.0 |
 | pulldown-cmark | Markdown parsing | MIT |
-| quick-xml, zip | OOXML containers | MIT |
+| quick-xml, zip | OOXML containers; quick-xml also reads XML records and AXF | MIT |
 | cfb | Outlook `.msg` containers | MIT |
 | encoding_rs | email charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
-| serde, serde_json | serialization | MIT OR Apache-2.0 |
-| unicode-normalization | NFKC | MIT OR Apache-2.0 |
+| serde, serde_json | serialization; reading JSON records and source formats | MIT OR Apache-2.0 |
+| unicode-normalization | NFKC; matching a record's value to a list without regard to accents | MIT OR Apache-2.0 |
 
 No copyleft anywhere in the tree — run `cargo tree` to verify. This is a
 release constraint rather than a preference: the engine is meant to be

@@ -3,8 +3,8 @@
 Adaptive document parsing: a deterministic Rust engine first, with
 model-arbitrated upgrade tiers a document walks through only as far as it
 needs. PDF, Markdown, HTML, DOCX, PPTX, XLSX, a raster image, a meeting
-transcript or an email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD
-graph out.
+transcript, an email, a media asset (AXF) or a declared XML or JSON record
+in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD graph out.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
@@ -49,6 +49,11 @@ fdoc convert call.vtt   -f doco              # WebVTT or SubRip in, one paragrap
                                              #   per speaker turn, with who and when
 fdoc convert reply.eml  -f doco              # .eml or .msg in, the thread split
                                              #   into its messages
+fdoc convert episode.axf -f doco             # a media asset in: its title and
+                                             #   what was said, with when
+fdoc convert article.xml -f doco \
+     --source-format news-article.json       # an XML or JSON record in, read as
+                                             #   its source format declares
 fdoc convert document.pdf -f xhtml           # XHTML
 fdoc convert document.pdf -f json            # DoCO-typed elements + bboxes
 fdoc convert document.pdf -f doco            # DoCO JSON-LD graph (sections,
@@ -102,12 +107,16 @@ and the negative results kept on record are in
 
 ## One element model, five outputs
 
-PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email and raster images all converge on one element
+PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email, media assets,
+declared records and raster images all converge on one element
 model, so every source produces the same DoCO graph. PDF is the geometric
 path — structure inferred from glyph and rule positions, with escalation to
 model tiers where the inference is weak. The others declare their structure,
 so those readers map rather than measure, and carry no geometry: their
-elements have no `bbox` rather than a zeroed one.
+elements have no `bbox` rather than a zeroed one. A record exported by a
+content system says what it holds and not what it is for, so it is read by a
+[declaration](docs/inputs/records.md) of what each field is, and every
+element says which field it was read from.
 
 The `doco` output is insertable into a [Fluree](https://flur.ee) ledger as-is:
 the JSON-LD context carries the DoCO/NIF/pattern ontologies, containment edges
@@ -139,6 +148,9 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-xlsx` — XLSX (OOXML) reader
 - `crates/fluree-doc-transcript` — WebVTT and SubRip transcript reader
 - `crates/fluree-doc-email` — email reader (`.eml`, `.msg`)
+- `crates/fluree-doc-record` — declared records (XML, JSON) and their source
+  formats
+- `crates/fluree-doc-axf` — media asset reader (Avid AXF)
 - `crates/fluree-doc-pdf` — extraction, layout, routing, arbitration
 - `crates/fluree-doc-cli` — the `fdoc` binary
 - `bench-adapter/` — opendataloader-bench engine adapters (incl. hybrid tiers)
@@ -156,7 +168,8 @@ crates (Apache-2.0 OR MIT). HTML parsing uses [html5ever](https://github.com/ser
 selector layer the reader does not need. Markdown parsing
 uses [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) (MIT),
 and the OOXML readers use [quick-xml](https://github.com/tafia/quick-xml) and
-[zip](https://github.com/zip-rs/zip2) (both MIT).
+[zip](https://github.com/zip-rs/zip2) (both MIT). The record and media asset
+readers use quick-xml too.
 
 No model code is linked and no weights ship here. Model readings enter
 through two doors: a deep reader configured over HTTPS, or JSON sidecars

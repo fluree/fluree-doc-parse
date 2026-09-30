@@ -32,6 +32,23 @@ about, and correspondingly nothing to escalate.
 They also carry **no geometry**. A DOCX paragraph has no position on a page,
 because the page does not exist until something lays it out.
 
+## A record declares its fields, and a format what they are
+
+An XML or JSON [record](../inputs/records.md) exported by a content system
+declares less than a document does. It says that `body` holds this text and
+`published` that value, and not that one is prose and the other a date.
+Nothing in the notation tells them apart, and guessing would be inference
+again, with nothing like a font size to support it.
+
+So the second half is declared too, by a person: a source format says what
+each field of a kind of record is, once, and every record of that kind is
+read by it. These elements carry the evidence `declared`, and a record no
+format recognises is not read as one. A
+[media asset](../inputs/media-assets.md) is read the same way.
+
+They carry no geometry either. What they have in its place is the field
+each element was read from, in `sourcePath`.
+
 ## Therefore: `bbox` is `Option`
 
 ```rust
@@ -76,7 +93,8 @@ measures shape — which cells sit together — and nothing else.
 
 | you want | source |
 |---|---|
-| text and structure | any of the six |
+| text and structure | any source |
 | coordinates, overlay, page rendering | PDF only |
 | certainty about structure | the declared formats |
-| the same graph shape regardless | all six, by construction |
+| the field a text was read from | records and media assets |
+| the same graph shape regardless | every source, by construction |

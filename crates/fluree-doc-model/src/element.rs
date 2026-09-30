@@ -192,6 +192,20 @@ pub struct Element {
     /// carries one, are that message's body.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<Box<crate::message::Message>>,
+    /// Where in the source this element was read from, for sources that name
+    /// their parts: the field of a record (`/record/body`, `/items/0/text`)
+    /// or the track of a media asset (`Stratum:CLOSED_CAPTION`). Absent
+    /// for sources that are one run of content, where the position on the
+    /// page or in the recording is the address.
+    ///
+    /// A path and not an offset into the file: the file's own characters are
+    /// escaped and encoded, so a count against them is a count against
+    /// something nobody reads. The field is what the source calls the place.
+    /// The element's text is the field's value as a person sees it, or one
+    /// paragraph of it, so a mention found in the text is found in the
+    /// field.
+    #[serde(rename = "sourcePath", skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
     /// Which engine produced this element. Always `"rust"` here; the VLM tier
     /// emits the same shape with `"vlm"`.
     pub provenance: &'static str,
@@ -251,6 +265,15 @@ pub struct DocumentInfo {
     pub created: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified: Option<String>,
+    /// The class the document is declared to be, as an absolute IRI. The
+    /// document is a `doco:Document` whatever this says; this is what kind
+    /// of thing the record describes (a news article, an episode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    /// What the source states about the document under the model's own
+    /// properties, in the order the source states it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<Property>,
 }
 
 impl DocumentInfo {
@@ -259,6 +282,121 @@ impl DocumentInfo {
             && self.creators.is_empty()
             && self.created.is_none()
             && self.modified.is_none()
+            && self.class.is_none()
+            && self.properties.is_empty()
+    }
+}
+
+/// One statement about the document: a property of the model and its value.
+///
+/// Declared by a source format, never inferred: a record's `published_at`
+/// becomes the model's publication date because the format says so.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Property {
+    /// The property, as an absolute IRI.
+    pub property: String,
+    #[serde(flatten)]
+    pub value: PropertyValue,
+}
+
+/// A property's value: something said, or something pointed at.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(untagged)]
+pub enum PropertyValue {
+    /// A value as the source writes it. `datatype` is an absolute IRI, and
+    /// absent for a plain string.
+    Literal {
+        value: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        datatype: Option<String>,
+    },
+    /// A node of the graph: the concept a controlled value names.
+    Iri { iri: String },
+}
+
+/// What part a field of the source plays in the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FieldRole {
+    /// Text to read: it became elements, and its value is theirs.
+    Content,
+    /// A fact about the document, stated under a property.
+    Metadata,
+    /// A value from a controlled list, stated under a property.
+    Enum,
+    /// Present in the source and declared nothing: kept so that what the
+    /// source held can be seen, and stated nowhere in the graph.
+    Unmapped,
+}
+
+/// A field of the source record, as the source holds it.
+///
+/// The elements are what the document says and the properties are what is
+/// stated about it. This is what the source looked like: every field that
+/// held a value, in the source's order, so a reader shown the document can
+/// be shown the record it came from.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceField {
+    /// The field's address in the source, the same form as
+    /// [`Element::source_path`].
+    pub path: String,
+    pub role: FieldRole,
+    /// The value, unescaped. Absent for content, whose value is the text of
+    /// the elements that carry this path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The value was longer than [`SourceField::VALUE_MAX_CHARS`] and is cut.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    /// The property the value is stated under, for the roles that state one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
+    /// The concept a controlled value resolved to. Absent when the list
+    /// holds no such value; the value is then stated as it was written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iri: Option<String>,
+    /// What the concept is called, where the source wrote its code: `2` is
+    /// what the record holds and `Television` is what a person reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl SourceField {
+    /// A field that is not content is shown, not read: past this length it
+    /// is a payload (an analysis dump, an encoded blob) and not a fact.
+    pub const VALUE_MAX_CHARS: usize = 1_000;
+
+    /// A field of `role` holding `value`, cut to the display length.
+    pub fn new(path: impl Into<String>, role: FieldRole, value: &str) -> Self {
+        let truncated = value.chars().count() > Self::VALUE_MAX_CHARS;
+        let value = if truncated {
+            value.chars().take(Self::VALUE_MAX_CHARS).collect()
+        } else {
+            value.to_string()
+        };
+        SourceField {
+            path: path.into(),
+            role,
+            value: Some(value),
+            truncated,
+            property: None,
+            iri: None,
+            label: None,
+        }
+    }
+
+    /// A content field: its value is the text of the elements read from it.
+    pub fn content(path: impl Into<String>) -> Self {
+        SourceField {
+            path: path.into(),
+            role: FieldRole::Content,
+            value: None,
+            truncated: false,
+            property: None,
+            iri: None,
+            label: None,
+        }
     }
 }
 
@@ -294,6 +432,9 @@ pub struct Notes {
     pub running_text: Vec<String>,
     pub info: DocumentInfo,
     pub attachments: Vec<Attachment>,
+    /// The fields of the record the document was read from, for sources that
+    /// are records.
+    pub fields: Vec<SourceField>,
 }
 
 impl Notes {
@@ -302,6 +443,7 @@ impl Notes {
             && self.running_text.is_empty()
             && self.info.is_empty()
             && self.attachments.is_empty()
+            && self.fields.is_empty()
     }
 
     /// One line a human or a model can act on, or `None` when nothing is

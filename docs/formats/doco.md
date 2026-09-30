@@ -64,6 +64,7 @@ than strings — which is what makes the graph traversable after insertion.
 | `nif:beginIndex` / `nif:endIndex` | char offsets into [`-f text`](text.md) |
 | `doc:pageIndex` | 0-based physical page — [not the printed number](../reference/vocabulary.md#why-pageindex-and-not-pagenumber) |
 | `doc:bbox` | `"x0,y0,x1,y1"`, PDF units, top-left origin |
+| `doc:sourcePath` | the field or track of a [record](#records-say-which-field) the element was read from |
 | `doc:evidence` | [which signal classified it](../concepts/provenance.md) |
 | `doc:xhtmlTag` | the equivalent HTML tag |
 | `po:contains` | children, for `doco:Document`, `BodyMatter`, `Section`, `Table` |
@@ -253,6 +254,92 @@ addressed mailbox of the same name when the document has one.
 
 A quoted message's `doc:sentAt` has no offset, because the line that quotes
 it states none. The file's own always has one.
+
+## Records say which field
+
+```json
+{
+  "@id": "urn:fluree-doc-parse:article/element/5",
+  "@type": "doco:Paragraph",
+  "doc:evidence": "declared",
+  "doc:pageIndex": 0,
+  "doc:sourcePath": "/record/body",
+  "doc:xhtmlTag": "p",
+  "nif:beginIndex": 81,
+  "nif:endIndex": 124,
+  "nif:isString": "The city announced the closure on Thursday.",
+  "rdfs:label": "The city announced the closure on Thursday."
+}
+```
+
+An element read from a [record](../inputs/records.md) or a
+[media asset](../inputs/media-assets.md) carries the field or the track it
+was read from, in place of the `doc:bbox` a page would give it. In XML the
+path is written as XPath writes it, `/record/tags/tag[2]`; in JSON it is a
+JSON Pointer, `/tags/1`; in an asset it names a field or a track,
+`Meta:MAINTITLE`, `Stratum:CLOSED_CAPTION`.
+
+A path and not an offset into the file, because the file's characters are
+escaped and encoded, and a count against them is a count against something
+nobody reads. The path names the field, and `nif:isString` is the field's
+value, or one paragraph of it, as a person sees it.
+
+What the record states about the document is on the document node:
+
+```json
+{
+  "@id": "urn:fluree-doc-parse:article/element/0",
+  "@type": [ "doco:Document", "https://example.org/model#NewsArticle" ],
+  "dcterms:created": { "@type": "xsd:dateTime", "@value": "2026-09-14T06:30:00" },
+  "dcterms:title": "Harbour bridge to close for repairs",
+  "doc:sourceFields": { "@type": "@json", "@value": [
+    { "path": "/record/id", "property": "https://example.org/model#recordId",
+      "role": "metadata", "value": "48213" },
+    { "path": "/record/body", "role": "content" },
+    …
+    { "path": "/record/desk", "role": "unmapped", "value": "Metro" } ] },
+  "https://example.org/model#keyword": [
+    { "@id": "https://example.org/id/keyword/bridges" },
+    { "@id": "https://example.org/id/keyword/roads" },
+    "ferries"
+  ],
+  "https://example.org/model#published": {
+    "@type": "http://www.w3.org/2001/XMLSchema#dateTime",
+    "@value": "2026-09-14T06:30:00"
+  },
+  "https://example.org/model#recordId": "48213",
+  "https://example.org/model#section": { "@id": "https://example.org/id/section/transport" }
+}
+```
+
+| on the document node | from the source format |
+|---|---|
+| a second `@type` | `documentClass`. It stands beside `doco:Document`, not in its place. |
+| `dcterms:title`, `dcterms:created`, `dcterms:modified` | the fields named by `title`, `created` and `modified` |
+| a statement under an absolute IRI | each `metadata` and `enums` entry, under its own `property` |
+| `doc:sourceFields` | the record's fields, each with the part it plays |
+
+A declared property is stated under its own IRI, in full, because it
+belongs to the model the format was written for and not to this
+vocabulary. Its value is one of three things:
+
+| value | when |
+|---|---|
+| `{ "@value": …, "@type": … }` | a fact with a declared datatype, which the value fits |
+| a plain string | a fact with no datatype, or a value that does not fit: a date that is not one, a value the list does not hold |
+| `{ "@id": … }` | a value from a controlled list, as the concept it names |
+
+A property stated more than once has an array of its values, in the order
+the record gives them. In the example, `ferries` is not in the declared
+list, so it stays the word the record wrote, beside two concepts. A
+declared property cannot overwrite what the emitter states itself: `@id`,
+`@type` and the Dublin Core terms are not a record's to replace.
+
+`doc:sourceFields` is kept beside the statements because no set of
+statements keeps what it holds: the record's own order, and the fields the
+format declares nothing about. It is a JSON literal, like `doc:pages`. See
+[what every output carries](../inputs/records.md#what-every-output-carries)
+for its keys.
 
 ## Links are nodes
 

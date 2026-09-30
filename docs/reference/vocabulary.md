@@ -24,6 +24,11 @@ dates. `xsd` types those dates, so a store compares them as times.
 
 `doc` is the single Fluree namespace, covering what those four do not.
 
+A [record](../inputs/records.md) read by a source format adds terms of its
+own: the class and the properties the format declares. They belong to the
+model the format was written for, and are written as absolute IRIs, under
+no prefix of this context.
+
 ## Types
 
 | type | what it is |
@@ -52,6 +57,19 @@ nothing becomes `doco:FrontMatter` either.
 
 A consumer should therefore not branch on either type expecting to see it.
 
+**A declared class.** A document read from a
+[record](../inputs/records.md) whose source format declares a
+`documentClass` has two types: `doco:Document` and the declared class, as an
+absolute IRI.
+
+```json
+"@type": [ "doco:Document", "https://example.org/model#NewsArticle" ]
+```
+
+The class stands beside `doco:Document` and not in its place: the structure
+is a document's, whatever the record describes. With no declared class,
+`@type` stays the plain string `"doco:Document"`.
+
 ## Properties
 
 **Text and identity**
@@ -70,22 +88,37 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:pageIndex` | all | 0-based physical page, slide, or sheet — see below |
 | `doc:bbox` | PDF elements | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | all | [which signal classified it](../concepts/provenance.md) |
+| `doc:sourcePath` | elements read from a [record](../inputs/records.md) or a [media asset](../inputs/media-assets.md) | the field or track the element was read from: `/record/body`, `/text/0`, `Stratum:CLOSED_CAPTION` |
 | `doc:sourceDocument` | all, with `--doc-iri` | the document IRI to retract by |
 | `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
 | `doc:attachments` | `doco:Document` | JSON literal: `[{filename?, contentType, size, inline?}]`, the files the document carries |
-| `dcterms:title` | `doco:Document` | the title the document declares: an email's subject |
+| `doc:sourceFields` | `doco:Document` | JSON literal: `[{path, role, value?, truncated?, property?, iri?}]`, the fields of the [record](../inputs/records.md#what-every-output-carries) the document was read from, in the record's order |
+| `dcterms:title` | `doco:Document` | the title the document declares: an email's subject, the field a source format names as `title` |
 | `dcterms:creator` | `doco:Document` | who made it, as the document names them: an email's sender |
-| `dcterms:created` / `dcterms:modified` | `doco:Document` | `xsd:dateTime`: when it was made, or an email sent |
+| `dcterms:created` / `dcterms:modified` | `doco:Document` | `xsd:dateTime`: when it was made, or an email sent. From a record, the fields a source format names as `created` and `modified`, and an `xsd:date` where the record states a day and no time |
 
 **Transcript turns**
 
 | property | on | value |
 |---|---|---|
 | `doc:speaker` | [transcript](../inputs/transcripts.md) turns that name one | the speaker as the file names them, unresolved |
-| `doc:startMs` | transcript turns | integer, milliseconds from the start of the recording to the turn's start |
-| `doc:endMs` | transcript turns | integer, milliseconds from the start of the recording to the turn's end |
+| `doc:startMs` | transcript turns; the turns and section titles of a [media asset](../inputs/media-assets.md) | integer, milliseconds from the start of the recording to the turn's or the section's start |
+| `doc:endMs` | the same | integer, milliseconds from the start of the recording to the turn's or the section's end |
+
+**Declared properties**
+
+| property | on | value |
+|---|---|---|
+| the `property` of a `metadata` entry, an absolute IRI | `doco:Document` | a plain string, or `{"@value": …, "@type": <datatype>}` where the entry declares a datatype and the value fits it |
+| the `property` of an `enums` entry, an absolute IRI | `doco:Document` | `{"@id": <concept>}` for a value the declared list holds, a plain string for one it does not |
+
+These are the statements a [source format](../inputs/records.md#the-declaration)
+declares. A property stated more than once has an array of its values, in
+the order the record gives them. A declared property never replaces what
+the emitter states itself, such as `@id`, `@type` and the Dublin Core
+terms.
 
 **Structure**
 

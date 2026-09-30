@@ -166,6 +166,62 @@ struct Cue {
     start: u64,
     end: u64,
     payload: String,
+    /// The source marks this cue as another voice taking over.
+    opens: bool,
+}
+
+/// A caption read out of something that is not a caption file: a media
+/// asset's caption track, a player's export. The same thing a cue is, a few
+/// seconds of speech under a timing, arriving without the file around it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caption {
+    /// Milliseconds from the start of the recording.
+    pub start_ms: u64,
+    pub end_ms: u64,
+    /// The words, with whatever markup the source left in them.
+    pub text: String,
+}
+
+/// Group captions into speaker turns, the way a caption file's cues are:
+/// `(turn, text)` in the order spoken.
+///
+/// Broadcast captions name no speaker. What they mark is the change of one:
+/// a line opening with a dash is another voice, the convention of subtitling
+/// since before there were files to put it in. The dash is that mark and not
+/// a word, so it opens a turn and is left out of the text.
+///
+/// Captions are taken in the order given. A caller that holds them by track
+/// position sorts them by start first.
+pub fn caption_turns(captions: &[Caption]) -> Vec<(Turn, String)> {
+    let cues: Vec<Cue> = captions
+        .iter()
+        .map(|c| {
+            let (opens, text) = match change_of_voice(&c.text) {
+                Some(rest) => (true, rest),
+                None => (false, c.text.as_str()),
+            };
+            Cue {
+                start: c.start_ms,
+                end: c.end_ms,
+                payload: text.to_string(),
+                opens,
+            }
+        })
+        .collect();
+    turns(pieces(&cues))
+}
+
+/// The words after a leading dash that marks a change of voice, if `text`
+/// opens with one.
+///
+/// A dash followed by a digit is a negative number and one followed by
+/// another dash is a rule, so neither is a mark.
+fn change_of_voice(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    let rest = text.strip_prefix(['-', '\u{2013}', '\u{2014}'])?;
+    let next = rest.trim_start().chars().next()?;
+    (!next.is_ascii_digit() && !matches!(next, '-' | '\u{2013}' | '\u{2014}'))
+        .then(|| rest.trim_start())
 }
 
 /// What one voice said within a cue. A cue is usually one piece; a cue that
@@ -176,6 +232,8 @@ struct Piece {
     speaker: Option<String>,
     /// The speaker came from a voice tag rather than a label in the text.
     voiced: bool,
+    /// Another voice takes over here, whoever it is.
+    opens: bool,
     lines: Vec<String>,
 }
 
@@ -209,6 +267,7 @@ fn read_block(block: &[&str], cues: &mut Vec<Cue>) {
             start,
             end,
             payload: block[at + 1..stop].join("\n"),
+            opens: false,
         });
     }
 }
@@ -238,7 +297,7 @@ fn pieces(cues: &[Cue]) -> Vec<Piece> {
     // repeat check below.
     let mut previous: Option<String> = None;
     for cue in cues {
-        for said in voices(&cue.payload) {
+        for (nth, said) in voices(&cue.payload).into_iter().enumerate() {
             let mut lines = said.lines;
             let last = lines.last().cloned();
             // Rolling captions (auto-generated video subtitles) scroll: each
@@ -257,6 +316,7 @@ fn pieces(cues: &[Cue]) -> Vec<Piece> {
                 end: cue.end,
                 voiced: said.voice.is_some(),
                 speaker: said.voice,
+                opens: cue.opens && nth == 0,
                 lines,
             });
         }
@@ -317,11 +377,13 @@ fn turns(pieces: Vec<Piece>) -> Vec<(Turn, String)> {
         let gap = p.start.saturating_sub(c.end);
         let speaker = match p.speaker {
             Some(s) => Some(s),
-            None if inherit && gap <= PAUSE_MS => c.speaker.clone(),
+            // Another voice is not whoever was speaking, whoever it is.
+            None if inherit && gap <= PAUSE_MS && !p.opens => c.speaker.clone(),
             None => None,
         };
         let ran = c.end.saturating_sub(c.start);
-        let continues = speaker == c.speaker
+        let continues = !p.opens
+            && speaker == c.speaker
             && gap <= PAUSE_MS
             && ran < MAX_TURN_MS
             && !(ran >= LONG_TURN_MS && ends_sentence(&c.words));
@@ -404,6 +466,7 @@ fn element(text: String, turn: Option<Turn>, format: Format) -> Element {
         links: None,
         turn,
         message: None,
+        source_path: None,
         provenance: format.tag(),
         evidence: format.tag(),
     }
@@ -1164,5 +1227,90 @@ mod tests {
             said(&parse_vtt(src).unwrap()),
             vec![(None, "x < y and 3 <4")]
         );
+    }
+
+    fn cap(start_ms: u64, end_ms: u64, text: &str) -> Caption {
+        Caption {
+            start_ms,
+            end_ms,
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn captions_from_a_container_join_into_turns() {
+        let turns = caption_turns(&[
+            cap(4_805, 9_805, "Bonsoir, dans la prochaine"),
+            cap(10_744, 11_744, "demi-heure du bulletin :"),
+            // More than the pause later: another turn.
+            cap(20_000, 21_000, "Voici les titres."),
+        ]);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(
+            turns[0].1,
+            "Bonsoir, dans la prochaine demi-heure du bulletin :"
+        );
+        assert_eq!((turns[0].0.start_ms, turns[0].0.end_ms), (4_805, 11_744));
+        assert_eq!(turns[0].0.speaker, None);
+        assert_eq!((turns[1].0.start_ms, turns[1].0.end_ms), (20_000, 21_000));
+    }
+
+    #[test]
+    fn a_leading_dash_is_another_voice_and_not_a_word() {
+        let turns = caption_turns(&[
+            cap(0, 1_000, "Vous confirmez ?"),
+            cap(1_000, 2_000, "- Oui, je confirme."),
+            cap(2_000, 3_000, "C'est sign\u{e9}."),
+            cap(3_000, 4_000, "\u{2013}Merci."),
+        ]);
+        let texts: Vec<&str> = turns.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "Vous confirmez ?",
+                "Oui, je confirme. C'est sign\u{e9}.",
+                "Merci."
+            ]
+        );
+        assert_eq!(turns[1].0.start_ms, 1_000);
+    }
+
+    #[test]
+    fn another_voice_is_not_the_speaker_it_follows() {
+        let turns = caption_turns(&[
+            cap(0, 1_000, "Ada Park: We take the detour."),
+            cap(1_000, 2_000, "Ada Park: It is shorter."),
+            cap(2_000, 3_000, "- How long is it?"),
+        ]);
+        let said: Vec<(Option<&str>, &str)> = turns
+            .iter()
+            .map(|(t, text)| (t.speaker.as_deref(), text.as_str()))
+            .collect();
+        assert_eq!(
+            said,
+            [
+                (
+                    Some("Ada Park"),
+                    "Ada Park: We take the detour. It is shorter."
+                ),
+                (None, "How long is it?"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dash_before_a_number_or_a_rule_marks_nothing() {
+        assert_eq!(change_of_voice("-5 degr\u{e9}s ce matin"), None);
+        assert_eq!(change_of_voice("--- pause ---"), None);
+        assert_eq!(change_of_voice("-"), None);
+        assert_eq!(change_of_voice("  - Oui."), Some("Oui."));
+    }
+
+    #[test]
+    fn a_caption_file_s_own_dashes_are_left_as_written() {
+        // The mark is read for captions handed over by a container. A file's
+        // cues keep their text: what a dash means there is the file's.
+        let out = parse_srt("1\n00:00:01,000 --> 00:00:02,000\n- Oui.\n").unwrap();
+        assert_eq!(out[0].text, "- Oui.");
     }
 }

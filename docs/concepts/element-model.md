@@ -1,6 +1,7 @@
 # The element model
 
-Every reader — PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email — produces a flat
+Every reader — PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email,
+media assets, declared records — produces a flat
 `Vec<Element>` in reading order. Every output format is a projection of that
 list. Nothing else is shared between a reader and an emitter, which is what
 lets a Markdown consumer avoid compiling a PDF engine.
@@ -24,10 +25,62 @@ pub struct Element {
     pub links: Option<Vec<Link>>,         // hyperlinks over this element's text
     pub turn: Option<Turn>,               // transcripts: speaker, start_ms, end_ms
     pub message: Option<Box<Message>>,    // email: the header of the message this opens
+    pub source_path: Option<String>,      // records: the field or track it was read from
     pub provenance: &'static str,         // "rust" | "vlm"
     pub evidence: &'static str,           // which signal classified it
 }
 ```
+
+`source_path` is serialized as `sourcePath`. It is present for sources that
+name their parts: the field of a [record](../inputs/records.md)
+(`/record/body`, `/items/0/text`) or the track of a
+[media asset](../inputs/media-assets.md) (`Stratum:CLOSED_CAPTION`). It is
+absent for sources that are one run of content, where the position on the
+page or in the recording is the address.
+
+## What a record states about the document
+
+A record holds more than text to read: an identifier, a publication date, a
+section from a list the organisation keeps. Those are facts about the
+document and not parts of it, so they are not elements. A reader hands them
+to the emitters beside the list, in `Notes`:
+
+```rust
+pub struct DocumentInfo {
+    pub title: Option<String>,
+    pub creators: Vec<String>,
+    pub created: Option<String>,
+    pub modified: Option<String>,
+    pub class: Option<String>,        // the declared class, an absolute IRI
+    pub properties: Vec<Property>,    // declared statements, in the source's order
+}
+
+pub struct Property {
+    pub property: String,             // an absolute IRI
+    pub value: PropertyValue,
+}
+
+pub enum PropertyValue {
+    Literal { value: String, datatype: Option<String> },  // something said
+    Iri { iri: String },                                  // something pointed at
+}
+
+pub struct SourceField {              // one field of the record, in Notes.fields
+    pub path: String,
+    pub role: FieldRole,              // Content | Metadata | Enum | Unmapped
+    pub value: Option<String>,        // absent for content
+    pub truncated: bool,              // the value was cut at 1000 characters
+    pub property: Option<String>,
+    pub iri: Option<String>,
+}
+```
+
+The class and the properties are declared by a
+[source format](../inputs/records.md) and never inferred: a record's
+`published` becomes the model's publication date because the format says
+so. The
+[DoCO emitter](../formats/doco.md#records-say-which-field) states them on
+the document node. The other outputs do not carry them.
 
 ## The DoCO classes
 

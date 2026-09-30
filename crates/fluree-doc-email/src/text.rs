@@ -133,6 +133,7 @@ pub fn element(kind: &str, text: String, provenance: &'static str) -> Element {
         links: None,
         turn: None,
         message: None,
+        source_path: None,
         provenance,
         evidence: provenance,
     }

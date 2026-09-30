@@ -34,7 +34,12 @@ fdoc convert deck.pptx   -f doco
 fdoc convert book.xlsx   -f doco
 fdoc convert call.vtt    -f doco
 fdoc convert reply.eml   -f doco
+fdoc convert episode.axf -f doco
+fdoc convert article.xml -f doco --source-format news-article.json
 ```
+
+An XML or JSON record is read by a declaration of what its fields are,
+which `--source-format` names. See [Records](../inputs/records.md).
 
 The graph has the same shape from every source. One difference matters:
 non-PDF elements have **no `bbox` field at all**, because those formats

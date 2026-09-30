@@ -16,6 +16,8 @@ configure it — not in the sense that you cannot audit it.
 | `rust` | the deterministic PDF engine |
 | `vlm` | spliced in from a model tier |
 | `markdown` / `html` / `docx` / `pptx` / `xlsx` / `vtt` / `srt` / `eml` / `msg` | the corresponding reader |
+| `xml` / `json` | a [record](../inputs/records.md) in that notation, read by a source format |
+| `axf` | a [media asset](../inputs/media-assets.md) |
 
 So `provenance` answers "which reader", and for PDF specifically it
 distinguishes deterministic output from escalated output.
@@ -72,6 +74,17 @@ reader decides is where one turn ends and the next begins — see
 reader decides where a quoted message begins, from the line that introduces
 it. An email body sent only as HTML keeps the HTML reader's evidence,
 `html`, under the email reader's provenance.
+
+And from records and media assets: `declared`. The class of every element
+is what a [source format](../inputs/records.md) declares its field to be: a
+title because the format names the field as the title, a paragraph because
+it names it as text. Nothing about it was inferred from the record. The
+notation is in `provenance`, `xml`, `json` or `axf`, and the evidence is
+the same for all three, because the same declaration decided. An asset read
+with no declaration carries `declared` too: the reader then declares what
+every asset has. As with a transcript, where a turn of a media asset ends
+is the reader's decision; see
+[Media assets](../inputs/media-assets.md#sections-and-turns).
 
 ## Reading it
 

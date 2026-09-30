@@ -37,6 +37,11 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         for input in &args.inputs {
             if input.is_dir() {
                 v.extend(common::pdfs_in(input));
+                // Records are documents to whoever declared their format.
+                if !args.source_format.is_empty() {
+                    v.extend(common::records_in(input));
+                    v.sort();
+                }
             } else {
                 v.push(input.clone());
             }
@@ -52,6 +57,8 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         }
         let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
             convert_transcript(&data, "stdin", args, quiet)
+        } else if let Some(converted) = convert_record(&data, "stdin", Named::Stdin, args, quiet) {
+            converted
         } else if fluree_doc_email::Format::sniff(&data).is_some() {
             convert_email(&data, "stdin", args, quiet)
         } else {
@@ -174,6 +181,16 @@ fn convert_path(
     if fluree_doc_transcript::Format::sniff(&data).is_some() || ext_is(pdf, &["vtt", "srt"]) {
         return convert_transcript(&data, stem, args, quiet);
     }
+    // A record by its content, and only a record a format was declared
+    // for: an XML file is a record to whoever knows what its fields are.
+    let named = if ext_is(pdf, &["xml", "json"]) {
+        Named::Record
+    } else {
+        Named::Other
+    };
+    if let Some(converted) = convert_record(&data, stem, named, args, quiet) {
+        return converted;
+    }
     // An email by its content too: a saved message is `.eml`, `.mht`, `.txt`
     // or nothing at all, depending on who saved it.
     if fluree_doc_email::Format::sniff(&data).is_some() || ext_is(pdf, &["eml", "msg"]) {
@@ -238,6 +255,139 @@ fn convert_path(
         return convert_image(data, stem, cfg, args, quiet);
     }
     convert_bytes(data, common::stem_of(pdf), cfg, args, pages, quiet)
+}
+
+/// What an input's name says it is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Named {
+    /// `.xml` or `.json`.
+    Record,
+    /// Any other name: another reader's, unless a format claims it.
+    Other,
+    /// No name at all.
+    Stdin,
+}
+
+/// The declarations in the files `--source-format` names.
+fn source_formats(args: &ConvertArgs) -> Result<Vec<fluree_doc_record::SourceFormat>, String> {
+    let mut out = Vec::new();
+    for path in &args.source_format {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("--source-format {}: {e}", path.display()))?;
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("--source-format {}: {e}", path.display()))?;
+        let declared = match value {
+            serde_json::Value::Array(items) => items,
+            one => vec![one],
+        };
+        for d in declared {
+            out.push(
+                fluree_doc_record::SourceFormat::from_json(&d.to_string())
+                    .map_err(|e| format!("--source-format {}: {e}", path.display()))?,
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// A record or a media asset, read as its source format declares.
+///
+/// `None` when the file is not this reader's: it is no asset, and either
+/// no format was declared, or it is no record at all, or it is a file of
+/// another reader's that no format claims. HTML opens with `<` too, and a
+/// batch holds both.
+///
+/// A file named as a record (`.xml`, `.json`, or stdin, which has no name)
+/// that no declared format recognises is an error and not a fallback: the
+/// formats were passed to say what such inputs are. An asset nothing
+/// recognises is read as its title and its captions.
+fn convert_record(
+    data: &[u8],
+    stem: &str,
+    named: Named,
+    args: &ConvertArgs,
+    quiet: bool,
+) -> Option<Result<String, String>> {
+    // Stdin has no name to say otherwise, so what it holds is a record
+    // when the formats were passed and it opens like one.
+    let named_a_record = named != Named::Other;
+    use fluree_doc_record::Recognition;
+    let asset = fluree_doc_axf::sniff(data);
+    if !asset && args.source_format.is_empty() {
+        return None;
+    }
+    if !asset && fluree_doc_record::sniff(data).is_none() {
+        // Named as a record and opening like none: a list of records, most
+        // often. Said here, since the readers after this one would say
+        // that it is not a PDF.
+        return (named == Named::Record).then(|| {
+            Err(
+                "not a record: a record is one XML element or one JSON object, \
+                 and this file opens with neither"
+                    .to_string(),
+            )
+        });
+    }
+    let formats = match source_formats(args) {
+        Ok(formats) => formats,
+        Err(e) => return Some(Err(e)),
+    };
+    let record = if asset {
+        fluree_doc_axf::read(data).map_err(|e| e.to_string())
+    } else {
+        fluree_doc_record::read(data).map_err(|e| e.to_string())
+    };
+    let record = match record {
+        Ok(record) => record,
+        // Markup that is not a record, in a file not named as one.
+        Err(_) if !asset && !named_a_record => return None,
+        Err(e) => return Some(Err(e)),
+    };
+    if !asset
+        && !named_a_record
+        && fluree_doc_record::recognise(&record, &formats) == Recognition::Unknown
+    {
+        return None;
+    }
+    Some((|| {
+        let undeclared;
+        let format = match fluree_doc_record::recognise(&record, &formats) {
+            Recognition::Known(f) => f,
+            Recognition::Ambiguous(claimed) => {
+                let names: Vec<&str> = claimed.iter().map(|f| f.name()).collect();
+                return Err(format!(
+                    "more than one source format recognises this record: {}",
+                    names.join(", ")
+                ));
+            }
+            Recognition::Unknown if asset => {
+                undeclared = fluree_doc_axf::default_format(&record);
+                &undeclared
+            }
+            Recognition::Unknown => {
+                return Err("no declared source format recognises this record".into());
+            }
+        };
+        let converted = fluree_doc_record::convert(&record, format);
+        if !quiet {
+            for w in &converted.warnings {
+                eprintln!("note: {stem}: {w}");
+            }
+            if converted.elements.is_empty() {
+                eprintln!(
+                    "note: {stem}: read as {}, which finds no content in it",
+                    format.name()
+                );
+            }
+        }
+        Ok(render(
+            &converted.elements,
+            stem,
+            args,
+            Vec::new(),
+            &converted.notes,
+        ))
+    })())
 }
 
 /// A meeting transcript or a caption file: one paragraph per speaker turn.
@@ -401,6 +551,7 @@ fn convert_image(
                 links: None,
                 turn: None,
                 message: None,
+                source_path: None,
                 provenance: "rust",
                 evidence: "layout",
             });
@@ -461,6 +612,7 @@ fn render(
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
+                fields: notes.fields.clone(),
             };
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }

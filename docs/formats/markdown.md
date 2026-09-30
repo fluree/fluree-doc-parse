@@ -16,6 +16,8 @@ read without tooling, and the one an LLM consumes best.
 | `doco:Paragraph` | a paragraph, blank-line separated |
 | a [transcript](../inputs/transcripts.md) turn | `**Ada Park** (04:32): words`, the speaker in bold and the turn's start time |
 | an [email](../inputs/email.md) message's header | one header line to a line, with `---` above each quoted message |
+| a [media asset](../inputs/media-assets.md)'s turn | `(00:05) words`, the turn's start time, and the speaker in bold where the captions name one |
+| a media asset's section title | a heading like any other. The section's start and end are not shown. |
 | `doco:List` / `ListItem` | `- ` items |
 | `doco:Table` | a pipe table with a header separator row |
 | `doco:Figure` | a paragraph (an [anchor](../integration/anchors.md) token, where enabled) |
@@ -84,6 +86,11 @@ Everything geometric. No pages, no bounding boxes, no
 [evidence](../concepts/provenance.md), no char offsets. Markdown has nowhere
 to put them, and encoding them in comments would produce a file that is
 neither good Markdown nor a good data format.
+
+The same goes for what a [record](../inputs/records.md) says beside its
+text: the field each element was read from, and the class, properties,
+title and dates its source format declares. A record's Markdown is its
+content fields and nothing else.
 
 If you need any of that, use [`json`](json.md) or [`doco`](doco.md) — and note
 that [`text`](text.md), not this, is the string

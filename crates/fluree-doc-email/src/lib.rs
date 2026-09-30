@@ -190,6 +190,8 @@ fn assemble(read: Read) -> Email {
             creators: own.from.iter().map(|m| m.display()).collect(),
             created: own.date.clone(),
             modified: None,
+            class: None,
+            properties: Vec::new(),
         },
         attachments: read.attachments,
     }

@@ -1,0 +1,11 @@
+[package]
+name = "fluree-doc-axf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Avid Asset eXchange Format (AXF) to Fluree document elements (DoCO-typed)"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-record.workspace = true
+quick-xml = "0.36"
