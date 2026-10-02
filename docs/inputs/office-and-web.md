@@ -118,6 +118,22 @@ browser lays it out: each run of it between blocks is a paragraph, and two
 all email, set their text. A `<blockquote>` that holds paragraphs of its own
 is their container rather than one paragraph run together.
 
+A table used for **layout** is read as the containers its cells are, not as
+data. Email, and many older pages, are laid out in tables: a column of
+boxes, a logo beside a banner, tables nested to centre a column. Read as
+data, a whole message would become one cell. A table is laid out when:
+
+- it is marked `role="presentation"` or `role="none"`,
+- it holds another table,
+- it has one row, or
+- it has one column and no header (`<th>`, `<thead>`, `<tfoot>`, `<caption>`).
+
+Every other table is data. The test follows the one browsers use to decide
+whether to announce a table to a screen reader. A cell marked `<th>` does
+not make a table data when it holds a table or sits in a single row,
+because email frameworks set their columns in `<th>`. A data table inside a
+layout table is still read as a table.
+
 Infallible: HTML is defined so that every byte sequence parses.
 
 ## Markdown

@@ -90,6 +90,14 @@ each client writes differently, and both carry the same words. A message
 sent only as HTML is read by the [HTML reader](office-and-web.md#html),
 and split into messages the same way.
 
+Some senders, mostly billing and notification systems, build the plain
+text by stripping the tags from the HTML and stopping there. The style
+sheet's rules and the character references (`03&#47;14&#47;2026`) are left
+in it as text, or whole runs of markup are. Such a plain text is set aside
+and the HTML is read instead. Markup only counts when the HTML does not show
+it as text, so a message that writes `&amp;` or `<td>` on purpose, as one
+about markup might, keeps its plain text.
+
 In plain text, a blank line ends a paragraph, and the line breaks inside a
 paragraph are kept, so a signature's name, title and company stay on
 separate lines. Lines starting with `-`, `*`, `•` or `1.` are list items.
@@ -158,7 +166,8 @@ organisation are given their SMTP address, not their internal directory
 name.
 
 The body is read from the plain text Outlook stores beside the formatted
-one. A `.msg` whose body exists only as compressed RTF, which is rare, is
+one, or from the HTML when markup was left in the plain text, as with
+`.eml`. A `.msg` whose body exists only as compressed RTF, which is rare, is
 read as having no body; its header and attachments are still read.
 
 ## Detection

@@ -353,8 +353,12 @@ fn walk(h: &Handle, out: &mut Vec<Element>) {
             return;
         }
         if t == "table" {
-            emit_table(h, out);
-            return; // innermost wins: cells own their text
+            if is_layout(h) {
+                walk_container(h, out);
+            } else {
+                emit_table(h, out); // innermost wins: cells own their text
+            }
+            return;
         }
         if let Some(level) = heading_level(t) {
             let (text, links) = text_of(h);
@@ -406,6 +410,60 @@ fn rows_under(h: &Handle, out: &mut Vec<Handle>) {
             _ => rows_under(c, out),
         }
     }
+}
+
+/// Is this table laid out rather than tabulated?
+///
+/// Email is set almost entirely in tables, and older pages often are: a
+/// column of boxes, a logo beside a banner, tables inside tables to centre
+/// a column. Read as data, a whole message becomes one cell. The test
+/// follows the one a browser makes before it tells a screen reader there is
+/// a table (Gecko's): the author's word, a header, the shape. Except that a
+/// table holding a table, or of one row, is laid out whatever its cells are
+/// called, because email frameworks set their columns in `<th>`. A layout
+/// table's cells are read as the containers they are.
+fn is_layout(table: &Handle) -> bool {
+    let role = attr_of(table, "role").map(|r| r.trim().to_ascii_lowercase());
+    if matches!(role.as_deref(), Some("presentation" | "none")) {
+        return true;
+    }
+    if holds_table(table) {
+        return true;
+    }
+    let mut trs = Vec::new();
+    rows_under(table, &mut trs);
+    let widths: Vec<usize> = trs
+        .iter()
+        .map(|tr| {
+            children_of(tr)
+                .iter()
+                .filter(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
+                .map(|c| num_attr(c, "colspan"))
+                .sum::<usize>()
+        })
+        .filter(|w| *w > 0)
+        .collect();
+    if widths.len() <= 1 {
+        return true;
+    }
+    let headed = children_of(table)
+        .iter()
+        .any(|c| matches!(tag_of(c).as_deref(), Some("caption" | "thead" | "tfoot")))
+        || trs.iter().any(|tr| {
+            children_of(tr)
+                .iter()
+                .any(|c| tag_of(c).as_deref() == Some("th"))
+        });
+    // One column is a stack of boxes, unless a header says it is a list of
+    // values.
+    !headed && widths.iter().all(|w| *w <= 1)
+}
+
+fn holds_table(h: &Handle) -> bool {
+    h.children
+        .borrow()
+        .iter()
+        .any(|c| tag_of(c).as_deref() == Some("table") || holds_table(c))
 }
 
 fn num_attr(h: &Handle, name: &str) -> usize {
@@ -598,9 +656,75 @@ mod tests {
     fn table_cells_own_their_text() {
         // A <p> inside a cell must not also emit as a paragraph, or the text
         // appears twice.
-        let els = parse("<table><tr><td><p>cell</p></td></tr></table>");
+        let els = parse(
+            "<table><tr><td><p>cell</p></td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>",
+        );
         assert_eq!(kinds(&els), ["doco:Table"]);
         assert_eq!(els[0].cells.as_ref().unwrap()[0][0], "cell");
+    }
+
+    #[test]
+    fn a_layout_table_reads_as_its_cells_content() {
+        // How an email sets a message: a centred column inside a frame,
+        // with the one data table it carries inside that.
+        let els = parse(
+            "<table width=\"100%\"><tr><td align=\"center\">\
+               <table><tr><td><h2>Your bill</h2></td></tr>\
+                 <tr><td>Your balance is ready.<br><br>Details below.</td></tr>\
+                 <tr><td><table>\
+                   <tr><td>Invoice Date</td><td>Amount Due</td></tr>\
+                   <tr><td>03/14/2026</td><td>$1,200.00</td></tr>\
+                 </table></td></tr>\
+               </table>\
+             </td></tr></table>",
+        );
+        assert_eq!(
+            kinds(&els),
+            [
+                "doco:SectionTitle",
+                "doco:Paragraph",
+                "doco:Paragraph",
+                "doco:Table"
+            ]
+        );
+        assert_eq!(
+            texts(&els)[..3],
+            ["Your bill", "Your balance is ready.", "Details below."]
+        );
+        assert_eq!(
+            els[3].cells.as_ref().unwrap()[1],
+            vec!["03/14/2026", "$1,200.00"]
+        );
+    }
+
+    #[test]
+    fn a_table_is_laid_out_by_its_authors_word_or_its_shape() {
+        let one_row = parse("<table><tr><td>Logo</td><td>Banner</td></tr></table>");
+        assert_eq!(texts(&one_row), ["Logo", "Banner"]);
+        let one_column = parse("<table><tr><td>Top</td></tr><tr><td>Bottom</td></tr></table>");
+        assert_eq!(texts(&one_column), ["Top", "Bottom"]);
+        let said = parse(
+            "<table role=\"presentation\"><tr><td>a</td><td>b</td></tr>\
+             <tr><td>c</td><td>d</td></tr></table>",
+        );
+        assert!(kinds(&said).iter().all(|k| *k == "doco:Paragraph"));
+        // A header over a column says it is a list of values.
+        let headed = parse("<table><tr><th>Total</th></tr><tr><td>12</td></tr></table>");
+        assert_eq!(kinds(&headed), ["doco:Table"]);
+    }
+
+    #[test]
+    fn columns_set_in_th_are_still_laid_out() {
+        // How Foundation for Emails sets a message: each column a `<th>`,
+        // each holding a table of its own.
+        let els = parse(
+            "<table class=\"row\"><tr>\
+               <th class=\"columns\"><table><tr><th><p>Hello Ada,</p></th></tr></table></th>\
+               <th class=\"columns\"><table><tr><th><p>Your statement is ready.</p></th></tr></table></th>\
+             </tr></table>",
+        );
+        assert_eq!(texts(&els), ["Hello Ada,", "Your statement is ready."]);
+        assert!(kinds(&els).iter().all(|k| *k == "doco:Paragraph"));
     }
 
     #[test]
@@ -657,15 +781,18 @@ mod tests {
 
     #[test]
     fn a_nested_table_keeps_its_own_rows() {
-        // rows_under must not steal the inner table's rows for the outer one.
+        // A table that holds a table is laid out; the inner one is the grid,
+        // and its rows are read once, by it.
         let els = parse(
-            "<table><tr><td>outer\
-               <table><tr><td>inner</td></tr></table>\
+            "<table><tr><th>Item</th></tr><tr><td>outer\
+               <table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table>\
              </td></tr></table>",
         );
-        let tables: Vec<&Element> = els.iter().filter(|e| e.kind == "doco:Table").collect();
-        assert_eq!(tables.len(), 1, "the outer table owns the cell");
-        assert_eq!(tables[0].cells.as_ref().unwrap().len(), 1);
+        assert_eq!(
+            kinds(&els),
+            ["doco:Paragraph", "doco:Paragraph", "doco:Table"]
+        );
+        assert_eq!(els[2].cells.as_ref().unwrap().len(), 2);
     }
 
     #[test]

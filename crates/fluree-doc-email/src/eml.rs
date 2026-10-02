@@ -2,7 +2,7 @@
 //! its parts is the body.
 
 use crate::mime::{self, Headers, Params};
-use crate::{address, date, text, AttachedFile, Body, EmailError, Read};
+use crate::{address, date, markup, text, AttachedFile, Body, EmailError, Read};
 use fluree_doc_model::{Attachment, Message};
 
 /// Deep enough for any real message; a bound so a hostile one cannot
@@ -171,16 +171,23 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
                     f
                 })
                 .collect();
-            let chosen = alts
-                .iter()
-                .position(|f| f.plain.is_some())
-                .or_else(|| alts.iter().rposition(|f| f.html.is_some()));
+            // The plain text, unless a sender's converter left markup in it.
+            let plain = alts.iter().position(|f| f.plain.is_some());
+            let html = alts.iter().rposition(|f| f.html.is_some());
+            let use_html = match (plain, html) {
+                (Some(p), Some(h)) => {
+                    let (p, h) = (&alts[p].plain, &alts[h].html);
+                    markup::unrendered(p.as_deref().unwrap_or(""), h.as_deref().unwrap_or(""))
+                }
+                (p, _) => p.is_none(),
+            };
+            let chosen = if use_html { html } else { plain };
             for (i, alt) in alts.iter_mut().enumerate() {
                 if Some(i) == chosen {
-                    if let Some(p) = alt.plain.take() {
-                        append(&mut found.plain, p);
-                    } else if let Some(h) = alt.html.take() {
-                        append(&mut found.html, h);
+                    if use_html {
+                        append(&mut found.html, alt.html.take().unwrap_or_default());
+                    } else {
+                        append(&mut found.plain, alt.plain.take().unwrap_or_default());
                     }
                 }
                 found.attachments.append(&mut alt.attachments);

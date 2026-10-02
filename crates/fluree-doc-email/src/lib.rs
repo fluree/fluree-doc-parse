@@ -15,7 +15,8 @@
 //! HTML. It states the quoting outright, with `>` or a header block, where
 //! the HTML states it in markup each client writes differently, and it
 //! carries the same words. A body sent only as HTML is read by the HTML
-//! reader.
+//! reader, and so is one whose plain text a sender's converter left markup
+//! in.
 //!
 //! Attachments are not read here. Each is a document of its own for its
 //! own reader, so they come back beside the elements as bytes, described.
@@ -24,6 +25,7 @@
 mod address;
 mod date;
 mod eml;
+mod markup;
 mod mime;
 mod msg;
 mod text;
@@ -424,6 +426,45 @@ Content-Type: text/html; charset=utf-8\r\n\
                     Some("2026-08-31T09:00:00".into())
                 ),
             ]
+        );
+        assert_eq!(
+            (email.elements[1].provenance, email.elements[1].evidence),
+            ("eml", "html")
+        );
+    }
+
+    #[test]
+    fn a_plain_part_left_with_markup_gives_way_to_the_html() {
+        // A billing system's converter stripped the tags and stopped: the
+        // style sheet and the character references are still in it.
+        let src = b"From: Billing <billing@example.com>\r\n\
+Subject: Your bill is ready\r\n\
+Content-Type: multipart/alternative; boundary=\"alt\"\r\n\
+\r\n\
+--alt\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+.banner\r\n\
+{\r\n\
+    color: &#35;EEEEEE;\r\n\
+}\r\n\
+Invoice Date\r\n\
+\r\n\
+03&#47;14&#47;2026\r\n\
+--alt\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<html><head><style>.banner { color: &#35;EEEEEE; }</style></head><body>\
+<table width=\"100%\"><tr><td><table>\
+<tr><td>Invoice Date</td><td>Amount Due</td></tr>\
+<tr><td>03&#47;14&#47;2026</td><td>$1,200.00</td></tr>\
+</table></td></tr></table></body></html>\r\n\
+--alt--\r\n";
+        let email = parse(src).unwrap();
+        assert_eq!(email.elements.len(), 2);
+        assert_eq!(
+            email.elements[1].cells.as_ref().unwrap()[1],
+            vec!["03/14/2026", "$1,200.00"]
         );
         assert_eq!(
             (email.elements[1].provenance, email.elements[1].evidence),

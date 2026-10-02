@@ -8,7 +8,7 @@
 //! is read from the properties instead.
 
 use crate::mime::{self, Headers};
-use crate::{address, date, eml, AttachedFile, Body, EmailError, Read};
+use crate::{address, date, eml, markup, AttachedFile, Body, EmailError, Read};
 use cfb::CompoundFile;
 use encoding_rs::Encoding;
 use fluree_doc_model::{Attachment, Mailbox, Message};
@@ -292,12 +292,15 @@ fn message(cf: &mut Cf, dir: &str, header_len: usize, depth: usize) -> Msg {
     let shown = raw_date.or_else(|| own.date.as_deref().and_then(date::to_rfc5322));
     let header = crate::header_text(&own, shown.as_deref());
 
-    let body = match props.string(cf, BODY) {
-        Some(b) => Body::Plain(b.replace("\r\n", "\n")),
-        None => match html(cf, &props) {
-            Some(h) => Body::Html(h),
-            None => Body::None,
-        },
+    // The plain text, unless a sender's converter left markup in it.
+    let body = match (
+        props.string(cf, BODY).map(|b| b.replace("\r\n", "\n")),
+        html(cf, &props),
+    ) {
+        (Some(p), Some(h)) if markup::unrendered(&p, &h) => Body::Html(h),
+        (Some(p), _) => Body::Plain(p),
+        (None, Some(h)) => Body::Html(h),
+        (None, None) => Body::None,
     };
     let attachments = attachments(cf, &props, depth);
     Msg {
