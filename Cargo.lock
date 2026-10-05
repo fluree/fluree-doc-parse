@@ -539,6 +539,7 @@ dependencies = [
 name = "fluree-doc-html"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "fluree-doc-model",
  "html5ever",
  "markup5ever_rcdom",

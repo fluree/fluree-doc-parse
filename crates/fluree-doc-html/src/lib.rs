@@ -5,7 +5,8 @@
 //! wrappers — and real-world markup is frequently malformed. So the parse is
 //! spec-compliant (Servo's html5ever) and the walk is selective: non-content
 //! subtrees are dropped whole, and only elements that name a document role
-//! are emitted.
+//! are emitted. Text the page does not draw is left out with them, and a
+//! page that marks its main content is read for that alone.
 //!
 //! Nesting is resolved by *innermost wins*. A `<p>` inside a `<td>` inside a
 //! `<table>` is table content, not a paragraph, and emitting both would
@@ -25,14 +26,154 @@ use fluree_doc_model::{Element, Link};
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
-/// Subtrees that never carry document content.
+/// Subtrees that never carry document content. A `<form>` is not one of
+/// them: older pages, and every ASP.NET page, wrap the whole body in one, so
+/// only its controls are dropped.
 const SKIP: &[&str] = &[
-    "script", "style", "noscript", "template", "svg", "head", "nav", "iframe", "canvas", "form",
+    "script", "style", "noscript", "template", "svg", "head", "nav", "iframe", "canvas", "button",
+    "select", "textarea", "datalist", "dialog",
 ];
+
+/// Landmark roles that are never the document's text, wherever they sit: a
+/// navigation block, a search box, a dialog. The banner and contentinfo
+/// roles are not among them: mail templates put the sender's name and
+/// address in a `contentinfo` footer the reader sees, and a page's own
+/// banner and footer already fall outside its `<main>`.
+const CHROME_ROLES: &[&str] = &["navigation", "search", "dialog", "alertdialog"];
+
+/// Class names the common style sheets (Bootstrap, WordPress, HTML5
+/// Boilerplate) give text that is kept for screen readers and never drawn.
+const UNDRAWN_CLASSES: &[&str] = &[
+    "sr-only",
+    "visually-hidden",
+    "visuallyhidden",
+    "screen-reader-text",
+    "screen-reader-only",
+];
+
+/// Does the page leave this subtree undrawn? The `hidden` attribute (except
+/// `until-found`, which a find-in-page reveals), an inline `display:none` or
+/// `visibility:hidden` — email preheaders are set that way — and the
+/// screen-reader-only classes, whose text sits inside a visible phrase
+/// ("Read more(opens in a new window)") and would join its words.
+fn undrawn(h: &Handle) -> bool {
+    if attr_of(h, "hidden").is_some_and(|v| !v.trim().eq_ignore_ascii_case("until-found")) {
+        return true;
+    }
+    if let Some(style) = attr_of(h, "style") {
+        let style: String = style
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if style.contains("display:none") || style.contains("visibility:hidden") {
+            return true;
+        }
+    }
+    attr_of(h, "class").is_some_and(|c| {
+        c.split_whitespace()
+            .any(|c| UNDRAWN_CLASSES.iter().any(|u| c.eq_ignore_ascii_case(u)))
+    })
+}
+
+/// The ARIA role an element states, its first token lowercased.
+fn role_of(h: &Handle) -> Option<String> {
+    attr_of(h, "role")?
+        .split_whitespace()
+        .next()
+        .map(|r| r.to_ascii_lowercase())
+}
+
+/// Is this element furniture? A landmark role can say so, and so does an
+/// `<aside>` that belongs to the page rather than to an article or section —
+/// the rule by which browsers make it a complementary landmark: a sidebar of
+/// other stories, not a factbox inside the story.
+fn is_chrome(h: &Handle) -> bool {
+    if let Some(role) = role_of(h) {
+        return CHROME_ROLES.contains(&role.as_str());
+    }
+    tag_of(h).as_deref() == Some("aside") && !has_ancestor(h, &["article", "section"])
+}
+
+fn has_ancestor(h: &Handle, tags: &[&str]) -> bool {
+    let mut at = h.parent.take();
+    h.parent.set(at.clone());
+    while let Some(weak) = at {
+        let Some(p) = weak.upgrade() else { break };
+        if tag_of(&p).is_some_and(|t| tags.contains(&t.as_str())) {
+            return true;
+        }
+        at = p.parent.take();
+        p.parent.set(at.clone());
+    }
+    false
+}
+
+/// Is this subtree left out of the reading: never content, undrawn, or the
+/// page's furniture?
+fn skipped(h: &Handle) -> bool {
+    tag_of(h).is_some_and(|t| SKIP.contains(&t.as_str())) || undrawn(h) || is_chrome(h)
+}
 
 /// Parse an HTML document into elements in reading order.
 pub fn parse(src: &str) -> Vec<Element> {
     parse_with_quote_depth(src).0
+}
+
+/// Decode an HTML file's bytes. A byte-order mark decides; then UTF-8, when
+/// the bytes are valid UTF-8; then the charset the page declares; then
+/// Windows-1252.
+///
+/// Valid UTF-8 is taken before the declaration because a saved page is often
+/// re-encoded by whatever fetched it while its `<meta>` still names the old
+/// charset, and text in a legacy encoding that uses any byte above ASCII is
+/// almost never valid UTF-8 by accident. Labels resolve as browsers resolve
+/// them, so `iso-8859-1` is read as Windows-1252, which has the curly quotes
+/// pages declared as Latin-1 actually use.
+pub fn decode(bytes: &[u8]) -> String {
+    if let Some((enc, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+        return enc
+            .decode_without_bom_handling(&bytes[bom..])
+            .0
+            .into_owned();
+    }
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_owned();
+    }
+    let enc = declared_charset(bytes)
+        .and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
+        // A page cannot declare itself UTF-16 from inside its own bytes.
+        .filter(|e| *e != encoding_rs::UTF_16LE && *e != encoding_rs::UTF_16BE)
+        .unwrap_or(encoding_rs::WINDOWS_1252);
+    enc.decode_without_bom_handling(bytes).0.into_owned()
+}
+
+/// The `charset=` a page declares near its top, as written.
+fn declared_charset(bytes: &[u8]) -> Option<String> {
+    let head = &bytes[..bytes.len().min(4096)];
+    let lower: Vec<u8> = head.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let at = lower.windows(8).position(|w| w == b"charset=")? + 8;
+    let label: String = lower[at..]
+        .iter()
+        .skip_while(|b| matches!(b, b'"' | b'\'' | b' '))
+        .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':' | b'.'))
+        .map(|b| *b as char)
+        .collect();
+    (!label.is_empty()).then_some(label)
+}
+
+/// The Windows-1252 character a C1 control stands for. Text that holds one
+/// was decoded as Latin-1 when it was Windows-1252, the commonest mislabelling
+/// on the web: `l\u{92}art` is `l’art`. HTML never means a C1 control in
+/// text, and the five codes Windows-1252 leaves undefined stay as they are.
+fn repair_c1(c: char) -> char {
+    let n = c as u32;
+    if !(0x80..=0x9f).contains(&n) {
+        return c;
+    }
+    let byte = [n as u8];
+    let (s, _, _) = encoding_rs::WINDOWS_1252.decode(&byte);
+    s.chars().next().filter(|r| *r != '\u{fffd}').unwrap_or(c)
 }
 
 /// Parse an HTML document into elements in reading order, with how many
@@ -49,11 +190,38 @@ pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
         .read_from(&mut src.as_bytes())
         .unwrap_or_default();
     let mut out = Out::default();
-    walk(&dom.document, &mut out);
+    // A page that marks its main content is read for that alone: what lies
+    // outside it is the site around the document. One whose main holds no
+    // text has marked it wrongly, and is read whole.
+    let mut mains = Vec::new();
+    find_mains(&dom.document, &mut mains);
+    mains.retain(|m| !text_of(m).0.is_empty());
+    if mains.is_empty() {
+        walk(&dom.document, &mut out);
+    } else {
+        for m in &mains {
+            walk(m, &mut out);
+        }
+    }
     for (i, e) in out.elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
     (out.elements, out.depths)
+}
+
+/// The outermost `<main>` elements, or elements in the `main` role, that the
+/// page draws.
+fn find_mains(h: &Handle, out: &mut Vec<Handle>) {
+    for c in h.children.borrow().iter() {
+        if tag_of(c).is_none() || skipped(c) {
+            continue;
+        }
+        if tag_of(c).as_deref() == Some("main") || role_of(c).as_deref() == Some("main") {
+            out.push(c.clone());
+        } else {
+            find_mains(c, out);
+        }
+    }
 }
 
 /// What the walk emits: the elements, and beside each the number of cited
@@ -160,7 +328,7 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
         NodeData::Text { contents } => out.push_str(&contents.borrow()),
         NodeData::Element { .. } => {
             let Some(tag) = tag_of(node) else { return };
-            if SKIP.contains(&tag.as_str()) {
+            if skipped(node) {
                 return;
             }
             if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
@@ -201,6 +369,7 @@ const BLOCK: &[&str] = &[
     "figcaption",
     "figure",
     "footer",
+    "form",
     "h1",
     "h2",
     "h3",
@@ -237,7 +406,7 @@ fn is_block(tag: &str) -> bool {
 /// Does anything under this node lay out as a block?
 fn holds_block(h: &Handle) -> bool {
     h.children.borrow().iter().any(|c| match tag_of(c) {
-        Some(t) if SKIP.contains(&t.as_str()) => false,
+        Some(_) if skipped(c) => false,
         Some(t) => is_block(&t) || holds_block(c),
         None => false,
     })
@@ -309,7 +478,7 @@ fn own_text(h: &Handle) -> (String, Vec<Link>) {
             NodeData::Text { contents } => raw.push_str(&contents.borrow()),
             NodeData::Element { .. } => {
                 let Some(tag) = tag_of(child) else { continue };
-                if SKIP.contains(&tag.as_str()) || matches!(tag.as_str(), "ul" | "ol" | "table") {
+                if skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
                     continue;
                 }
                 raw.push(' ');
@@ -338,7 +507,7 @@ fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>)
     let mut out = String::new();
     let mut at: Vec<Option<usize>> = Vec::with_capacity(raw.len());
     let (mut n, mut pending) = (0usize, false);
-    for c in raw.chars() {
+    for c in raw.chars().map(repair_c1) {
         if c.is_whitespace() {
             pending = n > 0;
             at.push(None);
@@ -408,7 +577,7 @@ fn walk(h: &Handle, out: &mut Out) {
 fn walk_node(h: &Handle, out: &mut Out) {
     if let Some(tag) = tag_of(h) {
         let t = tag.as_str();
-        if SKIP.contains(&t) {
+        if skipped(h) {
             return;
         }
         if t == "table" {
@@ -463,6 +632,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
 fn rows_under(h: &Handle, out: &mut Vec<Handle>) {
     for c in h.children.borrow().iter() {
         match tag_of(c).as_deref() {
+            Some(_) if skipped(c) => {}
             Some("tr") => out.push(c.clone()),
             // Do not descend into a nested table: its rows are its own.
             Some("table") => {}
@@ -911,5 +1081,84 @@ mod tests {
             assert!(b >= end, "{links:?}");
             end = e;
         }
+    }
+
+    #[test]
+    fn a_form_around_the_page_is_read_and_its_controls_are_not() {
+        // ASP.NET and older pages wrap the whole body in one form.
+        let els = parse(
+            "<body><form action=\"/x\"><p>The story.</p><input name=\"q\">\
+             <button>Search</button><select><option>One</option></select>\
+             <textarea>draft</textarea></form></body>",
+        );
+        assert_eq!(texts(&els), vec!["The story."]);
+    }
+
+    #[test]
+    fn undrawn_text_is_left_out() {
+        let els = parse(
+            "<div style=\"display: none; max-height:0\">Preheader</div>\
+             <p>Read <a href=\"/a\">the report<span class=\"sr-only\">(opens in a new window)</span></a> now.</p>\
+             <p hidden>Gone</p><p style=\"VISIBILITY:hidden\">Gone too</p>\
+             <p hidden=\"until-found\">Folded</p><p aria-hidden=\"true\">Drawn</p>",
+        );
+        assert_eq!(texts(&els), vec!["Read the report now.", "Folded", "Drawn"]);
+        assert_eq!(els[0].links.as_ref().unwrap()[0].span(), Some((5, 15)));
+    }
+
+    #[test]
+    fn a_page_with_a_main_is_read_for_it_alone() {
+        let els = parse(
+            "<body><header><p>Site name</p></header><div>Menu</div>\
+             <main><h1>Story</h1><p>Body.</p></main><footer><p>Copyright</p></footer></body>",
+        );
+        assert_eq!(texts(&els), vec!["Story", "Body."]);
+        // A main with no text in it was marked wrongly; the page is read whole.
+        let els = parse("<body><main> </main><p>Everything</p></body>");
+        assert_eq!(texts(&els), vec!["Everything"]);
+        let els = parse("<body><div>Nav</div><div role=\"main\"><p>Here</p></div></body>");
+        assert_eq!(texts(&els), vec!["Here"]);
+    }
+
+    #[test]
+    fn a_page_sidebar_is_furniture_and_a_factbox_is_not() {
+        let els = parse(
+            "<main><article><p>Story.</p><aside><p>Factbox.</p></aside></article>\
+             <aside><p>Other stories</p></aside></main>",
+        );
+        assert_eq!(texts(&els), vec!["Story.", "Factbox."]);
+    }
+
+    #[test]
+    fn landmark_roles_drop_navigation_and_dialogs_but_keep_a_mail_footer() {
+        // Mail templates mark their visible footer, with the sender's address,
+        // as contentinfo.
+        let els = parse(
+            "<div role=\"navigation\">Home</div><div role=\"dialog\">Accept cookies</div>\
+             <dialog open>Modal</dialog><p>Text.</p>\
+             <div role=\"contentinfo\"><p>Acme Ltd, 1 High St</p></div>",
+        );
+        assert_eq!(texts(&els), vec!["Text.", "Acme Ltd, 1 High St"]);
+    }
+
+    #[test]
+    fn windows_1252_read_as_latin_1_is_repaired() {
+        let els = parse("<p>l\u{92}art \u{93}cit\u{e9}\u{94} \u{81}</p>");
+        assert_eq!(els[0].text, "l\u{2019}art \u{201c}cit\u{e9}\u{201d} \u{81}");
+    }
+
+    #[test]
+    fn bytes_decode_by_mark_then_utf8_then_the_declared_charset() {
+        let latin = b"<meta charset=\"iso-8859-1\"><p>l\x92\xe9t\xe9</p>";
+        assert_eq!(
+            decode(latin),
+            "<meta charset=\"iso-8859-1\"><p>l\u{2019}\u{e9}t\u{e9}</p>"
+        );
+        // Re-saved as UTF-8 under its old declaration: the bytes win.
+        let resaved = "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=iso-8859-1\"><p>été</p>";
+        assert_eq!(decode(resaved.as_bytes()), resaved);
+        assert_eq!(decode(b"\xef\xbb\xbf<p>x</p>"), "<p>x</p>");
+        // No declaration and not UTF-8: Windows-1252.
+        assert_eq!(decode(b"<p>\x93q\x94</p>"), "<p>\u{201c}q\u{201d}</p>");
     }
 }

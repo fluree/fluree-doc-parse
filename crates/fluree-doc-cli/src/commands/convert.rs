@@ -192,7 +192,7 @@ fn convert_path(
         ));
     }
     if ext_is(pdf, &["html", "htm", "xhtml"]) {
-        let text = String::from_utf8_lossy(&data).into_owned();
+        let text = fluree_doc_html::decode(&data);
         return Ok(render(
             &fluree_doc_html::parse(&text),
             stem,

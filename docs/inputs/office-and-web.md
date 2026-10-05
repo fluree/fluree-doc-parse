@@ -107,6 +107,39 @@ and real-world markup is frequently malformed. So the parse is spec-compliant
 (Servo's html5ever) and the walk is **selective**: non-content subtrees are
 dropped whole, and only elements naming a document role are emitted.
 
+What is left out, and why:
+
+- **Never content:** scripts, styles, `<nav>`, `<iframe>`, `<svg>`,
+  `<dialog>` and form controls (`<button>`, `<select>`, `<textarea>`). A
+  `<form>` itself is read, because older pages and every ASP.NET page wrap
+  the whole body in one.
+- **Undrawn:** the `hidden` attribute (but not `hidden="until-found"`, which
+  find-in-page reveals), inline `display:none` or `visibility:hidden` — how
+  email preheaders are set — and the screen-reader-only classes of the common
+  style sheets (`sr-only`, `visually-hidden`, `visuallyhidden`,
+  `screen-reader-text`), whose text sits inside a visible phrase and would
+  join its words ("the report(opens in a new window)"). `aria-hidden` text is
+  drawn, so it stays.
+- **Furniture:** the `navigation`, `search`, `dialog` and `alertdialog`
+  roles, and an `<aside>` that belongs to the page rather than to an
+  `<article>` or `<section>` — browsers make only such an aside a
+  complementary landmark, so a sidebar of other stories goes and a factbox
+  inside the story stays. The `banner` and `contentinfo` roles are kept:
+  mail templates put the sender's name and address in a visible
+  `contentinfo` footer.
+- **Outside `<main>`:** a page that marks its main content (`<main>`, or
+  `role="main"`) is read for that alone; its site header, menus and footer
+  lie outside it. A `<main>` with no text is a marking error, and the page is
+  read whole.
+
+Text in the C1 control range (U+0080–U+009F) is read as the Windows-1252
+character it stands for: it appears when a page in Windows-1252 was decoded as
+Latin-1, which is how `l’art` becomes `l\u0092art`. A file is decoded by its
+byte-order mark, then as UTF-8 when its bytes are valid UTF-8 (a saved page is
+often re-encoded while its `<meta>` still names the old charset), then by the
+charset it declares, resolved as browsers resolve labels (`iso-8859-1` reads as
+Windows-1252), then as Windows-1252.
+
 Nesting resolves **innermost wins**. A `<p>` inside a `<td>` inside a
 `<table>` is table content, not a paragraph — emitting both would duplicate
 the text, the same double-emission the PDF engine guards against when a grid's
