@@ -40,8 +40,9 @@ dates. `xsd` types those dates, so a store compares them as times.
 | `doc:Link` | one hyperlink, with its anchor and target |
 | `doc:Message` | one message of an [email](../inputs/email.md); contains its elements |
 | `doc:Mailbox` | a sender or recipient, one per address in the document |
+| `doc:Signature` | a message's signature; contains its elements |
 
-That is the complete set — thirteen types, and no others are emitted. Notably
+That is the complete set — fourteen types, and no others are emitted. Notably
 **`doco:Caption` and `doco:FrontMatter` are not produced.** DoCO defines both
 and an earlier design assigned them, but caption classification measured
 −0.0004 against the benchmark twice (its ground truth blesses prominent
@@ -120,6 +121,7 @@ its own — an image, a whole table cell.
 | `doc:messageId` | `doc:Message` | `Message-ID`, without angle brackets |
 | `doc:inReplyTo`, `doc:references` | `doc:Message` | the identifiers of the messages it answers and the thread before it |
 | `doc:quoted` | `doc:Message` | `true` for a message quoted or forwarded inside another |
+| `doc:signer` | `doc:Signature` | the mailbox nodes of the message's senders (IRI-coerced) |
 | `doc:address` | `doc:Mailbox` | the email address, as written |
 | `doc:name` | `doc:Mailbox` | the display name, as written |
 

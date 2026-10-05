@@ -134,6 +134,13 @@ not make a table data when it holds a table or sits in a single row,
 because email frameworks set their columns in `<th>`. A data table inside a
 layout table is still read as a table.
 
+In Rust, `fluree_doc_html::parse_with_quote_depth` returns beside the
+elements how many cited quotations enclose each one: a `<blockquote>` with
+`type="cite"` or a `cite` address, Gmail's `gmail_quote`, and the containers
+Yahoo and Proton put around a quote. A plain `<blockquote>`, as an indent
+button writes one, does not count. The [email](email.md) reader splits a
+thread by it.
+
 Infallible: HTML is defined so that every byte sequence parses.
 
 ## Markdown

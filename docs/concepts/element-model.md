@@ -24,6 +24,8 @@ pub struct Element {
     pub links: Option<Vec<Link>>,         // hyperlinks over this element's text
     pub turn: Option<Turn>,               // transcripts: speaker, start_ms, end_ms
     pub message: Option<Box<Message>>,    // email: the header of the message this opens
+    pub resumes: Option<String>,          // email: id of the element opening the message this goes back to
+    pub signature: bool,                  // email: part of a message's signature
     pub provenance: &'static str,         // "rust" | "vlm"
     pub evidence: &'static str,           // which signal classified it
 }

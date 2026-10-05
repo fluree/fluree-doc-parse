@@ -46,8 +46,10 @@ fields, in `message`:
 | `message_id`, `in_reply_to`, `references` | message identifiers, without angle brackets |
 | `quoted` | `true` for a message quoted or forwarded in another's body |
 
-The elements after it, up to the next element with a `message`, are that
-message's body.
+The elements after it, up to the next element that opens a message or
+returns to one, are that message's body. A message can go on after a quote
+nested in it (see [below](#text-after-a-quote)); the element where it does
+carries `resumes`, the `id` of the element that opened it.
 
 - **The file's own message** takes its header from the file's headers. Its
   `date` keeps the sender's UTC offset: `2026-07-17T13:48:00-05:00`.
@@ -64,22 +66,113 @@ address.
 
 ## Quoted and forwarded messages
 
-Clients quote in two ways, and both are read:
+Clients quote in two ways, and both are read, alone or mixed in one thread:
 
 - **Attribution and `>`**, as Gmail, Apple Mail and most others write it:
   an `On … wrote:` line (possibly wrapped over two or three lines), then the
   quoted text with `>` before each line, nested a level deeper for each
-  earlier reply. The `>` marks are removed.
+  earlier reply. Gmail writes the attribution outside the quote; Apple Mail
+  writes it inside, as the quote's first line. The `>` marks are removed.
 - **Header blocks**, as Outlook writes it: an optional separator
   (`-----Original Message-----`, a line of underscores,
-  `---------- Forwarded message ---------`), then `From:`, `Sent:` or
-  `Date:`, `To:`, `Cc:` and `Subject:` lines, with the earlier message under
-  them unmarked.
+  `---------- Forwarded message ---------`, `Begin forwarded message:`),
+  then `From:`, `Sent:` or `Date:`, `To:`, `Cc:` and `Subject:` lines, with
+  the earlier message under them unmarked. Outlook sets the separator
+  straight under the reply's last line, and wraps a long recipient list
+  over several lines; both are read.
 
-Both forms are recognised in English, German, French, Spanish and Dutch.
+A thread that passed through both kinds of client carries both: an Apple
+Mail reply quotes an Outlook thread as a run of header blocks inside its
+`>` quote, and each block is a message of its own, with its own sender,
+date and subject.
+
+Quoted text with nothing to say whose it is, a `>` quote with no
+attribution above it, is a quoted message all the same. Its `message` says
+only that it is quoted.
+
+In HTML, a quote is what the markup marks as one: a `<blockquote>` with
+`type="cite"` (Apple Mail, Thunderbird), Gmail's `gmail_quote`, and the
+containers Yahoo and Proton put around a quote. Gmail's indent button also
+writes a `<blockquote>`, with no quotation in it, and is not taken for one.
+
+All of these are recognised in English, German, French, Spanish and Dutch.
 Messages appear in reading order, newest first, the way a reply sets them.
-Text that follows a quote at the same level, as in a reply written below
-the quote, is kept but is counted as part of the quoted message.
+
+### Text after a quote
+
+A message does not always end where the quote in it starts. Gmail can set a
+reply's signature below the message it quotes, and a mail server adds its
+footer below everything:
+
+```
+> On Sep 29, 2026, at 5:05 PM, Kai Moreno <kai@example.com> wrote:
+>
+> Is the ontology included?
+>
+> On Tue, Sep 29, 2026 at 1:01 PM Lena Holt <lena@example.com> wrote:
+>> The brief is attached.
+>
+> --
+> Kai Moreno, Senior Director
+> 1 Main Street, Springfield
+```
+
+The signature is Kai's, though it comes after Lena's message. Text that
+returns to a shallower quote level, or out of a quote altogether, returns
+to the message open at that level. The element where it does carries
+`resumes`, and in DoCO its elements go back into that message's
+`doc:Message`. A reply written below the quote it answers is the sender's
+own text, the same way.
+
+Outlook quotes without marks, so its header blocks follow one another at
+one level, and nothing in a thread of them says where a message would go
+on. Text after the last block is the last message's.
+
+## Signatures
+
+Each message's signature is marked: the sign-off, the name, title and
+company under it, phones, the office address, and a legal footer. Every
+element in it carries `signature: true`. In DoCO the elements sit in a
+`doc:Signature` inside the message, with `doc:signer` pointing at the
+message's sender.
+
+```
+Thanks so much,
+
+-Ada Park
+Executive Director, Learner Network
+Example State University
+```
+
+A signature belongs to whoever sent the message it ends, quoted messages
+included, so each signature in a thread is its own sender's. That is what
+lets a consumer keep what a signature says, an office address above all,
+on the sender and their organisation, rather than on whatever company the
+message discusses.
+
+A signature is found from the end of each message, by the lines that open
+one:
+
+- `-- `, which sets a signature apart by convention. Everything after it is
+  signature.
+- A sign-off (`Thanks,`, `Best regards`, `Mit freundlichen Grüßen`,
+  `Cordialement`) with a name under it, or on its line (`Thanks, Kai`).
+- The sender's name on a line of its own, as the header gives it, or their
+  first name with a surname: `Kai`, `Kai Moreno`, `Moreno, Kai`.
+- A name after a dash: `-Kai`, `— Kai`.
+
+The lowest of these lines is in the signature, and the signature runs up
+from it over blank lines, rules and more of the same: `Best,` over `Kai`
+over a blank line over `Kai Moreno` is one signature. It runs down to the
+end of the message, or to a paragraph of prose: terms pasted under a
+sign-off are not part of it, though a legal footer below them is, as a
+second signature. A message with none of these lines but a legal footer at
+its end has that footer for its signature.
+
+A message does not start with its signature unless it is little else: a
+notification that opens with the sender's name has a masthead, not a
+signature. A message's text after a quote nested in it can start with its
+signature, and often does.
 
 ## Bodies
 
@@ -102,8 +195,9 @@ In plain text, a blank line ends a paragraph, and the line breaks inside a
 paragraph are kept, so a signature's name, title and company stay on
 separate lines. Lines starting with `-`, `*`, `•` or `1.` are list items.
 `format=flowed` text is rejoined where the sender's client wrapped it.
-Outlook's `[cid:image001.png@…]` placeholders for inline images are
-removed.
+Placeholders for inline images, Outlook's `[cid:image001.png@…]` and Apple
+Mail's `<image001.png>`, are removed, and so are the zero-width characters
+clients leave at the ends of lines.
 
 Bodies are decoded from base64 and quoted-printable, and from their declared
 charset. Text labelled `us-ascii` or `iso-8859-1` that is valid UTF-8 is

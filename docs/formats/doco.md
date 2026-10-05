@@ -254,6 +254,28 @@ addressed mailbox of the same name when the document has one.
 A quoted message's `doc:sentAt` has no offset, because the line that quotes
 it states none. The file's own always has one.
 
+A message that goes on after a quote nested in it, as a signature set below
+the quoted thread does, goes on in its own `doc:Message`: the elements after
+the quote are contained by the message they belong to, not by the one quoted
+before them.
+
+```json
+{ "@id": "urn:fluree-doc-parse:reply/signature/31",
+  "@type": "doc:Signature",
+  "doc:signer": ["urn:fluree-doc-parse:reply/mailbox/4"],
+  "nif:isString": "Best,\nKai\n\nKai Moreno\nExample Data Inc.\n1 Main Street, Springfield",
+  "nif:beginIndex": 1180, "nif:endIndex": 1243,
+  "po:contains": [ "…/element/32", "…/element/33" ] }
+```
+
+Each message's [signature](../inputs/email.md#signatures) is a
+`doc:Signature` inside its `doc:Message`, containing the signature's
+elements, with `doc:signer` pointing at the message's senders. Its span
+covers its elements' text in the projection. A place named in a signature
+is the signer's: an address under a name is that sender's office, not the
+office of a company the message talks about, and `doc:signer` is the join
+that keeps it there.
+
 ## Links are nodes
 
 A hyperlink becomes its own node, referenced from the element whose text

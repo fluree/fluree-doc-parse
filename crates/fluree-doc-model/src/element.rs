@@ -189,9 +189,27 @@ pub struct Element {
     pub turn: Option<Turn>,
     /// The header of the message this element opens, on the first element of
     /// each message in an email. The elements after it, up to the next that
-    /// carries one, are that message's body.
+    /// opens or resumes one, are that message's body.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<Box<crate::message::Message>>,
+    /// The id of the element that opened an earlier message, on the first
+    /// element where that message goes on after a quote nested in it.
+    ///
+    /// A reply can quote inside a quote, and the outer message does not end
+    /// where the inner one starts: a sender's signature, or a footer their
+    /// server added, comes after everything they quoted. Read as the body of
+    /// whichever message came last, a signature with an address in it
+    /// belongs to someone else. The elements from here, up to the next that
+    /// opens or resumes a message, are that earlier message's body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resumes: Option<String>,
+    /// Part of a message's signature: the sign-off and the block under it
+    /// (name, title, company, phone, address, legal footer), in an email.
+    /// It is the sender's, so whatever it states, an address above all, is
+    /// about the sender and their organisation rather than about the
+    /// people the message discusses.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub signature: bool,
     /// Which engine produced this element. Always `"rust"` here; the VLM tier
     /// emits the same shape with `"vlm"`.
     pub provenance: &'static str,

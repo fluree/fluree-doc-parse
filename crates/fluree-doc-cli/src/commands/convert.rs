@@ -401,6 +401,8 @@ fn convert_image(
                 links: None,
                 turn: None,
                 message: None,
+                resumes: None,
+                signature: false,
                 provenance: "rust",
                 evidence: "layout",
             });

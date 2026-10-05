@@ -210,6 +210,12 @@ struct Emitter<'a> {
     open_sections: Vec<(usize, usize)>,
     /// The `doc:Message` node the current email message's elements go into.
     open_message: Option<usize>,
+    /// `doc:Message` nodes by the id of the element that opened them, for
+    /// an element that goes back to one.
+    messages: HashMap<String, usize>,
+    /// The `doc:Signature` the current elements go into, with its text so
+    /// far and where that starts and ends in the projection.
+    open_signature: Option<OpenSignature>,
     /// Mailbox IRIs by address (lower-cased), or by name for a mailbox
     /// written without one.
     mailboxes: HashMap<String, String>,
@@ -245,13 +251,57 @@ impl<'a> Emitter<'a> {
         self.children[parent].push(child_iri);
     }
 
-    /// The innermost open section, else the open message, else the body.
+    /// The open signature, else the innermost open section, else the open
+    /// message, else the body.
     fn current_parent(&self) -> usize {
-        self.open_sections
-            .last()
-            .map(|(i, _)| *i)
+        self.open_signature
+            .as_ref()
+            .map(|s| s.node)
+            .or(self.open_sections.last().map(|(i, _)| *i))
             .or(self.open_message)
             .unwrap_or(self.body_idx)
+    }
+
+    /// Open a `doc:Signature` in the current message, signed by its sender.
+    ///
+    /// A node of its own, holding the signature's elements, so a consumer
+    /// can tell a place named in a signature from a place the message talks
+    /// about, and keep it on `doc:signer`: the address under a name is that
+    /// sender's office, not the office of the company the thread discusses.
+    fn open_signature(&mut self) {
+        let parent = self.open_message.unwrap_or_else(|| self.current_parent());
+        let idx = self.node("signature", "doc:Signature", None);
+        if let Some(from) = self
+            .open_message
+            .and_then(|m| self.nodes[m].get("doc:from").cloned())
+        {
+            self.nodes[idx].insert("doc:signer".into(), from);
+        }
+        self.attach(parent, idx);
+        self.open_signature = Some(OpenSignature {
+            node: idx,
+            text: String::new(),
+            span: None,
+        });
+    }
+
+    /// Close the open signature, giving it the span its elements cover.
+    fn close_signature(&mut self) {
+        let Some(sig) = self.open_signature.take() else {
+            return;
+        };
+        if let Some((start, end)) = sig.span {
+            self.set_text(sig.node, &sig.text);
+            self.set_offsets(sig.node, start, end);
+        }
+    }
+
+    /// Go on with the `doc:Message` the element `opener` opened.
+    fn resume_message(&mut self, opener: &str) {
+        if let Some(&idx) = self.messages.get(opener) {
+            self.open_sections.clear();
+            self.open_message = Some(idx);
+        }
     }
 
     /// Mint a `doc:Mailbox` node for every sender and recipient in the
@@ -316,9 +366,10 @@ impl<'a> Emitter<'a> {
     /// of messages, each by its own sender, and "everything Ada wrote" is
     /// then one step from each of them. Sections a message's own headings
     /// open stay inside it.
-    fn open_message(&mut self, m: &Message) {
+    fn open_message(&mut self, m: &Message, opener: &str) {
         self.open_sections.clear();
         let idx = self.node("message", "doc:Message", None);
+        self.messages.insert(opener.to_string(), idx);
         for (key, boxes) in [
             ("doc:from", &m.from),
             ("doc:to", &m.to),
@@ -455,6 +506,14 @@ impl<'a> Emitter<'a> {
     }
 }
 
+/// A signature being emitted: its node, the projection text of its elements
+/// so far, and the span that text covers.
+struct OpenSignature {
+    node: usize,
+    text: String,
+    span: Option<(usize, usize)>,
+}
+
 /// The key a mailbox is minted under: its address, case folded, or its name
 /// where it has no address.
 fn mailbox_key(m: &Mailbox) -> String {
@@ -484,6 +543,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         counter: 0,
         open_sections: Vec::new(),
         open_message: None,
+        messages: HashMap::new(),
+        open_signature: None,
         mailboxes: HashMap::new(),
         body_idx: 0,
     };
@@ -538,6 +599,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     // Character cursor into the `to_text` projection.
     let mut cursor = 0usize;
     let mut first_text = true;
+    // The span the last element took, for the signature holding it.
+    let last_span = std::cell::Cell::new(None);
     let mut offsets_for = |text: &str| -> (usize, usize) {
         if !first_text {
             cursor += 2; // the "\n\n" separator
@@ -545,6 +608,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         first_text = false;
         let start = cursor;
         cursor += text.chars().count();
+        last_span.set(Some((start, cursor)));
         (start, cursor)
     };
 
@@ -555,8 +619,22 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         }
         if let Some(m) = &e.message {
             open_list = None;
-            em.open_message(m);
+            em.close_signature();
+            em.open_message(m, &e.id);
+        } else if let Some(opener) = &e.resumes {
+            open_list = None;
+            em.close_signature();
+            em.resume_message(opener);
         }
+        if e.signature != em.open_signature.is_some() {
+            open_list = None;
+            if e.signature {
+                em.open_signature();
+            } else {
+                em.close_signature();
+            }
+        }
+        last_span.set(None);
         match e.kind.as_str() {
             "doco:SectionTitle" => {
                 let level = e.level.unwrap_or(1).clamp(1, 6);
@@ -769,7 +847,15 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 em.attach(parent, p);
             }
         }
+        if let (Some(sig), Some((start, end))) = (em.open_signature.as_mut(), last_span.get()) {
+            if !sig.text.is_empty() {
+                sig.text.push_str("\n\n");
+            }
+            sig.text.push_str(&projection_text(e));
+            sig.span = Some((sig.span.map_or(start, |s| s.0), end));
+        }
     }
+    em.close_signature();
 
     // Attach po:contains and build the graph.
     let Emitter {
@@ -804,12 +890,13 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             // address rather than a string about one.
             "doc:link": { "@type": "@id" },
             "doc:linkTarget": { "@type": "@id" },
-            // A message's sender and recipients are the graph's mailbox
-            // nodes.
+            // A message's sender and recipients, and a signature's signer,
+            // are the graph's mailbox nodes.
             "doc:from": { "@type": "@id" },
             "doc:to": { "@type": "@id" },
             "doc:cc": { "@type": "@id" },
             "doc:bcc": { "@type": "@id" },
+            "doc:signer": { "@type": "@id" },
         },
         "@graph": graph,
     });
@@ -843,6 +930,8 @@ mod tests {
             links: None,
             turn: None,
             message: None,
+            resumes: None,
+            signature: false,
             provenance: "rust",
             evidence: "layout",
         }
@@ -1106,5 +1195,79 @@ mod tests {
         let link = find(&g, "doc:Link");
         assert_eq!(link[0]["doc:linkPage"], 11);
         assert!(link[0].get("doc:linkTarget").is_none());
+    }
+
+    #[test]
+    fn a_signature_is_its_senders_and_a_message_goes_on_after_its_quote() {
+        let mailbox = |name: &str, address: &str| Mailbox {
+            name: Some(name.into()),
+            address: Some(address.into()),
+        };
+        let para = |id: &str, text: &str| {
+            let mut e = el("doco:Paragraph", text, None);
+            e.id = id.into();
+            e
+        };
+        let opener = |id: &str, text: &str, from: Mailbox, quoted: bool| {
+            let mut e = para(id, text);
+            e.message = Some(Box::new(Message {
+                from: vec![from],
+                quoted,
+                ..Default::default()
+            }));
+            e
+        };
+        let mut sign_off = para("e5", "--");
+        sign_off.resumes = Some("e1".into());
+        sign_off.signature = true;
+        let mut block = para("e6", "Kai Moreno\n1 Main Street, Springfield");
+        block.signature = true;
+        let els = vec![
+            opener(
+                "e1",
+                "From: Kai Moreno <kai@example.net>",
+                mailbox("Kai Moreno", "kai@example.net"),
+                false,
+            ),
+            para("e2", "Done."),
+            opener(
+                "e3",
+                "On Fri, Jul 17, 2026 at 10:05 AM Lena Holt <lena@example.com> wrote:",
+                mailbox("Lena Holt", "lena@example.com"),
+                true,
+            ),
+            para("e4", "Ready?"),
+            sign_off,
+            block,
+        ];
+        let g = graph(&els);
+        let messages = find(&g, "doc:Message");
+        let signatures = find(&g, "doc:Signature");
+        assert_eq!((messages.len(), signatures.len()), (2, 1));
+        let sig = signatures[0];
+        // Signed by the sender's mailbox, inside the message it went back
+        // to, not the quoted one before it.
+        let kai = find(&g, "doc:Mailbox")
+            .into_iter()
+            .find(|m| m["doc:address"] == "kai@example.net")
+            .unwrap();
+        assert_eq!(sig["doc:signer"], json!([kai["@id"]]));
+        let holds = |n: &Value, id: &Value| {
+            n["po:contains"]
+                .as_array()
+                .is_some_and(|kids| kids.contains(id))
+        };
+        assert!(holds(messages[0], &sig["@id"]));
+        assert!(!holds(messages[1], &sig["@id"]));
+        assert_eq!(sig["po:contains"].as_array().unwrap().len(), 2);
+        // Its span is the text of its elements in the projection.
+        let projection = to_text(&els);
+        let (b, e) = (
+            sig["nif:beginIndex"].as_u64().unwrap() as usize,
+            sig["nif:endIndex"].as_u64().unwrap() as usize,
+        );
+        let slice: String = projection.chars().skip(b).take(e - b).collect();
+        assert_eq!(slice, "--\n\nKai Moreno\n1 Main Street, Springfield");
+        assert_eq!(sig["nif:isString"], slice.as_str());
     }
 }

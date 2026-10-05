@@ -62,8 +62,9 @@ fn item(line: &str) -> Option<&str> {
 }
 
 /// Remove `[cid:image001.png@01DA…]`, which Outlook writes where an inline
-/// image was: a reference to an attachment, not words.
-fn strip_cid(line: &str) -> String {
+/// image was, and `<image001.png>`, which Apple Mail writes: a reference to
+/// an attachment, not words.
+pub fn strip_cid(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut rest = line;
     while let Some(i) = rest.find("[cid:") {
@@ -71,7 +72,42 @@ fn strip_cid(line: &str) -> String {
         rest = rest[i..].find(']').map_or("", |j| &rest[i + j + 1..]);
     }
     out.push_str(rest);
+    let mut rest = std::mem::take(&mut out);
+    while let Some((i, len)) = image_name(&rest) {
+        out.push_str(&rest[..i]);
+        rest = rest[i + len..].to_string();
+    }
+    out.push_str(&rest);
     out
+}
+
+/// Where `<name.png>` is in `text`, and its length: a file name in angle
+/// brackets, not an address or a link.
+fn image_name(text: &str) -> Option<(usize, usize)> {
+    const IMAGES: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".bmp", ".heic", ".webp"];
+    let mut from = 0;
+    while let Some(i) = text[from..].find('<').map(|i| from + i) {
+        let j = text[i..].find('>')?;
+        let inner = &text[i + 1..i + j];
+        let lower = inner.to_ascii_lowercase();
+        let plain = !inner.is_empty()
+            && !inner.contains(|c: char| c.is_whitespace() || matches!(c, '@' | ':' | '/' | '<'));
+        if plain && IMAGES.iter().any(|x| lower.ends_with(x)) {
+            return Some((i, j + 1));
+        }
+        from = i + 1;
+    }
+    None
+}
+
+/// A line as it reads: without image placeholders, and trimmed of spaces and
+/// of the zero-width characters clients leave at the ends of lines (Apple
+/// Mail a byte-order mark at the start of a quote, Outlook spaces of no
+/// width after a name).
+pub fn visible(line: &str) -> String {
+    strip_cid(line)
+        .trim_matches(|c: char| c.is_whitespace() || matches!(c, '\u{200b}' | '\u{feff}'))
+        .to_string()
 }
 
 /// Paragraphs and list items from a body's lines, in order.
@@ -92,7 +128,8 @@ pub fn elements(lines: &[String], provenance: &'static str, out: &mut Vec<Elemen
     };
     for raw in lines {
         let line = strip_cid(raw);
-        if line.trim().is_empty() {
+        let text = visible(&line);
+        if text.is_empty() {
             flush(&mut para, out);
             last_item = None;
             continue;
@@ -107,11 +144,11 @@ pub fn elements(lines: &[String], provenance: &'static str, out: &mut Vec<Elemen
         }
         if let (Some(i), true) = (last_item, line.starts_with(char::is_whitespace)) {
             out[i].text.push(' ');
-            out[i].text.push_str(line.trim());
+            out[i].text.push_str(&text);
             continue;
         }
         last_item = None;
-        para.push(line.trim().to_string());
+        para.push(text);
     }
     flush(&mut para, out);
 }
@@ -133,6 +170,8 @@ pub fn element(kind: &str, text: String, provenance: &'static str) -> Element {
         links: None,
         turn: None,
         message: None,
+        resumes: None,
+        signature: false,
         provenance,
         evidence: provenance,
     }
@@ -159,6 +198,20 @@ mod tests {
                 ("doco:ListItem".into(), "sign the order".into()),
                 ("doco:ListItem".into(), "book the kickoff for May".into()),
                 ("doco:Paragraph".into(), "Lena Holt\nOperations Lead".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn image_placeholders_and_zero_width_marks_are_not_text() {
+        assert_eq!(
+            read("\u{feff}Hi Kai,\n\nLena Holt \u{200b}\u{200b}\nOps <image001.png>\n<lena@example.com>"),
+            vec![
+                ("doco:Paragraph".into(), "Hi Kai,".into()),
+                (
+                    "doco:Paragraph".into(),
+                    "Lena Holt\nOps\n<lena@example.com>".into()
+                ),
             ]
         );
     }

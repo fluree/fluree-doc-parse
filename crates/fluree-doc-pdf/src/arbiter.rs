@@ -596,6 +596,8 @@ fn replace_read_pages(
                 links: None,
                 turn: None,
                 message: None,
+                resumes: None,
+                signature: false,
                 provenance: "vlm",
                 evidence: "page-tier",
             }),
@@ -967,6 +969,8 @@ mod tests {
             links: None,
             turn: None,
             message: None,
+            resumes: None,
+            signature: false,
             provenance: "rust",
             evidence: "layout",
         }

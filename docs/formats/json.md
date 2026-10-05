@@ -42,6 +42,8 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `links` | where the source has any | hyperlinks over this element's text |
 | `turn` | [transcripts](../inputs/transcripts.md) | `{speaker?, start_ms, end_ms}`: who spoke and when |
 | `message` | [email](../inputs/email.md), on the element opening each message | the message's header: `from`, `to`, `cc`, `date`, `subject`, … |
+| `resumes` | email, where a message goes on after a quote nested in it | the `id` of the element that opened that message |
+| `signature` | email | `true` on each element of a message's signature |
 
 Absent fields are **omitted**, not null. `bbox` in particular: an element with
 no geometry has no `bbox` key, and this is load-bearing — see [Measured vs
@@ -117,9 +119,29 @@ the recording. See [Transcripts](../inputs/transcripts.md).
 ```
 
 `message` is on the first element of each message in an email; the elements
-after it, up to the next that carries one, are that message's body. The
-document's attachments and its title, creator and date are not in this
-output; they are in [`doco`](doco.md#emails-are-threads-of-messages). See
+after it, up to the next that carries `message` or `resumes`, are that
+message's body. `resumes` marks where a message goes on after a quote nested
+in it, a signature below the quoted thread for one, by the `id` of the
+element that opened it:
+
+```json
+{
+  "id": "elem-00009",
+  "type": "doco:Paragraph",
+  "page": 0,
+  "text": "--\nKai Moreno, Senior Director\n1 Main Street, Springfield",
+  "resumes": "elem-00004",
+  "signature": true,
+  "provenance": "eml",
+  "evidence": "eml"
+}
+```
+
+So the sender of any element is one walk back: to the last element with
+`message`, or to the element a `resumes` names. `signature` marks the
+elements of a message's signature, which is its sender's. The document's
+attachments and its title, creator and date are not in this output; they
+are in [`doco`](doco.md#emails-are-threads-of-messages). See
 [Email](../inputs/email.md).
 
 ## Figures come in groups

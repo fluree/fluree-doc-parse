@@ -404,6 +404,8 @@ fn element(text: String, turn: Option<Turn>, format: Format) -> Element {
         links: None,
         turn,
         message: None,
+        resumes: None,
+        signature: false,
         provenance: format.tag(),
         evidence: format.tag(),
     }

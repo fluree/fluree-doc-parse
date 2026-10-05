@@ -28,10 +28,11 @@ mod eml;
 mod markup;
 mod mime;
 mod msg;
+mod signature;
 mod text;
 mod thread;
 
-use fluree_doc_model::{Attachment, DocumentInfo, Element, Message, Notes};
+use fluree_doc_model::{Attachment, DocumentInfo, Element, Mailbox, Message, Notes};
 
 /// An email, read.
 #[derive(Debug)]
@@ -155,34 +156,89 @@ fn assemble(read: Read) -> Email {
     let mut elements = Vec::new();
     // A message with no header at all opens with nothing rather than with
     // an empty element.
-    if !read.header.is_empty() {
+    let own = (!read.header.is_empty()).then(|| {
         let mut head = text::element("doco:Paragraph", read.header.clone(), prov);
         head.message = Some(Box::new(read.own.clone()));
         elements.push(head);
-    }
+        0
+    });
+    // (element, element that opened the earlier message it goes back to)
+    let mut resumes: Vec<(usize, usize)> = Vec::new();
+    // Per segment of the body: the element that opened its message, and
+    // who sent it.
+    let mut opened: Vec<(Option<usize>, Vec<Mailbox>)> = Vec::new();
     match read.body {
         Body::Plain(body) => {
             for seg in thread::split(&body) {
-                if let Some((text, m)) = seg.header {
+                let mut who = owner(seg.open, own, &read.own, &opened);
+                // Only a quoted message has a header to open it; one with
+                // none opens on its body's first element.
+                if let Some(text) = seg.header {
                     let mut e = text::element("doco:Paragraph", text, prov);
-                    e.message = Some(Box::new(m));
+                    e.message = who.quoted.take().map(Box::new);
+                    who.opener = Some(elements.len());
                     elements.push(e);
                 }
-                text::elements(&seg.lines, prov, &mut elements);
+                let first = elements.len();
+                let mut at = 0;
+                for signed in signature::find(&seg.lines, &who.sender, who.resumed) {
+                    text::elements(&seg.lines[at..signed.start], prov, &mut elements);
+                    let from = elements.len();
+                    text::elements(&seg.lines[signed.clone()], prov, &mut elements);
+                    for e in &mut elements[from..] {
+                        e.signature = true;
+                    }
+                    at = signed.end;
+                }
+                text::elements(&seg.lines[at..], prov, &mut elements);
+                let sender = who.sender.clone();
+                let opener = open_body(&mut elements, first, who, &mut resumes);
+                opened.push((opener, sender));
             }
         }
         Body::Html(html) => {
-            let mut els = fluree_doc_html::parse(&html);
-            for e in &mut els {
-                e.provenance = prov;
+            let (els, depths) = fluree_doc_html::parse_with_quote_depth(&html);
+            // A paragraph holding nothing but a zero-width character, as
+            // Apple Mail and Outlook leave, is not text.
+            let (els, depths): (Vec<Element>, Vec<usize>) = els
+                .into_iter()
+                .zip(depths)
+                .filter(|(e, _)| e.cells.is_some() || e.links.is_some() || !thread::blank(&e.text))
+                .unzip();
+            for part in thread::split_elements(els, &depths) {
+                let mut who = owner(part.open, own, &read.own, &opened);
+                if let Some(mut e) = part.header {
+                    e.message = who.quoted.take().map(Box::new);
+                    e.provenance = prov;
+                    who.opener = Some(elements.len());
+                    elements.push(e);
+                }
+                let first = elements.len();
+                // Each element is a paragraph of its own: element `i` is
+                // line `2 * i`, with a blank line after it.
+                let lines: Vec<String> = part
+                    .elements
+                    .iter()
+                    .flat_map(|e| [e.text.clone(), String::new()])
+                    .collect();
+                let signed = signature::find(&lines, &who.sender, who.resumed);
+                for (i, mut e) in part.elements.into_iter().enumerate() {
+                    e.provenance = prov;
+                    e.signature = signed.iter().any(|r| r.contains(&(2 * i)));
+                    elements.push(e);
+                }
+                let sender = who.sender.clone();
+                let opener = open_body(&mut elements, first, who, &mut resumes);
+                opened.push((opener, sender));
             }
-            thread::mark(&mut els);
-            elements.extend(els);
         }
         Body::None => {}
     }
     for (i, e) in elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
+    }
+    for (at, opener) in resumes {
+        elements[at].resumes = Some(elements[opener].id.clone());
     }
     let own = &read.own;
     Email {
@@ -194,6 +250,78 @@ fn assemble(read: Read) -> Email {
             modified: None,
         },
         attachments: read.attachments,
+    }
+}
+
+/// Whose a segment of the body is.
+struct Owner {
+    /// The element that opened its message, once one has.
+    opener: Option<usize>,
+    sender: Vec<Mailbox>,
+    /// The header of a quoted message still to be opened.
+    quoted: Option<Message>,
+    /// The segment goes back to a message opened before it.
+    resumed: bool,
+}
+
+fn owner(
+    open: thread::Open,
+    own: Option<usize>,
+    own_message: &Message,
+    opened: &[(Option<usize>, Vec<Mailbox>)],
+) -> Owner {
+    match open {
+        thread::Open::Own => Owner {
+            opener: own,
+            sender: own_message.from.clone(),
+            quoted: None,
+            resumed: false,
+        },
+        thread::Open::Quoted(m) => Owner {
+            opener: None,
+            sender: m.from.clone(),
+            quoted: Some(*m),
+            resumed: false,
+        },
+        thread::Open::Resume(k) => Owner {
+            opener: opened[k].0,
+            sender: opened[k].1.clone(),
+            quoted: None,
+            resumed: true,
+        },
+    }
+}
+
+/// Open a segment's body, which starts at `first`: a quote with no header
+/// opens on its first element, and a return to an earlier message is marked
+/// on its first. Returns the element that opened the segment's message.
+fn open_body(
+    elements: &mut [Element],
+    first: usize,
+    owner: Owner,
+    resumes: &mut Vec<(usize, usize)>,
+) -> Option<usize> {
+    let has_body = first < elements.len();
+    match owner {
+        Owner {
+            opener: Some(o),
+            resumed: true,
+            ..
+        } => {
+            if has_body {
+                resumes.push((first, o));
+            }
+            Some(o)
+        }
+        Owner {
+            opener: None,
+            quoted: Some(m),
+            ..
+        } if has_body => {
+            elements[first].message = Some(Box::new(m));
+            Some(first)
+        }
+        Owner { opener, .. } => opener,
     }
 }
 
@@ -470,6 +598,292 @@ Content-Type: text/html; charset=utf-8\r\n\
             (email.elements[1].provenance, email.elements[1].evidence),
             ("eml", "html")
         );
+    }
+
+    /// Each element as a consumer reads it: its text, whose message it is
+    /// in (by sender), and whether it is signature.
+    fn owned(email: &Email) -> Vec<(String, String, bool)> {
+        let mut by_id: std::collections::HashMap<&str, String> = Default::default();
+        let mut owner = String::new();
+        let mut out = Vec::new();
+        for e in &email.elements {
+            if let Some(m) = &e.message {
+                owner = m.from.first().map_or("?".into(), |f| f.display());
+                by_id.insert(&e.id, owner.clone());
+            } else if let Some(r) = &e.resumes {
+                owner = by_id[r.as_str()].clone();
+            }
+            out.push((e.text.clone(), owner.clone(), e.signature));
+        }
+        out
+    }
+
+    fn signatures(email: &Email) -> Vec<(String, String)> {
+        owned(email)
+            .into_iter()
+            .filter(|(_, _, sig)| *sig)
+            .map(|(text, who, _)| (who, text))
+            .collect()
+    }
+
+    #[test]
+    fn apple_mail_quotes_the_attribution_and_the_chain_it_carries() {
+        // Apple Mail, plain text only: the attribution inside the quote, a
+        // narrow no-break space before AM, an Outlook-style header block in
+        // the quote, and a Gmail attribution with the text under it
+        // unmarked.
+        let src = "From: Ben Ortiz <ben@example.com>\r\n\
+To: Ada Park <ada@example.org>\r\n\
+Date: Fri, 25 Sep 2026 11:11:40 -0600\r\n\
+Subject: Re: Pilot\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+Content-Transfer-Encoding: 8bit\r\n\
+\r\n\
+Ada, I can join today.\r\n\
+\r\n\
+> On Sep 24, 2026, at 7:41\u{202f}AM, Ada Park <ada@example.org> wrote:\r\n\
+> \r\n\
+> Thanks Kai! Ben, good to meet you.\r\n\
+> \r\n\
+> Best,\r\n\
+> Ada Park\r\n\
+> \r\n\
+> From: Ben Ortiz <ben@example.com>\r\n\
+> Date: Thursday, September 24, 2026 at 7:58\u{202f}AM\r\n\
+> To: Kai Moreno <kai@example.net>\r\n\
+> Cc: Ada Park <ada@example.org>\r\n\
+> Subject: Re: Pilot\r\n\
+> \r\n\
+> Thanks Kai, glad to meet Ada.\r\n\
+> \r\n\
+> On Wed, Sep 23, 2026 at 18:13 Kai Moreno <kai@example.net> wrote:\r\n\
+> Hi Ben,\r\n\
+> Ada runs the account and has a demo built.\r\n\
+> Best,\r\n\
+> Kai\r\n\
+> \r\n\
+> Kai Moreno | Data Lead\r\n\
+> Example Data Inc. | 1 Main Street, Springfield\r\n";
+        let email = parse(src.as_bytes()).unwrap();
+        assert_eq!(
+            heads(&email),
+            vec![
+                (
+                    "Ben Ortiz <ben@example.com>".into(),
+                    Some("2026-09-25T11:11:40-06:00".into())
+                ),
+                (
+                    "Ada Park <ada@example.org>".into(),
+                    Some("2026-09-24T07:41:00".into())
+                ),
+                (
+                    "Ben Ortiz <ben@example.com>".into(),
+                    Some("2026-09-24T07:58:00".into())
+                ),
+                (
+                    "Kai Moreno <kai@example.net>".into(),
+                    Some("2026-09-23T18:13:00".into())
+                ),
+            ]
+        );
+        assert_eq!(
+            signatures(&email),
+            vec![
+                (
+                    "Ada Park <ada@example.org>".into(),
+                    "Best,\nAda Park".into()
+                ),
+                ("Kai Moreno <kai@example.net>".into(), "Best,\nKai".into()),
+                (
+                    "Kai Moreno <kai@example.net>".into(),
+                    "Kai Moreno | Data Lead\nExample Data Inc. | 1 Main Street, Springfield".into()
+                ),
+            ]
+        );
+        // The quote marks are gone from what was quoted.
+        assert!(texts(&email).contains(&"Thanks Kai, glad to meet Ada."));
+    }
+
+    #[test]
+    fn a_signature_under_what_it_quoted_is_its_senders() {
+        // The reply's signature comes after a quote nested in it, as Gmail
+        // sets it, and that is where the address is.
+        let src = "From: Ada Park <ada@example.org>\r\n\
+Date: Thu, 1 Oct 2026 12:20:06 -0400\r\n\
+Subject: Re: Brief\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Thanks, will do.\r\n\
+\r\n\
+-Ada\r\n\
+\r\n\
+> On Sep 29, 2026, at 5:05 PM, Kai Moreno <kai@example.net> wrote:\r\n\
+> \r\n\
+> Is the ontology included?\r\n\
+> \r\n\
+> Best,\r\n\
+> Kai\r\n\
+> \r\n\
+> On Tue, Sep 29, 2026 at 1:01 PM Ada Park <ada@example.org <mailto:ada@example.org>> wrote:\r\n\
+>> Kai,\r\n\
+>> \r\n\
+>> The brief is attached.\r\n\
+>> \r\n\
+>> -Ada\r\n\
+> \r\n\
+> -- \r\n\
+> Kai Moreno, Senior Director\r\n\
+> Example Data Inc.\r\n\
+> 1 Main Street, Springfield\r\n";
+        let email = parse(src.as_bytes()).unwrap();
+        let kai = "Kai Moreno <kai@example.net>".to_string();
+        let ada = "Ada Park <ada@example.org>".to_string();
+        assert_eq!(
+            signatures(&email),
+            vec![
+                (ada.clone(), "-Ada".into()),
+                (kai.clone(), "Best,\nKai".into()),
+                (ada.clone(), "-Ada".into()),
+                (
+                    kai.clone(),
+                    "--\nKai Moreno, Senior Director\nExample Data Inc.\n1 Main Street, Springfield"
+                        .into()
+                ),
+            ]
+        );
+        // The return is marked on the element, by the id of the element
+        // that opened Kai's message.
+        let back = email.elements.iter().find(|e| e.resumes.is_some()).unwrap();
+        let opener = email
+            .elements
+            .iter()
+            .find(|e| Some(&e.id) == back.resumes.as_ref())
+            .unwrap();
+        assert_eq!(opener.message.as_ref().unwrap().from[0].display(), kai);
+    }
+
+    #[test]
+    fn an_outlook_reply_splits_where_its_rule_follows_the_text() {
+        // Outlook 365: the rule straight under the reply, an image
+        // placeholder and zero-width spaces in the signature.
+        let src = "From: Lena Holt <lena@example.com>\r\n\
+Date: Thu, 1 Oct 2026 18:11:09 +0000\r\n\
+Subject: Re: Board call\r\n\
+Content-Type: multipart/alternative; boundary=\"alt\"\r\n\
+\r\n\
+--alt\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Moved to Monday.\r\n\
+________________________________\r\n\
+From: Lena Holt <lena@example.com>\r\n\
+Sent: Thursday, October 1, 2026 2:06 PM\r\n\
+To: Kai Moreno <kai@example.net>\r\n\
+Subject: Board call\r\n\
+\r\n\
+Is the call still on?\r\n\
+\r\n\
+Lena\r\n\
+[cid:image001.png@01DC0000.00000000]\r\n\
+Lena Holt \u{200b}\u{200b}\r\n\
+Founder, Example Health\r\n\
+PO Box 100 | Springfield | 49588\r\n\
+--alt\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<div>Moved to Monday.</div><div id=\"appendonsend\"></div><hr>\
+<div id=\"divRplyFwdMsg\"><b>From:</b> Lena Holt</div><div>Is the call still on?</div>\r\n\
+--alt--\r\n";
+        let email = parse(src.as_bytes()).unwrap();
+        assert_eq!(heads(&email).len(), 2);
+        assert_eq!(
+            signatures(&email),
+            vec![
+                ("Lena Holt <lena@example.com>".into(), "Lena".into()),
+                (
+                    "Lena Holt <lena@example.com>".into(),
+                    "Lena Holt\nFounder, Example Health\nPO Box 100 | Springfield | 49588".into()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn html_quotes_nest_by_their_markup() {
+        // Gmail's message, quoted whole by Apple Mail: its own quote and,
+        // after it, its signature.
+        let src = b"From: Ada Park <ada@example.org>\r\n\
+Subject: Re: Brief\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<div>Will do.</div><div>-Ada</div>\
+<blockquote type=\"cite\"><div>On Sep 29, 2026, at 5:05 PM, Kai Moreno &lt;kai@example.net&gt; wrote:</div>\
+<div dir=\"ltr\">Is the ontology included?</div>\
+<div class=\"gmail_quote\"><div class=\"gmail_attr\">On Tue, Sep 29, 2026 at 1:01 PM Ada Park &lt;ada@example.org&gt; wrote:<br></div>\
+<blockquote class=\"gmail_quote\" style=\"margin:0 0 0 .8ex\"><div>The brief is attached.</div></blockquote></div>\
+<br clear=\"all\"><span class=\"gmail_signature_prefix\">-- </span><br>\
+<div class=\"gmail_signature\"><div>Kai Moreno, Senior Director</div><div>1 Main Street, Springfield</div></div>\
+</blockquote>\r\n";
+        let email = parse(src).unwrap();
+        let kai = "Kai Moreno <kai@example.net>".to_string();
+        let owners: Vec<(String, String)> = owned(&email)
+            .into_iter()
+            .skip(1)
+            .map(|(text, who, _)| (text, who))
+            .collect();
+        assert_eq!(
+            owners[owners.len() - 3..],
+            [
+                ("--".to_string(), kai.clone()),
+                ("Kai Moreno, Senior Director".to_string(), kai.clone()),
+                ("1 Main Street, Springfield".to_string(), kai.clone()),
+            ]
+        );
+        assert!(email.elements[email.elements.len() - 3].resumes.is_some());
+        assert!(email.elements.iter().rev().take(3).all(|e| e.signature));
+    }
+
+    #[test]
+    fn a_quote_nothing_attributes_is_a_message_and_the_reply_under_it_is_not() {
+        let src = b"From: Kai Moreno <kai@example.net>\r\n\
+Subject: Re: Meeting\r\n\
+\r\n\
+> Can we meet Tuesday?\r\n\
+\r\n\
+Tuesday works.\r\n\
+\r\n\
+-Kai\r\n";
+        let email = parse(src).unwrap();
+        let quote = email.elements[1].message.as_deref().unwrap();
+        assert!(quote.quoted && quote.from.is_empty());
+        assert_eq!(email.elements[2].resumes.as_deref(), Some("elem-00001"));
+        assert_eq!(
+            owned(&email)[1..],
+            [
+                ("Can we meet Tuesday?".into(), "?".into(), false),
+                (
+                    "Tuesday works.".into(),
+                    "Kai Moreno <kai@example.net>".into(),
+                    false
+                ),
+                ("-Kai".into(), "Kai Moreno <kai@example.net>".into(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_html_message_is_read_a_paragraph_at_a_time_for_its_footer() {
+        // Each block of HTML is a paragraph of its own: a notice at the end
+        // is the footer, not everything above it.
+        let src = b"From: Example Bank <alerts@example.com>\r\n\
+Subject: Payment processed\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<div>Payment processed</div><div>The payment of $120.00 to Example Ltd has been sent.</div>\
+<div>This is an account service message, intended solely for the addressee.</div>\r\n";
+        let email = parse(src).unwrap();
+        let signed: Vec<bool> = email.elements.iter().map(|e| e.signature).collect();
+        assert_eq!(signed, [false, false, false, true]);
     }
 
     #[test]

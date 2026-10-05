@@ -524,6 +524,8 @@ mod tests {
             links: (!links.is_empty()).then_some(links),
             turn: None,
             message: None,
+            resumes: None,
+            signature: false,
             provenance: "rust",
             evidence: "layout",
         }

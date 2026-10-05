@@ -32,16 +32,63 @@ const SKIP: &[&str] = &[
 
 /// Parse an HTML document into elements in reading order.
 pub fn parse(src: &str) -> Vec<Element> {
+    parse_with_quote_depth(src).0
+}
+
+/// Parse an HTML document into elements in reading order, with how many
+/// quotations of another text enclose each one.
+///
+/// A quotation here is one the markup marks as cited, as mail clients mark
+/// a reply's quoted history: a `<blockquote>` with `type="cite"`, a `cite`
+/// address, or a class naming a quote (`gmail_quote`), and the containers
+/// Gmail, Yahoo and Proton put around one. A plain `<blockquote>` is left
+/// out, since Gmail's indent button writes one with no quotation in it.
+pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
     let dom = html5ever::parse_document(RcDom::default(), Default::default())
         .from_utf8()
         .read_from(&mut src.as_bytes())
         .unwrap_or_default();
-    let mut out = Vec::new();
+    let mut out = Out::default();
     walk(&dom.document, &mut out);
-    for (i, e) in out.iter_mut().enumerate() {
+    for (i, e) in out.elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    out
+    (out.elements, out.depths)
+}
+
+/// What the walk emits: the elements, and beside each the number of cited
+/// quotations open where it was read.
+#[derive(Default)]
+struct Out {
+    elements: Vec<Element>,
+    depths: Vec<usize>,
+    depth: usize,
+}
+
+impl Out {
+    fn push(&mut self, e: Element) {
+        self.elements.push(e);
+        self.depths.push(self.depth);
+    }
+}
+
+/// Does this element mark its content as quoted from another text?
+fn is_citation(h: &Handle) -> bool {
+    let class = attr_of(h, "class").unwrap_or_default().to_ascii_lowercase();
+    match tag_of(h).as_deref() {
+        Some("blockquote") => {
+            attr_of(h, "type").is_some_and(|t| t.eq_ignore_ascii_case("cite"))
+                || attr_of(h, "cite").is_some()
+                || class.contains("quote")
+        }
+        Some("div") => class.split_whitespace().any(|c| {
+            matches!(
+                c,
+                "gmail_quote" | "gmail_quote_container" | "yahoo_quoted" | "protonmail_quote"
+            )
+        }),
+        _ => false,
+    }
 }
 
 /// An element node's lowercase tag name, or `None` for text and the rest.
@@ -83,6 +130,8 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
         links: None,
         turn: None,
         message: None,
+        resumes: None,
+        signature: false,
         provenance: "html",
         evidence: "html",
     }
@@ -203,7 +252,7 @@ fn is_inline(h: &Handle) -> bool {
 }
 
 /// A paragraph from a run of inline siblings, when it has any text.
-fn flush_run(run: &mut Vec<Handle>, out: &mut Vec<Element>) {
+fn flush_run(run: &mut Vec<Handle>, out: &mut Out) {
     let mut raw = String::new();
     let mut anchors = Vec::new();
     for node in run.drain(..) {
@@ -223,7 +272,7 @@ fn flush_run(run: &mut Vec<Handle>, out: &mut Vec<Element>) {
 /// named blocks drops whole. A browser lays each such run out in an
 /// anonymous block, and so does this: runs end at a block child, and at two
 /// `<br>` in a row, which is how that markup separates paragraphs.
-fn walk_container(h: &Handle, out: &mut Vec<Element>) {
+fn walk_container(h: &Handle, out: &mut Out) {
     let mut run: Vec<Handle> = Vec::new();
     let mut last_br = false;
     for c in children_of(h) {
@@ -346,7 +395,17 @@ fn children_of(h: &Handle) -> Vec<Handle> {
     h.children.borrow().iter().cloned().collect()
 }
 
-fn walk(h: &Handle, out: &mut Vec<Element>) {
+fn walk(h: &Handle, out: &mut Out) {
+    if is_citation(h) {
+        out.depth += 1;
+        walk_node(h, out);
+        out.depth -= 1;
+    } else {
+        walk_node(h, out);
+    }
+}
+
+fn walk_node(h: &Handle, out: &mut Out) {
     if let Some(tag) = tag_of(h) {
         let t = tag.as_str();
         if SKIP.contains(&t) {
@@ -476,7 +535,7 @@ fn num_attr(h: &Handle, name: &str) -> usize {
 /// Build the flat grid, carrying `colspan` / `rowspan` into the model's merge
 /// flags — the same convention DOCX's gridSpan/vMerge map to and the PDF
 /// engine derives from ruling.
-fn emit_table(table: &Handle, out: &mut Vec<Element>) {
+fn emit_table(table: &Handle, out: &mut Out) {
     let mut trs = Vec::new();
     rows_under(table, &mut trs);
 
@@ -626,6 +685,29 @@ mod tests {
     fn two_line_breaks_in_a_row_end_a_paragraph() {
         let els = parse("<div>One line<br>still one<br><br>Two</div>");
         assert_eq!(texts(&els), vec!["One line still one", "Two"]);
+    }
+
+    #[test]
+    fn cited_quotations_are_counted_and_an_indent_is_not() {
+        let (els, depths) = parse_with_quote_depth(
+            "<div>Reply</div><blockquote type=\"cite\"><div>Quoted</div>\
+             <div class=\"gmail_quote\"><div>Attribution</div>\
+             <blockquote class=\"gmail_quote\"><p>Deeper</p></blockquote></div>\
+             <div>Back</div></blockquote>\
+             <blockquote style=\"margin:0 0 0 40px\"><p>Indented</p></blockquote>",
+        );
+        assert_eq!(
+            texts(&els),
+            [
+                "Reply",
+                "Quoted",
+                "Attribution",
+                "Deeper",
+                "Back",
+                "Indented"
+            ]
+        );
+        assert_eq!(depths, [0, 1, 2, 3, 1, 0]);
     }
 
     #[test]

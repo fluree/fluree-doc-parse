@@ -1062,6 +1062,8 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
         links: None,
         turn: None,
         message: None,
+        resumes: None,
+        signature: false,
         provenance: "xlsx",
         evidence: "xlsx",
     }
