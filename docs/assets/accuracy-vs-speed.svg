@@ -1,0 +1,71 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='880' height='500' viewBox='0 0 880 500' font-family='-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif'>
+<rect width='880' height='500' fill='white'/>
+<text x='20' y='28' font-size='17' font-weight='700' fill='#1e293b'>Accuracy against speed · opendataloader-bench</text>
+<text x='20' y='48' font-size='12' fill='#64748b'>200 single-page PDFs · overall score, the mean of reading order, table and heading scores · 17 engines · 2026-10-07</text>
+<circle cx='26' cy='70' r='5.5' fill='#0d9488'/>
+<text x='37' y='74' font-size='12' font-weight='700' fill='#1e293b'>fluree-doc-parse, by tier</text>
+<circle cx='206' cy='70' r='4.5' fill='#64748b'/>
+<text x='216' y='74' font-size='12' fill='#1e293b'>other engines</text>
+<text x='856' y='74' font-size='12' font-weight='700' fill='#1e293b' text-anchor='end'>higher is more accurate · left is faster</text>
+<line x1='64' y1='389.3' x2='856' y2='389.3' stroke='#e2e8f0'/>
+<text x='56' y='393.3' font-size='11' fill='#64748b' text-anchor='end'>0.6</text>
+<line x1='64' y1='307.8' x2='856' y2='307.8' stroke='#e2e8f0'/>
+<text x='56' y='311.8' font-size='11' fill='#64748b' text-anchor='end'>0.7</text>
+<line x1='64' y1='226.2' x2='856' y2='226.2' stroke='#e2e8f0'/>
+<text x='56' y='230.2' font-size='11' fill='#64748b' text-anchor='end'>0.8</text>
+<line x1='64' y1='144.7' x2='856' y2='144.7' stroke='#e2e8f0'/>
+<text x='56' y='148.7' font-size='11' fill='#64748b' text-anchor='end'>0.9</text>
+<line x1='64.0' y1='104' x2='64.0' y2='430' stroke='#e2e8f0'/>
+<text x='64.0' y='447' font-size='11' fill='#64748b' text-anchor='middle'>1 ms</text>
+<line x1='222.4' y1='104' x2='222.4' y2='430' stroke='#e2e8f0'/>
+<text x='222.4' y='447' font-size='11' fill='#64748b' text-anchor='middle'>10 ms</text>
+<line x1='380.8' y1='104' x2='380.8' y2='430' stroke='#e2e8f0'/>
+<text x='380.8' y='447' font-size='11' fill='#64748b' text-anchor='middle'>100 ms</text>
+<line x1='539.2' y1='104' x2='539.2' y2='430' stroke='#e2e8f0'/>
+<text x='539.2' y='447' font-size='11' fill='#64748b' text-anchor='middle'>1 s</text>
+<line x1='697.6' y1='104' x2='697.6' y2='430' stroke='#e2e8f0'/>
+<text x='697.6' y='447' font-size='11' fill='#64748b' text-anchor='middle'>10 s</text>
+<line x1='856.0' y1='104' x2='856.0' y2='430' stroke='#e2e8f0'/>
+<text x='856.0' y='447' font-size='11' fill='#64748b' text-anchor='middle'>100 s</text>
+<line x1='64' y1='430' x2='856' y2='430' stroke='#64748b' stroke-opacity='0.5'/>
+<text x='460' y='466' font-size='11.5' fill='#1e293b' text-anchor='middle'>seconds per page (log scale)</text>
+<text x='16' y='267' font-size='11.5' fill='#1e293b' text-anchor='middle' transform='rotate(-90 16 267)'>overall score</text>
+<circle cx='486.2' cy='139.4' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='495.2' y='144.4' font-size='11' fill='#64748b' text-anchor='start'>opendataloader-hybrid</text>
+<circle cx='209.9' cy='156.9' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='200.9' y='160.9' font-size='11' fill='#64748b' text-anchor='end'>nutrient</text>
+<circle cx='520.5' cy='159.7' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='529.5' y='171.7' font-size='11' fill='#64748b' text-anchor='start'>docling</text>
+<circle cx='650.8' cy='163.6' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='659.8' y='157.6' font-size='11' fill='#64748b' text-anchor='start'>opendataloader-hybrid-hydrogen</text>
+<circle cx='187.3' cy='164.8' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='178.3' y='172.8' font-size='11' fill='#64748b' text-anchor='end'>pdf-inspector</text>
+<circle cx='813.5' cy='176.7' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='822.5' y='180.7' font-size='11' fill='#64748b' text-anchor='start'>marker</text>
+<circle cx='687.4' cy='189.5' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='696.4' y='202.5' font-size='11' fill='#64748b' text-anchor='start'>opendataloader-hybrid-helium</text>
+<circle cx='615.0' cy='192.5' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='606.0' y='196.5' font-size='11' fill='#64748b' text-anchor='end'>unstructured-hires</text>
+<circle cx='311.1' cy='196.1' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='320.1' y='193.1' font-size='11' fill='#64748b' text-anchor='start'>edgeparse</text>
+<circle cx='250.3' cy='200.8' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='241.3' y='210.8' font-size='11' fill='#64748b' text-anchor='end'>opendataloader</text>
+<circle cx='662.0' cy='200.9' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='653.0' y='212.9' font-size='11' fill='#64748b' text-anchor='end'>mineru</text>
+<circle cx='374.2' cy='282.0' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='383.2' y='286.0' font-size='11' fill='#64748b' text-anchor='start'>pymupdf4llm</text>
+<circle cx='363.1' cy='319.3' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='372.1' y='323.3' font-size='11' fill='#64748b' text-anchor='start'>unstructured</text>
+<circle cx='389.8' cy='398.6' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='398.8' y='402.6' font-size='11' fill='#64748b' text-anchor='start'>markitdown</text>
+<circle cx='543.2' cy='409.1' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
+<text x='552.2' y='413.1' font-size='11' fill='#64748b' text-anchor='start'>liteparse</text>
+<path d='M215.2 150.1 L428.5 143.8 L567.1 116.8' fill='none' stroke='#0d9488' stroke-width='2' stroke-linejoin='round'/>
+<circle cx='215.2' cy='150.1' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
+<text x='215.2' y='136.1' font-size='12' font-weight='700' fill='#1e293b' text-anchor='middle'>Tier 1 · deterministic <tspan font-weight='400' fill='#64748b'>0.893</tspan></text>
+<circle cx='428.5' cy='143.8' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
+<text x='422.5' y='165.8' font-size='12' font-weight='700' fill='#1e293b' text-anchor='end'>Tier 2 · layout detector <tspan font-weight='400' fill='#64748b'>0.901</tspan></text>
+<circle cx='567.1' cy='116.8' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
+<text x='557.1' y='104.8' font-size='12' font-weight='700' fill='#1e293b' text-anchor='end'>Tier 3 · cascade <tspan font-weight='400' fill='#64748b'>0.934</tspan></text>
+<text x='20' y='486' font-size='10.5' fill='#64748b'>Other engines' times are the benchmark's own. Tier 1 is a warm median; tiers 2 and 3 include model time, averaged over the corpus.</text>
+</svg>
