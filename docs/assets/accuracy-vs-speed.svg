@@ -60,13 +60,13 @@
 <text x='383.2' y='345.3' font-size='11' fill='#64748b' text-anchor='start'>pymupdf4llm</text>
 <circle cx='363.1' cy='391.1' r='4.5' fill='#64748b' stroke='white' stroke-width='2'/>
 <text x='372.1' y='395.1' font-size='11' fill='#64748b' text-anchor='start'>unstructured</text>
-<path d='M215.2 165.4 L428.5 156.9 L567.1 121.1' fill='none' stroke='#0d9488' stroke-width='2' stroke-linejoin='round'/>
-<circle cx='215.2' cy='165.4' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
-<text x='215.2' y='151.4' font-size='12' font-weight='700' fill='#1e293b' text-anchor='middle'>Tier 1 · deterministic <tspan font-weight='400' fill='#64748b'>0.894</tspan></text>
-<circle cx='428.5' cy='156.9' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
-<text x='422.5' y='178.9' font-size='12' font-weight='700' fill='#1e293b' text-anchor='end'>Tier 2 · layout detector <tspan font-weight='400' fill='#64748b'>0.901</tspan></text>
-<circle cx='567.1' cy='121.1' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
-<text x='579.1' y='125.1' font-size='12' font-weight='700' fill='#1e293b' text-anchor='start'>Tier 3 · cascade <tspan font-weight='400' fill='#64748b'>0.934</tspan></text>
+<path d='M215.2 164.1 L428.5 155.6 L567.1 120.9' fill='none' stroke='#0d9488' stroke-width='2' stroke-linejoin='round'/>
+<circle cx='215.2' cy='164.1' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
+<text x='215.2' y='150.1' font-size='12' font-weight='700' fill='#1e293b' text-anchor='middle'>Tier 1 · deterministic <tspan font-weight='400' fill='#64748b'>0.895</tspan></text>
+<circle cx='428.5' cy='155.6' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
+<text x='422.5' y='177.6' font-size='12' font-weight='700' fill='#1e293b' text-anchor='end'>Tier 2 · layout detector <tspan font-weight='400' fill='#64748b'>0.903</tspan></text>
+<circle cx='567.1' cy='120.9' r='6' fill='#0d9488' stroke='white' stroke-width='2'/>
+<text x='579.1' y='124.9' font-size='12' font-weight='700' fill='#1e293b' text-anchor='start'>Tier 3 · cascade <tspan font-weight='400' fill='#64748b'>0.934</tspan></text>
 <rect x='608' y='353' width='238' height='67' rx='8' fill='#f8fafc' stroke='#e2e8f0'/>
 <text x='618' y='373' font-size='11' font-weight='700' fill='#1e293b'>Below 0.65, off the scale</text>
 <circle cx='622' cy='386' r='4' fill='#64748b'/>

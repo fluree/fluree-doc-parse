@@ -29,9 +29,9 @@ MEASURED = "2026-10-07"
 # document; tiers 2 and 3 are the corpus average including model time, since
 # the harness only times the replay of cached model output.
 TIERS = [
-    ("Tier 1 · deterministic", 0.893524, 0.009),
-    ("Tier 2 · layout detector", 0.901298, 0.2),
-    ("Tier 3 · cascade", 0.934296, 1.5),
+    ("Tier 1 · deterministic", 0.894673, 0.009),
+    ("Tier 2 · layout detector", 0.902501, 0.2),
+    ("Tier 3 · cascade", 0.934448, 1.5),
 ]
 ENGINES = [
     ("opendataloader-hybrid", 0.906572, 0.4627),

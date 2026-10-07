@@ -25,9 +25,9 @@ Measured 2026-10-07 on the full 200 documents.
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.934296** | 0.9484 | 0.9447 | 0.8788 | ~1.5¹ |
+| 1 | **fluree-doc-parse** (cascade) | **0.934448** | 0.9484 | 0.9420 | 0.8814 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.893524** | 0.9236 | 0.8536 | 0.8146 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.894673** | 0.9238 | 0.8616 | 0.8172 | **~0.009**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -50,9 +50,9 @@ By [tier](../getting-started/tiers.md):
 
 | tier | adds | overall | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction and layout | 0.893524 | 8 ms, CPU |
-| 2 | layout-detector arbitration | 0.901298 | ~0.2 s, CPU |
-| 3 | deep reading of pixels-only content | 0.934296 | ~1.5 s across the corpus¹ |
+| 1 | deterministic extraction and layout | 0.894673 | 8 ms, CPU |
+| 2 | layout-detector arbitration | 0.902501 | ~0.2 s, CPU |
+| 3 | deep reading of pixels-only content | 0.934448 | ~1.5 s across the corpus¹ |
 
 ¹ The harness prints 0.010 s/document for the cascade, which is only the Rust
 pass reading cached model output. Honestly: 87 of 200 documents escalate and

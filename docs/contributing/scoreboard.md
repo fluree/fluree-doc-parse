@@ -11,9 +11,9 @@ Measured 2026-10-07 on opendataloader-bench, 200 documents.
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse-cascade** | **0.934296** | 0.9484 | 0.9447 | 0.8788 | ~1.5¹ |
+| 1 | **fluree-doc-parse-cascade** | **0.934448** | 0.9484 | 0.9420 | 0.8814 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.893524** | 0.9236 | 0.8536 | 0.8146 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.894673** | 0.9238 | 0.8616 | 0.8172 | **~0.009**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -43,7 +43,7 @@ pass reading cached model output. Honestly: 87 of 200 documents escalate,
 1.7 s and the worst 18.9 s. Quote ~1.5 s/document, or 51 s for the corpus at
 the 6-way concurrency the runner uses.
 
-**The deterministic engine is 0.0085 ahead of nutrient**, after weak
+**The deterministic engine is 0.0096 ahead of nutrient**, after weak
 typography inside deterministic figure regions was demoted, split heading
 fragments were coalesced, and false numbered sentences, page labels, formulas,
 and chart metrics were rejected. Display labels governing lettered content
@@ -113,9 +113,9 @@ Per-document scores land in
 
 ## The next points are in headings
 
-The deterministic engine beats nutrient on tables by a distance (TEDS 0.8536
-vs 0.7081) and narrowly loses on headings (MHS 0.8146 vs 0.8190). Summed per
-document against nutrient: TEDS **+6.11**, NID −0.29, MHS **−0.47**. Heading
+The deterministic engine beats nutrient on tables by a distance (TEDS 0.8616
+vs 0.7081) and narrowly loses on headings (MHS 0.8172 vs 0.8190). Summed per
+document against nutrient: TEDS **+6.45**, NID −0.25, MHS **−0.20**. Heading
 work remains the largest quality opportunity, but no longer blocks the
 deterministic lead.
 
@@ -124,7 +124,7 @@ docling on each:
 
 | | overall | places |
 |---|---|---|
-| today | 0.893524 | 3rd |
+| today | 0.894673 | 3rd |
 | top-20 closed **halfway** | ~0.900 | 3rd, clear of nutrient |
 | top-20 closed fully | ~0.907 | 2nd, just above hybrid |
 | every document's MHS at best-of-three | ~0.912 | 2nd |

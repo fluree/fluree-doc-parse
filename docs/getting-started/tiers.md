@@ -5,9 +5,9 @@ tier 1.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.893524 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.901298 | ~0.2 s (CPU) |
-| 3 | deep reading of pixels-only content and doubted structure | **0.934296** | ~1.5 s/doc² |
+| 1 | deterministic extraction + layout | 0.894673 | **8 ms** (CPU) |
+| 2 | layout-detector arbitration (headings, table regions) | 0.902501 | ~0.2 s (CPU) |
+| 3 | deep reading of pixels-only content and doubted structure | **0.934448** | ~1.5 s/doc² |
 
 ¹ 200-document public evaluation corpus, measured 2026-10-07. Tier 3 places
 first among the 17 engines scored, including ML and AI-routed systems; tier 1
