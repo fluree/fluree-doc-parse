@@ -133,7 +133,7 @@ its own — an image, a whole table cell.
 | `doc:rowIndex` | 0-based row |
 | `doc:columnIndex` | 0-based column |
 | `doc:rowHeader` | the row's header text, denormalized |
-| `doc:columnHeader` | the column's header text, denormalized |
+| `doc:columnHeader` | the column's header text, denormalized; under a stacked header, its labels from the top down joined with ` / ` (`Price / Unit`), each once |
 | `doc:sectionLabel` | the enclosing sub-header band's text, if any |
 
 ## Why `pageIndex` and not `pageNumber`

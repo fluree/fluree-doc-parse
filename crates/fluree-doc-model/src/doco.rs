@@ -126,8 +126,9 @@ pub fn projection_text(e: &Element) -> String {
 ///
 /// One function builds both because they must agree exactly: the projection
 /// is rows of trimmed cells tab-joined (row trailing whitespace dropped,
-/// rows newline-joined, the whole trimmed), and a span computed by any
-/// second walk drifts from it silently. Spans are keyed `(row, column)` in
+/// rows newline-joined, leading empty rows and trailing whitespace
+/// dropped), and a span computed by any second walk drifts from it
+/// silently. Spans are keyed `(row, column)` in
 /// the RAW grid — the same indices the cell-emission loop iterates — and
 /// exist only for cells whose trimmed text is non-empty, i.e. the cells
 /// that actually appear in the projection.
@@ -164,11 +165,15 @@ pub fn table_projection(
         out.push_str(trimmed_row);
         cursor += trimmed_row.chars().count();
     }
-    // The final trim: leading whitespace exists only when leading rows
-    // were entirely empty, so surviving spans just shift left by the
-    // trimmed char count.
-    let lead = out.chars().count() - out.trim_start().chars().count();
-    let text = out.trim().to_string();
+    // The final trim drops leading rows that were entirely empty, and
+    // nothing else at the start: a first row whose first cell is empty
+    // (the corner over a column of row labels) keeps its tab, so every
+    // line of the table puts its fields at the same positions. Surviving
+    // spans shift left by the trimmed char count.
+    let start = out.trim_start_matches('\n');
+    let start = if start.trim().is_empty() { "" } else { start };
+    let lead = out.chars().count() - start.chars().count();
+    let text = start.trim_end().to_string();
     if lead > 0 {
         let shifted = spans
             .into_iter()
@@ -177,6 +182,54 @@ pub fn table_projection(
         return (text, shifted);
     }
     (text, spans)
+}
+
+/// Each column's header path, as `doc:columnHeader` carries it.
+///
+/// One header row names the columns by itself, and its label is the
+/// header, verbatim. A stacked header says more: a banner spanning several
+/// columns (`Price` over `Unit` and `Line`) is part of the name of every
+/// column under it, and dropping it leaves two columns that differ from
+/// the neighbouring ones only by a word. So under a stacked header each
+/// column's name is its labels from the top down, joined with `" / "`
+/// (`Price / Unit`). A label that reaches a column by a span is read from
+/// the cell that holds it — `rows` is the denormalised grid, where a
+/// horizontal span's text sits at its first column and a vertical span is
+/// repeated into each row — and appears once however many rows or columns
+/// it covers (`Item`, not `Item / Item`).
+fn column_headers(
+    rows: &[Vec<String>],
+    n_header: usize,
+    merged_left: Option<&[bool]>,
+) -> Vec<String> {
+    let ncols = rows.first().map(Vec::len).unwrap_or(0);
+    if n_header == 0 {
+        return Vec::new();
+    }
+    if n_header == 1 {
+        return rows[0].iter().map(|h| h.trim().to_string()).collect();
+    }
+    let continues_left = |r: usize, c: usize| {
+        merged_left
+            .filter(|m| m.len() == rows.len() * ncols)
+            .is_some_and(|m| m[r * ncols + c])
+    };
+    (0..ncols)
+        .map(|c| {
+            let mut path: Vec<&str> = Vec::new();
+            for (r, row) in rows.iter().enumerate().take(n_header) {
+                let mut owner = c;
+                while owner > 0 && continues_left(r, owner) {
+                    owner -= 1;
+                }
+                let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
+                if !label.is_empty() && !path.contains(&label) {
+                    path.push(label);
+                }
+            }
+            path.join(" / ")
+        })
+        .collect()
 }
 
 /// Minimal tag stripper for model-arbitrated tables whose text is HTML.
@@ -703,10 +756,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
 
                 // Cell entities: data rows index from 0 below the measured
                 // header (`header_rows` — absent means undetected, treated
-                // as the presumed single header row). Column names come from
-                // the *last* header row: rows above it in a stacked header
-                // are spanning banners, not column labels. Empty cells are
-                // not materialised.
+                // as the presumed single header row). A column's name is its
+                // header path (`column_headers`): the one header row's label,
+                // or, under a stacked header, the banner over it and the
+                // label under that. Empty cells are not materialised.
                 if let Some(raw_rows) = &e.cells {
                     // Where each raw cell's text sits inside the table's
                     // projection block — the anchor for per-cell offsets.
@@ -736,7 +789,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     }
                     let rows = &rows;
                     let n_header = e.header_rows.unwrap_or(1).min(rows.len());
-                    let header: Option<&Vec<String>> = (n_header > 0).then(|| &rows[n_header - 1]);
+                    let header = column_headers(rows, n_header, e.merged_left.as_deref());
                     let subs = e.sub_headers.clone().unwrap_or_default();
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
@@ -762,13 +815,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             let cell_idx = em.node("element", "doc:TableCell", None);
                             em.nodes[cell_idx].insert("doc:rowIndex".into(), json!(r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
-                            if let Some(h) = header
-                                .and_then(|h| h.get(c))
-                                .map(|h| h.trim())
-                                .filter(|h| !h.is_empty())
-                            {
+                            if let Some(h) = header.get(c).filter(|h| !h.is_empty()) {
                                 em.nodes[cell_idx]
-                                    .insert("doc:columnHeader".into(), Value::String(h.into()));
+                                    .insert("doc:columnHeader".into(), Value::String(h.clone()));
                             }
                             if let Some(s) = section {
                                 em.nodes[cell_idx]
@@ -1079,6 +1128,41 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_corner_keeps_its_field_in_the_projection() {
+        // A transposed table: the header row's first cell is empty, the
+        // rows below are labelled in it.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["".into(), "Paracetamol".into(), "Ibuprofen".into()],
+            vec!["Code".into(), "MD-0152".into(), "MD-0140".into()],
+        ]);
+        t.header_rows = Some(1);
+        let els = vec![el("doco:Paragraph", "Intro.", None), t];
+        let projection = to_text(&els);
+        assert_eq!(
+            projection,
+            "Intro.\n\n\tParacetamol\tIbuprofen\nCode\tMD-0152\tMD-0140\n"
+        );
+        let g = graph(&els);
+        let table = &find(&g, "doco:Table")[0];
+        assert_eq!(
+            table["nif:beginIndex"],
+            json!(8),
+            "the table starts at its line"
+        );
+        for cell in find(&g, "doc:TableCell") {
+            let s = cell["nif:beginIndex"].as_u64().unwrap() as usize;
+            let e = cell["nif:endIndex"].as_u64().unwrap() as usize;
+            let slice: String = projection.chars().skip(s).take(e - s).collect();
+            assert_eq!(&slice, cell["doc:cellValue"].as_str().unwrap());
+        }
+        // Leading rows with nothing in them are still dropped.
+        let (text, _) =
+            table_projection(&[vec!["".into(), "".into()], vec!["".into(), "x".into()]]);
+        assert_eq!(text, "\tx");
+    }
+
+    #[test]
     fn filled_down_cells_carry_no_offsets() {
         let mut t = el("doco:Table", "", None);
         t.cells = Some(vec![
@@ -1102,6 +1186,68 @@ mod tests {
         // Its projected neighbour still carries offsets.
         let two = cells.iter().find(|c| c["doc:cellValue"] == "2").unwrap();
         assert!(two.get("nif:beginIndex").is_some());
+    }
+
+    #[test]
+    fn a_stacked_header_names_each_column_by_its_path() {
+        // Item and Qty span both header rows; Price spans Unit and Line.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Item".into(), "Qty".into(), "Price".into(), "".into()],
+            vec!["".into(), "".into(), "Unit".into(), "Line".into()],
+            vec![
+                "Fish pie".into(),
+                "2".into(),
+                "14.50".into(),
+                "29.00".into(),
+            ],
+        ]);
+        t.header_rows = Some(2);
+        let mut ml = vec![false; 12];
+        ml[3] = true;
+        let mut md = vec![false; 12];
+        md[4] = true;
+        md[5] = true;
+        t.merged_left = Some(ml);
+        t.merged_down = Some(md);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let header = |v: &str| {
+            cells.iter().find(|c| c["doc:cellValue"] == v).unwrap()["doc:columnHeader"].clone()
+        };
+        assert_eq!(header("Fish pie"), "Item", "a rowspan label appears once");
+        assert_eq!(header("2"), "Qty");
+        assert_eq!(header("14.50"), "Price / Unit");
+        assert_eq!(
+            header("29.00"),
+            "Price / Line",
+            "the banner reaches every column it spans"
+        );
+        assert!(cells.iter().all(|c| c["doc:rowIndex"] == json!(0)));
+    }
+
+    #[test]
+    fn a_single_header_row_is_read_verbatim() {
+        // One header row: a spanned label stays on the column that holds it.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Item".into(), "Price".into(), "".into()],
+            vec!["Fish pie".into(), "14.50".into(), "29.00".into()],
+        ]);
+        t.header_rows = Some(1);
+        t.merged_left = Some(vec![false, false, true, false, false, false]);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let line = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "29.00")
+            .unwrap();
+        assert!(line.get("doc:columnHeader").is_none());
+        let unit = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "14.50")
+            .unwrap();
+        assert_eq!(unit["doc:columnHeader"], "Price");
     }
 
     #[test]

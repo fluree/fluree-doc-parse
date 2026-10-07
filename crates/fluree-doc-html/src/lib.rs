@@ -757,6 +757,8 @@ fn emit_table(table: &Handle, out: &mut Out) {
     // Occupancy, so a rowspan from an earlier row displaces later cells the
     // way a browser lays them out.
     let mut taken = vec![false; n * width];
+    // Rows that are one cell across the whole width, as laid out.
+    let mut full_width = vec![false; n];
 
     for (r, cells) in rows.iter().enumerate() {
         let mut c = 0usize;
@@ -769,6 +771,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
             }
             let cs = (*colspan).min(width - c);
             let rs = (*rowspan).min(n - r);
+            full_width[r] = cells.len() == 1 && c == 0 && cs == width && width > 1;
             grid[r * width + c] = text.clone();
             for dr in 0..rs {
                 for dc in 0..cs {
@@ -792,8 +795,16 @@ fn emit_table(table: &Handle, out: &mut Out) {
         .map(|r| r.join(" | "))
         .collect::<Vec<_>>()
         .join("\n");
+    // A body row that is one cell across the whole table labels the rows
+    // beneath it — `<td colspan="4">Food</td>` over the dishes — and is not
+    // itself a row of data. The last row has nothing beneath it to label.
+    let header_rows = header_rows.min(n);
+    let sub_headers: Vec<usize> = (header_rows..n.saturating_sub(1))
+        .filter(|&r| full_width[r] && !cells[r][0].trim().is_empty())
+        .collect();
     let mut e = element("doco:Table", text, None);
-    e.header_rows = Some(header_rows.min(n));
+    e.header_rows = Some(header_rows);
+    e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
@@ -1008,6 +1019,23 @@ mod tests {
         assert!(md[2 * 2], "row 3 col 0 continues the rowspan cell");
         // The rowspan displaces B into column 1, as a browser would.
         assert_eq!(cells[2][1], "B");
+    }
+
+    #[test]
+    fn a_full_width_body_row_is_a_section_band() {
+        let els = parse(
+            "<table><tr><th>Item</th><th>Qty</th><th>Price</th></tr>\
+               <tr><td colspan=\"3\">Food</td></tr>\
+               <tr><td>Fish pie</td><td>2</td><td>14.50</td></tr>\
+               <tr><th colspan=\"3\">Drinks</th></tr>\
+               <tr><td>Lemonade</td><td></td><td>3.20</td></tr>\
+               <tr><td colspan=\"3\">Thank you</td></tr>\
+             </table>",
+        );
+        let t = &els[0];
+        assert_eq!(t.header_rows, Some(1));
+        // A row with a missing value is data; the last row labels nothing.
+        assert_eq!(t.sub_headers, Some(vec![1, 3]));
     }
 
     #[test]

@@ -38,6 +38,14 @@ struct Reader {
     in_table: bool,
     in_table_head: bool,
     header_rows: usize,
+    /// Per row of the table under construction: its first cell is set
+    /// entirely in strong emphasis.
+    first_bold: Vec<bool>,
+    /// Within the cell being read: depth of strong emphasis, and whether
+    /// any text arrived inside it and outside it.
+    strong: usize,
+    cell_strong_text: bool,
+    cell_plain_text: bool,
     /// Links closed so far in the text under construction, and the one still
     /// open, as `(char offset where its anchor begins, target)`.
     links: Vec<Link>,
@@ -167,6 +175,9 @@ impl Reader {
                     self.flush_text("doco:Paragraph", None);
                     self.in_table = true;
                     self.rows.clear();
+                    self.first_bold.clear();
+                    self.cell_strong_text = false;
+                    self.cell_plain_text = false;
                     self.header_rows = 0;
                 }
                 Event::Start(Tag::TableHead) => self.in_table_head = true,
@@ -183,6 +194,12 @@ impl Reader {
                 Event::End(TagEnd::TableCell) => {
                     let c = self.text.trim().to_string();
                     self.text.clear();
+                    if self.row.is_empty() {
+                        self.first_bold
+                            .push(self.cell_strong_text && !self.cell_plain_text);
+                    }
+                    self.cell_strong_text = false;
+                    self.cell_plain_text = false;
                     // A cell's text leaves the buffer without becoming an
                     // element, so any link inside it has nothing to attach to
                     // and must not follow the next paragraph out.
@@ -209,15 +226,40 @@ impl Reader {
                         .map(|r| r.join(" | "))
                         .collect::<Vec<_>>()
                         .join("\n");
+                    // Markdown has no merged cells, so a section band is
+                    // written as a body row holding only a bold first cell
+                    // (`| **Food** | | |`). Bold is the author's mark: a row
+                    // whose other cells are merely empty is an item with
+                    // values missing. The last row has nothing to label.
+                    let sub_headers: Vec<usize> = (self.header_rows..rows.len().saturating_sub(1))
+                        .filter(|&r| {
+                            width > 1
+                                && self.first_bold.get(r).copied().unwrap_or(false)
+                                && !rows[r][0].is_empty()
+                                && rows[r][1..].iter().all(|c| c.is_empty())
+                        })
+                        .collect();
                     let mut e = self.element("doco:Table", text, None);
                     e.header_rows = Some(self.header_rows);
+                    e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
                     e.cells = Some(rows);
                     self.out.push(e);
                 }
                 Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None),
                 Event::Start(Tag::Link { dest_url, .. }) => self.open_link(&dest_url),
                 Event::End(TagEnd::Link) => self.close_link(),
-                Event::Text(t) | Event::Code(t) => self.text.push_str(&t),
+                Event::Start(Tag::Strong) => self.strong += 1,
+                Event::End(TagEnd::Strong) => self.strong = self.strong.saturating_sub(1),
+                Event::Text(t) | Event::Code(t) => {
+                    if !t.trim().is_empty() {
+                        if self.strong > 0 {
+                            self.cell_strong_text = true;
+                        } else {
+                            self.cell_plain_text = true;
+                        }
+                    }
+                    self.text.push_str(&t)
+                }
                 Event::SoftBreak => self.text.push(' '),
                 Event::HardBreak => {
                     if self.in_code {
@@ -277,6 +319,27 @@ mod tests {
         assert_eq!(cells.len(), 3);
         assert_eq!(cells[0], vec!["Year", "Total"]);
         assert_eq!(cells[2], vec!["2024", "12"]);
+    }
+
+    #[test]
+    fn a_bold_first_cell_alone_on_its_row_is_a_section_band() {
+        let els = parse(
+            "| Item | Qty | Price |\n|---|---|---|\n\
+             | **Food** | | |\n\
+             | Fish pie | 2 | 14.50 |\n\
+             | Bread | | 3.00 |\n\
+             | **Drinks** | | |\n\
+             | Lemonade | 3 | 3.20 |\n\
+             | **Total** | | |\n",
+        );
+        let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+        // Bread is missing a value, not a band; the trailing bold row has
+        // nothing beneath it to label.
+        assert_eq!(t.sub_headers, Some(vec![1, 4]));
+        assert_eq!(t.cells.as_ref().unwrap()[1][0], "Food");
+        // Bold that is not alone on its row is data.
+        let els = parse("| a | b |\n|---|---|\n| **x** | 1 |\n| y | 2 |\n");
+        assert_eq!(els[0].sub_headers, None);
     }
 
     #[test]

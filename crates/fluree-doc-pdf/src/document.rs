@@ -1072,6 +1072,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 }
             }
             let header_rows = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
+            let header_rows =
+                g.stacked_header_rows(header_rows, &rows, &merges, &raw.pages[pi].rules);
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
             let sub_headers: Vec<usize> = merges

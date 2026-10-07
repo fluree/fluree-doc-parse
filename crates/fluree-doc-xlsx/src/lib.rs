@@ -214,7 +214,7 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
 
 /// What a cell's style index resolves to: how its number displays, and
 /// whether its font is bold and how large.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CellStyle {
     pub format: NumFmt,
     pub bold: bool,
@@ -239,15 +239,19 @@ pub struct Styles {
 
 impl Styles {
     fn get(&self, s: Option<usize>) -> CellStyle {
-        s.and_then(|i| self.xfs.get(i).copied()).unwrap_or_default()
+        s.and_then(|i| self.xfs.get(i).cloned()).unwrap_or_default()
     }
 }
 
 /// How a numeric cell displays. Excel's format language is large; this
 /// reads the part that changes what a number *means* — a date is not a
-/// count of days, a percentage is not a fraction — and leaves the rest
-/// (thousands separators, currency signs, colours) to the shortest decimal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// count of days, a percentage is not a fraction — and the part that
+/// changes how it reads: `14.50` where the format fixes two decimals,
+/// `1,234.50` grouped, `$` or `EUR` beside it. A cell is read for the text
+/// Excel shows, and an amount in an invoice is shown as one. What this
+/// does not read (conditions, scientific notation, fractions) falls back
+/// to the shortest decimal.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NumFmt {
     General,
     Date,
@@ -255,13 +259,30 @@ pub enum NumFmt {
     DateTime,
     /// Decimal places shown.
     Percent(usize),
+    /// Digits, grouping and the literal text around them.
+    Number(NumberFormat),
 }
 
 /// Built-in number formats, by id. Ids 14–22 are dates and times; 27–36
 /// and 50–58 are locale dates; 45–47 are elapsed times; 9 and 10 are
 /// percentages.
+///
+/// Ids 1–4 are fixed decimals and grouping. 5–8 and 37–44 are the locale's
+/// currency and accounting formats, which the file does not spell out:
+/// read with grouping, two decimals where they have them, and negatives in
+/// parentheses, but no currency sign, because which sign is the reader's
+/// locale and not the file's.
 fn builtin_fmt(id: u32) -> NumFmt {
+    let number = |code: &str| NumberFormat::parse(code).map_or(NumFmt::General, NumFmt::Number);
     match id {
+        1 => number("0"),
+        2 => number("0.00"),
+        3 => number("#,##0"),
+        4 => number("#,##0.00"),
+        5 | 6 | 37 | 38 => number("#,##0_);(#,##0)"),
+        7 | 8 | 39 | 40 => number("#,##0.00_);(#,##0.00)"),
+        41 | 42 => number("_(* #,##0_);_(* \\(#,##0\\);_(* \"-\"_);_(@_)"),
+        43 | 44 => number("_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)"),
         9 => NumFmt::Percent(0),
         10 => NumFmt::Percent(2),
         14..=17 | 27..=36 | 50..=58 => NumFmt::Date,
@@ -308,8 +329,279 @@ pub fn custom_fmt(code: &str) -> NumFmt {
         (true, false, _) => NumFmt::Date,
         (false, true, _) => NumFmt::Time,
         (false, false, true) => NumFmt::Date,
-        _ => NumFmt::General,
+        _ => NumberFormat::parse(code).map_or(NumFmt::General, NumFmt::Number),
     }
+}
+
+/// A number format read section by section: positive; negative; zero.
+///
+/// Each section is literal text, one run of digit placeholders, and
+/// literal text — which covers fixed decimals (`0.00`), grouping
+/// (`#,##0`), currency on either side (`"$"#,##0.00`, `[$€-407] #,##0.00`,
+/// `#,##0.00 [$EUR]`), accounting padding (`_(` and `* ` take space and
+/// show nothing), parenthesised negatives, and scaling by trailing commas.
+/// A format outside that — a condition, an exponent, a fraction, digits on
+/// both sides of a literal, text placeholders — is not read at all, and
+/// the cell shows its General form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberFormat {
+    sections: Vec<NumSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct NumSection {
+    prefix: String,
+    suffix: String,
+    /// The section shows a number at all; a zero section can be a dash.
+    digits: bool,
+    /// Integer digits always shown (`0` placeholders before the point).
+    int_zeros: usize,
+    /// Decimals always shown, and at most shown.
+    dec_min: usize,
+    dec_max: usize,
+    point: bool,
+    grouping: bool,
+    /// Thousands divided out by trailing commas.
+    scale: usize,
+    /// Each `%` multiplies by a hundred.
+    percent: usize,
+}
+
+impl NumberFormat {
+    pub fn parse(code: &str) -> Option<NumberFormat> {
+        let sections = split_sections(code)
+            .into_iter()
+            .take(3)
+            .map(|s| NumSection::parse(&s))
+            .collect::<Option<Vec<_>>>()?;
+        // A format with no digits anywhere is not a number format.
+        sections
+            .first()
+            .is_some_and(|s| s.digits)
+            .then_some(NumberFormat { sections })
+    }
+
+    /// `v` as this format displays it.
+    pub fn format(&self, v: f64) -> String {
+        if !v.is_finite() {
+            return format_general(v);
+        }
+        let s = &self.sections;
+        let (section, signed) = match (v < 0.0, v == 0.0) {
+            (true, _) if s.len() >= 2 => (&s[1], false),
+            (true, _) => (&s[0], true),
+            (false, true) if s.len() >= 3 => (&s[2], false),
+            _ => (&s[0], false),
+        };
+        let shown = section.render(v.abs());
+        // One section serves negatives with a minus in front of everything,
+        // unless the value rounds away to nothing.
+        if signed && shown.chars().any(|c| c.is_ascii_digit() && c != '0') {
+            format!("-{shown}")
+        } else {
+            shown
+        }
+    }
+}
+
+/// A format code's `;`-separated sections, ignoring any `;` that is quoted
+/// or escaped.
+fn split_sections(code: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut quoted = false;
+    let mut chars = code.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => quoted = !quoted,
+            ';' if !quoted => {
+                out.push(String::new());
+                continue;
+            }
+            '\\' if !quoted => {
+                let last = out.last_mut().unwrap();
+                last.push(c);
+                if let Some(n) = chars.next() {
+                    last.push(n);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        out.last_mut().unwrap().push(c);
+    }
+    out
+}
+
+impl NumSection {
+    fn parse(code: &str) -> Option<NumSection> {
+        let mut s = NumSection::default();
+        // 0: before the digits, 1: in them, 2: after them.
+        let mut phase = 0;
+        let chars: Vec<char> = code.chars().collect();
+        let is_digit = |c: Option<&char>| matches!(c, Some('0' | '#' | '?'));
+        let literal = |s: &mut NumSection, phase: &mut u8, text: &str| {
+            if *phase == 0 {
+                s.prefix.push_str(text);
+            } else {
+                *phase = 2;
+                s.suffix.push_str(text);
+            }
+        };
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            i += 1;
+            match c {
+                '"' => {
+                    let end = chars[i..]
+                        .iter()
+                        .position(|c| *c == '"')
+                        .map_or(chars.len(), |p| i + p);
+                    let text: String = chars[i..end].iter().collect();
+                    literal(&mut s, &mut phase, &text);
+                    i = end + 1;
+                }
+                '\\' => {
+                    if let Some(n) = chars.get(i) {
+                        literal(&mut s, &mut phase, &n.to_string());
+                    }
+                    i += 1;
+                }
+                // Padding to the width of a character, and a fill: both
+                // lay the cell out and show nothing in text.
+                '_' | '*' => i += 1,
+                '[' => {
+                    let end = chars[i..]
+                        .iter()
+                        .position(|c| *c == ']')
+                        .map_or(chars.len(), |p| i + p);
+                    let tag: String = chars[i..end].iter().collect();
+                    i = end + 1;
+                    if let Some(currency) = tag.strip_prefix('$') {
+                        // `[$€-407]`: the symbol, then the locale it is for.
+                        let symbol = currency.split('-').next().unwrap_or("");
+                        literal(&mut s, &mut phase, symbol);
+                    } else if tag.starts_with(['<', '>', '=']) {
+                        return None;
+                    }
+                    // Anything else is a colour or a calendar.
+                }
+                '0' | '#' | '?' => {
+                    if phase == 2 {
+                        return None;
+                    }
+                    phase = 1;
+                    s.digits = true;
+                    if s.point {
+                        s.dec_max += 1;
+                        if c == '0' {
+                            s.dec_min = s.dec_max;
+                        }
+                    } else if c == '0' {
+                        s.int_zeros += 1;
+                    }
+                }
+                '.' if phase == 1 || phase == 0 && is_digit(chars.get(i)) => {
+                    if s.point {
+                        return None;
+                    }
+                    phase = 1;
+                    s.point = true;
+                }
+                ',' if phase == 1 => {
+                    if !s.point && is_digit(chars.get(i)) {
+                        s.grouping = true;
+                    } else {
+                        s.scale += 1;
+                    }
+                }
+                '%' => {
+                    s.percent += 1;
+                    literal(&mut s, &mut phase, "%");
+                }
+                'E' | 'e' if phase == 1 => return None,
+                '/' if phase == 1 => return None,
+                '@' => return None,
+                c if c.is_ascii_alphanumeric() => return None,
+                c => literal(&mut s, &mut phase, &c.to_string()),
+            }
+        }
+        Some(s)
+    }
+
+    fn render(&self, v: f64) -> String {
+        if !self.digits {
+            return format!("{}{}", self.prefix, self.suffix);
+        }
+        let v = v * 100f64.powi(self.percent as i32) / 1000f64.powi(self.scale as i32);
+        let (int, mut frac) = round_decimal(v, self.dec_max);
+        while frac.len() > self.dec_min && frac.ends_with('0') {
+            frac.pop();
+        }
+        let mut int = int.trim_start_matches('0').to_string();
+        while int.len() < self.int_zeros {
+            int.insert(0, '0');
+        }
+        if self.grouping {
+            let digits: Vec<char> = int.chars().collect();
+            int = digits
+                .iter()
+                .enumerate()
+                .flat_map(|(k, d)| {
+                    let sep = k > 0 && (digits.len() - k).is_multiple_of(3);
+                    sep.then_some(',').into_iter().chain(std::iter::once(*d))
+                })
+                .collect();
+        }
+        let point = if self.point { "." } else { "" };
+        format!("{}{int}{point}{frac}{}", self.prefix, self.suffix)
+    }
+}
+
+/// A non-negative value's integer and fractional digits, rounded to
+/// `decimals` places the way Excel shows them: to the fifteen significant
+/// digits it keeps, then half away from zero. Binary rounding alone shows
+/// 2.675 at two places as 2.67, because the double is 2.67499999…; Excel
+/// shows 2.68.
+fn round_decimal(v: f64, decimals: usize) -> (String, String) {
+    let sci = format!("{:.14e}", v);
+    let (mantissa, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let exp: i64 = exp.parse().unwrap_or(0);
+    let mut digits: Vec<u8> = mantissa
+        .bytes()
+        .filter(u8::is_ascii_digit)
+        .map(|b| b - b'0')
+        .collect();
+    let mut int_len = exp + 1;
+    if int_len <= 0 {
+        let pad = (1 - int_len) as usize;
+        digits.splice(0..0, std::iter::repeat_n(0, pad));
+        int_len = 1;
+    }
+    let mut int_len = int_len as usize;
+    let cut = int_len + decimals;
+    digits.resize(digits.len().max(cut + 1), 0);
+    let up = digits[cut] >= 5;
+    digits.truncate(cut);
+    if up {
+        let mut k = cut;
+        loop {
+            if k == 0 {
+                digits.insert(0, 1);
+                int_len += 1;
+                break;
+            }
+            k -= 1;
+            if digits[k] == 9 {
+                digits[k] = 0;
+            } else {
+                digits[k] += 1;
+                break;
+            }
+        }
+    }
+    let text = |d: &[u8]| d.iter().map(|d| char::from(b'0' + d)).collect::<String>();
+    (text(&digits[..int_len]), text(&digits[int_len..]))
 }
 
 /// `xl/styles.xml`: custom number formats, fonts, and the cell style table
@@ -349,7 +641,15 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
         let tag = local(name.as_ref());
         match tag {
             "numFmt" => {
-                if let (Some(id), Some(code)) = (attr(&e, "numFmtId"), attr(&e, "formatCode")) {
+                // The code is unescaped: a currency in quotes arrives as
+                // `&quot;$&quot;#,##0.00`, and read raw its entity names
+                // are letters that make it no number format.
+                let code = e.attributes().flatten().find_map(|a| {
+                    (local(a.key.as_ref()) == "formatCode")
+                        .then(|| a.unescape_value().ok().map(|v| v.into_owned()))
+                        .flatten()
+                });
+                if let (Some(id), Some(code)) = (attr(&e, "numFmtId"), code) {
                     if let Ok(id) = id.parse::<u32>() {
                         custom.insert(id, custom_fmt(&code));
                     }
@@ -382,7 +682,7 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
                     .unwrap_or(0);
                 let format = custom
                     .get(&num)
-                    .copied()
+                    .cloned()
                     .unwrap_or_else(|| builtin_fmt(num));
                 let (bold, size) = attr(&e, "fontId")
                     .and_then(|v| v.parse::<usize>().ok())
@@ -524,14 +824,15 @@ pub fn format_serial(v: f64, fmt: NumFmt, date1904: bool) -> String {
 }
 
 /// Render a numeric cell's cached value through its style.
-pub fn format_number(raw: &str, style: CellStyle, date1904: bool) -> String {
+pub fn format_number(raw: &str, style: &CellStyle, date1904: bool) -> String {
     let Ok(v) = raw.trim().parse::<f64>() else {
         return raw.trim().to_string();
     };
-    match style.format {
+    match &style.format {
         NumFmt::General => format_general(v),
         NumFmt::Percent(decimals) => format!("{:.*}%", decimals, v * 100.0),
-        fmt => format_serial(v, fmt, date1904),
+        NumFmt::Number(f) => f.format(v),
+        fmt => format_serial(v, fmt.clone(), date1904),
     }
 }
 
@@ -605,7 +906,7 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
                     "c" => {
                         if let Some((pos, kind, style)) = cur.take() {
                             let st = ctx.styles.get(style);
-                            let text = cell_text(&kind, &value, st, ctx);
+                            let text = cell_text(&kind, &value, &st, ctx);
                             if !text.is_empty() {
                                 sheet.cells.insert(
                                     pos,
@@ -683,7 +984,7 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
 }
 
 /// A cell's display text from its type, cached value and style.
-fn cell_text(kind: &str, value: &str, st: CellStyle, ctx: &Context<'_>) -> String {
+fn cell_text(kind: &str, value: &str, st: &CellStyle, ctx: &Context<'_>) -> String {
     let text = match kind {
         "s" => value
             .trim()
@@ -749,6 +1050,8 @@ fn layout(sheet: &Sheet, page: usize) -> Vec<Element> {
     };
 
     let mut islands = islands(&occupied);
+    absorb_fragments(&mut islands);
+    join_labels_to_amounts(&mut islands, &cells, modal_size);
     islands.sort_by_key(|isl| (isl.range.r0, isl.range.c0));
 
     let mut placed: Vec<((u32, u32), Element)> = Vec::new();
@@ -764,6 +1067,9 @@ fn layout(sheet: &Sheet, page: usize) -> Vec<Element> {
 struct Island {
     members: HashSet<(u32, u32)>,
     range: Range,
+    /// Empty columns inside `range` that are not part of the island: the
+    /// gap between labels and the amounts they were joined to.
+    gaps: Vec<u32>,
 }
 
 /// Connected components of occupied cells, four-connected: an empty row or
@@ -804,9 +1110,153 @@ fn islands(occupied: &HashSet<(u32, u32)>) -> Vec<Island> {
                 }
             }
         }
-        out.push(Island { members, range });
+        out.push(Island {
+            members,
+            range,
+            gaps: Vec::new(),
+        });
     }
     out
+}
+
+/// Fold into a block the pieces of it that only a missing cell set apart.
+///
+/// Rows of totals under a line table carry a label in column A and an
+/// amount in the last column with nothing between. While every row has its
+/// amount, the amount column joins them into the table; a row whose amount
+/// is missing (`TOTAL` left blank) breaks that column, and the amounts
+/// below it become an island of their own, cut from their labels. An
+/// island inside another's columns, on rows where the other has cells, is
+/// part of it.
+fn absorb_fragments(islands: &mut Vec<Island>) {
+    let rows_of = |isl: &Island| -> HashSet<u32> { isl.members.iter().map(|(r, _)| *r).collect() };
+    let mut i = 0;
+    while i < islands.len() {
+        let inner = &islands[i];
+        let host = (0..islands.len()).find(|&j| {
+            let outer = &islands[j];
+            j != i
+                && outer.members.len() > inner.members.len()
+                && inner.range.c0 >= outer.range.c0
+                && inner.range.c1 <= outer.range.c1
+                && rows_of(inner).is_subset(&rows_of(outer))
+        });
+        match host {
+            Some(j) => {
+                let inner = islands.remove(i);
+                let j = if j > i { j - 1 } else { j };
+                let outer = &mut islands[j];
+                outer.members.extend(inner.members);
+                outer.range.r0 = outer.range.r0.min(inner.range.r0);
+                outer.range.r1 = outer.range.r1.max(inner.range.r1);
+                i = 0;
+            }
+            None => i += 1,
+        }
+    }
+}
+
+/// Join a column of labels to the amounts set apart from it on the same
+/// rows.
+///
+/// An invoice's totals are written as `Subtotal` in column A and its amount
+/// under the line totals in column D, with nothing between: two islands,
+/// each a column, and read apart they are a list of labels and a list of
+/// numbers that no longer say which is which. They are one block: the same
+/// rows, a label on each, an amount on each. So a single-column island of
+/// text is joined to the nearest island on its right when that island
+/// occupies exactly the same rows and holds nothing but amounts, and the
+/// empty columns between them are dropped from the table.
+///
+/// Side-by-side tables, a heading beside a date, an address beside an
+/// address do not join: each fails one of the shape, the alignment or the
+/// type of the right-hand cells.
+fn join_labels_to_amounts(
+    islands: &mut Vec<Island>,
+    cells: &BTreeMap<(u32, u32), Cell>,
+    modal_size: f32,
+) {
+    let rows_of = |isl: &Island| -> Vec<u32> {
+        let mut rows: Vec<u32> = isl.members.iter().map(|(r, _)| *r).collect();
+        rows.sort_unstable();
+        rows.dedup();
+        rows
+    };
+    let texts = |isl: &Island| -> Vec<&Cell> {
+        let mut at: Vec<&(u32, u32)> = isl.members.iter().collect();
+        at.sort_unstable();
+        at.into_iter().filter_map(|p| cells.get(p)).collect()
+    };
+    let mut i = 0;
+    while i < islands.len() {
+        let left = &islands[i];
+        let labels = texts(left);
+        let is_labels = left.range.width() == 1
+            && !labels.is_empty()
+            && labels.len() == left.range.height() as usize
+            && labels
+                .iter()
+                .all(|c| !is_amount(&c.text) && c.size < modal_size * DISPLAY_SIZE_RATIO);
+        // The nearest island to the right that shares any of these rows.
+        let right = is_labels
+            .then(|| {
+                islands
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, o)| {
+                        *j != i
+                            && o.range.c0 > left.range.c1
+                            && o.range.r0 <= left.range.r1
+                            && o.range.r1 >= left.range.r0
+                    })
+                    .min_by_key(|(_, o)| o.range.c0)
+                    .map(|(j, _)| j)
+            })
+            .flatten()
+            .filter(|&j| {
+                let o = &islands[j];
+                let amounts = texts(o);
+                rows_of(o) == rows_of(left)
+                    && !amounts.is_empty()
+                    && amounts.iter().all(|c| is_amount(&c.text))
+            });
+        let Some(j) = right else {
+            i += 1;
+            continue;
+        };
+        let other = islands.remove(j);
+        let at = if j < i { i - 1 } else { i };
+        let left = &mut islands[at];
+        left.gaps.extend(left.range.c1 + 1..other.range.c0);
+        left.gaps.extend(other.gaps);
+        left.members.extend(other.members);
+        left.range.r0 = left.range.r0.min(other.range.r0);
+        left.range.r1 = left.range.r1.max(other.range.r1);
+        left.range.c1 = left.range.c1.max(other.range.c1);
+        i = at + 1;
+    }
+}
+
+/// A cell showing an amount: digits dressed as a number format dresses
+/// them — sign or parentheses, grouping, a decimal point, a percent sign,
+/// a currency symbol, or a three-letter currency code beside it.
+fn is_amount(s: &str) -> bool {
+    let mut t = s.trim();
+    for part in [t.get(..4), t.get(t.len().saturating_sub(4)..)] {
+        if let Some(code) = part
+            .map(str::trim)
+            .filter(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_uppercase()))
+        {
+            t = t.trim_start_matches(code).trim_end_matches(code).trim();
+        }
+    }
+    let t = t.strip_prefix(['-', '+', '\u{2212}', '(']).unwrap_or(t);
+    let t = t.strip_suffix(')').unwrap_or(t);
+    t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || matches!(c, '$' | '€' | '£' | '¥' | '%' | ',' | '.' | ' ' | '\u{a0}')
+        })
 }
 
 /// The anchors an island's row holds — cells with text, at their own
@@ -845,18 +1295,27 @@ fn island_elements(
     let mut top = isl.range.r0;
     let mut bottom = isl.range.r1;
 
-    // A lone cell is a title when it is set as one, else a paragraph.
-    if isl.range.width() == 1 && isl.range.height() == 1 {
-        if let Some((_, cell)) = row_anchors(isl, cells, top).first() {
-            let (kind, level) = if title_like(cell, modal_size) {
-                ("doco:SectionTitle", Some(2))
-            } else {
-                ("doco:Paragraph", None)
-            };
-            out.push((
-                (top, isl.range.c0),
-                element(kind, cell.text.clone(), level, page),
-            ));
+    // A lone cell is a title when it is set as one, else a paragraph. So
+    // is a column of them: lines stacked in one column — a receipt's
+    // title, the shop, its address, the date — are text set down a sheet,
+    // not a table of one column whose first line names the rest. The
+    // first set as display type is the title; the rest are paragraphs.
+    if isl.range.width() == 1 {
+        let mut titled = false;
+        for r in top..=bottom {
+            if let Some((_, cell)) = row_anchors(isl, cells, r).first() {
+                let title = !titled && title_like(cell, modal_size);
+                titled |= title;
+                let (kind, level) = if title {
+                    ("doco:SectionTitle", Some(2))
+                } else {
+                    ("doco:Paragraph", None)
+                };
+                out.push((
+                    (r, isl.range.c0),
+                    element(kind, cell.text.clone(), level, page),
+                ));
+            }
         }
         return out;
     }
@@ -922,18 +1381,22 @@ fn island_elements(
         r1: bottom,
         c1,
     };
+    // The table's columns: the range, less any gap a join left inside it.
+    let cols: Vec<u32> = (range.c0..=range.c1)
+        .filter(|c| !isl.gaps.contains(c))
+        .collect();
     let n_rows = range.height() as usize;
-    let width = range.width() as usize;
+    let width = cols.len();
     let mut grid = vec![String::new(); n_rows * width];
     let mut m_left = vec![false; n_rows * width];
     let mut m_down = vec![false; n_rows * width];
     let mut bold = vec![false; n_rows * width];
     for r in range.r0..=range.r1 {
-        for c in range.c0..=range.c1 {
+        for (k, &c) in cols.iter().enumerate() {
             if !isl.members.contains(&(r, c)) {
                 continue;
             }
-            let i = (r - range.r0) as usize * width + (c - range.c0) as usize;
+            let i = (r - range.r0) as usize * width + k;
             if let Some(cell) = cells.get(&(r, c)) {
                 grid[i] = cell.text.clone();
                 bold[i] = cell.bold;
@@ -962,7 +1425,7 @@ fn island_elements(
         return out;
     }
 
-    let header_rows = header_rows(&range, &rows, &bold, sheet);
+    let header_rows = header_rows(&range, &rows, &bold, (&m_left, &m_down), sheet);
     // Banner bands inside the body: one merged cell across the full width.
     let sub_headers: Vec<usize> = (header_rows..n_rows)
         .filter(|&r| {
@@ -999,7 +1462,18 @@ fn island_elements(
 /// names every column and is set bold, or names every column in text while
 /// a later row carries numbers — a label row over data. A key/value block
 /// whose first row is a label and a value has none.
-fn header_rows(range: &Range, rows: &[Vec<String>], bold: &[bool], sheet: &Sheet) -> usize {
+///
+/// A column a merged label covers is named by it, and a header found from
+/// its type or weight runs on through the rows its merged cells reach
+/// down into: `Item` merged over two rows beside `Price` spanning `Unit`
+/// and `Line` is a two-row header.
+fn header_rows(
+    range: &Range,
+    rows: &[Vec<String>],
+    bold: &[bool],
+    merged: (&[bool], &[bool]),
+    sheet: &Sheet,
+) -> usize {
     let n_rows = rows.len();
     let width = rows.first().map_or(0, |r| r.len());
     if n_rows < 2 || width == 0 {
@@ -1018,19 +1492,52 @@ fn header_rows(range: &Range, rows: &[Vec<String>], bold: &[bool], sheet: &Sheet
     {
         return 1;
     }
+    let (m_left, m_down) = merged;
     let first = &rows[0];
-    if first.iter().any(|c| c.is_empty()) {
-        return 0;
-    }
-    if bold[..width].iter().all(|b| *b) {
+    // The corner over a column of row labels is empty in a header that
+    // names the other columns; set bold over a plain row, it is still one.
+    let corner = width > 2
+        && first[0].is_empty()
+        && (1..width).all(|c| (!first[c].is_empty() && bold[c]) || m_left[c])
+        && (0..width).any(|c| !rows[1][c].is_empty() && !bold[width + c]);
+    if corner {
         return 1;
     }
-    let numeric = |s: &str| {
-        s.parse::<f64>().is_ok() || s.ends_with('%') && s[..s.len() - 1].parse::<f64>().is_ok()
+    if (0..width).any(|c| first[c].is_empty() && !m_left[c]) {
+        return 0;
+    }
+    let numeric = |s: &str| s.parse::<f64>().is_ok() || is_amount(s);
+    // A field list — `Description | Cinnamon bun` over `Code | BK-215`,
+    // `Quantity | 1` — is two columns whose values are numbers only some
+    // of the time; a label row over amounts has numbers all the way down.
+    let data_below = if width == 2 {
+        rows[1..]
+            .iter()
+            .filter(|r| !r[1].is_empty())
+            .all(|r| numeric(&r[1]))
+            && rows[1..].iter().any(|r| numeric(&r[1]))
+    } else {
+        rows[1..].iter().any(|r| r.iter().any(|c| numeric(c)))
     };
-    let labels = first.iter().all(|c| !numeric(c));
-    let data_below = rows[1..].iter().any(|r| r.iter().any(|c| numeric(c)));
-    usize::from(labels && data_below)
+    let header = (0..width).all(|c| bold[c] || m_left[c]) || {
+        let labels = first.iter().all(|c| !numeric(c));
+        labels && data_below
+    };
+    if !header {
+        return 0;
+    }
+    let mut n = 1;
+    while n + 1 < n_rows && (0..width).any(|c| m_down[n * width + c]) {
+        n += 1;
+    }
+    // A label merged across columns names them only as the banner of a
+    // stacked header, over the row that names them one by one. A merged
+    // first row with nothing reaching down beside it is a note or a title
+    // set across the block.
+    if n == 1 && m_left[..width].iter().any(|m| *m) {
+        return 0;
+    }
+    n
 }
 
 fn local(qname: &[u8]) -> &str {
@@ -1208,18 +1715,71 @@ mod tests {
         assert_eq!(custom_fmt("[$-409]mmm-yy;@"), NumFmt::Date);
         assert_eq!(custom_fmt("0.0%"), NumFmt::Percent(1));
         assert_eq!(custom_fmt("0%"), NumFmt::Percent(0));
-        assert_eq!(custom_fmt("#,##0.00"), NumFmt::General);
-        assert_eq!(custom_fmt("\"Days:\" 0"), NumFmt::General);
+        assert!(matches!(custom_fmt("#,##0.00"), NumFmt::Number(_)));
+        assert!(matches!(custom_fmt("\"Days:\" 0"), NumFmt::Number(_)));
         assert_eq!(custom_fmt("0.00E+00"), NumFmt::General);
+        assert_eq!(custom_fmt("[>100]0.00;0"), NumFmt::General);
+        assert_eq!(custom_fmt("# ?/?"), NumFmt::General);
         assert_eq!(custom_fmt("General"), NumFmt::General);
         assert_eq!(custom_fmt("@"), NumFmt::General);
     }
 
     #[test]
     fn percent_cells_render_as_percentages() {
-        let st = styles().xfs[4];
+        let st = &styles().xfs[4];
         assert_eq!(format_number("0.125", st, false), "12.5%");
         assert_eq!(format_number("1", st, false), "100.0%");
+    }
+
+    #[test]
+    fn numbers_show_as_their_format_displays_them() {
+        let f = |code: &str, v: f64| match custom_fmt(code) {
+            NumFmt::Number(n) => n.format(v),
+            other => panic!("{code} read as {other:?}"),
+        };
+        assert_eq!(f("0.00", 14.5), "14.50");
+        assert_eq!(f("0.00", 29.0), "29.00");
+        assert_eq!(
+            f("0.00", 2.675),
+            "2.68",
+            "half away from zero, as Excel shows it"
+        );
+        assert_eq!(
+            f("0.00", -0.001),
+            "0.00",
+            "no minus on a value that rounds away"
+        );
+        assert_eq!(f("#,##0.00", 1234567.891), "1,234,567.89");
+        assert_eq!(f("#,##0", 999.5), "1,000");
+        assert_eq!(f("0.0#", 3.0), "3.0");
+        assert_eq!(f("0.0#", 1.23456), "1.23");
+        assert_eq!(f("#.00", 0.5), ".50");
+        assert_eq!(f("000", 7.0), "007");
+        assert_eq!(f("\"$\"#,##0.00", 1234.5), "$1,234.50");
+        assert_eq!(f("\"$\"#,##0.00", -1234.5), "-$1,234.50");
+        assert_eq!(f("[$€-407] #,##0.00", 12.0), "€ 12.00");
+        assert_eq!(f("#,##0.00 [$EUR]", 12.0), "12.00 EUR");
+        assert_eq!(f("#,##0.00\\ \"€\"", 12.0), "12.00 €");
+        assert_eq!(f("#,##0.00_);[Red](#,##0.00)", -3.5), "(3.50)");
+        let accounting = "_(\"$\"* #,##0.00_);_(\"$\"* \\(#,##0.00\\);_(\"$\"* \"-\"??_);_(@_)";
+        assert_eq!(f(accounting, 1234.5), "$1,234.50");
+        assert_eq!(f(accounting, -1234.5), "$(1,234.50)");
+        assert_eq!(f(accounting, 0.0), "$-");
+        assert_eq!(f("#,##0.0,,\"M\"", 2_500_000.0), "2.5M");
+        assert_eq!(f("\"Days:\" 0", 3.0), "Days: 3");
+        // Built-in ids name the common ones; a currency id shows no sign,
+        // which is the reader's locale rather than the file's.
+        let b = |id: u32, v: f64| match builtin_fmt(id) {
+            NumFmt::Number(n) => n.format(v),
+            other => panic!("{id} read as {other:?}"),
+        };
+        assert_eq!(b(2, 9.6), "9.60");
+        assert_eq!(b(4, 38600.0), "38,600.00");
+        assert_eq!(b(7, -42.46), "(42.46)");
+        assert_eq!(b(44, 0.0), "-");
+        assert_eq!(b(44, -3.0), "(3.00)");
+        assert_eq!(builtin_fmt(0), NumFmt::General);
+        assert_eq!(builtin_fmt(11), NumFmt::General);
     }
 
     #[test]
@@ -1258,6 +1818,13 @@ mod tests {
             }
         );
         assert_eq!(st.xfs[2].format, NumFmt::Percent(2));
+        // A quoted currency arrives entity-escaped in the attribute.
+        let xml = format!(
+            "<styleSheet {NS}><numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"&quot;$&quot;#,##0.00\"/></numFmts>\
+             <cellXfs count=\"1\"><xf numFmtId=\"164\" fontId=\"0\"/></cellXfs></styleSheet>"
+        );
+        let quoted = parse_styles(&xml).unwrap();
+        assert_eq!(format_number("14.5", &quoted.xfs[0], false), "$14.50");
         assert_eq!(st.xfs[3].format, NumFmt::DateTime);
         assert!(st.xfs[3].bold);
     }
@@ -1326,6 +1893,24 @@ mod tests {
         let els = parse_sheet(&xml);
         assert_eq!(kinds(&els), vec!["doco:SectionTitle:1", "doco:Table"]);
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_field_list_gets_no_header() {
+        let xml = sheet(
+            &[
+                text("A1", 1, "Description"),
+                text("B1", 0, "Cinnamon bun"),
+                text("A2", 1, "Code"),
+                text("B2", 0, "BK-215"),
+                text("A3", 1, "Quantity"),
+                num("B3", 0, "1"),
+                text("A4", 1, "Total paid"),
+                num("B4", 0, "9"),
+            ],
+            "",
+        );
+        assert_eq!(parse_sheet(&xml)[1].header_rows, Some(0));
     }
 
     #[test]
@@ -1414,6 +1999,33 @@ mod tests {
     }
 
     #[test]
+    fn lines_stacked_in_one_column_are_text_not_a_table() {
+        // A receipt's head: title, shop, address, date, all in column A.
+        let xml = sheet(
+            &[
+                text("A1", 2, "Receipt WB-37727"),
+                text("A2", 1, "Wrenmoor Bakehouse"),
+                text("A3", 0, "14 Quayside Row, Bristol"),
+                text("A4", 0, "Date: 9 June 2026"),
+            ],
+            "",
+        );
+        let els = parse_sheet(&xml);
+        assert_eq!(
+            kinds(&els),
+            vec![
+                "doco:SectionTitle:1",
+                "doco:SectionTitle:2",
+                "doco:Paragraph",
+                "doco:Paragraph",
+                "doco:Paragraph"
+            ]
+        );
+        assert_eq!(els[1].text, "Receipt WB-37727");
+        assert_eq!(els[4].text, "Date: 9 June 2026");
+    }
+
+    #[test]
     fn an_empty_column_separates_two_tables() {
         let xml = sheet(
             &[
@@ -1435,6 +2047,140 @@ mod tests {
         );
         assert_eq!(els[1].cells.as_ref().unwrap()[0], vec!["L", "M"]);
         assert_eq!(els[2].cells.as_ref().unwrap()[0], vec!["R", "S"]);
+    }
+
+    #[test]
+    fn labels_and_their_amounts_across_empty_columns_are_one_table() {
+        // Totals under a line table: labels in A, amounts in D.
+        let xml = sheet(
+            &[
+                text("A1", 1, "Item"),
+                text("B1", 1, "Qty"),
+                text("C1", 1, "Unit"),
+                text("D1", 1, "Line"),
+                text("A2", 0, "Fish pie"),
+                num("B2", 0, "2"),
+                num("C2", 0, "14.5"),
+                num("D2", 0, "29"),
+                text("A4", 0, "Subtotal"),
+                num("D4", 0, "38.6"),
+                text("A5", 0, "Total"),
+                num("D5", 0, "42.46"),
+            ],
+            "",
+        );
+        let els = parse_sheet(&xml);
+        assert_eq!(
+            kinds(&els),
+            vec!["doco:SectionTitle:1", "doco:Table", "doco:Table"]
+        );
+        let totals = &els[2];
+        assert_eq!(
+            totals.cells.as_ref().unwrap(),
+            &vec![vec!["Subtotal", "38.6"], vec!["Total", "42.46"]],
+            "the empty columns between are not part of the table"
+        );
+        assert_eq!(totals.header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_row_missing_its_amount_does_not_split_the_table() {
+        let xml = sheet(
+            &[
+                text("A1", 1, "Item"),
+                text("B1", 1, "Units"),
+                text("C1", 1, "Amount"),
+                text("A2", 0, "Utility knife"),
+                num("B2", 0, "4"),
+                num("C2", 0, "43.16"),
+                text("A3", 0, "Subtotal"),
+                num("C3", 0, "70.7"),
+                text("A4", 0, "TOTAL"),
+                text("A5", 0, "Cash"),
+                num("C5", 0, "80"),
+                text("A6", 0, "Change"),
+                num("C6", 0, "3.07"),
+            ],
+            "",
+        );
+        let els = parse_sheet(&xml);
+        assert_eq!(kinds(&els), vec!["doco:SectionTitle:1", "doco:Table"]);
+        let cells = els[1].cells.as_ref().unwrap();
+        assert_eq!(cells[3], vec!["TOTAL", "", ""]);
+        assert_eq!(cells[5], vec!["Change", "", "3.07"]);
+    }
+
+    #[test]
+    fn a_bold_header_over_row_labels_has_an_empty_corner() {
+        let xml = sheet(
+            &[
+                text("B1", 1, "Paracetamol"),
+                text("C1", 1, "Ibuprofen"),
+                text("A2", 0, "Code"),
+                text("B2", 0, "MD-0152"),
+                text("C2", 0, "MD-0140"),
+                text("A3", 0, "Each"),
+                num("B3", 0, "2.49"),
+                num("C3", 0, "3.5"),
+            ],
+            "",
+        );
+        let t = &parse_sheet(&xml)[1];
+        assert_eq!(
+            t.cells.as_ref().unwrap()[0],
+            vec!["", "Paracetamol", "Ibuprofen"]
+        );
+        assert_eq!(t.header_rows, Some(1));
+    }
+
+    #[test]
+    fn side_by_side_blocks_that_are_not_labels_and_amounts_stay_apart() {
+        // Two address blocks: text beside text.
+        let xml = sheet(
+            &[
+                text("A1", 0, "Bill to"),
+                text("A2", 0, "Acme Ltd"),
+                text("D1", 0, "Ship to"),
+                text("D2", 0, "Beta plc"),
+            ],
+            "",
+        );
+        let els = parse_sheet(&xml);
+        assert_eq!(els.len(), 5, "four lines under the sheet title");
+        assert!(els.iter().all(|e| e.kind != "doco:Table"));
+        // A label column beside a table with its own header.
+        let xml = sheet(
+            &[
+                text("A1", 0, "Notes"),
+                text("A2", 0, "Paid"),
+                text("C1", 1, "Qty"),
+                text("D1", 1, "Price"),
+                num("C2", 0, "2"),
+                num("D2", 0, "14.5"),
+            ],
+            "",
+        );
+        let els = parse_sheet(&xml);
+        assert_eq!(els[1].text, "Notes");
+        let firsts: Vec<_> = els
+            .iter()
+            .filter_map(|e| e.cells.as_ref())
+            .map(|c| c[0].clone())
+            .collect();
+        assert_eq!(firsts, vec![vec!["Qty", "Price"]]);
+        // Rows that do not line up.
+        let xml = sheet(
+            &[
+                text("A1", 0, "Subtotal"),
+                text("A2", 0, "Total"),
+                num("D2", 0, "42.46"),
+                num("D3", 0, "1"),
+            ],
+            "",
+        );
+        assert!(parse_sheet(&xml)
+            .iter()
+            .all(|e| e.cells.as_ref().is_none_or(|c| c[0].len() == 1)));
     }
 
     #[test]
@@ -1508,6 +2254,25 @@ mod tests {
             "<sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"2\" topLeftCell=\"A3\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>",
         );
         assert_eq!(parse_sheet(&xml)[1].header_rows, Some(2));
+    }
+
+    #[test]
+    fn a_header_merged_down_into_a_second_row_is_a_stacked_header() {
+        let xml = sheet(
+            &[
+                text("A1", 1, "Item"),
+                text("B1", 1, "Price"),
+                text("B2", 1, "Unit"),
+                text("C2", 1, "Line"),
+                text("A3", 0, "Fish pie"),
+                num("B3", 0, "14.5"),
+                num("C3", 0, "29"),
+            ],
+            "<mergeCells count=\"2\"><mergeCell ref=\"A1:A2\"/><mergeCell ref=\"B1:C1\"/></mergeCells>",
+        );
+        let t = &parse_sheet(&xml)[1];
+        assert_eq!(t.header_rows, Some(2));
+        assert_eq!(t.cells.as_ref().unwrap()[0], vec!["Item", "Price", ""]);
     }
 
     #[test]
