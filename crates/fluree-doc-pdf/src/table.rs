@@ -108,6 +108,14 @@ impl TableLayout {
                 m.full_width_row[r] = true;
             }
         }
+        for &(r0, c, r1) in &self.downs {
+            if c >= cols {
+                continue;
+            }
+            for r in (r0 + 1)..r1.min(rows) {
+                m.continues_above[r * cols + c] = true;
+            }
+        }
         m
     }
 }
@@ -119,6 +127,9 @@ pub struct TableLayout {
     pub header_rows: usize,
     /// Cells read as one: `(row, first column, end column)`.
     pub spans: Vec<(usize, usize, usize)>,
+    /// Header labels set across the header's rows, read into the top one:
+    /// `(first row, column, end row)`.
+    pub downs: Vec<(usize, usize, usize)>,
     /// Body rows that label the rows beneath them.
     pub sub_headers: Vec<usize>,
     /// Per cell, row-major, the page glyphs read into it.

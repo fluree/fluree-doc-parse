@@ -62,6 +62,9 @@ struct Chunk {
     glyphs: Vec<usize>,
     /// The page's space glyphs between this chunk and the next on its line.
     trailing: Vec<usize>,
+    /// The chunk's words, each a chunk of its own with no words, so a chunk
+    /// read across a gutter can be cut where its words part.
+    words: Vec<Chunk>,
 }
 
 impl Chunk {
@@ -264,9 +267,11 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
             let mut text = String::new();
             let mut prev: Option<&Glyph> = None;
             let (mut x0, mut x1, mut y0, mut y1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+            let mut words: Vec<Chunk> = Vec::new();
             for g in &group {
                 let b = g.bbox.unwrap();
-                if prev.is_some_and(|p| gap(p, g) > fs * WORD_GAP) {
+                let parted = prev.is_some_and(|p| gap(p, g) > fs * WORD_GAP);
+                if parted {
                     text.push(' ');
                 }
                 text.push_str(g.text.trim());
@@ -275,6 +280,26 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                 x1 = x1.max(b.x1);
                 y0 = y0.min(b.y0);
                 y1 = y1.max(b.y1);
+                match words.last_mut() {
+                    Some(w) if !parted => {
+                        w.text.push_str(g.text.trim());
+                        w.glyphs.push(index(g));
+                        w.x1 = w.x1.max(b.x1);
+                        w.y0 = w.y0.min(b.y0);
+                        w.y1 = w.y1.max(b.y1);
+                    }
+                    _ => words.push(Chunk {
+                        x0: b.x0,
+                        x1: b.x1,
+                        y0: b.y0,
+                        y1: b.y1,
+                        text: g.text.trim().to_string(),
+                        bold,
+                        glyphs: vec![index(g)],
+                        trailing: Vec::new(),
+                        words: Vec::new(),
+                    }),
+                }
             }
             chunks.push(Chunk {
                 x0,
@@ -285,6 +310,7 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                 bold,
                 glyphs: group.iter().map(|g| index(g)).collect(),
                 trailing: Vec::new(),
+                words,
             });
         }
         // `$` set apart from its figure is the figure's: `$ 10,441`.
@@ -299,6 +325,7 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                 if joins {
                     prev.text = format!("{} {}", prev.text, c.text);
                     prev.glyphs.extend(c.glyphs);
+                    prev.words.extend(c.words);
                     prev.x1 = c.x1;
                     prev.y0 = prev.y0.min(c.y0);
                     prev.y1 = prev.y1.max(c.y1);
@@ -323,6 +350,11 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                     && !c.glyphs.contains(&i)
                 {
                     c.glyphs.push(i);
+                    // A space inside a word's ink is that word's; one between
+                    // words belongs to the word before it.
+                    if let Some(w) = c.words.iter_mut().rev().find(|w| w.x0 <= x) {
+                        w.glyphs.push(i);
+                    }
                 }
             }
         }
@@ -547,6 +579,128 @@ fn fits(cols: &[(f64, f64)], l: &Line) -> bool {
     !cols.is_empty() && l.chunks.iter().all(|c| covered(cols, c).len() <= 1)
 }
 
+/// A line with each chunk that runs across a gutter cut where a figure
+/// starts inside it. A label long enough to bring its figure within a cell
+/// gap reads as one chunk with it (`montmorillonite/smectite 100`), which no
+/// column holds, and the table's rows broke at it. Only a figure ending the
+/// line is cut off: a banner's words across the gutters it spans stay one
+/// label. A cut is kept only where every piece then sits in one column.
+fn split_at_gutters(cols: &[(f64, f64)], l: &Line) -> Line {
+    let mut chunks: Vec<Chunk> = Vec::new();
+    for (i, c) in l.chunks.iter().enumerate() {
+        // Only the line's last chunk: its figure is then the row's value. A
+        // label with its row's value set after it keeps a figure of its own
+        // (`Antihistamine tablets (30) | 30.80`), however wide a monospaced
+        // word space.
+        // A run of prose ending in a figure (a footnote under the table) is
+        // no label and its value; cut, it would fit the columns as a row.
+        if covered(cols, c).len() <= 1
+            || c.words.len() < 2
+            || c.words.len() > MAX_CUT_WORDS
+            || i + 1 < l.chunks.len()
+        {
+            chunks.push(c.clone());
+            continue;
+        }
+        let mut pieces: Vec<Vec<&Chunk>> = vec![vec![&c.words[0]]];
+        for w in &c.words[1..] {
+            let before = *pieces.last().unwrap().last().unwrap();
+            let cut = cols.windows(2).any(|p| {
+                let (gutter_x0, gutter_x1) = (p[0].1, p[1].0);
+                before.x1 <= gutter_x1 + 0.5
+                    && w.x0 >= gutter_x0 - 0.5
+                    && column_of(cols, before) != column_of(cols, w)
+                    && (is_figure(&w.text) || is_currency(&w.text))
+                    && !date_part(before, w)
+            });
+            if cut {
+                pieces.push(vec![w]);
+            } else {
+                pieces.last_mut().unwrap().push(w);
+            }
+        }
+        let n = pieces.len();
+        let cut: Vec<Chunk> = pieces
+            .into_iter()
+            .enumerate()
+            .map(|(i, ws)| Chunk {
+                x0: ws.iter().map(|w| w.x0).fold(f64::MAX, f64::min),
+                x1: ws.iter().map(|w| w.x1).fold(f64::MIN, f64::max),
+                y0: ws.iter().map(|w| w.y0).fold(f64::MAX, f64::min),
+                y1: ws.iter().map(|w| w.y1).fold(f64::MIN, f64::max),
+                text: ws
+                    .iter()
+                    .map(|w| w.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                bold: c.bold,
+                glyphs: ws.iter().flat_map(|w| w.glyphs.iter().copied()).collect(),
+                trailing: if i + 1 == n {
+                    c.trailing.clone()
+                } else {
+                    Vec::new()
+                },
+                words: ws.into_iter().cloned().collect(),
+            })
+            .collect();
+        if cut.len() > 1 && cut.iter().all(|p| covered(cols, p).len() <= 1) {
+            chunks.extend(cut);
+        } else {
+            chunks.push(c.clone());
+        }
+    }
+    Line {
+        chunks,
+        ..l.clone()
+    }
+}
+
+/// Most words in a chunk cut at a gutter: a label and its figure, not a
+/// sentence (`montmorillonite/smectite 100`, not a footnote's line).
+const MAX_CUT_WORDS: usize = 8;
+
+/// A word that is part of a date with the word before it: a year, or a day
+/// after a month's name (`December 31, 2016`), which a banner ends on.
+fn date_part(before: &Chunk, w: &Chunk) -> bool {
+    let t = w.text.trim();
+    if is_year(t) {
+        return true;
+    }
+    // The word before ends on a month's name, full or short, a space lost
+    // before it or not (`As ofDecember 31, 2015`).
+    let month = before.text.trim().trim_end_matches('.').to_lowercase();
+    let months = [
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+        "jan",
+        "feb",
+        "mar",
+        "apr",
+        "jun",
+        "jul",
+        "aug",
+        "sep",
+        "sept",
+        "oct",
+        "nov",
+        "dec",
+    ];
+    t.trim_end_matches(',')
+        .parse::<u32>()
+        .is_ok_and(|d| (1..=31).contains(&d))
+        && months.iter().any(|m| month.ends_with(m))
+}
+
 fn has_figures(cols: &[(f64, f64)], l: &Line) -> bool {
     l.chunks.iter().any(|c| {
         is_figure(&c.text) && !is_year(&c.text) && column_of(cols, c).is_some_and(|k| k > 0)
@@ -685,6 +839,10 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
     if cols0.len() < 2 {
         return Vec::new();
     }
+    let clipped: Vec<Line> = clipped
+        .iter()
+        .map(|l| split_at_gutters(&cols0, l))
+        .collect();
     let value_row = |l: &Line| fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l);
     let label_row = |l: &Line| {
         l.chunks.len() == 1
@@ -1116,7 +1274,8 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         }
     };
     let mut leaf: Vec<Chunk> = Vec::new();
-    let mut banners: Vec<(f64, Vec<Chunk>, bool)> = Vec::new(); // (base, chunks, above)
+    // (base, chunks, above the column labels, columns named)
+    let mut banners: Vec<(f64, Vec<Chunk>, bool, Vec<usize>)> = Vec::new();
     let mut leaf_bases: Vec<(usize, f64)> = Vec::new();
     let mut kinds: Vec<Vec<bool>> = Vec::new();
     for (i, l) in head.iter().enumerate() {
@@ -1205,24 +1364,94 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 .filter(|(k, _)| names.contains(k) || names.is_empty())
                 .map(|(_, b)| *b)
                 .fold(f64::MAX, f64::min);
-            banners.push((l.base, row, l.base < under || under == f64::MAX));
+            let mut named = names.clone();
+            for c in &row {
+                if let Some((a, b)) = rule_under(l, c) {
+                    named.extend(covered(
+                        &cols,
+                        &Chunk {
+                            x0: a,
+                            x1: b,
+                            ..c.clone()
+                        },
+                    ));
+                }
+            }
+            banners.push((l.base, row, l.base < under || under == f64::MAX, named));
+        }
+    }
+    // A column label with no banner over it, set higher than the header's
+    // last line, spans the header's rows and is read into the top one: a
+    // stub centred across them (`AMS`), a label wrapped down beside a
+    // banner and the labels under it (`Remittance` over `inflows in 2020`),
+    // a label level with the banner over the next column (`Mineral or
+    // colloid type` beside `CEC of pure colloid` over `cmolc/kg`). Left in
+    // the last line, the banner beside it took its column too.
+    let above_names: Vec<usize> = banners
+        .iter()
+        .filter(|b| b.2)
+        .flat_map(|b| b.3.iter().copied())
+        .collect();
+    let mut lifted: Vec<Chunk> = Vec::new();
+    let mut lifted_cols: Vec<usize> = Vec::new();
+    if banners.iter().any(|b| b.2) && !leaf.is_empty() {
+        // The line most columns' labels end on: a label wrapped further
+        // down is no measure of it.
+        let mut ends: Vec<f64> = (0..cols.len())
+            .filter_map(|k| {
+                leaf.iter()
+                    .filter(|c| column_of(&cols, c) == Some(k))
+                    .map(|c| c.y1)
+                    .reduce(f64::max)
+            })
+            .collect();
+        ends.sort_by(f64::total_cmp);
+        let bottom = ends[ends.len() / 2];
+        for k in 0..cols.len() {
+            let in_k: Vec<&Chunk> = leaf
+                .iter()
+                .filter(|c| column_of(&cols, c) == Some(k) && covered(&cols, c).len() <= 1)
+                .collect();
+            let top = in_k.iter().map(|c| c.y1).fold(f64::MAX, f64::min);
+            if !above_names.contains(&k) && !in_k.is_empty() && top < bottom - fs * 0.5 {
+                lifted_cols.push(k);
+            }
+        }
+        let (up, stay): (Vec<Chunk>, Vec<Chunk>) = leaf.into_iter().partition(|c| {
+            covered(&cols, c).len() <= 1
+                && column_of(&cols, c).is_some_and(|k| lifted_cols.contains(&k))
+        });
+        if stay.is_empty() {
+            leaf = up;
+            lifted_cols.clear();
+        } else {
+            leaf = stay;
+            lifted = up;
         }
     }
     let mut head_lines: Vec<Line> = Vec::new();
-    for (base, row, above) in &banners {
+    for (base, row, above, _) in &banners {
         if *above {
-            head_lines.push(synth(row.clone(), *base));
+            let mut row = row.clone();
+            if head_lines.is_empty() {
+                row.append(&mut lifted);
+                row.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+            }
+            head_lines.push(synth(row, *base));
         }
     }
+    let leaf_row = head_lines.len();
     if !leaf.is_empty() {
         let base = leaf.iter().map(|c| c.y1).fold(f64::MIN, f64::max);
         head_lines.push(synth(leaf, base));
     }
-    for (base, row, above) in &banners {
+    for (base, row, above, _) in &banners {
         if !*above {
             head_lines.push(synth(row.clone(), *base));
         }
     }
+    let downs: Vec<(usize, usize, usize)> =
+        lifted_cols.iter().map(|&k| (0, k, leaf_row + 1)).collect();
     let head_rows: Vec<Vec<&Line>> = head_lines.iter().map(|l| vec![l]).collect();
     // Body rows: one per line, a wrapped label joined to its row and a
     // label alone over rows read as their section.
@@ -1421,8 +1650,19 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             return None;
         }
     }
-    // A contents page: entries over a rising column of page numbers.
-    if cols.len() == 2 {
+    // A contents page: entries over a rising column of page numbers, under
+    // no header or one that says so. A header naming both columns makes it
+    // a table of rising values (`Mineral or colloid type` and `CEC of pure
+    // colloid`: 10, 30, 100, 150, 200); a label over one is a chart's.
+    let head_label = |k: usize| {
+        head_rows
+            .iter()
+            .flat_map(|ls| ls.iter().flat_map(|l| l.chunks.iter()))
+            .filter(|c| column_of(&cols, c) == Some(k) && c.text.chars().any(char::is_alphabetic))
+            .any(|c| !c.text.trim().to_lowercase().starts_with("page"))
+    };
+    let figures_named = head_label(0) && head_label(1);
+    if cols.len() == 2 && !figures_named {
         let pages: Vec<u32> = value_rows
             .iter()
             .flat_map(|ls| ls.iter().flat_map(|l| l.chunks.iter()))
@@ -1513,6 +1753,81 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             }
         }
     }
+    // A banner centred over the columns between its neighbours that the row
+    // under it names is theirs, however few of them its words cover:
+    // `Average Annual Growth` over five year ranges between `AMS` and
+    // `Remittance`. A rule under it as wide as its columns says what it
+    // spans, and stands.
+    for r in 0..head_rows.len().saturating_sub(1) {
+        let labels: Vec<(usize, &Line, &Chunk)> = head_rows[r]
+            .iter()
+            .flat_map(|l| l.chunks.iter().map(move |c| (*l, c)))
+            .filter_map(|(l, c)| column_of(&cols, c).map(|k| (k, l, c)))
+            .collect();
+        let named_below: Vec<usize> = head_rows[r + 1]
+            .iter()
+            .flat_map(|l| l.chunks.iter())
+            .filter_map(|c| column_of(&cols, c))
+            .collect();
+        for &(k, l, c) in &labels {
+            let ks = covered(&cols, c);
+            // A rule narrower than the label's own columns says nothing of
+            // what it spans.
+            let ruled = rule_under(l, c).is_some_and(|(a, b)| {
+                covered(
+                    &cols,
+                    &Chunk {
+                        x0: a,
+                        x1: b,
+                        ..c.clone()
+                    },
+                )
+                .len()
+                    >= ks.len()
+            });
+            if ks.len() < 2 || ruled {
+                continue;
+            }
+            // Its neighbours by the columns they cover, not their centres:
+            // a banner over two columns holds both.
+            let spread = |d: &Chunk, j: usize| {
+                let ds = covered(&cols, d);
+                if ds.is_empty() {
+                    (j, j)
+                } else {
+                    (ds[0], ds[ds.len() - 1])
+                }
+            };
+            // Nor into a span a banner to its left was just given.
+            let lo = labels
+                .iter()
+                .filter(|(j, _, d)| !std::ptr::eq(*d, c) && spread(d, *j).1 < ks[0])
+                .map(|(j, _, d)| spread(d, *j).1 + 1)
+                .chain(
+                    spans
+                        .iter()
+                        .filter(|&&(sr, _, c1)| sr == r && c1 <= ks[ks.len() - 1])
+                        .map(|&(_, _, c1)| c1),
+                )
+                .max()
+                .unwrap_or(1);
+            let hi = labels
+                .iter()
+                .filter(|(j, _, d)| !std::ptr::eq(*d, c) && spread(d, *j).0 > ks[ks.len() - 1])
+                .map(|(j, _, d)| spread(d, *j).0)
+                .min()
+                .unwrap_or(ncols);
+            if lo >= ks[0] && hi <= ks[ks.len() - 1] + 1 {
+                continue;
+            }
+            let (a, b) = (cols[lo].0, cols[hi - 1].1);
+            let centred = ((c.x0 + c.x1) / 2.0 - (a + b) / 2.0).abs() <= (b - a) * 0.15;
+            if centred && lo <= k && (lo..hi).all(|j| named_below.contains(&j)) {
+                spans.retain(|&(sr, c0, c1)| !(sr == r && c0 <= k && k < c1));
+                spans.push((r, lo, hi));
+            }
+        }
+    }
     // A banner row's label names the columns to its right as far as the
     // next label, where the row under it names them: `EUR` over `Unit` and
     // `Total`.
@@ -1528,6 +1843,8 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             .flat_map(|l| l.chunks.iter())
             .filter_map(|c| column_of(&cols, c))
             .collect();
+        // Labels read up from the rows below span down, not across.
+        at.retain(|&(k, _)| !(r == 0 && lifted_cols.contains(&k)));
         if at.is_empty() || at.len() * 2 > ncols || at.iter().any(|&(k, _)| k == 0) {
             continue;
         }
@@ -1599,6 +1916,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         layout: Some(std::sync::Arc::new(TableLayout {
             header_rows,
             spans,
+            downs,
             sub_headers,
             cells,
             claimed: Vec::new(),
