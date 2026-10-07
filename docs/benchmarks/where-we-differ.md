@@ -105,6 +105,27 @@ agrees with the key no more often than one that does not. The score is
 neither evidence for this change nor against it, which is worth stating
 plainly rather than quoting "no regression" as though it were a result.
 
+## Cell values wrapped at their own hyphen
+
+**Cost: 0.00001 of the deterministic overall, across 2 of 200 documents.**
+
+A narrow table column breaks a value at a hyphen the value already has.
+Joined back with a space, a product code printed as `FR-` over `15T` reads
+`FR- 15T`, which is not the code and matches it nowhere else in the document.
+So a cell's lines join with no space after a line-ending hyphen, and the
+hyphen stays.
+
+The reference transcribes the space. Document 053:
+
+```
+reference   TOTAL (w/ Party- List)
+ours        TOTAL (w/ Party-List)
+```
+
+The same reference spells it `Party-List` in the document's prose. Document
+147 has the same split in a web address inside a cell, `le- programme/`
+against `le-programme/`. Each document costs 0.0009.
+
 ## How to read this list
 
 It is short on purpose, and it is not a general excuse. Two rules keep it

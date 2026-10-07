@@ -159,3 +159,7 @@ it might contain composed forms:
 import unicodedata
 pattern = unicodedata.normalize("NFKC", user_query)
 ```
+
+Superscripts and subscripts are the exception: the text keeps `m³` and `H₂O`
+as printed, while NFKC folds them to `m3` and `H2O`. A query that contains
+them should keep them too.

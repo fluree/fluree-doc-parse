@@ -221,8 +221,8 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
     None
 }
 
-/// NFKC-fold one character, the same normalisation [`crate::line`] applies
-/// when it builds line text.
+/// Fold one character the way [`crate::line`] normalises
+/// line text (NFKC, keeping super- and subscripts).
 ///
 /// Line text is normalised on the way into the projection; glyph text keeps
 /// whatever the font's ToUnicode said. So the two spell the same character
@@ -235,8 +235,7 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
 /// string maps position→glyph, and a whole-string normalisation could compose
 /// across a glyph boundary and desynchronise that mapping.
 fn fold(c: char) -> impl Iterator<Item = char> {
-    use unicode_normalization::UnicodeNormalization;
-    c.to_string().nfkc().collect::<Vec<_>>().into_iter()
+    crate::text::fold(c)
 }
 
 /// Locate a string among a page's glyphs, preferring a match inside `within`.

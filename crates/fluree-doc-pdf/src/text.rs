@@ -13,6 +13,45 @@
 
 use unicode_normalization::UnicodeNormalization;
 
+/// A superscript or subscript code point, which NFKC would fold to its plain
+/// digit or letter. The unit in "m³/h" is a cubic metre; folded it reads
+/// "m3/h", a different string from the one printed and from the one every
+/// other reader of the same document emits. Ligatures, wide forms and the rest
+/// of NFKC's compatibility mappings stay folded.
+fn keeps_form(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00B2}' | '\u{00B3}' | '\u{00B9}' | '\u{2070}'..='\u{209F}'
+    )
+}
+
+/// NFKC-normalise one character, keeping super- and subscripts as printed
+/// (see [`keeps_form`]). The one normalisation line text, page text and span
+/// lookup all share, so the three always spell a character the same way.
+pub(crate) fn fold(c: char) -> impl Iterator<Item = char> {
+    let out: Vec<char> = if keeps_form(c) {
+        vec![c]
+    } else {
+        c.to_string().nfkc().collect()
+    };
+    out.into_iter()
+}
+
+/// [`fold`] over a string. Runs between kept characters are normalised whole,
+/// so a base letter and its combining mark still compose.
+pub(crate) fn normalize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(keeps_form) {
+        out.extend(rest[..i].nfkc());
+        let c = rest[i..].chars().next().unwrap_or_default();
+        out.push(c);
+        rest = &rest[i + c.len_utf8()..];
+    }
+    out.extend(rest.nfkc());
+    out
+}
+
 #[derive(Debug, Default)]
 pub struct PageText {
     /// Raw concatenation of glyph text.
@@ -38,7 +77,7 @@ impl PageText {
                 pt.raw_to_glyph.push(gi);
                 // Normalize one char at a time: 1 raw char may yield N normalized
                 // chars, and every one of them must point back to this raw offset.
-                for nch in ch.to_string().nfkc() {
+                for nch in fold(ch) {
                     pt.normalized.push(nch);
                     pt.norm_to_raw.push(raw_off);
                 }
@@ -103,6 +142,13 @@ mod tests {
             .normalized
             .chars()
             .any(|c| ('\u{FB00}'..='\u{FB06}').contains(&c)));
+    }
+
+    #[test]
+    fn superscripts_and_subscripts_are_kept_as_printed() {
+        assert_eq!(normalize("m³/h, cm², H₂O, ﬁt"), "m³/h, cm², H₂O, fit");
+        let g: Vec<String> = "m³".chars().map(|c| c.to_string()).collect();
+        assert_eq!(PageText::build(&g).normalized, "m³");
     }
 
     #[test]

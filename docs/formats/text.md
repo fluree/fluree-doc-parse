@@ -41,6 +41,9 @@ raw  : reﬂect ﬁnd reﬁne proﬁle ofﬁcer signiﬁcant
 NFKC : reflect find refine profile officer significant
 ```
 
+Superscripts and subscripts are kept as printed: `m³/h` stays `m³/h` rather
+than folding to `m3/h`.
+
 Without this, searching for `profile` finds one occurrence in six. Offsets are
 in **characters** of the normalized string, not bytes.
 

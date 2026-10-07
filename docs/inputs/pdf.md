@@ -36,7 +36,8 @@ Left alone this produces `検検討討会会のの構構成成` instead of
 **NFKC normalization.** Ligatures arrive as single codepoints; searching
 un-normalized output for `profile` finds one occurrence in six. Normalization
 can change string length, so the engine keeps a bijective map between raw
-glyph offsets and normalized text offsets.
+glyph offsets and normalized text offsets. Superscripts and subscripts are
+kept as printed (`m³/h`, `H₂O`) rather than folded to plain digits.
 
 Measured Unicode resolution: **99.97%** on a 200-document Latin corpus,
 **99.73%** on CJK, with **zero** replacement characters on Japanese and

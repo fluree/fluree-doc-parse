@@ -557,10 +557,31 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             let mut fill_grids = timed(&mut timings.tables, || {
                 table::detect_fill_bands(&p.fills, p.index)
             });
+            // Half of the grid's cells hold text, counting a merged cell once:
+            // fill edges cut a band into more columns than it has, and a
+            // label run across two of them is one cell, not one empty and
+            // one full, nor two full.
             fill_grids.retain(|grid| {
                 let cells = grid.cell_texts(&p.glyphs);
-                let occupied = cells.iter().filter(|cell| !cell.trim().is_empty()).count();
-                occupied * 2 >= grid.rows() * grid.cols()
+                let m = grid.merges(&p.rules, &p.fills);
+                let cols = grid.cols();
+                let owner = |mut i: usize| {
+                    while m.continues_left[i] || m.continues_above[i] {
+                        i -= if m.continues_left[i] { 1 } else { cols };
+                    }
+                    i
+                };
+                let mut held = vec![false; cells.len()];
+                for (i, cell) in cells.iter().enumerate() {
+                    if !cell.trim().is_empty() {
+                        held[owner(i)] = true;
+                    }
+                }
+                let slots = (0..cells.len()).filter(|&i| owner(i) == i).count();
+                let occupied = (0..cells.len())
+                    .filter(|&i| owner(i) == i && held[i])
+                    .count();
+                occupied * 2 >= slots
             });
             grids = fill_grids;
             grid_sources = vec![GridSource::FillBand; grids.len()];
@@ -1100,6 +1121,53 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     } else if owner {
                         merges.continues_left[c] = true;
                     }
+                }
+            }
+            // A merged cell is read whole, into its top-left cell. Its words
+            // were dealt out by the grid's cuts through it, which split a
+            // centred header across the row boundary under it (`time` above,
+            // `Delivery` below) and a band across the columns it spans
+            // (`Crucible | Logistics`).
+            let rcount = rows.len();
+            let mut taken = vec![false; rcount * cols];
+            for r in 0..rcount {
+                for c in 0..cols {
+                    if taken[r * cols + c] {
+                        continue;
+                    }
+                    let mut c_end = c + 1;
+                    while c_end < cols && merges.continues_left[r * cols + c_end] {
+                        c_end += 1;
+                    }
+                    let mut r_end = r + 1;
+                    while r_end < rcount && merges.continues_above[r_end * cols + c] {
+                        r_end += 1;
+                    }
+                    for i in r..r_end {
+                        for k in c..c_end {
+                            taken[i * cols + k] = true;
+                        }
+                    }
+                    if r_end - r == 1 && c_end - c == 1 {
+                        continue;
+                    }
+                    // Text the cuts part cleanly is separate values and stays
+                    // where it is, unless it is the block's only text: then it
+                    // is the merged cell's, and its place is the first cell.
+                    let held: Vec<(usize, usize)> = (r..r_end)
+                        .flat_map(|i| (c..c_end).map(move |k| (i, k)))
+                        .filter(|&(i, k)| !rows[i][k].trim().is_empty())
+                        .collect();
+                    let text =
+                        match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
+                            Some(t) => furniture::scrub_cell(&t, &furniture_texts),
+                            None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
+                            None => continue,
+                        };
+                    for row in rows.iter_mut().take(r_end).skip(r) {
+                        row[c..c_end].iter_mut().for_each(String::clear);
+                    }
+                    rows[r][c] = text;
                 }
             }
             // Banner bands below the header block are sub-headers: they label

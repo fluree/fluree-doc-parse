@@ -28,7 +28,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `id` | yes | `elem-NNNNN`, emission order |
 | `type` | yes | DoCO class |
 | `page` | yes | 0-based; `0` for formats without pages |
-| `text` | yes | NFKC-normalized |
+| `text` | yes | NFKC-normalized, super- and subscripts kept |
 | `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt`, `eml`, `msg` |
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |

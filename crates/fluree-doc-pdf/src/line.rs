@@ -16,7 +16,6 @@
 
 use crate::geom::BBox;
 use crate::glyph::Glyph;
-use unicode_normalization::UnicodeNormalization;
 
 /// Gap, as a fraction of font size, above which we insert a synthetic space —
 /// the *fallback* when a document's own gap distribution is not clearly
@@ -983,10 +982,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     }
 
     let bbox = bbox?;
-    // NFKC here so line text is directly usable by NER and search. The raw
-    // offsets that resolve to bounding boxes live in `glyphs`, so normalizing
-    // the display text costs us nothing (T1.4 in eval/TEST_PLAN.md).
-    let text: String = text.trim().nfkc().collect();
+    // NFKC here (super- and subscripts kept) so line text is directly usable
+    // by NER and search. The raw offsets that resolve to bounding boxes live
+    // in `glyphs`, so normalizing the display text costs us nothing (T1.4 in
+    // eval/TEST_PLAN.md).
+    let text = crate::text::normalize(text.trim());
     if text.is_empty() {
         return None;
     }

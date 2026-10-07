@@ -57,6 +57,10 @@ raw  : reﬂect ﬁnd reﬁne proﬁle ofﬁcer signiﬁcant
 NFKC : reflect find refine profile officer significant
 ```
 
+Superscripts and subscripts are the one exception. NFKC would fold `m³/h` to
+`m3/h` and `H₂O` to `H2O`, which is a different string from the one printed,
+so they are kept as they are, the same as the other input formats keep them.
+
 NFKC can change string length, so raw glyph offsets and normalized text
 offsets are not the same coordinate. The engine keeps a bijective map between
 them; the offsets in `doco` are in **normalized** space, matching the text

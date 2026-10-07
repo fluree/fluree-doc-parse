@@ -74,8 +74,23 @@ impl Grid {
     /// page-level line spans the full grid width. This is the same ordering
     /// constraint as column segmentation: segment first, assemble second.
     pub fn cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
-        let (rows, cols) = (self.rows(), self.cols());
-        let mut buckets: Vec<Vec<crate::glyph::Glyph>> = vec![Vec::new(); rows * cols];
+        let mut buckets: Vec<Vec<crate::glyph::Glyph>> =
+            vec![Vec::new(); self.rows() * self.cols()];
+        for (g, home) in glyphs.iter().zip(self.glyph_cells(glyphs)) {
+            if let Some(cell) = home {
+                buckets[cell].push(g.clone());
+            }
+        }
+        buckets
+            .iter()
+            .map(|gs| join_cell_lines(crate::line::assemble(gs).iter().map(|l| l.text.as_str())))
+            .collect()
+    }
+
+    /// The cell each glyph is read into, as `row * cols + col`; `None` for
+    /// a glyph outside the grid or set across it.
+    fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
+        let cols = self.cols();
         let mut home: Vec<Option<usize>> = vec![None; glyphs.len()];
 
         // Assign *words*, not glyphs. A per-glyph assignment lets a column
@@ -96,19 +111,22 @@ impl Grid {
                     && glyphs[i].is_horizontal()
             })
             .collect();
-        idx.sort_by(|&a, &b| {
-            let (ga, gb) = (&glyphs[a], &glyphs[b]);
-            ga.origin
-                .1
-                .partial_cmp(&gb.origin.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(
-                    ga.origin
-                        .0
-                        .partial_cmp(&gb.origin.0)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
-        });
+        idx.sort_by(|&a, &b| glyphs[a].origin.1.total_cmp(&glyphs[b].origin.1));
+        // Then left to right within each line. A line's baselines jitter by
+        // fractions of a point, and a label is set a little higher or lower
+        // than its row's others, so sorting by baseline alone interleaves the
+        // words of one line: `Co` and `lor`, a column apart, with another
+        // word between them.
+        let mut start = 0;
+        while start < idx.len() {
+            let first = &glyphs[idx[start]];
+            let reach = first.font_size.max(1.0) as f64 * 0.3;
+            let end = (start..idx.len())
+                .find(|&k| glyphs[idx[k]].origin.1 - first.origin.1 >= reach)
+                .unwrap_or(idx.len());
+            idx[start..end].sort_by(|&a, &b| glyphs[a].origin.0.total_cmp(&glyphs[b].origin.0));
+            start = end;
+        }
         let mut runs: Vec<Vec<usize>> = Vec::new();
         let mut run: Vec<usize> = Vec::new();
         for &i in &idx {
@@ -122,7 +140,11 @@ impl Grid {
                     .map(|a| pg.origin.0 + a)
                     .unwrap_or(pg.bbox.unwrap().x1);
                 let start = g.bbox.unwrap().x0.min(g.origin.0);
-                if !same_line || start - pen_end > fs * 0.2 {
+                // Backwards is a break too: where two lines' glyphs fall
+                // within one line's reach of each other, the next glyph can
+                // start well behind the pen.
+                let gap = start - pen_end;
+                if !same_line || gap > fs * 0.2 || gap < -fs * 0.5 {
                     runs.push(std::mem::take(&mut run));
                 }
             }
@@ -190,7 +212,6 @@ impl Grid {
                 for &i in run.iter() {
                     let b = glyphs[i].bbox.unwrap();
                     if let Some((r, c)) = self.cell_at((b.x0 + b.x1) * 0.5, cy) {
-                        buckets[r * cols + c].push(glyphs[i].clone());
                         home[i] = Some(r * cols + c);
                     }
                 }
@@ -198,7 +219,6 @@ impl Grid {
             }
             if let Some((r, c)) = self.cell_at(cx, cy) {
                 for &i in run.iter() {
-                    buckets[r * cols + c].push(glyphs[i].clone());
                     home[i] = Some(r * cols + c);
                 }
             }
@@ -248,21 +268,12 @@ impl Grid {
             if let (Some(p), Some(n)) = (before, after) {
                 if let (Some(a), Some(b)) = (home[p], home[n]) {
                     if a == b {
-                        buckets[a].push(glyphs[s].clone());
+                        home[s] = Some(a);
                     }
                 }
             }
         }
-        buckets
-            .iter()
-            .map(|gs| {
-                crate::line::assemble(gs)
-                    .iter()
-                    .map(|l| l.text.as_str())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect()
+        home
     }
 
     /// Derive columns for a one-column grid from the alignment of its text.
@@ -396,6 +407,150 @@ impl Grid {
             .map(|l| l.text.as_str())
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// The text of a block of cells read as one label, rows `rows` by
+    /// columns `cols`, when its text runs across the cuts between them.
+    ///
+    /// A merged cell's text belongs to the whole block, not to the cells the
+    /// grid cuts it into. A header spanning two rows is centred across their
+    /// boundary, so its one line puts `Staff` above the cut and `member` below
+    /// it, and two lines can split the other way round; a banner across two
+    /// columns puts `Weight` in one and `(kg)` in the next.
+    ///
+    /// A cut with text on both sides must be crossed by it: a line set
+    /// across it, a word space apart either side of a column cut, or the
+    /// lines either side of a row cut a paragraph's leading apart. `None`
+    /// otherwise, because then the cut falls cleanly between values. A
+    /// merge read from where the ruling is absent also takes in columns
+    /// that were simply never ruled apart (`Foreign | Domestic`), and their
+    /// values are separate.
+    pub fn region_text(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        merges: &Merges,
+        rows: std::ops::Range<usize>,
+        cols: std::ops::Range<usize>,
+    ) -> Option<String> {
+        let n = self.cols();
+        let homes = self.glyph_cells(glyphs);
+        let inside: Vec<crate::glyph::Glyph> = glyphs
+            .iter()
+            .zip(&homes)
+            .filter(|(_, home)| {
+                home.is_some_and(|i| rows.contains(&(i / n)) && cols.contains(&(i % n)))
+            })
+            .map(|(g, _)| g.clone())
+            .collect();
+        let lines = crate::line::assemble(&inside);
+        // A line's words, each as the span of its ink. Words, not glyphs: a
+        // cell is dealt whole words, and a boundary inferred from alignment
+        // can run through one (`M|eiosis`) without parting anything.
+        let words = |l: &crate::line::Line| -> Vec<BBox> {
+            let fs = l.font_size.max(1.0) as f64;
+            let mut words: Vec<BBox> = Vec::new();
+            let mut open = false;
+            for g in l.glyphs.iter().map(|&i| &inside[i]) {
+                let Some(b) = g.bbox.filter(|_| !g.text.trim().is_empty()) else {
+                    open = false;
+                    continue;
+                };
+                match words.last_mut() {
+                    Some(w) if open && b.x0 - w.x1 <= fs * 0.2 => {
+                        w.x1 = w.x1.max(b.x1);
+                        w.y0 = w.y0.min(b.y0);
+                        w.y1 = w.y1.max(b.y1);
+                    }
+                    _ => words.push(b),
+                }
+                open = true;
+            }
+            words
+        };
+        let ink: Vec<BBox> = lines.iter().flat_map(words).collect();
+        let column_cut = |x: f64| {
+            let parted = ink.iter().any(|b| (b.x0 + b.x1) * 0.5 < x)
+                && ink.iter().any(|b| (b.x0 + b.x1) * 0.5 >= x);
+            !parted
+                || lines.iter().any(|l| {
+                    let boxes = words(l);
+                    let left = boxes
+                        .iter()
+                        .filter(|b| (b.x0 + b.x1) * 0.5 < x)
+                        .map(|b| b.x1)
+                        .fold(f64::MIN, f64::max);
+                    let right = boxes
+                        .iter()
+                        .filter(|b| (b.x0 + b.x1) * 0.5 >= x)
+                        .map(|b| b.x0)
+                        .fold(f64::MAX, f64::min);
+                    right - left < l.font_size.max(1.0) as f64
+                })
+        };
+        let baseline = |l: &crate::line::Line| inside[l.glyphs[0]].origin.1;
+        // Per column beside the block that rules row `row` off from the one
+        // above it: whether ink in `row` sits on this baseline.
+        let beside = |row: usize, cut: usize, base: f64, fs: f64| -> Vec<bool> {
+            (0..n)
+                .filter(|j| {
+                    !cols.contains(j)
+                        && !merges
+                            .continues_above
+                            .get(cut * n + j)
+                            .copied()
+                            .unwrap_or(false)
+                })
+                .map(|j| {
+                    glyphs.iter().zip(&homes).any(|(g, home)| {
+                        *home == Some(row * n + j)
+                            && g.bbox.is_some()
+                            && !g.text.trim().is_empty()
+                            && (g.origin.1 - base).abs() <= fs * SHARED_BASELINE
+                    })
+                })
+                .collect()
+        };
+        let row_cut = |k: usize| {
+            let y = self.ys[k];
+            let mid = |l: &&crate::line::Line| (l.bbox.y0 + l.bbox.y1) * 0.5;
+            let above = lines
+                .iter()
+                .filter(|l| mid(l) < y)
+                .max_by(|a, b| baseline(a).total_cmp(&baseline(b)));
+            let below = lines
+                .iter()
+                .filter(|l| mid(l) >= y)
+                .min_by(|a, b| baseline(a).total_cmp(&baseline(b)));
+            // All of the text on one side: nothing for the cut to part.
+            let (Some(a), Some(b)) = (above, below) else {
+                return true;
+            };
+            let fs = a.font_size.max(b.font_size).max(1.0) as f64;
+            let leading = baseline(b) - baseline(a);
+            // Two lines each on the baseline of a value beside them, in rows
+            // the ruling parts, are those rows' labels however tightly the
+            // rows are set: `Revision Level | L` over `Revision Date |
+            // 06/14/2026`. A merged label's lines are centred across its
+            // rows and sit on neither. Another merged label beside it is no
+            // evidence: wrapped the same way, its lines share the baselines.
+            let rowed = beside(k - 1, k, baseline(a), fs)
+                .into_iter()
+                .zip(beside(k, k, baseline(b), fs))
+                .any(|(up, down)| up && down);
+            // Unless the lower line plainly carries on the upper one. A label
+            // top-aligned over single-line rows puts each of its lines on a
+            // row's baseline too: `KEYTRUDA in combination` over `with
+            // axitinib`, `Infusion-related reactions` over `[see Warnings…]`.
+            let carries_on = b
+                .text
+                .starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
+                || a.text.ends_with([',', '-', '/']);
+            lines.iter().any(|l| l.bbox.y0 < y && l.bbox.y1 > y)
+                || (leading <= PARAGRAPH_LEADING * fs && (!rowed || carries_on))
+        };
+        let crossed = (cols.start + 1..cols.end).all(|k| column_cut(self.xs[k]))
+            && (rows.start + 1..rows.end).all(row_cut);
+        crossed.then(|| join_cell_lines(lines.iter().map(|l| l.text.as_str())))
     }
 
     pub fn cols(&self) -> usize {
@@ -737,6 +892,41 @@ impl Grid {
         let r = self.ys.windows(2).position(|w| y >= w[0] && y < w[1])?;
         Some((r, c))
     }
+}
+
+/// Baseline-to-baseline distance, in font sizes, up to which two lines are
+/// one wrapped label rather than the values of two rows. Wrapped lines sit
+/// about 1.1–1.25 apart; a padded table row is 1.5 or more.
+const PARAGRAPH_LEADING: f64 = 1.35;
+
+/// Baseline difference, in font sizes, within which a label and a value
+/// beside it are set on one line. A label centred across merged rows is off
+/// its neighbours' baselines by a fifth of its size or more.
+const SHARED_BASELINE: f64 = 0.1;
+
+/// A cell's lines, top to bottom, as one value.
+///
+/// A line ending in a hyphen joins the next with no space and keeps the
+/// hyphen. A narrow column breaks a value at a hyphen it already has, so the
+/// hyphen is the value's own: a product code `FR-` over `15T` is `FR-15T`,
+/// a name `Ben-` over `David` is `Ben-David`. A paragraph drops the hyphen
+/// instead (see [`crate::block::Block::text`]), because running prose is
+/// where typesetters hyphenate words that have none; a cell's codes and names
+/// are where that reading costs the value.
+fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
+    let mut out = String::new();
+    for l in lines {
+        let wrapped = out
+            .strip_suffix('-')
+            .and_then(|s| s.chars().next_back())
+            .is_some_and(char::is_alphanumeric)
+            && l.starts_with(char::is_alphanumeric);
+        if !out.is_empty() && !wrapped {
+            out.push(' ');
+        }
+        out.push_str(l);
+    }
+    out
 }
 
 /// Total length of `[x0, x1]` covered by the union of `spans`.
@@ -4063,5 +4253,152 @@ mod tests {
         let out = coalesce(vec![68.0, 68.4, 183.0, 183.2, 297.0], 3.0);
         assert_eq!(out.len(), 3);
         assert!((out[0] - 68.2).abs() < 0.01);
+    }
+
+    /// `text` set from `x` on baseline `y`: one glyph a character at 10pt,
+    /// 5.5pt apart, spaces as outline-less glyphs the way a PDF draws them.
+    fn set(text: &str, x: f64, y: f64) -> Vec<crate::glyph::Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, ch)| {
+                let cx = x + 5.5 * i as f64;
+                crate::glyph::Glyph {
+                    text: ch.to_string(),
+                    bbox: (ch != ' ').then_some(BBox {
+                        x0: cx,
+                        y0: y - 8.0,
+                        x1: cx + 5.0,
+                        y1: y + 2.0,
+                    }),
+                    page: 0,
+                    origin: (cx, y),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(5.5),
+                    draw_index: 0,
+                }
+            })
+            .collect()
+    }
+
+    fn grid(xs: &[f64], ys: &[f64]) -> Grid {
+        Grid {
+            page: 0,
+            xs: xs.to_vec(),
+            ys: ys.to_vec(),
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: *xs.last().unwrap(),
+                y1: *ys.last().unwrap(),
+            },
+        }
+    }
+
+    fn merged(g: &Grid, above: &[(usize, usize)], left: &[(usize, usize)]) -> Merges {
+        let n = g.rows() * g.cols();
+        let mut m = Merges {
+            continues_above: vec![false; n],
+            continues_left: vec![false; n],
+            full_width_row: vec![false; g.rows()],
+        };
+        for &(r, c) in above {
+            m.continues_above[r * g.cols() + c] = true;
+        }
+        for &(r, c) in left {
+            m.continues_left[r * g.cols() + c] = true;
+        }
+        m
+    }
+
+    #[test]
+    fn a_value_wrapped_at_its_hyphen_keeps_it() {
+        assert_eq!(join_cell_lines(["FR-", "15T"].into_iter()), "FR-15T");
+        assert_eq!(
+            join_cell_lines(["Dov Ben-", "David"].into_iter()),
+            "Dov Ben-David"
+        );
+        assert_eq!(
+            join_cell_lines(["Nominal", "flow"].into_iter()),
+            "Nominal flow"
+        );
+        // A dash set apart is a range or a blank, not a wrapped word.
+        assert_eq!(join_cell_lines(["10 -", "20"].into_iter()), "10 - 20");
+        let g = grid(&[0.0, 60.0], &[0.0, 30.0]);
+        let mut gl = set("FR-", 5.0, 10.0);
+        gl.extend(set("15T", 5.0, 22.0));
+        assert_eq!(g.cell_texts(&gl), ["FR-15T"]);
+    }
+
+    #[test]
+    fn a_banner_higher_than_its_row_does_not_take_the_label_beside_it() {
+        // `Contact` is centred over its columns, two points above `Payroll`:
+        // sorted by baseline alone it came first, and `Payroll` then started
+        // behind its pen and was read as the same word.
+        let g = grid(&[0.0, 100.0, 200.0], &[90.0, 125.0]);
+        let mut gl = set("Payroll", 10.0, 105.0);
+        gl.extend(set("Contact", 115.0, 102.75));
+        assert_eq!(g.cell_texts(&gl), ["Payroll", "Contact"]);
+    }
+
+    #[test]
+    fn a_banner_across_two_columns_is_read_whole() {
+        let g = grid(&[0.0, 60.0, 120.0], &[0.0, 20.0, 40.0]);
+        let mut gl = set("Weight (kg)", 35.0, 14.0);
+        gl.extend(set("Net", 10.0, 34.0));
+        gl.extend(set("Shipping", 70.0, 34.0));
+        let m = merged(&g, &[], &[(0, 1)]);
+        assert_eq!(
+            g.region_text(&gl, &m, 0..1, 0..2).as_deref(),
+            Some("Weight (kg)")
+        );
+    }
+
+    #[test]
+    fn columns_never_ruled_apart_keep_their_own_values() {
+        let g = grid(&[0.0, 60.0, 120.0], &[0.0, 20.0]);
+        let mut gl = set("Foreign", 10.0, 14.0);
+        gl.extend(set("Domestic", 70.0, 14.0));
+        let m = merged(&g, &[], &[(0, 1)]);
+        assert_eq!(g.region_text(&gl, &m, 0..1, 0..2), None);
+    }
+
+    #[test]
+    fn a_header_centred_across_two_rows_is_read_whole() {
+        // One line on the cut between the rows it spans: `Staff` and
+        // `member` were dealt to the rows either side of it.
+        let g = grid(&[0.0, 100.0, 200.0], &[0.0, 20.0, 40.0]);
+        let mut gl = set("Staff member", 10.0, 24.0);
+        gl.extend(set("Contact", 110.0, 14.0));
+        gl.extend(set("Phone", 110.0, 34.0));
+        let m = merged(&g, &[(1, 0)], &[]);
+        assert_eq!(
+            g.region_text(&gl, &m, 0..2, 0..1).as_deref(),
+            Some("Staff member")
+        );
+    }
+
+    #[test]
+    fn labels_on_their_values_baselines_are_separate_rows() {
+        // Tight rows with no rule between the labels: a paragraph's leading
+        // apart, but each label sits on the baseline of its own value.
+        let rows = |upper: &str, lower: &str| {
+            let mut gl = set(upper, 5.0, 10.0);
+            gl.extend(set(lower, 5.0, 22.0));
+            gl.extend(set("L", 160.0, 10.0));
+            gl.extend(set("06/14/2026", 160.0, 22.0));
+            gl
+        };
+        let g = grid(&[0.0, 150.0, 220.0], &[0.0, 13.0, 26.0]);
+        let m = merged(&g, &[(1, 0)], &[]);
+        let gl = rows("Revision Level", "Revision Date");
+        assert_eq!(g.region_text(&gl, &m, 0..2, 0..1), None);
+        // The same geometry, but the lower line plainly carries on the upper.
+        let gl = rows("KEYTRUDA in combination", "with axitinib");
+        assert_eq!(
+            g.region_text(&gl, &m, 0..2, 0..1).as_deref(),
+            Some("KEYTRUDA in combination with axitinib")
+        );
     }
 }
