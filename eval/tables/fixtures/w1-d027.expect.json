@@ -1,0 +1,275 @@
+{
+ "family": "sparse",
+ "formats": [
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Sales receipt WB-40110"
+  },
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "text": "Date of sale: 21 March 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Item",
+     "Qty",
+     "Price",
+     "Amount"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "KT-301",
+       "Fish pie",
+       "",
+       "12.05",
+       "24.10"
+      ]
+     },
+     {
+      "cells": [
+       "BK-104",
+       "Seeded rye",
+       "4",
+       "5.55",
+       "22.20"
+      ]
+     },
+     {
+      "cells": [
+       "BK-210",
+       "Almond croissant",
+       "2",
+       "2.79",
+       "5.58"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Subtotal",
+       "",
+       "",
+       "51.88"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "VAT",
+       "",
+       "",
+       "10.38"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "TOTAL",
+       "",
+       "",
+       "62.26"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Item",
+      "Qty",
+      "Price",
+      "Amount"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "All amounts in GBP."
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "WB-40110",
+   "needed": true,
+   "start": 14
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "21 March 2026",
+   "needed": true,
+   "start": 14
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "GBP",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "KT-301",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Fish pie",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "12.05",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "24.10",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "BK-104",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Seeded rye",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "5.55",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "22.20",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "BK-210",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Almond croissant",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2.79",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "5.58",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "51.88",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "10.38",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "62.26",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 4
+  }
+ ]
+}

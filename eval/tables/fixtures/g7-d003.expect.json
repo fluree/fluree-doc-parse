@@ -1,0 +1,139 @@
+{
+ "family": "field-value",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "BF-5 blast freezer: technical data"
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Transport weight",
+       "629 lb"
+      ]
+     },
+     {
+      "cells": [
+       "Long side",
+       "195 cm"
+      ]
+     },
+     {
+      "cells": [
+       "Across",
+       "178 cm"
+      ]
+     },
+     {
+      "cells": [
+       "Tall",
+       "42 cm"
+      ]
+     },
+     {
+      "cells": [
+       "Covered for",
+       "5 years"
+      ]
+     },
+     {
+      "cells": [
+       "Brim volume",
+       "99 L"
+      ]
+     },
+     {
+      "cells": [
+       "Heat limit",
+       "287 °C"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "BF-5",
+   "needed": true,
+   "start": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "629 lb",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "195 cm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "178 cm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "42 cm",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "5 years",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "99 L",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "287 °C",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  }
+ ]
+}

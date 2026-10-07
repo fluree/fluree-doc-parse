@@ -1,0 +1,246 @@
+{
+ "family": "transposed",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Product range: technical data"
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     "QC-12S",
+     "QC-16",
+     "BV-25",
+     "BV-25L"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Overall length",
+       "196 cm",
+       "188 cm",
+       "198 cm",
+       "200 cm"
+      ]
+     },
+     {
+      "cells": [
+       "W",
+       "73 cm",
+       "86 cm",
+       "154 cm",
+       "166 cm"
+      ]
+     },
+     {
+      "cells": [
+       "H",
+       "186 cm",
+       "156 cm",
+       "on request",
+       "82 cm"
+      ]
+     },
+     {
+      "cells": [
+       "Flow rate",
+       "24.8 m³/h",
+       "9.9 m³/h",
+       "30.6 m³/h",
+       "10.5 m³/h"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "",
+      "QC-12S",
+      "QC-16",
+      "BV-25",
+      "BV-25L"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "QC-12S",
+   "needed": true,
+   "start": 0,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "QC-16",
+   "needed": true,
+   "start": 0,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "BV-25",
+   "needed": true,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "BV-25L",
+   "needed": true,
+   "start": 0,
+   "col": 4,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "196 cm",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "188 cm",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "198 cm",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "200 cm",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "73 cm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "86 cm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "154 cm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "166 cm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "186 cm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "156 cm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "82 cm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "24.8 m³/h",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "9.9 m³/h",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "30.6 m³/h",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "10.5 m³/h",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  }
+ ]
+}

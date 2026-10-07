@@ -1,0 +1,426 @@
+{
+ "family": "merged-header",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Till receipt KP-023034"
+  },
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "Date of sale: 21/07/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Ref.",
+     "Article",
+     "Qty",
+     "Amount / Unit",
+     "Amount / Line"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "FA-0412",
+       "Digital thermometer",
+       "1",
+       "EUR 12.85",
+       "EUR 12.85"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0152",
+       "Paracetamol 500mg (24)",
+       "1",
+       "EUR 2.25",
+       "EUR 2.25"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0210",
+       "Antihistamine tablets (30)",
+       "4",
+       "EUR 10.10",
+       "EUR 40.40"
+      ]
+     },
+     {
+      "cells": [
+       "FA-0401",
+       "Plasters assorted (40)",
+       "2",
+       "EUR 3.15",
+       "EUR 6.30"
+      ]
+     },
+     {
+      "cells": [
+       "PC-0310",
+       "Sun cream SPF50 200ml",
+       "1",
+       "EUR 13.55",
+       "EUR 13.55"
+      ]
+     },
+     {
+      "cells": [
+       "PC-0322",
+       "Hand cream 75ml",
+       "1",
+       "EUR 6.60",
+       "EUR 6.60"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Ref.",
+      "Article",
+      "Qty",
+      "Amount",
+      null
+     ],
+     [
+      null,
+      null,
+      null,
+      "Unit",
+      "Line"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Goods total: EUR 81.95"
+  },
+  {
+   "text": "VAT 23%: EUR 18.85"
+  },
+  {
+   "text": "TOTAL: EUR 100.80"
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "KP-023034",
+   "needed": true,
+   "start": 13
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "21/07/2026",
+   "needed": true,
+   "start": 14
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "FA-0412",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Digital thermometer",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 12.85",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 12.85",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "MD-0152",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Paracetamol 500mg (24)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 2.25",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 2.25",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "MD-0210",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Antihistamine tablets (30)",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 10.10",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 40.40",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "FA-0401",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Plasters assorted (40)",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 3.15",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 6.30",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "PC-0310",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Sun cream SPF50 200ml",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 13.55",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 13.55",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "PC-0322",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Hand cream 75ml",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 6.60",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 6.60",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "EUR 81.95",
+   "needed": true,
+   "start": 13
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "23%",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "EUR 18.85",
+   "needed": true,
+   "start": 9
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "EUR 100.80",
+   "needed": true,
+   "start": 7
+  }
+ ]
+}

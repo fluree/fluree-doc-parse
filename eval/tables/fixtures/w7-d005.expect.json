@@ -1,0 +1,278 @@
+{
+ "family": "transposed",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Ardee Road Chemists"
+  },
+  {
+   "text": "No. KP-087929   Issued: 18/03/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Hand cream 75ml",
+     "Plasters assorted (40)",
+     "Paracetamol 500mg (24)"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Code",
+       "PC-0322",
+       "FA-0401",
+       "MD-0152"
+      ]
+     },
+     {
+      "cells": [
+       "No.",
+       "4",
+       "1",
+       "1"
+      ]
+     },
+     {
+      "cells": [
+       "Each",
+       "EUR 5.20",
+       "EUR 3.05",
+       "EUR 2.95"
+      ]
+     },
+     {
+      "cells": [
+       "Value",
+       "EUR 20.80",
+       "EUR 3.05",
+       "EUR 2.95"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Hand cream 75ml",
+      "Plasters assorted (40)",
+      "Paracetamol 500mg (24)"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Net: EUR 26.80"
+  },
+  {
+   "text": "VAT 23%: EUR 6.16"
+  },
+  {
+   "text": "TOTAL: EUR 32.96"
+  },
+  {
+   "text": "Cash: EUR 40.00"
+  },
+  {
+   "text": "Change: EUR 7.04"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "KP-087929",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "18/03/2026",
+   "needed": true,
+   "start": 24
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Hand cream 75ml",
+   "needed": true,
+   "start": 0,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Plasters assorted (40)",
+   "needed": true,
+   "start": 0,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Paracetamol 500mg (24)",
+   "needed": true,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "PC-0322",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "FA-0401",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "MD-0152",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 5.20",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 3.05",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 2.95",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 20.80",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 3.05",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 2.95",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "EUR 26.80",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "23%",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "EUR 6.16",
+   "needed": true,
+   "start": 9
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "EUR 32.96",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "EUR 40.00",
+   "needed": true,
+   "start": 6
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "EUR 7.04",
+   "needed": true,
+   "start": 8
+  }
+ ]
+}

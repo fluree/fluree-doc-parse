@@ -1,0 +1,256 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Hollis Lumber Yard"
+  },
+  {
+   "table": {
+    "columns": [
+     "Receipt",
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Receipt no.",
+       "091267"
+      ]
+     },
+     {
+      "cells": [
+       "Date of sale",
+       "06/15/2026"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Receipt",
+      ""
+     ]
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     "Item",
+     "Units",
+     "Unit price"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Interior latex paint, 1 gal",
+       "2",
+       "29.79"
+      ]
+     },
+     {
+      "cells": [
+       "Cordless drill kit",
+       "1",
+       "124.95"
+      ]
+     },
+     {
+      "cells": [
+       "Wood glue 16 oz",
+       "1",
+       "8.39"
+      ]
+     },
+     {
+      "cells": [
+       "Tape measure 25 ft",
+       "4",
+       "14.80"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Item",
+      "Units",
+      "Unit price"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Net: 252.12"
+  },
+  {
+   "text": "Sales tax: 22.21"
+  },
+  {
+   "text": "TOTAL: 274.33"
+  },
+  {
+   "text": "All amounts in USD."
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "091267",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "06/15/2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "USD",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Interior latex paint, 1 gal",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "29.79",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Cordless drill kit",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "124.95",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Wood glue 16 oz",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "8.39",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Tape measure 25 ft",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "14.80",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "252.12",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "22.21",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "274.33",
+   "needed": true,
+   "start": 7
+  }
+ ]
+}

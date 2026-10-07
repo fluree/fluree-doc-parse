@@ -1,0 +1,192 @@
+{
+ "family": "transposed",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "Receipt no. KP-079106   Issued: 01/08/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Sun cream SPF50 200ml",
+     "Paracetamol 500mg (24)"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Code",
+       "PC-0310",
+       "MD-0152"
+      ]
+     },
+     {
+      "cells": [
+       "No.",
+       "2",
+       "1"
+      ]
+     },
+     {
+      "cells": [
+       "Unit price",
+       "15.50",
+       "2.30"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Sun cream SPF50 200ml",
+      "Paracetamol 500mg (24)"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Net: 33.30"
+  },
+  {
+   "text": "VAT 23%: 7.66"
+  },
+  {
+   "text": "Amount due: 40.96"
+  },
+  {
+   "text": "Currency: EUR"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "KP-079106",
+   "needed": true,
+   "start": 12
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "01/08/2026",
+   "needed": true,
+   "start": 32
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "EUR",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Sun cream SPF50 200ml",
+   "needed": true,
+   "start": 0,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Paracetamol 500mg (24)",
+   "needed": true,
+   "start": 0,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "PC-0310",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "MD-0152",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "15.50",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "2.30",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "33.30",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "23%",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "7.66",
+   "needed": true,
+   "start": 9
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "40.96",
+   "needed": true,
+   "start": 12
+  }
+ ]
+}

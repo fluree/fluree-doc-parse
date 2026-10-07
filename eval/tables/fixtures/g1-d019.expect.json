@@ -1,0 +1,390 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Combi ovens: price list"
+  },
+  {
+   "text": "Prices in GBP and periods in days."
+  },
+  {
+   "table": {
+    "columns": [
+     "Part no.",
+     "Price each"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "CO-61",
+       "223.75"
+      ]
+     },
+     {
+      "cells": [
+       "CO-61G",
+       "8,260.32"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101",
+       "3,658.17"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101G",
+       "3,610.79"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Part no.",
+      "Price each"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Ordering terms"
+  },
+  {
+   "table": {
+    "columns": [
+     "Part no.",
+     "Carton price",
+     "Pack qty",
+     "MOQ",
+     "Delivery time",
+     "Country of origin",
+     "Remarks"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "CO-61",
+       "",
+       "20",
+       "25",
+       "10",
+       "Poland",
+       "Discontinued after stock"
+      ]
+     },
+     {
+      "cells": [
+       "CO-61G",
+       "46,891.95",
+       "6",
+       "2",
+       "17",
+       "Germany",
+       "Discontinued after stock"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101",
+       "63,741.59",
+       "20",
+       "2",
+       "10",
+       "Germany",
+       "Discontinued after stock"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101G",
+       "30,300.51",
+       "10",
+       "10",
+       "19",
+       "Poland",
+       "Fragile"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Part no.",
+      "Carton price",
+      "Pack qty",
+      "MOQ",
+      "Delivery time",
+      "Country of origin",
+      "Remarks"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "GBP",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "days",
+   "needed": true,
+   "start": 29
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "CO-61",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "223.75",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "CO-61G",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "8,260.32",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "CO-101",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "3,658.17",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "CO-101G",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "3,610.79",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "CO-61",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "25",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "CO-61G",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "46,891.95",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "6",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "17",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "CO-101",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "63,741.59",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "CO-101G",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "30,300.51",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "19",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  }
+ ]
+}

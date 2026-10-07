@@ -1,0 +1,226 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Corbett Hardware & Supply"
+  },
+  {
+   "text": "2210 Larimer St, Denver CO"
+  },
+  {
+   "text": "All amounts in USD."
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Number",
+       "065090"
+      ]
+     },
+     {
+      "cells": [
+       "Date",
+       "05/12/2026"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     "Description",
+     "Qty",
+     "Price"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Deck screws 3in (1 lb box)",
+       "1",
+       "11.80"
+      ]
+     },
+     {
+      "cells": [
+       "Wood glue 16 oz",
+       "4",
+       "7.40"
+      ]
+     },
+     {
+      "cells": [
+       "Cordless drill kit",
+       "2",
+       "127.50"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Description",
+      "Qty",
+      "Price"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Sub-total: 296.40"
+  },
+  {
+   "text": "Sales tax: 26.11"
+  },
+  {
+   "text": "Grand total: 322.51"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "2210",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "065090",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "05/12/2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "USD",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Deck screws 3in (1 lb box)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "11.80",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Wood glue 16 oz",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "7.40",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Cordless drill kit",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "127.50",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "296.40",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "26.11",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "322.51",
+   "needed": true,
+   "start": 13
+  }
+ ]
+}

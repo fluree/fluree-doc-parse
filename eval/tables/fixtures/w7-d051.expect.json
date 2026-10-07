@@ -1,0 +1,293 @@
+{
+ "family": "totals-block",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "31 Dorset St Upper, Dublin 1"
+  },
+  {
+   "text": "Receipt no. KP-018252   Date: 02/07/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Ref.",
+     "Item",
+     "Qty",
+     "Each"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "PC-0310",
+       "Sun cream SPF50 200ml",
+       "2",
+       "EUR 16.45"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0140",
+       "Ibuprofen 200mg (24)",
+       "4",
+       "EUR 4.95"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0210",
+       "Antihistamine tablets (30)",
+       "2",
+       "EUR 8.90"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Ref.",
+      "Item",
+      "Qty",
+      "Each"
+     ]
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Sub-total",
+       "EUR 70.50"
+      ]
+     },
+     {
+      "cells": [
+       "VAT 23%",
+       "EUR 16.22"
+      ]
+     },
+     {
+      "cells": [
+       "Total",
+       "EUR 86.72"
+      ]
+     },
+     {
+      "cells": [
+       "Cash",
+       "EUR 100.00"
+      ]
+     },
+     {
+      "cells": [
+       "Change",
+       "EUR 13.28"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "text": "Thank you for your business."
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "31",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "KP-018252",
+   "needed": true,
+   "start": 12
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "02/07/2026",
+   "needed": true,
+   "start": 30
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "PC-0310",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Sun cream SPF50 200ml",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 16.45",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "MD-0140",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Ibuprofen 200mg (24)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 4.95",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "MD-0210",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Antihistamine tablets (30)",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "EUR 8.90",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR 70.50",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "23%",
+   "needed": true,
+   "start": 4,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR 16.22",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR 86.72",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR 100.00",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR 13.28",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  }
+ ]
+}

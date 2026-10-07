@@ -1,0 +1,174 @@
+{
+ "family": "field-value",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "The Pellow Street Cafe"
+  },
+  {
+   "text": "Pellow Street, Bristol"
+  },
+  {
+   "text": "All amounts in GBP."
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Number",
+       "WB-47843"
+      ]
+     },
+     {
+      "cells": [
+       "Date",
+       "30 August 2026"
+      ]
+     },
+     {
+      "cells": [
+       "Item",
+       "Flat white"
+      ]
+     },
+     {
+      "cells": [
+       "Code",
+       "DR-401"
+      ]
+     },
+     {
+      "cells": [
+       "Quantity",
+       "1"
+      ]
+     },
+     {
+      "cells": [
+       "Price each",
+       "2.99"
+      ]
+     },
+     {
+      "cells": [
+       "Subtotal",
+       "2.99"
+      ]
+     },
+     {
+      "cells": [
+       "VAT",
+       "0.60"
+      ]
+     },
+     {
+      "cells": [
+       "Total",
+       "3.59"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "WB-47843",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "30 August 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "GBP",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Flat white",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "DR-401",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2.99",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2.99",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "0.60",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "3.59",
+   "needed": true,
+   "start": 0,
+   "row": 8,
+   "col": 1
+  }
+ ]
+}

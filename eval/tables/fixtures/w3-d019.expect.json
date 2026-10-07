@@ -1,0 +1,224 @@
+{
+ "family": "totals-block",
+ "formats": [
+  "html",
+  "md",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Brannock Print Supplies Pty Ltd"
+  },
+  {
+   "text": "88 Kensington Rd, Melbourne VIC"
+  },
+  {
+   "text": "Number INV-28618   Date: 28/04/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Description",
+     "Qty",
+     "Rate (AUD)"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "TN-C210",
+       "Toner cartridge cyan C210",
+       "20",
+       "137.50"
+      ]
+     },
+     {
+      "cells": [
+       "BD-CM12",
+       "Comb binding spines 12mm (100)",
+       "1",
+       "23.50"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Description",
+      "Qty",
+      "Rate (AUD)"
+     ]
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Subtotal",
+       "AUD 2,773.50"
+      ]
+     },
+     {
+      "cells": [
+       "GST 10%",
+       "AUD 277.35"
+      ]
+     },
+     {
+      "cells": [
+       "TOTAL",
+       "AUD 3,050.85"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "88",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "INV-28618",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "28/04/2026",
+   "needed": true,
+   "start": 25
+  },
+  {
+   "block": 3,
+   "kind": "header",
+   "surface": "AUD",
+   "needed": true,
+   "start": 6,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "TN-C210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Toner cartridge cyan C210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "137.50",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "BD-CM12",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Comb binding spines 12mm (100)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "23.50",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "AUD 2,773.50",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "10%",
+   "needed": true,
+   "start": 4,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "AUD 277.35",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "AUD 3,050.85",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  }
+ ]
+}

@@ -1,0 +1,407 @@
+{
+ "family": "totals-block",
+ "formats": [
+  "html",
+  "md",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Brannock Print Supplies Pty Ltd"
+  },
+  {
+   "text": "Number INV-75094   Date of sale: 23/01/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Description",
+     "Quantity",
+     "Rate (AUD)",
+     "Line total (AUD)"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "TN-C210",
+       "Toner cartridge cyan C210",
+       "10",
+       "99.49",
+       "994.90"
+      ]
+     },
+     {
+      "cells": [
+       "TN-K260",
+       "High-yield toner black K260",
+       "12",
+       "184.00",
+       "2,208.00"
+      ]
+     },
+     {
+      "cells": [
+       "PA-A3-80",
+       "A3 copy paper 80gsm, ream",
+       "10",
+       "16.80",
+       "168.00"
+      ]
+     },
+     {
+      "cells": [
+       "BD-CM12",
+       "Comb binding spines 12mm (100)",
+       "12",
+       "21.80",
+       "261.60"
+      ]
+     },
+     {
+      "cells": [
+       "BD-LP80",
+       "Laminating pouches A4 80mic (100)",
+       "1",
+       "19.79",
+       "19.79"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Description",
+      "Quantity",
+      "Rate (AUD)",
+      "Line total (AUD)"
+     ]
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Goods total",
+       "AUD 3,652.29"
+      ]
+     },
+     {
+      "cells": [
+       "GST 10%",
+       "AUD 365.23"
+      ]
+     },
+     {
+      "cells": [
+       "Grand total",
+       "AUD 4,017.52"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "INV-75094",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "23/01/2026",
+   "needed": true,
+   "start": 33
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "AUD",
+   "needed": true,
+   "start": 6,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "AUD",
+   "needed": true,
+   "start": 12,
+   "col": 4,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "TN-C210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Toner cartridge cyan C210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "99.49",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "994.90",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "TN-K260",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "High-yield toner black K260",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "12",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "184.00",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "2,208.00",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "PA-A3-80",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "A3 copy paper 80gsm, ream",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "16.80",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "168.00",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "BD-CM12",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Comb binding spines 12mm (100)",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "12",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "21.80",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "261.60",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "BD-LP80",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Laminating pouches A4 80mic (100)",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "19.79",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "19.79",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "AUD 3,652.29",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "10%",
+   "needed": true,
+   "start": 4,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "AUD 365.23",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "AUD 4,017.52",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  }
+ ]
+}

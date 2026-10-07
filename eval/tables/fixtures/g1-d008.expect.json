@@ -1,0 +1,425 @@
+{
+ "family": "plain",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Deliveries: delivery schedule"
+  },
+  {
+   "table": {
+    "columns": [
+     "Delivery no.",
+     "Dispatched",
+     "Transport",
+     "Pieces",
+     "Gross weight (lb)",
+     "Order no."
+    ],
+    "rows": [
+     {
+      "cells": [
+       "LD-57998",
+       "27 Jan 2026",
+       "Crucible Logistics",
+       "23",
+       "1,039",
+       "ORD-175209"
+      ]
+     },
+     {
+      "cells": [
+       "LD-10601",
+       "30 Jan 2026",
+       "Crucible Logistics",
+       "11",
+       "7,363",
+       "ORD-763798"
+      ]
+     },
+     {
+      "cells": [
+       "LD-77097",
+       "6 Feb 2026",
+       "Wigeon Haulage",
+       "11",
+       "3,822",
+       "ORD-423746"
+      ]
+     },
+     {
+      "cells": [
+       "LD-47532",
+       "27 Jan 2026",
+       "Gimbal Transport",
+       "21",
+       "7,995",
+       "ORD-229925"
+      ]
+     },
+     {
+      "cells": [
+       "LD-24510",
+       "24 Jan 2026",
+       "Wigeon Haulage",
+       "15",
+       "8,261",
+       "ORD-672235"
+      ]
+     },
+     {
+      "cells": [
+       "LD-93008",
+       "30 Jan 2026",
+       "Gimbal Transport",
+       "n/a",
+       "6,417",
+       "ORD-860243"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Delivery no.",
+      "Dispatched",
+      "Transport",
+      "Pieces",
+      "Gross weight (lb)",
+      "Order no."
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "lb",
+   "needed": true,
+   "start": 14,
+   "col": 4,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "LD-57998",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "27 Jan 2026",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Crucible Logistics",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "23",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,039",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-175209",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "LD-10601",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "30 Jan 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Crucible Logistics",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "11",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "7,363",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-763798",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "LD-77097",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "6 Feb 2026",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Wigeon Haulage",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "11",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3,822",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-423746",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "LD-47532",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "27 Jan 2026",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Gimbal Transport",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "21",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "7,995",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-229925",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "LD-24510",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "24 Jan 2026",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Wigeon Haulage",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "15",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,261",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-672235",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "LD-93008",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "30 Jan 2026",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Gimbal Transport",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "6,417",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-860243",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 5
+  }
+ ]
+}

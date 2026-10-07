@@ -1,0 +1,331 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Brannock Print Supplies Pty Ltd"
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Invoice no.",
+       "INV-21714"
+      ]
+     },
+     {
+      "cells": [
+       "Date",
+       "30/06/2026"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     "Item code",
+     "Description",
+     "Quantity",
+     "Unit price",
+     "Amount"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "BD-CM12",
+       "Comb binding spines 12mm (100)",
+       "20",
+       "AUD 23.40",
+       "AUD 468.00"
+      ]
+     },
+     {
+      "cells": [
+       "TN-K260",
+       "High-yield toner black K260",
+       "10",
+       "AUD 192.95",
+       "AUD 1,929.50"
+      ]
+     },
+     {
+      "cells": [
+       "PA-A4-80",
+       "A4 copy paper 80gsm, box of 5 reams",
+       "20",
+       "AUD 50.90",
+       "AUD 1,018.00"
+      ]
+     },
+     {
+      "cells": [
+       "BD-LP80",
+       "Laminating pouches A4 80mic (100)",
+       "10",
+       "AUD 24.60",
+       "AUD 246.00"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Item code",
+      "Description",
+      "Quantity",
+      "Unit price",
+      "Amount"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Net: AUD 3,661.50"
+  },
+  {
+   "text": "GST 10%: AUD 366.15"
+  },
+  {
+   "text": "Grand total: AUD 4,027.65"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "INV-21714",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "30/06/2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "BD-CM12",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Comb binding spines 12mm (100)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 23.40",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 468.00",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "TN-K260",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "High-yield toner black K260",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 192.95",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 1,929.50",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "PA-A4-80",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "A4 copy paper 80gsm, box of 5 reams",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 50.90",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 1,018.00",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "BD-LP80",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Laminating pouches A4 80mic (100)",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 24.60",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "AUD 246.00",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "AUD 3,661.50",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "10%",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "AUD 366.15",
+   "needed": true,
+   "start": 9
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "AUD 4,027.65",
+   "needed": true,
+   "start": 13
+  }
+ ]
+}

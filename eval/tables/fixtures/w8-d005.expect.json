@@ -1,0 +1,174 @@
+{
+ "family": "field-value",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Tax invoice MLS-61116"
+  },
+  {
+   "text": "Pohutukawa Garden Wholesale"
+  },
+  {
+   "text": "East Tamaki, Auckland"
+  },
+  {
+   "text": "Date: 6 May 2026"
+  },
+  {
+   "text": "All amounts in NZD."
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Description",
+       "Paving stone 400x400 charcoal"
+      ]
+     },
+     {
+      "cells": [
+       "Qty",
+       "10"
+      ]
+     },
+     {
+      "cells": [
+       "Price each",
+       "7.85"
+      ]
+     },
+     {
+      "cells": [
+       "Goods total",
+       "78.50"
+      ]
+     },
+     {
+      "cells": [
+       "Promotion",
+       "3.93"
+      ]
+     },
+     {
+      "cells": [
+       "GST 15%",
+       "11.19"
+      ]
+     },
+     {
+      "cells": [
+       "Amount due",
+       "85.76"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "MLS-61116",
+   "needed": true,
+   "start": 12
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "6 May 2026",
+   "needed": true,
+   "start": 6
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "NZD",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "Paving stone 400x400 charcoal",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "7.85",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "78.50",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "3.93",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "11.19",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "15%",
+   "needed": true,
+   "start": 4,
+   "row": 5,
+   "col": 0
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "85.76",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  }
+ ]
+}

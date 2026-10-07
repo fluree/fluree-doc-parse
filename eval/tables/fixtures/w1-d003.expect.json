@@ -1,0 +1,191 @@
+{
+ "family": "field-value",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "table": {
+    "columns": [
+     "Field",
+     "Details"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Number",
+       "WB-69673"
+      ]
+     },
+     {
+      "cells": [
+       "Date of sale",
+       "29 July 2026"
+      ]
+     },
+     {
+      "cells": [
+       "Purchased",
+       "Club sandwich"
+      ]
+     },
+     {
+      "cells": [
+       "Code",
+       "KT-320"
+      ]
+     },
+     {
+      "cells": [
+       "Qty",
+       "1"
+      ]
+     },
+     {
+      "cells": [
+       "Unit price",
+       "£7.90"
+      ]
+     },
+     {
+      "cells": [
+       "Subtotal",
+       "£7.90"
+      ]
+     },
+     {
+      "cells": [
+       "Discount",
+       "£0.40"
+      ]
+     },
+     {
+      "cells": [
+       "VAT 20%",
+       "£1.50"
+      ]
+     },
+     {
+      "cells": [
+       "Grand total",
+       "£9.00"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Field",
+      "Details"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "WB-69673",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "29 July 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Club sandwich",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "KT-320",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£7.90",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£7.90",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£0.40",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£1.50",
+   "needed": true,
+   "start": 0,
+   "row": 8,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "20%",
+   "needed": true,
+   "start": 4,
+   "row": 8,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£9.00",
+   "needed": true,
+   "start": 0,
+   "row": 9,
+   "col": 1
+  }
+ ]
+}

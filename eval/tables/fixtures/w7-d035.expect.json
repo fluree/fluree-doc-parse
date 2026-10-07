@@ -1,0 +1,212 @@
+{
+ "family": "merged-header",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "No. KP-043059   Date: 30/06/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Article",
+     "Qty",
+     "EUR / per unit",
+     "EUR / Line"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "PC-0330",
+       "Electric toothbrush heads (4)",
+       "1",
+       "16.05",
+       "16.05"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0210",
+       "Antihistamine tablets (30)",
+       "2",
+       "9.80",
+       "19.60"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Article",
+      "Qty",
+      "EUR",
+      null
+     ],
+     [
+      null,
+      null,
+      null,
+      "per unit",
+      "Line"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Sub-total: EUR 35.65"
+  },
+  {
+   "text": "VAT: EUR 8.20"
+  },
+  {
+   "text": "Amount due: EUR 43.85"
+  },
+  {
+   "text": "Thank you for your visit!"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "KP-043059",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "30/06/2026",
+   "needed": true,
+   "start": 22
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "EUR",
+   "needed": true,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "PC-0330",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Electric toothbrush heads (4)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "16.05",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "16.05",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "MD-0210",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Antihistamine tablets (30)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "9.80",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "19.60",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "EUR 35.65",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "EUR 8.20",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "EUR 43.85",
+   "needed": true,
+   "start": 12
+  }
+ ]
+}

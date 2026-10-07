@@ -1,0 +1,216 @@
+{
+ "family": "line-table",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "No. KP-001860   Issued: 16/03/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Article",
+     "Qty",
+     "Unit price"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "MD-0140",
+       "Ibuprofen 200mg (24)",
+       "1",
+       "EUR 4.49"
+      ]
+     },
+     {
+      "cells": [
+       "PC-0310",
+       "Sun cream SPF50 200ml",
+       "1",
+       "EUR 13.05"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0152",
+       "Paracetamol 500mg (24)",
+       "3",
+       "EUR 2.59"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Article",
+      "Qty",
+      "Unit price"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Subtotal: EUR 25.31"
+  },
+  {
+   "text": "VAT: EUR 5.82"
+  },
+  {
+   "text": "TOTAL: EUR 31.13"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "KP-001860",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "16/03/2026",
+   "needed": true,
+   "start": 24
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "MD-0140",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Ibuprofen 200mg (24)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 4.49",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "PC-0310",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Sun cream SPF50 200ml",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 13.05",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "MD-0152",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Paracetamol 500mg (24)",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "3",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "EUR 2.59",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "EUR 25.31",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "EUR 5.82",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "EUR 31.13",
+   "needed": true,
+   "start": 7
+  }
+ ]
+}

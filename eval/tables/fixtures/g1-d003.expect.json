@@ -1,0 +1,666 @@
+{
+ "family": "merged-header",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Product range: technical data"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Weight / Net",
+     "Weight / Packed",
+     "Dimensions / Length",
+     "Dimensions / Width",
+     "Dimensions / H",
+     "Warranty",
+     "Power",
+     "Fill volume",
+     "Max. temp."
+    ],
+    "rows": [
+     {
+      "cells": [
+       "CO-61",
+       "210.3 kg",
+       "268.8 kg",
+       "1,157 mm",
+       "1,120 mm",
+       "on request",
+       "12 months",
+       "8,367 W",
+       "445 L",
+       "122 °C"
+      ]
+     },
+     {
+      "cells": [
+       "CO-61G",
+       "249.8 kg",
+       "281.6 kg",
+       "770 mm",
+       "579 mm",
+       "1,205 mm",
+       "36 months",
+       "8,238 W",
+       "1,159 L",
+       "126 °C"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101G",
+       "299.9 kg",
+       "330.7 kg",
+       "1,468 mm",
+       "721 mm",
+       "2,050 mm",
+       "24 months",
+       "4,756 W",
+       "690 L",
+       "84 °C"
+      ]
+     },
+     {
+      "cells": [
+       "FR-15",
+       "298.5 kg",
+       "353.6 kg",
+       "1,939 mm",
+       "1,083 mm",
+       "365 mm",
+       "36 months",
+       "8,488 W",
+       "589 L",
+       "124 °C"
+      ]
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "116.1 kg",
+       "128.8 kg",
+       "2,193 mm",
+       "1,059 mm",
+       "1,866 mm",
+       "36 months",
+       "4,071 W",
+       "921 L",
+       "175 °C"
+      ]
+     },
+     {
+      "cells": [
+       "FR-22",
+       "n/a",
+       "66.2 kg",
+       "921 mm",
+       "526 mm",
+       "530 mm",
+       "60 months",
+       "9,306 W",
+       "726 L",
+       "121 °C"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Weight",
+      null,
+      "Dimensions",
+      null,
+      null,
+      "Warranty",
+      "Power",
+      "Fill volume",
+      "Max. temp."
+     ],
+     [
+      null,
+      "Net",
+      "Packed",
+      "Length",
+      "Width",
+      "H",
+      null,
+      null,
+      null,
+      null
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-61",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "210.3 kg",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "268.8 kg",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,157 mm",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,120 mm",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "12 months",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 6
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,367 W",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 7
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "445 L",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 8
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "122 °C",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 9
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-61G",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "249.8 kg",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "281.6 kg",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "770 mm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "579 mm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,205 mm",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "36 months",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 6
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,238 W",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 7
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,159 L",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 8
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "126 °C",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 9
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-101G",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "299.9 kg",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "330.7 kg",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,468 mm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "721 mm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2,050 mm",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "24 months",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 6
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,756 W",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 7
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "690 L",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 8
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "84 °C",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 9
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "298.5 kg",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "353.6 kg",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,939 mm",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,083 mm",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "365 mm",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "36 months",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 6
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,488 W",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 7
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "589 L",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 8
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "124 °C",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 9
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "116.1 kg",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "128.8 kg",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2,193 mm",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,059 mm",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,866 mm",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "36 months",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 6
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,071 W",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 7
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "921 L",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 8
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "175 °C",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 9
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-22",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "66.2 kg",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "921 mm",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "526 mm",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "530 mm",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "60 months",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 6
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "9,306 W",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 7
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "726 L",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 8
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "121 °C",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 9
+  }
+ ]
+}

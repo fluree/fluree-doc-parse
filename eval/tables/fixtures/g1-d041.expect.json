@@ -1,0 +1,412 @@
+{
+ "family": "section-rows",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Product range: technical data"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Unit weight (kg)",
+     "Shipping weight (kg)",
+     "Length (mm)",
+     "Warranty period (months)",
+     "Motor (W)"
+    ],
+    "rows": [
+     {
+      "section": "Combi ovens"
+     },
+     {
+      "cells": [
+       "CO-61",
+       "210.3",
+       "268.8",
+       "1,157",
+       "12",
+       "8,367"
+      ]
+     },
+     {
+      "cells": [
+       "CO-61G",
+       "249.8",
+       "281.6",
+       "770",
+       "36",
+       "8,238"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101",
+       "356.9",
+       "450.0",
+       "1,312",
+       "36",
+       "2,104"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101G",
+       "299.9",
+       "330.7",
+       "1,468",
+       "24",
+       "4,756"
+      ]
+     },
+     {
+      "section": "Fryers"
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "116.1",
+       "128.8",
+       "2,193",
+       "36",
+       "4,071"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Unit weight (kg)",
+      "Shipping weight (kg)",
+      "Length (mm)",
+      "Warranty period (months)",
+      "Motor (W)"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "kg",
+   "needed": true,
+   "start": 13,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "kg",
+   "needed": true,
+   "start": 17,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "mm",
+   "needed": true,
+   "start": 8,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "months",
+   "needed": true,
+   "start": 17,
+   "col": 4,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "W",
+   "needed": true,
+   "start": 7,
+   "col": 5,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-61",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "210.3",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "268.8",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,157",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "12",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,367",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-61G",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "249.8",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "281.6",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "770",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "36",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,238",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-101",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "356.9",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "450.0",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,312",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "36",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2,104",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-101G",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "299.9",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "330.7",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,468",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "24",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,756",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "116.1",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "128.8",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2,193",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "36",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,071",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 5
+  }
+ ]
+}

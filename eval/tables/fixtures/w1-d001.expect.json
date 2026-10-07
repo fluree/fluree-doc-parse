@@ -1,0 +1,313 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "text": "Currency: GBP"
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "No.",
+       "WB-66086"
+      ]
+     },
+     {
+      "cells": [
+       "Date",
+       "11 August 2026"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     "PLU",
+     "Item",
+     "Quantity",
+     "Price",
+     "Total"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "BK-210",
+       "Almond croissant",
+       "2",
+       "2.80",
+       "5.60"
+      ]
+     },
+     {
+      "cells": [
+       "KT-320",
+       "Club sandwich",
+       "4",
+       "9.35",
+       "37.40"
+      ]
+     },
+     {
+      "cells": [
+       "KT-305",
+       "Leek and potato soup",
+       "1",
+       "6.75",
+       "6.75"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "PLU",
+      "Item",
+      "Quantity",
+      "Price",
+      "Total"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Sub-total: 49.75"
+  },
+  {
+   "text": "Promotion: 2.49"
+  },
+  {
+   "text": "VAT: 9.45"
+  },
+  {
+   "text": "Amount due: 56.71"
+  },
+  {
+   "text": "Cash: 60.00"
+  },
+  {
+   "text": "Change: 3.29"
+  },
+  {
+   "text": "Please keep this receipt."
+  }
+ ],
+ "parts": [
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "WB-66086",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "11 August 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "GBP",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "BK-210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Almond croissant",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2.80",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "5.60",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "KT-320",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Club sandwich",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "9.35",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "37.40",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "KT-305",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Leek and potato soup",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "6.75",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "6.75",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "49.75",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "2.49",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "9.45",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "56.71",
+   "needed": true,
+   "start": 12
+  },
+  {
+   "block": 8,
+   "kind": "text",
+   "surface": "60.00",
+   "needed": true,
+   "start": 6
+  },
+  {
+   "block": 9,
+   "kind": "text",
+   "surface": "3.29",
+   "needed": true,
+   "start": 8
+  }
+ ]
+}

@@ -1,0 +1,223 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Rietberg IT Services GmbH"
+  },
+  {
+   "text": "All amounts in CHF."
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Number",
+       "R-13247"
+      ]
+     },
+     {
+      "cells": [
+       "Date",
+       "31.08.2026"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     "Item",
+     "Qty",
+     "Price"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Laptop setup and imaging",
+       "1",
+       "140.50"
+      ]
+     },
+     {
+      "cells": [
+       "Wireless keyboard and mouse",
+       "5",
+       "128.95"
+      ]
+     },
+     {
+      "cells": [
+       "On-site support (hour)",
+       "4",
+       "181.95"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Item",
+      "Qty",
+      "Price"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Net: 1,513.05"
+  },
+  {
+   "text": "MWST 8.1%: 122.56"
+  },
+  {
+   "text": "Total: 1,635.61"
+  }
+ ],
+ "parts": [
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "R-13247",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "31.08.2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "CHF",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Laptop setup and imaging",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "140.50",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Wireless keyboard and mouse",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "5",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "128.95",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "On-site support (hour)",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "181.95",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "1,513.05",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "8.1%",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "122.56",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "1,635.61",
+   "needed": true,
+   "start": 7
+  }
+ ]
+}

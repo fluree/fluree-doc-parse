@@ -1,0 +1,222 @@
+{
+ "family": "merged-header",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Receipt KP-003516"
+  },
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "Issued: 03/05/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Ref.",
+     "Article",
+     "Qty",
+     "EUR / Unit",
+     "EUR / Total"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "MD-0152",
+       "Paracetamol 500mg (24)",
+       "4",
+       "€2.60",
+       "€10.40"
+      ]
+     },
+     {
+      "cells": [
+       "FA-0412",
+       "Digital thermometer",
+       "1",
+       "€11.45",
+       "€11.45"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Ref.",
+      "Article",
+      "Qty",
+      "EUR",
+      null
+     ],
+     [
+      null,
+      null,
+      null,
+      "Unit",
+      "Total"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Subtotal: €21.85"
+  },
+  {
+   "text": "Discount: €1.09"
+  },
+  {
+   "text": "VAT: €4.77"
+  },
+  {
+   "text": "TOTAL: €25.53"
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "KP-003516",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "03/05/2026",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 3,
+   "kind": "header",
+   "surface": "EUR",
+   "needed": false,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "MD-0152",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Paracetamol 500mg (24)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "€2.60",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "€10.40",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "FA-0412",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Digital thermometer",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "€11.45",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "€11.45",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "€21.85",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "€1.09",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "€4.77",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "€25.53",
+   "needed": true,
+   "start": 7
+  }
+ ]
+}

@@ -1,0 +1,199 @@
+{
+ "family": "sparse",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Invoice MLS-31214"
+  },
+  {
+   "text": "Pohutukawa Garden Wholesale"
+  },
+  {
+   "text": "Date: 25 March 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Product",
+     "Qty",
+     "Unit price",
+     "Amount"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Bark mulch (per m3)",
+       "12",
+       "",
+       "$1,137.60"
+      ]
+     },
+     {
+      "cells": [
+       "Garden mix (per m3)",
+       "1",
+       "$85.19",
+       "$85.19"
+      ]
+     },
+     {
+      "cells": [
+       "Subtotal",
+       "",
+       "",
+       "$1,222.79"
+      ]
+     },
+     {
+      "cells": [
+       "GST 15%",
+       "",
+       "",
+       "$183.42"
+      ]
+     },
+     {
+      "cells": [
+       "Total",
+       "",
+       "",
+       "$1,406.21"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Product",
+      "Qty",
+      "Unit price",
+      "Amount"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Thank you for your visit!"
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "MLS-31214",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "25 March 2026",
+   "needed": true,
+   "start": 6
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Bark mulch (per m3)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "12",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "$1,137.60",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Garden mix (per m3)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "$85.19",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "$85.19",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "$1,222.79",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "15%",
+   "needed": true,
+   "start": 4,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "$183.42",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "$1,406.21",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  }
+ ]
+}

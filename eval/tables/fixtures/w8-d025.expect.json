@@ -1,0 +1,216 @@
+{
+ "family": "transposed",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Matakana Landscape Supplies Ltd"
+  },
+  {
+   "text": "Number MLS-87768   Date: 2 February 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     "Bark mulch (per m3)",
+     "Drainage metal 20mm (per m3)",
+     "Timber edging 150x25 (4.8m)"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Qty",
+       "6",
+       "2",
+       "12"
+      ]
+     },
+     {
+      "cells": [
+       "Unit price",
+       "$81.09",
+       "$107.50",
+       "$24.10"
+      ]
+     },
+     {
+      "cells": [
+       "Ext.",
+       "$486.54",
+       "$215.00",
+       "$289.20"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "",
+      "Bark mulch (per m3)",
+      "Drainage metal 20mm (per m3)",
+      "Timber edging 150x25 (4.8m)"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Goods total: $990.74"
+  },
+  {
+   "text": "GST: $148.61"
+  },
+  {
+   "text": "Total paid: $1,139.35"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "MLS-87768",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "2 February 2026",
+   "needed": true,
+   "start": 25
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Bark mulch (per m3)",
+   "needed": true,
+   "start": 0,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Drainage metal 20mm (per m3)",
+   "needed": true,
+   "start": 0,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "header",
+   "surface": "Timber edging 150x25 (4.8m)",
+   "needed": true,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "6",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "12",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "$81.09",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "$107.50",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "$24.10",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "$486.54",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "$215.00",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "$289.20",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "$990.74",
+   "needed": true,
+   "start": 13
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "$148.61",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "$1,139.35",
+   "needed": true,
+   "start": 12
+  }
+ ]
+}

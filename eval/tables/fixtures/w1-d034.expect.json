@@ -1,0 +1,221 @@
+{
+ "family": "field-value",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "table": {
+    "columns": [
+     "Field",
+     "Details"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Number",
+       "WB-69083"
+      ]
+     },
+     {
+      "cells": [
+       "Date",
+       "15 April 2026"
+      ]
+     },
+     {
+      "cells": [
+       "Purchased",
+       "Sourdough loaf"
+      ]
+     },
+     {
+      "cells": [
+       "PLU",
+       "BK-101"
+      ]
+     },
+     {
+      "cells": [
+       "Qty",
+       "3"
+      ]
+     },
+     {
+      "cells": [
+       "Price each",
+       "£3.45"
+      ]
+     },
+     {
+      "cells": [
+       "Subtotal",
+       "£10.35"
+      ]
+     },
+     {
+      "cells": [
+       "VAT 20%",
+       "£2.07"
+      ]
+     },
+     {
+      "cells": [
+       "Tip",
+       "£1.29"
+      ]
+     },
+     {
+      "cells": [
+       "TOTAL",
+       "£13.71"
+      ]
+     },
+     {
+      "cells": [
+       "Card",
+       "£15.00"
+      ]
+     },
+     {
+      "cells": [
+       "Change",
+       "£1.29"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Field",
+      "Details"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "WB-69083",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "15 April 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Sourdough loaf",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "BK-101",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£3.45",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£10.35",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£2.07",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "20%",
+   "needed": true,
+   "start": 4,
+   "row": 7,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£1.29",
+   "needed": true,
+   "start": 0,
+   "row": 8,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£13.71",
+   "needed": true,
+   "start": 0,
+   "row": 9,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£15.00",
+   "needed": true,
+   "start": 0,
+   "row": 10,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "£1.29",
+   "needed": true,
+   "start": 0,
+   "row": 11,
+   "col": 1
+  }
+ ]
+}

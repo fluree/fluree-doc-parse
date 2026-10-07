@@ -1,0 +1,37 @@
+{
+ "family": "caption",
+ "formats": [
+  "html"
+ ],
+ "blocks": [
+  {
+   "text": "Price list, prices in EUR"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Price"
+    ],
+    "all_cells": true,
+    "rows": [
+     {
+      "cells": [
+       "PX-210",
+       "1,250.00"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "start": 0,
+   "surface": "Price list, prices in EUR",
+   "needed": true
+  }
+ ]
+}

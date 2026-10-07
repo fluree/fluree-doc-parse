@@ -1,0 +1,274 @@
+{
+ "family": "sparse",
+ "formats": [
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "The Pellow Street Cafe"
+  },
+  {
+   "text": "Pellow Street, Bristol"
+  },
+  {
+   "text": "Number WB-94475   Date of sale: 25 January 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Item",
+     "Quantity",
+     "Price",
+     "Total"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "BK-104",
+       "Seeded rye",
+       "2",
+       "£3.70",
+       "£7.40"
+      ]
+     },
+     {
+      "cells": [
+       "KT-301",
+       "Fish pie",
+       "2",
+       "£15.40",
+       "£30.80"
+      ]
+     },
+     {
+      "cells": [
+       "DR-401",
+       "Flat white",
+       "3",
+       "£3.40",
+       "£10.20"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Subtotal",
+       "",
+       "",
+       "£48.40"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "VAT 20%",
+       "",
+       "",
+       "£9.68"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Grand total",
+       "",
+       "",
+       ""
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Item",
+      "Quantity",
+      "Price",
+      "Total"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "WB-94475",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "25 January 2026",
+   "needed": true,
+   "start": 32
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "BK-104",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Seeded rye",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£3.70",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£7.40",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "KT-301",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Fish pie",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£15.40",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£30.80",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "DR-401",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Flat white",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "3",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£3.40",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£10.20",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£48.40",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "20%",
+   "needed": true,
+   "start": 4,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£9.68",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  }
+ ]
+}

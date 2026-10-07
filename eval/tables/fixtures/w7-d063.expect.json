@@ -1,0 +1,220 @@
+{
+ "family": "merged-header",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Receipt KP-042787"
+  },
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "31 Dorset St Upper, Dublin 1"
+  },
+  {
+   "text": "Date: 14/02/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Ref.",
+     "Article",
+     "No.",
+     "Amount (EUR) / Each"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "PC-0322",
+       "Hand cream 75ml",
+       "1",
+       "6.25"
+      ]
+     },
+     {
+      "cells": [
+       "MD-0152",
+       "Paracetamol 500mg (24)",
+       "4",
+       "2.60"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Goods total",
+       "",
+       "16.65"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "VAT",
+       "",
+       "3.83"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Amount due",
+       "",
+       "20.48"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Ref.",
+      "Article",
+      "No.",
+      "Amount (EUR)"
+     ],
+     [
+      null,
+      null,
+      null,
+      "Each"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "KP-042787",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "31",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "14/02/2026",
+   "needed": true,
+   "start": 6
+  },
+  {
+   "block": 4,
+   "kind": "header",
+   "surface": "EUR",
+   "needed": true,
+   "start": 8,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "PC-0322",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Hand cream 75ml",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "6.25",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "MD-0152",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Paracetamol 500mg (24)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "2.60",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "16.65",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "3.83",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "20.48",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  }
+ ]
+}

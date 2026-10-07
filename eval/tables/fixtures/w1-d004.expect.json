@@ -1,0 +1,266 @@
+{
+ "family": "totals-block",
+ "formats": [
+  "html",
+  "md",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "The Pellow Street Cafe"
+  },
+  {
+   "text": "Receipt no. WB-05048   Issued: 26 June 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "PLU",
+     "Item",
+     "Quantity",
+     "Price",
+     "Total"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "DR-401",
+       "Flat white",
+       "1",
+       "£3.50",
+       "£3.50"
+      ]
+     },
+     {
+      "cells": [
+       "KT-320",
+       "Club sandwich",
+       "1",
+       "£8.05",
+       "£8.05"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "PLU",
+      "Item",
+      "Quantity",
+      "Price",
+      "Total"
+     ]
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Net",
+       "£11.55"
+      ]
+     },
+     {
+      "cells": [
+       "VAT",
+       "£2.31"
+      ]
+     },
+     {
+      "cells": [
+       "Gratuity",
+       "£1.16"
+      ]
+     },
+     {
+      "cells": [
+       "Total",
+       "£15.02"
+      ]
+     },
+     {
+      "cells": [
+       "Cash",
+       "£20.00"
+      ]
+     },
+     {
+      "cells": [
+       "Change",
+       "£4.98"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "text": "Goods remain our property until paid in full."
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "WB-05048",
+   "needed": true,
+   "start": 12
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "26 June 2026",
+   "needed": true,
+   "start": 31
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "DR-401",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Flat white",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "£3.50",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "£3.50",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "KT-320",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "Club sandwich",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "£8.05",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "£8.05",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£11.55",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£2.31",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£1.16",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£15.02",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£20.00",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "£4.98",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 1
+  }
+ ]
+}

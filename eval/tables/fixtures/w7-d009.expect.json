@@ -1,0 +1,289 @@
+{
+ "family": "transposed",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Till receipt KP-008475"
+  },
+  {
+   "text": "Kilcarran Pharmacy"
+  },
+  {
+   "text": "31 Dorset St Upper, Dublin 1"
+  },
+  {
+   "text": "Issued: 09/06/2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Digital thermometer",
+     "Antihistamine tablets (30)",
+     "Sun cream SPF50 200ml"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Code",
+       "FA-0412",
+       "MD-0210",
+       "PC-0310"
+      ]
+     },
+     {
+      "cells": [
+       "Qty",
+       "4",
+       "1",
+       "1"
+      ]
+     },
+     {
+      "cells": [
+       "Each (EUR)",
+       "9.79",
+       "7.50",
+       "16.59"
+      ]
+     },
+     {
+      "cells": [
+       "Value (EUR)",
+       "39.16",
+       "7.50",
+       "16.59"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Digital thermometer",
+      "Antihistamine tablets (30)",
+      "Sun cream SPF50 200ml"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Subtotal: EUR 63.25"
+  },
+  {
+   "text": "VAT 23%: EUR 14.55"
+  },
+  {
+   "text": "Grand total: EUR 77.80"
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "KP-008475",
+   "needed": true,
+   "start": 13
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "31",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "09/06/2026",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 4,
+   "kind": "header",
+   "surface": "Digital thermometer",
+   "needed": true,
+   "start": 0,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 4,
+   "kind": "header",
+   "surface": "Antihistamine tablets (30)",
+   "needed": true,
+   "start": 0,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 4,
+   "kind": "header",
+   "surface": "Sun cream SPF50 200ml",
+   "needed": true,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "FA-0412",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "MD-0210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "PC-0310",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR",
+   "needed": true,
+   "start": 6,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "9.79",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "7.50",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "16.59",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "EUR",
+   "needed": true,
+   "start": 7,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "39.16",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "7.50",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "16.59",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "EUR 63.25",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "23%",
+   "needed": true,
+   "start": 4
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "EUR 14.55",
+   "needed": true,
+   "start": 9
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "EUR 77.80",
+   "needed": true,
+   "start": 13
+  }
+ ]
+}

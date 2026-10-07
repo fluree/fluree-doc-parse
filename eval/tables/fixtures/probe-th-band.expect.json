@@ -1,0 +1,41 @@
+{
+ "family": "section-rows",
+ "formats": [
+  "html"
+ ],
+ "blocks": [
+  {
+   "table": {
+    "columns": [
+     "Name",
+     "Ext.",
+     "Start date"
+    ],
+    "all_cells": true,
+    "rows": [
+     {
+      "section": "Finance"
+     },
+     {
+      "cells": [
+       "Ana Ruiz",
+       "214",
+       "2024-03-01"
+      ]
+     },
+     {
+      "section": "Logistics"
+     },
+     {
+      "cells": [
+       "Bo Lind",
+       "220",
+       "2023-11-12"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": []
+}

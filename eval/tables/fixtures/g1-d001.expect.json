@@ -1,0 +1,252 @@
+{
+ "family": "transposed",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Deliveries: delivery schedule"
+  },
+  {
+   "table": {
+    "columns": [
+     "Consignment",
+     "DL23632",
+     "DL12587",
+     "DL26922",
+     "DL25775",
+     "DL16516"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Haulier",
+       "Wigeon Haulage",
+       "Wigeon Haulage",
+       "Crucible Logistics",
+       "Crucible Logistics",
+       "on request"
+      ]
+     },
+     {
+      "cells": [
+       "No. of cartons",
+       "6",
+       "4",
+       "9",
+       "27",
+       "7"
+      ]
+     },
+     {
+      "cells": [
+       "PO number",
+       "45584888",
+       "45732706",
+       "45915389",
+       "45145139",
+       "45893432"
+      ]
+     },
+     {
+      "cells": [
+       "Dock",
+       "Bay B",
+       "Door 5",
+       "Bay A",
+       "Yard",
+       "Bay A"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Consignment",
+      "DL23632",
+      "DL12587",
+      "DL26922",
+      "DL25775",
+      "DL16516"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "DL23632",
+   "needed": true,
+   "start": 0,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "DL12587",
+   "needed": true,
+   "start": 0,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "DL26922",
+   "needed": true,
+   "start": 0,
+   "col": 3,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "DL25775",
+   "needed": true,
+   "start": 0,
+   "col": 4,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "DL16516",
+   "needed": true,
+   "start": 0,
+   "col": 5,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Wigeon Haulage",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Wigeon Haulage",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Crucible Logistics",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Crucible Logistics",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "6",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "9",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "27",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "7",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "45584888",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "45732706",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "45915389",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "45145139",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "45893432",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 5
+  }
+ ]
+}

@@ -1,0 +1,295 @@
+{
+ "family": "merged-header",
+ "formats": [
+  "html",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Deliveries: delivery schedule"
+  },
+  {
+   "table": {
+    "columns": [
+     "Delivery no.",
+     "Dates / Shipped",
+     "Dates / ETA",
+     "Haulier",
+     "Gross wt.",
+     "PO number"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "DL92708",
+       "6 May 2026",
+       "15 May 2026",
+       "Gimbal Transport",
+       "4,769 lb",
+       "ORD-282216"
+      ]
+     },
+     {
+      "cells": [
+       "DL20937",
+       "1 May 2026",
+       "3 May 2026",
+       "Crucible Logistics",
+       "3,475 lb",
+       "ORD-375638"
+      ]
+     },
+     {
+      "cells": [
+       "DL14084",
+       "15 May 2026",
+       "21 May 2026",
+       "Gimbal Transport",
+       "8,645 lb",
+       "ORD-292872"
+      ]
+     },
+     {
+      "cells": [
+       "DL49007",
+       "11 May 2026",
+       "14 May 2026",
+       "Crucible Logistics",
+       "",
+       "ORD-291985"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Delivery no.",
+      "Dates",
+      null,
+      "Haulier",
+      "Gross wt.",
+      "PO number"
+     ],
+     [
+      null,
+      "Shipped",
+      "ETA",
+      null,
+      null,
+      null
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "DL92708",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "6 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "15 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Gimbal Transport",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,769 lb",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-282216",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "DL20937",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Crucible Logistics",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3,475 lb",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-375638",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "DL14084",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "15 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "21 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Gimbal Transport",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,645 lb",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-292872",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "DL49007",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "11 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "14 May 2026",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "Crucible Logistics",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "ORD-291985",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 5
+  }
+ ]
+}

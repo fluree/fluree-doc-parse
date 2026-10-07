@@ -1,0 +1,258 @@
+{
+ "family": "plain",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Fryers: price list"
+  },
+  {
+   "table": {
+    "columns": [
+     "Model",
+     "Price/unit (GBP)",
+     "Case price (GBP)",
+     "Pack qty",
+     "Min. qty",
+     "Country of origin",
+     "Finish"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "FR-15",
+       "1,270.85",
+       "2,250.13",
+       "2",
+       "100",
+       "Vietnam",
+       "Traffic white"
+      ]
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "4,107.52",
+       "13,904.53",
+       "4",
+       "2",
+       "Poland",
+       "Jet black"
+      ]
+     },
+     {
+      "cells": [
+       "FR-22",
+       "4,141.61",
+       "18,852.32",
+       "5",
+       "25",
+       "Germany",
+       "Traffic white"
+      ]
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "4,445.45",
+       "",
+       "",
+       "",
+       "",
+       ""
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Model",
+      "Price/unit (GBP)",
+      "Case price (GBP)",
+      "Pack qty",
+      "Min. qty",
+      "Country of origin",
+      "Finish"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "GBP",
+   "needed": true,
+   "start": 12,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "GBP",
+   "needed": true,
+   "start": 12,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "1,270.85",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2,250.13",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "100",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,107.52",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "13,904.53",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-22",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,141.61",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "18,852.32",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "5",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "25",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,445.45",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  }
+ ]
+}

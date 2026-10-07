@@ -1,0 +1,263 @@
+{
+ "family": "sparse",
+ "formats": [
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Receipt WB-37727"
+  },
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "text": "14 Quayside Row, Bristol"
+  },
+  {
+   "text": "Date: 9 June 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "PLU",
+     "Item",
+     "Quantity",
+     "Each",
+     "Amount"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "BK-210",
+       "Almond croissant",
+       "3",
+       "£3.35",
+       "£10.05"
+      ]
+     },
+     {
+      "cells": [
+       "KT-301",
+       "Fish pie",
+       "4",
+       "£12.60",
+       "£50.40"
+      ]
+     },
+     {
+      "cells": [
+       "KT-320",
+       "Club sandwich",
+       "2",
+       "£7.40",
+       "£14.80"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "PLU",
+      "Item",
+      "Quantity",
+      "Each",
+      "Amount"
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Net: £75.25"
+  },
+  {
+   "text": "Less discount: £3.76"
+  },
+  {
+   "text": "VAT: £14.30"
+  },
+  {
+   "text": "Grand total: "
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "WB-37727",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "14",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "9 June 2026",
+   "needed": true,
+   "start": 6
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "BK-210",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Almond croissant",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "3",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "£3.35",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "£10.05",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "KT-301",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Fish pie",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "£12.60",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "£50.40",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "KT-320",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Club sandwich",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "£7.40",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "£14.80",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "£75.25",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "£3.76",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "£14.30",
+   "needed": true,
+   "start": 5
+  }
+ ]
+}

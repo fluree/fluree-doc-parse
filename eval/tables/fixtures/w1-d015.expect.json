@@ -1,0 +1,281 @@
+{
+ "family": "totals-block",
+ "formats": [
+  "html",
+  "md",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "text": "14 Quayside Row, Bristol"
+  },
+  {
+   "text": "Number WB-78927   Date of sale: 23 January 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Code",
+     "Description",
+     "Qty",
+     "Each",
+     "Amount"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "BK-215",
+       "Cinnamon bun",
+       "2",
+       "GBP 3.29",
+       "GBP 6.58"
+      ]
+     },
+     {
+      "cells": [
+       "KT-320",
+       "Club sandwich",
+       "1",
+       "GBP 9.49",
+       "GBP 9.49"
+      ]
+     },
+     {
+      "cells": [
+       "DR-402",
+       "Pot of tea",
+       "1",
+       "GBP 2.80",
+       "GBP 2.80"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Sub-total",
+       "",
+       "",
+       "GBP 18.87"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "VAT",
+       "",
+       "",
+       "GBP 3.77"
+      ]
+     },
+     {
+      "cells": [
+       "",
+       "Grand total",
+       "",
+       "",
+       "GBP 22.64"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Code",
+      "Description",
+      "Qty",
+      "Each",
+      "Amount"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "14",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "WB-78927",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "23 January 2026",
+   "needed": true,
+   "start": 32
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "BK-215",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Cinnamon bun",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 3.29",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 6.58",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "KT-320",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Club sandwich",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 9.49",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 9.49",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "DR-402",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "Pot of tea",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "1",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 2.80",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 2.80",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 18.87",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 3.77",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 3,
+   "kind": "cell",
+   "surface": "GBP 22.64",
+   "needed": true,
+   "start": 0,
+   "row": 5,
+   "col": 4
+  }
+ ]
+}

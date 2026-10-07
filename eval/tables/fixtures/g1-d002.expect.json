@@ -1,0 +1,458 @@
+{
+ "family": "section-rows",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Product range: price list"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Price each (GBP)",
+     "Carton price (GBP)",
+     "Pack qty",
+     "Minimum order",
+     "Lead (days)"
+    ],
+    "rows": [
+     {
+      "section": "Combi ovens"
+     },
+     {
+      "cells": [
+       "CO-61",
+       "223.75",
+       "3,736.74",
+       "20",
+       "25",
+       "10"
+      ]
+     },
+     {
+      "cells": [
+       "CO-61G",
+       "8,260.32",
+       "46,891.95",
+       "6",
+       "2",
+       "17"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101",
+       "3,658.17",
+       "63,741.59",
+       "20",
+       "2",
+       "10"
+      ]
+     },
+     {
+      "cells": [
+       "CO-101G",
+       "3,610.79",
+       "30,300.51",
+       "10",
+       "10",
+       "19"
+      ]
+     },
+     {
+      "section": "Fryers"
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "4,107.52",
+       "13,904.53",
+       "4",
+       "2",
+       "30"
+      ]
+     },
+     {
+      "cells": [
+       "FR-22",
+       "4,141.61",
+       "18,852.32",
+       "5",
+       "25",
+       "5"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Price each (GBP)",
+      "Carton price (GBP)",
+      "Pack qty",
+      "Minimum order",
+      "Lead (days)"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "GBP",
+   "needed": true,
+   "start": 12,
+   "col": 1,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "GBP",
+   "needed": true,
+   "start": 14,
+   "col": 2,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "header",
+   "surface": "days",
+   "needed": true,
+   "start": 6,
+   "col": 5,
+   "hrow": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-61",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "223.75",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3,736.74",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "25",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-61G",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "8,260.32",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "46,891.95",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "6",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "17",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-101",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3,658.17",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "63,741.59",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "CO-101G",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "3,610.79",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "30,300.51",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "19",
+   "needed": true,
+   "start": 0,
+   "row": 4,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,107.52",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "13,904.53",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "30",
+   "needed": true,
+   "start": 0,
+   "row": 6,
+   "col": 5
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "FR-22",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 0
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "4,141.61",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 1
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "18,852.32",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 2
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "5",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 3
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "25",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 4
+  },
+  {
+   "block": 1,
+   "kind": "cell",
+   "surface": "5",
+   "needed": true,
+   "start": 0,
+   "row": 7,
+   "col": 5
+  }
+ ]
+}

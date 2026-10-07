@@ -1,0 +1,258 @@
+{
+ "family": "totals-block",
+ "formats": [
+  "html",
+  "md",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Invoice KCS087017"
+  },
+  {
+   "text": "Seaforth Hospitality Wholesale"
+  },
+  {
+   "text": "Paarden Eiland, Cape Town"
+  },
+  {
+   "text": "Issued: 2026-07-29"
+  },
+  {
+   "table": {
+    "columns": [
+     "Description",
+     "Units",
+     "Price"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Takeaway containers 750ml (50)",
+       "10",
+       "127.95"
+      ]
+     },
+     {
+      "cells": [
+       "Wooden cutlery set (100)",
+       "20",
+       "98.20"
+      ]
+     },
+     {
+      "cells": [
+       "Dishwasher detergent 20L",
+       "2",
+       "441.95"
+      ]
+     },
+     {
+      "cells": [
+       "Gastronorm pan 1/1 65mm",
+       "12",
+       "224.00"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Description",
+      "Units",
+      "Price"
+     ]
+    ]
+   }
+  },
+  {
+   "table": {
+    "columns": [
+     null,
+     null
+    ],
+    "rows": [
+     {
+      "cells": [
+       "Net",
+       "6,815.40"
+      ]
+     },
+     {
+      "cells": [
+       "VAT",
+       "1,022.31"
+      ]
+     },
+     {
+      "cells": [
+       "TOTAL",
+       "7,837.71"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "text": "All amounts in ZAR."
+  }
+ ],
+ "parts": [
+  {
+   "block": 0,
+   "kind": "text",
+   "surface": "KCS087017",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "2026-07-29",
+   "needed": true,
+   "start": 8
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "ZAR",
+   "needed": true,
+   "start": 15
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Takeaway containers 750ml (50)",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "10",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "127.95",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Wooden cutlery set (100)",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "20",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "98.20",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Dishwasher detergent 20L",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "441.95",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "Gastronorm pan 1/1 65mm",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "12",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "224.00",
+   "needed": true,
+   "start": 0,
+   "row": 3,
+   "col": 2
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "6,815.40",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "1,022.31",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 5,
+   "kind": "cell",
+   "surface": "7,837.71",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  }
+ ]
+}

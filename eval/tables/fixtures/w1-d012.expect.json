@@ -1,0 +1,197 @@
+{
+ "family": "kv-lines",
+ "formats": [
+  "html",
+  "md",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Wrenmoor Bakehouse"
+  },
+  {
+   "text": "14 Quayside Row, Bristol"
+  },
+  {
+   "text": "Number WB-24928   Date of sale: 20 May 2026"
+  },
+  {
+   "text": "DR-402 Pot of tea  4 @ GBP 2.89  GBP 11.56"
+  },
+  {
+   "text": "BK-215 Cinnamon bun  1 @ GBP 2.90  GBP 2.90"
+  },
+  {
+   "text": "KT-305 Leek and potato soup  4 @ GBP 7.05  GBP 28.20"
+  },
+  {
+   "text": "Sub-total  GBP 42.66"
+  },
+  {
+   "text": "VAT  GBP 8.53"
+  },
+  {
+   "text": "Gratuity  GBP 6.40"
+  },
+  {
+   "text": "Total  GBP 57.59"
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "14",
+   "needed": false,
+   "start": 0
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "WB-24928",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 2,
+   "kind": "text",
+   "surface": "20 May 2026",
+   "needed": true,
+   "start": 32
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "DR-402",
+   "needed": true,
+   "start": 0
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "Pot of tea",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "4",
+   "needed": true,
+   "start": 19
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "GBP 2.89",
+   "needed": true,
+   "start": 23
+  },
+  {
+   "block": 3,
+   "kind": "text",
+   "surface": "GBP 11.56",
+   "needed": true,
+   "start": 33
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "BK-215",
+   "needed": true,
+   "start": 0
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "Cinnamon bun",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "1",
+   "needed": true,
+   "start": 21
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "GBP 2.90",
+   "needed": true,
+   "start": 25
+  },
+  {
+   "block": 4,
+   "kind": "text",
+   "surface": "GBP 2.90",
+   "needed": true,
+   "start": 35
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "KT-305",
+   "needed": true,
+   "start": 0
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "Leek and potato soup",
+   "needed": true,
+   "start": 7
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "4",
+   "needed": true,
+   "start": 29
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "GBP 7.05",
+   "needed": true,
+   "start": 33
+  },
+  {
+   "block": 5,
+   "kind": "text",
+   "surface": "GBP 28.20",
+   "needed": true,
+   "start": 43
+  },
+  {
+   "block": 6,
+   "kind": "text",
+   "surface": "GBP 42.66",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 7,
+   "kind": "text",
+   "surface": "GBP 8.53",
+   "needed": true,
+   "start": 5
+  },
+  {
+   "block": 8,
+   "kind": "text",
+   "surface": "GBP 6.40",
+   "needed": true,
+   "start": 10
+  },
+  {
+   "block": 9,
+   "kind": "text",
+   "surface": "GBP 57.59",
+   "needed": true,
+   "start": 7
+  }
+ ]
+}

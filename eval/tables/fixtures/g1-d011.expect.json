@@ -1,0 +1,333 @@
+{
+ "family": "two-tables",
+ "formats": [
+  "html",
+  "md",
+  "docx",
+  "xlsx",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Fryers: technical data"
+  },
+  {
+   "text": "Weights in kilograms; dimensions in millimetres; periods in months and power inputs in watts."
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "Weight, net",
+     "Ship wt."
+    ],
+    "rows": [
+     {
+      "cells": [
+       "FR-15",
+       "298.5",
+       "353.6"
+      ]
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "116.1",
+       "128.8"
+      ]
+     },
+     {
+      "cells": [
+       "FR-22",
+       "61.2",
+       "66.2"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "Weight, net",
+      "Ship wt."
+     ]
+    ]
+   }
+  },
+  {
+   "text": "Further data"
+  },
+  {
+   "table": {
+    "columns": [
+     "Article",
+     "H",
+     "Guarantee",
+     "Motor",
+     "Certification",
+     "Remarks"
+    ],
+    "rows": [
+     {
+      "cells": [
+       "FR-15",
+       "365",
+       "36",
+       "8,488",
+       "CE, RoHS",
+       "Made to order"
+      ]
+     },
+     {
+      "cells": [
+       "FR-15T",
+       "1,866",
+       "36",
+       "4,071",
+       "CE",
+       "Made to order"
+      ]
+     },
+     {
+      "cells": [
+       "FR-22",
+       "530",
+       "60",
+       "9,306",
+       "CE, RoHS",
+       "Replaces older model"
+      ]
+     }
+    ],
+    "header_grid": [
+     [
+      "Article",
+      "H",
+      "Guarantee",
+      "Motor",
+      "Certification",
+      "Remarks"
+     ]
+    ]
+   }
+  }
+ ],
+ "parts": [
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "kilograms",
+   "needed": true,
+   "start": 11
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "millimetres",
+   "needed": true,
+   "start": 36
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "months",
+   "needed": true,
+   "start": 60
+  },
+  {
+   "block": 1,
+   "kind": "text",
+   "surface": "watts",
+   "needed": true,
+   "start": 87
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "FR-15",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "298.5",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "353.6",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "116.1",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "128.8",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "FR-22",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "61.2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 2,
+   "kind": "cell",
+   "surface": "66.2",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "FR-15",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "365",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "36",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "8,488",
+   "needed": true,
+   "start": 0,
+   "row": 0,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "FR-15T",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "1,866",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "36",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "4,071",
+   "needed": true,
+   "start": 0,
+   "row": 1,
+   "col": 3
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "FR-22",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 0
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "530",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 1
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "60",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 2
+  },
+  {
+   "block": 4,
+   "kind": "cell",
+   "surface": "9,306",
+   "needed": true,
+   "start": 0,
+   "row": 2,
+   "col": 3
+  }
+ ]
+}
