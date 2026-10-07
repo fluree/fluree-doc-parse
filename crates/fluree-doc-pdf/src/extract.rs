@@ -191,8 +191,23 @@ impl<'a> Device<'a> for Collector {
     ) {
         // Bounding box only. A table grid is axis-aligned rectangles and
         // segments; curve detail is irrelevant and expensive to keep.
-        let r: Rect = (transform * path.clone()).bounding_box();
+        let path = transform * path.clone();
+        let r: Rect = path.bounding_box();
         if !self.page_box.intersects(&crate::geom::from_kurbo(r)) {
+            return;
+        }
+        // One path can carry many rules. A financial statement strokes every
+        // underline on the page — a short rule under each figure, the double
+        // rule under each total — as subpaths of a single path (`m l m l …
+        // S`), and that path's box is a block spanning all of them: read
+        // whole it was one fill, and the page had no rules. Where every
+        // subpath is a rule on its own, each is pushed as one.
+        if let Some(rules) = subpath_rules(&path, self.page) {
+            self.rules.extend(
+                rules
+                    .into_iter()
+                    .filter(|x| self.page_box.intersects(&x.bbox)),
+            );
             return;
         }
         match rule::classify(crate::geom::from_kurbo(r), self.page) {
@@ -392,6 +407,60 @@ const MIN_ROW_TRANSITIONS: usize = 6;
 
 /// Whether decoded pixels look like text or line structure rather than a
 /// photograph. See [`ImagePlacement::texty`].
+/// The rules a path of several straight subpaths draws, one per subpath, when
+/// every subpath is a horizontal rule a figure wide; `None` for a path of one
+/// subpath, a curve, or any other subpath (a box, a cell background, a
+/// chart's tick marks, which are short, and its axes, which stand up), read
+/// whole as before.
+/// Shortest underline read out of a path of several, in points: a narrow
+/// figure's width, longer than a chart's tick.
+const MIN_UNDERLINE: f64 = 8.0;
+
+fn subpath_rules(path: &kurbo::BezPath, page: usize) -> Option<Vec<Rule>> {
+    let mut boxes: Vec<Rect> = Vec::new();
+    let mut current: Option<Rect> = None;
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => {
+                boxes.extend(current.take());
+                current = Some(Rect::from_points(p, p));
+            }
+            kurbo::PathEl::LineTo(p) => {
+                current = Some(current?.union_pt(p));
+            }
+            kurbo::PathEl::ClosePath => {}
+            kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => return None,
+        }
+    }
+    boxes.extend(current);
+    if boxes.len() < 2 {
+        return None;
+    }
+    // Underlines under columns of figures: some level carries two rules or
+    // more, apart. A chart's gridlines are one rule a level, the plot's
+    // width each, and read whole they are the fill that finds the chart.
+    let parted = boxes.iter().enumerate().any(|(i, a)| {
+        boxes[i + 1..]
+            .iter()
+            .any(|b| (a.y0 - b.y0).abs() <= 1.0 && (a.x1 < b.x0 - 1.0 || b.x1 < a.x0 - 1.0))
+    });
+    if !parted {
+        return None;
+    }
+    boxes
+        .into_iter()
+        .map(|b| match rule::classify(crate::geom::from_kurbo(b), page) {
+            Some(rule::Shape::Rule(x))
+                if x.orientation == rule::Orientation::Horizontal
+                    && x.length() >= MIN_UNDERLINE =>
+            {
+                Some(x)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
     let (w, h, luma): (usize, usize, Vec<u8>) = match data {
         hayro_interpret::ImageData::Luma(l) => {

@@ -111,6 +111,7 @@ pub mod route;
 pub mod rule;
 pub mod table;
 pub mod text;
+pub mod textgrid;
 
 pub use block::Block;
 pub use extract::{extract_bytes, extract_file, Document, ExtractError, Page};

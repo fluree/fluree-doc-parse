@@ -63,6 +63,70 @@ pub struct Grid {
     /// Row boundaries, ascending.
     pub ys: Vec<f64>,
     pub bbox: BBox,
+    /// The header, spans and bands of a table read from its text
+    /// ([`crate::textgrid`]), which knows them as it finds the rows; a
+    /// ruled grid leaves them to be read from its ruling.
+    pub layout: Option<std::sync::Arc<TableLayout>>,
+}
+
+impl TableLayout {
+    /// Each cell's text, a span's read whole into its first cell.
+    pub fn texts(&self, glyphs: &[crate::glyph::Glyph], cols: usize) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .cells
+            .iter()
+            .map(|ids| {
+                let gs: Vec<crate::glyph::Glyph> = ids.iter().map(|&i| glyphs[i].clone()).collect();
+                join_cell_lines(crate::line::assemble(&gs).iter().map(|l| l.text.as_str()))
+            })
+            .collect();
+        for &(r, c0, c1) in &self.spans {
+            let parts: Vec<String> = (c0..c1.min(cols))
+                .map(|c| std::mem::take(&mut out[r * cols + c]))
+                .filter(|t| !t.trim().is_empty())
+                .collect();
+            out[r * cols + c0] = parts.join(" ");
+        }
+        out
+    }
+
+    /// The spans as a grid's merges: each span's cells continue its first.
+    pub fn merges(&self, rows: usize, cols: usize) -> Merges {
+        let mut m = Merges {
+            continues_above: vec![false; rows * cols],
+            continues_left: vec![false; rows * cols],
+            full_width_row: vec![false; rows],
+        };
+        for &(r, c0, c1) in &self.spans {
+            if r >= rows {
+                continue;
+            }
+            for c in (c0 + 1)..c1.min(cols) {
+                m.continues_left[r * cols + c] = true;
+            }
+            if c0 == 0 && c1 >= cols {
+                m.full_width_row[r] = true;
+            }
+        }
+        m
+    }
+}
+
+/// What a table read from its text says of its own structure.
+#[derive(Debug, Clone, Default)]
+pub struct TableLayout {
+    /// Rows at the top that name the columns.
+    pub header_rows: usize,
+    /// Cells read as one: `(row, first column, end column)`.
+    pub spans: Vec<(usize, usize, usize)>,
+    /// Body rows that label the rows beneath them.
+    pub sub_headers: Vec<usize>,
+    /// Per cell, row-major, the page glyphs read into it.
+    pub cells: Vec<Vec<usize>>,
+    /// The `draw_index` of every glyph the cells hold, sorted: the glyphs the
+    /// table takes from the page. A glyph inside its box that no cell holds
+    /// (a note set on a row's baseline beside it) stays the page's.
+    pub claimed: Vec<usize>,
 }
 
 impl Grid {
@@ -1514,6 +1578,7 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
                 // rules around a paragraph are not a table.
                 if sub.len() >= MIN_GRID_LINES || is_banner(&band_xs, &sub, rules) {
                     out.push(Grid {
+                        layout: None,
                         page,
                         bbox: BBox {
                             x0: band_xs[0],
@@ -1534,6 +1599,7 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
     // Nothing split out: fall back to the whole span.
     if out.is_empty() && (ys.len() >= MIN_GRID_LINES || is_banner(&xs, &ys, rules)) {
         out.push(Grid {
+            layout: None,
             page,
             bbox: BBox {
                 x0: xs[0],
@@ -2076,6 +2142,7 @@ pub fn detect_fill_bands(fills: &[crate::rule::Fill], page: usize) -> Vec<Grid> 
             let mut boundaries = xs.clone();
             boundaries.push(x_hi + 1.0);
             let grid = Grid {
+                layout: None,
                 page,
                 bbox: BBox {
                     x0: boundaries[0],
@@ -2221,6 +2288,7 @@ pub fn detect_horizontal_bands(
             continue;
         }
         out.push(Grid {
+            layout: None,
             page,
             bbox: BBox {
                 x0: xs[0],
@@ -2465,6 +2533,7 @@ fn grid_by_rank(
     ys.push(y_hi + 1.0);
     let ys = join_wrapped_rows(ys);
     Some(Grid {
+        layout: None,
         page,
         bbox: BBox {
             x0: xs[0],
@@ -2499,6 +2568,13 @@ const MAX_FIELD_LABEL_WORDS: usize = 4;
 /// under at least one label. Prose set in columns has no such row. A field
 /// list's values are as often text as figures (a number, a date, an item,
 /// a code), so in two columns the labels carry the evidence alone.
+/// An aligned run whose type says what it is — a transposed table's two
+/// axes, or a field list's bold labels — which a reading from alignment
+/// alone would take for an ordinary table with a header.
+pub fn typed_layout(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    has_two_axis_header(g, glyphs) || (g.cols() == 2 && has_typeset_header(g, glyphs))
+}
+
 fn has_typeset_header(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
     let (rows, cols) = (g.rows(), g.cols());
     if cols == 2 && rows >= 2 {
@@ -2911,6 +2987,7 @@ fn grid_from_cells(
     let ys = join_wrapped_rows(ys);
 
     Some(Grid {
+        layout: None,
         page,
         bbox: BBox {
             x0: xs[0],
@@ -3004,6 +3081,7 @@ mod header_tests {
     fn grid_with_bands() -> Grid {
         // 4 columns x 5 rows, rows 20pt tall from y=100.
         Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0, 300.0, 400.0],
             ys: vec![100.0, 120.0, 140.0, 160.0, 180.0, 200.0],
@@ -3170,6 +3248,7 @@ mod header_tests {
         ];
         rules.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
         let g = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0, 300.0],
             ys: vec![100.0, 120.0, 140.0, 160.0, 180.0],
@@ -3233,6 +3312,7 @@ mod header_tests {
         // the gap test never broke — a row-spanning label sharing its line
         // with the figures beside it.
         let g = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0, 300.0, 400.0],
             ys: vec![0.0, 20.0],
@@ -3264,6 +3344,7 @@ mod header_tests {
         // left edge legally crosses its own boundary; splitting it is the
         // `$ 7,8 | 35,559` defect.
         let g = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0],
             ys: vec![0.0, 20.0],
@@ -3305,6 +3386,7 @@ mod header_tests {
         ];
         rules.sort_by(|a, b| a.bbox.y0.partial_cmp(&b.bbox.y0).unwrap());
         let g = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0, 300.0],
             ys: vec![0.0, 20.0, 40.0, 60.0, 80.0],
@@ -3348,6 +3430,7 @@ mod header_tests {
             .map(|r| y0 + (y1 - y0) * r as f64 / rows as f64)
             .collect();
         Grid {
+            layout: None,
             page: 0,
             bbox: BBox {
                 x0: 0.0,
@@ -3510,6 +3593,7 @@ mod header_tests {
         // Subtotal | 38.60 over Tax | 3.86: the labels are bold on every
         // row, the amounts on none.
         let g = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0],
             ys: vec![100.0, 120.0, 140.0, 160.0],
@@ -3561,6 +3645,7 @@ mod header_tests {
         // A bare bordered box: no interior horizontal rules, so "merged with
         // the row above" is unsupported by evidence and must not be claimed.
         let g = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 150.0, 300.0],
             ys: vec![100.0, 130.0, 160.0],
@@ -3671,6 +3756,7 @@ mod tests {
             put(v, 227.0, y);
         }
         let mut g = Grid {
+            layout: None,
             page: 0,
             xs: vec![40.0, 572.0],
             ys: (0..8)
@@ -3723,6 +3809,7 @@ mod tests {
             }
         }
         let mut g = Grid {
+            layout: None,
             page: 0,
             xs: vec![40.0, 572.0],
             ys: vec![252.0, 267.0, 282.0, 297.0, 312.0],
@@ -4284,6 +4371,7 @@ mod tests {
 
     fn grid(xs: &[f64], ys: &[f64]) -> Grid {
         Grid {
+            layout: None,
             page: 0,
             xs: xs.to_vec(),
             ys: ys.to_vec(),

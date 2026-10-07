@@ -21,7 +21,12 @@ readers:
 | `plain` | generic entity tables under their own header words |
 
 `probe-*` files are hand-written cases for a single behaviour (a `<caption>`,
-a `<th colspan>` band).
+a `<th colspan>` band). The PDF probes for tables drawn without column rules
+(`probe-statement`, `probe-statement-far`, `probe-booktabs`: dot leaders,
+underlines under figures, banners, centred unit lines, wrapped labels) are
+drawn by `make_probes.py` (`uv run eval/tables/make_probes.py`) in the
+geometry of the published pages that a real-document audit found unread, so
+no third-party page is kept here.
 
 ## What is checked
 

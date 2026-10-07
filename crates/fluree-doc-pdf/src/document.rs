@@ -379,6 +379,8 @@ enum GridSource {
     FillBand,
     Aligned,
     HorizontalBand,
+    /// Read from its text by `textgrid`, with its structure stated.
+    Text,
 }
 
 struct PageLayout {
@@ -477,7 +479,12 @@ fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
                 Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
                 None => g.origin,
             };
-            !grids.iter().any(|grid| grid.cell_at(x, y).is_some())
+            !grids.iter().any(|grid| match grid.layout.as_deref() {
+                Some(lay) if !lay.claimed.is_empty() => {
+                    lay.claimed.binary_search(&g.draw_index).is_ok()
+                }
+                _ => grid.cell_at(x, y).is_some(),
+            })
         })
         .cloned()
         .collect()
@@ -590,7 +597,137 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let aligned_full = timed(&mut timings.tables, || {
             table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
         });
-        if prefer_aligned_over_ruled(&grids, &aligned_full, &p.glyphs) {
+        let aligned_preferred = prefer_aligned_over_ruled(&grids, &aligned_full, &p.glyphs);
+        // Tables ruled with horizontals only, or by nothing but the rules
+        // under their figures, are read from their text: their bands are
+        // not rows and their rules' ends are not columns. See `textgrid`.
+        // Where alignment already reads the page's one coarse grid, it
+        // keeps it.
+        if !aligned_preferred {
+            timed(&mut timings.tables, || {
+                let lines = crate::textgrid::lines(&p.glyphs);
+                let mut read: Vec<Grid> = Vec::new();
+                let mut seeded: Vec<usize> = Vec::new();
+                let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
+                for i in crate::textgrid::unruled_grids(&grids, &p.rules, &lines) {
+                    for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
+                        let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        if debug {
+                            eprintln!(
+                                "TEXTGRID p{} seed grid {i} region {:?} -> {:?}",
+                                p.index,
+                                region,
+                                got.iter()
+                                    .map(|g| (g.rows(), g.cols(), g.bbox))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                        if got.is_empty() {
+                            continue;
+                        }
+                        if !seeded.contains(&i) {
+                            seeded.push(i);
+                        }
+                        read.extend(got);
+                    }
+                }
+                // Runs of figures no grid holds: a statement ruled by
+                // nothing but the underlines under its figures. Not where
+                // alignment finds a layout its type names (a transposed
+                // table, a field list), which it reads better.
+                let mut taken: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
+                taken.extend(read.iter().map(|g| g.bbox));
+                let outside = glyphs_outside_grids(&p.glyphs, &grids);
+                let accepted = table::detect_aligned(&outside, &p.rules, &p.fills, p.index);
+                let typed: Vec<crate::geom::BBox> = accepted
+                    .iter()
+                    .filter(|g| table::typed_layout(g, &outside))
+                    .map(|g| g.bbox)
+                    .collect();
+                for region in crate::textgrid::figure_runs(&lines, &taken) {
+                    if typed.iter().any(|t| overlap_area(t, &region) > 0.0) {
+                        continue;
+                    }
+                    let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                    if debug {
+                        eprintln!(
+                            "TEXTGRID p{} figure run {:?} -> {:?}",
+                            p.index,
+                            region,
+                            got.iter()
+                                .map(|g| (g.rows(), g.cols(), g.bbox))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    // Nor where alignment, accepting a table there, finds
+                    // more columns than the gutters do: columns set closer
+                    // than a gutter's width.
+                    read.extend(got.into_iter().filter(|g| {
+                        !typed.iter().any(|t| overlap_area(t, &g.bbox) > 0.0)
+                            && !accepted.iter().any(|a| {
+                                overlap_area(&a.bbox, &g.bbox) > 0.0 && {
+                                    // Its columns that hold more than a
+                                    // currency sign: alignment sets `$` apart.
+                                    let cells = a.cell_texts(&outside);
+                                    let n = a.cols();
+                                    let real = (0..n)
+                                        .filter(|&c| {
+                                            (0..a.rows()).any(|r| {
+                                                let t = cells[r * n + c].trim();
+                                                !t.is_empty() && !matches!(t, "$" | "€" | "£" | "¥")
+                                            })
+                                        })
+                                        .count();
+                                    real > g.cols()
+                                }
+                            })
+                    }));
+                }
+                // One table found from two seeds is kept once, the larger.
+                read.sort_by_key(|g| std::cmp::Reverse(g.rows() * g.cols()));
+                let mut kept: Vec<Grid> = Vec::new();
+                for g in read {
+                    if !kept.iter().any(|k| overlap_area(&k.bbox, &g.bbox) > 0.0) {
+                        kept.push(g);
+                    }
+                }
+                if kept.is_empty() {
+                    return;
+                }
+                let mut out_grids = Vec::new();
+                let mut out_sources = Vec::new();
+                for (gi, (g, s)) in grids.drain(..).zip(grid_sources.drain(..)).enumerate() {
+                    let area = ((g.bbox.x1 - g.bbox.x0) * (g.bbox.y1 - g.bbox.y0)).max(1.0);
+                    // A seed that was read is replaced by its reading; another
+                    // grid only where a reading covers much of it.
+                    let replaced = seeded.contains(&gi)
+                        || (!crate::textgrid::has_vertical(&p.rules, &g.bbox)
+                            && kept
+                                .iter()
+                                .any(|k| overlap_area(&k.bbox, &g.bbox) >= 0.3 * area));
+                    if !replaced {
+                        out_grids.push(g);
+                        out_sources.push(s);
+                    }
+                }
+                for mut g in kept {
+                    crate::textgrid::claim(&mut g, &p.glyphs);
+                    if !out_grids
+                        .iter()
+                        .any(|o: &Grid| overlap_area(&o.bbox, &g.bbox) > 0.0)
+                    {
+                        out_grids.push(g);
+                        out_sources.push(GridSource::Text);
+                    }
+                }
+                grids = out_grids;
+                grid_sources = out_sources;
+            });
+        }
+        let read_from_text = grid_sources.contains(&GridSource::Text);
+
+        if read_from_text {
+        } else if aligned_preferred {
             grids = aligned_full;
             grid_sources = vec![GridSource::Aligned; grids.len()];
         } else {
@@ -1028,11 +1165,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
         for (gi, g) in layout.grids.iter().enumerate() {
-            let flat: Vec<String> = g
-                .cell_texts(&raw.pages[pi].glyphs)
-                .into_iter()
-                .map(|c| furniture::scrub_cell(&c, &furniture_texts))
-                .collect();
+            let flat: Vec<String> = match g.layout.as_deref() {
+                Some(lay) => lay.texts(&raw.pages[pi].glyphs, g.cols()),
+                None => g.cell_texts(&raw.pages[pi].glyphs),
+            }
+            .into_iter()
+            .map(|c| furniture::scrub_cell(&c, &furniture_texts))
+            .collect();
             if layout.demoted_tables[gi] {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
@@ -1077,7 +1216,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect()
                 })
                 .collect();
-            let mut merges = g.merges(&raw.pages[pi].rules, &raw.pages[pi].fills);
+            let explicit = g.layout.as_deref();
+            let mut merges = match explicit {
+                Some(lay) => lay.merges(g.rows(), g.cols()),
+                None => g.merges(&raw.pages[pi].rules, &raw.pages[pi].fills),
+            };
             // A row whose text crosses an alignment-derived boundary is one
             // cell across the row — a boxed notice over a key/value list.
             // Its text is read whole into the first cell, since the cut
@@ -1092,9 +1235,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     merges.continues_left[r * cols + c] = true;
                 }
             }
-            let header_rows = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
-            let mut header_rows =
-                g.stacked_header_rows(header_rows, &rows, &merges, &raw.pages[pi].rules);
+            let mut header_rows = match explicit {
+                Some(lay) => {
+                    for cell in rows.iter_mut().flatten() {
+                        *cell = crate::textgrid::strip_leaders(cell);
+                    }
+                    lay.header_rows
+                }
+                None => {
+                    let h = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
+                    g.stacked_header_rows(h, &rows, &merges, &raw.pages[pi].rules)
+                }
+            };
             // An unruled table read by alignment has no rules to say a header
             // label spans columns. Its column banner (`EUR` over `Unit` and
             // `Total`, taken in by `extend_by_banner`) is a first row whose
@@ -1130,6 +1282,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // (`Crucible | Logistics`).
             let rcount = rows.len();
             let mut taken = vec![false; rcount * cols];
+            // A table read from its text joined its spans as it read them.
+            if explicit.is_some() {
+                taken.iter_mut().for_each(|t| *t = true);
+            }
             for r in 0..rcount {
                 for c in 0..cols {
                     if taken[r * cols + c] {
@@ -1172,15 +1328,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
-            let sub_headers: Vec<usize> = merges
-                .full_width_row
-                .iter()
-                .enumerate()
-                .filter(|(r, full)| {
-                    **full && *r >= header_rows && rows[*r].iter().any(|c| !c.trim().is_empty())
-                })
-                .map(|(r, _)| r)
-                .collect();
+            let sub_headers: Vec<usize> = match explicit {
+                Some(lay) => lay.sub_headers.clone(),
+                None => merges
+                    .full_width_row
+                    .iter()
+                    .enumerate()
+                    .filter(|(r, full)| {
+                        **full && *r >= header_rows && rows[*r].iter().any(|c| !c.trim().is_empty())
+                    })
+                    .map(|(r, _)| r)
+                    .collect(),
+            };
             tables += 1;
             table_elements.push(Element {
                 id: String::new(),
@@ -1578,6 +1737,7 @@ mod tests {
     #[test]
     fn prose_and_table_glyphs_are_exclusive() {
         let grid = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0],
             ys: vec![0.0, 100.0],
@@ -1650,6 +1810,7 @@ mod tests {
     #[test]
     fn wider_aligned_tables_replace_a_prose_heavy_coarse_grid() {
         let ruled = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 100.0, 200.0],
             ys: vec![0.0, 50.0, 100.0, 150.0],
@@ -1661,6 +1822,7 @@ mod tests {
             },
         };
         let aligned = Grid {
+            layout: None,
             page: 0,
             xs: vec![0.0, 40.0, 80.0, 120.0, 160.0, 200.0],
             ys: vec![0.0, 50.0, 100.0, 150.0],
