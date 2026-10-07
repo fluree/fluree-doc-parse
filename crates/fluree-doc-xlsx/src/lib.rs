@@ -1503,6 +1503,15 @@ fn header_rows(
     if corner {
         return 1;
     }
+    // A label column, bold down its first column and nothing else bold, is
+    // a field list (`Number | R-13247` over `Date | 31.08.2026`): its first
+    // row is a field like the rest, however its values are typed.
+    let label_column = width >= 2
+        && (0..n_rows).all(|r| bold[r * width] && !rows[r][0].is_empty())
+        && (0..n_rows).all(|r| (1..width).all(|c| !bold[r * width + c]));
+    if label_column {
+        return 0;
+    }
     if (0..width).any(|c| first[c].is_empty() && !m_left[c]) {
         return 0;
     }
@@ -1907,6 +1916,35 @@ mod tests {
                 num("B3", 0, "1"),
                 text("A4", 1, "Total paid"),
                 num("B4", 0, "9"),
+            ],
+            "",
+        );
+        assert_eq!(parse_sheet(&xml)[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_bold_label_column_is_a_field_list_whatever_its_values() {
+        // Labels over amounts read, by type alone, as a header over data;
+        // the bold column says they are fields.
+        let xml = sheet(
+            &[
+                text("A1", 1, "Goods total"),
+                num("B1", 0, "78.5"),
+                text("A2", 1, "GST 15%"),
+                num("B2", 0, "11.19"),
+                text("A3", 1, "Amount due"),
+                num("B3", 0, "85.76"),
+            ],
+            "",
+        );
+        assert_eq!(parse_sheet(&xml)[1].header_rows, Some(0));
+        // Two fields are a field list too.
+        let xml = sheet(
+            &[
+                text("A1", 1, "Number"),
+                text("B1", 0, "R-13247"),
+                text("A2", 1, "Date"),
+                text("B2", 0, "31.08.2026"),
             ],
             "",
         );

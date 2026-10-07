@@ -460,7 +460,16 @@ pub fn detect_with_rules(
     };
     let (min_x, max_x, width) = (p.min_x, p.max_x, p.width);
 
-    let cuts: Vec<f64> = p.gutters(&p.clear_bins()).iter().map(|g| g.cut).collect();
+    let cuts: Vec<f64> = p
+        .gutters(&p.clear_bins())
+        .iter()
+        .filter(|g| {
+            let x0 = p.min_x + g.bins.0 as f64 * BIN;
+            let x1 = p.min_x + (g.bins.1 + 1) as f64 * BIN;
+            !bridged(glyphs, x0, x1)
+        })
+        .map(|g| g.cut)
+        .collect();
     if cuts.is_empty() {
         return full_width(&boxed);
     }
@@ -500,6 +509,122 @@ pub fn detect_with_rules(
         return full_width(&boxed);
     }
     merged
+}
+
+/// Is this gutter crossed by the lines it would split, not set between two
+/// columns?
+///
+/// A line set in a monospace face with padded spaces puts a space in the
+/// same character cell on every line, and a space glyph has no ink: down
+/// the page that cell is an empty stripe as wide as a gutter, and cutting
+/// there slices the lines, and any heading across them, mid-word
+/// (`Wrenmoor Ba` / `kehouse`). Emptiness cannot tell the stripe from a
+/// gutter; the rows with ink on both sides of it can. A column's line ends
+/// and the next column's starts with a jump of the pen; a padded line walks
+/// across the stripe by the advances of its own space glyphs. So the
+/// gutter is crossed when every row with ink on both sides of it is one
+/// line (bridged by its spaces, or with ink inside the stripe), or when
+/// most are and at least one is bridged.
+///
+/// Both sides are judged by vertical overlap with a row's ink, not by a
+/// shared baseline: a sidebar's baselines sit a few points off the body's,
+/// and by baseline alone each side of it looked one-sided.
+fn bridged(glyphs: &[Glyph], x0: f64, x1: f64) -> bool {
+    let mut order: Vec<&Glyph> = glyphs.iter().filter(|g| g.is_horizontal()).collect();
+    order.sort_by_key(|g| g.draw_index);
+    let inked = |g: &&&Glyph| g.bbox.is_some() && !g.text.trim().is_empty();
+
+    // Rows by baseline: (baseline, ink left, ink right, font size, ink inside).
+    let mut rows: Vec<(f64, bool, bool, f64, bool)> = Vec::new();
+    // Each baseline's vertical extent of ink: (baseline, y0, y1).
+    let mut extent: Vec<(f64, f64, f64)> = Vec::new();
+    for g in order.iter().filter(inked) {
+        let b = g.bbox.unwrap();
+        let fs = (g.font_size as f64).max(1.0);
+        let y = g.origin.1;
+        let left = b.x1 <= x0 + 0.5;
+        let right = b.x0 >= x1 - 0.5;
+        match rows
+            .iter_mut()
+            .find(|r| (r.0 - y).abs() < r.3.max(fs) * 0.3)
+        {
+            Some(r) => {
+                r.1 |= left;
+                r.2 |= right;
+                r.4 |= !left && !right;
+            }
+            None => rows.push((y, left, right, fs, !left && !right)),
+        }
+        match extent.iter_mut().find(|e| (e.0 - y).abs() < fs * 0.3) {
+            Some(e) => {
+                e.1 = e.1.min(b.y0);
+                e.2 = e.2.max(b.y1);
+            }
+            None => extent.push((y, b.y0, b.y1)),
+        }
+    }
+    for r in rows.iter_mut() {
+        let Some(e) = extent.iter().find(|e| (e.0 - r.0).abs() < 0.01) else {
+            continue;
+        };
+        for g in order.iter().filter(inked) {
+            let b = g.bbox.unwrap();
+            let overlap = b.y1.min(e.2) - b.y0.max(e.1);
+            if overlap <= 0.3 * (b.y1 - b.y0).min(e.2 - e.1).max(0.1) {
+                continue;
+            }
+            if b.x1 <= x0 + 0.5 {
+                r.1 = true;
+            } else if b.x0 >= x1 - 0.5 {
+                r.2 = true;
+            }
+        }
+    }
+    let two_sided: Vec<f64> = rows.iter().filter(|r| r.1 && r.2).map(|r| r.0).collect();
+    let occupied: Vec<f64> = rows
+        .iter()
+        .filter(|r| r.1 && r.2 && r.4)
+        .map(|r| r.0)
+        .collect();
+    if two_sided.is_empty() {
+        return false;
+    }
+
+    // Rows whose pen walks across the stripe through space glyphs alone.
+    let mut walked: Vec<f64> = Vec::new();
+    for (i, a) in order.iter().enumerate() {
+        let Some(ab) = a.bbox else { continue };
+        if a.text.trim().is_empty() || ab.x1 > x0 + 0.5 {
+            continue;
+        }
+        let fs = (a.font_size as f64).max(1.0);
+        let mut pen = a.origin.0 + a.advance.unwrap_or(ab.x1 - a.origin.0);
+        let mut j = i + 1;
+        let mut spaces = 0usize;
+        while j < order.len() && order[j].text.trim().is_empty() {
+            pen = order[j].origin.0 + order[j].advance.unwrap_or(0.0);
+            spaces += 1;
+            j += 1;
+        }
+        let Some(b) = order.get(j) else { continue };
+        let Some(bb) = b.bbox else { continue };
+        if spaces == 0 || bb.x0 < x1 - 0.5 || (b.origin.1 - a.origin.1).abs() > fs * 0.3 {
+            continue;
+        }
+        if (b.origin.0 - pen).abs() <= fs * 0.25
+            && !walked.iter().any(|y| (y - a.origin.1).abs() < fs * 0.3)
+        {
+            walked.push(a.origin.1);
+        }
+    }
+    let crossing = two_sided
+        .iter()
+        .filter(|y| {
+            occupied.iter().any(|o| (*o - **y).abs() < 0.01)
+                || walked.iter().any(|w| (w - **y).abs() < 3.0)
+        })
+        .count();
+    crossing == two_sided.len() || (!walked.is_empty() && crossing * 2 > two_sided.len())
 }
 
 fn extent(g: &[&Glyph]) -> (f64, f64, f64, f64) {

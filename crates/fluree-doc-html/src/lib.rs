@@ -584,6 +584,16 @@ fn walk_node(h: &Handle, out: &mut Out) {
             if is_layout(h) {
                 walk_container(h, out);
             } else {
+                // The caption is where a table states its subject or unit
+                // (`Price list, prices in EUR`); it reads before the table.
+                for c in children_of(h) {
+                    if tag_of(&c).as_deref() == Some("caption") {
+                        let (text, links) = text_of(&c);
+                        if !text.is_empty() {
+                            out.push(linked("doco:Paragraph", text, None, links));
+                        }
+                    }
+                }
                 emit_table(h, out); // innermost wins: cells own their text
             }
             return;
@@ -743,6 +753,26 @@ fn emit_table(table: &Handle, out: &mut Out) {
     }
     if rows.is_empty() {
         return;
+    }
+    // A `<thead>`, where there is one, is where the header ends: a `<th>`
+    // spanning the table at the top of `<tbody>` is a group heading
+    // (`scope="rowgroup"`), a band over the rows beneath it.
+    let mut thead_trs = Vec::new();
+    for c in children_of(table) {
+        if tag_of(&c).as_deref() == Some("thead") {
+            rows_under(&c, &mut thead_trs);
+        }
+    }
+    if !thead_trs.is_empty() {
+        let n = thead_trs
+            .iter()
+            .filter(|tr| {
+                children_of(tr)
+                    .iter()
+                    .any(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
+            })
+            .count();
+        header_rows = n.min(rows.len());
     }
     let width = rows
         .iter()
@@ -1036,6 +1066,37 @@ mod tests {
         assert_eq!(t.header_rows, Some(1));
         // A row with a missing value is data; the last row labels nothing.
         assert_eq!(t.sub_headers, Some(vec![1, 3]));
+    }
+
+    #[test]
+    fn a_th_band_in_the_body_is_a_band_not_a_header_row() {
+        // `<th colspan scope=rowgroup>` at the top of `<tbody>`: the header
+        // ends where `<thead>` does.
+        let els = parse(
+            "<table><thead><tr><th>Name</th><th>Ext.</th></tr></thead><tbody>\
+               <tr><th colspan=\"2\" scope=\"rowgroup\">Finance</th></tr>\
+               <tr><td>Ana Ruiz</td><td>214</td></tr>\
+               <tr><th colspan=\"2\" scope=\"rowgroup\">Logistics</th></tr>\
+               <tr><td>Bo Lind</td><td>220</td></tr>\
+             </tbody></table>",
+        );
+        let t = &els[0];
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.sub_headers, Some(vec![1, 3]));
+    }
+
+    #[test]
+    fn a_caption_reads_before_its_table() {
+        let els = parse(
+            "<table><caption>Price list, prices in EUR</caption>\
+               <tr><th>Code</th><th>Price</th></tr><tr><td>PX-210</td><td>1,250.00</td></tr>\
+             </table>",
+        );
+        assert_eq!(els[0].kind, "doco:Paragraph");
+        assert_eq!(els[0].text, "Price list, prices in EUR");
+        assert_eq!(els[1].kind, "doco:Table");
+        let cells = els[1].cells.as_ref().unwrap();
+        assert!(cells.iter().flatten().all(|c| !c.contains("Price list")));
     }
 
     #[test]

@@ -1072,8 +1072,36 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 }
             }
             let header_rows = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
-            let header_rows =
+            let mut header_rows =
                 g.stacked_header_rows(header_rows, &rows, &merges, &raw.pages[pi].rules);
+            // An unruled table read by alignment has no rules to say a header
+            // label spans columns. Its column banner (`EUR` over `Unit` and
+            // `Total`, taken in by `extend_by_banner`) is a first row whose
+            // labels each leave the cells to their right empty, over a row of
+            // labels naming every column: a two-row header, each banner
+            // spanning the columns up to the next. A transposed table's empty
+            // corner is no banner: its header row names every other column.
+            let banner = layout.grid_sources[gi] == GridSource::Aligned
+                && rows.len() >= 3
+                && rows[0][0].trim().is_empty()
+                && (1..cols).any(|c| {
+                    rows[0][c].trim().is_empty()
+                        && rows[0][..c].iter().any(|t| !t.trim().is_empty())
+                })
+                && rows[1]
+                    .iter()
+                    .all(|c| !c.trim().is_empty() && !table::is_numeric_cell(c.trim()));
+            if banner {
+                header_rows = 2;
+                let mut owner = false;
+                for (c, label) in rows[0].iter().enumerate() {
+                    if !label.trim().is_empty() {
+                        owner = true;
+                    } else if owner {
+                        merges.continues_left[c] = true;
+                    }
+                }
+            }
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
             let sub_headers: Vec<usize> = merges
