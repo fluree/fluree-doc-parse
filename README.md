@@ -8,8 +8,8 @@ graph out.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.893380 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.901153 | ~0.2 s (CPU) |
+| 1 | deterministic extraction + layout | 0.893524 | **8 ms** (CPU) |
+| 2 | layout-detector arbitration (headings, table regions) | 0.901298 | ~0.2 s (CPU) |
 | 3 | deep reading of pixels-only content and doubted structure | **0.934296** | ~1.5 s² |
 
 ¹ 200-document public evaluation corpus, measured 2026-10-07 — the standings
@@ -78,20 +78,29 @@ Measured 2026-10-07 on
 written nor tuned by this project. NID scores reading order and text, TEDS
 table structure, MHS heading structure; `overall` is their per-document mean.
 
-![Overall score against seconds per page for 17 engines on opendataloader-bench: fluree-doc-parse tier 1 scores 0.893 at 9 ms per page, tier 3 scores 0.934 at about 1.5 s](docs/assets/accuracy-vs-speed.svg)
+![Overall score against seconds per page for 17 engines on opendataloader-bench: fluree-doc-parse tier 1 scores 0.894 at 9 ms per page and tier 3 scores 0.934 at about 1.5 s; markitdown and liteparse, below 0.65, are listed in a note](docs/assets/accuracy-vs-speed.svg)
 
-The top 8 of the 17 engines scored:
+All 17 engines scored:
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
 | 1 | **fluree-doc-parse** (cascade) | **0.934296** | 0.9484 | 0.9447 | 0.8788 | ~1.5 |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.893380** | 0.9233 | 0.8533 | 0.8146 | **~0.009** |
+| 3 | **fluree-doc-parse** (deterministic) | **0.893524** | 0.9236 | 0.8536 | 0.8146 | **~0.009** |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
 | 7 | pdf-inspector | 0.875348 | 0.9147 | 0.8141 | 0.7879 | 0.006 |
 | 8 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
+| 9 | opendataloader-hybrid-helium | 0.845058 | 0.8789 | 0.8068 | 0.7549 | 8.620 |
+| 10 | unstructured-hires | 0.841377 | 0.9038 | 0.5883 | 0.7486 | 3.008 |
+| 11 | edgeparse | 0.836959 | 0.8938 | 0.7174 | 0.7061 | 0.036 |
+| 12 | opendataloader | 0.831209 | 0.9023 | 0.4887 | 0.7395 | 0.015 |
+| 13 | mineru | 0.831135 | 0.8574 | 0.8730 | 0.7430 | 5.962 |
+| 14 | pymupdf4llm | 0.731621 | 0.8851 | 0.4010 | 0.4122 | 0.091 |
+| 15 | unstructured | 0.685777 | 0.8818 | 0.0000 | 0.3877 | 0.077 |
+| 16 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
+| 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
 The deterministic engine, which uses no model, GPU or API key, places third
 on its own. The full cascade places first, 0.028 ahead of the next engine.

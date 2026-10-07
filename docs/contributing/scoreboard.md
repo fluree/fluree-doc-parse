@@ -13,12 +13,21 @@ Measured 2026-10-07 on opendataloader-bench, 200 documents.
 |---|---|---|---|---|---|---|
 | 1 | **fluree-doc-parse-cascade** | **0.934296** | 0.9484 | 0.9447 | 0.8788 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.893380** | 0.9233 | 0.8533 | 0.8146 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.893524** | 0.9236 | 0.8536 | 0.8146 | **~0.009**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
 | 7 | pdf-inspector | 0.875348 | 0.9147 | 0.8141 | 0.7879 | 0.006 |
 | 8 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
+| 9 | opendataloader-hybrid-helium | 0.845058 | 0.8789 | 0.8068 | 0.7549 | 8.620 |
+| 10 | unstructured-hires | 0.841377 | 0.9038 | 0.5883 | 0.7486 | 3.008 |
+| 11 | edgeparse | 0.836959 | 0.8938 | 0.7174 | 0.7061 | 0.036 |
+| 12 | opendataloader | 0.831209 | 0.9023 | 0.4887 | 0.7395 | 0.015 |
+| 13 | mineru | 0.831135 | 0.8574 | 0.8730 | 0.7430 | 5.962 |
+| 14 | pymupdf4llm | 0.731621 | 0.8851 | 0.4010 | 0.4122 | 0.091 |
+| 15 | unstructured | 0.685777 | 0.8818 | 0.0000 | 0.3877 | 0.077 |
+| 16 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
+| 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
 ² Warm, median of five. **The harness spawns 200 separate `fdoc` processes**,
 so this number is substantially process startup and page cache, not parsing —
@@ -34,7 +43,7 @@ pass reading cached model output. Honestly: 87 of 200 documents escalate,
 1.7 s and the worst 18.9 s. Quote ~1.5 s/document, or 51 s for the corpus at
 the 6-way concurrency the runner uses.
 
-**The deterministic engine is 0.0083 ahead of nutrient**, after weak
+**The deterministic engine is 0.0085 ahead of nutrient**, after weak
 typography inside deterministic figure regions was demoted, split heading
 fragments were coalesced, and false numbered sentences, page labels, formulas,
 and chart metrics were rejected. Display labels governing lettered content
@@ -104,9 +113,9 @@ Per-document scores land in
 
 ## The next points are in headings
 
-The deterministic engine beats nutrient on tables by a distance (TEDS 0.8533
+The deterministic engine beats nutrient on tables by a distance (TEDS 0.8536
 vs 0.7081) and narrowly loses on headings (MHS 0.8146 vs 0.8190). Summed per
-document against nutrient: TEDS **+6.10**, NID −0.34, MHS **−0.48**. Heading
+document against nutrient: TEDS **+6.11**, NID −0.29, MHS **−0.47**. Heading
 work remains the largest quality opportunity, but no longer blocks the
 deterministic lead.
 
@@ -115,7 +124,7 @@ docling on each:
 
 | | overall | places |
 |---|---|---|
-| today | 0.893380 | 3rd |
+| today | 0.893524 | 3rd |
 | top-20 closed **halfway** | ~0.900 | 3rd, clear of nutrient |
 | top-20 closed fully | ~0.907 | 2nd, just above hybrid |
 | every document's MHS at best-of-three | ~0.912 | 2nd |

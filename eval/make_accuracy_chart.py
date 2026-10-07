@@ -9,6 +9,10 @@ seconds per page, on a log axis. Every document in the corpus is one page, so
 the harness's seconds per document are seconds per page. fluree-doc-parse's
 three tiers are joined in order, the way a document walks up them.
 
+The score axis starts at Y_LO so the leading engines have room to spread out.
+Engines scoring below it are listed in a note in the plot's empty corner, so
+every engine still appears.
+
 Hand-rolled SVG with no dependencies, so it renders as a plain <img> on GitHub.
 Update ENGINES when the scores change, and re-run.
 """
@@ -25,8 +29,8 @@ MEASURED = "2026-10-07"
 # document; tiers 2 and 3 are the corpus average including model time, since
 # the harness only times the replay of cached model output.
 TIERS = [
-    ("Tier 1 · deterministic", 0.893380, 0.009),
-    ("Tier 2 · layout detector", 0.901153, 0.2),
+    ("Tier 1 · deterministic", 0.893524, 0.009),
+    ("Tier 2 · layout detector", 0.901298, 0.2),
     ("Tier 3 · cascade", 0.934296, 1.5),
 ]
 ENGINES = [
@@ -59,8 +63,9 @@ PLACE = {
     "opendataloader-hybrid-hydrogen": (9, -6, "start"),
     "opendataloader-hybrid-helium": (9, 13, "start"),
     "mineru": (-9, 12, "end"),
+    "marker": (-9, 4, "end"),
 }
-TIER_PLACE = [(0, -14, "middle"), (-6, 22, "end"), (-10, -12, "end")]
+TIER_PLACE = [(0, -14, "middle"), (-6, 22, "end"), (12, 4, "start")]
 
 FLUREE = "#0d9488"  # teal, as in the Fluree benchmark charts
 OTHER = "#64748b"
@@ -72,7 +77,7 @@ FONT = "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"
 W, H = 880, 500
 LEFT, RIGHT, TOP, BOTTOM = 64, 856, 104, 430
 X_LO, X_HI = 0.001, 100.0
-Y_LO, Y_HI = 0.55, 0.95
+Y_LO, Y_HI = 0.65, 0.95
 
 
 def x(s):
@@ -108,10 +113,10 @@ def main():
              "higher is more accurate · left is faster</text>")
 
     # Grid and axes.
-    for v in (0.6, 0.7, 0.8, 0.9):
+    for v in (0.70, 0.75, 0.80, 0.85, 0.90, 0.95):
         yy = y(v)
         s.append(f"<line x1='{LEFT}' y1='{yy:.1f}' x2='{RIGHT}' y2='{yy:.1f}' stroke='{GRID}'/>")
-        s.append(f"<text x='{LEFT - 8}' y='{yy + 4:.1f}' font-size='11' fill='{MUTED}' text-anchor='end'>{v:.1f}</text>")
+        s.append(f"<text x='{LEFT - 8}' y='{yy + 4:.1f}' font-size='11' fill='{MUTED}' text-anchor='end'>{v:.2f}</text>")
     for t, label in ((0.001, "1 ms"), (0.01, "10 ms"), (0.1, "100 ms"), (1, "1 s"), (10, "10 s"), (100, "100 s")):
         xx = x(t)
         s.append(f"<line x1='{xx:.1f}' y1='{TOP}' x2='{xx:.1f}' y2='{BOTTOM}' stroke='{GRID}'/>")
@@ -123,7 +128,7 @@ def main():
              f"transform='rotate(-90 16 {(TOP + BOTTOM) / 2:.0f})'>overall score</text>")
 
     # Other engines, under ours.
-    for name, score, secs in ENGINES:
+    for name, score, secs in (e for e in ENGINES if e[1] >= Y_LO):
         px, py = x(secs), y(score)
         s.append(f"<circle cx='{px:.1f}' cy='{py:.1f}' r='4.5' fill='{OTHER}' stroke='white' stroke-width='2'/>")
         dx, dy, anchor = PLACE.get(name, (9, 4, "start"))
@@ -138,6 +143,24 @@ def main():
         s.append(f"<circle cx='{px:.1f}' cy='{py:.1f}' r='6' fill='{FLUREE}' stroke='white' stroke-width='2'/>")
         s.append(f"<text x='{px + dx:.1f}' y='{py + dy:.1f}' font-size='12' font-weight='700' fill='{INK}' "
                  f"text-anchor='{anchor}'>{esc(label)} <tspan font-weight='400' fill='{MUTED}'>{score:.3f}</tspan></text>")
+
+    # Engines below the score axis, in a note in the bottom-right corner.
+    below = sorted((e for e in ENGINES if e[1] < Y_LO), key=lambda e: -e[1])
+    if below:
+        row, pad, bw = 17, 10, 238
+        bh = pad * 2 + row * (len(below) + 1) - 4
+        bx, by = RIGHT - bw - 10, BOTTOM - bh - 10
+        s.append(f"<rect x='{bx}' y='{by}' width='{bw}' height='{bh}' rx='8' fill='#f8fafc' "
+                 f"stroke='{GRID}'/>")
+        s.append(f"<text x='{bx + pad}' y='{by + pad + 10}' font-size='11' font-weight='700' "
+                 f"fill='{INK}'>Below {Y_LO:.2f}, off the scale</text>")
+        for i, (name, score, secs) in enumerate(below):
+            ty = by + pad + 10 + row * (i + 1)
+            t = f"{secs * 1000:.0f} ms" if secs < 1 else f"{secs:.2f} s"
+            s.append(f"<circle cx='{bx + pad + 4}' cy='{ty - 4}' r='4' fill='{OTHER}'/>")
+            s.append(f"<text x='{bx + pad + 14}' y='{ty}' font-size='11' fill='{MUTED}'>{esc(name)}</text>")
+            s.append(f"<text x='{bx + bw - pad}' y='{ty}' font-size='11' fill='{MUTED}' text-anchor='end'>"
+                     f"{score:.3f} · {t}</text>")
 
     s.append(f"<text x='20' y='{H - 14}' font-size='10.5' fill='{MUTED}'>Other engines' times are the "
              "benchmark's own. Tier 1 is a warm median; tiers 2 and 3 include model time, averaged over the corpus.</text>")
