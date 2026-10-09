@@ -294,6 +294,9 @@ pub struct Attachment {
     pub content_type: String,
     /// In bytes, decoded.
     pub size: usize,
+    /// Its decoded bytes as lowercase hex SHA-256: the same file sent in
+    /// fifty messages, under any name, is one file.
+    pub sha256: String,
     /// Shown in the body, as an image pasted into a message is, rather than
     /// attached to it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]

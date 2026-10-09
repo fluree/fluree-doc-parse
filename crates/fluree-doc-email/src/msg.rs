@@ -11,7 +11,7 @@ use crate::mime::{self, Headers};
 use crate::{address, date, eml, markup, AttachedFile, Body, EmailError, Read};
 use cfb::CompoundFile;
 use encoding_rs::Encoding;
-use fluree_doc_model::{Attachment, Mailbox, Message};
+use fluree_doc_model::{Mailbox, Message};
 use std::collections::HashMap;
 use std::io::{Cursor, Read as _};
 
@@ -401,15 +401,12 @@ fn attachments(cf: &mut Cf, props: &Store, depth: usize) -> Vec<AttachedFile> {
                         .map(|f| f.trim_end_matches(".msg").to_string())
                 })
                 .unwrap_or_else(|| "message".into());
-            out.push(AttachedFile {
-                info: Attachment {
-                    filename: Some(format!("{stem}.eml")),
-                    content_type: "message/rfc822".into(),
-                    size: bytes.len(),
-                    inline: false,
-                },
+            out.push(AttachedFile::new(
+                Some(format!("{stem}.eml")),
+                "message/rfc822".into(),
+                false,
                 bytes,
-            });
+            ));
             continue;
         }
         let Some(bytes) = a.binary(cf, ATTACH_DATA) else {
@@ -422,15 +419,7 @@ fn attachments(cf: &mut Cf, props: &Store, depth: usize) -> Vec<AttachedFile> {
         let hidden = a.fixed.get(&ATTACHMENT_HIDDEN).is_some_and(|v| v[0] != 0);
         let inline = hidden
             || (content_type.starts_with("image/") && a.string(cf, ATTACH_CONTENT_ID).is_some());
-        out.push(AttachedFile {
-            info: Attachment {
-                filename,
-                content_type,
-                size: bytes.len(),
-                inline,
-            },
-            bytes,
-        });
+        out.push(AttachedFile::new(filename, content_type, inline, bytes));
     }
     out
 }

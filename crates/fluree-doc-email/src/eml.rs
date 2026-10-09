@@ -3,7 +3,7 @@
 
 use crate::mime::{self, Headers, Params};
 use crate::{address, date, markup, text, AttachedFile, Body, EmailError, Read};
-use fluree_doc_model::{Attachment, Message};
+use fluree_doc_model::Message;
 
 /// Deep enough for any real message; a bound so a hostile one cannot
 /// exhaust the stack.
@@ -247,13 +247,7 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
         Some(d) => d.value == "inline",
         None => h.get("content-id").is_some(),
     };
-    found.attachments.push(AttachedFile {
-        info: Attachment {
-            filename,
-            content_type: kind.to_string(),
-            size: bytes.len(),
-            inline,
-        },
-        bytes,
-    });
+    found
+        .attachments
+        .push(AttachedFile::new(filename, kind.to_string(), inline, bytes));
 }

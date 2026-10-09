@@ -72,6 +72,26 @@ than strings — which is what makes the graph traversable after insertion.
 `doc:bbox` is absent for sources without geometry — see [Measured vs
 declared structure](../concepts/geometry-vs-declared.md).
 
+## The document node says what was read
+
+```json
+{ "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-0",
+  "@type": "doco:Document",
+  "doc:sha256": "661511bb2b30c4e8a9f2d71b05e3c6a48f90d2b17e5a3c8f4b6d1e09a7c25f3e",
+  "doc:sourceName": "report.pdf" }
+```
+
+`doc:sha256` is the input's bytes as lowercase hex SHA-256, always present.
+The same file found twice — two copies on a drive, one file under two names —
+has one value, so duplicates are a query rather than a guess. It identifies
+bytes, not text: a PDF exported again, or a document saved again, is a new
+hash even where nothing it says has changed.
+
+`doc:sourceName` is what the caller calls the input: the file name `fdoc
+convert` was given, or `--source-name`. Standard input has none. A name is
+not an identifier — names repeat, and change when a file is moved — which is
+why the hash is the one to join on.
+
 ## The document node carries page geometry
 
 ```json
@@ -225,7 +245,8 @@ never appear in the text, so they never become entities.
   "dcterms:created": { "@value": "2026-07-17T13:48:00-05:00", "@type": "xsd:dateTime" },
   "doc:attachments": { "@type": "@json",
                        "@value": [ { "filename": "quote.pdf",
-                                     "contentType": "application/pdf", "size": 48213 } ] } }
+                                     "contentType": "application/pdf", "size": 48213,
+                                     "sha256": "c41e09a7…" } ] } }
 
 { "@id": "urn:fluree-doc-parse:reply-5c0e2a91d7b3-message-7",
   "@type": "doc:Message",

@@ -204,6 +204,11 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "IRI")]
     pub doc_iri: Option<String>,
 
+    /// What `--format doco` records as the input's name, `doc:sourceName`
+    /// (default: the input's file name; none from stdin). One input only
+    #[arg(long, value_name = "NAME")]
+    pub source_name: Option<String>,
+
     /// Read escalated pages with the configured model, in this one command
     ///
     /// On by default once `fdoc config gemini` has been run. This flag is for

@@ -211,8 +211,8 @@ An attachment is a document of its own, so its content is **not** part of
 this output. Attachments are described instead:
 
 - In DoCO, on the document node as `doc:attachments`: filename, content
-  type, size in bytes, and whether the file is shown inline in the body
-  (an image pasted into the message).
+  type, size in bytes, the SHA-256 of its bytes, and whether the file is
+  shown inline in the body (an image pasted into the message).
 - On stderr, `fdoc` lists the files it left out.
 
 `--attachments DIR` saves each email's files under `DIR/<email name>/` so
@@ -222,6 +222,11 @@ you can convert them on their own:
 fdoc convert reply.eml --attachments ./att
 fdoc convert ./att/reply/
 ```
+
+A saved attachment converted on its own has that same SHA-256 as its
+document's `doc:sha256`, which is the join from an email to the documents it
+carried. The same file forwarded in fifty threads has one hash, whatever it
+was called each time.
 
 A message forwarded *as an attachment* comes back as an `.eml` of its own,
 including one embedded in an Outlook `.msg`. Signature parts
@@ -235,7 +240,7 @@ elements, as bytes with their description, for your own pipeline to read:
 ```rust
 let email = fluree_doc_email::parse(&bytes)?;
 for file in &email.attachments {
-    // file.info.filename, file.info.content_type, file.bytes
+    // file.info.filename, file.info.content_type, file.info.sha256, file.bytes
 }
 let notes = email.notes(); // document info and attachment descriptions, for the emitters
 ```

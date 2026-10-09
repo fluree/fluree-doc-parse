@@ -15,23 +15,29 @@ struct Source<'a> {
     stem: &'a str,
     /// Whether `stem` is a file's own name rather than a stand-in.
     named: bool,
+    /// What the output records as the input's name: `--source-name`, else
+    /// the file's name. Standard input has none.
+    name: Option<String>,
     /// The input's bytes as lowercase hex SHA-256.
     sha256: String,
 }
 
 impl<'a> Source<'a> {
-    fn file(path: &'a Path, data: &[u8]) -> Self {
+    fn file(path: &'a Path, data: &[u8], args: &ConvertArgs) -> Self {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         Source {
             stem: common::stem_of(path),
             named: true,
+            name: args.source_name.clone().or(name),
             sha256: fluree_doc_model::sha256_hex(data),
         }
     }
 
-    fn stdin(data: &[u8]) -> Self {
+    fn stdin(data: &[u8], args: &ConvertArgs) -> Self {
         Source {
             stem: "stdin",
             named: false,
+            name: args.source_name.clone(),
             sha256: fluree_doc_model::sha256_hex(data),
         }
     }
@@ -79,7 +85,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             eprintln!("error: reading stdin: {e}");
             return 1;
         }
-        let src = Source::stdin(&data);
+        let src = Source::stdin(&data, args);
         let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
             convert_transcript(&data, &src, args, quiet)
         } else if fluree_doc_email::Format::sniff(&data).is_some() {
@@ -102,6 +108,13 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     }
     if files.len() > 1 && args.out_dir.is_none() {
         eprintln!("error: multiple inputs require --out-dir");
+        return 2;
+    }
+    if files.len() > 1 && args.source_name.is_some() {
+        eprintln!(
+            "error: --source-name names one input, and there are {}",
+            files.len()
+        );
         return 2;
     }
 
@@ -198,7 +211,7 @@ fn convert_path(
     quiet: bool,
 ) -> Result<String, String> {
     let data = std::fs::read(pdf).map_err(|e| e.to_string())?;
-    let src = Source::file(pdf, &data);
+    let src = Source::file(pdf, &data, args);
     // A transcript by its content before anything by its name: `.vtt` has no
     // registered type on most systems, so it arrives renamed as often as not.
     if fluree_doc_transcript::Format::sniff(&data).is_some() || ext_is(pdf, &["vtt", "srt"]) {
@@ -506,6 +519,8 @@ fn render(
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
+                sha256: Some(src.sha256.clone()),
+                source_name: src.name.clone(),
             };
             fluree_doc_pdf::doco::to_doco(elements, &opts)
         }

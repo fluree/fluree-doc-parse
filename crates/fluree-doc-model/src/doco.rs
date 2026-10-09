@@ -91,6 +91,14 @@ pub struct DocoOptions {
     /// Files the document carries. Described on the document node as
     /// `doc:attachments`; their content is theirs to convert.
     pub attachments: Vec<Attachment>,
+    /// The input's bytes as lowercase hex SHA-256, emitted on the document
+    /// node as `doc:sha256`: the same file found twice, under any names, is
+    /// one value.
+    pub sha256: Option<String>,
+    /// What the caller calls the input, usually its file name, emitted on
+    /// the document node as `doc:sourceName`. Only the caller knows it: a
+    /// parser is handed bytes.
+    pub source_name: Option<String>,
 }
 
 /// The base IRI for a document whose caller named none:
@@ -672,6 +680,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     };
 
     let doc_idx = em.node("element", "doco:Document", Some("html"));
+    if let Some(h) = &opts.sha256 {
+        em.nodes[doc_idx].insert("doc:sha256".into(), Value::String(h.clone()));
+    }
+    if let Some(n) = &opts.source_name {
+        em.nodes[doc_idx].insert("doc:sourceName".into(), Value::String(n.clone()));
+    }
     if !opts.running_text.is_empty() {
         em.nodes[doc_idx].insert(
             "doc:runningText".into(),
@@ -1345,6 +1359,33 @@ mod tests {
         // Structural wrappers are stamped too (retract-on-rerun must catch them).
         let doc = &find(&g, "doco:Document")[0];
         assert_eq!(doc["doc:sourceDocument"]["@id"], "urn:test:doc");
+    }
+
+    #[test]
+    fn the_document_node_says_which_bytes_it_was_read_from() {
+        let sha = "661511bb2b30c4e8a9f2d71b05e3c6a48f90d2b17e5a3c8f4b6d1e09a7c25f3e";
+        let o = DocoOptions {
+            base_iri: "urn:test".into(),
+            sha256: Some(sha.into()),
+            source_name: Some("Q3 report.pdf".into()),
+            attachments: vec![Attachment {
+                filename: Some("quote.pdf".into()),
+                content_type: "application/pdf".into(),
+                size: 3,
+                sha256: crate::sha256_hex(b"pdf"),
+                inline: false,
+            }],
+            ..Default::default()
+        };
+        let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
+        let doc = &v["@graph"][0];
+        assert_eq!(doc["@type"], "doco:Document");
+        assert_eq!(doc["doc:sha256"], sha);
+        assert_eq!(doc["doc:sourceName"], "Q3 report.pdf");
+        assert_eq!(
+            doc["doc:attachments"]["@value"][0]["sha256"],
+            "c35b21d6ca39aa7cc3b79a705d989f1a6e88b99ab43988d74048799e3db926a3"
+        );
     }
 
     #[test]

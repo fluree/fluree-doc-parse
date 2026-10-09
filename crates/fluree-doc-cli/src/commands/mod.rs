@@ -51,6 +51,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         emit_anchors: false,
         base_iri: None,
         doc_iri: None,
+        source_name: None,
         escalate: false,
         // The compatibility forms never escalate. Benchmark adapters shell
         // these, and a score has to be reproducible offline by whoever reads

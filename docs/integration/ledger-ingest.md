@@ -72,6 +72,24 @@ Keep `--doc-iri` **stable across runs** for this to work. Pass a `--base-iri`
 per run if you want the two extractions' nodes to have distinct identities
 within that history.
 
+## Finding duplicates
+
+Every document node carries `doc:sha256`, the hash of the bytes it was read
+from, and `doc:sourceName`, the file name it was given. Copies of one file
+across a crawl are the hashes that repeat:
+
+```sparql
+SELECT ?hash (COUNT(?d) AS ?copies) (GROUP_CONCAT(?name; separator=", ") AS ?names)
+WHERE { ?d a doco:Document ; doc:sha256 ?hash ; doc:sourceName ?name }
+GROUP BY ?hash
+HAVING (COUNT(?d) > 1)
+```
+
+A crawler can also hash a file before converting it, and skip the conversion
+when that hash is already in the ledger. An email's attachments carry their
+hashes too, in `doc:attachments`, so the same file forwarded in fifty threads
+is one value.
+
 ## What you can query
 
 The graph is shaped for the questions people actually ask of documents:

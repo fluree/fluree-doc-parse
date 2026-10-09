@@ -67,6 +67,28 @@ pub struct AttachedFile {
     pub bytes: Vec<u8>,
 }
 
+impl AttachedFile {
+    /// A file described as its message declares it, with its size and hash
+    /// taken from its bytes.
+    pub fn new(
+        filename: Option<String>,
+        content_type: String,
+        inline: bool,
+        bytes: Vec<u8>,
+    ) -> Self {
+        AttachedFile {
+            info: Attachment {
+                filename,
+                content_type,
+                size: bytes.len(),
+                sha256: fluree_doc_model::sha256_hex(&bytes),
+                inline,
+            },
+            bytes,
+        }
+    }
+}
+
 /// The two email formats this crate reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {

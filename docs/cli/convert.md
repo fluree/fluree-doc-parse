@@ -30,6 +30,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `-j`, `--jobs <N>` | parallel workers for batch (`0` = one per core) |
 | `--base-iri <IRI>` | what every node IRI minted by `-f doco` starts with (`<IRI>-element-3`). Default: `--doc-iri`, else `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>` |
 | `--doc-iri <IRI>` | stamp `-f doco` nodes with `doc:sourceDocument`, the tag a re-extraction retracts by |
+| `--source-name <NAME>` | what `-f doco` records as the input's name, `doc:sourceName`. Default: the input's file name; none from stdin. One input only |
 | `--attachments <DIR>` | save each email's attachments under `DIR/<email name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
 | `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
