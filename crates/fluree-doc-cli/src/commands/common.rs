@@ -4,23 +4,56 @@
 
 use std::path::{Path, PathBuf};
 
-/// Readable documents in a directory: PDF plus the structural formats.
-pub(crate) fn pdfs_in(dir: &Path) -> Vec<PathBuf> {
+/// Which reader a file goes to, by its extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceKind {
+    Pdf,
+    Markdown,
+    Html,
+    Docx,
+    Pptx,
+    Xlsx,
+    Transcript,
+    Email,
+    Image,
+}
+
+/// Every extension `convert` reads, by the reader it goes to. Conversion
+/// dispatches on this table and directory discovery lists what it names, so
+/// a file one accepts the other finds. Word, PowerPoint and Excel's
+/// macro-enabled, template and show variants are the same package under
+/// another name.
+const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
+    (SourceKind::Pdf, &["pdf"]),
+    (SourceKind::Markdown, &["md", "markdown", "txt", "text"]),
+    (SourceKind::Html, &["html", "htm", "xhtml"]),
+    (SourceKind::Docx, &["docx", "docm", "dotx", "dotm"]),
+    (
+        SourceKind::Pptx,
+        &["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"],
+    ),
+    (SourceKind::Xlsx, &["xlsx", "xlsm", "xltx", "xltm"]),
+    (SourceKind::Transcript, &["vtt", "srt"]),
+    (SourceKind::Email, &["eml", "msg"]),
+    (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
+];
+
+/// The reader a file's extension names, if it names one.
+pub(crate) fn source_kind(path: &Path) -> Option<SourceKind> {
+    let ext = path.extension()?.to_str()?;
+    SOURCE_EXTENSIONS
+        .iter()
+        .find(|(_, exts)| exts.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+        .map(|(kind, _)| *kind)
+}
+
+/// The files in a directory `convert` reads, in name order.
+pub(crate) fn sources_in(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<_> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| {
-            p.extension().and_then(|x| x.to_str()).is_some_and(|x| {
-                [
-                    "pdf", "md", "markdown", "html", "htm", "xhtml", "docx", "pptx", "xlsx", "vtt",
-                    "srt", "eml", "msg",
-                ]
-                .iter()
-                .chain(fluree_doc_pdf::image::EXTENSIONS.iter())
-                .any(|k| x.eq_ignore_ascii_case(k))
-            })
-        })
+        .filter(|p| p.is_file() && source_kind(p).is_some())
         .collect();
     v.sort();
     v

@@ -7,14 +7,14 @@
 
 #![allow(clippy::too_many_lines)]
 
-use crate::commands::common::{opts_for, pdfs_in, CROP_MARGIN, VLM_RENDER_SCALE};
+use crate::commands::common::{opts_for, sources_in, CROP_MARGIN, VLM_RENDER_SCALE};
 use fluree_doc_pdf::{
     block, dedup, extract_file, furniture, heading, line, outline, overlay, rule, PageText,
 };
 use std::path::{Path, PathBuf};
 
 pub(crate) fn probe(dir: &Path) {
-    let files = pdfs_in(dir);
+    let files = sources_in(dir);
     let (mut pages, mut glyphs, mut uni, mut boxed) = (0usize, 0usize, 0usize, 0usize);
     let (mut deduped, mut lig_raw, mut lig_norm) = (0usize, 0usize, 0usize);
     let (mut errors, mut panics) = (Vec::new(), Vec::new());
@@ -166,7 +166,7 @@ pub(crate) fn lines(pdf: &Path, page: Option<usize>) {
 /// thresholds from data rather than by eye (defects L1/L2 in eval/TEST_PLAN.md).
 pub(crate) fn gaps(target: &Path) {
     let files: Vec<PathBuf> = if target.is_dir() {
-        pdfs_in(target)
+        sources_in(target)
     } else {
         vec![target.to_path_buf()]
     };
@@ -406,7 +406,7 @@ pub(crate) fn furn(pdf: &Path) {
 /// size. Used to separate intra-paragraph leading from paragraph breaks.
 pub(crate) fn leading(target: &Path) {
     let files: Vec<PathBuf> = if target.is_dir() {
-        pdfs_in(target)
+        sources_in(target)
     } else {
         vec![target.to_path_buf()]
     };
@@ -1096,7 +1096,7 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
 
     std::fs::create_dir_all(outdir).expect("create outdir");
     let files: Vec<PathBuf> = if path.is_dir() {
-        pdfs_in(path)
+        sources_in(path)
     } else {
         vec![path.to_path_buf()]
     };
@@ -1364,7 +1364,7 @@ pub(crate) fn render_pages(path: &Path, outdir: &Path) {
 
     std::fs::create_dir_all(outdir).expect("create outdir");
     let files: Vec<PathBuf> = if path.is_dir() {
-        pdfs_in(path)
+        sources_in(path)
     } else {
         vec![path.to_path_buf()]
     };
@@ -1422,7 +1422,7 @@ pub(crate) fn timings(path: &Path, warmup: usize, runs: usize) {
     use std::time::{Duration, Instant};
 
     let files: Vec<PathBuf> = if path.is_dir() {
-        pdfs_in(path)
+        sources_in(path)
     } else {
         vec![path.to_path_buf()]
     };

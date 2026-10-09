@@ -63,18 +63,24 @@ page of a long document costs one crop rather than all of them.
 
 ## Inputs
 
-Files, directories, or `-` for stdin. **Stdin is PDF only** — the other
-readers identify the format by extension.
+Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email or
+a transcript**, which are told apart by their content; the other readers
+identify the format by extension.
 
-Directories are scanned for supported documents. Multiple inputs are allowed;
-with more than one you need `--out-dir` rather than `--output`.
+Directories are scanned for every extension `convert` reads, including
+Word, PowerPoint and Excel's macro-enabled, template and show variants
+(`.docm`, `.dotx`, `.potx`, `.ppsx`, `.xltx`, …). Multiple inputs are
+allowed; with more than one you need `--out-dir` rather than `--output`.
 
 ## Output naming
 
 With `--out-dir`, each output is the input stem plus the format's extension
-(`.md`, `.xhtml`, `.json`, `.jsonld`, `.txt`). Where two inputs share a stem —
-`a/report.pdf` and `b/report.docx` — the names are disambiguated rather than
-one silently overwriting the other.
+(`.md`, `.xhtml`, `.json`, `.jsonld`, `.txt`). No two inputs write one file:
+where inputs share a stem, the source extension joins it (`report.pdf.md`,
+`report.docx.md`), and where that still repeats — `a/report.md` and
+`b/report.md` — later ones are numbered (`report.md (2).md`). Names are
+compared without case, as a case-insensitive file system would.
+`--attachments` names each email's directory the same way.
 
 ## Batch and parallelism
 

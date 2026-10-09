@@ -1,6 +1,6 @@
 //! `fdoc render` — pages as PNG, in the space the output's coordinates use.
 
-use crate::commands::common::pdfs_in;
+use crate::commands::common::sources_in;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run(path: &Path, outdir: &Path, scale: f32, pages: Option<&str>) -> i32 {
@@ -21,7 +21,7 @@ pub(crate) fn run(path: &Path, outdir: &Path, scale: f32, pages: Option<&str>) -
         return 1;
     }
     let files: Vec<PathBuf> = if path.is_dir() {
-        pdfs_in(path)
+        sources_in(path)
     } else {
         vec![path.to_path_buf()]
     };

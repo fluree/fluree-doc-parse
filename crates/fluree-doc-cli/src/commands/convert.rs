@@ -13,6 +13,9 @@ struct Source<'a> {
     /// What sidecar files and messages name it by: the file's stem, or
     /// `stdin`.
     stem: &'a str,
+    /// What this input's outputs are named by in its run: its stem, unless
+    /// another input shares that (see [`slots`]).
+    slot: String,
     /// Whether `stem` is a file's own name rather than a stand-in.
     named: bool,
     /// What the output records as the input's name: `--source-name`, else
@@ -23,10 +26,11 @@ struct Source<'a> {
 }
 
 impl<'a> Source<'a> {
-    fn file(path: &'a Path, data: &[u8], args: &ConvertArgs) -> Self {
+    fn file(path: &'a Path, slot: &str, data: &[u8], args: &ConvertArgs) -> Self {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
         Source {
             stem: common::stem_of(path),
+            slot: slot.to_string(),
             named: true,
             name: args.source_name.clone().or(name),
             sha256: fluree_doc_model::sha256_hex(data),
@@ -36,6 +40,7 @@ impl<'a> Source<'a> {
     fn stdin(data: &[u8], args: &ConvertArgs) -> Self {
         Source {
             stem: "stdin",
+            slot: "stdin".to_string(),
             named: false,
             name: args.source_name.clone(),
             sha256: fluree_doc_model::sha256_hex(data),
@@ -71,7 +76,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         let mut v = Vec::new();
         for input in &args.inputs {
             if input.is_dir() {
-                v.extend(common::pdfs_in(input));
+                v.extend(common::sources_in(input));
             } else {
                 v.push(input.clone());
             }
@@ -125,7 +130,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     if files.len() == 1 && args.out_dir.is_none() {
         let f = &files[0];
         let t0 = std::time::Instant::now();
-        let r = convert_path(f, cfg, args, pages.as_deref(), quiet);
+        let r = convert_path(f, common::stem_of(f), cfg, args, pages.as_deref(), quiet);
         if verbose {
             eprintln!("{}: {:.1}ms", f.display(), t0.elapsed().as_secs_f64() * 1e3);
         }
@@ -155,7 +160,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     // alone makes one silently overwrite the other. Disambiguate only where
     // a stem actually repeats, so the ordinary single-format batch keeps
     // plain names.
-    let dests = destinations(&files, out_dir, ext(args.format));
+    let slots = slots(&files);
     let cursor = AtomicUsize::new(0);
     let failures = AtomicUsize::new(0);
     std::thread::scope(|s| {
@@ -164,9 +169,9 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                 let i = cursor.fetch_add(1, Ordering::Relaxed);
                 let Some(f) = files.get(i) else { break };
                 let t0 = std::time::Instant::now();
-                match convert_path(f, cfg, args, pages.as_deref(), quiet) {
+                match convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet) {
                     Ok(out) => {
-                        let dst = &dests[i];
+                        let dst = &out_dir.join(format!("{}.{}", slots[i], ext(args.format)));
                         if let Err(e) = std::fs::write(dst, out) {
                             eprintln!("error: writing {}: {e}", dst.display());
                             failures.fetch_add(1, Ordering::Relaxed);
@@ -209,97 +214,70 @@ fn single_input_flag(args: &ConvertArgs) -> Option<&'static str> {
     .find_map(|(flag, given)| given.then_some(flag))
 }
 
-/// Source formats `convert` accepts. PDF is the geometric path; the others
-/// carry their structure explicitly and need no inference.
-fn ext_is(p: &Path, kinds: &[&str]) -> bool {
-    p.extension()
-        .and_then(|x| x.to_str())
-        .is_some_and(|x| kinds.iter().any(|k| x.eq_ignore_ascii_case(k)))
-}
-
 fn convert_path(
-    pdf: &Path,
+    path: &Path,
+    slot: &str,
     cfg: &TierConfig,
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
 ) -> Result<String, String> {
-    let data = std::fs::read(pdf).map_err(|e| e.to_string())?;
-    let src = Source::file(pdf, &data, args);
+    use common::SourceKind;
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    let src = Source::file(path, slot, &data, args);
+    let kind = common::source_kind(path);
     // A transcript by its content before anything by its name: `.vtt` has no
     // registered type on most systems, so it arrives renamed as often as not.
-    if fluree_doc_transcript::Format::sniff(&data).is_some() || ext_is(pdf, &["vtt", "srt"]) {
+    if fluree_doc_transcript::Format::sniff(&data).is_some() || kind == Some(SourceKind::Transcript)
+    {
         return convert_transcript(&data, &src, args, quiet);
     }
     // An email by its content too: a saved message is `.eml`, `.mht`, `.txt`
     // or nothing at all, depending on who saved it.
-    if fluree_doc_email::Format::sniff(&data).is_some() || ext_is(pdf, &["eml", "msg"]) {
+    if fluree_doc_email::Format::sniff(&data).is_some() || kind == Some(SourceKind::Email) {
         return convert_email(&data, &src, args, quiet);
-    }
-    // Structural formats: the source declares what a PDF makes us infer, so
-    // these readers map rather than measure and carry no geometry.
-    if ext_is(pdf, &["md", "markdown", "txt", "text"]) {
-        let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
-        return Ok(render(
-            &fluree_doc_markdown::parse(&text),
-            &src,
-            args,
-            Vec::new(),
-            &fluree_doc_model::Notes::default(),
-        ));
     }
     // What a file declares about itself: its title, author and dates.
     let declared = |info| fluree_doc_model::Notes {
         info,
         ..Default::default()
     };
-    if ext_is(pdf, &["html", "htm", "xhtml"]) {
-        let text = fluree_doc_html::decode(&data);
-        return Ok(render(
-            &fluree_doc_html::parse(&text),
-            &src,
-            args,
-            Vec::new(),
-            &declared(fluree_doc_html::info(&text)),
-        ));
-    }
-    // Word's macro-enabled and template variants are the same OOXML
-    // package with a different extension.
-    if ext_is(pdf, &["docx", "docm", "dotx", "dotm"]) {
-        let els = fluree_doc_docx::parse(&data).map_err(|e| e.to_string())?;
-        return Ok(render(
-            &els,
-            &src,
-            args,
-            Vec::new(),
-            &declared(fluree_doc_docx::info(&data)),
-        ));
-    }
-    if ext_is(pdf, &["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"]) {
-        let els = fluree_doc_pptx::parse(&data).map_err(|e| e.to_string())?;
-        return Ok(render(
-            &els,
-            &src,
-            args,
-            Vec::new(),
-            &declared(fluree_doc_pptx::info(&data)),
-        ));
-    }
-    // A workbook: each sheet is a page, its islands of cells are tables.
-    if ext_is(pdf, &["xlsx", "xlsm", "xltx", "xltm"]) {
-        let els = fluree_doc_xlsx::parse(&data).map_err(|e| e.to_string())?;
-        return Ok(render(
-            &els,
-            &src,
-            args,
-            Vec::new(),
-            &declared(fluree_doc_xlsx::info(&data)),
-        ));
-    }
-    if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
-        return convert_image(data, &src, cfg, args, quiet);
-    }
-    convert_bytes(data, &src, cfg, args, pages, quiet)
+    // Structural formats: the source declares what a PDF makes us infer, so
+    // these readers map rather than measure and carry no geometry.
+    let (elements, notes) = match kind {
+        Some(SourceKind::Markdown) => {
+            let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
+            (
+                fluree_doc_markdown::parse(&text),
+                fluree_doc_model::Notes::default(),
+            )
+        }
+        Some(SourceKind::Html) => {
+            let text = fluree_doc_html::decode(&data);
+            (
+                fluree_doc_html::parse(&text),
+                declared(fluree_doc_html::info(&text)),
+            )
+        }
+        Some(SourceKind::Docx) => (
+            fluree_doc_docx::parse(&data).map_err(|e| e.to_string())?,
+            declared(fluree_doc_docx::info(&data)),
+        ),
+        Some(SourceKind::Pptx) => (
+            fluree_doc_pptx::parse(&data).map_err(|e| e.to_string())?,
+            declared(fluree_doc_pptx::info(&data)),
+        ),
+        // A workbook: each sheet is a page, its islands of cells are tables.
+        Some(SourceKind::Xlsx) => (
+            fluree_doc_xlsx::parse(&data).map_err(|e| e.to_string())?,
+            declared(fluree_doc_xlsx::info(&data)),
+        ),
+        _ if fluree_doc_pdf::image::Format::sniff(&data).is_some() => {
+            return convert_image(data, &src, cfg, args, quiet);
+        }
+        _ => return convert_bytes(data, &src, cfg, args, pages, quiet),
+    };
+    Ok(render(&elements, &src, args, Vec::new(), &notes))
 }
 
 /// A meeting transcript or a caption file: one paragraph per speaker turn.
@@ -343,7 +321,9 @@ fn convert_email(
     let plural = if count == 1 { "" } else { "s" };
     match &args.attachments {
         Some(dir) if count > 0 => {
-            let dir = dir.join(stem);
+            // The slot, not the stem: two `mail.eml` in one batch would
+            // otherwise save their attachments over each other's.
+            let dir = dir.join(&src.slot);
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
             let mut taken = std::collections::HashSet::new();
@@ -656,26 +636,33 @@ fn convert_bytes(
     Ok(render(&a.elements, src, args, sizes, &notes))
 }
 
-/// One output path per input, keeping stem names unless a stem repeats —
-/// in which case the source extension joins it (`report.docx.md`).
-fn destinations(files: &[PathBuf], out_dir: &Path, ext: &str) -> Vec<PathBuf> {
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+/// A name per input for its outputs in one run: its stem, unless another
+/// input shares it, then with its source extension (`report.docx`), then
+/// numbered (`report.md (2)`) where even that repeats, as `a/report.md` and
+/// `b/report.md` do. Allocated before any conversion starts, so no two
+/// inputs write one file or one attachment directory. Compared without
+/// case, as the file systems that ignore it would.
+fn slots(files: &[PathBuf]) -> Vec<String> {
+    let mut stems: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for f in files {
-        *seen.entry(common::stem_of(f)).or_default() += 1;
+        *stems.entry(common::stem_of(f).to_lowercase()).or_default() += 1;
     }
+    let mut taken = std::collections::HashSet::new();
     files
         .iter()
         .map(|f| {
             let stem = common::stem_of(f);
-            let name = if seen.get(stem).copied().unwrap_or(0) > 1 {
-                match f.extension().and_then(|x| x.to_str()) {
-                    Some(src) => format!("{stem}.{src}.{ext}"),
-                    None => format!("{stem}.{ext}"),
-                }
-            } else {
-                format!("{stem}.{ext}")
+            let base = match f.extension().and_then(|x| x.to_str()) {
+                Some(src) if stems[&stem.to_lowercase()] > 1 => format!("{stem}.{src}"),
+                _ => stem.to_string(),
             };
-            out_dir.join(name)
+            let mut slot = base.clone();
+            let mut n = 2;
+            while !taken.insert(slot.to_lowercase()) {
+                slot = format!("{base} ({n})");
+                n += 1;
+            }
+            slot
         })
         .collect()
 }
@@ -749,16 +736,23 @@ mod tests {
 
     #[test]
     fn colliding_stems_get_disambiguated() {
+        let slots = |names: &[&str]| slots(&names.iter().map(PathBuf::from).collect::<Vec<_>>());
         // Five sources named `demo` wrote one file and silently lost four.
-        let files: Vec<PathBuf> = ["demo.md", "demo.docx", "report.pdf"]
-            .iter()
-            .map(PathBuf::from)
-            .collect();
-        let d = destinations(&files, Path::new("/out"), "jsonld");
-        assert_eq!(d[0], Path::new("/out/demo.md.jsonld"));
-        assert_eq!(d[1], Path::new("/out/demo.docx.jsonld"));
-        // A stem that does not repeat keeps its plain name.
-        assert_eq!(d[2], Path::new("/out/report.jsonld"));
+        assert_eq!(
+            slots(&["demo.md", "demo.docx", "report.pdf"]),
+            ["demo.md", "demo.docx", "report"]
+        );
+        // The same name in two directories, and a name differing in case,
+        // which a case-insensitive file system holds as one.
+        assert_eq!(
+            slots(&["a/report.md", "b/report.md", "c/Report.md"]),
+            ["report.md", "report.md (2)", "Report.md (3)"]
+        );
+        // A plain stem that a disambiguated name already took.
+        assert_eq!(
+            slots(&["x/report.md", "y/report.md", "report.md.txt"]),
+            ["report.md", "report.md (2)", "report.md (3)"]
+        );
     }
 
     #[test]

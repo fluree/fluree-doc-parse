@@ -1,6 +1,6 @@
 //! `fdoc triage` — per-page routing verdicts and the corpus escalation rate.
 
-use crate::commands::common::{opts_for, pdfs_in};
+use crate::commands::common::{opts_for, sources_in};
 use fluree_doc_pdf::extract_file;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +23,7 @@ pub fn run(path: &Path) -> i32 {
         // Directory expansion now yields every readable format, and a deck
         // or a memo is not a triage failure — it simply has no pages to
         // route.
-        pdfs_in(path)
+        sources_in(path)
             .into_iter()
             .filter(|p| {
                 p.extension()
