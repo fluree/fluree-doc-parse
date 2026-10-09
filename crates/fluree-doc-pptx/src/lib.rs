@@ -12,8 +12,11 @@
 //! `gridSpan` / `rowSpan` merges, and paragraphs with a bullet character or a
 //! non-zero outline level are list items.
 //!
-//! Slides are read in `ppt/slides/slideN.xml` order, which is the deck's own
-//! order — the archive does not store them sorted.
+//! Slides are read in the deck's order: the slide list in
+//! `ppt/presentation.xml`, each entry resolved through the presentation's
+//! relationships to its part. A slide moved in PowerPoint keeps its part's
+//! name, so `slide2.xml` can come first. A package with no usable list is
+//! read in the numeric order of its slide parts' names.
 //!
 //! **Charts carry their data.** A chart in a deck is not ink: `c:cat` and
 //! `c:val` hold the categories and values outright, cached beside the
@@ -52,25 +55,13 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
     let cursor = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(cursor).map_err(|e| PptxError::Zip(e.to_string()))?;
 
-    // The archive lists entries in arbitrary order; the deck's order is the
-    // numeric suffix, and `slide10` must not sort before `slide2`.
-    let mut slides: Vec<(usize, String)> = Vec::new();
-    for i in 0..zip.len() {
-        let name = match zip.by_index(i) {
-            Ok(f) => f.name().to_string(),
-            Err(_) => continue,
-        };
-        if let Some(n) = slide_number(&name) {
-            slides.push((n, name));
-        }
-    }
+    let slides = slide_parts(&mut zip);
     if slides.is_empty() {
         return Err(PptxError::NoSlides);
     }
-    slides.sort_by_key(|(n, _)| *n);
 
     let mut out = Vec::new();
-    for (idx, (n, name)) in slides.iter().enumerate() {
+    for (idx, name) in slides.iter().enumerate() {
         let mut xml = String::new();
         if zip
             .by_name(name)
@@ -83,12 +74,11 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
         // Charts live in their own parts; the slide only names a
         // relationship id, so resolve those before walking it.
         let mut charts: Vec<(String, String)> = Vec::new();
-        let rels_name = format!("ppt/slides/_rels/slide{n}.xml.rels");
         let mut rels = String::new();
-        if let Ok(mut f) = zip.by_name(&rels_name) {
+        if let Ok(mut f) = zip.by_name(&rels_part(name)) {
             let _ = f.read_to_string(&mut rels);
         }
-        for (id, part) in chart_parts_for(&rels) {
+        for (id, part) in chart_parts_for(&rels, name) {
             let mut cx = String::new();
             if let Ok(mut f) = zip.by_name(&part) {
                 if f.read_to_string(&mut cx).is_ok() {
@@ -104,37 +94,134 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
     Ok(out)
 }
 
-/// Chart parts a slide references, in relationship order.
+/// The deck's slide parts, in its order.
 ///
-/// The slide names a relationship id; `slideN.xml.rels` maps it to the part.
-/// Targets are relative to `ppt/slides/`, so `../charts/chart1.xml` has to be
-/// normalised back to an archive path.
-fn chart_parts_for(rels_xml: &str) -> Vec<(String, String)> {
+/// `ppt/presentation.xml` lists the slides as relationship ids
+/// (`<p:sldId r:id="rId2"/>`), and its relationships name each one's part.
+/// A package without that list, or whose list names no part it holds, is
+/// read in the numeric order of its slide parts' names, where `slide10`
+/// comes after `slide2`.
+fn slide_parts(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>) -> Vec<String> {
+    let mut read = |name: &str| -> Option<String> {
+        let mut s = String::new();
+        zip.by_name(name).ok()?.read_to_string(&mut s).ok()?;
+        Some(s)
+    };
+    let listed = read("ppt/presentation.xml")
+        .zip(read("ppt/_rels/presentation.xml.rels"))
+        .map(|(presentation, rels)| {
+            let targets = relationships(&rels, "ppt/presentation.xml");
+            slide_ids(&presentation)
+                .into_iter()
+                .filter_map(|id| targets.iter().find(|(i, _, _)| *i == id))
+                .map(|(_, _, part)| part.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    let listed: Vec<String> = listed.into_iter().filter(|p| names.contains(p)).collect();
+    if !listed.is_empty() {
+        return listed;
+    }
+    let mut numbered: Vec<(usize, String)> = names
+        .into_iter()
+        .filter_map(|n| slide_number(&n).map(|k| (k, n)))
+        .collect();
+    numbered.sort();
+    numbered.into_iter().map(|(_, n)| n).collect()
+}
+
+/// The relationship ids of `presentation.xml`'s slide list, in order.
+///
+/// A `p:sldId` carries two ids: its own number, `id`, and the relationship
+/// id under the relationships namespace, `r:id`. Only the prefixed one names
+/// a part.
+fn slide_ids(xml: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut r = Reader::from_str(rels_xml);
+    let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     while let Ok(ev) = r.read_event_into(&mut buf) {
         match ev {
             Event::Eof => break,
-            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == "Relationship" => {
-                let ty = attr(&e, "Type").unwrap_or_default();
-                if !ty.ends_with("/chart") {
-                    continue;
+            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == "sldId" => {
+                let rel = e.attributes().flatten().find(|a| {
+                    let key = a.key.as_ref();
+                    key.contains(&b':') && local(key) == "id"
+                });
+                if let Some(a) = rel {
+                    out.push(String::from_utf8_lossy(&a.value).into_owned());
                 }
-                let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) else {
-                    continue;
-                };
-                let path = target
-                    .strip_prefix("../")
-                    .map(|t| format!("ppt/{t}"))
-                    .unwrap_or_else(|| format!("ppt/slides/{target}"));
-                out.push((id, path));
             }
             _ => {}
         }
         buf.clear();
     }
     out
+}
+
+/// A part's relationships: `dir/name.xml` → `dir/_rels/name.xml.rels`.
+fn rels_part(part: &str) -> String {
+    match part.rsplit_once('/') {
+        Some((dir, name)) => format!("{dir}/_rels/{name}.rels"),
+        None => format!("_rels/{part}.rels"),
+    }
+}
+
+/// A part's relationships as (id, type, archive path), each target resolved
+/// against the directory of `source`, the part they belong to.
+fn relationships(rels_xml: &str, source: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let mut r = Reader::from_str(rels_xml);
+    let mut buf = Vec::new();
+    let dir = source.rsplit_once('/').map_or("", |(d, _)| d);
+    while let Ok(ev) = r.read_event_into(&mut buf) {
+        match ev {
+            Event::Eof => break,
+            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == "Relationship" => {
+                // An external target is a URL, not a part.
+                if attr(&e, "TargetMode").as_deref() == Some("External") {
+                    continue;
+                }
+                if let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) {
+                    let ty = attr(&e, "Type").unwrap_or_default();
+                    out.push((id, ty, resolve_part(dir, &target)));
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+/// A relationship target as an archive path: absolute from the package
+/// root when it starts with `/`, otherwise relative to `dir`, with `.` and
+/// `..` segments applied.
+fn resolve_part(dir: &str, target: &str) -> String {
+    let mut parts: Vec<&str> = match target.strip_prefix('/') {
+        Some(_) => Vec::new(),
+        None => dir.split('/').filter(|s| !s.is_empty()).collect(),
+    };
+    for seg in target.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    parts.join("/")
+}
+
+/// Chart parts a slide references, in relationship order, resolved against
+/// the slide's own directory.
+fn chart_parts_for(rels_xml: &str, slide: &str) -> Vec<(String, String)> {
+    relationships(rels_xml, slide)
+        .into_iter()
+        .filter(|(_, ty, _)| ty.ends_with("/chart"))
+        .map(|(id, _, part)| (id, part))
+        .collect()
 }
 
 /// A named series and the values it plots.
@@ -751,11 +838,58 @@ mod tests {
             <Relationship Id=\"rId2\" \
             Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart\" \
             Target=\"../charts/chart1.xml\"/></Relationships>";
-        let parts = chart_parts_for(rels);
+        let parts = chart_parts_for(rels, "ppt/slides/slide1.xml");
         assert_eq!(
             parts,
             [("rId2".to_string(), "ppt/charts/chart1.xml".to_string())]
         );
+        assert_eq!(
+            resolve_part("ppt", "/ppt/slides/slide3.xml"),
+            "ppt/slides/slide3.xml"
+        );
+        assert_eq!(
+            resolve_part("ppt", "./slides/slide3.xml"),
+            "ppt/slides/slide3.xml"
+        );
+        assert_eq!(
+            rels_part("ppt/slides/slide3.xml"),
+            "ppt/slides/_rels/slide3.xml.rels"
+        );
+    }
+
+    #[test]
+    fn slides_are_read_in_the_decks_order_not_their_parts_names() {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        for (name, body) in [
+            (
+                "ppt/presentation.xml",
+                format!(
+                    "<p:presentation {NS}><p:sldIdLst><p:sldId id=\"257\" r:id=\"rId2\"/>\
+                     <p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+                ),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}\" Target=\"slides/slide1.xml\"/>\
+                     <Relationship Id=\"rId2\" Type=\"{rel}\" Target=\"/ppt/slides/slide2.xml\"/></Relationships>"
+                ),
+            ),
+            ("ppt/slides/slide1.xml", slide(&shape(None, &para("moved to second")))),
+            ("ppt/slides/slide2.xml", slide(&shape(None, &para("moved to first")))),
+        ] {
+            z.start_file(name, opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        let els = parse(buf.get_ref()).unwrap();
+        let read: Vec<(usize, &str)> = els.iter().map(|e| (e.page, e.text.as_str())).collect();
+        assert_eq!(read, [(0, "moved to first"), (1, "moved to second")]);
     }
 
     #[test]

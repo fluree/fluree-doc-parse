@@ -43,6 +43,9 @@ fdoc convert deck.pptx -f doco
 
 The one declared format with a real page concept: **each slide is a page**, so
 `page` carries the slide index and the graph keeps the deck's pagination.
+Slides are read in the deck's order, from its slide list in
+`ppt/presentation.xml`, not in the order of their parts' names: a slide moved
+in PowerPoint keeps its part's name, so `slide2.xml` can be the first slide.
 
 Geometry is still absent. Shapes do have positions in EMUs, but those describe
 a canvas layout rather than a text flow, and reporting them as `bbox` would
