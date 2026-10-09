@@ -8,6 +8,7 @@
 use crate::extract::Page;
 use crate::geom::BBox;
 use crate::glyph::Glyph;
+use fluree_doc_model::doco::{projection, Projected, Projection};
 use fluree_doc_model::Element;
 
 /// Where a span of the text projection sits on the page.
@@ -88,16 +89,11 @@ pub fn highlight(
 /// differential test in this module asserts that over a multi-element,
 /// multi-page fixture.
 pub struct SpanResolver<'a> {
-    elements: &'a [Element],
     pages: &'a [Page],
-    /// Next element to consider, and the offset its text begins at.
-    idx: usize,
-    cursor: usize,
-    /// Whether the "\n\n" separator applies yet — the first non-empty element
-    /// is not preceded by one. Mirrors [`crate::doco::to_text`].
-    first: bool,
-    /// The element the cursor currently sits in: `(index, start, char len)`.
-    current: Option<(usize, usize, usize)>,
+    /// The projection's walk, resumed from where the last span left it.
+    walk: Projection<'a>,
+    /// The element the walk currently sits in.
+    current: Option<Projected<'a>>,
     /// Flattened glyph tables, keyed by `Page::index`, built lazily. A
     /// document's words concentrate on one page at a time, but a caller may
     /// revisit, so these are kept rather than swapped.
@@ -107,11 +103,8 @@ pub struct SpanResolver<'a> {
 impl<'a> SpanResolver<'a> {
     pub fn new(elements: &'a [Element], pages: &'a [Page]) -> Self {
         Self {
-            elements,
             pages,
-            idx: 0,
-            cursor: 0,
-            first: true,
+            walk: projection(elements),
             current: None,
             indexes: std::collections::HashMap::new(),
         }
@@ -122,11 +115,9 @@ impl<'a> SpanResolver<'a> {
         if end <= begin {
             return None;
         }
-        let (element, element_start) = self.seek(begin)?;
+        let (element, element_start, text) = self.seek(begin)?;
         element.bbox?;
-        let projection: Vec<char> = fluree_doc_model::doco::projection_text(element)
-            .chars()
-            .collect();
+        let projection: Vec<char> = text.chars().collect();
         let from = begin.checked_sub(element_start)?;
         let to = end.checked_sub(element_start)?.min(projection.len());
         if from >= to {
@@ -155,38 +146,22 @@ impl<'a> SpanResolver<'a> {
         })
     }
 
-    /// The element containing `offset`, resuming from the last one.
+    /// The element containing `offset`, where its text begins, and that
+    /// text, resuming from the last one.
     ///
     /// Returns exactly what [`element_at`] returns, for any non-decreasing
-    /// sequence of offsets — it walks the same projection the same way, only
-    /// without restarting.
-    fn seek(&mut self, offset: usize) -> Option<(&'a Element, usize)> {
+    /// sequence of offsets — it takes the same walk, only without
+    /// restarting.
+    fn seek(&mut self, offset: usize) -> Option<(&'a Element, usize, String)> {
         loop {
             if self.current.is_none() {
-                while self.idx < self.elements.len() {
-                    let text = fluree_doc_model::doco::projection_text(&self.elements[self.idx]);
-                    if text.is_empty() {
-                        // Empty elements occupy no offset space and get no
-                        // separator — `to_text` skips them outright.
-                        self.idx += 1;
-                        continue;
-                    }
-                    if !self.first {
-                        self.cursor += 2; // the "\n\n" separator
-                    }
-                    self.first = false;
-                    self.current = Some((self.idx, self.cursor, text.chars().count()));
-                    break;
-                }
                 // Past the last element: every later offset is past it too.
-                self.current?;
+                self.current = Some(self.walk.next()?);
             }
-            let (i, start, len) = self.current?;
-            if offset < start + len {
-                return Some((&self.elements[i], start));
+            let p = self.current.as_ref()?;
+            if offset < p.end {
+                return Some((p.element, p.begin, p.text.clone()));
             }
-            self.cursor = start + len;
-            self.idx = i + 1;
             self.current = None;
         }
     }
@@ -194,31 +169,13 @@ impl<'a> SpanResolver<'a> {
 
 /// The element containing a projection offset, and where its text begins.
 ///
-/// Walks the projection the same way [`crate::doco::to_text`] builds it, so
-/// the two cannot disagree about where an element starts.
-///
-/// Kept as the reference implementation of that walk: [`SpanResolver::seek`]
-/// is the incremental form and the differential test holds the two together.
+/// Kept as the reference form of [`SpanResolver::seek`], a fresh walk per
+/// offset; the differential test holds the two together.
 #[cfg_attr(not(test), allow(dead_code))]
 fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> {
-    let mut cursor = 0usize;
-    let mut first = true;
-    for e in elements {
-        let text = fluree_doc_model::doco::projection_text(e);
-        if text.is_empty() {
-            continue;
-        }
-        if !first {
-            cursor += 2; // the "\n\n" separator
-        }
-        first = false;
-        let len = text.chars().count();
-        if offset < cursor + len {
-            return Some((e, cursor));
-        }
-        cursor += len;
-    }
-    None
+    projection(elements)
+        .find(|p| offset < p.end)
+        .map(|p| (p.element, p.begin))
 }
 
 /// Fold one character the way [`crate::line`] normalises

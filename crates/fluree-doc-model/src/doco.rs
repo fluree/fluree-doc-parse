@@ -153,15 +153,11 @@ pub fn slug(name: &str) -> String {
 /// element by interval.
 pub fn to_text(elements: &[Element]) -> String {
     let mut out = String::new();
-    for e in elements {
-        let t = projection_text(e);
-        if t.is_empty() {
-            continue;
-        }
+    for p in projection(elements) {
         if !out.is_empty() {
-            out.push_str("\n\n");
+            out.push_str(SEPARATOR);
         }
-        out.push_str(&t);
+        out.push_str(&p.text);
     }
     if !out.is_empty() {
         out.push('\n');
@@ -169,13 +165,79 @@ pub fn to_text(elements: &[Element]) -> String {
     out
 }
 
+/// What the projection puts between one element's text and the next's.
+const SEPARATOR: &str = "\n\n";
+
+/// One element's place in the text projection.
+#[derive(Debug, Clone)]
+pub struct Projected<'a> {
+    /// The element's position in the slice walked.
+    pub index: usize,
+    pub element: &'a Element,
+    /// Its text as the projection holds it: [`projection_text`].
+    pub text: String,
+    /// Where that text begins and ends in the projection, in characters.
+    pub begin: usize,
+    pub end: usize,
+}
+
+/// The walk the text projection is built by: each element that puts text
+/// into it, in order, with where that text sits.
+///
+/// Elements with no text are skipped and take no separator; every other is
+/// separated from the one before by [`SEPARATOR`]. [`to_text`] builds the
+/// string by it, [`to_doco`] takes every `nif:beginIndex` from it, and a
+/// reader mapping an offset back to its element walks it too — one walk, so
+/// none of them can count a separator the others do not.
+pub fn projection(elements: &[Element]) -> Projection<'_> {
+    Projection {
+        elements: elements.iter().enumerate(),
+        cursor: 0,
+        first: true,
+    }
+}
+
+/// The iterator [`projection`] returns.
+#[derive(Debug, Clone)]
+pub struct Projection<'a> {
+    elements: std::iter::Enumerate<std::slice::Iter<'a, Element>>,
+    cursor: usize,
+    first: bool,
+}
+
+impl<'a> Iterator for Projection<'a> {
+    type Item = Projected<'a>;
+
+    fn next(&mut self) -> Option<Projected<'a>> {
+        for (index, element) in self.elements.by_ref() {
+            let text = projection_text(element);
+            if text.is_empty() {
+                continue;
+            }
+            if !self.first {
+                self.cursor += SEPARATOR.chars().count();
+            }
+            self.first = false;
+            let begin = self.cursor;
+            self.cursor += text.chars().count();
+            return Some(Projected {
+                index,
+                element,
+                text,
+                begin,
+                end: self.cursor,
+            });
+        }
+        None
+    }
+}
+
 /// An element's contribution to the text projection.
 ///
-/// Public because anything mapping a projection offset back to a position has
-/// to walk the projection the same way [`to_text`] builds it. Re-deriving it
-/// from `Element::text` gets tables wrong — their contribution is the cells
-/// joined with tabs — and the resulting offsets drift by exactly the
-/// difference, silently.
+/// Re-deriving it from `Element::text` gets tables wrong — their
+/// contribution is the cells joined with tabs — and offsets drift by exactly
+/// the difference, silently. Anything mapping a projection offset back to an
+/// element walks [`projection`], which yields this text with where it sits.
 pub fn projection_text(e: &Element) -> String {
     match (&e.cells, e.kind.as_str()) {
         (Some(rows), "doco:Table") => table_projection(rows).0,
@@ -752,25 +814,15 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     em.attach(doc_idx, body_idx);
     em.register_mailboxes(elements);
 
-    // Character cursor into the `to_text` projection.
-    let mut cursor = 0usize;
-    let mut first_text = true;
-    // The span the last element took, for the signature holding it.
-    let last_span = std::cell::Cell::new(None);
-    let mut offsets_for = |text: &str| -> (usize, usize) {
-        if !first_text {
-            cursor += 2; // the "\n\n" separator
-        }
-        first_text = false;
-        let start = cursor;
-        cursor += text.chars().count();
-        last_span.set(Some((start, cursor)));
-        (start, cursor)
-    };
+    // Where each element's text sits in the `to_text` projection.
+    let mut spans: Vec<Option<(usize, usize)>> = vec![None; elements.len()];
+    for p in projection(elements) {
+        spans[p.index] = Some((p.begin, p.end));
+    }
 
     let mut open_list: Option<usize> = None;
     let mut titled = false;
-    for e in elements {
+    for (e, &span) in elements.iter().zip(&spans) {
         if open_list.is_some() && e.kind != "doc:ListItem" {
             open_list = None;
         }
@@ -791,7 +843,6 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 em.close_signature();
             }
         }
-        last_span.set(None);
         match e.kind.as_str() {
             // The title the file declares for itself is the document's
             // header. A document has one; a second reads as a top-level
@@ -802,12 +853,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(title, &text);
                 em.set_provenance(title, e);
-                let mut start = None;
-                if !text.is_empty() {
-                    let (s, t) = offsets_for(&text);
+                if let Some((s, t)) = span {
                     em.set_offsets(title, s, t);
-                    start = Some(s);
                 }
+                let start = span.map(|(s, _)| s);
                 em.set_links(title, e, start);
                 em.attach_header(doc_idx, title);
             }
@@ -828,12 +877,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(title, &text);
                 em.set_provenance(title, e);
-                let mut start = None;
-                if !text.is_empty() {
-                    let (s, t) = offsets_for(&text);
+                if let Some((s, t)) = span {
                     em.set_offsets(title, s, t);
-                    start = Some(s);
                 }
+                let start = span.map(|(s, _)| s);
                 em.set_links(title, e, start);
                 em.attach_header(section, title);
                 em.open_sections.push((section, level));
@@ -855,12 +902,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(item, &text);
                 em.set_provenance(item, e);
-                let mut start = None;
-                if !text.is_empty() {
-                    let (s, t) = offsets_for(&text);
+                if let Some((s, t)) = span {
                     em.set_offsets(item, s, t);
-                    start = Some(s);
                 }
+                let start = span.map(|(s, _)| s);
                 em.set_links(item, e, start);
                 em.attach(list, item);
             }
@@ -870,12 +915,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(table, &text);
                 em.set_provenance(table, e);
-                let mut table_start = None;
-                if !text.is_empty() {
-                    let (s, t) = offsets_for(&text);
+                if let Some((s, t)) = span {
                     em.set_offsets(table, s, t);
-                    table_start = Some(s);
                 }
+                let table_start = span.map(|(s, _)| s);
                 // A table's projection joins cells with tabs, so an anchor
                 // offset into the element's own text indexes nothing here.
                 em.set_links(table, e, None);
@@ -1003,12 +1046,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(f, &text);
                 em.set_provenance(f, e);
-                let mut start = None;
-                if !text.is_empty() {
-                    let (s, t) = offsets_for(&text);
+                if let Some((s, t)) = span {
                     em.set_offsets(f, s, t);
-                    start = Some(s);
                 }
+                let start = span.map(|(s, _)| s);
                 em.set_links(f, e, start);
                 if let Some(id) = &e.figure {
                     em.nodes[f].insert("doc:figure".into(), Value::String(id.clone()));
@@ -1022,17 +1063,15 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 let text = projection_text(e);
                 em.set_text(p, &text);
                 em.set_provenance(p, e);
-                let mut start = None;
-                if !text.is_empty() {
-                    let (s, t) = offsets_for(&text);
+                if let Some((s, t)) = span {
                     em.set_offsets(p, s, t);
-                    start = Some(s);
                 }
+                let start = span.map(|(s, _)| s);
                 em.set_links(p, e, start);
                 em.attach(parent, p);
             }
         }
-        if let (Some(sig), Some((start, end))) = (em.open_signature.as_mut(), last_span.get()) {
+        if let (Some(sig), Some((start, end))) = (em.open_signature.as_mut(), span) {
             if !sig.text.is_empty() {
                 sig.text.push_str("\n\n");
             }

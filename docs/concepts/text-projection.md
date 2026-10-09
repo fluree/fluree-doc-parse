@@ -46,6 +46,12 @@ decoration. It is a projection *of the elements*, so anything the layout pass
 dropped (page [furniture](../design/furniture.md), watermarks) is absent from
 both outputs consistently.
 
+In Rust, `fluree_doc_model::doco::projection(&elements)` is the walk itself:
+each element that contributes text, with that text and its `begin..end` in
+the projection. `to_text`, the graph's offsets and the PDF span resolver all
+take it, so code mapping an offset back to its element should too, rather
+than re-counting separators.
+
 ## Normalization
 
 Element text is **NFKC-normalized**. This is not cosmetic. PDFs emit ligatures
