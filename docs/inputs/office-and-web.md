@@ -26,7 +26,9 @@ fdoc convert report.docx -f doco
 Word states outright what a PDF makes us infer: `w:pStyle` gives the heading
 level, `w:numPr` marks a list item, `w:tbl` bounds a real table, and
 `w:gridSpan` / `w:vMerge` state the cell merges the PDF engine has to read
-back out of ruling geometry.
+back out of ruling geometry. A paragraph in Word's built-in Title style is the
+document's `doco:Title`, found by the style's name, which a localised Word
+keeps in English while it renames the style's id.
 
 `page` is `0` throughout — a `.docx` stores a flow, not a layout, and page
 boundaries exist only once something lays it out.
@@ -47,7 +49,8 @@ a canvas layout rather than a text flow, and reporting them as `bbox` would
 invite consumers to treat a deck like a scanned page.
 
 A shape whose placeholder type is `title` or `ctrTitle` becomes the slide
-heading; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
+heading, except the `ctrTitle` on the first slide — the title slide's title —
+which is the deck's `doco:Title`; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
 paragraphs with a bullet character or a non-zero outline level are list items.
 
 **Charts become tables.** Values come from the cached `c:strCache` /

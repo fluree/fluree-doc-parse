@@ -38,7 +38,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FORMATS = ["html", "md", "docx", "xlsx", "pdf"]
-CONTAINERS = {"doco:Table", "doco:Section", "doco:BodyMatter", "doco:Document", "doco:List"}
+CONTAINERS = {"doco:Table", "doco:Section", "doco:BodyMatter", "doc:Document", "doco:List"}
 HEADERS = ("doc:columnHeader", "doc:rowHeader", "doc:sectionLabel")
 
 

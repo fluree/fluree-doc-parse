@@ -137,7 +137,7 @@ pub fn elements(lines: &[String], provenance: &'static str, out: &mut Vec<Elemen
         if let Some(rest) = item(&line) {
             flush(&mut para, out);
             if !rest.is_empty() {
-                out.push(element("doco:ListItem", rest.to_string(), provenance));
+                out.push(element("doc:ListItem", rest.to_string(), provenance));
                 last_item = Some(out.len() - 1);
             }
             continue;
@@ -196,8 +196,8 @@ mod tests {
             vec![
                 ("doco:Paragraph".into(), "Hi Kai,".into()),
                 ("doco:Paragraph".into(), "Next steps:".into()),
-                ("doco:ListItem".into(), "sign the order".into()),
-                ("doco:ListItem".into(), "book the kickoff for May".into()),
+                ("doc:ListItem".into(), "sign the order".into()),
+                ("doc:ListItem".into(), "book the kickoff for May".into()),
                 ("doco:Paragraph".into(), "Lena Holt\nOperations Lead".into()),
             ]
         );

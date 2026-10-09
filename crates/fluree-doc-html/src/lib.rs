@@ -649,7 +649,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 // item's own text stops at it.
                 let (own, links) = own_text(h);
                 if !own.is_empty() {
-                    out.push(linked("doco:ListItem", own, None, links));
+                    out.push(linked("doc:ListItem", own, None, links));
                 }
                 for c in children_of(h) {
                     if matches!(tag_of(&c).as_deref(), Some("ul" | "ol" | "table")) {
@@ -910,8 +910,8 @@ mod tests {
             [
                 "doco:SectionTitle",
                 "doco:Paragraph",
-                "doco:ListItem",
-                "doco:ListItem"
+                "doc:ListItem",
+                "doc:ListItem"
             ]
         );
         assert_eq!(els[0].level, Some(1));

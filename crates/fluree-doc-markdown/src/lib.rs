@@ -155,7 +155,7 @@ impl Reader {
                     self.in_item = true;
                 }
                 Event::End(TagEnd::Item) => {
-                    self.flush_text("doco:ListItem", None);
+                    self.flush_text("doc:ListItem", None);
                     self.in_item = false;
                 }
                 Event::Start(Tag::CodeBlock(_)) => {
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn list_items_are_separate_elements() {
         let els = parse("- first\n- second\n- third\n");
-        assert_eq!(kinds(&els), ["doco:ListItem"; 3]);
+        assert_eq!(kinds(&els), ["doc:ListItem"; 3]);
         assert_eq!(els[1].text, "second");
     }
 

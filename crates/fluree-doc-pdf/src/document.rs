@@ -1109,13 +1109,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     },
                 ),
                 _ if figure_of.is_some() => ("doco:Figure", None, "fills"),
-                None if b.marker.is_some() => ("doco:ListItem", None, "marker"),
+                None if b.marker.is_some() => ("doc:ListItem", None, "marker"),
                 // A bullet the producer set inside the text run rather than
                 // beside it. The marker pass cannot pull out what was never
                 // separate, so the list read as paragraphs opening with a
                 // square.
                 None if block::strip_leading_bullet(&text).is_some() => {
-                    ("doco:ListItem", None, "bullet")
+                    ("doc:ListItem", None, "bullet")
                 }
                 None => ("doco:Paragraph", None, "layout"),
                 Some(_) => unreachable!("weak figure heading has figure membership"),
@@ -1135,7 +1135,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 continue;
             }
             let text = match block::strip_leading_bullet(&scrubbed) {
-                Some(without) if kind == "doco:ListItem" => without.to_string(),
+                Some(without) if kind == "doc:ListItem" => without.to_string(),
                 _ => scrubbed,
             };
             page_elements.push(Element {

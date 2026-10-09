@@ -248,11 +248,13 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
             out.push_str("</figure>\n");
             open_figure = None;
         }
-        if in_list && e.kind != "doco:ListItem" {
+        if in_list && e.kind != "doc:ListItem" {
             out.push_str("</ul>\n");
             in_list = false;
         }
         match e.kind.as_str() {
+            // The document's own title reads as its top heading.
+            "doco:Title" => out.push_str(&format!("<h1>{}</h1>\n", html_linked(e))),
             "doco:SectionTitle" => {
                 let l = e.level.unwrap_or(1).clamp(1, 6);
                 out.push_str(&format!(
@@ -265,7 +267,7 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                     html_linked(e)
                 ));
             }
-            "doco:ListItem" => {
+            "doc:ListItem" => {
                 if !in_list {
                     out.push_str("<ul>\n");
                     in_list = true;
@@ -467,6 +469,7 @@ pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
     let mut out = String::new();
     for e in elements {
         match e.kind.as_str() {
+            "doco:Title" => out.push_str(&format!("\n# {}\n\n", md_linked(e))),
             "doco:SectionTitle" => {
                 let l = e.level.unwrap_or(1).clamp(1, 6);
                 out.push_str(&format!("\n{} {}\n\n", "#".repeat(l), md_linked(e)));
@@ -488,7 +491,7 @@ pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
                     out.push_str(&format!("\n{}\n\n", e.text));
                 }
             }
-            "doco:ListItem" => out.push_str(&format!("- {}\n", md_linked(e))),
+            "doc:ListItem" => out.push_str(&format!("- {}\n", md_linked(e))),
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
                 (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
@@ -635,6 +638,14 @@ mod tests {
         // sentence this library wrote as though the document had said it.
         assert!(!x.contains("<p>fluree-doc-parse"));
         assert!(to_markdown_with(&[e], &notes).contains("<!-- fluree-doc-parse:"));
+    }
+
+    #[test]
+    fn a_documents_title_reads_as_its_top_heading() {
+        let mut t = para("Annual Report", vec![]);
+        t.kind = "doco:Title".into();
+        assert!(to_markdown(std::slice::from_ref(&t)).contains("\n# Annual Report\n"));
+        assert!(to_xhtml(std::slice::from_ref(&t)).contains("<h1>Annual Report</h1>"));
     }
 
     #[test]

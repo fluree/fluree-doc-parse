@@ -11,10 +11,13 @@
 //! - `@graph` of elements in reading order; hierarchy lives only in
 //!   `po:contains` (coerced to `@id` in the context so ingestion links
 //!   rather than storing dead strings).
-//! - A `doco:Document` root containing `doco:BodyMatter`; headings open a
-//!   `doco:Section` (with `doc:sectionLevel`) holding a `doco:SectionTitle`,
-//!   and content attaches to the innermost open section — the same stack
-//!   walk the XHTML consumer performs on `h1`-`h6`.
+//! - A `doc:Document` root containing `doco:BodyMatter`; headings open a
+//!   `doco:Section` (with `doc:sectionLevel`) holding a `doco:SectionTitle`
+//!   as its header, and content attaches to the innermost open section —
+//!   the same stack walk the XHTML consumer performs on `h1`-`h6`. A title
+//!   the file declares for itself is a `doco:Title`, the document's header.
+//!   Headers are held by `po:containsAsHeader`, as DoCO specifies, and by
+//!   `po:contains` too, so everything a section holds is one hop.
 //! - Consecutive list items group under a `doco:List`; tables carry
 //!   `doc:TableCell` children with row/column indices, header labels,
 //!   and cell values. Cells whose text appears verbatim in the projection
@@ -316,6 +319,8 @@ struct Emitter<'a> {
     /// node index → ordered child IRIs (kept separate so `po:contains` can be
     /// attached in one pass at the end).
     children: Vec<Vec<String>>,
+    /// node index → the child IRI it holds as its header.
+    headers: Vec<Option<String>>,
     counter: usize,
     /// (id-index of open section, its level)
     open_sections: Vec<(usize, usize)>,
@@ -367,7 +372,16 @@ impl<'a> Emitter<'a> {
         }
         self.nodes.push(m);
         self.children.push(Vec::new());
+        self.headers.push(None);
         self.nodes.len() - 1
+    }
+
+    /// Attach `child` as `parent`'s header: DoCO's `po:containsAsHeader`,
+    /// and `po:contains` too, so a query for everything a section holds
+    /// needs no second property.
+    fn attach_header(&mut self, parent: usize, child: usize) {
+        self.headers[parent] = Some(self.nodes[child]["@id"].as_str().unwrap().to_string());
+        self.attach(parent, child);
     }
 
     fn attach(&mut self, parent: usize, child: usize) {
@@ -674,6 +688,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         opts,
         nodes: Vec::new(),
         children: Vec::new(),
+        headers: Vec::new(),
         counter: 0,
         open_sections: Vec::new(),
         open_message: None,
@@ -683,7 +698,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         body_idx: 0,
     };
 
-    let doc_idx = em.node("element", "doco:Document", Some("html"));
+    let doc_idx = em.node("element", "doc:Document", Some("html"));
     if let Some(h) = &opts.sha256 {
         em.nodes[doc_idx].insert("doc:sha256".into(), Value::String(h.clone()));
     }
@@ -755,8 +770,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     };
 
     let mut open_list: Option<usize> = None;
+    let mut titled = false;
     for e in elements {
-        if open_list.is_some() && e.kind != "doco:ListItem" {
+        if open_list.is_some() && e.kind != "doc:ListItem" {
             open_list = None;
         }
         if let Some(m) = &e.message {
@@ -778,8 +794,29 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         }
         last_span.set(None);
         match e.kind.as_str() {
-            "doco:SectionTitle" => {
-                let level = e.level.unwrap_or(1).clamp(1, 6);
+            // The title the file declares for itself is the document's
+            // header. A document has one; a second reads as a top-level
+            // heading.
+            "doco:Title" if !titled => {
+                titled = true;
+                let title = em.node("element", "doco:Title", Some("h1"));
+                let text = projection_text(e);
+                em.set_text(title, &text);
+                em.set_provenance(title, e);
+                let mut start = None;
+                if !text.is_empty() {
+                    let (s, t) = offsets_for(&text);
+                    em.set_offsets(title, s, t);
+                    start = Some(s);
+                }
+                em.set_links(title, e, start);
+                em.attach_header(doc_idx, title);
+            }
+            "doco:SectionTitle" | "doco:Title" => {
+                let level = match e.kind.as_str() {
+                    "doco:Title" => 1,
+                    _ => e.level.unwrap_or(1).clamp(1, 6),
+                };
                 while em.open_sections.last().is_some_and(|(_, l)| *l >= level) {
                     em.open_sections.pop();
                 }
@@ -799,10 +836,10 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     start = Some(s);
                 }
                 em.set_links(title, e, start);
-                em.attach(section, title);
+                em.attach_header(section, title);
                 em.open_sections.push((section, level));
             }
-            "doco:ListItem" => {
+            "doc:ListItem" => {
                 let list = match open_list {
                     Some(l) => l,
                     None => {
@@ -813,7 +850,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         l
                     }
                 };
-                let item = em.node("element", "doco:ListItem", Some("li"));
+                let item = em.node("element", "doc:ListItem", Some("li"));
                 let text = projection_text(e);
                 em.set_text(item, &text);
                 em.set_provenance(item, e);
@@ -1006,12 +1043,19 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
 
     // Attach po:contains and build the graph.
     let Emitter {
-        nodes, children, ..
+        nodes,
+        children,
+        headers,
+        ..
     } = em;
     let graph: Vec<Value> = nodes
         .into_iter()
         .zip(children)
-        .map(|(mut n, kids)| {
+        .zip(headers)
+        .map(|((mut n, kids), header)| {
+            if let Some(h) = header {
+                n.insert("po:containsAsHeader".into(), Value::String(h));
+            }
             if !kids.is_empty() {
                 n.insert(
                     "po:contains".into(),
@@ -1033,6 +1077,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             "xsd": "http://www.w3.org/2001/XMLSchema#",
             // Containment edges must ingest as IRI references, not literals.
             "po:contains": { "@type": "@id" },
+            "po:containsAsHeader": { "@type": "@id" },
             // A link's anchor is a node of the graph. Its target is an
             // `xsd:anyURI` literal on that node.
             "doc:link": { "@type": "@id" },
@@ -1133,6 +1178,48 @@ mod tests {
     }
 
     #[test]
+    fn a_section_holds_its_title_as_its_header() {
+        let g = graph(&[
+            el("doco:SectionTitle", "Revenue", Some(1)),
+            el("doco:Paragraph", "Up.", None),
+        ]);
+        let section = &find(&g, "doco:Section")[0];
+        let title = &find(&g, "doco:SectionTitle")[0];
+        assert_eq!(section["po:containsAsHeader"], title["@id"]);
+        // Still contained, so everything a section holds is one hop.
+        assert!(section["po:contains"]
+            .as_array()
+            .unwrap()
+            .contains(&title["@id"]));
+    }
+
+    #[test]
+    fn the_documents_own_title_is_the_documents_header() {
+        let g = graph(&[
+            el("doco:Title", "Annual Report", None),
+            el("doco:Paragraph", "Prepared for the board.", None),
+            el("doco:SectionTitle", "Overview", Some(1)),
+            el("doco:Title", "Appendix", None),
+        ]);
+        let doc = &find(&g, "doc:Document")[0];
+        let titles = find(&g, "doco:Title");
+        assert_eq!(titles.len(), 1, "a document has one title");
+        assert_eq!(titles[0]["nif:isString"], "Annual Report");
+        assert_eq!(doc["po:containsAsHeader"], titles[0]["@id"]);
+        // It opens no section: the paragraph under it is the body's.
+        let body = &find(&g, "doco:BodyMatter")[0];
+        let para = &find(&g, "doco:Paragraph")[0];
+        assert!(body["po:contains"]
+            .as_array()
+            .unwrap()
+            .contains(&para["@id"]));
+        // A second title reads as a top-level heading.
+        let sections = find(&g, "doco:Section");
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[1]["doc:sectionLevel"], json!(1));
+    }
+
+    #[test]
     fn offsets_index_into_the_text_projection() {
         let els = vec![
             el("doco:SectionTitle", "Title", Some(1)),
@@ -1151,10 +1238,10 @@ mod tests {
     #[test]
     fn consecutive_list_items_group_under_one_list() {
         let els = vec![
-            el("doco:ListItem", "one", None),
-            el("doco:ListItem", "two", None),
+            el("doc:ListItem", "one", None),
+            el("doc:ListItem", "two", None),
             el("doco:Paragraph", "break", None),
-            el("doco:ListItem", "three", None),
+            el("doc:ListItem", "three", None),
         ];
         let g = graph(&els);
         let lists = find(&g, "doco:List");
@@ -1411,7 +1498,7 @@ mod tests {
         assert_eq!(p["doc:pageIndex"], json!(0));
         assert_eq!(p["doc:bbox"], "10.00,20.00,110.00,40.00");
         // Structural wrappers are stamped too (retract-on-rerun must catch them).
-        let doc = &find(&g, "doco:Document")[0];
+        let doc = &find(&g, "doc:Document")[0];
         assert_eq!(doc["doc:sourceDocument"]["@id"], "urn:test:doc");
     }
 
@@ -1433,7 +1520,7 @@ mod tests {
         };
         let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
         let doc = &v["@graph"][0];
-        assert_eq!(doc["@type"], "doco:Document");
+        assert_eq!(doc["@type"], "doc:Document");
         assert_eq!(doc["doc:sha256"], sha);
         assert_eq!(doc["doc:sourceName"], "Q3 report.pdf");
         assert_eq!(

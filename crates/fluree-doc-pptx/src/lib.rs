@@ -344,7 +344,7 @@ pub fn parse_slide_with_charts(
     let mut text = String::new();
     let mut in_text = false;
     // Shape state: a placeholder's type decides whether its text is a title.
-    let mut shape_is_title = false;
+    let mut shape = Shape::Body;
     let mut para_level = 0usize;
     let mut para_bullet = false;
     let mut in_table = 0usize;
@@ -362,7 +362,12 @@ pub fn parse_slide_with_charts(
                 "br" => push(&mut text, &mut cell, in_cell, " "),
                 "ph" => {
                     if let Some(t) = attr(&e, "type") {
-                        shape_is_title = t == "title" || t == "ctrTitle";
+                        shape = match t.as_str() {
+                            // The title slide's title is the deck's.
+                            "ctrTitle" if page == 0 => Shape::DeckTitle,
+                            "title" | "ctrTitle" => Shape::SlideTitle,
+                            _ => Shape::Body,
+                        };
                     }
                 }
                 "pPr" => {
@@ -417,7 +422,7 @@ pub fn parse_slide_with_charts(
                             &mut out,
                             &mut text,
                             page,
-                            shape_is_title,
+                            shape,
                             para_bullet || para_level > 0,
                         );
                         para_bullet = false;
@@ -437,8 +442,8 @@ pub fn parse_slide_with_charts(
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, page, shape_is_title, false);
-                    shape_is_title = false;
+                    flush(&mut out, &mut text, page, shape, false);
+                    shape = Shape::Body;
                 }
                 _ => {}
             },
@@ -446,7 +451,7 @@ pub fn parse_slide_with_charts(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, page, false, false);
+    flush(&mut out, &mut text, page, Shape::Body, false);
     Ok(out)
 }
 
@@ -495,7 +500,17 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
     }
 }
 
-fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, title: bool, listy: bool) {
+/// What a shape's text is, by its placeholder type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    Body,
+    /// A slide's title: the deck's section heading.
+    SlideTitle,
+    /// The title on the deck's title slide: the deck's own.
+    DeckTitle,
+}
+
+fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, listy: bool) {
     let t = std::mem::take(buf)
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -503,11 +518,12 @@ fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, title: bool, lis
     if t.is_empty() {
         return;
     }
-    if title {
-        // A slide title is the deck's section heading.
+    if shape == Shape::DeckTitle {
+        out.push(element("doco:Title", t, None, page));
+    } else if shape == Shape::SlideTitle {
         out.push(element("doco:SectionTitle", t, Some(1), page));
     } else if listy {
-        out.push(element("doco:ListItem", t, None, page));
+        out.push(element("doc:ListItem", t, None, page));
     } else {
         out.push(element("doco:Paragraph", t, None, page));
     }
@@ -582,6 +598,25 @@ mod tests {
     }
 
     #[test]
+    fn the_title_slides_title_is_the_decks() {
+        let first = slide(&format!(
+            "{}{}",
+            shape(Some("ctrTitle"), &para("Quarterly Review")),
+            shape(Some("subTitle"), &para("Q3 2026"))
+        ));
+        let els = parse_slide_xml(&first, 0).unwrap();
+        assert_eq!(els[0].kind, "doco:Title");
+        assert_eq!(els[1].kind, "doco:Paragraph");
+        // A later title slide, a section divider, is a heading like any
+        // slide's title.
+        let later = slide(&shape(Some("ctrTitle"), &para("Appendix")));
+        assert_eq!(
+            parse_slide_xml(&later, 7).unwrap()[0].kind,
+            "doco:SectionTitle"
+        );
+    }
+
+    #[test]
     fn slide_numbers_order_the_deck_not_the_archive() {
         assert_eq!(slide_number("ppt/slides/slide10.xml"), Some(10));
         assert_eq!(slide_number("ppt/slides/slide2.xml"), Some(2));
@@ -614,8 +649,8 @@ mod tests {
              <a:p><a:pPr lvl=\"1\"/><a:r><a:t>indented</a:t></a:r></a:p>",
         ));
         let els = parse_slide_xml(&x, 0).unwrap();
-        assert_eq!(els[0].kind, "doco:ListItem");
-        assert_eq!(els[1].kind, "doco:ListItem");
+        assert_eq!(els[0].kind, "doc:ListItem");
+        assert_eq!(els[1].kind, "doc:ListItem");
     }
 
     #[test]

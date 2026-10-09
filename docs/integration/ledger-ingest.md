@@ -80,7 +80,7 @@ across a crawl are the hashes that repeat:
 
 ```sparql
 SELECT ?hash (COUNT(?d) AS ?copies) (GROUP_CONCAT(?name; separator=", ") AS ?names)
-WHERE { ?d a doco:Document ; doc:sha256 ?hash ; doc:sourceName ?name }
+WHERE { ?d a doc:Document ; doc:sha256 ?hash ; doc:sourceName ?name }
 GROUP BY ?hash
 HAVING (COUNT(?d) > 1)
 ```
@@ -94,7 +94,7 @@ is one value.
 
 The graph is shaped for the questions people actually ask of documents:
 
-- **Section-scoped search** — `po:contains` chains from `doco:Document` down
+- **Section-scoped search** — `po:contains` chains from `doc:Document` down
   through `doco:Section`, so "entities mentioned under this heading" is a
   traversal rather than a coordinate comparison.
 - **Cell-addressed tables** — every cell is a `doc:TableCell` with

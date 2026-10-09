@@ -35,23 +35,29 @@ pub struct Element {
 ## The DoCO classes
 
 Structure is typed with [DoCO](http://purl.org/spar/doco), the Document
-Components Ontology:
+Components Ontology, and with Fluree's `doc:` namespace where DoCO has no
+class:
 
 | class | what it is |
 |---|---|
-| `doco:Document` | the root |
+| `doc:Document` | the root |
+| `doco:Title` | the title the document declares for itself |
 | `doco:BodyMatter` | the body partition |
 | `doco:Section` | a heading and everything under it |
 | `doco:SectionTitle` | the heading itself, with `level` |
 | `doco:Paragraph` | a block of prose |
-| `doco:List` / `doco:ListItem` | lists |
+| `doco:List` / `doc:ListItem` | lists |
 | `doco:Table` | a table, with `cells` |
 | `doco:Figure` | text inside a drawing, or an [anchor](../integration/anchors.md) for an escalated region |
 
-Readers emit five of these — `SectionTitle`, `Paragraph`, `ListItem`, `Table`
-and `Figure`. `Document`, `BodyMatter`, `Section`, `List` and `doc:TableCell`
-are minted by the [DoCO emitter](../formats/doco.md) when the flat list
-becomes a graph.
+Readers emit six of these — `Title`, `SectionTitle`, `Paragraph`, `ListItem`,
+`Table` and `Figure`. `Document`, `BodyMatter`, `Section`, `List` and
+`doc:TableCell` are minted by the [DoCO emitter](../formats/doco.md) when the
+flat list becomes a graph.
+
+A `doco:Title` is a title the file declares, never one read off the page:
+Word's Title style, the title on a deck's title slide. The first is the
+document's; the emitter reads any later one as a top-level heading.
 
 `doco:Caption` and `doco:FrontMatter` are **not** emitted — see the
 [vocabulary](../reference/vocabulary.md#types) for why.

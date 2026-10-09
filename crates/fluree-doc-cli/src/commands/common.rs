@@ -270,7 +270,7 @@ pub(crate) fn arbitrate_layout_titles(
         }
     }
     for e in elements.iter_mut() {
-        if e.kind != "doco:Paragraph" && e.kind != "doco:ListItem" {
+        if e.kind != "doco:Paragraph" && e.kind != "doc:ListItem" {
             continue;
         }
         if e.text.chars().count() > 120 {

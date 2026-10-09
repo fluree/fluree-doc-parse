@@ -20,6 +20,7 @@ insertable into a [Fluree](https://flur.ee) ledger as-is.
     "nif":      "http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#",
     "po":       "http://www.essepuntato.it/2008/12/pattern#",
     "po:contains": { "@type": "@id" },
+    "po:containsAsHeader": { "@type": "@id" },
     "rdfs":     "http://www.w3.org/2000/01/rdf-schema#",
     "dcterms":  "http://purl.org/dc/terms/",
     "xsd":      "http://www.w3.org/2001/XMLSchema#"
@@ -28,7 +29,7 @@ insertable into a [Fluree](https://flur.ee) ledger as-is.
 }
 ```
 
-One Fluree namespace, `doc:`, plus three public ontologies, `rdfs` for the
+One Fluree namespace, `doc:`, for what DoCO does not define, plus three public ontologies, `rdfs` for the
 display label, and Dublin Core (`dcterms`) for what a document declares about
 itself, with `xsd` typing its dates. `doco` is the Document Components Ontology; `po` is the Pattern
 ontology DoCO extends, and `po:contains` is the containment property DoCO
@@ -66,7 +67,7 @@ than strings — which is what makes the graph traversable after insertion.
 | `doc:bbox` | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | [which signal classified it](../concepts/provenance.md) |
 | `doc:xhtmlTag` | the equivalent HTML tag |
-| `po:contains` | children, for `doco:Document`, `BodyMatter`, `Section`, `Table` |
+| `po:contains` | children, for `doc:Document`, `BodyMatter`, `Section`, `Table` |
 | `doc:sectionLevel` | heading depth, on `doco:Section` |
 
 `doc:bbox` is absent for sources without geometry — see [Measured vs
@@ -76,7 +77,7 @@ declared structure](../concepts/geometry-vs-declared.md).
 
 ```json
 { "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-0",
-  "@type": "doco:Document",
+  "@type": "doc:Document",
   "doc:sha256": "661511bb2b30c4e8a9f2d71b05e3c6a48f90d2b17e5a3c8f4b6d1e09a7c25f3e",
   "doc:sourceName": "report.pdf" }
 ```
@@ -95,7 +96,7 @@ why the hash is the one to join on.
 What the file declares about itself rides beside them, in Dublin Core:
 
 ```json
-{ "@type": "doco:Document",
+{ "@type": "doc:Document",
   "dcterms:title": "Quarterly Report",
   "dcterms:creator": ["Ada Park"],
   "dcterms:created": { "@value": "2019-07-12T15:10:45-06:00", "@type": "xsd:dateTime" },
@@ -113,7 +114,7 @@ would fail a store's insert.
 
 ```json
 { "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-0",
-  "@type": "doco:Document",
+  "@type": "doc:Document",
   "doc:pages": { "@type": "@json",
                  "@value": [ { "pageIndex": 0, "width": 612.0, "height": 792.0 },
                              { "pageIndex": 1, "width": 612.0, "height": 792.0,
@@ -138,7 +139,7 @@ identifies a page rather than the document. A string, because front matter is
 ## What the pages say about the document
 
 ```json
-{ "@type": "doco:Document",
+{ "@type": "doc:Document",
   "doc:runningText": { "@type": "@json",
                        "@value": [ "CHURCH &", "DWIGHT",
                                    "TM004361 Rev:005 Production" ] } }
@@ -161,7 +162,7 @@ entry in `doc:pages`.
 ## Pages nothing read
 
 ```json
-{ "@type": "doco:Document",
+{ "@type": "doc:Document",
   "doc:unreadPages": { "@type": "@json",
                        "@value": [ { "pageIndex": 0, "reason": "NearBlank" } ] } }
 ```
@@ -183,14 +184,38 @@ visible, and inventing text puts characters into the projection that every
 
 The flat element list becomes a tree here. A `doco:Section` node is minted per
 heading, carrying `doc:sectionLevel` and containing the title plus everything
-under it:
+under it. The title is the section's header, held by `po:containsAsHeader` as
+DoCO specifies, and by `po:contains` with the rest, so everything a section
+holds is one hop:
 
 ```json
 { "@id": "urn:fluree-doc-parse:report-661511bb2b30-section-2",
   "@type": "doco:Section",
   "doc:sectionLevel": 1,
+  "po:containsAsHeader": "…-element-3",
   "po:contains": [ "…-element-3", "…-element-4", "…-table-5" ] }
 ```
+
+A title the file declares for itself — Word's Title style, a deck's title
+slide — is a `doco:Title`, and the document node's header in the same way:
+
+```json
+{ "@type": "doc:Document",
+  "po:containsAsHeader": "…-element-2",
+  "po:contains": [ "…-element-1", "…-element-2" ] }
+
+{ "@id": "…-element-2", "@type": "doco:Title", "nif:isString": "Annual Report" }
+```
+
+It opens no section: what follows it up to the first heading is the body's.
+A document has one title, so a second reads as a top-level heading. A PDF
+declares no title on its pages, so its graph has none: a title guessed from
+the largest line would be a reading of the page, and stays a heading.
+
+`po:contains` is a set, as JSON-LD arrays are. Reading order is
+`nif:beginIndex`, which every node holding text carries; DoCO's own
+suggestion, a linked list of items, would be a node per item in every
+container.
 
 Every node of a document shares one counter in emission order, so IRIs are
 `{base}-section-{n}`, `{base}-element-{n}`, `{base}-table-{n}` and so on, with
@@ -271,7 +296,7 @@ never appear in the text, so they never become entities.
 ## Emails are threads of messages
 
 ```json
-{ "@type": "doco:Document",
+{ "@type": "doc:Document",
   "dcterms:title": "RE: Pilot",
   "dcterms:creator": ["Lena Holt <lena@example.com>"],
   "dcterms:created": { "@value": "2026-07-17T13:48:00-05:00", "@type": "xsd:dateTime" },

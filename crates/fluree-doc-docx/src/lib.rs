@@ -55,12 +55,44 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
     let read = zip
         .by_name("word/styles.xml")
         .is_ok_and(|mut f| f.read_to_string(&mut styles).is_ok());
-    let header_styles = if read {
-        header_row_styles(&styles)
+    let (header_styles, title_styles) = if read {
+        (header_row_styles(&styles), title_styles(&styles))
     } else {
-        HashSet::new()
+        (HashSet::new(), HashSet::new())
     };
-    parse_with_styles(&xml, &header_styles)
+    parse_with_styles(&xml, &header_styles, &title_styles)
+}
+
+/// The paragraph styles that are Word's built-in Title.
+///
+/// A localised Word writes its own id for the style (`Titel`) but keeps the
+/// built-in name, `Title`, so the name is what says which style it is.
+fn title_styles(xml: &str) -> HashSet<String> {
+    let mut r = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut out = HashSet::new();
+    let mut style: Option<String> = None;
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(_) | Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                "style" => {
+                    style = (attr(&e, "type").as_deref() == Some("paragraph"))
+                        .then(|| attr(&e, "styleId"))
+                        .flatten();
+                }
+                "name" => {
+                    if attr(&e, "val").is_some_and(|v| v.eq_ignore_ascii_case("title")) {
+                        out.extend(style.clone());
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
 }
 
 /// The table styles that set a table's first row apart — bold or shaded
@@ -223,14 +255,16 @@ pub fn info(bytes: &[u8]) -> DocumentInfo {
 }
 
 pub fn parse_document_xml(xml: &str) -> Result<Vec<Element>, DocxError> {
-    parse_with_styles(xml, &HashSet::new())
+    parse_with_styles(xml, &HashSet::new(), &HashSet::new())
 }
 
 /// [`parse_document_xml`], knowing which table styles set their first row
-/// apart as a header (see [`header_row_styles`]).
+/// apart as a header (see [`header_row_styles`]) and which paragraph styles
+/// are the document's title (see [`title_styles`]).
 fn parse_with_styles(
     xml: &str,
     header_styles: &HashSet<String>,
+    title_styles: &HashSet<String>,
 ) -> Result<Vec<Element>, DocxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
@@ -342,7 +376,7 @@ fn parse_with_styles(
                                 cell.text.push(' ');
                             }
                         } else {
-                            flush_para(&mut out, &mut para);
+                            flush_para(&mut out, &mut para, title_styles);
                         }
                     }
                     "tc" => {
@@ -368,7 +402,7 @@ fn parse_with_styles(
         }
         buf.clear();
     }
-    flush_para(&mut out, &mut para);
+    flush_para(&mut out, &mut para, title_styles);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
@@ -429,16 +463,20 @@ fn is_list_style(style: &str) -> bool {
     s.starts_with("list") || s.starts_with("bullet")
 }
 
-fn flush_para(out: &mut Vec<Element>, para: &mut Para) {
+fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<String>) {
     let p = std::mem::take(para);
     let text = p.text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
         return;
     }
-    if let Some(level) = heading_level(&p.style) {
+    // The title Word's Title style declares: the document's own, which
+    // DoCO holds as the document's header rather than as a section's.
+    if p.style == "Title" || title_styles.contains(&p.style) {
+        out.push(element("doco:Title", text, None));
+    } else if let Some(level) = heading_level(&p.style) {
         out.push(element("doco:SectionTitle", text, Some(level)));
     } else if p.numbered || is_list_style(&p.style) {
-        out.push(element("doco:ListItem", text, None));
+        out.push(element("doc:ListItem", text, None));
     } else {
         out.push(element("doco:Paragraph", text, None));
     }
@@ -663,6 +701,33 @@ mod tests {
     }
 
     #[test]
+    fn the_title_style_is_the_documents_title() {
+        let x = doc(&format!(
+            "{}{}",
+            para(Some("Title"), "Annual Report"),
+            para(Some("Heading1"), "Overview")
+        ));
+        let els = parse_document_xml(&x).unwrap();
+        assert_eq!(els[0].kind, "doco:Title");
+        assert_eq!(els[0].text, "Annual Report");
+        assert_eq!(els[1].kind, "doco:SectionTitle");
+        // A localised Word names the style by its own id and keeps the
+        // built-in name.
+        let styles = format!(
+            "<w:styles {NS}><w:style w:type=\"paragraph\" w:styleId=\"Titel\">\
+             <w:name w:val=\"Title\"/></w:style></w:styles>"
+        );
+        let localised = title_styles(&styles);
+        let els = parse_with_styles(
+            &doc(&para(Some("Titel"), "Jahresbericht")),
+            &HashSet::new(),
+            &localised,
+        )
+        .unwrap();
+        assert_eq!(els[0].kind, "doco:Title");
+    }
+
+    #[test]
     fn heading_styles_give_their_level_directly() {
         let x = doc(&format!(
             "{}{}{}",
@@ -695,7 +760,7 @@ mod tests {
     fn numbered_paragraphs_are_list_items() {
         let x = doc("<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/></w:numPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>");
         let els = parse_document_xml(&x).unwrap();
-        assert_eq!(els[0].kind, "doco:ListItem");
+        assert_eq!(els[0].kind, "doc:ListItem");
         assert_eq!(els[0].text, "one");
     }
 
@@ -709,8 +774,8 @@ mod tests {
             para(Some("ListParagraph"), "also a list item")
         ));
         let els = parse_document_xml(&x).unwrap();
-        assert_eq!(els[0].kind, "doco:ListItem");
-        assert_eq!(els[1].kind, "doco:ListItem");
+        assert_eq!(els[0].kind, "doc:ListItem");
+        assert_eq!(els[1].kind, "doc:ListItem");
         assert!(!is_list_style("Normal"));
         assert!(!is_list_style("Heading1"));
     }
@@ -977,7 +1042,8 @@ mod tests {
                 tc("Engineer", false, "")
             ))
         };
-        let header = |xml: String| parse_with_styles(&xml, &marked).unwrap()[0].header_rows;
+        let header =
+            |xml: String| parse_with_styles(&xml, &marked, &HashSet::new()).unwrap()[0].header_rows;
         assert_eq!(header(x("Mine", "w:firstRow=\"1\"")), Some(1));
         assert_eq!(header(x("Mine", "w:val=\"04A0\"")), Some(1));
         assert_eq!(header(x("Mine", "w:firstRow=\"0\"")), Some(0));

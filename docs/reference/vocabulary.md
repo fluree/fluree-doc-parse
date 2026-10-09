@@ -28,12 +28,13 @@ dates. `xsd` types those dates, so a store compares them as times.
 
 | type | what it is |
 |---|---|
-| `doco:Document` | the root |
+| `doc:Document` | the root |
+| `doco:Title` | the title the document declares for itself, held as the root's header |
 | `doco:BodyMatter` | the body partition |
 | `doco:Section` | a minted node per heading, containing its subtree |
-| `doco:SectionTitle` | the heading itself |
+| `doco:SectionTitle` | the heading itself, held as its section's header |
 | `doco:Paragraph` | prose |
-| `doco:List` / `doco:ListItem` | lists |
+| `doco:List` / `doc:ListItem` | lists |
 | `doco:Table` | a table; contains its cells |
 | `doco:Figure` | [anchor](../integration/anchors.md) placeholders for escalated regions |
 | `doc:TableCell` | one cell of a table |
@@ -42,7 +43,10 @@ dates. `xsd` types those dates, so a store compares them as times.
 | `doc:Mailbox` | a sender or recipient, one per address in the document |
 | `doc:Signature` | a message's signature; contains its elements |
 
-That is the complete set — fourteen types, and no others are emitted. Notably
+That is the complete set — fifteen types, and no others are emitted.
+`doc:Document` and `doc:ListItem` are in the Fluree namespace because DoCO
+defines neither: it roots a document in a bibliographic class such as
+`fabio:JournalArticle`, and gives a list no item class. Notably
 **`doco:Caption` and `doco:FrontMatter` are not produced.** DoCO defines both
 and an earlier design assigned them, but caption classification measured
 −0.0004 against the benchmark twice (its ground truth blesses prominent
@@ -72,15 +76,15 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:bbox` | PDF elements | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | all | [which signal classified it](../concepts/provenance.md) |
 | `doc:sourceDocument` | all but table cells, with `--doc-iri` | the document IRI to retract by |
-| `doc:sha256` | `doco:Document` | the input's bytes as lowercase hex SHA-256 |
-| `doc:sourceName` | `doco:Document` | what the caller calls the input: its file name, or `--source-name` |
-| `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
-| `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
-| `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
-| `doc:attachments` | `doco:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
-| `dcterms:title` | `doco:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
-| `dcterms:creator` | `doco:Document` | who made it, as the file names them: `/Author`, `dc:creator`, `<meta name="author">`, an email's sender |
-| `dcterms:created` / `dcterms:modified` | `doco:Document` | `xsd:dateTime` (or `xsd:date`): when it was made and last saved, or an email sent |
+| `doc:sha256` | `doc:Document` | the input's bytes as lowercase hex SHA-256 |
+| `doc:sourceName` | `doc:Document` | what the caller calls the input: its file name, or `--source-name` |
+| `doc:pages` | `doc:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
+| `doc:unreadPages` | `doc:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
+| `doc:runningText` | `doc:Document` | JSON literal: the header/footer text stripped from the body |
+| `doc:attachments` | `doc:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
+| `dcterms:title` | `doc:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
+| `dcterms:creator` | `doc:Document` | who made it, as the file names them: `/Author`, `dc:creator`, `<meta name="author">`, an email's sender |
+| `dcterms:created` / `dcterms:modified` | `doc:Document` | `xsd:dateTime` (or `xsd:date`): when it was made and last saved, or an email sent |
 
 **Transcript turns**
 
@@ -95,6 +99,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | property | on | value |
 |---|---|---|
 | `po:contains` | `Document`, `BodyMatter`, `Section`, `Table` | children (IRI-coerced) |
+| `po:containsAsHeader` | `doc:Document`, `doco:Section` | the `doco:Title` or `doco:SectionTitle` heading it, also in `po:contains` (IRI-coerced) |
 | `doc:sectionLevel` | `doco:Section` | heading depth, 1–6 |
 | `doc:figure` | `doco:Figure` | shared id for fragments of one drawing |
 | `doc:link` | any text-bearing element | its hyperlinks (IRI-coerced) |

@@ -42,7 +42,9 @@ def chunks(path, max_chars=1500):
         return chunk
 
     for el in elements(path):
-        if el["type"] == "doco:SectionTitle":
+        # A document's own title (`doco:Title`) heads it like a top-level
+        # heading.
+        if el["type"] in ("doco:Title", "doco:SectionTitle"):
             out = flush()
             if out:
                 yield out

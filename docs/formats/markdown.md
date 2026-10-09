@@ -12,6 +12,7 @@ read without tooling, and the one an LLM consumes best.
 
 | element | Markdown |
 |---|---|
+| `doco:Title` | `#` |
 | `doco:SectionTitle` | `#` … `######`, from `level` |
 | `doco:Paragraph` | a paragraph, blank-line separated |
 | a [transcript](../inputs/transcripts.md) turn | `**Ada Park** (04:32): words`, the speaker in bold and the turn's start time |
