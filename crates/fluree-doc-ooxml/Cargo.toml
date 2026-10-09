@@ -1,13 +1,11 @@
 [package]
-name = "fluree-doc-xlsx"
+name = "fluree-doc-ooxml"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "The Office Open XML package layer shared by the DOCX, PPTX and XLSX readers: parts, relationships and core properties"
 
 [dependencies]
 fluree-doc-model.workspace = true
 quick-xml = "0.36"
-fluree-doc-ooxml.workspace = true
-
-[dev-dependencies]
 zip = { version = "2", default-features = false, features = ["deflate"] }

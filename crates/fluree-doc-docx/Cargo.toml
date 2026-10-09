@@ -8,4 +8,4 @@ description = "DOCX (OOXML) to Fluree document elements (DoCO-typed)"
 [dependencies]
 fluree-doc-model.workspace = true
 quick-xml = "0.36"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+fluree-doc-ooxml.workspace = true

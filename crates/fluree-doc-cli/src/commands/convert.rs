@@ -259,19 +259,22 @@ fn convert_path(
                 declared(fluree_doc_html::info(&text)),
             )
         }
-        Some(SourceKind::Docx) => (
-            fluree_doc_docx::parse(&data).map_err(|e| e.to_string())?,
-            declared(fluree_doc_docx::info(&data)),
-        ),
-        Some(SourceKind::Pptx) => (
-            fluree_doc_pptx::parse(&data).map_err(|e| e.to_string())?,
-            declared(fluree_doc_pptx::info(&data)),
-        ),
+        Some(SourceKind::Docx) => {
+            let (elements, info) =
+                fluree_doc_docx::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        Some(SourceKind::Pptx) => {
+            let (elements, info) =
+                fluree_doc_pptx::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
         // A workbook: each sheet is a page, its islands of cells are tables.
-        Some(SourceKind::Xlsx) => (
-            fluree_doc_xlsx::parse(&data).map_err(|e| e.to_string())?,
-            declared(fluree_doc_xlsx::info(&data)),
-        ),
+        Some(SourceKind::Xlsx) => {
+            let (elements, info) =
+                fluree_doc_xlsx::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
         _ if fluree_doc_pdf::image::Format::sniff(&data).is_some() => {
             return convert_image(data, &src, cfg, args, quiet);
         }

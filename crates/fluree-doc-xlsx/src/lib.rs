@@ -34,10 +34,10 @@
 //! wanting the address has the table's row and column.
 
 use fluree_doc_model::{Datum, DocumentInfo, Element};
+use fluree_doc_ooxml::{attr, local, Package};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::io::Read;
 
 #[derive(Debug)]
 pub enum XlsxError {
@@ -51,7 +51,7 @@ impl std::fmt::Display for XlsxError {
         match self {
             Self::Zip(e) => write!(f, "not a readable .xlsx: {e}"),
             Self::Xml(e) => write!(f, "malformed workbook XML: {e}"),
-            Self::NoWorkbook => write!(f, "archive has no xl/workbook.xml"),
+            Self::NoWorkbook => write!(f, "package has no workbook part"),
         }
     }
 }
@@ -60,37 +60,47 @@ impl std::error::Error for XlsxError {}
 
 /// Parse a `.xlsx` file's bytes into elements, in sheet order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, XlsxError> {
-    let cursor = std::io::Cursor::new(bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| XlsxError::Zip(e.to_string()))?;
-    let read = |zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, name: &str| -> Option<String> {
-        let mut s = String::new();
-        zip.by_name(name).ok()?.read_to_string(&mut s).ok()?;
-        Some(s)
+    parse_with_info(bytes).map(|(elements, _)| elements)
+}
+
+/// [`parse`], with what the file declares about itself in its core
+/// properties, read from the one opening of the package.
+///
+/// The workbook is the package's main part, and its sheets, shared strings
+/// and styles are the parts it relates to as such; `xl/` is where a package
+/// that does not say keeps them.
+pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), XlsxError> {
+    let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
+    let main = pkg.main_part("xl/workbook.xml");
+    let workbook = pkg.read(&main).ok_or(XlsxError::NoWorkbook)?;
+    let rels = pkg.relationships(&main);
+    let part = |name: &str, fallback: &str| {
+        rels.iter()
+            .find(|r| r.is(name) && !r.external)
+            .map_or_else(|| fallback.to_string(), |r| r.target.clone())
     };
-    let workbook = read(&mut zip, "xl/workbook.xml").ok_or(XlsxError::NoWorkbook)?;
-    let rels = read(&mut zip, "xl/_rels/workbook.xml.rels").unwrap_or_default();
-    let shared = read(&mut zip, "xl/sharedStrings.xml")
+    let (shared, styles) = (
+        part("sharedStrings", "xl/sharedStrings.xml"),
+        part("styles", "xl/styles.xml"),
+    );
+    let shared = pkg
+        .read(&shared)
         .map(|x| parse_shared_strings(&x))
         .transpose()?
         .unwrap_or_default();
-    let styles = read(&mut zip, "xl/styles.xml")
+    let styles = pkg
+        .read(&styles)
         .map(|x| parse_styles(&x))
         .transpose()?
         .unwrap_or_default();
     let (sheets, date1904) = parse_workbook_xml(&workbook)?;
-    let targets = parse_rels(&rels)?;
 
     let mut out = Vec::new();
     for (page, sheet) in sheets.iter().enumerate() {
-        let Some(target) = targets.get(&sheet.rid) else {
+        let Some(target) = rels.iter().find(|r| r.id == sheet.rid && !r.external) else {
             continue;
         };
-        let path = if let Some(p) = target.strip_prefix('/') {
-            p.to_string()
-        } else {
-            format!("xl/{target}")
-        };
-        let Some(xml) = read(&mut zip, &path) else {
+        let Some(xml) = pkg.read(&target.target) else {
             continue;
         };
         let ctx = Context {
@@ -103,27 +113,14 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, XlsxError> {
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok(out)
+    Ok((out, pkg.info()))
 }
 
-/// What the file declares about itself in its core properties
-/// (`docProps/core.xml`): title, author, and when it was made and last
-/// saved. Empty where the part is missing or the file is not a package.
+/// What the file declares about itself in its core properties: title,
+/// author, and when it was made and last saved. Empty where there are none
+/// or the file is not a package.
 pub fn info(bytes: &[u8]) -> DocumentInfo {
-    let mut xml = String::new();
-    let read = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .ok()
-        .and_then(|mut zip| {
-            zip.by_name("docProps/core.xml")
-                .ok()?
-                .read_to_string(&mut xml)
-                .ok()
-        });
-    if read.is_some() {
-        DocumentInfo::from_core_properties(&xml)
-    } else {
-        DocumentInfo::default()
-    }
+    fluree_doc_ooxml::info(bytes)
 }
 
 /// What a sheet needs from the rest of the package.
@@ -165,29 +162,6 @@ fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
         buf.clear();
     }
     Ok((sheets, date1904))
-}
-
-/// Relationship id → target path, relative to `xl/`.
-fn parse_rels(xml: &str) -> Result<HashMap<String, String>, XlsxError> {
-    let mut r = Reader::from_str(xml);
-    let mut buf = Vec::new();
-    let mut out = HashMap::new();
-    loop {
-        match r.read_event_into(&mut buf) {
-            Err(e) => return Err(XlsxError::Xml(e.to_string())),
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) | Ok(Event::Empty(e))
-                if local(e.name().as_ref()) == "Relationship" =>
-            {
-                if let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) {
-                    out.insert(id, target);
-                }
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(out)
 }
 
 /// The shared string table, one entry per `<si>`, rich-text runs joined and
@@ -1647,18 +1621,6 @@ fn header_rows(
     n
 }
 
-fn local(qname: &[u8]) -> &str {
-    let s = std::str::from_utf8(qname).unwrap_or("");
-    s.rsplit(':').next().unwrap_or(s)
-}
-
-fn attr(e: &quick_xml::events::BytesStart<'_>, want: &str) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        (local(a.key.as_ref()) == want)
-            .then(|| String::from_utf8_lossy(a.value.as_ref()).to_string())
-    })
-}
-
 fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Element {
     Element {
         id: String::new(),
@@ -2648,6 +2610,13 @@ mod tests {
             put(&format!("xl/worksheets/sheet{}.xml", sheets.len() - i), xml);
         }
         zw.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_sheet_is_named_as_the_workbook_names_it() {
+        // An attribute escapes its `&`; the sheet is still `R&D`.
+        let bytes = package(&[("R&amp;D", &sheet(&[text("A1", 0, "Budget")], ""))]);
+        assert_eq!(parse(&bytes).unwrap()[0].text, "R&D");
     }
 
     #[test]

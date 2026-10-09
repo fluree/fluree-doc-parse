@@ -16,10 +16,10 @@
 //!   structure is not a hypothesis.
 
 use fluree_doc_model::{DocumentInfo, Element};
+use fluree_doc_ooxml::{attr, local, Package};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
 
 #[derive(Debug)]
 pub enum DocxError {
@@ -33,7 +33,7 @@ impl std::fmt::Display for DocxError {
         match self {
             Self::Zip(e) => write!(f, "not a readable .docx: {e}"),
             Self::Xml(e) => write!(f, "malformed document.xml: {e}"),
-            Self::NoDocument => write!(f, "archive has no word/document.xml"),
+            Self::NoDocument => write!(f, "package has no main document part"),
         }
     }
 }
@@ -42,25 +42,29 @@ impl std::error::Error for DocxError {}
 
 /// Parse a `.docx` file's bytes into document elements in reading order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
-    let cursor = std::io::Cursor::new(bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| DocxError::Zip(e.to_string()))?;
-    let mut xml = String::new();
-    zip.by_name("word/document.xml")
-        .map_err(|_| DocxError::NoDocument)?
-        .read_to_string(&mut xml)
-        .map_err(|e| DocxError::Xml(e.to_string()))?;
-    // Styles only refine what a table's first row is; a package without
-    // them, or with ones that do not parse, still reads.
-    let mut styles = String::new();
-    let read = zip
-        .by_name("word/styles.xml")
-        .is_ok_and(|mut f| f.read_to_string(&mut styles).is_ok());
-    let (header_styles, title_styles) = if read {
-        (header_row_styles(&styles), title_styles(&styles))
-    } else {
-        (HashSet::new(), HashSet::new())
+    parse_with_info(bytes).map(|(elements, _)| elements)
+}
+
+/// [`parse`], with what the file declares about itself in its core
+/// properties, read from the one opening of the package.
+///
+/// The document part is the one the package names as its main part, and
+/// its styles the part the document relates to as such; `word/document.xml`
+/// and `word/styles.xml` are where a package that does not say keeps them.
+pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), DocxError> {
+    let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
+    let main = pkg.main_part("word/document.xml");
+    let xml = pkg.read(&main).ok_or(DocxError::NoDocument)?;
+    // Styles refine what a table's first row is and which paragraphs are
+    // the title; a package without them, or with ones that do not parse,
+    // still reads.
+    let styles = pkg.related(&main, "styles", "word/styles.xml");
+    let (header_styles, title_styles) = match pkg.read(&styles) {
+        Some(styles) => (header_row_styles(&styles), title_styles(&styles)),
+        None => (HashSet::new(), HashSet::new()),
     };
-    parse_with_styles(&xml, &header_styles, &title_styles)
+    let elements = parse_with_styles(&xml, &header_styles, &title_styles)?;
+    Ok((elements, pkg.info()))
 }
 
 /// The paragraph styles that are Word's built-in Title.
@@ -232,24 +236,11 @@ struct Para {
     numbered: bool,
 }
 
-/// What the file declares about itself in its core properties
-/// (`docProps/core.xml`): title, author, and when it was made and last
-/// saved. Empty where the part is missing or the file is not a package.
+/// What the file declares about itself in its core properties: title,
+/// author, and when it was made and last saved. Empty where there are none
+/// or the file is not a package.
 pub fn info(bytes: &[u8]) -> DocumentInfo {
-    let mut xml = String::new();
-    let read = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .ok()
-        .and_then(|mut zip| {
-            zip.by_name("docProps/core.xml")
-                .ok()?
-                .read_to_string(&mut xml)
-                .ok()
-        });
-    if read.is_some() {
-        DocumentInfo::from_core_properties(&xml)
-    } else {
-        DocumentInfo::default()
-    }
+    fluree_doc_ooxml::info(bytes)
 }
 
 pub fn parse_document_xml(xml: &str) -> Result<Vec<Element>, DocxError> {
@@ -405,18 +396,6 @@ fn parse_with_styles(
         e.id = format!("elem-{:05}", i + 1);
     }
     Ok(out)
-}
-
-fn local(qname: &[u8]) -> &str {
-    let s = std::str::from_utf8(qname).unwrap_or("");
-    s.rsplit(':').next().unwrap_or(s)
-}
-
-fn attr(e: &quick_xml::events::BytesStart<'_>, want: &str) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        (local(a.key.as_ref()) == want)
-            .then(|| String::from_utf8_lossy(a.value.as_ref()).to_string())
-    })
 }
 
 fn push(para: &mut Para, cell: &mut Cell, in_cell: bool, s: &str) {

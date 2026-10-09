@@ -521,8 +521,8 @@ name = "fluree-doc-docx"
 version = "0.1.0"
 dependencies = [
  "fluree-doc-model",
+ "fluree-doc-ooxml",
  "quick-xml",
- "zip",
 ]
 
 [[package]]
@@ -557,10 +557,18 @@ dependencies = [
 name = "fluree-doc-model"
 version = "0.1.0"
 dependencies = [
- "quick-xml",
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "fluree-doc-ooxml"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "quick-xml",
+ "zip",
 ]
 
 [[package]]
@@ -583,6 +591,7 @@ name = "fluree-doc-pptx"
 version = "0.1.0"
 dependencies = [
  "fluree-doc-model",
+ "fluree-doc-ooxml",
  "quick-xml",
  "zip",
 ]
@@ -599,6 +608,7 @@ name = "fluree-doc-xlsx"
 version = "0.1.0"
 dependencies = [
  "fluree-doc-model",
+ "fluree-doc-ooxml",
  "quick-xml",
  "zip",
 ]

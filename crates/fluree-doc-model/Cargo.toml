@@ -9,4 +9,3 @@ description = "Document element model and DoCO/Markdown/XHTML emitters, independ
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-quick-xml = "0.36"

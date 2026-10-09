@@ -6,9 +6,9 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-pdf      PDF: extraction, layout, routing, arbitration
       ├── fluree-doc-markdown  Markdown reader
       ├── fluree-doc-html      HTML reader
-      ├── fluree-doc-docx      DOCX reader
-      ├── fluree-doc-pptx      PPTX reader
-      ├── fluree-doc-xlsx      XLSX reader
+      ├── fluree-doc-docx      DOCX reader ─┐
+      ├── fluree-doc-pptx      PPTX reader ─┼── fluree-doc-ooxml  the package layer they share
+      ├── fluree-doc-xlsx      XLSX reader ─┘
       ├── fluree-doc-transcript  WebVTT and SubRip reader
       └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
                 │
@@ -16,8 +16,10 @@ fluree-doc-cli          the fdoc binary
 ```
 
 Every reader depends on `fluree-doc-model`, and on no other reader but one:
-the email reader reads HTML bodies with the HTML reader. That is the point of
-the split: **a Markdown or DOCX consumer never compiles a PDF engine.**
+the email reader reads HTML bodies with the HTML reader. The three Office
+readers share `fluree-doc-ooxml`, the package layer under all three formats.
+That is the point of the split: **a Markdown or DOCX consumer never compiles
+a PDF engine.**
 
 ## The crates
 
@@ -26,9 +28,10 @@ the split: **a Markdown or DOCX consumer never compiles a PDF engine.**
 | `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
-| `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>` |
-| `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts |
-| `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>` |
+| `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them |
+| `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening |
+| `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
+| `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |

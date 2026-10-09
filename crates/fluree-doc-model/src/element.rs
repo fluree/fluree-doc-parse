@@ -314,72 +314,6 @@ impl DocumentInfo {
             && self.created.is_none()
             && self.modified.is_none()
     }
-
-    /// What an Office file declares in its core properties part
-    /// (`docProps/core.xml` in a `.docx`, `.pptx` or `.xlsx`): `dc:title`,
-    /// `dc:creator`, and `dcterms:created` / `dcterms:modified`.
-    ///
-    /// Each is a child of the root, read by local name, so any prefix a
-    /// writer chose works, and its text is all of its text: CDATA included,
-    /// comments left out. A date that is not a real one is left out rather
-    /// than passed on as one. A part that stops parsing keeps what was read
-    /// before it.
-    pub fn from_core_properties(xml: &str) -> Self {
-        use quick_xml::events::Event;
-        let mut info = DocumentInfo::default();
-        let mut r = quick_xml::Reader::from_str(xml);
-        let mut buf = Vec::new();
-        let mut depth = 0usize;
-        // The root's child being read, by local name, and its text so far.
-        let mut field: Option<(String, String)> = None;
-        loop {
-            match r.read_event_into(&mut buf) {
-                Ok(Event::Start(e)) => {
-                    depth += 1;
-                    if depth == 2 {
-                        let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                        field = Some((name, String::new()));
-                    }
-                }
-                Ok(Event::Text(t)) => {
-                    if let Some((_, text)) = field.as_mut() {
-                        text.push_str(&t.unescape().unwrap_or_default());
-                    }
-                }
-                Ok(Event::CData(c)) => {
-                    if let Some((_, text)) = field.as_mut() {
-                        text.push_str(&String::from_utf8_lossy(&c));
-                    }
-                }
-                Ok(Event::End(_)) => {
-                    if depth == 2 {
-                        if let Some((name, text)) = field.take() {
-                            info.set_core_property(&name, &text);
-                        }
-                    }
-                    depth = depth.saturating_sub(1);
-                }
-                Ok(Event::Eof) | Err(_) => break,
-                _ => {}
-            }
-            buf.clear();
-        }
-        info
-    }
-
-    fn set_core_property(&mut self, name: &str, text: &str) {
-        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if text.is_empty() {
-            return;
-        }
-        match name {
-            "title" => self.title = Some(text),
-            "creator" => self.creators.push(text),
-            "created" => self.created = xsd_date_time(&text),
-            "modified" => self.modified = xsd_date_time(&text),
-            _ => {}
-        }
-    }
 }
 
 /// A W3C date, time or date-time as XML Schema writes it, with the XSD
@@ -547,39 +481,6 @@ impl Notes {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn core_properties_are_read_by_local_name() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<dc:title>Q3 &amp; Q4 Plan &#8212; Draft</dc:title><dc:subject/><dc:creator>Ada Park</dc:creator>
-<cp:lastModifiedBy>Kai Moreno</cp:lastModifiedBy>
-<dcterms:created xsi:type="dcterms:W3CDTF">2026-07-17T13:48:00Z</dcterms:created>
-<dcterms:modified xsi:type="dcterms:W3CDTF">sometime</dcterms:modified>
-</cp:coreProperties>"#;
-        let info = DocumentInfo::from_core_properties(xml);
-        assert_eq!(info.title.as_deref(), Some("Q3 & Q4 Plan \u{2014} Draft"));
-        assert_eq!(info.creators, ["Ada Park"]);
-        assert_eq!(info.created.as_deref(), Some("2026-07-17T13:48:00Z"));
-        assert_eq!(info.modified, None, "not a date, so not passed on as one");
-        assert!(DocumentInfo::from_core_properties("<cp:coreProperties/>").is_empty());
-    }
-
-    #[test]
-    fn a_core_property_is_all_of_its_text() {
-        let info = DocumentInfo::from_core_properties(
-            "<cp:coreProperties xmlns:cp=\"c\" xmlns:dc=\"d\">\
-             <dc:title><![CDATA[R&D <draft>]]></dc:title>\
-             <dc:creator>Ada<!-- the lead --> Park</dc:creator></cp:coreProperties>",
-        );
-        assert_eq!(info.title.as_deref(), Some("R&D <draft>"));
-        assert_eq!(info.creators, ["Ada Park"]);
-        // A part that stops parsing keeps what came before.
-        let cut = DocumentInfo::from_core_properties(
-            "<cp:coreProperties><dc:title>Kept</dc:title><dc:creator>Ada",
-        );
-        assert_eq!(cut.title.as_deref(), Some("Kept"));
-    }
 
     #[test]
     fn a_date_is_passed_on_only_as_a_real_one() {

@@ -27,9 +27,9 @@
 //! queryable like any other table's.
 
 use fluree_doc_model::{DocumentInfo, Element};
+use fluree_doc_ooxml::{attr, local, Package};
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::io::Read;
 
 #[derive(Debug)]
 pub enum PptxError {
@@ -43,7 +43,7 @@ impl std::fmt::Display for PptxError {
         match self {
             Self::Zip(e) => write!(f, "not a readable .pptx: {e}"),
             Self::Xml(e) => write!(f, "malformed slide XML: {e}"),
-            Self::NoSlides => write!(f, "archive has no ppt/slides/slideN.xml"),
+            Self::NoSlides => write!(f, "package has no slides"),
         }
     }
 }
@@ -52,74 +52,59 @@ impl std::error::Error for PptxError {}
 
 /// Parse a `.pptx` file's bytes into elements, in slide order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
-    let cursor = std::io::Cursor::new(bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| PptxError::Zip(e.to_string()))?;
+    parse_with_info(bytes).map(|(elements, _)| elements)
+}
 
-    let slides = slide_parts(&mut zip);
+/// [`parse`], with what the file declares about itself in its core
+/// properties, read from the one opening of the package.
+pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), PptxError> {
+    let mut pkg = Package::open(bytes).map_err(PptxError::Zip)?;
+    let slides = slide_parts(&mut pkg);
     if slides.is_empty() {
         return Err(PptxError::NoSlides);
     }
 
     let mut out = Vec::new();
     for (idx, name) in slides.iter().enumerate() {
-        let mut xml = String::new();
-        if zip
-            .by_name(name)
-            .map_err(|e| PptxError::Zip(e.to_string()))?
-            .read_to_string(&mut xml)
-            .is_err()
-        {
+        let Some(xml) = pkg.read(name) else {
             continue;
-        }
+        };
         // Charts live in their own parts; the slide only names a
         // relationship id, so resolve those before walking it.
-        let mut charts: Vec<(String, String)> = Vec::new();
-        let mut rels = String::new();
-        if let Ok(mut f) = zip.by_name(&rels_part(name)) {
-            let _ = f.read_to_string(&mut rels);
-        }
-        for (id, part) in chart_parts_for(&rels, name) {
-            let mut cx = String::new();
-            if let Ok(mut f) = zip.by_name(&part) {
-                if f.read_to_string(&mut cx).is_ok() {
-                    charts.push((id, cx));
-                }
-            }
-        }
+        let charts: Vec<(String, String)> = pkg
+            .relationships(name)
+            .into_iter()
+            .filter(|r| r.is("chart") && !r.external)
+            .filter_map(|r| Some((r.id, pkg.read(&r.target)?)))
+            .collect();
         out.extend(parse_slide_with_charts(&xml, idx, &charts)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok(out)
+    Ok((out, pkg.info()))
 }
 
 /// The deck's slide parts, in its order.
 ///
-/// `ppt/presentation.xml` lists the slides as relationship ids
+/// The presentation part lists the slides as relationship ids
 /// (`<p:sldId r:id="rId2"/>`), and its relationships name each one's part.
 /// A package without that list, or whose list names no part it holds, is
 /// read in the numeric order of its slide parts' names, where `slide10`
 /// comes after `slide2`.
-fn slide_parts(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>) -> Vec<String> {
-    let mut read = |name: &str| -> Option<String> {
-        let mut s = String::new();
-        zip.by_name(name).ok()?.read_to_string(&mut s).ok()?;
-        Some(s)
-    };
-    let listed = read("ppt/presentation.xml")
-        .zip(read("ppt/_rels/presentation.xml.rels"))
-        .map(|(presentation, rels)| {
-            let targets = relationships(&rels, "ppt/presentation.xml");
-            slide_ids(&presentation)
-                .into_iter()
-                .filter_map(|id| targets.iter().find(|(i, _, _)| *i == id))
-                .map(|(_, _, part)| part.clone())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
-    let listed: Vec<String> = listed.into_iter().filter(|p| names.contains(p)).collect();
+fn slide_parts(pkg: &mut Package<'_>) -> Vec<String> {
+    let presentation = pkg.main_part("ppt/presentation.xml");
+    let rels = pkg.relationships(&presentation);
+    let names = pkg.part_names();
+    let listed: Vec<String> = pkg
+        .read(&presentation)
+        .map(|xml| slide_ids(&xml))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|id| rels.iter().find(|r| r.id == id && !r.external))
+        .map(|r| r.target.clone())
+        .filter(|p| names.contains(p))
+        .collect();
     if !listed.is_empty() {
         return listed;
     }
@@ -159,71 +144,6 @@ fn slide_ids(xml: &str) -> Vec<String> {
     out
 }
 
-/// A part's relationships: `dir/name.xml` → `dir/_rels/name.xml.rels`.
-fn rels_part(part: &str) -> String {
-    match part.rsplit_once('/') {
-        Some((dir, name)) => format!("{dir}/_rels/{name}.rels"),
-        None => format!("_rels/{part}.rels"),
-    }
-}
-
-/// A part's relationships as (id, type, archive path), each target resolved
-/// against the directory of `source`, the part they belong to.
-fn relationships(rels_xml: &str, source: &str) -> Vec<(String, String, String)> {
-    let mut out = Vec::new();
-    let mut r = Reader::from_str(rels_xml);
-    let mut buf = Vec::new();
-    let dir = source.rsplit_once('/').map_or("", |(d, _)| d);
-    while let Ok(ev) = r.read_event_into(&mut buf) {
-        match ev {
-            Event::Eof => break,
-            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == "Relationship" => {
-                // An external target is a URL, not a part.
-                if attr(&e, "TargetMode").as_deref() == Some("External") {
-                    continue;
-                }
-                if let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) {
-                    let ty = attr(&e, "Type").unwrap_or_default();
-                    out.push((id, ty, resolve_part(dir, &target)));
-                }
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-    out
-}
-
-/// A relationship target as an archive path: absolute from the package
-/// root when it starts with `/`, otherwise relative to `dir`, with `.` and
-/// `..` segments applied.
-fn resolve_part(dir: &str, target: &str) -> String {
-    let mut parts: Vec<&str> = match target.strip_prefix('/') {
-        Some(_) => Vec::new(),
-        None => dir.split('/').filter(|s| !s.is_empty()).collect(),
-    };
-    for seg in target.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            s => parts.push(s),
-        }
-    }
-    parts.join("/")
-}
-
-/// Chart parts a slide references, in relationship order, resolved against
-/// the slide's own directory.
-fn chart_parts_for(rels_xml: &str, slide: &str) -> Vec<(String, String)> {
-    relationships(rels_xml, slide)
-        .into_iter()
-        .filter(|(_, ty, _)| ty.ends_with("/chart"))
-        .map(|(id, _, part)| (id, part))
-        .collect()
-}
-
 /// A named series and the values it plots.
 pub type Series = (String, Vec<String>);
 
@@ -240,24 +160,11 @@ struct Chart {
     series: Vec<Series>,
 }
 
-/// What the file declares about itself in its core properties
-/// (`docProps/core.xml`): title, author, and when it was made and last
-/// saved. Empty where the part is missing or the file is not a package.
+/// What the file declares about itself in its core properties: title,
+/// author, and when it was made and last saved. Empty where there are none
+/// or the file is not a package.
 pub fn info(bytes: &[u8]) -> DocumentInfo {
-    let mut xml = String::new();
-    let read = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .ok()
-        .and_then(|mut zip| {
-            zip.by_name("docProps/core.xml")
-                .ok()?
-                .read_to_string(&mut xml)
-                .ok()
-        });
-    if read.is_some() {
-        DocumentInfo::from_core_properties(&xml)
-    } else {
-        DocumentInfo::default()
-    }
+    fluree_doc_ooxml::info(bytes)
 }
 
 /// Most points a chart's cache is read to: a `ptCount` or an `idx` beyond
@@ -594,18 +501,6 @@ pub fn parse_slide_with_charts(
     Ok(out)
 }
 
-fn local(q: &[u8]) -> &str {
-    let s = std::str::from_utf8(q).unwrap_or("");
-    s.rsplit(':').next().unwrap_or(s)
-}
-
-fn attr(e: &quick_xml::events::BytesStart<'_>, want: &str) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
-        (local(a.key.as_ref()) == want)
-            .then(|| String::from_utf8_lossy(a.value.as_ref()).to_string())
-    })
-}
-
 fn push(text: &mut String, cell: &mut Cell, in_cell: bool, s: &str) {
     if in_cell {
         cell.text.push_str(s);
@@ -880,33 +775,6 @@ mod tests {
     #[test]
     fn a_part_with_no_series_is_not_a_chart() {
         assert!(parse_chart_xml("<c:chartSpace/>").is_none());
-    }
-
-    #[test]
-    fn chart_relationships_resolve_to_archive_paths() {
-        let rels = "<Relationships><Relationship Id=\"rId1\" \
-            Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" \
-            Target=\"../slideLayouts/slideLayout6.xml\"/>\
-            <Relationship Id=\"rId2\" \
-            Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart\" \
-            Target=\"../charts/chart1.xml\"/></Relationships>";
-        let parts = chart_parts_for(rels, "ppt/slides/slide1.xml");
-        assert_eq!(
-            parts,
-            [("rId2".to_string(), "ppt/charts/chart1.xml".to_string())]
-        );
-        assert_eq!(
-            resolve_part("ppt", "/ppt/slides/slide3.xml"),
-            "ppt/slides/slide3.xml"
-        );
-        assert_eq!(
-            resolve_part("ppt", "./slides/slide3.xml"),
-            "ppt/slides/slide3.xml"
-        );
-        assert_eq!(
-            rels_part("ppt/slides/slide3.xml"),
-            "ppt/slides/_rels/slide3.xml.rels"
-        );
     }
 
     #[test]
