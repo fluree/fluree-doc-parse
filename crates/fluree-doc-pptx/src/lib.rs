@@ -260,9 +260,20 @@ pub fn info(bytes: &[u8]) -> DocumentInfo {
     }
 }
 
+/// Most points a chart's cache is read to: a `ptCount` or an `idx` beyond
+/// it is a malformed part, not a chart anyone plotted.
+const MAX_POINTS: usize = 100_000;
+
 /// Read a chart part. Values come from the cached `c:strCache`/`c:numCache`
 /// blocks, which hold what the chart actually plots — the `c:f` formula
 /// beside them points into a workbook that may not travel with the deck.
+///
+/// A cache states how many points it has (`c:ptCount`) and each point's
+/// place (`c:pt idx`), and leaves out the ones with no value: a bar not
+/// drawn is a point not written. So each value goes to its index, and a
+/// series' gaps stay gaps instead of moving its later values onto earlier
+/// categories. Of a multi-level category axis, the first level is read: the
+/// labels next to the plot, one per point.
 pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
@@ -279,7 +290,12 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
     let mut slot = Slot::None;
     let mut in_title = false;
     let mut in_v = false;
-    let mut pending: Vec<String> = Vec::new();
+    // The cache being read: its declared size, the point being read, how
+    // many category levels have opened, and its values by index.
+    let mut count = 0usize;
+    let mut point: Option<usize> = None;
+    let mut level = 0usize;
+    let mut pending: Vec<(usize, String)> = Vec::new();
     let mut series_name = String::new();
     let mut text = String::new();
     let mut depth_title = 0usize;
@@ -296,6 +312,14 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
                     pending.clear();
                     series_name.clear();
                 }
+                "ptCount" => {
+                    count = attr(&e, "val")
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0)
+                        .min(MAX_POINTS);
+                }
+                "pt" => point = attr(&e, "idx").and_then(|v| v.parse().ok()),
+                "lvl" => level += 1,
                 "tx" => slot = Slot::Name,
                 "cat" | "xVal" => slot = Slot::Cat,
                 "val" | "yVal" => slot = Slot::Val,
@@ -320,31 +344,42 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
                         } else {
                             match slot {
                                 Slot::Name => series_name = val.trim().to_string(),
-                                Slot::Cat | Slot::Val => pending.push(val.trim().to_string()),
-                                Slot::None => {}
+                                Slot::Cat | Slot::Val if level <= 1 => {
+                                    // A point with no index follows the
+                                    // one before it.
+                                    let at = point.take().unwrap_or_else(|| {
+                                        pending.last().map_or(0, |(i, _)| i + 1)
+                                    });
+                                    if at < MAX_POINTS {
+                                        pending.push((at, val.trim().to_string()));
+                                    }
+                                }
+                                Slot::Cat | Slot::Val | Slot::None => {}
                             }
                         }
                         in_v = false;
                     }
                 }
                 "title" => in_title = false,
+                "pt" => point = None,
                 "cat" | "xVal" => {
+                    let points = by_index(&mut pending, &mut count);
                     if chart.categories.is_empty() {
-                        chart.categories = std::mem::take(&mut pending);
-                    } else {
-                        pending.clear();
+                        chart.categories = points;
                     }
                     slot = Slot::None;
+                    level = 0;
                 }
                 "val" | "yVal" => {
-                    chart.series.push((
-                        std::mem::take(&mut series_name),
-                        std::mem::take(&mut pending),
-                    ));
+                    let points = by_index(&mut pending, &mut count);
+                    chart
+                        .series
+                        .push((std::mem::take(&mut series_name), points));
                     slot = Slot::None;
                 }
                 "tx" => {
                     pending.clear();
+                    count = 0;
                     slot = Slot::None;
                 }
                 _ => {}
@@ -354,6 +389,23 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
         buf.clear();
     }
     (!chart.series.is_empty()).then_some((chart.title, chart.categories, chart.series))
+}
+
+/// A cache's values laid out by index: as many as it declares or holds,
+/// blank where it wrote no point. Leaves the cache state empty for the next.
+fn by_index(points: &mut Vec<(usize, String)>, count: &mut usize) -> Vec<String> {
+    let n = points
+        .iter()
+        .map(|(i, _)| i + 1)
+        .max()
+        .unwrap_or(0)
+        .max(*count);
+    let mut out = vec![String::new(); n];
+    for (i, v) in points.drain(..) {
+        out[i] = v;
+    }
+    *count = 0;
+    out
 }
 
 /// A chart as a table: categories down the first column, one column per
@@ -855,6 +907,41 @@ mod tests {
             rels_part("ppt/slides/slide3.xml"),
             "ppt/slides/_rels/slide3.xml.rels"
         );
+    }
+
+    #[test]
+    fn a_chart_keeps_each_point_at_its_index() {
+        // B has no value: PowerPoint writes no point for it, and C's value
+        // must not move up to B.
+        let x = chart_xml(
+            "<c:ser><c:tx><c:v>Revenue</c:v></c:tx>\
+             <c:cat><c:strLit><c:ptCount val=\"3\"/><c:pt idx=\"0\"><c:v>A</c:v></c:pt>\
+             <c:pt idx=\"1\"><c:v>B</c:v></c:pt><c:pt idx=\"2\"><c:v>C</c:v></c:pt></c:strLit></c:cat>\
+             <c:val><c:numLit><c:ptCount val=\"3\"/><c:pt idx=\"0\"><c:v>10</c:v></c:pt>\
+             <c:pt idx=\"2\"><c:v>30</c:v></c:pt></c:numLit></c:val></c:ser>",
+        );
+        let (_, cats, series) = parse_chart_xml(&x).unwrap();
+        assert_eq!(cats, ["A", "B", "C"]);
+        assert_eq!(series[0].1, ["10", "", "30"]);
+        // A trailing point left out still has its row.
+        let x = chart_xml(
+            "<c:ser><c:cat><c:strLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>A</c:v></c:pt>\
+             <c:pt idx=\"1\"><c:v>B</c:v></c:pt></c:strLit></c:cat>\
+             <c:val><c:numLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser>",
+        );
+        assert_eq!(parse_chart_xml(&x).unwrap().2[0].1, ["5", ""]);
+    }
+
+    #[test]
+    fn a_multi_level_axis_reads_the_level_next_to_the_plot() {
+        let x = chart_xml(
+            "<c:ser><c:cat><c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val=\"2\"/>\
+             <c:lvl><c:pt idx=\"0\"><c:v>Q1</c:v></c:pt><c:pt idx=\"1\"><c:v>Q2</c:v></c:pt></c:lvl>\
+             <c:lvl><c:pt idx=\"0\"><c:v>2026</c:v></c:pt></c:lvl>\
+             </c:multiLvlStrCache></c:multiLvlStrRef></c:cat>\
+             <c:val><c:numLit><c:pt idx=\"0\"><c:v>1</c:v></c:pt><c:pt idx=\"1\"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>",
+        );
+        assert_eq!(parse_chart_xml(&x).unwrap().1, ["Q1", "Q2"]);
     }
 
     #[test]

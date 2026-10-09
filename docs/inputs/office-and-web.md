@@ -59,6 +59,10 @@ paragraphs with a bullet character or a non-zero outline level are list items.
 **Charts become tables.** Values come from the cached `c:strCache` /
 `c:numCache` blocks — what the chart actually plots — because the `c:f`
 formula beside them points into a workbook that may not travel with the deck.
+Each value goes to the category its point's index names: a cache leaves out a
+point with no value, and a gap stays a blank cell rather than moving the
+values after it onto earlier categories. Of a multi-level category axis, the
+level next to the plot is read.
 
 Returns `PptxError` for a malformed or non-archive file.
 
