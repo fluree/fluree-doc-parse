@@ -362,26 +362,9 @@ mod tests {
 
     fn element(kind: &str, text: &str, bbox: BBox) -> Element {
         Element {
-            id: String::new(),
-            kind: kind.into(),
-            page: 0,
             bbox: Some(bbox),
-            text: text.into(),
             level: (kind == "doco:SectionTitle").then_some(2),
-            cells: None,
-            header_rows: None,
-            sub_headers: None,
-            merged_down: None,
-            merged_left: None,
-            figure: None,
-            links: None,
-            turn: None,
-            message: None,
-            resumes: None,
-            signature: false,
-            datums: None,
-            provenance: "rust",
-            evidence: "font-size",
+            ..Element::new(kind, text, "rust", "font-size")
         }
     }
 

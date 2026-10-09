@@ -1103,31 +1103,14 @@ mod tests {
 
     fn el(kind: &str, text: &str, level: Option<usize>) -> Element {
         Element {
-            id: String::new(),
-            kind: kind.into(),
-            page: 0,
             bbox: Some(BBox {
                 x0: 10.0,
                 y0: 20.0,
                 x1: 110.0,
                 y1: 40.0,
             }),
-            text: text.into(),
             level,
-            cells: None,
-            header_rows: None,
-            sub_headers: None,
-            merged_down: None,
-            merged_left: None,
-            figure: None,
-            links: None,
-            turn: None,
-            message: None,
-            resumes: None,
-            signature: false,
-            datums: None,
-            provenance: "rust",
-            evidence: "layout",
+            ..Element::new(kind, text, "rust", "layout")
         }
     }
 

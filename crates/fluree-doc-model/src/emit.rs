@@ -512,26 +512,8 @@ mod tests {
 
     fn para(text: &str, links: Vec<Link>) -> Element {
         Element {
-            id: String::new(),
-            kind: "doco:Paragraph".into(),
-            page: 0,
-            bbox: None,
-            text: text.into(),
-            level: None,
-            cells: None,
-            header_rows: None,
-            sub_headers: None,
-            merged_down: None,
-            merged_left: None,
-            figure: None,
             links: (!links.is_empty()).then_some(links),
-            turn: None,
-            message: None,
-            resumes: None,
-            signature: false,
-            datums: None,
-            provenance: "rust",
-            evidence: "layout",
+            ..Element::new("doco:Paragraph", text, "rust", "layout")
         }
     }
 

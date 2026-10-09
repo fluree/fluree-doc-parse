@@ -1139,26 +1139,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 _ => scrubbed,
             };
             page_elements.push(Element {
-                id: String::new(),
-                kind: kind.into(),
                 page: pi,
                 bbox: Some(b.bbox),
-                text,
                 level,
-                cells: None,
-                header_rows: None,
-                sub_headers: None,
-                merged_down: None,
-                merged_left: None,
                 figure: figure_of,
-                links: None,
-                turn: None,
-                message: None,
-                resumes: None,
-                signature: false,
-                datums: None,
-                provenance: "rust",
-                evidence,
+                ..Element::new(kind, text, "rust", evidence)
             });
         }
         coalesce_heading_fragments(&mut page_elements);
@@ -1188,26 +1173,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .collect::<Vec<_>>()
                     .join("\n");
                 table_elements.push(Element {
-                    id: String::new(),
-                    kind: "doco:Paragraph".into(),
                     page: pi,
                     bbox: Some(g.bbox),
-                    text,
-                    level: None,
-                    cells: None,
-                    header_rows: None,
-                    sub_headers: None,
-                    merged_down: None,
-                    merged_left: None,
-                    figure: None,
-                    links: None,
-                    turn: None,
-                    message: None,
-                    resumes: None,
-                    signature: false,
-                    datums: None,
-                    provenance: "rust",
-                    evidence: "layout-demoted",
+                    ..Element::new("doco:Paragraph", text, "rust", "layout-demoted")
                 });
                 continue;
             }
@@ -1343,17 +1311,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .collect(),
             };
             tables += 1;
+            let text = rows
+                .iter()
+                .map(|r| r.join(" | "))
+                .collect::<Vec<_>>()
+                .join("\n");
             table_elements.push(Element {
-                id: String::new(),
-                kind: "doco:Table".into(),
                 page: pi,
                 bbox: Some(g.bbox),
-                text: rows
-                    .iter()
-                    .map(|r| r.join(" | "))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                level: None,
                 cells: Some(rows),
                 header_rows: Some(header_rows),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
@@ -1367,15 +1332,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .iter()
                     .any(|x| *x)
                     .then_some(merges.continues_left),
-                figure: None,
-                links: None,
-                turn: None,
-                message: None,
-                resumes: None,
-                signature: false,
-                datums: None,
-                provenance: "rust",
-                evidence: "rules",
+                ..Element::new("doco:Table", text, "rust", "rules")
             });
         }
         // Table-confidence anchors: a grid whose structure was *inferred* from
@@ -1412,26 +1369,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 bbox.y0 -= 0.01; // order the anchor just before its table
                 bbox.y1 = bbox.y0;
                 table_elements.push(Element {
-                    id: String::new(),
-                    kind: "doco:Figure".into(),
                     page: pi,
                     bbox: Some(bbox),
-                    text: format!("[[VLMTAB:p{pi}:t{ti}]]"),
-                    level: None,
-                    cells: None,
-                    header_rows: None,
-                    sub_headers: None,
-                    merged_down: None,
-                    merged_left: None,
-                    figure: None,
-                    links: None,
-                    turn: None,
-                    message: None,
-                    resumes: None,
-                    signature: false,
-                    datums: None,
-                    provenance: "rust",
-                    evidence: "table-confidence",
+                    ..Element::new(
+                        "doco:Figure",
+                        format!("[[VLMTAB:p{pi}:t{ti}]]"),
+                        "rust",
+                        "table-confidence",
+                    )
                 });
             }
         }
@@ -1442,26 +1387,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         if opts.emit_anchors && opts.insert_missing_tables {
             for (ni, b) in layout.missing_tables.iter().enumerate() {
                 table_elements.push(Element {
-                    id: String::new(),
-                    kind: "doco:Figure".into(),
                     page: pi,
                     bbox: Some(*b),
-                    text: format!("[[VLMNEW:p{pi}:n{ni}]]"),
-                    level: None,
-                    cells: None,
-                    header_rows: None,
-                    sub_headers: None,
-                    merged_down: None,
-                    merged_left: None,
-                    figure: None,
-                    links: None,
-                    turn: None,
-                    message: None,
-                    resumes: None,
-                    signature: false,
-                    datums: None,
-                    provenance: "rust",
-                    evidence: "table-missing",
+                    ..Element::new(
+                        "doco:Figure",
+                        format!("[[VLMNEW:p{pi}:n{ni}]]"),
+                        "rust",
+                        "table-missing",
+                    )
                 });
             }
         }
@@ -1475,26 +1408,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if let crate::route::Route::VlmRegions(regions) = &layout.route {
                 for (ri, b) in regions.iter().enumerate() {
                     table_elements.push(Element {
-                        id: String::new(),
-                        kind: "doco:Figure".into(),
                         page: pi,
                         bbox: Some(*b),
-                        text: format!("[[VLM:p{pi}:r{ri}]]"),
-                        level: None,
-                        cells: None,
-                        header_rows: None,
-                        sub_headers: None,
-                        merged_down: None,
-                        merged_left: None,
-                        figure: None,
-                        links: None,
-                        turn: None,
-                        message: None,
-                        resumes: None,
-                        signature: false,
-                        datums: None,
-                        provenance: "rust",
-                        evidence: "route",
+                        ..Element::new(
+                            "doco:Figure",
+                            format!("[[VLM:p{pi}:r{ri}]]"),
+                            "rust",
+                            "route",
+                        )
                     });
                 }
             }
@@ -1626,31 +1547,18 @@ mod tests {
 
     fn element(text: &str, x0: f64, y0: f64, x1: f64, y1: f64, table: bool) -> Element {
         Element {
-            id: String::new(),
-            kind: if table {
-                "doco:Table"
-            } else {
-                "doco:Paragraph"
-            }
-            .into(),
-            page: 0,
             bbox: Some(BBox { x0, y0, x1, y1 }),
-            text: text.into(),
-            level: None,
             cells: table.then(|| vec![vec![text.into()]]),
-            header_rows: None,
-            sub_headers: None,
-            merged_down: None,
-            merged_left: None,
-            figure: None,
-            links: None,
-            turn: None,
-            message: None,
-            resumes: None,
-            signature: false,
-            datums: None,
-            provenance: "rust",
-            evidence: if table { "rules" } else { "layout" },
+            ..Element::new(
+                if table {
+                    "doco:Table"
+                } else {
+                    "doco:Paragraph"
+                },
+                text,
+                "rust",
+                if table { "rules" } else { "layout" },
+            )
         }
     }
 

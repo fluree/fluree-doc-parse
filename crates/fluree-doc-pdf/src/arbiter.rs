@@ -569,7 +569,11 @@ fn replace_read_pages(
             });
         match text {
             Some(text) => out.push(Element {
-                id: String::new(),
+                page,
+                bbox: elements
+                    .iter()
+                    .find(|e| e.page == page)
+                    .and_then(|e| e.bbox),
                 // A whole-page VLM reading is a block of prose, so it is a
                 // text-bearing leaf like every other one this crate emits
                 // (`overlay.rs`, `link.rs`, `document.rs`). It was
@@ -579,28 +583,7 @@ fn replace_read_pages(
                 // text and never reads the node's own `nif:isString`, so an
                 // escalated page produced zero chunks and failed the run
                 // with "empty document body?" while carrying the full text.
-                kind: "doco:Paragraph".into(),
-                page,
-                bbox: elements
-                    .iter()
-                    .find(|e| e.page == page)
-                    .and_then(|e| e.bbox),
-                text,
-                level: None,
-                cells: None,
-                header_rows: None,
-                sub_headers: None,
-                merged_down: None,
-                merged_left: None,
-                figure: None,
-                links: None,
-                turn: None,
-                message: None,
-                resumes: None,
-                signature: false,
-                datums: None,
-                provenance: "vlm",
-                evidence: "page-tier",
+                ..Element::new("doco:Paragraph", text, "vlm", "page-tier")
             }),
             None => out.extend(elements.iter().filter(|e| e.page == page).cloned()),
         }
@@ -955,26 +938,8 @@ mod tests {
 
     fn on_page(page: usize, text: &str) -> Element {
         Element {
-            id: String::new(),
-            kind: "doco:Paragraph".into(),
             page,
-            bbox: None,
-            text: text.into(),
-            level: None,
-            cells: None,
-            header_rows: None,
-            sub_headers: None,
-            merged_down: None,
-            merged_left: None,
-            figure: None,
-            links: None,
-            turn: None,
-            message: None,
-            resumes: None,
-            signature: false,
-            datums: None,
-            provenance: "rust",
-            evidence: "layout",
+            ..Element::new("doco:Paragraph", text, "rust", "layout")
         }
     }
 

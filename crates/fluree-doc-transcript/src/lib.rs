@@ -389,26 +389,8 @@ impl Open {
 
 fn element(text: String, turn: Option<Turn>, format: Format) -> Element {
     Element {
-        id: String::new(),
-        kind: "doco:Paragraph".into(),
-        page: 0,
-        bbox: None,
-        text,
-        level: None,
-        cells: None,
-        header_rows: None,
-        sub_headers: None,
-        merged_down: None,
-        merged_left: None,
-        figure: None,
-        links: None,
         turn,
-        message: None,
-        resumes: None,
-        signature: false,
-        datums: None,
-        provenance: format.tag(),
-        evidence: format.tag(),
+        ..Element::new("doco:Paragraph", text, format.tag(), format.tag())
     }
 }
 

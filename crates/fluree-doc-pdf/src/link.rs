@@ -360,26 +360,8 @@ mod tests {
 
     fn el(text: &str, bbox: BBox) -> Element {
         Element {
-            id: String::new(),
-            kind: "doco:Paragraph".into(),
-            page: 0,
             bbox: Some(bbox),
-            text: text.into(),
-            level: None,
-            cells: None,
-            header_rows: None,
-            sub_headers: None,
-            merged_down: None,
-            merged_left: None,
-            figure: None,
-            links: None,
-            turn: None,
-            message: None,
-            resumes: None,
-            signature: false,
-            datums: None,
-            provenance: "rust",
-            evidence: "layout",
+            ..Element::new("doco:Paragraph", text, "rust", "layout")
         }
     }
 

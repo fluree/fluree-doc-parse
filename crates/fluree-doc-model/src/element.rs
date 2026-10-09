@@ -232,6 +232,44 @@ pub struct Element {
 }
 
 impl Element {
+    /// An element of `kind` holding `text`, from the reader `provenance`
+    /// names, classified by the signal `evidence` names — and nothing else:
+    /// the first page, no box, no table, no links.
+    ///
+    /// A reader writes what it knows over this
+    /// (`Element { page, level, ..Element::new(kind, text, "pptx", "pptx") }`),
+    /// so a field the model gains is absent from every reader until one
+    /// fills it, rather than a change to each.
+    pub fn new(
+        kind: impl Into<String>,
+        text: impl Into<String>,
+        provenance: &'static str,
+        evidence: &'static str,
+    ) -> Self {
+        Element {
+            id: String::new(),
+            kind: kind.into(),
+            page: 0,
+            bbox: None,
+            text: text.into(),
+            level: None,
+            cells: None,
+            header_rows: None,
+            sub_headers: None,
+            merged_down: None,
+            merged_left: None,
+            datums: None,
+            figure: None,
+            links: None,
+            turn: None,
+            message: None,
+            resumes: None,
+            signature: false,
+            provenance,
+            evidence,
+        }
+    }
+
     /// The element's box, or an empty one for sources without geometry.
     ///
     /// Convenience for geometric pipelines (PDF), where every element has a

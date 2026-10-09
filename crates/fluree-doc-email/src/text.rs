@@ -154,28 +154,7 @@ pub fn elements(lines: &[String], provenance: &'static str, out: &mut Vec<Elemen
 }
 
 pub fn element(kind: &str, text: String, provenance: &'static str) -> Element {
-    Element {
-        id: String::new(),
-        kind: kind.into(),
-        page: 0,
-        bbox: None,
-        text,
-        level: None,
-        cells: None,
-        header_rows: None,
-        sub_headers: None,
-        merged_down: None,
-        merged_left: None,
-        figure: None,
-        links: None,
-        turn: None,
-        message: None,
-        resumes: None,
-        signature: false,
-        datums: None,
-        provenance,
-        evidence: provenance,
-    }
+    Element::new(kind, text, provenance, provenance)
 }
 
 #[cfg(test)]

@@ -32,6 +32,10 @@ pub struct Element {
 }
 ```
 
+A reader builds one from `Element::new(kind, text, provenance, evidence)`,
+which leaves everything else absent, and writes what it knows over that:
+`Element { page, level, ..Element::new("doco:SectionTitle", text, "pptx", "pptx") }`.
+
 ## The DoCO classes
 
 Structure is typed with [DoCO](http://purl.org/spar/doco), the Document

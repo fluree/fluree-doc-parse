@@ -1623,26 +1623,9 @@ fn header_rows(
 
 fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Element {
     Element {
-        id: String::new(),
-        kind: kind.into(),
         page,
-        bbox: None,
-        text,
         level,
-        cells: None,
-        header_rows: None,
-        sub_headers: None,
-        merged_down: None,
-        merged_left: None,
-        figure: None,
-        links: None,
-        turn: None,
-        message: None,
-        resumes: None,
-        signature: false,
-        datums: None,
-        provenance: "xlsx",
-        evidence: "xlsx",
+        ..Element::new(kind, text, "xlsx", "xlsx")
     }
 }
 

@@ -434,26 +434,8 @@ fn convert_image(
             // One synthetic element for the splice to replace, so the image
             // travels the same page-tier path a scanned PDF page does.
             elements.push(Element {
-                id: String::new(),
-                kind: "doco:Paragraph".into(),
-                page: 0,
                 bbox: Some(doc.pages[0].images[0].bbox),
-                text: String::new(),
-                level: None,
-                cells: None,
-                header_rows: None,
-                sub_headers: None,
-                merged_down: None,
-                merged_left: None,
-                figure: None,
-                links: None,
-                turn: None,
-                message: None,
-                resumes: None,
-                signature: false,
-                datums: None,
-                provenance: "rust",
-                evidence: "layout",
+                ..Element::new("doco:Paragraph", String::new(), "rust", "layout")
             });
             fluree_doc_pdf::arbiter::splice_with_page(
                 &mut elements,
