@@ -44,7 +44,7 @@ than strings — which is what makes the graph traversable after insertion.
 
 ```json
 {
-  "@id": "urn:fluree-doc-parse:report/element/2",
+  "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-2",
   "@type": "doco:Paragraph",
   "doc:bbox": "91.17,185.64,145.00,195.09",
   "doc:evidence": "layout",
@@ -75,7 +75,7 @@ declared structure](../concepts/geometry-vs-declared.md).
 ## The document node carries page geometry
 
 ```json
-{ "@id": "urn:fluree-doc-parse:report/element/0",
+{ "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-0",
   "@type": "doco:Document",
   "doc:pages": { "@type": "@json",
                  "@value": [ { "pageIndex": 0, "width": 612.0, "height": 792.0 },
@@ -149,32 +149,39 @@ heading, carrying `doc:sectionLevel` and containing the title plus everything
 under it:
 
 ```json
-{ "@id": "urn:fluree-doc-parse:report/section/2",
+{ "@id": "urn:fluree-doc-parse:report-661511bb2b30-section-2",
   "@type": "doco:Section",
   "doc:sectionLevel": 1,
-  "po:contains": [ ".../element/3", ".../element/4", ".../element/5" ] }
+  "po:contains": [ "…-element-3", "…-element-4", "…-table-5" ] }
 ```
 
-Sections and elements share one counter in emission order, so IRIs are
-`{base}/section/{n}` and `{base}/element/{n}` with `n` never reused.
+Every node of a document shares one counter in emission order, so IRIs are
+`{base}-section-{n}`, `{base}-element-{n}`, `{base}-table-{n}` and so on, with
+`n` never reused. See [IRIs and re-extraction](#iris-and-re-extraction) for
+the base.
 
 ## Table cells are nodes
 
 Each cell is addressable, with its headers denormalized onto it:
 
 ```json
-{ "@id": "urn:fluree-doc-parse:report/element/6",
+{ "@id": "urn:fluree-doc-parse:report-661511bb2b30-cell-6",
   "@type": "doc:TableCell",
   "doc:cellValue": "1",
   "doc:columnHeader": "a",
   "doc:rowHeader": "…",
   "doc:columnIndex": 0,
-  "doc:rowIndex": 0 }
+  "doc:rowIndex": 0,
+  "nif:beginIndex": 212, "nif:endIndex": 213 }
 ```
 
 This is what lets a query ask for "the Supply voltage row of the LM358B
 column" without the consumer reconstructing the grid. Merged cells are
 denormalized first, so every cell stands on its own.
+
+A cell's offsets slice the projection to its `doc:cellValue`, which is its
+text, so it carries no `nif:isString` repeating it. A value copied into a cell
+by a merge has no place in the projection and no offsets.
 
 Because a cell is a node rather than a position in a grid, there is no merge
 shape this format fails to represent. That is not true of
@@ -220,17 +227,17 @@ never appear in the text, so they never become entities.
                        "@value": [ { "filename": "quote.pdf",
                                      "contentType": "application/pdf", "size": 48213 } ] } }
 
-{ "@id": "urn:fluree-doc-parse:reply/message/7",
+{ "@id": "urn:fluree-doc-parse:reply-5c0e2a91d7b3-message-7",
   "@type": "doc:Message",
-  "doc:from": ["urn:fluree-doc-parse:reply/mailbox/2"],
-  "doc:to":   ["urn:fluree-doc-parse:reply/mailbox/3"],
+  "doc:from": ["urn:fluree-doc-parse:reply-5c0e2a91d7b3-mailbox-2"],
+  "doc:to":   ["urn:fluree-doc-parse:reply-5c0e2a91d7b3-mailbox-3"],
   "doc:sentAt": { "@value": "2026-07-17T13:48:00-05:00", "@type": "xsd:dateTime" },
   "doc:subject": "RE: Pilot",
   "doc:messageId": "3@example.com",
   "doc:inReplyTo": ["2@example.com"],
-  "po:contains": [ "…/element/8", "…/element/9" ] }
+  "po:contains": [ "…-element-8", "…-element-9" ] }
 
-{ "@id": "urn:fluree-doc-parse:reply/mailbox/2",
+{ "@id": "urn:fluree-doc-parse:reply-5c0e2a91d7b3-mailbox-2",
   "@type": "doc:Mailbox",
   "doc:address": "lena@example.com",
   "doc:name": "Lena Holt" }
@@ -260,12 +267,12 @@ the quote are contained by the message they belong to, not by the one quoted
 before them.
 
 ```json
-{ "@id": "urn:fluree-doc-parse:reply/signature/31",
+{ "@id": "urn:fluree-doc-parse:reply-5c0e2a91d7b3-signature-31",
   "@type": "doc:Signature",
-  "doc:signer": ["urn:fluree-doc-parse:reply/mailbox/4"],
+  "doc:signer": ["urn:fluree-doc-parse:reply-5c0e2a91d7b3-mailbox-4"],
   "nif:isString": "Best,\nKai\n\nKai Moreno\nExample Data Inc.\n1 Main Street, Springfield",
   "nif:beginIndex": 1180, "nif:endIndex": 1243,
-  "po:contains": [ "…/element/32", "…/element/33" ] }
+  "po:contains": [ "…-element-32", "…-element-33" ] }
 ```
 
 Each message's [signature](../inputs/email.md#signatures) is a
@@ -284,30 +291,38 @@ several links and each has its own anchor — flattened onto the element they
 would be a set of targets with no way to tell which words point where.
 
 ```json
-{ "@id": "urn:fluree-doc-parse:report/element/12",
+{ "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-12",
   "@type": "doco:Paragraph",
-  "doc:link": [ "urn:fluree-doc-parse:report/link/13" ],
+  "doc:link": [ "urn:fluree-doc-parse:report-661511bb2b30-link-13" ],
   "nif:beginIndex": 1866, "nif:endIndex": 1910,
   "nif:isString": "Learn more at www.example.org/plan" }
 
-{ "@id": "urn:fluree-doc-parse:report/link/13",
+{ "@id": "urn:fluree-doc-parse:report-661511bb2b30-link-13",
   "@type": "doc:Link",
-  "doc:linkTarget": { "@id": "https://www.example.org/plan" },
+  "doc:linkTarget": { "@value": "https://www.example.org/plan", "@type": "xsd:anyURI" },
   "nif:beginIndex": 1880, "nif:endIndex": 1910,
   "nif:isString": "www.example.org/plan" }
 ```
 
 | term | what it carries |
 |---|---|
-| `doc:linkTarget` | an address outside the document, IRI-coerced |
+| `doc:linkTarget` | an address outside the document, as an `xsd:anyURI` literal |
 | `doc:linkPage` | a jump inside the document: 0-based page index |
 | `nif:isString` | the anchor text |
 | `nif:beginIndex` / `nif:endIndex` | the anchor's offsets into [`-f text`](text.md) |
 
-Exactly one of `doc:linkTarget` and `doc:linkPage` is present. `doc:link` and
-`doc:linkTarget` are both IRI-coerced in the context, so a link ingests as a
-reference you can follow rather than a string about one — which is what lets a
-query ask which documents point at a domain.
+Exactly one of `doc:linkTarget` and `doc:linkPage` is present. `doc:link` is
+IRI-coerced in the context, so an element's links are nodes you can follow.
+The target is a literal, not a node: a store that keys namespaces on an IRI's
+path, as Fluree does, would otherwise keep one for every directory of every
+address a corpus links to, and which ones is up to the documents. Which
+documents point at a domain is a string test on it:
+
+```sparql
+SELECT DISTINCT ?doc
+WHERE { ?link doc:linkTarget ?target ; doc:sourceDocument ?doc .
+        FILTER (STRSTARTS(STR(?target), "https://www.example.org/")) }
+```
 
 The anchor's offsets are in the same space as every other offset in the graph,
 so the interval lookup that finds an entity mention finds a link anchor too.
@@ -317,18 +332,37 @@ element's own text would index nothing there.
 
 ## IRIs and re-extraction
 
-`--base-iri` sets the namespace for minted IRIs. Default:
-`urn:fluree-doc-parse:<stem>`.
+Every node IRI is the base IRI, a `-`, the kind of node and its number:
+`urn:fluree-doc-parse:report-661511bb2b30-element-12`. The base is, in order:
 
-`--doc-iri` stamps every element with `doc:sourceDocument → <iri>`. That tag
-is what a re-extraction retracts by: delete everything pointing at the
-document IRI, insert the new graph, and the ledger holds exactly one
-extraction of that document without a diff.
+1. `--base-iri`, when given;
+2. else `--doc-iri`, so a document's nodes are named after it;
+3. else `urn:fluree-doc-parse:`, the file's stem with anything outside
+   letters, digits, `.`, `_` and `~` turned into `-`, and the first twelve hex
+   digits of the file's SHA-256 (just the digits, from standard input).
+
+The hash is there because names repeat: `report.pdf` and `report.docx` share a
+stem, and so does every `report.docx` on a shared drive. Nodes minted under one
+base are one set of nodes in a store, so two documents under the same base
+would merge.
+
+Nothing minted adds a `/`, `#` or `:` to the base, so every node of a document
+lands in the namespace its base already sits in. Fluree splits an IRI into a
+namespace and a name at the last of those, and encodes each namespace once; a
+whole corpus minted this way costs one namespace, not one per document. A base
+ending in `/`, `#` or `:` keeps its own namespace per document, and the `-` is
+left off: `https://example.org/doc/7f3a/` mints
+`https://example.org/doc/7f3a/element-12`.
+
+`--doc-iri` stamps nodes with `doc:sourceDocument → <iri>`. That tag is what a
+re-extraction retracts by: delete everything pointing at the document IRI,
+insert the new graph, and the ledger holds exactly one extraction of that
+document without a diff. Table cells are not stamped: a cell is always one
+`po:contains` below its table, which is, and cells are most of a table-heavy
+graph.
 
 ```bash
-fdoc convert report.pdf -f doco \
-  --base-iri https://example.org/docs/report/v2 \
-  --doc-iri  https://example.org/docs/report
+fdoc convert report.pdf -f doco --doc-iri urn:doc:finance-q3-report
 ```
 
 See [Loading into a Fluree ledger](../integration/ledger-ingest.md).

@@ -18,7 +18,8 @@
 //! - Consecutive list items group under a `doco:List`; tables carry
 //!   `doc:TableCell` children with row/column indices, header labels,
 //!   and cell values. Cells whose text appears verbatim in the projection
-//!   also carry `nif:beginIndex`/`nif:endIndex` (and `nif:isString`), so a
+//!   also carry `nif:beginIndex`/`nif:endIndex`, slicing it to their
+//!   `doc:cellValue`, so a
 //!   consumer can scope work to a table *row* instead of the whole table;
 //!   a value synthesised by merge denormalisation has no place in the
 //!   projection and carries no offsets rather than wrong ones.
@@ -46,11 +47,20 @@ const LABEL_MAX_CHARS: usize = 100;
 
 #[derive(Default)]
 pub struct DocoOptions {
-    /// Prefix for minted element IRIs: `{base_iri}/section/{n}` and
-    /// `{base_iri}/element/{n}`, one shared counter in emission order.
+    /// What every minted IRI starts with: `{base_iri}-section-{n}`,
+    /// `{base_iri}-element-{n}`, one shared counter in emission order.
+    ///
+    /// Nothing minted adds a `/`, `#` or `:`, so every node of a document
+    /// falls in the namespace its base IRI does. A store that keys
+    /// namespaces on the part before the last of those — Fluree does —
+    /// then keeps one namespace for a whole corpus, not one per document
+    /// and kind. A base that ends in one of them is the caller choosing a
+    /// namespace per document, and the `-` is left off.
     pub base_iri: String,
-    /// When present, every element is stamped `doc:sourceDocument → {iri}` —
-    /// the retract-on-rerun tag a re-extraction targets.
+    /// When present, every node except a table cell is stamped
+    /// `doc:sourceDocument → {iri}`, the tag a re-extraction retracts by. A
+    /// cell is always one `po:contains` below its stamped table, and cells
+    /// are most of a table-heavy graph.
     pub doc_iri: Option<String>,
     /// The document's running header and footer text, emitted once on the
     /// document node.
@@ -81,6 +91,46 @@ pub struct DocoOptions {
     /// Files the document carries. Described on the document node as
     /// `doc:attachments`; their content is theirs to convert.
     pub attachments: Vec<Attachment>,
+}
+
+/// The base IRI for a document whose caller named none:
+/// `urn:fluree-doc-parse:` then the file's stem as a [`slug`] and the first
+/// twelve hex digits of the file's SHA-256 (`report-661511bb2b30`), or the
+/// digits alone where there is no name.
+///
+/// The stem alone is not enough: `report.pdf` and `report.docx` share one,
+/// and so does every `report.docx` on a drive, and documents minted under
+/// one base merge into one set of nodes in a store. The hash keeps them
+/// apart; the stem keeps the IRI readable.
+pub fn default_base_iri(stem: Option<&str>, sha256: &str) -> String {
+    let digest = &sha256[..sha256.len().min(12)];
+    match stem.map(slug).filter(|s| !s.is_empty()) {
+        Some(s) => format!("urn:fluree-doc-parse:{s}-{digest}"),
+        None => format!("urn:fluree-doc-parse:{digest}"),
+    }
+}
+
+/// A name as it can sit inside an IRI: letters, digits, `.`, `_` and `~`
+/// kept, any run of anything else one `-`, none at either end.
+///
+/// A file name's space is not allowed in an IRI at all, and its `#`, `/`,
+/// `:` or `?` would move where a store splits the IRI into namespace and
+/// name.
+pub fn slug(name: &str) -> String {
+    let mut out = String::new();
+    let mut gap = false;
+    for c in name.chars() {
+        if c.is_alphanumeric() || matches!(c, '.' | '_' | '~') {
+            if gap && !out.is_empty() {
+                out.push('-');
+            }
+            gap = false;
+            out.push(c);
+        } else {
+            gap = true;
+        }
+    }
+    out
 }
 
 /// The plain-text projection: each text-bearing element's trimmed text in
@@ -276,23 +326,36 @@ struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    fn mint(&mut self, kind_segment: &str) -> String {
-        let iri = format!("{}/{}/{}", self.opts.base_iri, kind_segment, self.counter);
+    fn mint(&mut self, kind: &str) -> String {
+        let base = &self.opts.base_iri;
+        let sep = if base.is_empty() || base.ends_with(['/', '#', ':']) {
+            ""
+        } else {
+            "-"
+        };
+        let iri = format!("{base}{sep}{kind}-{}", self.counter);
         self.counter += 1;
         iri
     }
 
-    /// Create a node, returning its index.
-    fn node(&mut self, segment: &str, doco_type: &str, tag: Option<&str>) -> usize {
-        let iri = self.mint(segment);
+    /// Create a node stamped with its source document, returning its index.
+    fn node(&mut self, kind: &str, doco_type: &str, tag: Option<&str>) -> usize {
+        let idx = self.unstamped(kind, doco_type, tag);
+        if let Some(doc_iri) = &self.opts.doc_iri {
+            self.nodes[idx].insert("doc:sourceDocument".into(), json!({ "@id": doc_iri }));
+        }
+        idx
+    }
+
+    /// Create a node without the `doc:sourceDocument` stamp, for a node
+    /// always reached through a stamped parent.
+    fn unstamped(&mut self, kind: &str, doco_type: &str, tag: Option<&str>) -> usize {
+        let iri = self.mint(kind);
         let mut m = Map::new();
         m.insert("@id".into(), Value::String(iri));
         m.insert("@type".into(), Value::String(doco_type.into()));
         if let Some(tag) = tag {
             m.insert("doc:xhtmlTag".into(), Value::String(tag.into()));
-        }
-        if let Some(doc_iri) = &self.opts.doc_iri {
-            m.insert("doc:sourceDocument".into(), json!({ "@id": doc_iri }));
         }
         self.nodes.push(m);
         self.children.push(Vec::new());
@@ -533,8 +596,14 @@ impl<'a> Emitter<'a> {
         for l in &links {
             let node = self.node("link", "doc:Link", None);
             match &l.target {
+                // A literal, not a node: every directory of every address
+                // a corpus links to would otherwise become a namespace in
+                // the store, and which ones is up to the documents.
                 Target::Uri { uri } => {
-                    self.nodes[node].insert("doc:linkTarget".into(), json!({ "@id": uri }));
+                    self.nodes[node].insert(
+                        "doc:linkTarget".into(),
+                        json!({ "@value": uri, "@type": "xsd:anyURI" }),
+                    );
                 }
                 Target::Page { page } => {
                     self.nodes[node].insert("doc:linkPage".into(), json!(page));
@@ -739,7 +808,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             }
             "doco:Table" => {
                 let parent = em.current_parent();
-                let table = em.node("element", "doco:Table", Some("table"));
+                let table = em.node("table", "doco:Table", Some("table"));
                 let text = projection_text(e);
                 em.set_text(table, &text);
                 em.set_provenance(table, e);
@@ -812,7 +881,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             if value.is_empty() {
                                 continue;
                             }
-                            let cell_idx = em.node("element", "doc:TableCell", None);
+                            let cell_idx = em.unstamped("cell", "doc:TableCell", None);
                             em.nodes[cell_idx].insert("doc:rowIndex".into(), json!(r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
                             if let Some(h) = header.get(c).filter(|h| !h.is_empty()) {
@@ -835,18 +904,15 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             // this value at (r, c): merge denormalisation can
                             // synthesise or rejoin values (fill-down copies,
                             // fragment joins), and those have no span to
-                            // point at. `nif:isString` rides along so the
-                            // offset invariant — a span slices the
-                            // projection to the node's text — holds for
-                            // cells exactly as for every other node.
+                            // point at. A cell's span slices the projection
+                            // to its `doc:cellValue`, which is its text, so
+                            // it carries no `nif:isString` repeating it.
                             if let (Some(s), Some(&(b, t))) = (table_start, cell_spans.get(&(r, c)))
                             {
                                 let raw =
                                     raw_rows.get(r).and_then(|row| row.get(c)).map(|c| c.trim());
                                 if raw == Some(value) {
                                     em.set_offsets(cell_idx, s + b, s + t);
-                                    em.nodes[cell_idx]
-                                        .insert("nif:isString".into(), Value::String(value.into()));
                                 }
                             }
                             em.attach(table, cell_idx);
@@ -935,10 +1001,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             "xsd": "http://www.w3.org/2001/XMLSchema#",
             // Containment edges must ingest as IRI references, not literals.
             "po:contains": { "@type": "@id" },
-            // A link's anchor is a node of the graph, and its target is an
-            // address rather than a string about one.
+            // A link's anchor is a node of the graph. Its target is an
+            // `xsd:anyURI` literal on that node.
             "doc:link": { "@type": "@id" },
-            "doc:linkTarget": { "@type": "@id" },
             // A message's sender and recipients, and a signature's signer,
             // are the graph's mailbox nodes.
             "doc:from": { "@type": "@id" },
@@ -1110,7 +1175,7 @@ mod tests {
             let e = cell["nif:endIndex"].as_u64().unwrap() as usize;
             let slice: String = projection.chars().skip(s).take(e - s).collect();
             assert_eq!(&slice, cell["doc:cellValue"].as_str().unwrap());
-            assert_eq!(&slice, cell["nif:isString"].as_str().unwrap());
+            assert!(cell.get("nif:isString").is_none(), "the value is the text");
         }
         // Same-row cells sit on one projection line: no newline between
         // the row header's end and its neighbour's start.
@@ -1283,6 +1348,89 @@ mod tests {
     }
 
     #[test]
+    fn a_table_is_stamped_and_its_cells_are_reached_through_it() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Item".into(), "Price".into()],
+            vec!["Fish pie".into(), "14.50".into()],
+        ]);
+        let g = graph(&[t]);
+        let table = &find(&g, "doco:Table")[0];
+        assert_eq!(table["doc:sourceDocument"]["@id"], "urn:test:doc");
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), 2);
+        for cell in cells {
+            assert!(cell.get("doc:sourceDocument").is_none());
+            assert!(table["po:contains"]
+                .as_array()
+                .unwrap()
+                .contains(&cell["@id"]));
+        }
+    }
+
+    #[test]
+    fn minted_iris_stay_in_the_base_iris_namespace() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["A".into(), "B".into()],
+            vec!["1".into(), "2".into()],
+        ]);
+        let els = vec![el("doco:SectionTitle", "Prices", Some(1)), t];
+        let g = graph(&els);
+        let ids: Vec<&str> = g.iter().map(|n| n["@id"].as_str().unwrap()).collect();
+        assert_eq!(
+            ids,
+            [
+                "urn:test-element-0",
+                "urn:test-element-1",
+                "urn:test-section-2",
+                "urn:test-element-3",
+                "urn:test-table-4",
+                "urn:test-cell-5",
+                "urn:test-cell-6",
+            ]
+        );
+        // A base ending in a delimiter is a namespace of its own, and the
+        // caller's choice.
+        let o = DocoOptions {
+            base_iri: "https://example.org/doc/7f3a/".into(),
+            ..Default::default()
+        };
+        let v: Value = serde_json::from_str(&to_doco(&els, &o)).unwrap();
+        assert_eq!(
+            v["@graph"][0]["@id"],
+            "https://example.org/doc/7f3a/element-0"
+        );
+    }
+
+    #[test]
+    fn a_default_base_is_the_stem_as_a_slug_and_the_hash() {
+        let sha = "661511bb2b30c4e8a9f2d71b05e3c6a48f90d2b17e5a3c8f4b6d1e09a7c25f3e";
+        assert_eq!(
+            default_base_iri(Some("report"), sha),
+            "urn:fluree-doc-parse:report-661511bb2b30"
+        );
+        // Nothing that is not allowed in an IRI, and nothing that moves
+        // where a store splits one.
+        assert_eq!(
+            default_base_iri(Some("Invoice #12 final"), sha),
+            "urn:fluree-doc-parse:Invoice-12-final-661511bb2b30"
+        );
+        assert_eq!(slug("Résumé 2024"), "Résumé-2024");
+        assert_eq!(slug("a/b:c?d"), "a-b-c-d");
+        assert_eq!(slug("  --report.v2--  "), "report.v2");
+        // Standard input has no name, only bytes.
+        assert_eq!(
+            default_base_iri(None, sha),
+            "urn:fluree-doc-parse:661511bb2b30"
+        );
+        assert_eq!(
+            default_base_iri(Some("###"), sha),
+            "urn:fluree-doc-parse:661511bb2b30"
+        );
+    }
+
+    #[test]
     fn label_truncates_but_is_string_survives() {
         let long = "x".repeat(150);
         let g = graph(&[el("doco:Paragraph", &long, None)]);
@@ -1300,7 +1448,10 @@ mod tests {
         let g = graph(&[e]);
         let link = find(&g, "doc:Link");
         assert_eq!(link.len(), 1);
-        assert_eq!(link[0]["doc:linkTarget"]["@id"], "https://sec.example/x");
+        assert_eq!(
+            link[0]["doc:linkTarget"],
+            json!({ "@value": "https://sec.example/x", "@type": "xsd:anyURI" })
+        );
         assert_eq!(link[0]["nif:isString"], "the filing");
 
         // The anchor's offsets index the text projection, exactly as an

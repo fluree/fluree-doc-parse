@@ -55,7 +55,7 @@ hayro is pre-1.0 and this engine runs on documents nobody vetted.
 - **A format change** needs a check that the [offset
   contract](../concepts/text-projection.md) still holds — every
   `nif:beginIndex`/`nif:endIndex` must resolve to exactly its `nif:isString`
-  in the text projection.
+  (a table cell's `doc:cellValue`) in the text projection.
 
 ## Benchmark scores
 

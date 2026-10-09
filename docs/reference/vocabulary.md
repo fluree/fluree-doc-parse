@@ -71,7 +71,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:pageIndex` | all | 0-based physical page, slide, or sheet — see below |
 | `doc:bbox` | PDF elements | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | all | [which signal classified it](../concepts/provenance.md) |
-| `doc:sourceDocument` | all, with `--doc-iri` | the document IRI to retract by |
+| `doc:sourceDocument` | all but table cells, with `--doc-iri` | the document IRI to retract by |
 | `doc:pages` | `doco:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
@@ -102,7 +102,7 @@ A consumer should therefore not branch on either type expecting to see it.
 
 | property | value |
 |---|---|
-| `doc:linkTarget` | an address outside the document, IRI-coerced |
+| `doc:linkTarget` | an address outside the document, an `xsd:anyURI` literal |
 | `doc:linkPage` | a jump inside the document: 0-based page index |
 | `nif:isString` | the anchor text |
 | `nif:beginIndex` / `nif:endIndex` | the anchor's offsets into the text projection |
@@ -130,6 +130,7 @@ its own — an image, a whole table cell.
 | property | value |
 |---|---|
 | `doc:cellValue` | the cell's text |
+| `nif:beginIndex` / `nif:endIndex` | where `doc:cellValue` sits in the text projection; absent for a value a merge copied in |
 | `doc:rowIndex` | 0-based row |
 | `doc:columnIndex` | 0-based column |
 | `doc:rowHeader` | the row's header text, denormalized |
@@ -153,13 +154,21 @@ misdescribe.
 ## IRI shapes
 
 ```
-{base_iri}/element/{n}      elements and cells
-{base_iri}/section/{n}      minted section nodes
+{base_iri}-element-{n}      the document, its body, and text elements
+{base_iri}-section-{n}      minted section nodes
+{base_iri}-table-{n}        tables
+{base_iri}-cell-{n}         table cells
+{base_iri}-link-{n}         hyperlinks
+{base_iri}-message-{n}      email messages
+{base_iri}-mailbox-{n}      email senders and recipients
+{base_iri}-signature-{n}    email signatures
 ```
 
-One counter shared across both, in emission order, so `n` is never reused
-within a document. `base_iri` defaults to `urn:fluree-doc-parse:<stem>` and is set
-with `--base-iri`.
+One counter shared across all of them, in emission order, so `n` is never
+reused within a document. `base_iri` is `--base-iri`, else `--doc-iri`, else
+`urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`. A base
+ending in `/`, `#` or `:` is followed directly by the kind, without the `-`.
+See [IRIs and re-extraction](../formats/doco.md#iris-and-re-extraction).
 
 ## What is not emitted
 

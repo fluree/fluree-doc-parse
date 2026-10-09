@@ -193,13 +193,14 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub emit_anchors: bool,
 
-    /// Base IRI for element identifiers in `--format doco`
-    /// (default: `urn:fluree-doc-parse:<stem>`)
+    /// What every node IRI minted by `--format doco` starts with, as
+    /// `<IRI>-element-3` (default: the `--doc-iri`, else
+    /// `urn:fluree-doc-parse:<stem>-<first 12 hex digits of the SHA-256>`)
     #[arg(long, value_name = "IRI")]
     pub base_iri: Option<String>,
 
-    /// Stamp every `--format doco` element with `doc:sourceDocument <IRI>` —
-    /// the tag a re-extraction's cleanup transaction retracts by
+    /// Stamp `--format doco` nodes with `doc:sourceDocument <IRI>` — the tag
+    /// a re-extraction's cleanup transaction retracts by
     #[arg(long, value_name = "IRI")]
     pub doc_iri: Option<String>,
 

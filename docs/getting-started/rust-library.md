@@ -52,21 +52,25 @@ still run.
 ## Emit
 
 ```rust
-use fluree_doc_model::{to_markdown, to_xhtml};
+use fluree_doc_model::{doco::default_base_iri, sha256_hex, to_markdown, to_xhtml};
 use fluree_doc_pdf::doco::{to_doco, to_text, DocoOptions};
 
 let md    = to_markdown(&analysis.elements);
 let xhtml = to_xhtml(&analysis.elements);
 let text  = to_text(&analysis.elements);
 let graph = to_doco(&analysis.elements, &DocoOptions {
-    base_iri: "urn:fluree-doc-parse:report".into(),
+    base_iri: default_base_iri(Some("report"), &sha256_hex(&std::fs::read("report.pdf")?)),
     doc_iri: None,
+    ..Default::default()
 });
 ```
 
-All four return serialized `String`s. `DocoOptions` has no `Default` on
-purpose: `base_iri` is the namespace your minted element IRIs live under, and
-guessing it for you would put someone else's documents in your namespace.
+All four return serialized `String`s. `base_iri` is what every node IRI the
+graph mints starts with, and it is yours to choose: your document's own IRI,
+or, as here, the one `fdoc convert` uses when it is given none — the file's
+stem and the first twelve hex digits of its SHA-256, so two files named
+`report` do not mint the same nodes. See [IRIs and
+re-extraction](../formats/doco.md#iris-and-re-extraction).
 
 `to_text` and `to_doco` are a pair: the `nif:beginIndex` / `nif:endIndex`
 values in the graph are character offsets into exactly the string `to_text`

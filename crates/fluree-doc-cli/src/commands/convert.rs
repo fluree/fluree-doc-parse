@@ -8,6 +8,35 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// The input being converted, beyond its bytes.
+struct Source<'a> {
+    /// What sidecar files and messages name it by: the file's stem, or
+    /// `stdin`.
+    stem: &'a str,
+    /// Whether `stem` is a file's own name rather than a stand-in.
+    named: bool,
+    /// The input's bytes as lowercase hex SHA-256.
+    sha256: String,
+}
+
+impl<'a> Source<'a> {
+    fn file(path: &'a Path, data: &[u8]) -> Self {
+        Source {
+            stem: common::stem_of(path),
+            named: true,
+            sha256: fluree_doc_model::sha256_hex(data),
+        }
+    }
+
+    fn stdin(data: &[u8]) -> Self {
+        Source {
+            stem: "stdin",
+            named: false,
+            sha256: fluree_doc_model::sha256_hex(data),
+        }
+    }
+}
+
 pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let pages = match args.pages.as_deref().map(parse_pages) {
         Some(Ok(set)) => Some(set),
@@ -50,12 +79,13 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             eprintln!("error: reading stdin: {e}");
             return 1;
         }
+        let src = Source::stdin(&data);
         let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
-            convert_transcript(&data, "stdin", args, quiet)
+            convert_transcript(&data, &src, args, quiet)
         } else if fluree_doc_email::Format::sniff(&data).is_some() {
-            convert_email(&data, "stdin", args, quiet)
+            convert_email(&data, &src, args, quiet)
         } else {
-            convert_bytes(data, "stdin", cfg, args, pages.as_deref(), quiet)
+            convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet)
         };
         return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
@@ -168,16 +198,16 @@ fn convert_path(
     quiet: bool,
 ) -> Result<String, String> {
     let data = std::fs::read(pdf).map_err(|e| e.to_string())?;
-    let stem = common::stem_of(pdf);
+    let src = Source::file(pdf, &data);
     // A transcript by its content before anything by its name: `.vtt` has no
     // registered type on most systems, so it arrives renamed as often as not.
     if fluree_doc_transcript::Format::sniff(&data).is_some() || ext_is(pdf, &["vtt", "srt"]) {
-        return convert_transcript(&data, stem, args, quiet);
+        return convert_transcript(&data, &src, args, quiet);
     }
     // An email by its content too: a saved message is `.eml`, `.mht`, `.txt`
     // or nothing at all, depending on who saved it.
     if fluree_doc_email::Format::sniff(&data).is_some() || ext_is(pdf, &["eml", "msg"]) {
-        return convert_email(&data, stem, args, quiet);
+        return convert_email(&data, &src, args, quiet);
     }
     // Structural formats: the source declares what a PDF makes us infer, so
     // these readers map rather than measure and carry no geometry.
@@ -185,7 +215,7 @@ fn convert_path(
         let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
         return Ok(render(
             &fluree_doc_markdown::parse(&text),
-            stem,
+            &src,
             args,
             Vec::new(),
             &fluree_doc_model::Notes::default(),
@@ -195,7 +225,7 @@ fn convert_path(
         let text = fluree_doc_html::decode(&data);
         return Ok(render(
             &fluree_doc_html::parse(&text),
-            stem,
+            &src,
             args,
             Vec::new(),
             &fluree_doc_model::Notes::default(),
@@ -207,7 +237,7 @@ fn convert_path(
         let els = fluree_doc_docx::parse(&data).map_err(|e| e.to_string())?;
         return Ok(render(
             &els,
-            stem,
+            &src,
             args,
             Vec::new(),
             &fluree_doc_model::Notes::default(),
@@ -217,7 +247,7 @@ fn convert_path(
         let els = fluree_doc_pptx::parse(&data).map_err(|e| e.to_string())?;
         return Ok(render(
             &els,
-            stem,
+            &src,
             args,
             Vec::new(),
             &fluree_doc_model::Notes::default(),
@@ -228,16 +258,16 @@ fn convert_path(
         let els = fluree_doc_xlsx::parse(&data).map_err(|e| e.to_string())?;
         return Ok(render(
             &els,
-            stem,
+            &src,
             args,
             Vec::new(),
             &fluree_doc_model::Notes::default(),
         ));
     }
     if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
-        return convert_image(data, stem, cfg, args, quiet);
+        return convert_image(data, &src, cfg, args, quiet);
     }
-    convert_bytes(data, common::stem_of(pdf), cfg, args, pages, quiet)
+    convert_bytes(data, &src, cfg, args, pages, quiet)
 }
 
 /// A meeting transcript or a caption file: one paragraph per speaker turn.
@@ -246,17 +276,18 @@ fn convert_path(
 /// output is otherwise indistinguishable from a file that was not read.
 fn convert_transcript(
     data: &[u8],
-    stem: &str,
+    src: &Source,
     args: &ConvertArgs,
     quiet: bool,
 ) -> Result<String, String> {
+    let stem = src.stem;
     let elements = fluree_doc_transcript::parse(data).map_err(|e| e.to_string())?;
     if elements.is_empty() && !quiet {
         eprintln!("note: {stem}: the transcript holds no cues, so the output is empty");
     }
     Ok(render(
         &elements,
-        stem,
+        src,
         args,
         Vec::new(),
         &fluree_doc_model::Notes::default(),
@@ -270,10 +301,11 @@ fn convert_transcript(
 /// it, the note on stderr says what was left out.
 fn convert_email(
     data: &[u8],
-    stem: &str,
+    src: &Source,
     args: &ConvertArgs,
     quiet: bool,
 ) -> Result<String, String> {
+    let stem = src.stem;
     let email = fluree_doc_email::parse(data).map_err(|e| e.to_string())?;
     let count = email.attachments.len();
     let plural = if count == 1 { "" } else { "s" };
@@ -316,7 +348,7 @@ fn convert_email(
     }
     Ok(render(
         &email.elements,
-        stem,
+        src,
         args,
         Vec::new(),
         &email.notes(),
@@ -355,11 +387,12 @@ fn file_name(
 /// is otherwise indistinguishable from a blank image.
 fn convert_image(
     data: Vec<u8>,
-    stem: &str,
+    src: &Source,
     cfg: &TierConfig,
     args: &ConvertArgs,
     quiet: bool,
 ) -> Result<String, String> {
+    let stem = src.stem;
     let format = fluree_doc_pdf::image::Format::sniff(&data).ok_or("not a recognised image")?;
     let doc = fluree_doc_pdf::image::as_document(&data)
         .ok_or_else(|| format!("{} header declares no usable size", format.mime()))?;
@@ -432,7 +465,7 @@ fn convert_image(
     }
     Ok(render(
         &elements,
-        stem,
+        src,
         args,
         sizes,
         &fluree_doc_model::Notes::default(),
@@ -442,7 +475,7 @@ fn convert_image(
 /// Emit an element stream in the requested format. Shared by every source.
 fn render(
     elements: &[Element],
-    stem: &str,
+    src: &Source,
     args: &ConvertArgs,
     pages: Vec<fluree_doc_model::PageSize>,
     notes: &fluree_doc_model::Notes,
@@ -452,11 +485,21 @@ fn render(
         Format::Xhtml => fluree_doc_model::to_xhtml_with(elements, notes),
         Format::Json => serde_json::to_string_pretty(elements).unwrap(),
         Format::Doco => {
+            // A caller naming the document names its nodes too: they are
+            // minted under its IRI, so they cost the store no namespace the
+            // document IRI does not.
+            let base_iri = args
+                .base_iri
+                .clone()
+                .or_else(|| args.doc_iri.clone())
+                .unwrap_or_else(|| {
+                    fluree_doc_model::doco::default_base_iri(
+                        src.named.then_some(src.stem),
+                        &src.sha256,
+                    )
+                });
             let opts = fluree_doc_pdf::doco::DocoOptions {
-                base_iri: args
-                    .base_iri
-                    .clone()
-                    .unwrap_or_else(|| format!("urn:fluree-doc-parse:{stem}")),
+                base_iri,
                 doc_iri: args.doc_iri.clone(),
                 pages,
                 unread: notes.unread.clone(),
@@ -472,12 +515,13 @@ fn render(
 
 fn convert_bytes(
     data: Vec<u8>,
-    stem: &str,
+    src: &Source,
     cfg: &TierConfig,
     args: &ConvertArgs,
     pages: Option<&[usize]>,
     quiet: bool,
 ) -> Result<String, String> {
+    let stem = src.stem;
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
     // Kept for the crop pass, which re-derives the escalation anchors.
@@ -573,7 +617,7 @@ fn convert_bytes(
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {note}");
     }
-    Ok(render(&a.elements, stem, args, sizes, &notes))
+    Ok(render(&a.elements, src, args, sizes, &notes))
 }
 
 /// One output path per input, keeping stem names unless a stem repeats —

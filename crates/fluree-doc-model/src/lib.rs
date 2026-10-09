@@ -18,3 +18,13 @@ pub use emit::{to_markdown, to_markdown_with, to_xhtml, to_xhtml_with};
 pub use geom::{BBox, PageSize};
 pub use merges::{denormalize, Merges};
 pub use message::{Mailbox, Message};
+
+/// The SHA-256 of some bytes, as lowercase hex: how a document and each file
+/// it carries are identified, whatever they are named.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}

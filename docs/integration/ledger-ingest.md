@@ -5,10 +5,7 @@ context carries the DoCO, NIF and pattern ontologies, and `po:contains` is
 IRI-coerced so containment edges are real references rather than strings.
 
 ```bash
-fdoc convert report.pdf -f doco \
-  --base-iri https://example.org/docs/report \
-  --doc-iri  https://example.org/docs/report \
-  -o report.jsonld
+fdoc convert report.pdf -f doco --doc-iri urn:doc:finance-q3-report -o report.jsonld
 ```
 
 ## Choosing IRIs
@@ -17,15 +14,36 @@ Two flags, two different jobs — and mixing them up is the common mistake.
 
 | flag | names | changes per extraction? |
 |---|---|---|
-| `--base-iri` | the **elements** minted by this run | yes, if you want history |
-| `--doc-iri` | the **document** they came from | no, ever |
+| `--doc-iri` | the **document** the nodes came from | no, ever |
+| `--base-iri` | the **nodes** minted by this run | only if you want each run's nodes named apart |
 
-`--base-iri` defaults to `urn:fluree-doc-parse:<stem>`, which is fine for a single
-corpus and wrong the moment two documents share a filename. Give it a real
-namespace.
+`--doc-iri` stamps nodes with `doc:sourceDocument → <iri>`. That is the tag
+re-extraction retracts by. Without `--base-iri`, the nodes are named after it
+too: `urn:doc:finance-q3-report-element-12`.
 
-`--doc-iri` stamps every element with `doc:sourceDocument → <iri>`. That is
-the tag re-extraction retracts by.
+With neither flag, nodes are named after the file:
+`urn:fluree-doc-parse:report-661511bb2b30-element-12`, the stem and the first
+twelve hex digits of the file's SHA-256. The hash keeps `report.pdf` apart
+from `report.docx`, and from every other `report.pdf` on a shared drive.
+
+### Keep the namespaces few
+
+Fluree stores an IRI as a namespace and a name, split at the last `/`, `#` or
+`:`, and encodes each distinct namespace once. Minted IRIs never add one of
+those to the base, so a document's nodes cost exactly the namespace its
+document IRI sits in. What decides the count for a corpus is how document IRIs
+are shaped:
+
+| document IRIs | namespaces |
+|---|---|
+| `urn:doc:<id>`, `https://example.org/doc/<id>` | one, for the whole corpus |
+| `https://example.org/doc/<id>/` | one per document |
+| `file:///Volumes/Share/Finance/2024/report.pdf` | one per directory crawled |
+
+Give documents flat identifiers and keep a path or a location as data about
+them. For the same reason, put a run's version inside the last segment of a
+`--base-iri` (`https://example.org/doc/report-v2`), never as a segment of its
+own (`https://example.org/doc/report/v2`).
 
 ## Re-extraction without a diff
 
@@ -34,20 +52,24 @@ overlaps the old one. Elements shift, offsets move, and computing what changed
 is expensive and error-prone.
 
 The answer is not to diff. Retract everything tagged with the document IRI,
-then insert the new graph:
+and the table cells one `po:contains` below it, then insert the new graph:
 
-```
-delete { ?s ?p ?o }
-where  { ?s doc:sourceDocument <https://example.org/docs/report> .
+```sparql
+DELETE { ?s ?p ?o }
+WHERE  { ?x doc:sourceDocument <urn:doc:finance-q3-report> .
+         ?x po:contains? ?s .
          ?s ?p ?o }
 ```
+
+Cells are the one kind of node not stamped: a cell is always directly inside
+its table, which is, and cells are most of a table-heavy graph.
 
 Then insert `report.jsonld`. The ledger holds exactly one extraction of that
 document, and because Fluree is immutable the previous one remains queryable
 at its commit — you get history without maintaining it.
 
-Keep `--doc-iri` **stable across runs** for this to work. Vary `--base-iri`
-per run if you want the two extractions' elements to have distinct identities
+Keep `--doc-iri` **stable across runs** for this to work. Pass a `--base-iri`
+per run if you want the two extractions' nodes to have distinct identities
 within that history.
 
 ## What you can query

@@ -32,10 +32,13 @@ class Located:
     def __init__(self, path):
         self.text = run(path, "text")
         graph = json.loads(run(path, "doco"))["@graph"]
+        # Elements only: a table's cells, a paragraph's links and a
+        # message's signature carry offsets inside an element's interval.
         self.spans = sorted(
-            (n["nif:beginIndex"], n["nif:endIndex"], n)
-            for n in graph
-            if "nif:beginIndex" in n
+            ((n["nif:beginIndex"], n["nif:endIndex"], n)
+             for n in graph
+             if "nif:beginIndex" in n and "doc:pageIndex" in n),
+            key=lambda s: s[:2],
         )
         self.starts = [s[0] for s in self.spans]
 
