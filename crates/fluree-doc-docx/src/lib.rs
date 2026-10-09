@@ -81,10 +81,8 @@ fn title_styles(xml: &str) -> HashSet<String> {
                         .then(|| attr(&e, "styleId"))
                         .flatten();
                 }
-                "name" => {
-                    if attr(&e, "val").is_some_and(|v| v.eq_ignore_ascii_case("title")) {
-                        out.extend(style.clone());
-                    }
+                "name" if attr(&e, "val").is_some_and(|v| v.eq_ignore_ascii_case("title")) => {
+                    out.extend(style.clone());
                 }
                 _ => {}
             },

@@ -319,135 +319,157 @@ impl DocumentInfo {
     /// (`docProps/core.xml` in a `.docx`, `.pptx` or `.xlsx`): `dc:title`,
     /// `dc:creator`, and `dcterms:created` / `dcterms:modified`.
     ///
-    /// The part is a flat list of elements holding text, so it is read as
-    /// one, by local name: any prefix a writer chose works. A date that is
-    /// not ISO 8601 is left out rather than passed on as one.
+    /// Each is a child of the root, read by local name, so any prefix a
+    /// writer chose works, and its text is all of its text: CDATA included,
+    /// comments left out. A date that is not a real one is left out rather
+    /// than passed on as one. A part that stops parsing keeps what was read
+    /// before it.
     pub fn from_core_properties(xml: &str) -> Self {
+        use quick_xml::events::Event;
         let mut info = DocumentInfo::default();
-        let mut rest = xml;
-        while let Some(open) = rest.find('<') {
-            rest = &rest[open + 1..];
-            let Some(close) = rest.find('>') else { break };
-            let tag = &rest[..close];
-            rest = &rest[close + 1..];
-            if tag.starts_with(['/', '?', '!']) || tag.ends_with('/') {
-                continue;
-            }
-            let name = tag.split_whitespace().next().unwrap_or("");
-            let local = name.rsplit(':').next().unwrap_or(name);
-            let text = unescape_xml(&rest[..rest.find('<').unwrap_or(rest.len())]);
-            let text = text.trim();
-            if text.is_empty() {
-                continue;
-            }
-            match local {
-                "title" => info.title = Some(text.to_string()),
-                "creator" => info.creators.push(text.to_string()),
-                "created" => info.created = xsd_date_time(text),
-                "modified" => info.modified = xsd_date_time(text),
+        let mut r = quick_xml::Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let mut depth = 0usize;
+        // The root's child being read, by local name, and its text so far.
+        let mut field: Option<(String, String)> = None;
+        loop {
+            match r.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) => {
+                    depth += 1;
+                    if depth == 2 {
+                        let name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                        field = Some((name, String::new()));
+                    }
+                }
+                Ok(Event::Text(t)) => {
+                    if let Some((_, text)) = field.as_mut() {
+                        text.push_str(&t.unescape().unwrap_or_default());
+                    }
+                }
+                Ok(Event::CData(c)) => {
+                    if let Some((_, text)) = field.as_mut() {
+                        text.push_str(&String::from_utf8_lossy(&c));
+                    }
+                }
+                Ok(Event::End(_)) => {
+                    if depth == 2 {
+                        if let Some((name, text)) = field.take() {
+                            info.set_core_property(&name, &text);
+                        }
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                Ok(Event::Eof) | Err(_) => break,
                 _ => {}
             }
+            buf.clear();
         }
         info
     }
-}
 
-/// The five named entities and character references, as XML text holds them.
-fn unescape_xml(s: &str) -> String {
-    let mut out = String::new();
-    let mut rest = s;
-    while let Some(amp) = rest.find('&') {
-        out.push_str(&rest[..amp]);
-        rest = &rest[amp..];
-        let Some(semi) = rest.find(';') else { break };
-        let entity = &rest[1..semi];
-        let ch = match entity {
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "amp" => Some('&'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            _ => entity
-                .strip_prefix("#x")
-                .map(|h| u32::from_str_radix(h, 16))
-                .or_else(|| entity.strip_prefix('#').map(str::parse::<u32>))
-                .and_then(Result::ok)
-                .and_then(char::from_u32),
-        };
-        match ch {
-            Some(c) => {
-                out.push(c);
-                rest = &rest[semi + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
+    fn set_core_property(&mut self, name: &str, text: &str) {
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.is_empty() {
+            return;
+        }
+        match name {
+            "title" => self.title = Some(text),
+            "creator" => self.creators.push(text),
+            "created" => self.created = xsd_date_time(&text),
+            "modified" => self.modified = xsd_date_time(&text),
+            _ => {}
         }
     }
-    out.push_str(rest);
-    out
 }
 
-/// A W3C date or date-time (`2026-07-17`, `2026-07-17T13:48Z`,
-/// `2026-07-17T13:48:00.5+02:00`) as XML Schema writes it, or `None` when it
-/// is not a real one.
+/// A W3C date, time or date-time as XML Schema writes it, with the XSD
+/// datatype it is — `2026-07-17` an `xsd:date`, `13:48:05Z` an `xsd:time`,
+/// `2026-07-17T13:48Z` the `xsd:dateTime` `2026-07-17T13:48:00Z` — or `None`
+/// when it is not a real one.
 ///
-/// Dates on the document node are typed `xsd:date` and `xsd:dateTime`, and a
-/// store that checks the type rejects the whole insert over one that is
-/// not: XML Schema needs the seconds a W3C date-time may leave out, and no
-/// day that does not exist. A file's dates are whatever its writer put
-/// there, so they are checked rather than passed on.
-pub fn xsd_date_time(s: &str) -> Option<String> {
-    let num = |t: &str| -> Option<u32> {
-        t.bytes()
-            .all(|b| b.is_ascii_digit())
-            .then(|| t.parse().ok())
-            .flatten()
-    };
+/// A value typed as one of these that is not one fails a validating store's
+/// whole insert, and a file's dates are whatever its writer put there. So
+/// they are checked rather than passed on: no day that does not exist, no
+/// zone beyond ±14:00, and the seconds XML Schema requires and a W3C
+/// date-time may leave out. Nothing but ASCII is a date.
+pub fn xsd_temporal(s: &str) -> Option<(&'static str, String)> {
     let s = s.trim();
-    let (y, m, d) = (num(s.get(0..4)?)?, num(s.get(5..7)?)?, num(s.get(8..10)?)?);
+    if !s.is_ascii() {
+        return None;
+    }
+    if let Some(date) = s.get(..10).filter(|d| is_date(d)) {
+        let rest = &s[10..];
+        return match rest.strip_prefix('T') {
+            Some(time) => Some(("xsd:dateTime", format!("{date}T{}", clock(time)?))),
+            None => Some(("xsd:date", format!("{date}{}", zone(rest)?))),
+        };
+    }
+    Some(("xsd:time", clock(s)?))
+}
+
+/// [`xsd_temporal`] for a date or a date-time, as a document dates itself.
+pub fn xsd_date_time(s: &str) -> Option<String> {
+    xsd_temporal(s)
+        .filter(|(ty, _)| *ty != "xsd:time")
+        .map(|(_, v)| v)
+}
+
+/// Exactly `n` ASCII digits, as a number.
+fn digits(t: &str, n: usize) -> Option<u32> {
+    (t.len() == n && t.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| t.parse().ok())
+        .flatten()
+}
+
+/// `YYYY-MM-DD`, ten ASCII bytes, naming a day that exists.
+fn is_date(d: &str) -> bool {
+    let (Some(y), Some(m), Some(day)) = (
+        digits(&d[0..4], 4),
+        digits(&d[5..7], 2),
+        digits(&d[8..10], 2),
+    ) else {
+        return false;
+    };
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
     let days = match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
         2 if leap => 29,
         2 => 28,
-        _ => return None,
+        _ => return false,
     };
-    if &s[4..5] != "-" || &s[7..8] != "-" || d == 0 || d > days {
-        return None;
-    }
-    let date = &s[..10];
-    let Some(time) = s[10..].strip_prefix('T') else {
-        return s[10..].is_empty().then(|| date.to_string());
-    };
-    // The zone: `Z`, `+hh:mm` or `-hh:mm` at the end, or nothing.
-    let (clock, zone) = match time.find(['Z', '+', '-']) {
-        Some(i) => time.split_at(i),
-        None => (time, ""),
-    };
-    let zone_ok = match zone.as_bytes() {
-        [] | [b'Z'] => true,
-        [b'+' | b'-', ..] => {
-            zone.len() == 6
-                && &zone[3..4] == ":"
-                && num(&zone[1..3]).is_some_and(|h| h <= 14)
-                && num(&zone[4..6]).is_some_and(|m| m < 60)
-        }
-        _ => false,
-    };
-    let mut parts = clock.splitn(3, ':');
+    &d[4..5] == "-" && &d[7..8] == "-" && (1..=days).contains(&day)
+}
+
+/// `hh:mm`, `hh:mm:ss` or `hh:mm:ss.f…`, then a [`zone`], as XML Schema
+/// writes it: with its seconds.
+fn clock(t: &str) -> Option<String> {
+    let (time, tz) = t.split_at(t.find(['Z', '+', '-']).unwrap_or(t.len()));
+    let tz = zone(tz)?;
+    let mut parts = time.splitn(3, ':');
     let (hh, mm) = (parts.next()?, parts.next()?);
     let sec = parts.next().unwrap_or("00");
     let (whole, frac) = match sec.split_once('.') {
         Some((w, f)) => (w, Some(f)),
         None => (sec, None),
     };
-    let two = |t: &str, max: u32| t.len() == 2 && num(t).is_some_and(|v| v <= max);
-    let frac_ok = frac.is_none_or(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()));
-    (zone_ok && two(hh, 23) && two(mm, 59) && two(whole, 59) && frac_ok)
-        .then(|| format!("{date}T{hh}:{mm}:{sec}{zone}"))
+    let ok = digits(hh, 2).is_some_and(|h| h <= 23)
+        && digits(mm, 2).is_some_and(|m| m <= 59)
+        && digits(whole, 2).is_some_and(|s| s <= 59)
+        && frac.is_none_or(|f| !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()));
+    ok.then(|| format!("{hh}:{mm}:{sec}{tz}"))
+}
+
+/// Nothing, `Z`, or `±hh:mm` no further than 14 hours from UTC.
+fn zone(z: &str) -> Option<&str> {
+    match z.as_bytes() {
+        [] | [b'Z'] => Some(z),
+        [b'+' | b'-', _, _, b':', _, _] => {
+            let (h, m) = (digits(&z[1..3], 2)?, digits(&z[4..6], 2)?);
+            (h < 14 && m < 60 || h == 14 && m == 0).then_some(z)
+        }
+        _ => None,
+    }
 }
 
 /// A file carried inside a document, described.
@@ -544,6 +566,22 @@ mod tests {
     }
 
     #[test]
+    fn a_core_property_is_all_of_its_text() {
+        let info = DocumentInfo::from_core_properties(
+            "<cp:coreProperties xmlns:cp=\"c\" xmlns:dc=\"d\">\
+             <dc:title><![CDATA[R&D <draft>]]></dc:title>\
+             <dc:creator>Ada<!-- the lead --> Park</dc:creator></cp:coreProperties>",
+        );
+        assert_eq!(info.title.as_deref(), Some("R&D <draft>"));
+        assert_eq!(info.creators, ["Ada Park"]);
+        // A part that stops parsing keeps what came before.
+        let cut = DocumentInfo::from_core_properties(
+            "<cp:coreProperties><dc:title>Kept</dc:title><dc:creator>Ada",
+        );
+        assert_eq!(cut.title.as_deref(), Some("Kept"));
+    }
+
+    #[test]
     fn a_date_is_passed_on_only_as_a_real_one() {
         let ok = |s: &str| xsd_date_time(s);
         assert_eq!(ok("2026-07-17").as_deref(), Some("2026-07-17"));
@@ -571,8 +609,36 @@ mod tests {
             "2026-07-17T10:00:00.",
             "2026-7-17",
             "sometime",
+            // Beyond ±14:00, and not ASCII where a zone's digits go.
+            "2026-07-17T10:00:00+14:59",
+            "2026-07-17T10:00:00+15:00",
+            "2026-07-17T10:00:00+0\u{e9}00",
+            "2026-07-17T10:00:00+\u{e9}:00",
+            "\u{e9}026-07-17",
         ] {
             assert_eq!(ok(bad), None, "{bad}");
         }
+        assert_eq!(
+            ok("2026-07-17T10:00:00-14:00").as_deref(),
+            Some("2026-07-17T10:00:00-14:00")
+        );
+    }
+
+    #[test]
+    fn a_temporal_value_is_typed_by_what_it_is() {
+        let t = |s: &str| xsd_temporal(s);
+        let is = |ty: &'static str, v: &str| Some((ty, v.to_string()));
+        assert_eq!(t("2026-07-17"), is("xsd:date", "2026-07-17"));
+        // A date with a zone is a date, colon or not.
+        assert_eq!(t("2026-07-17+02:00"), is("xsd:date", "2026-07-17+02:00"));
+        assert_eq!(
+            t("2026-07-17T10:00"),
+            is("xsd:dateTime", "2026-07-17T10:00:00")
+        );
+        assert_eq!(t("13:48:05Z"), is("xsd:time", "13:48:05Z"));
+        assert_eq!(t("2026-02-30"), None);
+        assert_eq!(t("2026-07-17+2"), None);
+        // A time is not a date a document can be dated by.
+        assert_eq!(xsd_date_time("13:48:05"), None);
     }
 }

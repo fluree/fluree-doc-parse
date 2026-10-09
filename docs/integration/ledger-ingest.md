@@ -21,6 +21,11 @@ Two flags, two different jobs — and mixing them up is the common mistake.
 re-extraction retracts by. Without `--base-iri`, the nodes are named after it
 too: `urn:doc:finance-q3-report-element-12`.
 
+Both flags name one document, so `fdoc convert` refuses them with several
+inputs: shared, they would give every document the same nodes and the same
+tag to retract by. A crawler converts each file with its own `--doc-iri`.
+A batch with neither flag is safe, since each file's default base is its own.
+
 With neither flag, nodes are named after the file:
 `urn:fluree-doc-parse:report-661511bb2b30-element-12`, the stem and the first
 twelve hex digits of the file's SHA-256. The hash keeps `report.pdf` apart

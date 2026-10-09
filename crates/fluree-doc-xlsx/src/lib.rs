@@ -881,16 +881,10 @@ pub fn cell_datum(kind: &str, value: &str, style: &CellStyle, date1904: bool) ->
             "0" | "false" => Some(Datum::new("xsd:boolean", "false")),
             _ => None,
         },
-        // An ISO 8601 date, time or both, as the file writes it.
-        "d" => {
-            let ty = match (v.contains('T'), v.contains(':')) {
-                (true, _) => "xsd:dateTime",
-                (false, true) => "xsd:time",
-                (false, false) => "xsd:date",
-            };
-            v.starts_with(|c: char| c.is_ascii_digit())
-                .then(|| Datum::new(ty, v))
-        }
+        // An ISO 8601 date, time or both, as the file writes it, typed by
+        // what it is and written as XML Schema writes it. One that is not
+        // a real date has none: typed, it would fail a store's insert.
+        "d" => fluree_doc_model::xsd_temporal(v).map(|(ty, v)| Datum::new(ty, v)),
         "" | "n" => {
             let n = v.parse::<f64>().ok().filter(|n| n.is_finite())?;
             let serial = match style.format {
@@ -2026,6 +2020,21 @@ mod tests {
             datum("d", "2023-07-16T18:00:00", NumFmt::General),
             d("xsd:dateTime", "2023-07-16T18:00:00")
         );
+        // An ISO cell is typed by what it is and written as XML Schema
+        // writes it, and one that is not a real date has none.
+        assert_eq!(
+            datum("d", "2026-07-17T10:00", NumFmt::General),
+            d("xsd:dateTime", "2026-07-17T10:00:00")
+        );
+        assert_eq!(
+            datum("d", "2026-07-17+02:00", NumFmt::General),
+            d("xsd:date", "2026-07-17+02:00")
+        );
+        assert_eq!(
+            datum("d", "10:30:00", NumFmt::General),
+            d("xsd:time", "10:30:00")
+        );
+        assert_eq!(datum("d", "2026-02-30", NumFmt::General), None);
         // Text is text, digits or not: a code stored as a string stays one.
         assert_eq!(datum("inlineStr", "00123", NumFmt::General), None);
         assert_eq!(datum("s", "4", NumFmt::General), None);

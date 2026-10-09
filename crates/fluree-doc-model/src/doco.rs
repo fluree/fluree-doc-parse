@@ -674,12 +674,7 @@ fn mailbox_key(m: &Mailbox) -> String {
 /// time rather than a string. A bare date is an `xsd:date`. `None` for one
 /// that is not a real date: typed, it would fail the whole insert.
 fn date_time(v: &str) -> Option<Value> {
-    let v = crate::xsd_date_time(v)?;
-    let ty = if v.contains('T') {
-        "xsd:dateTime"
-    } else {
-        "xsd:date"
-    };
+    let (ty, v) = crate::xsd_temporal(v).filter(|(ty, _)| *ty != "xsd:time")?;
     Some(json!({ "@value": v, "@type": ty }))
 }
 

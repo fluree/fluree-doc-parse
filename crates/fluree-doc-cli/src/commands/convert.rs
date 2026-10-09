@@ -110,9 +110,12 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         eprintln!("error: multiple inputs require --out-dir");
         return 2;
     }
-    if files.len() > 1 && args.source_name.is_some() {
+    // Given to several inputs, a flag naming one document would name them
+    // all alike: one set of node IRIs, so their graphs merge in a store,
+    // and one tag, so a retraction removes them together.
+    if let (true, Some(flag)) = (files.len() > 1, single_input_flag(args)) {
         eprintln!(
-            "error: --source-name names one input, and there are {}",
+            "error: {flag} names one input, and there are {}",
             files.len()
         );
         return 2;
@@ -193,6 +196,17 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     } else {
         0
     }
+}
+
+/// The first flag given that names a single document.
+fn single_input_flag(args: &ConvertArgs) -> Option<&'static str> {
+    [
+        ("--doc-iri", args.doc_iri.is_some()),
+        ("--base-iri", args.base_iri.is_some()),
+        ("--source-name", args.source_name.is_some()),
+    ]
+    .into_iter()
+    .find_map(|(flag, given)| given.then_some(flag))
 }
 
 /// Source formats `convert` accepts. PDF is the geometric path; the others
@@ -745,6 +759,25 @@ mod tests {
         assert_eq!(d[1], Path::new("/out/demo.docx.jsonld"));
         // A stem that does not repeat keeps its plain name.
         assert_eq!(d[2], Path::new("/out/report.jsonld"));
+    }
+
+    #[test]
+    fn a_flag_naming_one_document_refuses_several_inputs() {
+        use clap::Parser;
+        let convert = |extra: &[&str]| {
+            let argv = ["fdoc", "convert", "a.md", "b.md", "--out-dir", "out"];
+            let cli = crate::cli::Cli::try_parse_from(argv.iter().chain(extra)).unwrap();
+            match cli.command {
+                crate::cli::Commands::Convert(args) => args,
+                _ => unreachable!(),
+            }
+        };
+        for flag in ["--doc-iri", "--base-iri", "--source-name"] {
+            let args = convert(&[flag, "urn:doc:a"]);
+            assert_eq!(single_input_flag(&args), Some(flag));
+            assert_eq!(run(&args, false, true), 2, "{flag}");
+        }
+        assert_eq!(single_input_flag(&convert(&[])), None);
     }
 
     #[test]
