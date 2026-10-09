@@ -234,6 +234,11 @@ fn convert_path(
             &fluree_doc_model::Notes::default(),
         ));
     }
+    // What a file declares about itself: its title, author and dates.
+    let declared = |info| fluree_doc_model::Notes {
+        info,
+        ..Default::default()
+    };
     if ext_is(pdf, &["html", "htm", "xhtml"]) {
         let text = fluree_doc_html::decode(&data);
         return Ok(render(
@@ -241,7 +246,7 @@ fn convert_path(
             &src,
             args,
             Vec::new(),
-            &fluree_doc_model::Notes::default(),
+            &declared(fluree_doc_html::info(&text)),
         ));
     }
     // Word's macro-enabled and template variants are the same OOXML
@@ -253,7 +258,7 @@ fn convert_path(
             &src,
             args,
             Vec::new(),
-            &fluree_doc_model::Notes::default(),
+            &declared(fluree_doc_docx::info(&data)),
         ));
     }
     if ext_is(pdf, &["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"]) {
@@ -263,7 +268,7 @@ fn convert_path(
             &src,
             args,
             Vec::new(),
-            &fluree_doc_model::Notes::default(),
+            &declared(fluree_doc_pptx::info(&data)),
         ));
     }
     // A workbook: each sheet is a page, its islands of cells are tables.
@@ -274,7 +279,7 @@ fn convert_path(
             &src,
             args,
             Vec::new(),
-            &fluree_doc_model::Notes::default(),
+            &declared(fluree_doc_xlsx::info(&data)),
         ));
     }
     if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
@@ -628,6 +633,7 @@ fn convert_bytes(
             .filter(|(text, _)| text.chars().any(char::is_alphabetic))
             .map(|(text, _)| text.clone())
             .collect(),
+        info: fluree_doc_pdf::info::read(&raw),
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {

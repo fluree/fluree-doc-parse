@@ -134,9 +134,13 @@ fn walk(
     }
 }
 
-/// Decode a PDF text string: UTF-16BE when the BOM is present, otherwise
-/// PDFDocEncoding — close enough to Latin-1 for title text.
-fn decode_text_string(bytes: &[u8]) -> String {
+/// Decode a PDF text string: UTF-16BE or, from PDF 2.0, UTF-8 when its BOM
+/// says so, otherwise PDFDocEncoding — close enough to Latin-1 for title
+/// text.
+pub(crate) fn decode_text_string(bytes: &[u8]) -> String {
+    if let Some(utf8) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8_lossy(utf8).into_owned();
+    }
     if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
         let units: Vec<u16> = bytes[2..]
             .chunks_exact(2)

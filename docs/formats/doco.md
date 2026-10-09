@@ -92,6 +92,23 @@ convert` was given, or `--source-name`. Standard input has none. A name is
 not an identifier — names repeat, and change when a file is moved — which is
 why the hash is the one to join on.
 
+What the file declares about itself rides beside them, in Dublin Core:
+
+```json
+{ "@type": "doco:Document",
+  "dcterms:title": "Quarterly Report",
+  "dcterms:creator": ["Ada Park"],
+  "dcterms:created": { "@value": "2019-07-12T15:10:45-06:00", "@type": "xsd:dateTime" },
+  "dcterms:modified": { "@value": "2019-07-12T15:11:13-06:00", "@type": "xsd:dateTime" } }
+```
+
+From a PDF's information dictionary, an Office file's core properties, an
+HTML page's `<title>` and author, or an email's headers. Declared, never
+inferred: a title guessed from a page's largest line would be a reading of
+the page, and the [elements](#sections-are-explicit) are where that goes. A
+date that is not a real one is left out, since typed as `xsd:dateTime` it
+would fail a store's insert.
+
 ## The document node carries page geometry
 
 ```json

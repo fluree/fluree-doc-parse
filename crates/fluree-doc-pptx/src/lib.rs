@@ -23,7 +23,7 @@
 //! table — categories down, one column per series — so its numbers are
 //! queryable like any other table's.
 
-use fluree_doc_model::Element;
+use fluree_doc_model::{DocumentInfo, Element};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::io::Read;
@@ -151,6 +151,26 @@ struct Chart {
     title: String,
     categories: Vec<String>,
     series: Vec<Series>,
+}
+
+/// What the file declares about itself in its core properties
+/// (`docProps/core.xml`): title, author, and when it was made and last
+/// saved. Empty where the part is missing or the file is not a package.
+pub fn info(bytes: &[u8]) -> DocumentInfo {
+    let mut xml = String::new();
+    let read = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .ok()
+        .and_then(|mut zip| {
+            zip.by_name("docProps/core.xml")
+                .ok()?
+                .read_to_string(&mut xml)
+                .ok()
+        });
+    if read.is_some() {
+        DocumentInfo::from_core_properties(&xml)
+    } else {
+        DocumentInfo::default()
+    }
 }
 
 /// Read a chart part. Values come from the cached `c:strCache`/`c:numCache`

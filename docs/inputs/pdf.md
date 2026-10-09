@@ -24,6 +24,14 @@ inferred from position. See [the pipeline](../design/pipeline.md) for how.
   point at. They are read, matched to the words they cover, and emitted in
   every format that has room for them — see
   [Links](../formats/markdown.md#links).
+- **The document information dictionary** — `/Title`, `/Author`,
+  `/CreationDate` and `/ModDate` — on the [DoCO](../formats/doco.md)
+  document node as `dcterms:title`, `dcterms:creator`, `dcterms:created` and
+  `dcterms:modified`. A date carries its offset where the file states one
+  other than zero; `Z` and no offset read alike, so neither is written. What
+  the file declares can be stale — a title of `Microsoft Word - draft3.doc`
+  is what that file says — and a title guessed from the largest line on the
+  first page would be a reading of the page, so none is.
 
 ## Text fidelity
 

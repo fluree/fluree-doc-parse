@@ -78,9 +78,9 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:unreadPages` | `doco:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:runningText` | `doco:Document` | JSON literal: the header/footer text stripped from the body |
 | `doc:attachments` | `doco:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
-| `dcterms:title` | `doco:Document` | the title the document declares: an email's subject |
-| `dcterms:creator` | `doco:Document` | who made it, as the document names them: an email's sender |
-| `dcterms:created` / `dcterms:modified` | `doco:Document` | `xsd:dateTime`: when it was made, or an email sent |
+| `dcterms:title` | `doco:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
+| `dcterms:creator` | `doco:Document` | who made it, as the file names them: `/Author`, `dc:creator`, `<meta name="author">`, an email's sender |
+| `dcterms:created` / `dcterms:modified` | `doco:Document` | `xsd:dateTime` (or `xsd:date`): when it was made and last saved, or an email sent |
 
 **Transcript turns**
 

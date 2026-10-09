@@ -510,7 +510,9 @@ impl<'a> Emitter<'a> {
             }
         }
         if let Some(d) = &m.date {
-            self.nodes[idx].insert("doc:sentAt".into(), date_time(d));
+            if let Some(d) = date_time(d) {
+                self.nodes[idx].insert("doc:sentAt".into(), d);
+            }
         }
         if let Some(s) = &m.subject {
             self.nodes[idx].insert("doc:subject".into(), Value::String(s.clone()));
@@ -655,14 +657,16 @@ fn mailbox_key(m: &Mailbox) -> String {
 }
 
 /// An ISO 8601 timestamp as a typed literal, so a store compares it as a
-/// time rather than a string. A bare date is an `xsd:date`.
-fn date_time(v: &str) -> Value {
+/// time rather than a string. A bare date is an `xsd:date`. `None` for one
+/// that is not a real date: typed, it would fail the whole insert.
+fn date_time(v: &str) -> Option<Value> {
+    let v = crate::xsd_date_time(v)?;
     let ty = if v.contains('T') {
         "xsd:dateTime"
     } else {
         "xsd:date"
     };
-    json!({ "@value": v, "@type": ty })
+    Some(json!({ "@value": v, "@type": ty }))
 }
 
 pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
@@ -718,7 +722,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         ("dcterms:modified", &info.modified),
     ] {
         if let Some(v) = value {
-            em.nodes[doc_idx].insert(key.into(), date_time(v));
+            if let Some(v) = date_time(v) {
+                em.nodes[doc_idx].insert(key.into(), v);
+            }
         }
     }
     if !opts.attachments.is_empty() {

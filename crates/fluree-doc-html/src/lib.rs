@@ -22,7 +22,7 @@
 //! There is no geometry: HTML positions nothing until it is laid out, so
 //! `bbox` is `None` rather than a zeroed box.
 
-use fluree_doc_model::{Element, Link};
+use fluree_doc_model::{DocumentInfo, Element, Link};
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 
@@ -260,6 +260,43 @@ fn is_citation(h: &Handle) -> bool {
 }
 
 /// An element node's lowercase tag name, or `None` for text and the rest.
+/// What a page declares about itself in its `<head>`: its `<title>` and a
+/// `<meta name="author">`. Read from the head alone, because a `<title>`
+/// in the body is an SVG drawing's.
+pub fn info(src: &str) -> DocumentInfo {
+    let dom = html5ever::parse_document(RcDom::default(), Default::default())
+        .from_utf8()
+        .read_from(&mut src.as_bytes())
+        .unwrap_or_default();
+    let mut info = DocumentInfo::default();
+    let html = children_of(&dom.document)
+        .into_iter()
+        .find(|h| tag_of(h).as_deref() == Some("html"));
+    let head = html
+        .iter()
+        .flat_map(children_of)
+        .find(|h| tag_of(h).as_deref() == Some("head"));
+    for h in head.iter().flat_map(children_of) {
+        match tag_of(&h).as_deref() {
+            Some("title") if info.title.is_none() => {
+                info.title = Some(text_of(&h).0).filter(|t| !t.is_empty());
+            }
+            Some("meta") => {
+                let named_author =
+                    attr_of(&h, "name").is_some_and(|n| n.eq_ignore_ascii_case("author"));
+                let content = attr_of(&h, "content")
+                    .map(|c| c.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|c| !c.is_empty());
+                if let (true, Some(c)) = (named_author, content) {
+                    info.creators.push(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
 fn tag_of(h: &Handle) -> Option<String> {
     match &h.data {
         NodeData::Element { name, .. } => Some(name.local.to_ascii_lowercase().to_string()),
@@ -848,6 +885,20 @@ mod tests {
 
     fn kinds(e: &[Element]) -> Vec<&str> {
         e.iter().map(|x| x.kind.as_str()).collect()
+    }
+
+    #[test]
+    fn a_page_declares_its_title_and_author_in_its_head() {
+        let info = info(
+            "<html><head><title>Quarterly\n  report</title>\
+             <meta name=\"Author\" content=\"Ada Park\"></head>\
+             <body><svg><title>a chart</title></svg><p>Text</p></body></html>",
+        );
+        assert_eq!(info.title.as_deref(), Some("Quarterly report"));
+        assert_eq!(info.creators, ["Ada Park"]);
+        // A drawing's title is not the page's.
+        let bare = super::info("<p>Text</p><svg><title>a chart</title></svg>");
+        assert_eq!(bare.title, None);
     }
 
     #[test]

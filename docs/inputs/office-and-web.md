@@ -10,6 +10,13 @@ Two consequences apply to all of them:
   structure](../concepts/geometry-vs-declared.md).
 - **No escalation.** There is nothing to arbitrate.
 
+And what a file declares about itself goes on the [DoCO](../formats/doco.md)
+document node: an Office file's core properties (`dc:title`, `dc:creator`,
+`dcterms:created`, `dcterms:modified`) and an HTML page's `<title>` and
+`<meta name="author">` become `dcterms:title`, `dcterms:creator`,
+`dcterms:created` and `dcterms:modified`. A date that is not a real one is
+left out.
+
 ## DOCX
 
 ```bash

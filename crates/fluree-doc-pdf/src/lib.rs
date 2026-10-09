@@ -62,6 +62,7 @@ pub mod geom;
 pub(crate) mod glyph;
 pub mod heading;
 pub mod image;
+pub mod info;
 pub mod line;
 pub mod link;
 pub mod outline;

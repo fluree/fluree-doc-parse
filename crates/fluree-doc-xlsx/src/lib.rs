@@ -33,7 +33,7 @@
 //! No `bbox`: a cell address is not a position on a page, and a consumer
 //! wanting the address has the table's row and column.
 
-use fluree_doc_model::{Datum, Element};
+use fluree_doc_model::{Datum, DocumentInfo, Element};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -104,6 +104,26 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, XlsxError> {
         e.id = format!("elem-{:05}", i + 1);
     }
     Ok(out)
+}
+
+/// What the file declares about itself in its core properties
+/// (`docProps/core.xml`): title, author, and when it was made and last
+/// saved. Empty where the part is missing or the file is not a package.
+pub fn info(bytes: &[u8]) -> DocumentInfo {
+    let mut xml = String::new();
+    let read = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .ok()
+        .and_then(|mut zip| {
+            zip.by_name("docProps/core.xml")
+                .ok()?
+                .read_to_string(&mut xml)
+                .ok()
+        });
+    if read.is_some() {
+        DocumentInfo::from_core_properties(&xml)
+    } else {
+        DocumentInfo::default()
+    }
 }
 
 /// What a sheet needs from the rest of the package.
