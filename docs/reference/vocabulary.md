@@ -132,6 +132,7 @@ its own — an image, a whole table cell.
 | property | value |
 |---|---|
 | `doc:cellValue` | the cell's text |
+| `doc:cellDatum` | what the source stores under that text, typed (`xsd:decimal`, `xsd:date`, `xsd:time`, `xsd:dateTime`, `xsd:boolean`); only where the source declares a type, as a workbook does |
 | `nif:beginIndex` / `nif:endIndex` | where `doc:cellValue` sits in the text projection; absent for a value a merge copied in |
 | `doc:rowIndex` | 0-based row |
 | `doc:columnIndex` | 0-based column |

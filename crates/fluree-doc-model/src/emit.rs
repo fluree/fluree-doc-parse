@@ -526,6 +526,7 @@ mod tests {
             message: None,
             resumes: None,
             signature: false,
+            datums: None,
             provenance: "rust",
             evidence: "layout",
         }

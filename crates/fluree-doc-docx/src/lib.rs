@@ -394,6 +394,7 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
         message: None,
         resumes: None,
         signature: false,
+        datums: None,
         provenance: "docx",
         evidence: "docx",
     }

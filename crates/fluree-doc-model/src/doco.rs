@@ -914,20 +914,32 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             }
                             em.nodes[cell_idx]
                                 .insert("doc:cellValue".into(), Value::String(value.into()));
+                            // Whether the value is this cell's own: merge
+                            // denormalisation can synthesise or rejoin
+                            // values (fill-down copies, fragment joins).
+                            let own = raw_rows.get(r).and_then(|row| row.get(c)).map(|c| c.trim())
+                                == Some(value);
                             // Offsets only when the projection really shows
-                            // this value at (r, c): merge denormalisation can
-                            // synthesise or rejoin values (fill-down copies,
-                            // fragment joins), and those have no span to
-                            // point at. A cell's span slices the projection
-                            // to its `doc:cellValue`, which is its text, so
-                            // it carries no `nif:isString` repeating it.
-                            if let (Some(s), Some(&(b, t))) = (table_start, cell_spans.get(&(r, c)))
+                            // this value at (r, c); a copied value has no
+                            // span to point at. A cell's span slices the
+                            // projection to its `doc:cellValue`, which is
+                            // its text, so it carries no `nif:isString`
+                            // repeating it.
+                            if let (true, Some(s), Some(&(b, t))) =
+                                (own, table_start, cell_spans.get(&(r, c)))
                             {
-                                let raw =
-                                    raw_rows.get(r).and_then(|row| row.get(c)).map(|c| c.trim());
-                                if raw == Some(value) {
-                                    em.set_offsets(cell_idx, s + b, s + t);
-                                }
+                                em.set_offsets(cell_idx, s + b, s + t);
+                            }
+                            // What the source stores under the text it
+                            // shows, typed, where it declares a type.
+                            if let Some(d) = own
+                                .then(|| e.datums.as_ref()?.get(r)?.get(c)?.as_ref())
+                                .flatten()
+                            {
+                                em.nodes[cell_idx].insert(
+                                    "doc:cellDatum".into(),
+                                    json!({ "@value": d.value, "@type": d.datatype }),
+                                );
                             }
                             em.attach(table, cell_idx);
                         }
@@ -1060,6 +1072,7 @@ mod tests {
             message: None,
             resumes: None,
             signature: false,
+            datums: None,
             provenance: "rust",
             evidence: "layout",
         }
@@ -1265,6 +1278,41 @@ mod tests {
         // Its projected neighbour still carries offsets.
         let two = cells.iter().find(|c| c["doc:cellValue"] == "2").unwrap();
         assert!(two.get("nif:beginIndex").is_some());
+    }
+
+    #[test]
+    fn a_cell_carries_its_stored_value_typed_beside_its_text() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Region".into(), "Share".into()],
+            vec!["North".into(), "12%".into()],
+            vec!["".into(), "7%".into()],
+        ]);
+        let dec = |v: &str| Some(crate::Datum::new("xsd:decimal", v));
+        t.datums = Some(vec![
+            vec![None, None],
+            vec![None, dec("0.12345")],
+            vec![None, dec("0.0701")],
+        ]);
+        // Row 2's region continues North from the row above.
+        t.merged_down = Some(vec![false, false, false, false, true, false]);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let cell = |row: u64, col: u64| {
+            cells
+                .iter()
+                .find(|c| c["doc:rowIndex"] == json!(row) && c["doc:columnIndex"] == json!(col))
+                .unwrap()
+        };
+        assert_eq!(cell(0, 1)["doc:cellValue"], "12%");
+        assert_eq!(
+            cell(0, 1)["doc:cellDatum"],
+            json!({ "@value": "0.12345", "@type": "xsd:decimal" })
+        );
+        assert_eq!(cell(1, 1)["doc:cellDatum"]["@value"], "0.0701");
+        assert!(cell(0, 0).get("doc:cellDatum").is_none(), "text is text");
+        assert_eq!(cell(1, 0)["doc:cellValue"], "North");
+        assert!(cell(1, 0).get("doc:cellDatum").is_none());
     }
 
     #[test]

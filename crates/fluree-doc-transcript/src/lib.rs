@@ -406,6 +406,7 @@ fn element(text: String, turn: Option<Turn>, format: Format) -> Element {
         message: None,
         resumes: None,
         signature: false,
+        datums: None,
         provenance: format.tag(),
         evidence: format.tag(),
     }

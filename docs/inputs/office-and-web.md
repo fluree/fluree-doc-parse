@@ -82,11 +82,24 @@ flattened out of it. So this reader measures after all, but only shape.
   `merged_left` / `merged_down` continuations, and a merged cell across the
   full width inside a table is a `sub_headers` band.
 - **Values are the cached ones.** A formula's last computed value is what
-  the file holds and what Excel shows; nothing is recalculated. Numbers
-  render as the shortest decimal that reads back to the same value, dates
-  and times as ISO where the cell's number format says the number is one,
-  percentages as percentages. Other format details — thousands separators,
-  currency signs, colours — are not rendered.
+  the file holds and what Excel shows; nothing is recalculated.
+- **A cell's text is what Excel shows.** A number is rendered through its
+  format: fixed decimals (`14.50`), grouping (`1,234.50`), a currency sign
+  or code beside it, negatives in parentheses, thousands scaled out,
+  percentages as percentages. The built-in currency formats show grouping
+  and decimals but no sign, because which sign is the reader's locale and
+  not the file's. Dates and times are ISO where the cell's format says the
+  number is one. A format this does not read — conditions, exponents,
+  fractions — falls back to the shortest decimal that reads back to the
+  value. Colours are not rendered.
+- **What the cell stores comes with it, typed.** A table's `datums`, and
+  `doc:cellDatum` in [DoCO](../formats/doco.md#table-cells-are-nodes), hold
+  each number at full precision whatever its format rounds away (`0.12345`
+  under a `12%`, `1234.5678` under `1,234.57`) as an `xsd:decimal`; a date
+  or time as the moment its serial counts to, keeping a time of day the
+  format hides, as an `xsd:date`, `xsd:time` or `xsd:dateTime`; a boolean as
+  an `xsd:boolean`. A cell the file stores as text has none, digits or not:
+  `00123` stored as text is a code, and stays one.
 
 Hidden sheets, rows and columns are read like any other; a consumer that
 wants what the author showed can drop them by name. Pictures anchored to

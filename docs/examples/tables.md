@@ -206,6 +206,7 @@ full of `<`, `>` and `&`.
 | `sub_headers` | row indices that are one full-width banner splitting the body into sections |
 | `merged_down` | flat `rows × cols`: this cell continues the one above |
 | `merged_left` | flat `rows × cols`: this cell continues the one to its left |
+| `datums` | workbooks only, nested like `cells`: each cell's stored value, typed (`0.12345` under `12%`), or `null` for text |
 
 `header_rows` is absent on model-supplied tables, where the header count was
 never measured. Treat absent as 1.

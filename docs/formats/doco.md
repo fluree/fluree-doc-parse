@@ -203,6 +203,21 @@ A cell's offsets slice the projection to its `doc:cellValue`, which is its
 text, so it carries no `nif:isString` repeating it. A value copied into a cell
 by a merge has no place in the projection and no offsets.
 
+Where the source stores a typed value under the text it shows — a
+[workbook](../inputs/office-and-web.md#xlsx) does — the cell also carries it,
+at full precision:
+
+```json
+{ "@type": "doc:TableCell",
+  "doc:cellValue": "12%",
+  "doc:cellDatum": { "@value": "0.12345", "@type": "xsd:decimal" } }
+```
+
+`doc:cellValue` stays what the author saw, and what the text projection reads;
+`doc:cellDatum` is what to compute with. Other formats store text, and their
+cells have none: a type guessed from text is a reading of the page, and
+`45584888` may be an order number, `03/04/2026` either of two days.
+
 Because a cell is a node rather than a position in a grid, there is no merge
 shape this format fails to represent. That is not true of
 [`xhtml`](xhtml.md), where a region HTML cannot tile is dropped along with its

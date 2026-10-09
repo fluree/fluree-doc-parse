@@ -165,6 +165,19 @@ pub struct Element {
     /// nested table rules columns the outer rows do not have.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_left: Option<Vec<bool>>,
+    /// What each cell holds, typed, where the source declares it: same
+    /// shape as `cells`, and `None` for a cell the source holds as text.
+    ///
+    /// A workbook stores a number and shows it through a format: `0.12345`
+    /// shows as `12%`, a serial day count as a date. `cells` keeps what is
+    /// shown, because that is what the author saw and what the text
+    /// projection reads; this keeps what is stored, at full precision. Only
+    /// a source that declares types fills it. A guessed type from text
+    /// (`45584888` a quantity rather than an order number, `03/04/2026` in
+    /// one country's order) would be a reading of the page, not a fact
+    /// about it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datums: Option<Vec<Vec<Option<Datum>>>>,
     /// Identifier of the figure this element belongs to, shared by every
     /// fragment of one chart.
     ///
@@ -227,6 +240,27 @@ impl Element {
     /// on purpose so layout code stays readable.
     pub fn rect(&self) -> BBox {
         self.bbox.unwrap_or_default()
+    }
+}
+
+/// A value as its source stores it, typed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Datum {
+    /// The XSD datatype, as a compact IRI: `xsd:decimal`, `xsd:boolean`,
+    /// `xsd:date`, `xsd:time` or `xsd:dateTime`.
+    #[serde(rename = "type")]
+    pub datatype: &'static str,
+    /// The value's lexical form in that datatype: `0.12345`, `true`,
+    /// `2023-07-16T18:00:00`.
+    pub value: String,
+}
+
+impl Datum {
+    pub fn new(datatype: &'static str, value: impl Into<String>) -> Self {
+        Datum {
+            datatype,
+            value: value.into(),
+        }
     }
 }
 

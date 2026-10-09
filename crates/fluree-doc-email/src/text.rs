@@ -172,6 +172,7 @@ pub fn element(kind: &str, text: String, provenance: &'static str) -> Element {
         message: None,
         resumes: None,
         signature: false,
+        datums: None,
         provenance,
         evidence: provenance,
     }

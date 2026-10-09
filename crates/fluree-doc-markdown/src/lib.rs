@@ -72,6 +72,7 @@ impl Reader {
             message: None,
             resumes: None,
             signature: false,
+            datums: None,
             provenance: "markdown",
             evidence: "markdown",
         }

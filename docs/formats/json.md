@@ -39,6 +39,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `sub_headers` | tables | full-width banner row indices |
 | `merged_down` | tables | row-major continuation flags |
 | `merged_left` | tables | row-major continuation flags |
+| `datums` | workbook tables | same shape as `cells`: each cell's stored value as `{type, value}` (`xsd:decimal`, `xsd:date`, …), or `null` for text |
 | `links` | where the source has any | hyperlinks over this element's text |
 | `turn` | [transcripts](../inputs/transcripts.md) | `{speaker?, start_ms, end_ms}`: who spoke and when |
 | `message` | [email](../inputs/email.md), on the element opening each message | the message's header: `from`, `to`, `cc`, `date`, `subject`, … |

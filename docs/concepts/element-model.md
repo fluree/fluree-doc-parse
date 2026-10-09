@@ -20,6 +20,7 @@ pub struct Element {
     pub sub_headers: Option<Vec<usize>>,
     pub merged_down: Option<Vec<bool>>,   // cell continues the one above
     pub merged_left: Option<Vec<bool>>,   // cell continues the one to its left
+    pub datums: Option<Vec<Vec<Option<Datum>>>>, // each cell's stored value, typed, where declared
     pub figure: Option<String>,           // shared id for fragments of one drawing
     pub links: Option<Vec<Link>>,         // hyperlinks over this element's text
     pub turn: Option<Turn>,               // transcripts: speaker, start_ms, end_ms
@@ -90,6 +91,12 @@ geometry measured and a consumer cannot re-derive:
 - **`sub_headers`** — row indices below the header block that are a single
   full-width cell labelling the rows beneath them. The banner bands that split
   a matrix into sections.
+
+- **`datums`** — the same shape as `cells`: what each cell stores beneath
+  the text it shows, as an XSD datatype and a lexical form
+  (`{type: "xsd:decimal", value: "0.12345"}` under `12%`), or `None` where
+  the source stores text. Only a source that declares types fills it, and
+  of the readers only the [workbook](../inputs/office-and-web.md#xlsx) does.
 
 Spanning cells follow the **rowspan convention**: the value sits where the
 text was laid out and the other spanned positions are blank, with

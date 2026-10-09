@@ -26,11 +26,14 @@
 //!   render as the shortest decimal that round-trips, dates and times as
 //!   ISO where the cell's number format says the number is one, and
 //!   percentages as percentages.
+//! * **What a cell stores rides beside what it shows.** A table's `datums`
+//!   hold each number, date, time and boolean as the file stores it, typed,
+//!   at full precision: `0.12345` under a `12%`.
 //!
 //! No `bbox`: a cell address is not a position on a page, and a consumer
 //! wanting the address has the table's row and column.
 
-use fluree_doc_model::Element;
+use fluree_doc_model::{Datum, Element};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -701,6 +704,8 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Cell {
     text: String,
+    /// What the cell stores, where its type is not text.
+    datum: Option<Datum>,
     bold: bool,
     size: f32,
 }
@@ -785,20 +790,22 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-/// A serial date as ISO text. Excel counts days from 1899-12-30 in the 1900
-/// system — the day before 1900-01-01, so that serial 1 is New Year's Day —
-/// and keeps a day that never happened, 1900-02-29, at serial 60; a serial
-/// below 61 is one day off from that. The 1904 system counts from 1904-01-01.
-pub fn format_serial(v: f64, fmt: NumFmt, date1904: bool) -> String {
+/// A serial date as the civil date it counts to and how far into that day
+/// it is, in `per_day` parts, rounded. Excel counts days from 1899-12-30 in
+/// the 1900 system — the day before 1900-01-01, so that serial 1 is New
+/// Year's Day — and keeps a day that never happened, 1900-02-29, at serial
+/// 60; a serial below 61 is one day off from that. The 1904 system counts
+/// from 1904-01-01. `None` for a serial before the epoch.
+fn civil_from_serial(v: f64, per_day: i64, date1904: bool) -> Option<((i64, u32, u32), i64)> {
     if v < 0.0 || !v.is_finite() {
-        return format_general(v);
+        return None;
     }
     let days = v.floor() as i64;
-    let secs = ((v - v.floor()) * 86_400.0).round() as i64;
-    let (days, secs) = if secs >= 86_400 {
+    let part = ((v - v.floor()) * per_day as f64).round() as i64;
+    let (days, part) = if part >= per_day {
         (days + 1, 0)
     } else {
-        (days, secs)
+        (days, part)
     };
     // Days between 1970-01-01 and each epoch.
     let epoch = if date1904 {
@@ -808,7 +815,14 @@ pub fn format_serial(v: f64, fmt: NumFmt, date1904: bool) -> String {
     } else {
         -25_568
     };
-    let (y, m, d) = civil_from_days(days + epoch);
+    Some((civil_from_days(days + epoch), part))
+}
+
+/// A serial date as ISO text, to the second.
+pub fn format_serial(v: f64, fmt: NumFmt, date1904: bool) -> String {
+    let Some(((y, m, d), secs)) = civil_from_serial(v, 86_400, date1904) else {
+        return format_general(v);
+    };
     let date = format!("{y:04}-{m:02}-{d:02}");
     let time = format!(
         "{:02}:{:02}:{:02}",
@@ -833,6 +847,69 @@ pub fn format_number(raw: &str, style: &CellStyle, date1904: bool) -> String {
         NumFmt::Percent(decimals) => format!("{:.*}%", decimals, v * 100.0),
         NumFmt::Number(f) => f.format(v),
         fmt => format_serial(v, fmt.clone(), date1904),
+    }
+}
+
+/// What a cell stores, typed, where its type is not text: a number at full
+/// precision whatever its format shows, a date or time as the moment its
+/// serial counts to, a boolean. Strings and errors have none.
+pub fn cell_datum(kind: &str, value: &str, style: &CellStyle, date1904: bool) -> Option<Datum> {
+    let v = value.trim();
+    match kind {
+        "b" => match v {
+            "1" | "true" => Some(Datum::new("xsd:boolean", "true")),
+            "0" | "false" => Some(Datum::new("xsd:boolean", "false")),
+            _ => None,
+        },
+        // An ISO 8601 date, time or both, as the file writes it.
+        "d" => {
+            let ty = match (v.contains('T'), v.contains(':')) {
+                (true, _) => "xsd:dateTime",
+                (false, true) => "xsd:time",
+                (false, false) => "xsd:date",
+            };
+            v.starts_with(|c: char| c.is_ascii_digit())
+                .then(|| Datum::new(ty, v))
+        }
+        "" | "n" => {
+            let n = v.parse::<f64>().ok().filter(|n| n.is_finite())?;
+            let serial = match style.format {
+                NumFmt::Date | NumFmt::Time | NumFmt::DateTime => {
+                    serial_datum(n, &style.format, date1904)
+                }
+                _ => None,
+            };
+            // Rust writes a float as the shortest decimal that reads back
+            // to it, never in exponent form: an `xsd:decimal` as it is.
+            Some(serial.unwrap_or_else(|| Datum::new("xsd:decimal", format!("{n}"))))
+        }
+        _ => None,
+    }
+}
+
+/// A serial as the moment it counts to, to the millisecond, whatever part
+/// of it the format shows: a date format over a serial with a time of day
+/// keeps the time. A time format over a day or more says the file does not
+/// say which it is — a timestamp showing its time, or an elapsed duration —
+/// and has none, so the number stands.
+fn serial_datum(v: f64, fmt: &NumFmt, date1904: bool) -> Option<Datum> {
+    let ((y, m, d), ms) = civil_from_serial(v, 86_400_000, date1904)?;
+    let date = format!("{y:04}-{m:02}-{d:02}");
+    let secs = ms / 1000;
+    let mut time = format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs / 60) % 60,
+        secs % 60
+    );
+    if ms % 1000 != 0 {
+        time.push_str(&format!(".{:03}", ms % 1000));
+    }
+    match fmt {
+        NumFmt::Time if v < 1.0 => Some(Datum::new("xsd:time", time)),
+        NumFmt::Time => None,
+        NumFmt::Date if ms == 0 => Some(Datum::new("xsd:date", date)),
+        _ => Some(Datum::new("xsd:dateTime", format!("{date}T{time}"))),
     }
 }
 
@@ -912,6 +989,7 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
                                     pos,
                                     Cell {
                                         text,
+                                        datum: cell_datum(&kind, &value, &st, ctx.date1904),
                                         bold: st.bold,
                                         size: st.size,
                                     },
@@ -1388,6 +1466,7 @@ fn island_elements(
     let n_rows = range.height() as usize;
     let width = cols.len();
     let mut grid = vec![String::new(); n_rows * width];
+    let mut data: Vec<Option<Datum>> = vec![None; n_rows * width];
     let mut m_left = vec![false; n_rows * width];
     let mut m_down = vec![false; n_rows * width];
     let mut bold = vec![false; n_rows * width];
@@ -1399,6 +1478,7 @@ fn island_elements(
             let i = (r - range.r0) as usize * width + k;
             if let Some(cell) = cells.get(&(r, c)) {
                 grid[i] = cell.text.clone();
+                data[i] = cell.datum.clone();
                 bold[i] = cell.bold;
             }
             if let Some(m) = merge_of.get(&(r, c)) {
@@ -1445,6 +1525,10 @@ fn island_elements(
         .join("\n");
     let mut e = element("doco:Table", text, None, page);
     e.cells = Some(rows);
+    e.datums = data
+        .iter()
+        .any(Option::is_some)
+        .then(|| data.chunks(width).map(<[Option<Datum>]>::to_vec).collect());
     // Measured, so stated even when it is zero: absent would read as
     // undetected, and a consumer then presumes one.
     e.header_rows = Some(header_rows);
@@ -1580,6 +1664,7 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
         message: None,
         resumes: None,
         signature: false,
+        datums: None,
         provenance: "xlsx",
         evidence: "xlsx",
     }
@@ -1872,6 +1957,90 @@ mod tests {
         assert_eq!(cells[1], vec!["BR-100", "Bracket", "6.74"]);
         assert_eq!(cells[2][2], "9");
         assert!(t.merged_left.is_none() && t.merged_down.is_none());
+    }
+
+    #[test]
+    fn a_cell_stores_its_value_typed_beneath_what_it_shows() {
+        let st = |format| CellStyle {
+            format,
+            ..Default::default()
+        };
+        let datum = |kind: &str, v: &str, format| cell_datum(kind, v, &st(format), false);
+        let d = |ty, v: &str| Some(Datum::new(ty, v));
+        // A number keeps every digit its format rounds away.
+        assert_eq!(
+            datum("", "0.12345", NumFmt::Percent(0)),
+            d("xsd:decimal", "0.12345")
+        );
+        assert_eq!(
+            format_number("0.12345", &st(NumFmt::Percent(0)), false),
+            "12%"
+        );
+        assert_eq!(
+            datum("n", "6.7400000000000002", NumFmt::General),
+            d("xsd:decimal", "6.74")
+        );
+        assert_eq!(datum("", "17", NumFmt::General), d("xsd:decimal", "17"));
+        // A date keeps the time of day its format hides.
+        assert_eq!(
+            datum("", "45123", NumFmt::Date),
+            d("xsd:date", "2023-07-16")
+        );
+        assert_eq!(
+            datum("", "45123.75", NumFmt::Date),
+            d("xsd:dateTime", "2023-07-16T18:00:00")
+        );
+        assert_eq!(
+            datum("", "45123.5000115741", NumFmt::DateTime),
+            d("xsd:dateTime", "2023-07-16T12:00:01")
+        );
+        assert_eq!(
+            datum("", "0.5000005787", NumFmt::Time),
+            d("xsd:time", "12:00:00.050")
+        );
+        // A time format over a day or more: timestamp or duration, the file
+        // does not say, so the number stands.
+        assert_eq!(datum("", "1.5", NumFmt::Time), d("xsd:decimal", "1.5"));
+        assert_eq!(datum("b", "1", NumFmt::General), d("xsd:boolean", "true"));
+        assert_eq!(
+            datum("d", "2023-07-16T18:00:00", NumFmt::General),
+            d("xsd:dateTime", "2023-07-16T18:00:00")
+        );
+        // Text is text, digits or not: a code stored as a string stays one.
+        assert_eq!(datum("inlineStr", "00123", NumFmt::General), None);
+        assert_eq!(datum("s", "4", NumFmt::General), None);
+        assert_eq!(datum("e", "#DIV/0!", NumFmt::General), None);
+    }
+
+    #[test]
+    fn a_table_carries_its_cells_stored_values() {
+        let xml = sheet(
+            &[
+                text("A1", 1, "Item"),
+                text("B1", 1, "Share"),
+                text("C1", 1, "Since"),
+                text("A2", 0, "00123"),
+                num("B2", 4, "0.12345"),
+                num("C2", 5, "45123"),
+            ],
+            "",
+        );
+        let els = parse_sheet(&xml);
+        let t = &els[1];
+        assert_eq!(
+            t.cells.as_ref().unwrap()[1],
+            ["00123", "12.3%", "2023-07-16"]
+        );
+        let data = t.datums.as_ref().unwrap();
+        assert_eq!(data[0], [None, None, None], "header labels are text");
+        assert_eq!(
+            data[1],
+            [
+                None,
+                Some(Datum::new("xsd:decimal", "0.12345")),
+                Some(Datum::new("xsd:date", "2023-07-16")),
+            ]
+        );
     }
 
     #[test]

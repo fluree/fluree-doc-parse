@@ -469,6 +469,7 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
         message: None,
         resumes: None,
         signature: false,
+        datums: None,
         provenance: "pptx",
         evidence: "pptx",
     }
