@@ -144,7 +144,7 @@ impl<'a> SpanResolver<'a> {
         // The element's box is in the display frame and the glyphs are in
         // the page's reading frame; on a turned page the two differ.
         let within = page.from_display(element.rect());
-        let (a, b) = glyph_range_in(index, page, &wanted, within)?;
+        let (a, b) = glyph_range_at(index, page, &projection, from, to, within)?;
         Some(Highlight {
             page: page_index,
             rects: rects_for_glyph_range(&page.glyphs, a, b)
@@ -250,7 +250,7 @@ fn fold(c: char) -> impl Iterator<Item = char> {
 /// cache with itself.
 #[cfg_attr(not(test), allow(dead_code))]
 fn glyph_range_for(page: &Page, needle: &str, within: BBox) -> Option<(usize, usize)> {
-    glyph_range_in(&PageIndex::build(page), page, needle, within)
+    glyph_range_in(&PageIndex::build(page), page, needle, within, 0)
 }
 
 /// A page's glyphs flattened once into a searchable string.
@@ -281,51 +281,120 @@ impl PageIndex {
     }
 }
 
-/// [`glyph_range_for`] against an already-built index.
+/// Characters as the page index holds them: whitespace dropped, each folded.
+fn squeeze(chars: impl IntoIterator<Item = char>) -> String {
+    chars
+        .into_iter()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(fold)
+        .collect()
+}
+
+/// Where `needle` occurs in `hay`, as character positions, overlapping
+/// occurrences included.
+fn occurrences<'s>(hay: &'s str, needle: &'s str) -> impl Iterator<Item = usize> + 's {
+    let mut from = 0usize;
+    let mut chars_before = 0usize;
+    std::iter::from_fn(move || {
+        if needle.is_empty() {
+            return None;
+        }
+        let at = from + hay.get(from..)?.find(needle)?;
+        let pos = chars_before + hay[from..at].chars().count();
+        // Advance one CHARACTER, not one byte: the text is UTF-8, and a
+        // byte step lands inside a multibyte character, so the next slice
+        // panics. Latent until NFKC folding let micro-sign needles match at
+        // all — then a page whose text contains µ brought the whole run
+        // down.
+        from = at + hay[at..].chars().next().map_or(1, char::len_utf8);
+        chars_before = pos + 1;
+        Some(pos)
+    })
+}
+
+/// [`glyph_range_for`] against an already-built index, taking the `nth`
+/// occurrence inside `within` (0 for the first).
 ///
 /// The search always starts at the beginning of `flat`: a page may draw the
 /// same word many times and the one inside `within` is the one the offsets
-/// meant, so this cannot carry a cursor the way the element walk does.
+/// meant, so this cannot carry a cursor the way the element walk does. With
+/// fewer occurrences inside than asked for it takes the last inside, and
+/// with none inside the first anywhere.
 fn glyph_range_in(
     index: &PageIndex,
     page: &Page,
     needle: &str,
     within: BBox,
+    nth: usize,
 ) -> Option<(usize, usize)> {
-    let squeezed: String = needle
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(fold)
-        .collect();
-    if squeezed.is_empty() {
+    let squeezed = squeeze(needle.chars());
+    let len = squeezed.chars().count();
+    if len == 0 {
         return None;
     }
-    let (flat, owner) = (&index.flat, &index.owner);
-    // Several occurrences are ordinary; the one inside the element's own box
-    // is the one the offsets meant.
-    let mut best: Option<(usize, usize)> = None;
-    let mut from = 0usize;
-    while let Some(rel) = flat[from..].find(&squeezed) {
-        let at = from + rel;
-        let start_c = flat[..at].chars().count();
-        let len_c = squeezed.chars().count();
-        let (a, b) = (owner[start_c], owner[start_c + len_c - 1]);
-        let inside = page.glyphs[a].bbox.is_some_and(|g| within.intersects(&g));
-        if inside {
-            return Some((a, b));
-        }
-        best.get_or_insert((a, b));
-        // Advance one CHARACTER, not one byte: `flat` is UTF-8, and a
-        // byte step lands inside a multibyte character, so the next
-        // slice panics. Latent until NFKC folding let micro-sign
-        // needles match at all — then a page whose text contains µ
-        // brought the whole run down.
-        from = at + flat[at..].chars().next().map_or(1, char::len_utf8);
-        if from >= flat.len() {
-            break;
+    let owner = &index.owner;
+    let inside = |p: usize| {
+        page.glyphs[owner[p]]
+            .bbox
+            .is_some_and(|g| within.intersects(&g))
+    };
+    let (mut first, mut last_inside, mut seen) = (None, None, 0usize);
+    for p in occurrences(&index.flat, &squeezed) {
+        first.get_or_insert(p);
+        if inside(p) {
+            if seen == nth {
+                return Some((owner[p], owner[p + len - 1]));
+            }
+            seen += 1;
+            last_inside = Some(p);
         }
     }
-    best
+    last_inside
+        .or(first)
+        .map(|p| (owner[p], owner[p + len - 1]))
+}
+
+/// The glyphs drawing characters `from..to` of an element's projected text.
+///
+/// The span's own characters are not enough to find it: an element saying
+/// "Alpha Beta Alpha" spells its second "Alpha" exactly as its first, and a
+/// search for the word inside the element's box finds the first. So the span
+/// is placed by where it sits in the element: the element's whole text is
+/// found among the glyphs inside its box, and the span is as many characters
+/// into that run as it is into the element. Where the glyphs do not spell
+/// the element in one run — a page drawn out of reading order — the span's
+/// own characters are searched for, and the occurrence taken is the one
+/// counting as many before it inside the box as there are before it in the
+/// element.
+fn glyph_range_at(
+    index: &PageIndex,
+    page: &Page,
+    text: &[char],
+    from: usize,
+    to: usize,
+    within: BBox,
+) -> Option<(usize, usize)> {
+    let whole = squeeze(text.iter().copied());
+    let before = squeeze(text[..from].iter().copied()).chars().count();
+    let span: String = text[from..to].iter().collect();
+    let needle = squeeze(span.chars());
+    let len = needle.chars().count();
+    if len == 0 {
+        return None;
+    }
+    let owner = &index.owner;
+    let run = occurrences(&index.flat, &whole).find(|&p| {
+        page.glyphs[owner[p]]
+            .bbox
+            .is_some_and(|g| within.intersects(&g))
+    });
+    if let Some(p) = run {
+        return Some((owner[p + before], owner[p + before + len - 1]));
+    }
+    let nth = occurrences(&whole, &needle)
+        .take_while(|&p| p < before)
+        .count();
+    glyph_range_in(index, page, &span, within, nth)
 }
 
 /// Merge a glyph range into one rect per visual line.
@@ -531,7 +600,14 @@ mod tests {
         }
         let wanted: String = projection[from..to].iter().collect();
         let page = pages.iter().find(|p| p.index == element.page)?;
-        let (a, b) = glyph_range_for(page, &wanted, element.rect())?;
+        let (a, b) = glyph_range_at(
+            &PageIndex::build(page),
+            page,
+            &projection,
+            from,
+            to,
+            element.rect(),
+        )?;
         Some(Highlight {
             page: element.page,
             rects: rects_for_glyph_range(&page.glyphs, a, b),
@@ -603,6 +679,37 @@ mod tests {
                 "edge span {s}..{e} resolved differently"
             );
         }
+    }
+
+    #[test]
+    fn a_repeated_word_resolves_to_the_occurrence_asked_for() {
+        let bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 200.0,
+            y1: 10.0,
+        };
+        let elements = vec![para("Alpha Beta Alpha", bbox)];
+        let x0 = |pages: &[Page], b: usize, e: usize| {
+            highlight(&elements, pages, b, e).map(|h| (h.rects[0].x0, h.text))
+        };
+        // Drawn in reading order: the element is one run of glyphs.
+        let pages = vec![page_of(&[
+            ("Alpha", 0.0, 0.0),
+            ("Beta", 30.0, 0.0),
+            ("Alpha", 55.0, 0.0),
+        ])];
+        assert_eq!(x0(&pages, 0, 5), Some((0.0, "Alpha".into())));
+        assert_eq!(x0(&pages, 11, 16), Some((55.0, "Alpha".into())));
+        // Drawn out of reading order: the second occurrence asked for is
+        // the second drawn inside the element's box.
+        let pages = vec![page_of(&[
+            ("Beta", 30.0, 0.0),
+            ("Alpha", 0.0, 0.0),
+            ("Alpha", 55.0, 0.0),
+        ])];
+        assert_eq!(x0(&pages, 11, 16), Some((55.0, "Alpha".into())));
+        assert_eq!(x0(&pages, 6, 10), Some((30.0, "Beta".into())));
     }
 
     #[test]

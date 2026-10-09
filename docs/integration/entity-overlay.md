@@ -60,6 +60,12 @@ mention's own string before drawing.
 geometry, or could not be found among the page's glyphs. The element-level box
 from step 2 is still there to fall back on.
 
+A word an element says twice resolves to the occurrence the offsets name, not
+the first: the span is placed by where it sits in its element, counted along
+the element's own run of glyphs. On a page that draws an element out of
+reading order, it is the occurrence counting as many before it inside the
+element's box as the element has before it.
+
 The lower-level `rects_for_glyph_range(&page.glyphs, start, end_inclusive)`
 remains available for callers that already hold glyph indices.
 
