@@ -524,14 +524,12 @@ fn convert_bytes(
     let stem = src.stem;
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
-    // Kept for the crop pass, which re-derives the escalation anchors.
-    let data_for_crops = if cfg.escalate {
-        data.clone()
-    } else {
-        Vec::new()
-    };
     let ol = outline::extract(&raw);
     let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
+    // A configured reader reads the crops chosen from the document as
+    // extracted, which the analysis below changes.
+    let read_here = cfg.escalate && cfg.tier_results.is_none();
+    let extracted = read_here.then(|| doc.clone());
     let opts = cfg.options_for(stem);
     let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts);
     common::arbitrate_layout_titles(cfg.layout_boxes.as_deref(), stem, &mut a.elements);
@@ -553,10 +551,18 @@ fn convert_bytes(
     // A configured reader, in this same command. Sidecars win where both are
     // present: `--tier-results` names readings someone already has, and
     // paying to produce them again would be surprising.
-    if cfg.escalate && cfg.tier_results.is_none() {
+    if let Some(extracted) = &extracted {
+        let hints = crate::escalate::jobs::hints(
+            extracted,
+            stem,
+            cfg.layout_boxes.as_deref(),
+            cfg.config.escalation.on_column_doubt,
+        );
+        let jobs = fluree_doc_pdf::escalate::plan(extracted, &ol, &opts, &hints);
         let readings = crate::escalate::read_document(
             std::path::Path::new(stem),
-            &data_for_crops,
+            jobs,
+            &hints,
             &doc,
             &raw,
             &cfg.config,

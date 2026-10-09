@@ -119,6 +119,7 @@ the text still worthless.
 It does not run any model and opens no network connection, whatever is
 configured. `triage` reports what *would* escalate, which is what makes it the
 cheap look before you spend — `fdoc convert` is where the reading happens, in
-the same command, once a provider is set up. See
+the same command, once a provider is set up. The crops it counts are the ones
+`fdoc convert` would read, chosen by the same selection. See
 [`fdoc config`](config.md) and [Wiring the escalation
 tiers](../integration/escalation-tiers.md).

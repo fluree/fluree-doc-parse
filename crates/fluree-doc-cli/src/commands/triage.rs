@@ -97,6 +97,9 @@ pub fn run(path: &Path) -> i32 {
                     .and_then(|b| hayro_syntax::Pdf::new(std::sync::Arc::new(b)).ok()),
             ) {
                 let ol = fluree_doc_pdf::outline::extract(&raw);
+                // Crops are chosen from the document as extracted, which
+                // the analysis below changes.
+                let extracted = d.clone();
                 // Anchors on, so the crop count below is the one a reader
                 // would be handed. Heading doubt does not count them.
                 let mut ropts = opts_for(f);
@@ -111,9 +114,18 @@ pub fn run(path: &Path) -> i32 {
                         fluree_doc_pdf::document::column_doubt(p, &a).map(|c| (p.index, c))
                     })
                     .collect();
-                crops = fluree_doc_pdf::escalate::crop_count(&fluree_doc_pdf::escalate::crops_for(
-                    &d, &a, false,
-                ));
+                // The crop set `render-routed` and `convert --escalate`
+                // take, from the same analysis `plan` would make.
+                let layout = crate::commands::common::TierConfig::from_env().layout_boxes;
+                let hints = crate::escalate::jobs::hints(
+                    &extracted,
+                    crate::commands::common::stem_of(f),
+                    layout.as_deref(),
+                    false,
+                );
+                crops = fluree_doc_pdf::escalate::crop_count(
+                    &fluree_doc_pdf::escalate::crops_for_with(&extracted, &a, &hints),
+                );
                 tables_total += a.tables;
                 tables_suspect += a.suspect_tables.len();
                 for s in &a.suspect_tables {

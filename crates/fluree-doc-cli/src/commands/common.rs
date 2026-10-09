@@ -63,13 +63,9 @@ pub(crate) fn stem_of(pdf: &Path) -> &str {
     pdf.file_stem().and_then(|x| x.to_str()).unwrap_or("doc")
 }
 
-/// Render scale for VLM crops. 2x of PDF units ≈ 144 dpi — the vision tier's
-/// sweet spot per its own preprocessing; higher wastes upload and tokens.
-pub(crate) const VLM_RENDER_SCALE: f32 = 2.0;
-
-/// Margin around a region crop, in PDF units. The vision tier reads better
-/// with a little ground around the content, and region boxes hug the ink.
-pub(crate) const CROP_MARGIN: f64 = 6.0;
+/// The crop render scale and margin, the library's: the crops `render-routed`
+/// writes and the ones `convert --escalate` sends are the same pixels.
+pub(crate) use fluree_doc_pdf::escalate::{CROP_MARGIN, VLM_RENDER_SCALE};
 
 /// Where the optional model tiers read their sidecar files from. Flags
 /// override the corresponding `FDOC_*` environment variables; the environment

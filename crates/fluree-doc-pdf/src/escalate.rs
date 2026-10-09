@@ -9,12 +9,12 @@
 //! drift: the crop set, the render scale, and the prompts are the ones the
 //! published benchmark scores describe.
 //!
-//! Differences from the CLI's private `escalate` module, deliberately:
-//! layout-detector sidecars (`FDOC_TITLE_BOXES`) are a file-based
-//! refinement an embedded consumer does not have, so [`crops_for`] takes
-//! its table evidence from the analysis alone and a region crop is never
-//! told "this holds a table" by a detector. Everything else is the same
-//! code path.
+//! `fdoc` also has a layout detector's table boxes, from sidecar files an
+//! embedded consumer does not have. They are a hint, [`CropHints`]: they
+//! widen a table crop the grid under-measured and tell a region it holds a
+//! table. [`crops_for`] and [`prompt_for_crop`] are the same selection and
+//! prompts without them; [`crops_for_with`] and [`prompt_for_crop_with`]
+//! take them.
 //!
 //! ```no_run
 //! # use fluree_doc_pdf::{document, escalate, extract_bytes, outline};
@@ -52,9 +52,10 @@
 //! ```
 
 use crate::arbiter::{Block, TierBackend};
-use crate::document::Analysis;
+use crate::document::{Analysis, AnalyzeOptions};
 use crate::extract::Document;
 use crate::geom::BBox;
+use crate::outline::OutlineItem;
 use hayro::vello_cpu::color::{AlphaColor, Srgb};
 use hayro::{render, RenderCache, RenderSettings};
 use hayro_syntax::Pdf;
@@ -142,15 +143,63 @@ impl TierBackend for Readings {
     }
 }
 
-/// Every crop this document asks for, in page order.
+/// What a caller knows beyond the document, for choosing and prompting crops.
+#[derive(Debug, Clone, Default)]
+pub struct CropHints {
+    /// Read every page whose column structure is in doubt as a whole page.
+    /// Off unless asked for: whether it helps depends on the corpus — see
+    /// [`crops_for_with`].
+    pub on_column_doubt: bool,
+    /// Tables a layout detector boxed, by page, in PDF units.
+    pub layout_tables: HashMap<usize, Vec<BBox>>,
+}
+
+/// The crops a document asks for, chosen from the document as extracted.
 ///
-/// Empty when it is read deterministically end to end, which is the common
-/// case: over the evaluation corpus 113 of 200 documents ask for nothing.
+/// The selection reads table anchors, which an analysis emits only with
+/// `emit_anchors` on, and an analysis changes the pages it reads (doubled
+/// glyphs removed, layout rules stripped). So a copy is analysed here with
+/// anchors on and `opts` otherwise, and pages are routed as extracted, as
+/// every caller of this sees them: the crops `fdoc dev render-routed` writes
+/// for a reader, the ones `fdoc convert --escalate` sends one, and the count
+/// `fdoc triage` prices are one set.
+pub fn plan(
+    doc: &Document,
+    outline: &[OutlineItem],
+    opts: &AnalyzeOptions,
+    hints: &CropHints,
+) -> CropJobs {
+    let mut copy = doc.clone();
+    let opts = AnalyzeOptions {
+        emit_anchors: true,
+        ..opts.clone()
+    };
+    let analysis = crate::document::analyze_with(&mut copy, outline, &opts);
+    crops_for_with(doc, &analysis, hints)
+}
+
+/// Every crop this document asks for, in page order, without hints.
 ///
 /// `analysis` MUST come from [`crate::document::analyze_with`] with
 /// `emit_anchors: true` — the table anchors this scans for are only
 /// emitted then, and the splice later replaces those same anchors.
 pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> CropJobs {
+    crops_for_with(
+        doc,
+        analysis,
+        &CropHints {
+            on_column_doubt,
+            ..Default::default()
+        },
+    )
+}
+
+/// Every crop this document asks for, in page order.
+///
+/// Empty when it is read deterministically end to end, which is the common
+/// case: over the evaluation corpus 113 of 200 documents ask for nothing.
+/// `analysis` comes with anchors on, as for [`crops_for`].
+pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) -> CropJobs {
     let mut jobs: CropJobs = Vec::new();
     for p in &doc.pages {
         match crate::route::decide(p).0 {
@@ -167,28 +216,56 @@ pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> 
             crate::route::Route::Deterministic => {}
         }
     }
+    // The whole page, superseding any region or table crop on it.
+    let whole = |jobs: &mut CropJobs, page: usize| match jobs.iter_mut().find(|(pi, _)| *pi == page)
+    {
+        Some((_, slot)) => *slot = None,
+        None => jobs.push((page, None)),
+    };
 
     // A hierarchy resting on nothing but font size is a whole-page
-    // problem, not a region one — the escalation is the whole page, and it
-    // supersedes any region or table crop on it. See the CLI's
-    // `escalate::jobs` for the measurements behind this and the choices
-    // below.
+    // problem, not a region one: the text is all there and legible, and
+    // what is wrong is how it is organised. So the escalation is the whole
+    // page, and it supersedes any region or table crop on it — a reading
+    // that owns the page owns its structure too.
+    //
+    // Measured: the six documents this fires on gain 1.459 between them,
+    // five of six better, the worst loss 0.087. Three of them more than
+    // triple. See `column::doubt` for the signal that was tried first and
+    // rejected: it flags 22 documents for the same escalation, gains less
+    // in total, and makes five worse.
+    //
+    // Only the doubtful pages, not the whole document. The signal is per
+    // page, and a long document with one badly organised page should cost
+    // one reading rather than all of them.
     for d in &analysis.suspect_headings {
-        match jobs.iter_mut().find(|(pi, _)| *pi == d.page) {
-            Some((_, slot)) => *slot = None,
-            None => jobs.push((d.page, None)),
-        }
+        whole(&mut jobs, d.page);
     }
-
-    // Column doubt escalates only when asked for: whether it helps depends
-    // on the corpus, and nothing on the page says which kind you have.
-    if on_column_doubt {
+    // A page whose text sits inside its drawings is a designed layout, and
+    // a designed layout is where every geometric inference this library
+    // makes is least trustworthy at once — reading order, heading rank,
+    // figure boundaries. Recognising it and handing it to a reader is
+    // cheaper than decoding it, and correct more often.
+    for d in &analysis.suspect_figures {
+        whole(&mut jobs, d.page);
+    }
+    // Column doubt escalates only when asked for, because whether it helps
+    // depends on the document and nothing on the page tells you which kind
+    // you have. Measured over the evaluation corpus it is net negative --
+    // fourteen documents better, seven worse, -0.0016 -- and the ones it
+    // hurts have hierarchies that were already sound. On layout-heavy
+    // material the same signal marks exactly the pages that read across
+    // their panels.
+    //
+    // Four discriminators were tried and none separates the two
+    // populations: band coverage, missed-gutter count, whether our lines
+    // are concatenations of the reading's, and whether the document carries
+    // a PDF outline. Until one is found, this is a choice the caller makes
+    // about their corpus rather than one the page can make for them.
+    if hints.on_column_doubt {
         for p in &doc.pages {
             if crate::document::column_doubt(p, analysis).is_some() {
-                match jobs.iter_mut().find(|(pi, _)| *pi == p.index) {
-                    Some((_, slot)) => *slot = None,
-                    None => jobs.push((p.index, None)),
-                }
+                whole(&mut jobs, p.index);
             }
         }
     }
@@ -229,6 +306,31 @@ pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> 
             x.kind == "doco:Table" && x.page == e.page && (x.rect().y0 - e.rect().y0).abs() < 1.0
         }) {
             bbox = tb.rect();
+            // Where the layout detector boxes the same table with different
+            // bounds, crop the union: our grid may cover only part of the
+            // real table, and the reader cannot read pixels it is not shown.
+            for lt in hints.layout_tables.get(&e.page).into_iter().flatten() {
+                let ix = (bbox.x1.min(lt.x1) - bbox.x0.max(lt.x0)).max(0.0);
+                let iy = (bbox.y1.min(lt.y1) - bbox.y0.max(lt.y0)).max(0.0);
+                if ix * iy <= 0.0 {
+                    continue;
+                }
+                let ux0 = bbox.x0.min(lt.x0);
+                let uy0 = bbox.y0.min(lt.y0);
+                let ux1 = bbox.x1.max(lt.x1);
+                let uy1 = bbox.y1.max(lt.y1);
+                // Expand only when the detector says the table is
+                // substantially larger than our grid; small disagreements
+                // are box jitter and would only bust crop caches.
+                let a0 = (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0);
+                let au = (ux1 - ux0) * (uy1 - uy0);
+                if au >= 1.15 * a0 {
+                    bbox.x0 = ux0;
+                    bbox.y0 = uy0;
+                    bbox.x1 = ux1;
+                    bbox.y1 = uy1;
+                }
+            }
         }
         match jobs.iter_mut().find(|(pi, _)| *pi == e.page) {
             Some((_, Some(list))) => list.push((t.to_string(), bbox)),
@@ -470,6 +572,14 @@ In every case:
 
 /// A whole page is not a big region: a page *is* the shape, so its reading
 /// has to carry headings and reading order.
+/// Prepended when a layout detector boxed a table inside a region crop. It
+/// says what the image holds; the form rules still decide how to write it.
+const TABLE_HINT: &str = "This image contains a table: values arranged in rows and columns.
+Transcribe that table as HTML markup, and any text printed outside it as plain
+lines.
+
+";
+
 const FULL: &str = "Transcribe this page exactly as printed, as Markdown.
 
 Reading order follows the page's own layout. Where the page is laid out in
@@ -511,17 +621,30 @@ fn links_hint(listing: &str) -> String {
     )
 }
 
-/// The prompt for one crop. `links` are the anchors and targets the file
-/// states inside the crop — see [`links_in`].
+/// The prompt for one crop, without hints. `links` are the anchors and
+/// targets the file states inside the crop — see [`links_in`].
 pub fn prompt_for_crop(crop: &Crop, links: &[(String, String)]) -> String {
+    prompt_for_crop_with(crop, &CropHints::default(), links)
+}
+
+/// The prompt for one crop: a region a layout detector boxed a table in is
+/// told it holds one.
+pub fn prompt_for_crop_with(crop: &Crop, hints: &CropHints, links: &[(String, String)]) -> String {
     if crop.is_table() {
-        // Table markup has no place to put a Markdown link.
+        // Table markup has no place to put a Markdown link, so the listing
+        // is not offered here.
         return TABLE.to_string();
     }
     let base = if crop.is_page() {
         FULL.to_string()
     } else {
-        REGION.to_string()
+        let boxed = crop.bbox.is_some_and(|b| {
+            hints
+                .layout_tables
+                .get(&crop.page)
+                .is_some_and(|tables| tables.iter().any(|t| overlaps(&b, t)))
+        });
+        format!("{}{REGION}", if boxed { TABLE_HINT } else { "" })
     };
     if links.is_empty() {
         return base;
@@ -681,6 +804,42 @@ mod tests {
         assert!(prompt_for_crop(&crop("p0_t0"), &[]).starts_with("This image is one table"));
         assert!(prompt_for_crop(&crop("p0_full"), &[]).starts_with("Transcribe this page"));
         assert!(prompt_for_crop(&crop("p0_r0"), &[]).starts_with("Transcribe what is printed"));
+    }
+
+    #[test]
+    fn a_region_a_detector_boxed_a_table_in_is_told_so() {
+        let mut c = crop("p0_r0");
+        c.bbox = Some(BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 100.0,
+            y1: 100.0,
+        });
+        let mut hints = CropHints::default();
+        hints.layout_tables.insert(
+            0,
+            vec![BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 150.0,
+                y1: 150.0,
+            }],
+        );
+        assert!(prompt_for_crop_with(&c, &hints, &[]).starts_with("This image contains a table"));
+        assert!(prompt_for_crop(&c, &[]).starts_with("Transcribe what is printed"));
+        // A whole page and a table crop are prompted as they always are.
+        assert!(
+            prompt_for_crop_with(&crop("p0_full"), &hints, &[]).starts_with("Transcribe this page")
+        );
+        assert!(prompt_for_crop_with(&crop("p0_t0"), &hints, &[])
+            .starts_with("This image is one table"));
+    }
+
+    #[test]
+    fn every_prose_prompt_forbids_inventing_a_link() {
+        for c in ["p0_full", "p0_r0"] {
+            assert!(prompt_for_crop(&crop(c), &[]).contains("NEVER invent a link"));
+        }
     }
 
     #[test]

@@ -1031,11 +1031,15 @@ const HINT_CONTAINMENT: f64 = 0.6;
 /// halved back to page space here. Absent directory, absent file and
 /// unparseable file all mean the same thing — no boxes — because every
 /// caller treats the detector as an optional second opinion.
-pub(crate) fn layout_tables(stem: &str, page: usize) -> Vec<fluree_doc_pdf::geom::BBox> {
-    let Some(dir) = std::env::var_os("FDOC_TITLE_BOXES") else {
+pub(crate) fn layout_tables(
+    dir: Option<&Path>,
+    stem: &str,
+    page: usize,
+) -> Vec<fluree_doc_pdf::geom::BBox> {
+    let Some(dir) = dir else {
         return Vec::new();
     };
-    let sidecar = PathBuf::from(dir).join(format!("{stem}_p{page}_page.json"));
+    let sidecar = dir.join(format!("{stem}_p{page}_page.json"));
     let Ok(txt) = std::fs::read_to_string(&sidecar) else {
         return Vec::new();
     };
@@ -1103,25 +1107,34 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
     let mut manifest =
         std::fs::File::create(outdir.join("manifest.jsonl")).expect("create manifest");
     let (mut n_pages, mut n_crops) = (0usize, 0usize);
+    let tiers = crate::commands::common::TierConfig::from_env();
+    let layout = tiers.layout_boxes.as_deref();
 
     for f in &files {
         let doc = match extract_file(f) {
             Ok(d) => d,
             Err(_) => continue,
         };
+        let data = std::fs::read(f).expect("read pdf");
+        let pdf = Pdf::new(Arc::new(data)).expect("parse pdf");
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
         // (named crops so the adapter can find each by its anchor token).
-        // The crop set is chosen in one place, shared with
-        // `convert --escalate`, so the two can never drift apart.
-        let bytes = std::fs::read(f).expect("read pdf");
-        let jobs = crate::escalate::jobs::crops_for(f, &bytes, &doc, false);
+        // The crop set is the library's `escalate::plan`, which
+        // `convert --escalate` and `triage` take too, so they cannot drift
+        // apart.
+        let stem = crate::commands::common::stem_of(f);
+        let hints = crate::escalate::jobs::hints(&doc, stem, layout, false);
+        let jobs = fluree_doc_pdf::escalate::plan(
+            &doc,
+            &fluree_doc_pdf::outline::extract(&pdf),
+            &tiers.options_for(stem),
+            &hints,
+        );
         if jobs.is_empty() {
             continue;
         }
 
-        let data = std::fs::read(f).expect("read pdf");
-        let pdf = Pdf::new(Arc::new(data)).expect("parse pdf");
         let links = fluree_doc_pdf::link::extract(&pdf);
         let pages = pdf.pages();
         let cache = RenderCache::new();
@@ -1132,7 +1145,6 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
             bg_color: white,
             ..Default::default()
         };
-        let stem = f.file_stem().and_then(|x| x.to_str()).unwrap_or("doc");
 
         for (page_idx, regions) in jobs {
             let pix = render(
@@ -1233,7 +1245,7 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
                     writeln!(manifest, "{rec}").unwrap();
                 }
                 Some(regions) => {
-                    let detected = layout_tables(stem, page_idx);
+                    let detected = layout_tables(layout, stem, page_idx);
                     for (tag, b) in regions.iter() {
                         let sc = VLM_RENDER_SCALE as f64;
                         let x0 = (((b.x0 - CROP_MARGIN) * sc).floor().max(0.0)) as usize;

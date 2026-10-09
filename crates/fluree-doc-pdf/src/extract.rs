@@ -35,6 +35,7 @@ pub struct ImagePlacement {
     pub texty: bool,
 }
 
+#[derive(Clone)]
 pub struct Page {
     pub index: usize,
     pub glyphs: Vec<Glyph>,
@@ -133,6 +134,7 @@ impl Page {
     }
 }
 
+#[derive(Clone)]
 pub struct Document {
     pub pages: Vec<Page>,
 }
