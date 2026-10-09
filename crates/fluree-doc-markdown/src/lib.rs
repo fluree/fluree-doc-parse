@@ -28,9 +28,9 @@ struct Reader {
     text: String,
     /// Heading level being collected, if any.
     heading: Option<usize>,
-    /// Depth of nested lists; item text is collected at the innermost.
-    list_depth: usize,
-    in_item: bool,
+    /// List items open around the text being read, nested ones included.
+    /// Text inside any of them belongs to the innermost.
+    items: usize,
     in_code: bool,
     /// Table under construction: rows, and whether the header row is open.
     rows: Vec<Vec<String>>,
@@ -125,11 +125,22 @@ impl Reader {
         }
     }
 
+    /// End the text read so far as the block it belongs to: the open list
+    /// item's, or a paragraph of its own.
+    fn flush_block(&mut self) {
+        let kind = if self.items > 0 {
+            "doc:ListItem"
+        } else {
+            "doco:Paragraph"
+        };
+        self.flush_text(kind, None);
+    }
+
     fn run(mut self, parser: Parser<'_>) -> Vec<Element> {
         for ev in parser {
             match ev {
                 Event::Start(Tag::Heading { level, .. }) => {
-                    self.flush_text("doco:Paragraph", None);
+                    self.flush_block();
                     self.heading = Some(match level {
                         HeadingLevel::H1 => 1,
                         HeadingLevel::H2 => 2,
@@ -143,23 +154,19 @@ impl Reader {
                     let level = self.heading.take();
                     self.flush_text("doco:SectionTitle", level);
                 }
-                Event::Start(Tag::List(_)) => {
-                    self.flush_text("doco:Paragraph", None);
-                    self.list_depth += 1;
-                }
-                Event::End(TagEnd::List(_)) => {
-                    self.list_depth = self.list_depth.saturating_sub(1);
-                }
+                // A nested list ends its parent item's own text, which is
+                // that item's, before the nested items begin.
+                Event::Start(Tag::List(_)) => self.flush_block(),
                 Event::Start(Tag::Item) => {
-                    self.flush_text("doco:Paragraph", None);
-                    self.in_item = true;
+                    self.flush_block();
+                    self.items += 1;
                 }
                 Event::End(TagEnd::Item) => {
                     self.flush_text("doc:ListItem", None);
-                    self.in_item = false;
+                    self.items = self.items.saturating_sub(1);
                 }
                 Event::Start(Tag::CodeBlock(_)) => {
-                    self.flush_text("doco:Paragraph", None);
+                    self.flush_block();
                     self.in_code = true;
                 }
                 Event::End(TagEnd::CodeBlock) => {
@@ -173,7 +180,7 @@ impl Reader {
                     }
                 }
                 Event::Start(Tag::Table(_)) => {
-                    self.flush_text("doco:Paragraph", None);
+                    self.flush_block();
                     self.in_table = true;
                     self.rows.clear();
                     self.first_bold.clear();
@@ -246,6 +253,14 @@ impl Reader {
                     e.cells = Some(rows);
                     self.out.push(e);
                 }
+                // A blank line between list items makes each item's text a
+                // paragraph inside it, and an item can hold several. They
+                // are the item's: run on, one item to a list entry.
+                Event::End(TagEnd::Paragraph) if self.items > 0 => {
+                    if !self.text.trim().is_empty() {
+                        self.text.push(' ');
+                    }
+                }
                 Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None),
                 Event::Start(Tag::Link { dest_url, .. }) => self.open_link(&dest_url),
                 Event::End(TagEnd::Link) => self.close_link(),
@@ -269,7 +284,7 @@ impl Reader {
                         self.text.push(' ');
                     }
                 }
-                Event::Rule => self.flush_text("doco:Paragraph", None),
+                Event::Rule => self.flush_block(),
                 _ => {}
             }
         }
@@ -287,6 +302,38 @@ mod tests {
 
     fn kinds(els: &[Element]) -> Vec<&str> {
         els.iter().map(|e| e.kind.as_str()).collect()
+    }
+
+    #[test]
+    fn a_loose_list_is_still_a_list() {
+        let els = parse("- First\n\n- Second\n");
+        assert_eq!(kinds(&els), ["doc:ListItem", "doc:ListItem"]);
+        assert_eq!(els[1].text, "Second");
+        // An item's paragraphs are the item's.
+        let els = parse("- First\n\n  more of it\n\n- Second\n\nAfter.\n");
+        assert_eq!(
+            kinds(&els),
+            ["doc:ListItem", "doc:ListItem", "doco:Paragraph"]
+        );
+        assert_eq!(els[0].text, "First more of it");
+    }
+
+    #[test]
+    fn a_nested_item_leaves_its_parent_an_item() {
+        let els = parse("- Parent\n  - Child\n  - Sibling\n- Next\n");
+        let read: Vec<(&str, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                ("doc:ListItem", "Parent"),
+                ("doc:ListItem", "Child"),
+                ("doc:ListItem", "Sibling"),
+                ("doc:ListItem", "Next"),
+            ]
+        );
     }
 
     #[test]
