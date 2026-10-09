@@ -249,7 +249,7 @@ let notes = email.notes(); // document info and attachment descriptions, for the
 
 The file's own message is the document's metadata:
 
-| DoCO, on `doc:Document` | from |
+| DoCO, on `foaf:Document` | from |
 |---|---|
 | `dcterms:title` | `Subject` |
 | `dcterms:creator` | `From` |

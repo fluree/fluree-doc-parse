@@ -11,14 +11,16 @@
 //! - `@graph` of elements in reading order; hierarchy lives only in
 //!   `po:contains` (coerced to `@id` in the context so ingestion links
 //!   rather than storing dead strings).
-//! - A `doc:Document` root containing `doco:BodyMatter`; headings open a
+//! - A `foaf:Document` root containing `doco:BodyMatter`; headings open a
 //!   `doco:Section` (with `doc:sectionLevel`) holding a `doco:SectionTitle`
 //!   as its header, and content attaches to the innermost open section —
 //!   the same stack walk the XHTML consumer performs on `h1`-`h6`. A title
 //!   the file declares for itself is a `doco:Title`, the document's header.
 //!   Headers are held by `po:containsAsHeader`, as DoCO specifies, and by
 //!   `po:contains` too, so everything a section holds is one hop.
-//! - Consecutive list items group under a `doco:List`; tables carry
+//! - Consecutive list items group under a `doco:List`, each a
+//!   `doco:Paragraph` it contains: DoCO has no item class, and containment
+//!   is what makes a block a list's member. Tables carry
 //!   `doc:TableCell` children with row/column indices, header labels,
 //!   and cell values. Cells whose text appears verbatim in the projection
 //!   also carry `nif:beginIndex`/`nif:endIndex`, slicing it to their
@@ -693,7 +695,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         body_idx: 0,
     };
 
-    let doc_idx = em.node("element", "doc:Document", Some("html"));
+    // FOAF's document class: DoCO roots its own examples in a FaBiO
+    // bibliographic class, which a spreadsheet or an email is not.
+    let doc_idx = em.node("element", "foaf:Document", Some("html"));
     if let Some(h) = &opts.sha256 {
         em.nodes[doc_idx].insert("doc:sha256".into(), Value::String(h.clone()));
     }
@@ -845,7 +849,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         l
                     }
                 };
-                let item = em.node("element", "doc:ListItem", Some("li"));
+                // A list item is the block it holds, a paragraph; being
+                // contained by the list is what makes it a member.
+                let item = em.node("element", "doco:Paragraph", Some("li"));
                 let text = projection_text(e);
                 em.set_text(item, &text);
                 em.set_provenance(item, e);
@@ -1069,6 +1075,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             "nif": "http://persistence.uni-leipzig.org/nlp2rdf/ontologies/nif-core#",
             "doc": "https://ns.flur.ee/doc#",
             "dcterms": "http://purl.org/dc/terms/",
+            "foaf": "http://xmlns.com/foaf/0.1/",
             "xsd": "http://www.w3.org/2001/XMLSchema#",
             // Containment edges must ingest as IRI references, not literals.
             "po:contains": { "@type": "@id" },
@@ -1196,7 +1203,7 @@ mod tests {
             el("doco:SectionTitle", "Overview", Some(1)),
             el("doco:Title", "Appendix", None),
         ]);
-        let doc = &find(&g, "doc:Document")[0];
+        let doc = &find(&g, "foaf:Document")[0];
         let titles = find(&g, "doco:Title");
         assert_eq!(titles.len(), 1, "a document has one title");
         assert_eq!(titles[0]["nif:isString"], "Annual Report");
@@ -1243,6 +1250,13 @@ mod tests {
         assert_eq!(lists.len(), 2);
         assert_eq!(lists[0]["po:contains"].as_array().unwrap().len(), 2);
         assert_eq!(lists[1]["po:contains"].as_array().unwrap().len(), 1);
+        // Each item is the paragraph it holds, a member by containment.
+        let item = |id: &Value| g.iter().find(|n| &n["@id"] == id).unwrap();
+        for id in lists[0]["po:contains"].as_array().unwrap() {
+            assert_eq!(item(id)["@type"], "doco:Paragraph");
+            assert_eq!(item(id)["doc:xhtmlTag"], "li");
+        }
+        assert!(g.iter().all(|n| n["@type"] != "doc:ListItem"));
     }
 
     #[test]
@@ -1493,7 +1507,7 @@ mod tests {
         assert_eq!(p["doc:pageIndex"], json!(0));
         assert_eq!(p["doc:bbox"], "10.00,20.00,110.00,40.00");
         // Structural wrappers are stamped too (retract-on-rerun must catch them).
-        let doc = &find(&g, "doc:Document")[0];
+        let doc = &find(&g, "foaf:Document")[0];
         assert_eq!(doc["doc:sourceDocument"]["@id"], "urn:test:doc");
     }
 
@@ -1515,7 +1529,7 @@ mod tests {
         };
         let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
         let doc = &v["@graph"][0];
-        assert_eq!(doc["@type"], "doc:Document");
+        assert_eq!(doc["@type"], "foaf:Document");
         assert_eq!(doc["doc:sha256"], sha);
         assert_eq!(doc["doc:sourceName"], "Q3 report.pdf");
         assert_eq!(

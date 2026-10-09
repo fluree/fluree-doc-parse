@@ -23,15 +23,17 @@ insertable into a [Fluree](https://flur.ee) ledger as-is.
     "po:containsAsHeader": { "@type": "@id" },
     "rdfs":     "http://www.w3.org/2000/01/rdf-schema#",
     "dcterms":  "http://purl.org/dc/terms/",
+    "foaf":     "http://xmlns.com/foaf/0.1/",
     "xsd":      "http://www.w3.org/2001/XMLSchema#"
   },
   "@graph": [ … ]
 }
 ```
 
-One Fluree namespace, `doc:`, for what DoCO does not define, plus three public ontologies, `rdfs` for the
-display label, and Dublin Core (`dcterms`) for what a document declares about
-itself, with `xsd` typing its dates. `doco` is the Document Components Ontology; `po` is the Pattern
+One Fluree namespace, `doc:`, for what no standard ontology defines, plus
+three public ontologies, `rdfs` for the display label, Dublin Core
+(`dcterms`) for what a document declares about itself, with `xsd` typing its
+dates, and FOAF for the root's class, `foaf:Document`. `doco` is the Document Components Ontology; `po` is the Pattern
 ontology DoCO extends, and `po:contains` is the containment property DoCO
 itself specifies; `nif` is the NLP Interchange Format, whose character offsets
 are the join point with annotation and NER tooling. Everything
@@ -67,7 +69,7 @@ than strings — which is what makes the graph traversable after insertion.
 | `doc:bbox` | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | [which signal classified it](../concepts/provenance.md) |
 | `doc:xhtmlTag` | the equivalent HTML tag |
-| `po:contains` | children, for `doc:Document`, `BodyMatter`, `Section`, `Table` |
+| `po:contains` | children, for `foaf:Document`, `BodyMatter`, `Section`, `Table` |
 | `doc:sectionLevel` | heading depth, on `doco:Section` |
 
 `doc:bbox` is absent for sources without geometry — see [Measured vs
@@ -77,7 +79,7 @@ declared structure](../concepts/geometry-vs-declared.md).
 
 ```json
 { "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-0",
-  "@type": "doc:Document",
+  "@type": "foaf:Document",
   "doc:sha256": "661511bb2b30c4e8a9f2d71b05e3c6a48f90d2b17e5a3c8f4b6d1e09a7c25f3e",
   "doc:sourceName": "report.pdf" }
 ```
@@ -96,7 +98,7 @@ why the hash is the one to join on.
 What the file declares about itself rides beside them, in Dublin Core:
 
 ```json
-{ "@type": "doc:Document",
+{ "@type": "foaf:Document",
   "dcterms:title": "Quarterly Report",
   "dcterms:creator": ["Ada Park"],
   "dcterms:created": { "@value": "2019-07-12T15:10:45-06:00", "@type": "xsd:dateTime" },
@@ -114,7 +116,7 @@ would fail a store's insert.
 
 ```json
 { "@id": "urn:fluree-doc-parse:report-661511bb2b30-element-0",
-  "@type": "doc:Document",
+  "@type": "foaf:Document",
   "doc:pages": { "@type": "@json",
                  "@value": [ { "pageIndex": 0, "width": 612.0, "height": 792.0 },
                              { "pageIndex": 1, "width": 612.0, "height": 792.0,
@@ -139,7 +141,7 @@ identifies a page rather than the document. A string, because front matter is
 ## What the pages say about the document
 
 ```json
-{ "@type": "doc:Document",
+{ "@type": "foaf:Document",
   "doc:runningText": { "@type": "@json",
                        "@value": [ "CHURCH &", "DWIGHT",
                                    "TM004361 Rev:005 Production" ] } }
@@ -162,7 +164,7 @@ entry in `doc:pages`.
 ## Pages nothing read
 
 ```json
-{ "@type": "doc:Document",
+{ "@type": "foaf:Document",
   "doc:unreadPages": { "@type": "@json",
                        "@value": [ { "pageIndex": 0, "reason": "NearBlank" } ] } }
 ```
@@ -200,7 +202,7 @@ A title the file declares for itself — Word's Title style, a deck's title
 slide — is a `doco:Title`, and the document node's header in the same way:
 
 ```json
-{ "@type": "doc:Document",
+{ "@type": "foaf:Document",
   "po:containsAsHeader": "…-element-2",
   "po:contains": [ "…-element-1", "…-element-2" ] }
 
@@ -221,6 +223,23 @@ Every node of a document shares one counter in emission order, so IRIs are
 `{base}-section-{n}`, `{base}-element-{n}`, `{base}-table-{n}` and so on, with
 `n` never reused. See [IRIs and re-extraction](#iris-and-re-extraction) for
 the base.
+
+## Lists contain their items
+
+A run of list items is a `doco:List` containing one `doco:Paragraph` per
+item, with `doc:xhtmlTag` `li`. DoCO has no list item class: a list's members
+are typed as what they are, and being contained by the list is what makes
+them members. Their order is their `nif:beginIndex`.
+
+```json
+{ "@type": "doco:List", "po:contains": [ "…-element-7", "…-element-8" ] }
+{ "@id": "…-element-7", "@type": "doco:Paragraph", "doc:xhtmlTag": "li",
+  "nif:isString": "Sign the order" }
+```
+
+The element model marks an item `doc:ListItem`, and [`-f json`](json.md)
+shows that mark, because a flat list of elements has no list to be contained
+by.
 
 ## Table cells are nodes
 
@@ -296,7 +315,7 @@ never appear in the text, so they never become entities.
 ## Emails are threads of messages
 
 ```json
-{ "@type": "doc:Document",
+{ "@type": "foaf:Document",
   "dcterms:title": "RE: Pilot",
   "dcterms:creator": ["Lena Holt <lena@example.com>"],
   "dcterms:created": { "@value": "2026-07-17T13:48:00-05:00", "@type": "xsd:dateTime" },

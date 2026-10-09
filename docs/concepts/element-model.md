@@ -35,18 +35,18 @@ pub struct Element {
 ## The DoCO classes
 
 Structure is typed with [DoCO](http://purl.org/spar/doco), the Document
-Components Ontology, and with Fluree's `doc:` namespace where DoCO has no
-class:
+Components Ontology, with FOAF's `foaf:Document` for the root, and with
+Fluree's `doc:` namespace where no standard ontology has a class:
 
 | class | what it is |
 |---|---|
-| `doc:Document` | the root |
+| `foaf:Document` | the root |
 | `doco:Title` | the title the document declares for itself |
 | `doco:BodyMatter` | the body partition |
 | `doco:Section` | a heading and everything under it |
 | `doco:SectionTitle` | the heading itself, with `level` |
 | `doco:Paragraph` | a block of prose |
-| `doco:List` / `doc:ListItem` | lists |
+| `doco:List` / `doc:ListItem` | a list, and the mark on each of its items |
 | `doco:Table` | a table, with `cells` |
 | `doco:Figure` | text inside a drawing, or an [anchor](../integration/anchors.md) for an escalated region |
 
@@ -54,6 +54,11 @@ Readers emit six of these — `Title`, `SectionTitle`, `Paragraph`, `ListItem`,
 `Table` and `Figure`. `Document`, `BodyMatter`, `Section`, `List` and
 `doc:TableCell` are minted by the [DoCO emitter](../formats/doco.md) when the
 flat list becomes a graph.
+
+`doc:ListItem` is the element model's own mark, not a class in the graph: a
+flat list of elements needs it to say which belong to a list. In the DoCO
+graph an item is the `doco:Paragraph` it holds, and the `doco:List`
+containing it is what makes it a member, as DoCO models lists.
 
 A `doco:Title` is a title the file declares, never one read off the page:
 Word's Title style, the title on a deck's title slide. The first is the

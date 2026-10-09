@@ -26,7 +26,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | field | always? | notes |
 |---|---|---|
 | `id` | yes | `elem-NNNNN`, emission order |
-| `type` | yes | DoCO class |
+| `type` | yes | DoCO class, or `doc:ListItem` for a member of a list — in the [DoCO graph](doco.md), a `doco:Paragraph` its `doco:List` contains |
 | `page` | yes | 0-based; `0` for formats without pages |
 | `text` | yes | NFKC-normalized, super- and subscripts kept |
 | `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `html`, `docx`, `pptx`, `xlsx`, `vtt`, `srt`, `eml`, `msg` |

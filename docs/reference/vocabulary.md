@@ -12,6 +12,7 @@ Every term the [DoCO output](../formats/doco.md) emits.
 | `po` | `http://www.essepuntato.it/2008/12/pattern#` |
 | `rdfs` | `http://www.w3.org/2000/01/rdf-schema#` |
 | `dcterms` | `http://purl.org/dc/terms/` |
+| `foaf` | `http://xmlns.com/foaf/0.1/` |
 | `xsd` | `http://www.w3.org/2001/XMLSchema#` |
 
 `doco`, `nif` and `po` are public ontologies — the Document Components
@@ -20,21 +21,22 @@ is not optional decoration: DoCO is defined as an extension of the Pattern
 ontology, and that is the containment property it specifies. `rdfs` carries
 one term, `rdfs:label`, rather than an ontology of its own. `dcterms` is
 Dublin Core, for what a document says about itself: its title, creator and
-dates. `xsd` types those dates, so a store compares them as times.
+dates. `foaf` carries one class, `foaf:Document`, for the root. `xsd` types
+those dates, so a store compares them as times.
 
-`doc` is the single Fluree namespace, covering what those four do not.
+`doc` is the single Fluree namespace, covering what none of those define.
 
 ## Types
 
 | type | what it is |
 |---|---|
-| `doc:Document` | the root |
+| `foaf:Document` | the root |
 | `doco:Title` | the title the document declares for itself, held as the root's header |
 | `doco:BodyMatter` | the body partition |
 | `doco:Section` | a minted node per heading, containing its subtree |
 | `doco:SectionTitle` | the heading itself, held as its section's header |
 | `doco:Paragraph` | prose |
-| `doco:List` / `doc:ListItem` | lists |
+| `doco:List` | a list; contains a `doco:Paragraph` per item |
 | `doco:Table` | a table; contains its cells |
 | `doco:Figure` | [anchor](../integration/anchors.md) placeholders for escalated regions |
 | `doc:TableCell` | one cell of a table |
@@ -43,10 +45,14 @@ dates. `xsd` types those dates, so a store compares them as times.
 | `doc:Mailbox` | a sender or recipient, one per address in the document |
 | `doc:Signature` | a message's signature; contains its elements |
 
-That is the complete set — fifteen types, and no others are emitted.
-`doc:Document` and `doc:ListItem` are in the Fluree namespace because DoCO
-defines neither: it roots a document in a bibliographic class such as
-`fabio:JournalArticle`, and gives a list no item class. Notably
+That is the complete set — fourteen types, and no others are emitted. Every
+one is a standard class where a standard one exists. DoCO roots a document in
+a bibliographic class such as `fabio:JournalArticle`, which a spreadsheet or
+an email is not, so the root is FOAF's general `foaf:Document`. DoCO has no
+list item class: a list contains its members, each typed as what it is, and
+an item here is the paragraph it holds. Its order among them is its
+`nif:beginIndex`. The `doc:` types are the parts no standard ontology names: a
+table's cells, a link, a message and its mailboxes and signature. Notably
 **`doco:Caption` and `doco:FrontMatter` are not produced.** DoCO defines both
 and an earlier design assigned them, but caption classification measured
 −0.0004 against the benchmark twice (its ground truth blesses prominent
@@ -76,15 +82,15 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:bbox` | PDF elements | `"x0,y0,x1,y1"`, PDF units, top-left origin |
 | `doc:evidence` | all | [which signal classified it](../concepts/provenance.md) |
 | `doc:sourceDocument` | all but table cells, with `--doc-iri` | the document IRI to retract by |
-| `doc:sha256` | `doc:Document` | the input's bytes as lowercase hex SHA-256 |
-| `doc:sourceName` | `doc:Document` | what the caller calls the input: its file name, or `--source-name` |
-| `doc:pages` | `doc:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
-| `doc:unreadPages` | `doc:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
-| `doc:runningText` | `doc:Document` | JSON literal: the header/footer text stripped from the body |
-| `doc:attachments` | `doc:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
-| `dcterms:title` | `doc:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
-| `dcterms:creator` | `doc:Document` | who made it, as the file names them: `/Author`, `dc:creator`, `<meta name="author">`, an email's sender |
-| `dcterms:created` / `dcterms:modified` | `doc:Document` | `xsd:dateTime` (or `xsd:date`): when it was made and last saved, or an email sent |
+| `doc:sha256` | `foaf:Document` | the input's bytes as lowercase hex SHA-256 |
+| `doc:sourceName` | `foaf:Document` | what the caller calls the input: its file name, or `--source-name` |
+| `doc:pages` | `foaf:Document` | JSON literal: `[{pageIndex, width, height, folio?}]`, PDF units as displayed; `folio` is the printed page number where there is one |
+| `doc:unreadPages` | `foaf:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
+| `doc:runningText` | `foaf:Document` | JSON literal: the header/footer text stripped from the body |
+| `doc:attachments` | `foaf:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
+| `dcterms:title` | `foaf:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |
+| `dcterms:creator` | `foaf:Document` | who made it, as the file names them: `/Author`, `dc:creator`, `<meta name="author">`, an email's sender |
+| `dcterms:created` / `dcterms:modified` | `foaf:Document` | `xsd:dateTime` (or `xsd:date`): when it was made and last saved, or an email sent |
 
 **Transcript turns**
 
@@ -99,7 +105,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | property | on | value |
 |---|---|---|
 | `po:contains` | `Document`, `BodyMatter`, `Section`, `Table` | children (IRI-coerced) |
-| `po:containsAsHeader` | `doc:Document`, `doco:Section` | the `doco:Title` or `doco:SectionTitle` heading it, also in `po:contains` (IRI-coerced) |
+| `po:containsAsHeader` | `foaf:Document`, `doco:Section` | the `doco:Title` or `doco:SectionTitle` heading it, also in `po:contains` (IRI-coerced) |
 | `doc:sectionLevel` | `doco:Section` | heading depth, 1–6 |
 | `doc:figure` | `doco:Figure` | shared id for fragments of one drawing |
 | `doc:link` | any text-bearing element | its hyperlinks (IRI-coerced) |
