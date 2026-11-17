@@ -39,6 +39,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `sub_headers` | tables | full-width banner row indices |
 | `merged_down` | tables | row-major continuation flags |
 | `merged_left` | tables | row-major continuation flags |
+| `continues` | tables continued from the page before | the `id` of the table this one carries on |
 | `datums` | workbook tables | same shape as `cells`: each cell's stored value as `{type, value}` (`xsd:decimal`, `xsd:date`, …), or `null` for text |
 | `links` | where the source has any | hyperlinks over this element's text |
 | `turn` | [transcripts](../inputs/transcripts.md) | `{speaker?, start_ms, end_ms}`: who spoke and when |
@@ -187,6 +188,25 @@ describe every position, and `doco` resolves every position into its own node.
 The [element model](../concepts/element-model.md) page has the denormalization
 snippet, and [Tables to rows and spans](../examples/tables.md) works each path
 end to end.
+
+### A table that runs onto the next page
+
+An element sits on one page, so a table that runs off the foot of one page and
+on at the head of the next is two elements. The second carries `continues`, the
+`id` of the first, and its rows are the first's rows:
+
+- It has no header of its own (`header_rows` is `0`) unless the document
+  repeats the header, and its columns are the ones the first part's header
+  names.
+- Where the break fell inside the header, the first part is nothing but header
+  and the second opens with the rest of it, which it keeps as its header.
+- An empty cell in its first row that spans down (`merged_down` on the row
+  below) is the rest of a cell the break cut: its value is the first part's
+  last value in that column.
+
+A table running over several pages is a chain, each part naming the one
+before it. [`doco`](doco.md) and [`md`](markdown.md) put the parts back
+together for you.
 
 ## Working with it
 

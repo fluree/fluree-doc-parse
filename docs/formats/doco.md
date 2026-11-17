@@ -279,6 +279,14 @@ at full precision:
 cells have none: a type guessed from text is a reading of the page, and
 `45584888` may be an order number, `03/04/2026` either of two days.
 
+A table that runs onto the next page is one `doco:Table` per page, and each
+part after the first names the one before it with `doc:continues`. Its cells
+are read as rows of one table: their `doc:columnHeader` comes from the first
+part's header when this part has none, `doc:rowIndex` numbers on from the part
+before, and a cell the page break cut takes its value, and so its row's
+`doc:rowHeader`, from above the break. To collect a row, follow
+`doc:continues` back to the first part and group by `doc:rowIndex`.
+
 Because a cell is a node rather than a position in a grid, there is no merge
 shape this format fails to represent. That is not true of
 [`xhtml`](xhtml.md), where a region HTML cannot tile is dropped along with its

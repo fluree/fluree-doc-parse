@@ -109,6 +109,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:sectionLevel` | `doco:Section` | heading depth, 1–6 |
 | `doc:figure` | `doco:Figure` | shared id for fragments of one drawing |
 | `doc:link` | any text-bearing element | its hyperlinks (IRI-coerced) |
+| `doc:continues` | `doco:Table` | the part of the same table on the page before (IRI-coerced) |
 | `doc:xhtmlTag` | most | the equivalent HTML tag |
 
 **Links**

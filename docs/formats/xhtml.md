@@ -132,6 +132,9 @@ an HTML-aware consumer without any work on your part:
 <tr><td rowspan="2">Differential input voltage</td><td>–32</td><td>V</td></tr>
 ```
 
+A table that runs onto the next page is one `<table>`: each later part's rows
+follow on, without a header the document repeats.
+
 If you need the spans in some other structure, [`json`](json.md) exposes the
 same information as flags — see [Tables to rows and
 spans](../examples/tables.md).

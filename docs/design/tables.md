@@ -133,6 +133,34 @@ Three conditions keep this from firing where it should not:
 - **A column has to give each row its own value.** Without one there are no
   rows to span.
 
+## Tables split by a page break
+
+A table that runs off the foot of one page and on at the head of the next is
+read as a grid on each page. Read alone, the second part's first data row is
+taken for a header, and a cell open into the rows below it grows that header
+deeper still, until a row of data names every column under it.
+
+Two parts are one table when nothing comes between them (the first is the last
+thing read on its page, the second the first on the next) and their columns
+are drawn at the same places. The second part is linked to the first and has
+no header of its own, unless:
+
+- **it repeats the first part's header**, which it keeps, and the renderers
+  leave out; or
+- **the break fell inside the header.** The first part is then nothing but
+  header (below it, at most a sliver of the row the break cut: a
+  superscript's top) and the second opens with a bold row of labels, which
+  finishes the header. Each column is named by both: `KEYTRUDA … / Grades 3-4 (%)`.
+
+A second part that opens with a styled row of its own (bold over plain, or a
+shaded header band) that repeats nothing is a new table with the same
+columns, and is left alone. A single shaded first row is no evidence either
+way, since a table striped row by row opens a page with one.
+
+The parts stay separate elements, because an element and its box sit on one
+page. Each later part names the one before it, and the DoCO and Markdown
+emitters read the chain as one table.
+
 ## Escalation signals
 
 A table earns a model tier when its detected structure **disagrees with

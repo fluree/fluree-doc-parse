@@ -222,6 +222,31 @@ fn html_turn(e: &Element, t: &Turn) -> String {
 /// worker already consumes (headings, paragraphs, lists, tables; text nodes
 /// carry the content). A drop-in for such a worker: downstream text
 /// extraction and NER see the same shape they see today.
+/// Whether the table at `i` carries on the one just before it, across a page
+/// break, so that its rows are rendered as more rows of that table.
+/// How many of the leading rows of the table at `i`, carried on from the one
+/// before it, repeat that table's header and are left out. None where the
+/// earlier part is nothing but header: the break fell inside the header and
+/// these rows finish it.
+fn repeated_header_rows(elements: &[Element], i: usize) -> usize {
+    if elements[i - 1].header_only() {
+        0
+    } else {
+        elements[i].header_rows.unwrap_or(0)
+    }
+}
+
+fn carries_on_table(elements: &[Element], i: usize) -> bool {
+    let (Some(prev), Some(e)) = (i.checked_sub(1).map(|p| &elements[p]), elements.get(i)) else {
+        return false;
+    };
+    let cols = |e: &Element| e.cells.as_ref().and_then(|r| r.first()).map(Vec::len);
+    prev.kind == "doco:Table"
+        && e.continues.as_deref() == Some(prev.id.as_str())
+        && cols(prev).is_some()
+        && cols(prev) == cols(e)
+}
+
 pub fn to_xhtml(elements: &[Element]) -> String {
     to_xhtml_with(elements, &Notes::default())
 }
@@ -243,7 +268,7 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
     );
     let mut in_list = false;
     let mut open_figure: Option<String> = None;
-    for e in elements {
+    for (i, e) in elements.iter().enumerate() {
         if open_figure.is_some() && e.kind != "doco:Figure" {
             out.push_str("</figure>\n");
             open_figure = None;
@@ -291,8 +316,20 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                         .merged_left
                         .as_ref()
                         .filter(|m| ncols > 0 && m.len() == rows.len() * ncols);
-                    out.push_str("<table>\n");
+                    // A part carried on from the page before goes on in
+                    // the table it continues, without a repeated header.
+                    let carried = carries_on_table(elements, i);
+                    let skip = if carried && out.ends_with("</table>\n") {
+                        out.truncate(out.len() - "</table>\n".len());
+                        repeated_header_rows(elements, i)
+                    } else {
+                        out.push_str("<table>\n");
+                        0
+                    };
                     for (ri, r) in rows.iter().enumerate() {
+                        if ri < skip {
+                            continue;
+                        }
                         // A merged full-width band is one spanning header
                         // cell, not a row of blanks after the first column.
                         // A merged full-width band is one spanning header
@@ -467,7 +504,7 @@ pub fn to_markdown(elements: &[Element]) -> String {
 /// and not part of the prose.
 pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
     let mut out = String::new();
-    for e in elements {
+    for (i, e) in elements.iter().enumerate() {
         match e.kind.as_str() {
             "doco:Title" => out.push_str(&format!("\n# {}\n\n", md_linked(e))),
             "doco:SectionTitle" => {
@@ -476,11 +513,20 @@ pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
             }
             "doco:Table" => {
                 if let Some(rows) = &e.cells {
-                    out.push('\n');
-                    for (i, r) in rows.iter().enumerate() {
+                    // A part carried on from the page before goes on in the
+                    // table it continues: no blank line, no second header.
+                    let carried = carries_on_table(elements, i);
+                    let skip = if carried {
+                        out.pop();
+                        repeated_header_rows(elements, i)
+                    } else {
+                        out.push('\n');
+                        0
+                    };
+                    for (ri, r) in rows.iter().enumerate().skip(skip) {
                         let cells: Vec<String> = r.iter().map(|c| md_cell(c)).collect();
                         out.push_str(&format!("|{}|\n", cells.join("|")));
-                        if i == 0 {
+                        if ri == 0 && !carried {
                             out.push_str(&format!("|{}|\n", vec!["---"; r.len()].join("|")));
                         }
                     }
@@ -515,6 +561,37 @@ mod tests {
             links: (!links.is_empty()).then_some(links),
             ..Element::new("doco:Paragraph", text, "rust", "layout")
         }
+    }
+
+    fn table(id: &str, rows: &[&[&str]], header: usize) -> Element {
+        Element {
+            id: id.into(),
+            cells: Some(
+                rows.iter()
+                    .map(|r| r.iter().map(|c| c.to_string()).collect())
+                    .collect(),
+            ),
+            header_rows: Some(header),
+            ..Element::new("doco:Table", "", "rust", "rules")
+        }
+    }
+
+    #[test]
+    fn a_continued_table_reads_as_one_table() {
+        let a = table("t1", &[&["Problem", "Cause"], &["Noise", "Dirty cell"]], 1);
+        // Carried on, its header repeated: the repeat is left out.
+        let mut b = table("t2", &[&["Problem", "Cause"], &["", "Dirty system"]], 1);
+        b.continues = Some("t1".into());
+        assert_eq!(
+            to_markdown(&[a.clone(), b.clone()]),
+            "\n|Problem|Cause|\n|---|---|\n|Noise|Dirty cell|\n||Dirty system|\n\n"
+        );
+        let html = to_xhtml(&[a.clone(), b]);
+        assert_eq!(html.matches("<table>").count(), 1);
+        assert_eq!(html.matches("Problem").count(), 1);
+        // Not carried on: two tables.
+        let c = table("t3", &[&["X", "Y"], &["1", "2"]], 1);
+        assert_eq!(to_markdown(&[a, c]).matches("|---|---|").count(), 2);
     }
 
     #[test]

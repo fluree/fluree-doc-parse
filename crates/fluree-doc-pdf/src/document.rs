@@ -63,6 +63,94 @@ pub struct Analysis {
     pub timings: StageTimings,
 }
 
+/// A table's frame on its page: where its columns are drawn, and whether
+/// its first row is set apart the way a header is.
+struct TableFrame {
+    page: usize,
+    bbox: crate::geom::BBox,
+    xs: Vec<f64>,
+    styled: bool,
+    bold: bool,
+}
+
+/// How far apart, in points, two parts' column edges may be drawn and still
+/// be one table's columns. A table the page break splits is drawn by one
+/// layout on both pages, so its edges agree to within a rule's stroke.
+const CONTINUED_EDGE_TOLERANCE: f64 = 3.0;
+
+/// Link a table the page break split to its part on the page before.
+///
+/// A table that fills the foot of one page and goes on at the head of the
+/// next is read as one grid per page. The second part has no header unless
+/// the document repeats it, and read alone its first data row is taken for
+/// one; a cell open into the rows below it even grows that into a header
+/// three rows deep, which names every column below after a row of data.
+///
+/// Two parts are one table when nothing comes between them (the first is
+/// the last thing read on its page, the second the first on the next) and
+/// their columns are drawn at the same places. A second part that opens
+/// with a styled row is a new table, unless that row repeats the first
+/// part's header.
+///
+/// A break can also fall inside the header: the arms over the columns on
+/// one page, `All Grades | Grades 3-4` under each on the next. The first
+/// part is then nothing but header, and the second opens with a bold row
+/// of labels. That row finishes the header and stays one, so the columns
+/// are named by both.
+fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
+    let frame = |e: &Element| {
+        frames
+            .iter()
+            .find(|f| f.page == e.page && Some(f.bbox) == e.bbox)
+    };
+    let same = |a: &[String], b: &[String]| {
+        a.len() == b.len()
+            && a.iter()
+                .zip(b)
+                .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
+    };
+    for i in 1..elements.len() {
+        let (before, after) = elements.split_at_mut(i);
+        let (prev, next) = (&before[i - 1], &mut after[0]);
+        if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
+            continue;
+        }
+        let (Some(a), Some(b)) = (frame(prev), frame(next)) else {
+            continue;
+        };
+        let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+            continue;
+        };
+        let aligned = a.xs.len() == b.xs.len()
+            && a.xs
+                .iter()
+                .zip(&b.xs)
+                .all(|(x, y)| (x - y).abs() <= CONTINUED_EDGE_TOLERANCE);
+        if !aligned {
+            continue;
+        }
+        let n = prev.header_rows.unwrap_or(0).min(head.len());
+        let repeats = n > 0 && rows.len() > n && (0..n).all(|r| same(&head[r], &rows[r]));
+        let finishes_header = prev.header_only()
+            && rows.len() > 1
+            && b.bold
+            && rows[0]
+                .iter()
+                .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()));
+        if b.styled && !repeats && !finishes_header {
+            continue;
+        }
+        next.continues = Some(prev.id.clone());
+        next.header_rows = Some(if repeats {
+            n
+        } else if finishes_header {
+            1
+        } else {
+            0
+        });
+    }
+}
+
 /// Insert tables into the existing prose reading stream without reordering
 /// blocks. Horizontal overlap selects the relevant column; within that lane a
 /// table follows only elements that are entirely above its top edge. Blocks
@@ -1051,6 +1139,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
 
     let mut n = 0usize;
     let mut tables = 0usize;
+    // Each table's column edges and whether it opens with a styled row,
+    // for joining a table the page break split.
+    let mut frames: Vec<TableFrame> = Vec::new();
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         let mut page_elements = Vec::new();
         // Chart and diagram regions. Text inside one is real and its *order*
@@ -1339,6 +1430,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .then_some(merges.continues_left),
                 ..Element::new("doco:Table", text, "rust", "rules")
             });
+            frames.push(TableFrame {
+                page: pi,
+                bbox: g.bbox,
+                xs: g.xs.clone(),
+                styled: g.opens_styled(&raw.pages[pi].glyphs, &raw.pages[pi].fills),
+                bold: g.opens_bold(&raw.pages[pi].glyphs),
+            });
         }
         // Table-confidence anchors: a grid whose structure was *inferred* from
         // alignment rather than read from drawn rules has guessed column
@@ -1431,6 +1529,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             elements.push(element);
         }
     }
+    link_continued_tables(&mut elements, &frames);
 
     // Per page. Averaged over a document the ratio disappears: a deck whose
     // stat pages are four fifths headings reads 0.36 across all its pages.
@@ -1531,6 +1630,167 @@ pub fn column_doubt(page: &Page, analysis: &Analysis) -> Option<crate::column::D
 mod tests {
     use super::*;
     use crate::geom::BBox;
+
+    /// A table on `page` with these rows, `header` of them header, framed
+    /// by columns at `xs`, and the frame it was read from.
+    fn part(
+        id: &str,
+        page: usize,
+        rows: &[&[&str]],
+        header: usize,
+        xs: &[f64],
+        styled: bool,
+        bold: bool,
+    ) -> (Element, TableFrame) {
+        let bbox = BBox {
+            x0: xs[0],
+            y0: if page == 0 { 600.0 } else { 72.0 },
+            x1: *xs.last().unwrap(),
+            y1: if page == 0 { 720.0 } else { 200.0 },
+        };
+        let cells: Vec<Vec<String>> = rows
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect();
+        let e = Element {
+            id: id.into(),
+            page,
+            bbox: Some(bbox),
+            cells: Some(cells),
+            header_rows: Some(header),
+            ..Element::new("doco:Table", "", "rust", "rules")
+        };
+        let f = TableFrame {
+            page,
+            bbox,
+            xs: xs.to_vec(),
+            styled,
+            bold,
+        };
+        (e, f)
+    }
+
+    const XS: [f64; 4] = [72.0, 180.0, 368.0, 595.0];
+
+    #[test]
+    fn a_table_the_page_break_split_is_linked_and_loses_its_false_header() {
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[
+                &["Problem", "Cause", "Resolution"],
+                &["Noise", "Dirty cell", "Clean it"],
+            ],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        // Read alone, the second part's open first cell grew its header
+        // three rows deep.
+        let (b, fb) = part(
+            "elem-00002",
+            1,
+            &[
+                &["", "Dirty system", "Clean it"],
+                &["", "Purge due", "Purge it"],
+                &["Broadening", "Old column", "Replace it"],
+            ],
+            3,
+            &[72.4, 180.2, 367.9, 595.1],
+            false,
+            false,
+        );
+        let mut els = vec![a, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_new_table_with_its_own_header_is_not_a_continuation() {
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["A", "B", "C"], &["1", "2", "3"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        // Same columns, but it opens with a bold row of its own labels.
+        let (b, fb) = part(
+            "elem-00002",
+            1,
+            &[&["D", "E", "F"], &["4", "5", "6"]],
+            1,
+            &XS,
+            true,
+            true,
+        );
+        let mut els = vec![a.clone(), b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues, None);
+        assert_eq!(els[1].header_rows, Some(1));
+        // Nor where the columns are drawn elsewhere.
+        let (c, fc) = part(
+            "elem-00002",
+            1,
+            &[&["4", "5", "6"]],
+            0,
+            &[72.0, 250.0, 400.0, 595.0],
+            false,
+            false,
+        );
+        let mut els = vec![a, c];
+        let fa = part(
+            "elem-00001",
+            0,
+            &[&["A", "B", "C"], &["1", "2", "3"]],
+            1,
+            &XS,
+            false,
+            false,
+        )
+        .1;
+        link_continued_tables(&mut els, &[fa, fc]);
+        assert_eq!(els[1].continues, None);
+    }
+
+    #[test]
+    fn a_header_the_break_split_is_finished_on_the_next_page() {
+        // The arms over the columns on one page, a sliver of the next row
+        // (a superscript's top) beneath them; the grades on the next page.
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["Reaction", "Drug", "Placebo"], &["", "*", ""]],
+            1,
+            &XS,
+            false,
+            true,
+        );
+        let (b, fb) = part(
+            "elem-00002",
+            1,
+            &[
+                &["", "All Grades* (%)", "All Grades (%)"],
+                &["Diarrhea", "56", "45"],
+            ],
+            1,
+            &XS,
+            true,
+            true,
+        );
+        let mut els = vec![a, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(
+            els[1].header_rows,
+            Some(1),
+            "the grades row finishes the header"
+        );
+    }
 
     fn line(x: f64, y: f64) -> Line {
         Line {

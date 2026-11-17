@@ -165,6 +165,20 @@ pub struct Element {
     /// nested table rules columns the outer rows do not have.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_left: Option<Vec<bool>>,
+    /// The id of the table this one carries on, on a table continued from
+    /// the page before.
+    ///
+    /// A table that runs off the foot of one page and on at the head of the
+    /// next is read as one element per page, since an element and its box
+    /// sit on one page. This links each part to the one before it, and its
+    /// rows are that table's rows. It has no header of its own unless it
+    /// repeats the earlier part's (`header_rows` is then `0`), and its
+    /// columns are the ones the earlier part's header names. An empty cell
+    /// in its first row that spans down (`merged_down` on the row below it)
+    /// is the rest of a cell the page break cut, and holds the value of the
+    /// earlier part's last cell in that column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continues: Option<String>,
     /// What each cell holds, typed, where the source declares it: same
     /// shape as `cells`, and `None` for a cell the source holds as text.
     ///
@@ -258,6 +272,7 @@ impl Element {
             sub_headers: None,
             merged_down: None,
             merged_left: None,
+            continues: None,
             datums: None,
             figure: None,
             links: None,
@@ -268,6 +283,23 @@ impl Element {
             provenance,
             evidence,
         }
+    }
+
+    /// A table that is nothing but its header: no letter or digit in any row
+    /// below it. A page break can fall inside a table's header, leaving the
+    /// first part its top rows and, at most, a sliver of the row it cut (a
+    /// superscript's top, a rule's mark); the part on the next page then
+    /// finishes the header rather than repeating it.
+    pub fn header_only(&self) -> bool {
+        let (Some(rows), Some(n)) = (&self.cells, self.header_rows) else {
+            return false;
+        };
+        n > 0
+            && n <= rows.len()
+            && rows[n..]
+                .iter()
+                .flatten()
+                .all(|c| !c.chars().any(char::is_alphanumeric))
     }
 
     /// The element's box, or an empty one for sources without geometry.

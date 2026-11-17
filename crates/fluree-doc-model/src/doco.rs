@@ -399,7 +399,24 @@ struct Emitter<'a> {
     /// Mailbox IRIs by address (lower-cased), or by name for a mailbox
     /// written without one.
     mailboxes: HashMap<String, String>,
+    /// Each table emitted so far, by element id, for a part that carries it
+    /// on across a page break.
+    tables: HashMap<String, TablePart>,
     body_idx: usize,
+}
+
+/// What a table's continuation takes from it: the node it links to, the
+/// names of its columns, its header rows with which of their cells continue
+/// the one to the left, its last row read whole, and how many data rows it
+/// and the parts before it hold.
+struct TablePart {
+    iri: String,
+    header: Vec<String>,
+    head: Vec<Vec<String>>,
+    head_left: Vec<bool>,
+    header_only: bool,
+    last: Vec<String>,
+    rows: usize,
 }
 
 impl<'a> Emitter<'a> {
@@ -759,6 +776,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         messages: HashMap::new(),
         open_signature: None,
         mailboxes: HashMap::new(),
+        tables: HashMap::new(),
         body_idx: 0,
     };
 
@@ -928,6 +946,29 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 // offset into the element's own text indexes nothing here.
                 em.set_links(table, e, None);
                 em.attach(parent, table);
+                // A part carried on from the page before is that table's
+                // rows: it links to the part it carries on, its columns are
+                // the ones that part's header names, and its rows number on
+                // from that part's. Only where the columns line up.
+                let ncols = e.cells.as_ref().and_then(|r| r.first()).map(Vec::len);
+                let earlier = e
+                    .continues
+                    .as_ref()
+                    .and_then(|id| em.tables.get(id))
+                    .filter(|p| Some(p.last.len()) == ncols);
+                let (header_before, last_before, rows_before, head_before) = match earlier {
+                    Some(p) => {
+                        em.nodes[table]
+                            .insert("doc:continues".into(), Value::String(p.iri.clone()));
+                        (
+                            Some(p.header.clone()),
+                            Some(p.last.clone()),
+                            p.rows,
+                            Some((p.head.clone(), p.head_left.clone(), p.header_only)),
+                        )
+                    }
+                    None => (None, None, 0, None),
+                };
 
                 // Cell entities: data rows index from 0 below the measured
                 // header (`header_rows` — absent means undetected, treated
@@ -944,6 +985,16 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // by the rowspan convention would otherwise lose its row
                     // context entirely.
                     let mut rows = raw_rows.clone();
+                    // A cell the page break cut: empty at the top of the
+                    // part and spanning down, its value is above the break.
+                    if let (Some(last), Some(md)) = (&last_before, &e.merged_down) {
+                        let n = last.len();
+                        for (c, value) in last.iter().enumerate() {
+                            if rows[0][c].trim().is_empty() && md.get(n + c) == Some(&true) {
+                                rows[0][c] = value.clone();
+                            }
+                        }
+                    }
                     if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some()
                     {
                         let ncols = rows.first().map(Vec::len).unwrap_or(0);
@@ -964,7 +1015,35 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     }
                     let rows = &rows;
                     let n_header = e.header_rows.unwrap_or(1).min(rows.len());
-                    let header = column_headers(rows, n_header, e.merged_left.as_deref());
+                    let ncols = rows.first().map(Vec::len).unwrap_or(0);
+                    let own_left = e
+                        .merged_left
+                        .clone()
+                        .filter(|m| m.len() == rows.len() * ncols)
+                        .unwrap_or_else(|| vec![false; rows.len() * ncols]);
+                    let own_head = (
+                        rows[..n_header].to_vec(),
+                        own_left[..n_header * ncols].to_vec(),
+                    );
+                    // The header block: this part's own, the earlier part's
+                    // where this one has none, or both where the break fell
+                    // inside it (the earlier part is nothing but header).
+                    let (head, head_left, header) = match head_before {
+                        Some((mut h, mut l, true)) if n_header > 0 => {
+                            h.extend(own_head.0);
+                            l.extend(own_head.1);
+                            let header = column_headers(&h, h.len(), Some(&l));
+                            (h, l, header)
+                        }
+                        Some((h, l, _)) if n_header == 0 => {
+                            (h, l, header_before.unwrap_or_default())
+                        }
+                        _ => (
+                            own_head.0,
+                            own_head.1,
+                            column_headers(rows, n_header, e.merged_left.as_deref()),
+                        ),
+                    };
                     let subs = e.sub_headers.clone().unwrap_or_default();
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
@@ -988,7 +1067,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 continue;
                             }
                             let cell_idx = em.unstamped("cell", "doc:TableCell", None);
-                            em.nodes[cell_idx].insert("doc:rowIndex".into(), json!(r - n_header));
+                            em.nodes[cell_idx]
+                                .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
                             if let Some(h) = header.get(c).filter(|h| !h.is_empty()) {
                                 em.nodes[cell_idx]
@@ -1035,6 +1115,24 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             }
                             em.attach(table, cell_idx);
                         }
+                    }
+                    if let Some(last) = rows.last() {
+                        let iri = em.nodes[table]["@id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string();
+                        em.tables.insert(
+                            e.id.clone(),
+                            TablePart {
+                                iri,
+                                header,
+                                head,
+                                head_left,
+                                header_only: e.header_only(),
+                                last: last.clone(),
+                                rows: rows_before + rows.len() - n_header,
+                            },
+                        );
                     }
                 }
             }
@@ -1134,6 +1232,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
             "doc:cc": { "@type": "@id" },
             "doc:bcc": { "@type": "@id" },
             "doc:signer": { "@type": "@id" },
+            // A table carried on from the page before names the part it
+            // carries on.
+            "doc:continues": { "@type": "@id" },
         },
         "@graph": graph,
     });
@@ -1392,6 +1493,117 @@ mod tests {
         let (text, _) =
             table_projection(&[vec!["".into(), "".into()], vec!["".into(), "x".into()]]);
         assert_eq!(text, "\tx");
+    }
+
+    /// A table split by a page break: its first part with a header, the
+    /// second carrying it on with a cell the break cut at its top.
+    fn split_table() -> Vec<Element> {
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            vec!["Problem".into(), "Cause".into(), "Resolution".into()],
+            vec![
+                "Baseline noise".into(),
+                "Dirty cell".into(),
+                "Clean the cell".into(),
+            ],
+        ]);
+        a.header_rows = Some(1);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![
+            vec!["".into(), "Dirty system".into(), "Clean the system".into()],
+            vec![
+                "".into(),
+                "Detector needs purging".into(),
+                "Purge it".into(),
+            ],
+            vec![
+                "Broadening".into(),
+                "Old column".into(),
+                "Replace it".into(),
+            ],
+        ]);
+        b.header_rows = Some(0);
+        b.continues = Some("elem-00001".into());
+        let mut md = vec![false; 9];
+        md[3] = true; // the cut cell spans down into the second row
+        b.merged_down = Some(md);
+        vec![a, b]
+    }
+
+    #[test]
+    fn a_continued_table_names_its_columns_and_rows_as_one_table() {
+        let els = split_table();
+        let projection = to_text(&els);
+        let g = graph(&els);
+        let tables = find(&g, "doco:Table");
+        assert_eq!(tables[1]["doc:continues"], tables[0]["@id"]);
+        let row_of = |table: &Value, value: &str| -> Value {
+            let ids = table["po:contains"].as_array().unwrap();
+            g.iter()
+                .find(|n| ids.contains(&n["@id"]) && n["doc:cellValue"] == value)
+                .cloned()
+                .unwrap()
+        };
+        let system = row_of(tables[1], "Dirty system");
+        assert_eq!(system["doc:columnHeader"], "Cause");
+        assert_eq!(
+            system["doc:rowIndex"],
+            json!(1),
+            "rows number on from the first part"
+        );
+        assert_eq!(
+            system["doc:rowHeader"], "Baseline noise",
+            "the cut cell is above the break"
+        );
+        assert_eq!(
+            row_of(tables[1], "Purge it")["doc:rowHeader"],
+            "Baseline noise"
+        );
+        assert_eq!(
+            row_of(tables[1], "Replace it")["doc:rowHeader"],
+            "Broadening"
+        );
+        // The carried value is a copy: no offsets, and every offset the
+        // parts do carry still cuts its own text.
+        let carried = row_of(tables[1], "Baseline noise");
+        assert!(carried.get("nif:beginIndex").is_none());
+        for n in g.iter().filter(|n| n.get("nif:beginIndex").is_some()) {
+            let s = n["nif:beginIndex"].as_u64().unwrap() as usize;
+            let e = n["nif:endIndex"].as_u64().unwrap() as usize;
+            let slice: String = projection.chars().skip(s).take(e - s).collect();
+            let want = n.get("nif:isString").or(n.get("doc:cellValue")).unwrap();
+            assert_eq!(&slice, want.as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn a_header_split_by_the_break_names_columns_by_both_parts() {
+        let mut a = el("doco:Table", "", None);
+        a.id = "elem-00001".into();
+        a.cells = Some(vec![
+            vec!["Reaction".into(), "Drug".into(), "".into()],
+            vec!["".into(), "*".into(), "".into()],
+        ]);
+        a.header_rows = Some(1);
+        let mut left = vec![false; 6];
+        left[2] = true; // `Drug` spans both of its grade columns
+        a.merged_left = Some(left);
+        let mut b = el("doco:Table", "", None);
+        b.id = "elem-00002".into();
+        b.page = 1;
+        b.cells = Some(vec![
+            vec!["".into(), "All grades".into(), "Grades 3-4".into()],
+            vec!["Diarrhea".into(), "56".into(), "11".into()],
+        ]);
+        b.header_rows = Some(1);
+        b.continues = Some("elem-00001".into());
+        let g = graph(&[a, b]);
+        let eleven = g.iter().find(|n| n["doc:cellValue"] == "11").unwrap();
+        assert_eq!(eleven["doc:columnHeader"], "Drug / Grades 3-4");
+        assert_eq!(eleven["doc:rowHeader"], "Diarrhea");
     }
 
     #[test]

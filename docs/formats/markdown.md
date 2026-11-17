@@ -104,6 +104,10 @@ If you want rows that stand on their own, use [`doco`](doco.md), whose
 and column headers. If you want the spans themselves, use
 [`xhtml`](xhtml.md), which emits real `rowspan` and `colspan`.
 
+A table that runs onto the next page is printed as one table: the rows of
+each part after the first follow on with no blank line and no second
+separator, and a header the document repeats on the new page is left out.
+
 A `|` inside a cell is escaped as `\|`, a `\` as `\\`, and a newline becomes a
 space, so a row always has the column count its header promises. The backslash
 has to be escaped as well as the pipe: without it a cell whose text *ends* in

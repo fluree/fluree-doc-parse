@@ -983,6 +983,27 @@ impl Grid {
         decide_header_rows(rows, styled)
     }
 
+    /// The first row is set apart the way a header is: bold over a row
+    /// that is not, or the first of a run of shaded bands over the rest.
+    ///
+    /// Presence of a header, not its absence: a header set like its data
+    /// says nothing either way. A single shaded first row is no evidence
+    /// here, since a table striped row by row opens a page with one.
+    pub fn opens_styled(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        fills: &[crate::rule::Fill],
+    ) -> bool {
+        let run = self.leading_fill_run(fills);
+        (self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, 1))
+            || (run >= 2 && run < self.rows())
+    }
+
+    /// The first row's cells are set bold, whatever the row below is.
+    pub fn opens_bold(&self, glyphs: &[crate::glyph::Glyph]) -> bool {
+        self.cells_are_bold(glyphs, 0)
+    }
+
     /// Most weighted glyphs in the row's band are bold — the same
     /// most-not-any predicate line assembly uses.
     fn row_is_bold(&self, glyphs: &[crate::glyph::Glyph], row: usize) -> bool {
