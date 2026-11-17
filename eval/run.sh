@@ -23,8 +23,17 @@ echo "### span resolution (overlay mechanism)"
 ./target/release/fdoc dev find eval/corpus/jp_stat.pdf "検討会の構成"
 
 echo
+echo "### tough cases (eval/tough; fetch the documents with eval/tough/check.py --fetch)"
+python3 eval/tough/check.py
+tough_rc=$?
+
+echo
 if [ $probe_rc -ne 0 ]; then
   echo "FAIL — probe reported a hard-gate failure (see TEST_PLAN.md T0/T1)"
   exit 1
 fi
-echo "PASS — T0/T1 gates met. T2 (layout) not yet implemented; see TEST_PLAN.md."
+if [ $tough_rc -ne 0 ]; then
+  echo "FAIL — a tough case failed or its document is missing (see eval/tough/README.md)"
+  exit 1
+fi
+echo "PASS — T0/T1 gates met, tough cases hold. T2 (layout) not yet implemented; see TEST_PLAN.md."

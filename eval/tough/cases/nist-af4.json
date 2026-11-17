@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "nist-af4.pdf",
+    "url": "https://www.nist.gov/document/asymmetric-flow-field-flow-fractionation",
+    "sha256": "03be584704adba51aa3c552b4c5bdc3a58d0b0ffce2a7a3bf8f9a2959d7ba579",
+    "about": "NIST/AAPS interlaboratory study, AF4 protocol (27 August 2023). The sample table, a landscape conditions table with a method banner over two antibody columns, and a recommendations table with lettered lists in its cells, split across a page break."
+  },
+  "notes": [
+    "2026-11-17: the conditions table and the recommendations table open with an empty cell, so their text starts with a tab, and their nif:isString had the tab trimmed. A consumer comparing each element's string with its slice refused the document. The offsets check covers it."
+  ],
+  "checks": [
+    {
+      "id": "formulation-spans-its-samples",
+      "found": "2026-11-17",
+      "issue": "Each protein and its formulation are set once, centred across three sample rows the ruling does not separate; the wrapped formulation was split into rows.",
+      "row": {"Proteins": "Amgen IgG2", "Formulations": "10 mM sodium acetate, pH 5.0", "Samples": "Unstressed, 1 mg/mL"}
+    },
+    {
+      "id": "formulation-second-protein",
+      "found": "2026-11-17",
+      "issue": "The second protein's formulation, read whole on each of its samples.",
+      "row": {"Proteins": "NISTmAb IgG1", "Formulations": "12.5 mM L-histidine, 12.5 mM L-histidine HCl, pH 6.0", "Samples": "Stir stressed, 1 mg/mL"}
+    },
+    {
+      "id": "conditions-name-method-and-antibody",
+      "status": "open",
+      "found": "2026-11-17",
+      "issue": "Table 2 sets each method as a banner over two antibody columns. The antibody row is read as data, so the second antibody's values have no column name, and a value cannot be told apart from the other antibody's.",
+      "row": {
+        "Primary Method (Submicrometer Particles) / NISTmAb": "25 mM His/L-His HCl, pH 6.0",
+        "Primary Method (Submicrometer Particles) / Amgen mAb": "100 mM sodium phosphate + 250 mM NaCl, pH 6.8"
+      }
+    },
+    {
+      "id": "recommendations-one-table",
+      "status": "open",
+      "found": "2026-11-17",
+      "issue": "Table 3's cells hold lettered lists. The settings column and the lists are read as separate grids side by side, so the part on page 7 is a list item over its neighbours and a settings label split into cells.",
+      "row": {"Settings": "AF4 Separator & Channel Considerations"}
+    },
+    {
+      "id": "recommendations-no-list-item-as-a-column-name",
+      "status": "open",
+      "found": "2026-11-17",
+      "issue": "On page 7 the list item `c)` names a column.",
+      "no_column_header": "c)"
+    }
+  ]
+}

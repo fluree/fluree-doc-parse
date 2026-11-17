@@ -44,11 +44,38 @@ Unicode resolution, panics), span resolution, and the expectations in
 **T0.2 — no panics on any page — is a release blocker, not a bug report.**
 hayro is pre-1.0 and this engine runs on documents nobody vetted.
 
+## Tough cases
+
+```bash
+eval/tough/check.py --fetch     # first run: download the public documents
+eval/tough/check.py             # every case
+eval/tough/check.py nist-sec    # one case
+```
+
+Real documents the engine once read wrong, each with the facts a fix made
+true: a table row read whole under the right column names, a column name that
+must not appear. Every document is also held to the offset contract. The
+benchmark scores Markdown over 200 documents from one mix; a fix to a table
+the bench never shows moves no number there, and a later change can undo it
+without moving one either. These checks are where such fixes stay fixed.
+
+Public documents are fetched from their publisher and checked against the
+SHA-256 their checks were written on; they are not redistributed.
+`eval/tough/private/` holds cases whose documents cannot be published, in the
+same format, and is not tracked. A check marked `"open"` records a known
+failure without failing the run, and the run says when it starts passing.
+[`eval/tough/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/tough/README.md)
+has the case format.
+
 ## Adding tests
 
 - **A bug fix** gets a test reproducing the geometry that caused it, not the
   PDF that contained it. Ship the minimal case; the document may not be
   redistributable, and the geometry is the actual finding.
+- **A fix found on a real document** also gets a [tough case](#tough-cases)
+  for that document: the unit test pins the geometry, the case pins the
+  document. Write the check against the output the fix produces, and confirm
+  it fails on the binary before the fix.
 - **A new detector** needs both a positive case and the false positive you
   expect it to avoid. Most rejected ideas in the ablation table failed on
   false positives, not on recall.

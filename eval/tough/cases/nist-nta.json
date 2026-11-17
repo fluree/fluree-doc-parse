@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "nist-nta.pdf",
+    "url": "https://www.nist.gov/document/nta-protocol",
+    "sha256": "6a172c4f7b7d14b62a8cf4d4417354631fd54bca2da82de824aeff8afe124c1c",
+    "about": "NIST/AAPS interlaboratory study, NTA protocol (31 August 2023). The same sample table as the SEC protocol, wrapped at different points."
+  },
+  "notes": [],
+  "checks": [
+    {
+      "id": "formulation-spans-its-samples",
+      "found": "2026-11-17",
+      "issue": "Each protein and its formulation are set once, centred across three sample rows the ruling does not separate; the wrapped formulation was split into rows (`10 mM sodium acetate,` / `pH 5.0`).",
+      "row": {"Proteins": "Amgen IgG2", "Formulations": "10 mM sodium acetate, pH 5.0", "Samples": "Stir stressed, 1 mg/mL"}
+    },
+    {
+      "id": "formulation-three-lines",
+      "found": "2026-11-17",
+      "issue": "The second formulation wraps over three lines, one beside each sample.",
+      "row": {"Proteins": "NISTmAb IgG1", "Formulations": "12.5 mM L-histidine, 12.5 mMol L-histidine HCl, pH 6.0", "Samples": "Light stressed, 1 mg/mL"}
+    }
+  ]
+}

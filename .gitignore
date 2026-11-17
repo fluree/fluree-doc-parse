@@ -20,3 +20,8 @@ SOLO-HANDOFF.md
 # The full synthetic table corpus with its expectations, for the local
 # sweep; a curated subset is tracked in eval/tables/.
 eval/tables-full/
+
+# Tough cases: public documents fetched by eval/tough/check.py --fetch, and
+# the cases whose documents cannot be published.
+eval/tough/docs/
+eval/tough/private/

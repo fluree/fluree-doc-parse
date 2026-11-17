@@ -1,0 +1,55 @@
+{
+  "document": {
+    "file": "nist-sec.pdf",
+    "url": "https://www.nist.gov/document/sec-protocol",
+    "sha256": "988f0ab687f635fd792e575abe24421d67773e9090d6acdf0d65fce35b7b12d4",
+    "about": "NIST/AAPS interlaboratory study, SEC protocol (31 August 2023). Six pages from a word processor: tables whose rows are drawn but not ruled, a table split across a page break, conditions per antibody with units in the headers."
+  },
+  "notes": [
+    "2026-11-17: the troubleshooting table's part on page 6 opens with an empty cell, so its text starts with a tab, and its nif:isString had the tab trimmed. A consumer comparing each element's string with its slice refused the document. The offsets check covers it."
+  ],
+  "checks": [
+    {
+      "id": "formulation-spans-its-samples",
+      "found": "2026-11-17",
+      "issue": "Table 1 sets each protein and its formulation once, centred across three sample rows the ruling does not separate. The wrapped formulation was split into rows (`pH` / `5.0`) and the protein sat on the middle sample only.",
+      "row": {"Proteins": "Amgen IgG2", "Formulations": "10 mM sodium acetate, pH 5.0", "Samples": "Light stressed, 1 mg/mL"}
+    },
+    {
+      "id": "formulation-carried-on-across-rows",
+      "found": "2026-11-17",
+      "issue": "The second formulation's first two lines sit on the samples' baselines, a row apart, the second carrying on the first.",
+      "row": {"Proteins": "NISTmAb IgG1", "Formulations": "12.5 mM L-histidine, 12.5 mMol L-histidine HCl, pH 6.0", "Samples": "Unstressed, 1 mg/mL"}
+    },
+    {
+      "id": "conditions-per-antibody",
+      "found": "2026-11-17",
+      "issue": "Read well from the start: each antibody's conditions on its row, units in the column headers. Guarded so it stays so.",
+      "row": {"mAb": "NISTmAb(1)", "Column Temp. (°C)": "25", "Run Duration (min)": "10", "Flow Rate / (mL/min)": "0.3", "Injection (μg)": "60"}
+    },
+    {
+      "id": "conditions-second-antibody",
+      "found": "2026-11-17",
+      "issue": "The second antibody's conditions on its own row.",
+      "row": {"mAb": "Amgen IgG2(2)", "Run Duration (min)": "35", "Flow Rate / (mL/min)": "0.5", "Injection (μg)": "100"}
+    },
+    {
+      "id": "troubleshooting-continues-across-the-page",
+      "found": "2026-11-17",
+      "issue": "Table 3 runs from page 5 onto page 6 with no repeated header. The part on page 6 was read as its own table, its first rows taken for a three-row header.",
+      "row": {"Problem": "Baseline Noise and Drift", "Probable Cause": "Column shedding or sample adsorption on the column", "Resolution": "Clean or replace column."}
+    },
+    {
+      "id": "troubleshooting-later-problem",
+      "found": "2026-11-17",
+      "issue": "A problem that starts on page 6 keeps its own causes.",
+      "row": {"Problem": "Excessive Peak Broadening", "Probable Cause": "Excessive tubing length or tubing I.D. too large", "Resolution": "Reduce tubing length and use recommended tubing I.D."}
+    },
+    {
+      "id": "no-data-row-as-a-column-name",
+      "found": "2026-11-17",
+      "issue": "A data row of the continued table named the columns of every cell below it.",
+      "no_column_header": "Dirty HPLC system"
+    }
+  ]
+}
