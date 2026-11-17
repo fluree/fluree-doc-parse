@@ -179,6 +179,14 @@ shaded header band) that repeats nothing is a new table with the same
 columns, and is left alone. A single shaded first row is no evidence either
 way, since a table striped row by row opens a page with one.
 
+A table whose cells hold lettered lists is not a table of lists. A reading
+from horizontal bands replaces a coarse ruled grid whose cells hold whole
+paragraphs, which is right for a page ruled into a frame with a table set in
+one of its columns. But a band reading whose first column is nothing but list
+markers is the list in a cell, read cell by cell (`a) | Change the pump
+frit`), and taking it for the table pulled the settings beside the lists out
+into a table of their own.
+
 The parts stay separate elements, because an element and its box sit on one
 page. Each later part names the one before it, and the DoCO and Markdown
 emitters read the chain as one table.

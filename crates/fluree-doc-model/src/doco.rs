@@ -985,12 +985,18 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // by the rowspan convention would otherwise lose its row
                     // context entirely.
                     let mut rows = raw_rows.clone();
-                    // A cell the page break cut: empty at the top of the
-                    // part and spanning down, its value is above the break.
-                    if let (Some(last), Some(md)) = (&last_before, &e.merged_down) {
+                    // A cell the page break cut: empty at the top of a part
+                    // with no header of its own, and spanning down or
+                    // labelling the row (its first cell, beside values),
+                    // its value is above the break.
+                    if let (Some(last), Some(0)) = (&last_before, e.header_rows) {
                         let n = last.len();
+                        let spans = |c: usize| {
+                            e.merged_down.as_ref().and_then(|m| m.get(n + c)) == Some(&true)
+                        };
+                        let labels = rows[0].iter().skip(1).any(|t| !t.trim().is_empty());
                         for (c, value) in last.iter().enumerate() {
-                            if rows[0][c].trim().is_empty() && md.get(n + c) == Some(&true) {
+                            if rows[0][c].trim().is_empty() && (spans(c) || (c == 0 && labels)) {
                                 rows[0][c] = value.clone();
                             }
                         }
@@ -1577,6 +1583,34 @@ mod tests {
             let want = n.get("nif:isString").or(n.get("doc:cellValue")).unwrap();
             assert_eq!(&slice, want.as_str().unwrap());
         }
+    }
+
+    #[test]
+    fn a_label_cut_by_the_break_is_carried_beside_its_values() {
+        // The break cuts a row: its label stays above, the rest of its
+        // values open the next page beside an empty first cell that spans
+        // nothing.
+        let mut els = split_table();
+        els[1].merged_down = None;
+        els[1].cells = Some(vec![
+            vec!["".into(), "Dirty system".into(), "Clean the system".into()],
+            vec![
+                "Broadening".into(),
+                "Old column".into(),
+                "Replace it".into(),
+            ],
+        ]);
+        let g = graph(&els);
+        let system = g
+            .iter()
+            .find(|n| n["doc:cellValue"] == "Dirty system")
+            .unwrap();
+        assert_eq!(system["doc:rowHeader"], "Baseline noise");
+        let old = g
+            .iter()
+            .find(|n| n["doc:cellValue"] == "Old column")
+            .unwrap();
+        assert_eq!(old["doc:rowHeader"], "Broadening");
     }
 
     #[test]

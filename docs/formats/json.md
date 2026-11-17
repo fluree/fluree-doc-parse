@@ -200,8 +200,9 @@ on at the head of the next is two elements. The second carries `continues`, the
   names.
 - Where the break fell inside the header, the first part is nothing but header
   and the second opens with the rest of it, which it keeps as its header.
-- An empty cell in its first row that spans down (`merged_down` on the row
-  below) is the rest of a cell the break cut: its value is the first part's
+- In a part with no header of its own, an empty cell in its first row that
+  spans down (`merged_down` on the row below), or an empty first cell beside
+  values, is the rest of a cell the break cut: its value is the first part's
   last value in that column.
 
 A table running over several pages is a chain, each part naming the one

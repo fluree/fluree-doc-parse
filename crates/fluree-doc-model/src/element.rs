@@ -174,9 +174,10 @@ pub struct Element {
     /// rows are that table's rows. It has no header of its own unless it
     /// repeats the earlier part's (`header_rows` is then `0`), and its
     /// columns are the ones the earlier part's header names. An empty cell
-    /// in its first row that spans down (`merged_down` on the row below it)
-    /// is the rest of a cell the page break cut, and holds the value of the
-    /// earlier part's last cell in that column.
+    /// in its first row that spans down (`merged_down` on the row below it),
+    /// or an empty first cell beside values, is the rest of a cell the page
+    /// break cut, and holds the value of the earlier part's last cell in
+    /// that column.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continues: Option<String>,
     /// What each cell holds, typed, where the source declares it: same

@@ -43,15 +43,19 @@
       "cell": {"value": "3", "column": "Secondary Method (Soluble Aggregates)-Optional / Amgen mAb", "row": "Crossflow Initial (mL/min)", "section": "Separation"}
     },
     {
+      "id": "recommendations-cut-label-carried",
+      "found": "2026-11-17",
+      "issue": "The page break cuts the `Mobile Phase` row: its last three recommendations open page 7 beside an empty settings cell, and belong to the label above the break.",
+      "row": {"Settings": "Mobile Phase", "Recommendations": "c) Suppress bacterial growth (antibacterial agent or frequent mobile phase change). d) Clean contaminated HPLC system according to the manufacturer’s recommendation. e) Use an inline filter between pump and autosampler/injector."}
+    },
+    {
       "id": "recommendations-one-table",
-      "status": "open",
       "found": "2026-11-17",
       "issue": "Table 3's cells hold lettered lists. The settings column and the lists are read as separate grids side by side, so the part on page 7 is a list item over its neighbours and a settings label split into cells.",
       "row": {"Settings": "AF4 Separator & Channel Considerations"}
     },
     {
       "id": "recommendations-no-list-item-as-a-column-name",
-      "status": "open",
       "found": "2026-11-17",
       "issue": "On page 7 the list item `c)` names a column.",
       "no_column_header": "c)"

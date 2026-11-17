@@ -487,11 +487,20 @@ fn prefer_aligned_over_ruled(ruled: &[Grid], aligned: &[Grid], glyphs: &[Glyph])
     coarse || aligned_cells >= ruled_grid.rows() * ruled_grid.cols() * 3
 }
 
+/// Prefer a reading from horizontal bands over one coarse ruled grid whose
+/// cells hold whole tables of prose: a page ruled into a frame, a table set
+/// in one of its columns.
+///
+/// Not a reading whose first column is nothing but list markers. A table
+/// whose cells hold lettered lists reads, cell by cell, as `a) | Change the
+/// pump frit`, `b) | Flush the loop`: a list, not the table, and taking it
+/// for one pulled the labels beside the lists out into a table of their own.
 fn prefer_horizontal_bands(ruled: &[Grid], bands: &[Grid], glyphs: &[Glyph]) -> bool {
     if ruled.len() != 1 || bands.is_empty() {
         return false;
     }
     let ruled_grid = &ruled[0];
+    let table_not_list = |band: &Grid| !is_marker_list(&band.cell_texts(glyphs), band.cols());
     let coarse = ruled_grid.cell_texts(glyphs).iter().any(|cell| {
         cell.split_whitespace().count() > 25
             || cell
@@ -505,11 +514,34 @@ fn prefer_horizontal_bands(ruled: &[Grid], bands: &[Grid], glyphs: &[Glyph]) -> 
     });
     coarse
         && bands.iter().any(|band| {
-            band.cols() >= ruled_grid.cols() + 3
-                || (ruled_grid.cols() <= 2
-                    && band.cols() == ruled_grid.cols()
-                    && band.rows() >= ruled_grid.rows() + 2)
+            table_not_list(band)
+                && (band.cols() >= ruled_grid.cols() + 3
+                    || (ruled_grid.cols() <= 2
+                        && band.cols() == ruled_grid.cols()
+                        && band.rows() >= ruled_grid.rows() + 2))
         })
+}
+
+/// A grid's first column holds nothing but list markers (`a)`, `2.`, `(iii)`,
+/// `•`), at least two of them: an enumerated list read as a table.
+fn is_marker_list(cells: &[String], cols: usize) -> bool {
+    if cols < 2 {
+        return false;
+    }
+    let firsts: Vec<&str> = cells
+        .iter()
+        .step_by(cols)
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let marker = |t: &str| {
+        let body = t.trim_start_matches('(').trim_end_matches(['.', ')']);
+        matches!(t, "•" | "◦" | "▪" | "-" | "–" | "*")
+            || (t != body
+                && (1..=4).contains(&body.chars().count())
+                && body.chars().all(|c| c.is_ascii_alphanumeric()))
+    };
+    firsts.len() >= 2 && firsts.iter().all(|t| marker(t))
 }
 
 /// Run the pipeline over an already-extracted document.
@@ -1852,6 +1884,39 @@ mod tests {
         assert!(!group_label(&list, 1));
     }
 
+    #[test]
+    fn a_lettered_list_read_as_a_table_is_a_list() {
+        let cells = |rows: &[[&str; 2]]| -> Vec<String> {
+            rows.iter().flatten().map(|c| c.to_string()).collect()
+        };
+        let list = [
+            ["a)", "Change the pump frit."],
+            ["b)", "Flush the loop."],
+            ["c)", "Filter it."],
+        ];
+        assert!(is_marker_list(&cells(&list), 2));
+        assert!(is_marker_list(
+            &cells(&[["1.", "Thaw."], ["2.", "Mix."]]),
+            2
+        ));
+        assert!(is_marker_list(
+            &cells(&[["(iii)", "One."], ["(iv)", "Two."]]),
+            2
+        ));
+        assert!(is_marker_list(&cells(&[["•", "One."], ["•", "Two."]]), 2));
+        // A table with labels in its first column is a table.
+        let table = [["Added cation", "Relative size"], ["K+", ""], ["Na+", ""]];
+        assert!(!is_marker_list(&cells(&table), 2));
+        // A year column is not a list of markers, nor is one marker alone.
+        assert!(!is_marker_list(
+            &cells(&[["2023", "4.1"], ["2024", "3.9"]]),
+            2
+        ));
+        assert!(!is_marker_list(
+            &cells(&[["a)", "Only one."], ["", "More text."]]),
+            2
+        ));
+    }
 
     #[test]
     fn a_table_the_page_break_split_is_linked_and_loses_its_false_header() {
