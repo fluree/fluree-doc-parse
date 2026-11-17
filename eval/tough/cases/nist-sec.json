@@ -50,6 +50,18 @@
       "found": "2026-11-17",
       "issue": "A data row of the continued table named the columns of every cell below it.",
       "no_column_header": "Dirty HPLC system"
+    },
+    {
+      "id": "ring-above-reads-as-degrees",
+      "found": "2026-11-17",
+      "issue": "The autosampler temperature is set with a spacing ring (U+02DA) for the degree sign; it read as a stray combining mark before the C.",
+      "text": "Set sample rack/autosampler temperature to (4 to 10) °C."
+    },
+    {
+      "id": "no-stray-combining-ring",
+      "found": "2026-11-17",
+      "issue": "NFKC decomposes the spacing ring above (U+02DA), set here for a degree sign, into a space and a combining ring, which then sat on the C.",
+      "no_text": "\u030a"
     }
   ]
 }

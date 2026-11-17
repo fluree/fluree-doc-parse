@@ -47,6 +47,13 @@ than folding to `m3/h`.
 Without this, searching for `profile` finds one occurrence in six. Offsets are
 in **characters** of the normalized string, not bytes.
 
+A character set for a degree sign that is not one reads as `°`: the ordinal
+`º`, the ring `˚`, a superscript `⁰`, a ring operator `∘` or a white bullet
+`◦` before a temperature's unit (`25 ºC` → `25 °C`), and the ring or ring operator after a
+number (`45˚` → `45°`). NFKC would turn `º` into the letter `o` and `˚` into a
+space and a combining mark. An ordinal stays an ordinal: `1º` and `Nº` fold as
+NFKC folds them.
+
 ## Tables
 
 A table contributes its cells joined by tabs, rows by newlines — the same

@@ -226,11 +226,25 @@ impl PageIndex {
     pub fn build(page: &Page) -> Self {
         // Glyph index → its characters, skipping whitespace-only glyphs, so a
         // position in the flattened string maps back to the glyph that drew it.
+        let solid: Vec<(usize, char)> = page
+            .glyphs
+            .iter()
+            .enumerate()
+            .flat_map(|(i, g)| {
+                g.text
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .map(move |c| (i, c))
+            })
+            .collect();
+        // Degrees are read in context, as the projection reads them.
+        let mut chars: Vec<char> = solid.iter().map(|&(_, c)| c).collect();
+        crate::text::degrees(&mut chars);
         let mut flat = String::new();
         let mut owner: Vec<usize> = Vec::new();
-        for (i, g) in page.glyphs.iter().enumerate() {
-            for c in g.text.chars().filter(|c| !c.is_whitespace()).flat_map(fold) {
-                flat.push(c);
+        for (&(i, _), &c) in solid.iter().zip(&chars) {
+            for f in fold(c) {
+                flat.push(f);
                 owner.push(i);
             }
         }
@@ -240,11 +254,9 @@ impl PageIndex {
 
 /// Characters as the page index holds them: whitespace dropped, each folded.
 fn squeeze(chars: impl IntoIterator<Item = char>) -> String {
-    chars
-        .into_iter()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(fold)
-        .collect()
+    let mut solid: Vec<char> = chars.into_iter().filter(|c| !c.is_whitespace()).collect();
+    crate::text::degrees(&mut solid);
+    solid.into_iter().flat_map(fold).collect()
 }
 
 /// Where `needle` occurs in `hay`, as character positions, overlapping

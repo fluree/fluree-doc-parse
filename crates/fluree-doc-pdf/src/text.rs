@@ -18,11 +18,56 @@ use unicode_normalization::UnicodeNormalization;
 /// "m3/h", a different string from the one printed and from the one every
 /// other reader of the same document emits. Ligatures, wide forms and the rest
 /// of NFKC's compatibility mappings stay folded.
+///
+/// The spacing ring above (U+02DA) is kept too. NFKC decomposes it into a
+/// space and a combining ring, so a `˚` the [`degrees`] pass did not read as
+/// a degree would leave a stray mark on whatever follows.
 fn keeps_form(c: char) -> bool {
     matches!(
         c,
-        '\u{00B2}' | '\u{00B3}' | '\u{00B9}' | '\u{2070}'..='\u{209F}'
+        '\u{00B2}' | '\u{00B3}' | '\u{00B9}' | '\u{02DA}' | '\u{2070}'..='\u{209F}'
     )
+}
+
+/// A character a document sets for a degree sign that is not one: the
+/// masculine ordinal `º`, the spacing ring `˚`, the superscript zero `⁰`, the
+/// ring operator `∘` LaTeX sets for `^\circ`, and the white bullet `◦`.
+fn looks_like_degree(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00BA}' | '\u{02DA}' | '\u{2070}' | '\u{2218}' | '\u{25E6}'
+    )
+}
+
+/// Each degree look-alike in `chars` that reads as a degree, as `°`.
+///
+/// NFKC folds `º` to the letter `o`, so `25 ºC` read `25 oC`, and turns `˚`
+/// into a space and a combining ring; neither is the temperature printed, and
+/// a search for `°C` finds neither. A look-alike reads as a degree before a
+/// temperature's unit (`ºC`, `˚F`, `(⁰C)`), and the ring and the ring
+/// operator also after a number (`45˚`). An ordinal stays one: `1º` and `Nº`
+/// are not degrees, and NFKC goes on folding them as before.
+///
+/// Neighbours are the nearest characters that are not whitespace, and the
+/// replacement is one for one. So the pass reads the same over line text,
+/// which has spaces, as over a page's glyphs with whitespace dropped, which
+/// the span lookup searches, and leaves every offset where it was.
+pub(crate) fn degrees(chars: &mut [char]) {
+    let read: Vec<char> = chars.to_vec();
+    let solid = |c: &&char| !c.is_whitespace();
+    for (i, c) in chars.iter_mut().enumerate() {
+        if !looks_like_degree(*c) {
+            continue;
+        }
+        let next = read[i + 1..].iter().find(solid).copied();
+        let prev = read[..i].iter().rev().find(solid).copied();
+        let unit = matches!(next, Some('C' | 'F'));
+        let after_number =
+            matches!(*c, '\u{02DA}' | '\u{2218}') && prev.is_some_and(|p| p.is_ascii_digit());
+        if unit || after_number {
+            *c = '\u{00B0}';
+        }
+    }
 }
 
 /// NFKC-normalise one character, keeping super- and subscripts as printed
@@ -40,8 +85,11 @@ pub(crate) fn fold(c: char) -> impl Iterator<Item = char> {
 /// [`fold`] over a string. Runs between kept characters are normalised whole,
 /// so a base letter and its combining mark still compose.
 pub(crate) fn normalize(s: &str) -> String {
+    let mut chars: Vec<char> = s.chars().collect();
+    degrees(&mut chars);
+    let s: String = chars.into_iter().collect();
     let mut out = String::with_capacity(s.len());
-    let mut rest = s;
+    let mut rest = s.as_str();
     while let Some(i) = rest.find(keeps_form) {
         out.extend(rest[..i].nfkc());
         let c = rest[i..].chars().next().unwrap_or_default();
@@ -70,17 +118,22 @@ impl PageText {
     /// faster but would lose the per-glyph correspondence.
     pub fn build(glyph_texts: &[String]) -> Self {
         let mut pt = PageText::default();
-        for (gi, t) in glyph_texts.iter().enumerate() {
-            for ch in t.chars() {
-                let raw_off = pt.raw.chars().count();
-                pt.raw.push(ch);
-                pt.raw_to_glyph.push(gi);
-                // Normalize one char at a time: 1 raw char may yield N normalized
-                // chars, and every one of them must point back to this raw offset.
-                for nch in fold(ch) {
-                    pt.normalized.push(nch);
-                    pt.norm_to_raw.push(raw_off);
-                }
+        let owned: Vec<(usize, char)> = glyph_texts
+            .iter()
+            .enumerate()
+            .flat_map(|(gi, t)| t.chars().map(move |c| (gi, c)))
+            .collect();
+        // Degrees are read in context, across glyphs, one for one.
+        let mut read: Vec<char> = owned.iter().map(|&(_, c)| c).collect();
+        degrees(&mut read);
+        for (raw_off, (&(gi, ch), &as_read)) in owned.iter().zip(&read).enumerate() {
+            pt.raw.push(ch);
+            pt.raw_to_glyph.push(gi);
+            // Normalize one char at a time: 1 raw char may yield N normalized
+            // chars, and every one of them must point back to this raw offset.
+            for nch in fold(as_read) {
+                pt.normalized.push(nch);
+                pt.norm_to_raw.push(raw_off);
             }
         }
         pt
@@ -149,6 +202,38 @@ mod tests {
         assert_eq!(normalize("m³/h, cm², H₂O, ﬁt"), "m³/h, cm², H₂O, fit");
         let g: Vec<String> = "m³".chars().map(|c| c.to_string()).collect();
         assert_eq!(PageText::build(&g).normalized, "m³");
+    }
+
+    #[test]
+    fn degree_look_alikes_read_as_degrees() {
+        // Before a temperature's unit, with or without a space.
+        assert_eq!(normalize("25 ºC, 25ºC, (ºC)"), "25 °C, 25°C, (°C)");
+        assert_eq!(
+            normalize("25˚C, 77 ˚F, (⁰C), 25∘C, 4 ◦C"),
+            "25°C, 77 °F, (°C), 25°C, 4 °C"
+        );
+        // The ring and the ring operator after a number are angles.
+        assert_eq!(normalize("45˚ and 90∘"), "45° and 90°");
+        // An ordinal stays one, folded as NFKC always folded it; an exponent
+        // stays an exponent; a ring with no degree to read keeps its form
+        // instead of leaving a combining mark.
+        assert_eq!(
+            normalize("1º lugar, Nº 5, 10⁰, x˚y"),
+            "1o lugar, No 5, 10⁰, x˚y"
+        );
+        assert!(!normalize("x˚y").contains('\u{030A}'));
+    }
+
+    #[test]
+    fn degrees_read_across_glyphs_keep_offsets() {
+        let g: Vec<String> = ["2", "5", " ", "\u{00BA}", "C"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let pt = PageText::build(&g);
+        assert_eq!(pt.raw, "25 \u{00BA}C");
+        assert_eq!(pt.normalized, "25 °C");
+        assert_eq!(pt.glyph_range_for_norm_span(3, 5), Some((3, 4)));
     }
 
     #[test]

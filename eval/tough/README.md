@@ -69,6 +69,8 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `row` | some table row has each of these values under these column names |
 | `no_row` | no table row has them all |
 | `no_column_header` | no cell's column name contains this text |
+| `text` | the text projection contains this text |
+| `no_text` | the text projection does not contain this text anywhere |
 
 A row is the cells sharing a `doc:rowIndex` in one table, a table split by a
 page break counting as one (its parts are followed back by `doc:continues`).

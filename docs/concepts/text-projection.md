@@ -67,6 +67,12 @@ Superscripts and subscripts are the one exception. NFKC would fold `m³/h` to
 `m3/h` and `H₂O` to `H2O`, which is a different string from the one printed,
 so they are kept as they are, the same as the other input formats keep them.
 
+Degree signs set with a look-alike are read before NFKC sees them. A PDF may
+set `25 ºC` with the masculine ordinal, or `25˚C` with the spacing ring, and
+NFKC would turn those into `25 oC` and a stray combining mark. A look-alike
+before a temperature's unit, or a ring after a number, reads as `°`, one
+character for one, so offsets are unaffected.
+
 NFKC can change string length, so raw glyph offsets and normalized text
 offsets are not the same coordinate. The engine keeps a bijective map between
 them; the offsets in `doco` are in **normalized** space, matching the text

@@ -138,6 +138,12 @@ def run_check(check, reading):
     if "no_row" in check:
         ok = not reading.has_row(check["no_row"])
         return ok, None if ok else "the row is there"
+    if "text" in check:
+        ok = norm(check["text"]) in norm(reading.text)
+        return ok, None if ok else "not in the text projection"
+    if "no_text" in check:
+        hits = norm(reading.text).count(norm(check["no_text"]))
+        return hits == 0, None if hits == 0 else f"{hits} times in the text projection"
     if "no_column_header" in check:
         # Anywhere in the name: under a stacked header a row read as header
         # is one label in a path (`A / B / C`).
