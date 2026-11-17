@@ -57,6 +57,11 @@ a	b
 1	2
 ```
 
+An empty cell keeps its field, so every row puts its values at the same tab
+positions. When the first cell of the first row is empty (the corner above a
+column of row labels), the table's text starts with a tab, and so does its
+`nif:isString`. Compare an element's string with its slice untrimmed.
+
 ## What is absent
 
 Anything the layout pass dropped: page [furniture](../design/furniture.md),

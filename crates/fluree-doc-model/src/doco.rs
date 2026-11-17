@@ -614,12 +614,17 @@ impl<'a> Emitter<'a> {
         self.open_message = Some(idx);
     }
 
+    /// Give a node its text: `text` is its slice of the projection, and
+    /// `nif:isString` carries it verbatim, so it equals what the node's
+    /// offsets cut from [`to_text`]. A table whose first cell is empty
+    /// starts with a tab there, and trimming it would put the string one
+    /// character off its own offsets. Only the display label is trimmed.
     fn set_text(&mut self, idx: usize, text: &str) {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return;
         }
-        self.nodes[idx].insert("nif:isString".into(), Value::String(trimmed.into()));
+        self.nodes[idx].insert("nif:isString".into(), Value::String(text.into()));
         let label: String = if trimmed.chars().count() > LABEL_MAX_CHARS {
             let mut l: String = trimmed.chars().take(LABEL_MAX_CHARS).collect();
             l.push('\u{2026}');
@@ -677,8 +682,8 @@ impl<'a> Emitter<'a> {
         let Some(links) = e.links.clone() else {
             return;
         };
-        // `set_text` trims, so offsets into the projection have to trim with
-        // it.
+        // The projection trims the element's text, so offsets into it have
+        // to trim with it.
         let lead = e.text.chars().take_while(|c| c.is_whitespace()).count();
         let mut iris = Vec::new();
         for l in &links {
@@ -1365,6 +1370,17 @@ mod tests {
             table["nif:beginIndex"],
             json!(8),
             "the table starts at its line"
+        );
+        // Its string is what its offsets cut, corner tab included.
+        let (s, e) = (
+            table["nif:beginIndex"].as_u64().unwrap() as usize,
+            table["nif:endIndex"].as_u64().unwrap() as usize,
+        );
+        let slice: String = projection.chars().skip(s).take(e - s).collect();
+        assert_eq!(table["nif:isString"].as_str().unwrap(), slice);
+        assert_eq!(
+            table["rdfs:label"],
+            "Paracetamol\tIbuprofen\nCode\tMD-0152\tMD-0140"
         );
         for cell in find(&g, "doc:TableCell") {
             let s = cell["nif:beginIndex"].as_u64().unwrap() as usize;
