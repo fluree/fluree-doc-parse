@@ -616,12 +616,16 @@ impl Grid {
             // top-aligned over single-line rows puts each of its lines on a
             // row's baseline too: `KEYTRUDA in combination` over `with
             // axitinib`, `Infusion-related reactions` over `[see Warnings…]`.
+            // Its lines are then as far apart as the rows are, so the
+            // paragraph's leading is no bound on them; a blank line between
+            // them is.
             let carries_on = b
                 .text
                 .starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
                 || a.text.ends_with([',', '-', '/']);
             lines.iter().any(|l| l.bbox.y0 < y && l.bbox.y1 > y)
-                || (leading <= PARAGRAPH_LEADING * fs && (!rowed || carries_on))
+                || (leading <= PARAGRAPH_LEADING * fs && !rowed)
+                || (carries_on && leading <= CARRIED_LEADING * fs)
         };
         let crossed = (cols.start + 1..cols.end).all(|k| column_cut(self.xs[k]))
             && (rows.start + 1..rows.end).all(row_cut);
@@ -756,6 +760,173 @@ impl Grid {
             }
         }
         m
+    }
+
+    /// Spans the ruling leaves unsaid: rows grouped between rules, where one
+    /// column gives each row its own value and another sets one value across
+    /// the group.
+    ///
+    /// A word processor draws a table's rows whether it rules them or not.
+    /// Three samples of one product are three rows with no rule between
+    /// them, and the product's name and formulation are each one cell
+    /// spanning all three, centred on the group and wrapped where the column
+    /// is narrow. [`Grid::merges`] reads nothing from an unruled boundary,
+    /// and rightly: absence alone is no span. The text is the evidence here.
+    /// A column whose rows each hold text placed the same way (each centred
+    /// in its row, or each at its top) gives every row a value. Another
+    /// column whose text runs across the rows' cuts as one wrapped value
+    /// ([`Grid::region_text`]), or sits as one line centred on the whole
+    /// group, is one cell spanning it.
+    ///
+    /// Claimed only for groups between rules drawn across the whole table,
+    /// below the first row, and only where there are two such groups or
+    /// more. A table ruled under its header and at its foot and nowhere else
+    /// is one group, and a sparse column in it is values missing from some
+    /// rows, not a span. And only where the rows inside a group are drawn:
+    /// the border stroked row by row, breaking at each. A cut the grid took
+    /// from the gap between a label's wrapped lines has the border run
+    /// straight through it, and reading it as rows would copy the values
+    /// beside the label onto a row of its second line.
+    pub fn text_merges(&self, glyphs: &[crate::glyph::Glyph], rules: &[Rule], merges: &mut Merges) {
+        let (rows, cols) = (self.rows(), self.cols());
+        if rows < 3 || cols < 2 || merges.continues_above.len() != rows * cols {
+            return;
+        }
+        let (left, right) = (self.xs[0], self.xs[cols]);
+        let at = |k: usize| {
+            rules
+                .iter()
+                .filter(|r| {
+                    r.orientation == Orientation::Horizontal
+                        && (r.bbox.y0 - self.ys[k]).abs() <= EDGE_TOLERANCE * 2.0
+                        && r.bbox.x1 > left
+                        && r.bbox.x0 < right
+                })
+                .map(|r| (r.bbox.x0, r.bbox.x1))
+                .collect::<Vec<_>>()
+        };
+        let across =
+            |k: usize| span_coverage(at(k).into_iter(), left, right) >= 0.9 * (right - left);
+        // The rows are drawn at an unruled boundary when the table's
+        // verticals are stroked row by row and break there: some vertical on
+        // a column edge ends at it, and none runs on across it. A boundary
+        // the grid took from elsewhere (another column's rows, the gap
+        // between a label's wrapped lines) has the border run straight
+        // through it, and the rows it parts are one row.
+        let drawn = |k: usize| {
+            let y = self.ys[k];
+            let edge = |r: &&Rule| {
+                r.orientation == Orientation::Vertical
+                    && self
+                        .xs
+                        .iter()
+                        .any(|x| (r.bbox.x0 - x).abs() <= EDGE_TOLERANCE * 2.0)
+            };
+            let verticals: Vec<&Rule> = rules.iter().filter(edge).collect();
+            verticals.iter().any(|r| {
+                (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE || (r.bbox.y1 - y).abs() <= EDGE_TOLERANCE
+            }) && !verticals
+                .iter()
+                .any(|r| r.bbox.y0 < y - EDGE_TOLERANCE && r.bbox.y1 > y + EDGE_TOLERANCE)
+        };
+        // Groups: rows between boundaries that carry a rule, each closed by
+        // one drawn across the whole table, with every row inside drawn.
+        let mut cuts: Vec<usize> = vec![0];
+        cuts.extend((1..rows).filter(|&k| !at(k).is_empty()));
+        cuts.push(rows);
+        let groups: Vec<(usize, usize)> = cuts
+            .windows(2)
+            .map(|w| (w[0], w[1]))
+            .filter(|&(a, b)| a > 0 && across(a) && across(b) && (a + 1..b).all(drawn))
+            .collect();
+        if groups.len() < 2 {
+            return;
+        }
+
+        let homes = self.glyph_cells(glyphs);
+        let font = {
+            let mut sizes: Vec<f32> = glyphs
+                .iter()
+                .zip(&homes)
+                .filter(|(_, h)| h.is_some())
+                .map(|(g, _)| g.font_size)
+                .collect();
+            if sizes.is_empty() {
+                return;
+            }
+            sizes.sort_by(f32::total_cmp);
+            sizes[sizes.len() / 2].max(1.0) as f64
+        };
+        let tolerance = font * PLACEMENT_TOLERANCE;
+        // The vertical extent of the ink in cell (r, c).
+        let ink = |r: usize, c: usize| -> Option<(f64, f64)> {
+            glyphs
+                .iter()
+                .zip(&homes)
+                .filter(|(_, h)| **h == Some(r * cols + c))
+                .filter_map(|(g, _)| g.bbox)
+                .fold(None, |acc, b| match acc {
+                    None => Some((b.y0, b.y1)),
+                    Some((y0, y1)) => Some((y0.min(b.y0), y1.max(b.y1))),
+                })
+        };
+        let spread = |v: &[f64]| {
+            v.iter().copied().fold(f64::MIN, f64::max) - v.iter().copied().fold(f64::MAX, f64::min)
+        };
+
+        for (a, b) in groups.into_iter().filter(|&(a, b)| b - a >= 2) {
+            let inks: Vec<Vec<Option<(f64, f64)>>> = (0..cols)
+                .map(|c| (a..b).map(|r| ink(r, c)).collect())
+                .collect();
+            // A value in every row, each placed in its row as the others are.
+            let rowed = |c: usize| -> bool {
+                let Some(blocks) = inks[c].iter().copied().collect::<Option<Vec<_>>>() else {
+                    return false;
+                };
+                let rows_of = |f: &dyn Fn(usize, (f64, f64)) -> f64| -> Vec<f64> {
+                    blocks
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &blk)| f(a + i, blk))
+                        .collect()
+                };
+                let tops = rows_of(&|r, (y0, _)| y0 - self.ys[r]);
+                let middles = rows_of(&|r, (y0, y1)| (y0 + y1 - self.ys[r] - self.ys[r + 1]) / 2.0);
+                let bottoms = rows_of(&|r, (_, y1)| self.ys[r + 1] - y1);
+                [tops, middles, bottoms]
+                    .iter()
+                    .any(|v| spread(v) <= tolerance)
+            };
+            if !(0..cols).any(rowed) {
+                continue;
+            }
+            let middle = (self.ys[a] + self.ys[b]) / 2.0;
+            let spanning: Vec<usize> = (0..cols)
+                .filter(|&c| !rowed(c))
+                .filter(|&c| {
+                    let held: Vec<(f64, f64)> = inks[c].iter().flatten().copied().collect();
+                    if held.is_empty() {
+                        return false;
+                    }
+                    // Text on both sides of a cut, which `region_text` then
+                    // has to find crossed; otherwise one line, centred.
+                    let first = inks[c].iter().position(Option::is_some);
+                    let last = inks[c].iter().rposition(Option::is_some);
+                    let parted = first != last;
+                    let (y0, y1) = held.iter().fold((f64::MAX, f64::MIN), |(lo, hi), &(t, u)| {
+                        (lo.min(t), hi.max(u))
+                    });
+                    let centred = ((y0 + y1) / 2.0 - middle).abs() <= tolerance;
+                    (parted || centred)
+                        && self.region_text(glyphs, merges, a..b, c..c + 1).is_some()
+                })
+                .collect();
+            for c in spanning {
+                for r in a + 1..b {
+                    merges.continues_above[r * cols + c] = true;
+                }
+            }
+        }
     }
 
     /// How many leading rows are column headers.
@@ -973,6 +1144,17 @@ impl Grid {
 /// one wrapped label rather than the values of two rows. Wrapped lines sit
 /// about 1.1–1.25 apart; a padded table row is 1.5 or more.
 const PARAGRAPH_LEADING: f64 = 1.35;
+
+/// Baseline-to-baseline distance, in font sizes, up to which a line that
+/// carries on the one above it (starts lowercase, or follows a comma) is
+/// still that line's continuation. Set on the baselines of padded rows its
+/// lines are a row apart; two lines' worth is a blank line between them.
+const CARRIED_LEADING: f64 = 2.0;
+
+/// How far, in font sizes, a value's text may sit from the middle of the
+/// rows it is centred across, or vary in where it sits in each of its rows,
+/// and still be placed the same way.
+const PLACEMENT_TOLERANCE: f64 = 0.3;
 
 /// Baseline difference, in font sizes, within which a label and a value
 /// beside it are set on one line. A label centred across merged rows is off
@@ -3858,6 +4040,121 @@ mod tests {
             orientation: Orientation::Vertical,
             page: 0,
         }
+    }
+
+    /// A table grouped by rules, its rows drawn but not ruled: per group,
+    /// a sample on each row, and a product and its formulation centred on
+    /// the group, the formulation wrapped across the rows' cuts. `drawn`
+    /// says whether the border is stroked row by row (breaking at each row)
+    /// or in one piece per group.
+    fn grouped_rows(drawn: bool) -> (Grid, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let xs = vec![72.0, 191.0, 340.0, 504.0];
+        let ys = vec![162.0, 179.0, 196.0, 213.0, 230.0, 247.0, 264.0, 281.0];
+        let mut glyphs = Vec::new();
+        let mut put = |text: &str, x: f64, baseline: f64| {
+            let mut cx = x;
+            for ch in text.chars() {
+                glyphs.push(crate::glyph::Glyph {
+                    text: ch.to_string(),
+                    bbox: Some(BBox {
+                        x0: cx,
+                        y0: baseline - 9.0,
+                        x1: cx + 5.5,
+                        y1: baseline + 3.0,
+                    }),
+                    page: 0,
+                    origin: (cx, baseline),
+                    rotation_deg: 0.0,
+                    font_size: 12.0,
+                    weight: None,
+                    advance: Some(6.0),
+                    draw_index: 0,
+                });
+                cx += 6.0;
+            }
+        };
+        put("Product", 100.0, 174.0);
+        put("Formulation", 230.0, 174.0);
+        put("Sample", 400.0, 174.0);
+        // Group one: a single line centred on the group, and two lines,
+        // the second set across the cut between the second and third rows.
+        put("Alpha", 100.0, 207.5);
+        put("10 mM acetate,", 200.0, 204.0);
+        put("pH 5.0", 240.0, 218.0);
+        put("Unstressed", 360.0, 192.0);
+        put("Stirred", 360.0, 209.0);
+        put("Lit", 360.0, 226.0);
+        // Group two: the formulation's first two lines sit on the samples'
+        // baselines, a row apart (1.42 of its size), the second carrying
+        // on the first; its last is set a paragraph's leading below.
+        put("Beta", 100.0, 258.5);
+        put("12.5 mM histidine,", 200.0, 243.0);
+        put("mMol histidine HCl,", 200.0, 260.0);
+        put("pH 6.0", 240.0, 273.0);
+        put("Unstressed", 360.0, 243.0);
+        put("Stirred", 360.0, 260.0);
+        put("Lit", 360.0, 277.0);
+        let mut rules: Vec<Rule> = [162.0, 179.0, 230.0, 281.0]
+            .iter()
+            .map(|&y| h(72.0, 504.0, y))
+            .collect();
+        let spans: Vec<(f64, f64)> = if drawn {
+            ys.windows(2).map(|w| (w[0], w[1])).collect()
+        } else {
+            vec![(162.0, 179.0), (179.0, 230.0), (230.0, 281.0)]
+        };
+        for (y0, y1) in spans {
+            rules.push(v(y0, y1, 72.0));
+            rules.push(v(y0, y1, 504.0));
+        }
+        let grid = Grid {
+            page: 0,
+            bbox: BBox {
+                x0: 72.0,
+                y0: 162.0,
+                x1: 504.0,
+                y1: 281.0,
+            },
+            xs,
+            ys,
+            layout: None,
+        };
+        (grid, glyphs, rules)
+    }
+
+    #[test]
+    fn values_set_across_a_group_of_drawn_rows_span_it() {
+        let (g, glyphs, rules) = grouped_rows(true);
+        let mut m = g.merges(&rules, &[]);
+        assert!(m.continues_above.iter().all(|x| !x), "nothing ruled open");
+        g.text_merges(&glyphs, &rules, &mut m);
+        let spans = |r: usize, c: usize| m.continues_above[r * 3 + c];
+        for r in [2, 3, 5, 6] {
+            assert!(
+                spans(r, 0) && spans(r, 1),
+                "row {r}: product and formulation span"
+            );
+            assert!(!spans(r, 2), "row {r}: each sample is its own");
+        }
+        for r in [1, 4] {
+            assert!((0..3).all(|c| !spans(r, c)), "row {r} opens its group");
+        }
+        // The formulation reads whole, its carried-on line included.
+        assert_eq!(
+            g.region_text(&glyphs, &m, 4..7, 1..2).as_deref(),
+            Some("12.5 mM histidine, mMol histidine HCl, pH 6.0")
+        );
+    }
+
+    #[test]
+    fn rows_the_border_runs_through_are_not_a_group() {
+        // The same text, but the border stroked once per group: the grid's
+        // cuts inside a group are not rows anyone drew, and the samples'
+        // lines are one cell's wrapped text for all the page says.
+        let (g, glyphs, rules) = grouped_rows(false);
+        let mut m = g.merges(&rules, &[]);
+        g.text_merges(&glyphs, &rules, &mut m);
+        assert!(m.continues_above.iter().all(|x| !x));
     }
 
     /// The segmented-rule shape: horizontal rules drawn as one segment per

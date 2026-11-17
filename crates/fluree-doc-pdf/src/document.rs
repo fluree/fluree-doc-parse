@@ -1189,7 +1189,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             let explicit = g.layout.as_deref();
             let mut merges = match explicit {
                 Some(lay) => lay.merges(g.rows(), g.cols()),
-                None => g.merges(&raw.pages[pi].rules, &raw.pages[pi].fills),
+                None => {
+                    let page = &raw.pages[pi];
+                    let mut m = g.merges(&page.rules, &page.fills);
+                    g.text_merges(&page.glyphs, &page.rules, &mut m);
+                    m
+                }
             };
             // A row whose text crosses an alignment-derived boundary is one
             // cell across the row — a boxed notice over a key/value list.

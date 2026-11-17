@@ -102,6 +102,37 @@ as detected. Consumers wanting self-contained rows
 does, and the XHTML emitter expresses the merges as `rowspan`/`colspan`
 instead.
 
+### Rows drawn but not ruled
+
+An unruled boundary is not, by itself, a merge: reading every one as a span
+blanks most of a table whose rows came from elsewhere. But a word processor
+draws a table's rows whether it rules them or not, and then the text says
+what the ruling does not. Three samples of one product sit on three rows with
+no rule between them, the product's name and formulation each set once,
+centred on the group and wrapped where the column is narrow. Cut at the rows,
+the formulation's `pH` lands on one sample and its `5.0` on the next.
+
+So inside a group of rows ruled off from its neighbours but not within, a
+column whose rows each hold text placed the same way (each centred in its row,
+or each at its top) gives every row its own value, and another column whose
+text runs across the rows' cuts as one wrapped value, or sits as one line
+centred on the whole group, is one cell spanning it. A line that carries on
+the one above it (it starts lowercase, or follows a comma) is the same value
+even when it sits on the next row's baseline, a row's height below.
+
+Three conditions keep this from firing where it should not:
+
+- **The group is ruled off on both sides by rules drawn across the whole
+  table, and there are two such groups or more.** A table ruled under its
+  header and at its foot is one group, and a sparse column in it is values
+  missing from some rows.
+- **The rows inside the group are drawn.** The border is stroked row by row
+  and breaks at each one. Where the grid took a cut from the gap between a
+  label's wrapped lines, the border runs straight through it, and reading the
+  cut as rows copied the doses beside the label onto a row of its second line.
+- **A column has to give each row its own value.** Without one there are no
+  rows to span.
+
 ## Escalation signals
 
 A table earns a model tier when its detected structure **disagrees with
