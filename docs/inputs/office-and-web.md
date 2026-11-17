@@ -30,6 +30,17 @@ back out of ruling geometry. A paragraph in Word's built-in Title style is the
 document's `doco:Title`, found by the style's name, which a localised Word
 keeps in English while it renames the style's id.
 
+List numbering is one thing Word does not store: a clause numbered `9.1.5.`
+holds no number in its text, and Word computes it when it lays the page out.
+The reader computes it the same way and puts it at the head of the paragraph,
+as Word shows it, so `9.1.5. Record the reading` reads as it is
+cited. That covers numbering on the paragraph and numbering a paragraph style
+carries, multi-level labels (`%1.%2.%3.`), decimal, letter and roman formats,
+legal numbering, where a list restarts or carries on, and a numbered
+paragraph with no text, such as a step column's `1.` and `2.`. Bullets add no
+text. Formats spelled out in words (`First`, `Second`) are written as
+numbers.
+
 `page` is `0` throughout — a `.docx` stores a flow, not a layout, and page
 boundaries exist only once something lays it out.
 

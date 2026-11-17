@@ -4,7 +4,9 @@
 //! the whole way through: `w:pStyle` names the heading level, `w:numPr` marks
 //! a list item, `w:tbl` bounds a real table, and `w:gridSpan` / `w:vMerge`
 //! state cell merges that the PDF engine has to read back out of ruling
-//! geometry. So this reader measures nothing — it maps.
+//! geometry. So this reader measures nothing — it maps. The one thing it
+//! computes is what Word computes at layout rather than storing: list
+//! numbers, in the `numbering` module.
 //!
 //! Two consequences worth being explicit about:
 //!
@@ -15,8 +17,11 @@
 //! * **No escalation.** There is nothing for a model tier to arbitrate: the
 //!   structure is not a hypothesis.
 
+mod numbering;
+
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local, Package};
+use numbering::Numbering;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
@@ -59,11 +64,16 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
     // the title; a package without them, or with ones that do not parse,
     // still reads.
     let styles = pkg.related(&main, "styles", "word/styles.xml");
-    let (header_styles, title_styles) = match pkg.read(&styles) {
-        Some(styles) => (header_row_styles(&styles), title_styles(&styles)),
+    let styles = pkg.read(&styles);
+    let (header_styles, title_styles) = match &styles {
+        Some(styles) => (header_row_styles(styles), title_styles(styles)),
         None => (HashSet::new(), HashSet::new()),
     };
-    let elements = parse_with_styles(&xml, &header_styles, &title_styles)?;
+    // List numbering, which Word computes rather than stores; without the
+    // part the document numbers nothing.
+    let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
+    let numbering = Numbering::new(pkg.read(&numbering).as_deref(), styles.as_deref());
+    let elements = parse_with_styles(&xml, &header_styles, &title_styles, numbering)?;
     Ok((elements, pkg.info()))
 }
 
@@ -233,7 +243,14 @@ struct TableLook {
 struct Para {
     text: String,
     style: String,
+    /// `w:numPr` on the paragraph itself, with the list and level it names
+    /// (either may be left to the style).
     numbered: bool,
+    num_id: Option<String>,
+    ilvl: Option<usize>,
+    /// The number Word shows at the head of the paragraph, with what
+    /// follows it: `9.1.5. `.
+    label: Option<String>,
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -244,16 +261,18 @@ pub fn info(bytes: &[u8]) -> DocumentInfo {
 }
 
 pub fn parse_document_xml(xml: &str) -> Result<Vec<Element>, DocxError> {
-    parse_with_styles(xml, &HashSet::new(), &HashSet::new())
+    parse_with_styles(xml, &HashSet::new(), &HashSet::new(), Numbering::default())
 }
 
 /// [`parse_document_xml`], knowing which table styles set their first row
 /// apart as a header (see [`header_row_styles`]) and which paragraph styles
-/// are the document's title (see [`title_styles`]).
+/// are the document's title (see [`title_styles`]), and numbering each
+/// numbered paragraph by `numbering`.
 fn parse_with_styles(
     xml: &str,
     header_styles: &HashSet<String>,
     title_styles: &HashSet<String>,
+    mut numbering: Numbering,
 ) -> Result<Vec<Element>, DocxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
@@ -276,6 +295,12 @@ fn parse_with_styles(
     // `w:rPr` counts; the one inside `w:pPr` formats the paragraph mark.
     let mut in_ppr = false;
     let mut run_bold = false;
+    // A tracked change keeps the paragraph's properties as they were, inside
+    // `w:pPrChange`: its style and numbering are not the paragraph's.
+    let mut in_ppr_change = false;
+    // Where the paragraph being read starts in its cell's text, so a
+    // numbered one's label goes at its head.
+    let mut cell_para_start = 0usize;
 
     loop {
         match r.read_event_into(&mut buf) {
@@ -286,6 +311,20 @@ fn parse_with_styles(
                 let tag = local(name.as_ref());
                 match tag {
                     "t" => in_text = true,
+                    "p" => {
+                        // A paragraph's properties are its own: a style or a
+                        // list read in a cell before it does not carry on.
+                        para.style.clear();
+                        para.numbered = false;
+                        para.num_id = None;
+                        para.ilvl = None;
+                        para.label = None;
+                        if in_cell {
+                            cell_para_start = cell.text.len();
+                        }
+                    }
+                    "pPrChange" => in_ppr_change = true,
+                    _ if in_ppr_change => {}
                     "pPr" => in_ppr = true,
                     "r" => run_bold = false,
                     "b" if !in_ppr => run_bold = !is_off(&e),
@@ -313,7 +352,9 @@ fn parse_with_styles(
                             para.style = v;
                         }
                     }
-                    "numPr" => para.numbered = true,
+                    "numPr" if in_ppr => para.numbered = true,
+                    "numId" if in_ppr => para.num_id = attr(&e, "val"),
+                    "ilvl" if in_ppr => para.ilvl = attr(&e, "val").and_then(|v| v.parse().ok()),
                     "gridSpan" => {
                         if let Some(v) = attr(&e, "val") {
                             cell.span = v.parse().unwrap_or(1);
@@ -357,9 +398,30 @@ fn parse_with_styles(
                 let name = e.name();
                 match local(name.as_ref()) {
                     "t" => in_text = false,
-                    "pPr" => in_ppr = false,
+                    "pPrChange" => in_ppr_change = false,
+                    _ if in_ppr_change => {}
+                    "pPr" => {
+                        in_ppr = false;
+                        // The paragraph's list and level are known once its
+                        // properties are; its number is counted here, shown
+                        // or not, as Word counts it.
+                        let style = (!para.style.is_empty()).then_some(para.style.as_str());
+                        if let Some((id, level)) =
+                            numbering.resolve(para.num_id.as_deref(), para.ilvl, style)
+                        {
+                            para.label = numbering.next(&id, level);
+                        }
+                    }
                     "p" => {
                         if in_cell {
+                            // A numbered paragraph's label heads its text in
+                            // the cell. Word shows it on an empty paragraph
+                            // too, and a step column's cells hold nothing
+                            // else: `1.`, `2.` beside each step.
+                            if let Some(label) = para.label.take() {
+                                let start = cell_para_start.min(cell.text.len());
+                                cell.text.insert_str(start, &label);
+                            }
                             // Paragraphs inside a cell are one cell's content.
                             if !cell.text.is_empty() && !cell.text.ends_with(' ') {
                                 cell.text.push(' ');
@@ -424,17 +486,23 @@ fn is_list_style(style: &str) -> bool {
 
 fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<String>) {
     let p = std::mem::take(para);
-    let text = p.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    // The number Word shows at the head of a numbered paragraph is part of
+    // what it says: `9.1.5. Record the reading` is how it is cited.
+    // Word shows it on an empty paragraph as well.
+    let text = format!("{}{}", p.label.as_deref().unwrap_or(""), p.text);
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if text.is_empty() {
         return;
     }
+    // `numId` 0 is a paragraph taken out of its list.
+    let numbered = p.numbered && p.num_id.as_deref() != Some("0");
     // The title Word's Title style declares: the document's own, which
     // DoCO holds as the document's header rather than as a section's.
     if p.style == "Title" || title_styles.contains(&p.style) {
         out.push(element("doco:Title", text, None));
     } else if let Some(level) = heading_level(&p.style) {
         out.push(element("doco:SectionTitle", text, Some(level)));
-    } else if p.numbered || is_list_style(&p.style) {
+    } else if numbered || is_list_style(&p.style) {
         out.push(element("doc:ListItem", text, None));
     } else {
         out.push(element("doco:Paragraph", text, None));
@@ -659,6 +727,263 @@ mod tests {
         format!("<w:p>{p}<w:r><w:t>{text}</w:t></w:r></w:p>")
     }
 
+    /// A level as `(numFmt, lvlText, extra level XML)`.
+    type Lvl<'a> = (&'a str, &'a str, &'a str);
+
+    /// `numbering.xml` with one abstract numbering per `(id, levels)`, and
+    /// `w:num`s as given.
+    fn numbering_xml(abstracts: &[(&str, &[Lvl])], nums: &str) -> String {
+        let mut x = format!("<w:numbering {NS}>");
+        for (id, levels) in abstracts {
+            x.push_str(&format!("<w:abstractNum w:abstractNumId=\"{id}\">"));
+            for (i, (fmt, text, extra)) in levels.iter().enumerate() {
+                x.push_str(&format!(
+                    "<w:lvl w:ilvl=\"{i}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"{fmt}\"/>\
+                     <w:lvlText w:val=\"{text}\"/>{extra}</w:lvl>"
+                ));
+            }
+            x.push_str("</w:abstractNum>");
+        }
+        x.push_str(nums);
+        x.push_str("</w:numbering>");
+        x
+    }
+
+    /// A paragraph in list `num` at `lvl`.
+    fn item(num: &str, lvl: usize, text: &str) -> String {
+        format!(
+            "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"{lvl}\"/><w:numId w:val=\"{num}\"/></w:numPr></w:pPr>\
+             <w:r><w:t>{text}</w:t></w:r></w:p>"
+        )
+    }
+
+    fn numbered(body: &str, numbering: &str, styles: Option<&str>) -> Vec<String> {
+        let n = Numbering::new(Some(numbering), styles);
+        parse_with_styles(&doc(body), &HashSet::new(), &HashSet::new(), n)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.text)
+            .collect()
+    }
+
+    const OUTLINE: &[Lvl] = &[
+        ("decimal", "%1.", ""),
+        ("decimal", "%1.%2.", ""),
+        ("decimal", "%1.%2.%3.", ""),
+    ];
+
+    #[test]
+    fn clause_numbers_word_computes_head_their_paragraphs() {
+        let nx = numbering_xml(
+            &[("0", OUTLINE)],
+            r#"<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"#,
+        );
+        let body = [
+            item("1", 0, "Purpose"),
+            item("1", 0, "Procedure"),
+            item("1", 1, "Calibration"),
+            item("1", 2, "Zero the balance."),
+            item("1", 2, "Weigh the standard."),
+            item("1", 1, "Cleaning"),
+            item("1", 2, "Wipe the pan."),
+            item("1", 0, "Records"),
+            item("1", 1, "Retention"),
+        ]
+        .concat();
+        assert_eq!(
+            numbered(&body, &nx, None),
+            [
+                "1. Purpose",
+                "2. Procedure",
+                "2.1. Calibration",
+                "2.1.1. Zero the balance.",
+                "2.1.2. Weigh the standard.",
+                "2.2. Cleaning",
+                "2.2.1. Wipe the pan.",
+                "3. Records",
+                "3.1. Retention",
+            ]
+        );
+    }
+
+    #[test]
+    fn letters_romans_bullets_and_legal_numbers() {
+        let nx = numbering_xml(
+            &[
+                (
+                    "0",
+                    &[
+                        ("decimal", "%1.", ""),
+                        ("lowerLetter", "%2)", ""),
+                        ("lowerRoman", "(%3)", ""),
+                    ],
+                ),
+                ("1", &[("bullet", "\u{F0B7}", "")]),
+                // Legal numbering: the level shows every number in decimal.
+                (
+                    "2",
+                    &[
+                        ("upperRoman", "%1.", ""),
+                        ("decimal", "%1.%2", "<w:isLgl/>"),
+                    ],
+                ),
+            ],
+            r#"<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+               <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+               <w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>"#,
+        );
+        let body = [
+            item("1", 0, "Scope"),
+            item("1", 1, "first"),
+            item("1", 1, "second"),
+            item("1", 2, "detail"),
+            item("1", 2, "more"),
+            item("2", 0, "a bullet"),
+            item("3", 0, "Article"),
+            item("3", 0, "Article"),
+            item("3", 1, "Section"),
+        ]
+        .concat();
+        assert_eq!(
+            numbered(&body, &nx, None),
+            [
+                "1. Scope",
+                "a) first",
+                "b) second",
+                "(i) detail",
+                "(ii) more",
+                "a bullet",
+                "I. Article",
+                "II. Article",
+                "2.1 Section",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_style_numbers_its_paragraphs_at_the_level_linked_to_it() {
+        // Clause styles carry the list; the levels name the style each is
+        // for, as an outline built on heading styles does.
+        let nx = numbering_xml(
+            &[(
+                "0",
+                &[
+                    ("decimal", "%1.", "<w:pStyle w:val=\"Clause1\"/>"),
+                    ("decimal", "%1.%2.", "<w:pStyle w:val=\"Clause2\"/>"),
+                ],
+            )],
+            r#"<w:num w:numId="7"><w:abstractNumId w:val="0"/></w:num>"#,
+        );
+        let styles = format!(
+            "<w:styles {NS}>\
+             <w:style w:type=\"paragraph\" w:styleId=\"Clause1\"><w:pPr><w:numPr><w:numId w:val=\"7\"/></w:numPr></w:pPr></w:style>\
+             <w:style w:type=\"paragraph\" w:styleId=\"Clause2\"><w:basedOn w:val=\"Clause1\"/></w:style>\
+             </w:styles>"
+        );
+        let body = [
+            para(Some("Clause1"), "Responsibilities"),
+            para(Some("Clause2"), "Operators"),
+            para(Some("Clause2"), "Reviewers"),
+            para(Some("Clause1"), "Procedure"),
+            para(None, "Plain text is not numbered."),
+        ]
+        .concat();
+        assert_eq!(
+            numbered(&body, &nx, Some(&styles)),
+            [
+                "1. Responsibilities",
+                "1.1. Operators",
+                "1.2. Reviewers",
+                "2. Procedure",
+                "Plain text is not numbered.",
+            ]
+        );
+    }
+
+    #[test]
+    fn lists_drawn_from_one_numbering_count_on_unless_one_restarts() {
+        let nx = numbering_xml(
+            &[("0", OUTLINE)],
+            r#"<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+               <w:num w:numId="2"><w:abstractNumId w:val="0"/></w:num>
+               <w:num w:numId="3"><w:abstractNumId w:val="0"/>
+                 <w:lvlOverride w:ilvl="0"><w:startOverride w:val="5"/></w:lvlOverride></w:num>"#,
+        );
+        let body = [
+            item("1", 0, "one"),
+            item("2", 0, "carries on"),
+            item("3", 0, "starts at five"),
+            item("3", 0, "six"),
+        ]
+        .concat();
+        assert_eq!(
+            numbered(&body, &nx, None),
+            ["1. one", "2. carries on", "5. starts at five", "6. six"]
+        );
+    }
+
+    #[test]
+    fn a_paragraph_taken_out_of_its_list_is_neither_numbered_nor_an_item() {
+        let nx = numbering_xml(
+            &[("0", OUTLINE)],
+            r#"<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"#,
+        );
+        let body = [
+            item("1", 0, "first"),
+            item("0", 0, "no longer listed"),
+            item("1", 0, "second"),
+        ]
+        .concat();
+        let n = Numbering::new(Some(&nx), None);
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        assert_eq!(els[1].text, "no longer listed");
+        assert_eq!(els[1].kind, "doco:Paragraph");
+        assert_eq!(els[2].text, "2. second");
+    }
+
+    #[test]
+    fn a_step_column_keeps_its_numbers() {
+        // A form's step column: each cell holds an empty numbered
+        // paragraph, and Word shows only its number.
+        let nx = numbering_xml(
+            &[("0", OUTLINE)],
+            r#"<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"#,
+        );
+        let step = |text: &str| {
+            format!(
+                "<w:tr><w:tc><w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr></w:p></w:tc>\
+                 <w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr>"
+            )
+        };
+        let body = format!(
+            "<w:tbl>{}{}</w:tbl>{}",
+            step("Weigh the sample."),
+            step("Label the vial."),
+            item("1", 1, "after the table")
+        );
+        let n = Numbering::new(Some(&nx), None);
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let cells = els[0].cells.as_ref().unwrap();
+        assert_eq!(cells[0][0].trim(), "1.");
+        assert_eq!(cells[1][0].trim(), "2.");
+        assert_eq!(els[1].text, "2.1. after the table");
+    }
+
+    #[test]
+    fn a_tracked_changes_old_numbering_is_not_the_paragraphs() {
+        let nx = numbering_xml(
+            &[("0", OUTLINE)],
+            r#"<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>"#,
+        );
+        let body = "<w:p><w:pPr><w:pStyle w:val=\"Body\"/><w:pPrChange><w:pPr><w:pStyle w:val=\"Heading1\"/>\
+                    <w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr></w:pPrChange></w:pPr>\
+                    <w:r><w:t>Was a numbered heading</w:t></w:r></w:p>";
+        let n = Numbering::new(Some(&nx), None);
+        let els = parse_with_styles(&doc(body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        assert_eq!(els[0].text, "Was a numbered heading");
+        assert_eq!(els[0].kind, "doco:Paragraph");
+    }
+
     #[test]
     fn the_title_style_is_the_documents_title() {
         let x = doc(&format!(
@@ -681,6 +1006,7 @@ mod tests {
             &doc(&para(Some("Titel"), "Jahresbericht")),
             &HashSet::new(),
             &localised,
+            Numbering::default(),
         )
         .unwrap();
         assert_eq!(els[0].kind, "doco:Title");
@@ -1001,8 +1327,10 @@ mod tests {
                 tc("Engineer", false, "")
             ))
         };
-        let header =
-            |xml: String| parse_with_styles(&xml, &marked, &HashSet::new()).unwrap()[0].header_rows;
+        let header = |xml: String| {
+            parse_with_styles(&xml, &marked, &HashSet::new(), Numbering::default()).unwrap()[0]
+                .header_rows
+        };
         assert_eq!(header(x("Mine", "w:firstRow=\"1\"")), Some(1));
         assert_eq!(header(x("Mine", "w:val=\"04A0\"")), Some(1));
         assert_eq!(header(x("Mine", "w:firstRow=\"0\"")), Some(0));
