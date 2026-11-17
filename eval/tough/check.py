@@ -138,6 +138,13 @@ def run_check(check, reading):
     if "no_row" in check:
         ok = not reading.has_row(check["no_row"])
         return ok, None if ok else "the row is there"
+    if "cell" in check:
+        # A cell with each of these: its value and, where given, the names
+        # it carries.
+        keys = {"value": "doc:cellValue", "column": "doc:columnHeader", "row": "doc:rowHeader", "section": "doc:sectionLabel"}
+        want = {keys[k]: norm(v) for k, v in check["cell"].items()}
+        ok = any(all(norm(c.get(k, "")) == v for k, v in want.items()) for c in reading.cells)
+        return ok, None if ok else "no such cell"
     if "text" in check:
         ok = norm(check["text"]) in norm(reading.text)
         return ok, None if ok else "not in the text projection"

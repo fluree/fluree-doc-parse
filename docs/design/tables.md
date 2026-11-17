@@ -87,6 +87,28 @@ word — produce the same two baselines and the same scatter of column edges, an
 on boundaries alone are indistinguishable from a letterhead; nothing encloses
 them. Nor does a decorative rule in a margin vouch for a row it never touched.
 
+## Two-row headers and row groups
+
+A ruled table says where a header label spans columns: the ruling leaves them
+open under it. When the row beneath names each spanned column with a label of
+its own (`Primary Method` over `NISTmAb | Amgen mAb`), the two rows are one
+header and each column is named by both. The labels must differ from each
+other and hold no numbers, because data under a banner repeats itself
+(`Short | Short`). Each must be a cell of its own: a value run across the
+banner's columns (`3.1 mg in 2 mL` under `Strength`) names nothing. And where
+the label above spans every column it is as often a band titling the rows
+beneath (`Monotherapy` over `Adult patients with …`) as a header over the
+column names (`Establishment` over `Name | Address | ID/FEI`), so the labels
+under it must be short, as column names are.
+
+A row that holds only a label in its first column, drawn as cells of the
+table rather than a band across it, labels the rows beneath it when the row
+below fills every column. The full row is what tells a group from a row whose
+values are missing: a receipt's `TOTAL` with no amount sits over `Cash` and
+`Change`, as sparse as it is. A label wrapped onto the next row (`Median in`
+over `months (95% CI)`) is carried on, not a group, and a two-column list is
+left alone, since a field left empty there looks the same.
+
 ## Merges
 
 Spanning cells are detected from which boundaries are *not* drawn across a

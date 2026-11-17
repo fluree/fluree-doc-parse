@@ -36,7 +36,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `figure` | figures | shared id for fragments of one drawing |
 | `cells` | tables | row-major, **as detected** |
 | `header_rows` | tables | `None` → treat as 1 |
-| `sub_headers` | tables | full-width banner row indices |
+| `sub_headers` | tables | indices of rows that label the rows beneath them: full-width banners, and labels set alone in the first column |
 | `merged_down` | tables | row-major continuation flags |
 | `merged_left` | tables | row-major continuation flags |
 | `continues` | tables continued from the page before | the `id` of the table this one carries on |

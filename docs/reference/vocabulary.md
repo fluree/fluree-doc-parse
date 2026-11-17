@@ -150,7 +150,7 @@ its own — an image, a whole table cell.
 | `doc:columnIndex` | 0-based column |
 | `doc:rowHeader` | the row's header text, denormalized |
 | `doc:columnHeader` | the column's header text, denormalized; under a stacked header, its labels from the top down joined with ` / ` (`Price / Unit`), each once |
-| `doc:sectionLabel` | the enclosing sub-header band's text, if any |
+| `doc:sectionLabel` | the label of the group the row belongs to, if any: a sub-header band above it, or a row holding only a label |
 
 ## Why `pageIndex` and not `pageNumber`
 

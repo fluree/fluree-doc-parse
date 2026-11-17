@@ -63,6 +63,81 @@ pub struct Analysis {
     pub timings: StageTimings,
 }
 
+/// Row 1 names each column a label of row 0 spans: under every span a label
+/// of its own, all different, and no number anywhere in the row. Then the
+/// two rows are one header, and a column is named by both.
+///
+/// Its own: a value run across the span's columns (`3.1 mg in 2 mL` under
+/// `Strength`) continues left and names nothing. And short where the label
+/// above spans every column, which is as often a band titling the rows
+/// beneath (`Monotherapy` over `Adult patients with …`) as a header over
+/// the column names (`Establishment` over `Name | Address | ID/FEI`).
+/// `continues_left` is row-major over the whole grid.
+fn names_spanned_columns(rows: &[Vec<String>], continues_left: &[bool]) -> bool {
+    let cols = rows.first().map(Vec::len).unwrap_or(0);
+    if rows.len() < 3 || continues_left.len() < 2 * cols {
+        return false;
+    }
+    let spans = header_spans(&continues_left[..cols]);
+    let labels = |a: usize, b: usize| {
+        let names: Vec<&str> = rows[1][a..b].iter().map(|t| t.trim()).collect();
+        let short = b - a < cols || names.iter().all(|t| t.split_whitespace().count() <= 4);
+        short
+            && (a + 1..b).all(|k| !continues_left[cols + k])
+            && names
+                .iter()
+                .all(|t| !t.is_empty() && !table::is_numeric_cell(t))
+            && names.iter().collect::<std::collections::HashSet<_>>().len() == names.len()
+    };
+    !spans.is_empty()
+        && spans.iter().all(|&(a, b)| labels(a, b))
+        && rows[1]
+            .iter()
+            .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()))
+}
+
+/// The columns each spanning label of a header row covers, as `start..end`,
+/// from that row's flags for a cell continuing the one to its left.
+fn header_spans(continues_left: &[bool]) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut c = 0;
+    while c < continues_left.len() {
+        let end = (c + 1..continues_left.len())
+            .find(|&k| !continues_left[k])
+            .unwrap_or(continues_left.len());
+        if end - c > 1 {
+            spans.push((c, end));
+        }
+        c = end;
+    }
+    spans
+}
+
+/// Row `r` labels the rows beneath it: a label in its first column and
+/// nothing in the rest, drawn as cells of the table rather than a band
+/// across it, over a row with a value in every column (`Focus-Inject` over
+/// `Position | 12% | 12% | 12% | 12%`).
+///
+/// The full row below is what tells a group from a row whose values are
+/// missing: a receipt's `TOTAL` with no amount sits over `Cash` and
+/// `Change`, as sparse as it is. Not a label wrapped onto the next row
+/// either (`Median in` over `months (95% CI)`): a first cell below that
+/// starts lowercase or with a bracket carries this one on. And not in a
+/// two-column list, where a field left empty looks the same.
+fn group_label(rows: &[Vec<String>], r: usize) -> bool {
+    let (Some(row), Some(next)) = (rows.get(r), rows.get(r + 1)) else {
+        return false;
+    };
+    let label = row[0].trim();
+    let below = next[0].trim();
+    row.len() >= 3
+        && !label.is_empty()
+        && !table::is_numeric_cell(label)
+        && row[1..].iter().all(|t| t.trim().is_empty())
+        && next.iter().all(|t| !t.trim().is_empty())
+        && !below.starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
+}
+
 /// A table's frame on its page: where its columns are drawn, and whether
 /// its first row is set apart the way a header is.
 struct TableFrame {
@@ -1341,6 +1416,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     }
                 }
             }
+            // A ruled table says where a header label spans columns: the
+            // ruling leaves them open under it (`Primary Method` over two
+            // antibodies). A row beneath that names each spanned column with
+            // a label of its own is the header's second row, and every
+            // column is named by both. Distinct labels, because data under a
+            // banner repeats itself (`Short | Short`), and no numbers.
+            if explicit.is_none()
+                && header_rows == 1
+                && names_spanned_columns(&rows, &merges.continues_left)
+            {
+                header_rows = 2;
+            }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
             // centred header across the row boundary under it (`time` above,
@@ -1401,7 +1488,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .iter()
                     .enumerate()
                     .filter(|(r, full)| {
-                        **full && *r >= header_rows && rows[*r].iter().any(|c| !c.trim().is_empty())
+                        (**full && rows[*r].iter().any(|c| !c.trim().is_empty())
+                            || group_label(&rows, *r))
+                            && *r >= header_rows
                     })
                     .map(|(r, _)| r)
                     .collect(),
@@ -1671,6 +1760,98 @@ mod tests {
     }
 
     const XS: [f64; 4] = [72.0, 180.0, 368.0, 595.0];
+
+    fn grid(rows: &[&[&str]]) -> Vec<Vec<String>> {
+        rows.iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_row_naming_each_spanned_column_is_the_headers_second() {
+        let mut left = vec![false; 15];
+        left[2] = true;
+        left[4] = true;
+        let methods = grid(&[
+            &["", "Primary", "", "Secondary", ""],
+            &["", "NISTmAb", "Amgen mAb", "NISTmAb", "Amgen mAb"],
+            &["Channel", "Short", "Short", "Short", "Short"],
+        ]);
+        assert!(names_spanned_columns(&methods, &left));
+        // Data under a banner repeats itself; it names nothing.
+        let data = grid(&[
+            &["", "Primary", "", "Secondary", ""],
+            &["Channel", "Short", "Short", "Short", "Short"],
+            &["Flow", "0.5", "0.5", "1.5", "1.5"],
+        ]);
+        assert!(!names_spanned_columns(&data, &left));
+        // Nor is a row of numbers, nor a header with no span.
+        let numbers = grid(&[
+            &["", "Primary", "", "Secondary", ""],
+            &["Flow", "0.5", "0.7", "1.5", "1.7"],
+            &["Time", "3", "4", "5", "6"],
+        ]);
+        assert!(!names_spanned_columns(&numbers, &left));
+        assert!(!names_spanned_columns(&methods, &[false; 15]));
+        // A value run across the banner's columns names nothing.
+        let mut run = left.clone();
+        run[5 + 2] = true;
+        assert!(!names_spanned_columns(&methods, &run));
+        // A band over every column titles rows unless short labels follow.
+        let mut band = vec![false; 9];
+        band[1] = true;
+        band[2] = true;
+        let titled = grid(&[
+            &["Monotherapy", "", ""],
+            &[
+                "Adult patients with melanoma",
+                "200 mg every 3 weeks",
+                "Until disease progression",
+            ],
+            &[
+                "Adult patients with NSCLC",
+                "200 mg every 3 weeks",
+                "Until disease progression",
+            ],
+        ]);
+        assert!(!names_spanned_columns(&titled, &band));
+        let named = grid(&[
+            &["Establishment", "", ""],
+            &["Name", "Address", "ID/FEI"],
+            &["Plant A", "1 Main St", "123"],
+        ]);
+        assert!(names_spanned_columns(&named, &band));
+    }
+
+    #[test]
+    fn a_label_alone_over_full_rows_labels_them() {
+        let t = grid(&[
+            &["", "A", "B"],
+            &["Focus-Inject", "", ""],
+            &["Position", "12%", "12%"],
+            &["Flow-Rate", "0.5", "1.5"],
+        ]);
+        assert!(group_label(&t, 1));
+        assert!(!group_label(&t, 2), "a row with values labels nothing");
+        // A total left empty over rows as sparse as it is: missing values.
+        let receipt = grid(&[
+            &["Item", "Units", "Amount"],
+            &["TOTAL", "", ""],
+            &["Cash", "", "USD 80.00"],
+        ]);
+        assert!(!group_label(&receipt, 1));
+        // A label wrapped onto the next row is carried on, not a group.
+        let wrapped = grid(&[
+            &["Endpoint", "A", "B"],
+            &["Median in", "", ""],
+            &["months (95% CI)", "5.4", "6.5"],
+        ]);
+        assert!(!group_label(&wrapped, 1));
+        // A field left empty in a two-column list is not a label.
+        let list = grid(&[&["Name", "Value"], &["Notes", ""], &["Lot", "A12"]]);
+        assert!(!group_label(&list, 1));
+    }
+
 
     #[test]
     fn a_table_the_page_break_split_is_linked_and_loses_its_false_header() {

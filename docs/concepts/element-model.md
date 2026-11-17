@@ -103,9 +103,10 @@ geometry measured and a consumer cannot re-derive:
 
 - **`header_rows`** — how many leading rows are header. `None` means
   undetected (model-provided tables); treat that as 1.
-- **`sub_headers`** — row indices below the header block that are a single
-  full-width cell labelling the rows beneath them. The banner bands that split
-  a matrix into sections.
+- **`sub_headers`** — row indices below the header block that label the rows
+  beneath them: a single full-width cell (the banner bands that split a matrix
+  into sections), or a label set alone in the first column over full rows
+  (`Focus-Inject` over the parameters it groups).
 
 - **`datums`** — the same shape as `cells`: what each cell stores beneath
   the text it shows, as an XSD datatype and a lexical form

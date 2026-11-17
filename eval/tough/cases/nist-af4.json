@@ -23,13 +23,24 @@
     },
     {
       "id": "conditions-name-method-and-antibody",
-      "status": "open",
       "found": "2026-11-17",
       "issue": "Table 2 sets each method as a banner over two antibody columns. The antibody row is read as data, so the second antibody's values have no column name, and a value cannot be told apart from the other antibody's.",
       "row": {
         "Primary Method (Submicrometer Particles) / NISTmAb": "25 mM His/L-His HCl, pH 6.0",
         "Primary Method (Submicrometer Particles) / Amgen mAb": "100 mM sodium phosphate + 250 mM NaCl, pH 6.8"
       }
+    },
+    {
+      "id": "conditions-row-groups-label-their-rows",
+      "found": "2026-11-17",
+      "issue": "`Focus-Inject` and `Separation` are rows holding only a label, naming the parameters set beneath them; they read as rows with no values, and the rows under them carried no group.",
+      "cell": {"value": "0.5", "column": "Primary Method (Submicrometer Particles) / NISTmAb", "row": "Flow-Rate (mL/min)", "section": "Focus-Inject"}
+    },
+    {
+      "id": "conditions-second-group",
+      "found": "2026-11-17",
+      "issue": "The second group's parameters carry its label.",
+      "cell": {"value": "3", "column": "Secondary Method (Soluble Aggregates)-Optional / Amgen mAb", "row": "Crossflow Initial (mL/min)", "section": "Separation"}
     },
     {
       "id": "recommendations-one-table",
