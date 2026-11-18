@@ -89,9 +89,11 @@ pub fn unread_pages(
     const NEARLY_EMPTY: usize = 40;
     let mut out = Vec::new();
     for p in &doc.pages {
+        // A running header kept once says nothing about whether the page
+        // under it was read.
         let text: usize = elements
             .iter()
-            .filter(|e| e.page == p.index)
+            .filter(|e| e.page == p.index && !matches!(e.evidence, "header" | "footer"))
             .map(|e| e.text.trim().chars().count())
             .sum();
         if text >= NEARLY_EMPTY {

@@ -70,10 +70,12 @@ by adding signals:
 
 ## Where it goes
 
-Detected furniture is dropped rather than retyped as `doco:FrontMatter`, so it
-appears in no output — not in the text projection, not in the graph, not in
-the offsets. The two stay consistent: an element that does not exist has no
-text and no offsets.
+Detected furniture is dropped from every page rather than retyped as
+`doco:FrontMatter`. The one exception is the running header and footer a
+document opens and closes with, kept once; see
+[below](#removed-from-the-body-kept-about-the-document). The text projection,
+the graph and the offsets stay consistent: an element that does not exist has
+no text and no offsets, and one that does has both.
 
 ## Model readings are scrubbed too
 
@@ -107,11 +109,22 @@ running header, and stripping them leaves the document anonymous: one test
 method lost `CHURCH &`, `DWIGHT`, its title and its document number in a
 single pass.
 
-So the text is removed from the body and declared once on the document node as
-[`doc:runningText`](../formats/doco.md). Not restored into the body, which
-would put back what was removed from it and shift every character offset in
-the graph, and not merely dropped. Bare page numbers are excluded — a folio
-identifies nothing about the document.
+So every line is declared once on the document node as
+[`doc:runningText`](../formats/doco.md), and the header and footer are also
+kept once in the text, the way a Word file's are read: the header printed on
+the first page, before that page's content, and the footer printed on the
+last, after its content. These are `doco:Paragraph` elements whose `evidence`
+is `header` or `footer`, with the box they were printed in, so a consumer that
+wants the body alone can leave them out. A header line whose page number
+changes is the first page's copy: `Form QA-12 Page 1`.
+
+A running head that starts later in the document, such as a report's title
+over its inner pages or the meeting date on its even pages, is not kept in the
+text. Placed where it is first printed, it would stand between two pages'
+text, and the document's first page usually says the same thing in its own
+title. It is in the running text with the rest. Lines that name nothing are
+left out of both: a folio identifies nothing about the document, and neither
+does `Page 3 of 15`.
 
 ## The folio identifies the page
 

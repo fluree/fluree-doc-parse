@@ -601,6 +601,16 @@ fn convert_bytes(
             fluree_doc_pdf::arbiter::scrub_furniture(&mut a.elements, &a.furniture);
         }
     }
+    // After the tiers, which replace whole pages; before the links, which a
+    // footer carries as often as the body does.
+    let (first, last) = match pages {
+        Some(keep) => (
+            keep.iter().copied().min().unwrap_or(0),
+            keep.iter().copied().max().unwrap_or(0),
+        ),
+        None => (0, doc.pages.len().saturating_sub(1)),
+    };
+    fluree_doc_pdf::furniture::keep_running(&mut a.elements, &a.running, first, last);
     // After the tiers: an escalated reading replaces the text an anchor has to
     // be found in.
     fluree_doc_pdf::link::attach(
@@ -631,12 +641,12 @@ fn convert_bytes(
     // it has run.
     let notes = fluree_doc_model::Notes {
         unread: fluree_doc_pdf::unread_pages(&doc, &a.elements),
-        // A bare page number identifies nothing; the rest of the running
-        // block is the document's own name for itself.
+        // A page number identifies nothing, bare or as `Page 3 of 15`; the
+        // rest of the running block is the document's own name for itself.
         running_text: a
             .furniture
             .iter()
-            .filter(|(text, _)| text.chars().any(char::is_alphabetic))
+            .filter(|(text, _)| fluree_doc_pdf::furniture::names_something(text))
             .map(|(text, _)| text.clone())
             .collect(),
         info: fluree_doc_pdf::info::read(&raw),

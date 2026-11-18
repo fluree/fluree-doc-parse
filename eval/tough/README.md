@@ -70,7 +70,7 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `no_row` | no table row has them all |
 | `no_column_header` | no cell's column name contains this text |
 | `cell` | some cell has this `value`, and the `column`, `row` and `section` names given |
-| `text` | the text projection contains this text |
+| `text` | the text projection contains this text, exactly `count` times where one is given |
 | `no_text` | the text projection does not contain this text anywhere |
 | `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence` |
 

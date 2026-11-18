@@ -287,6 +287,105 @@ fn classify(rel_y: f64, digits_vary: bool) -> Furniture {
     }
 }
 
+/// A running header or footer line, where one page printed it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Running {
+    pub page: usize,
+    pub bbox: crate::geom::BBox,
+    pub text: String,
+    /// Printed in the top half of the page: a header, not a footer.
+    pub top: bool,
+}
+
+/// Whether a furniture line says anything besides where the reader is.
+/// `Page 3 of 15` and `- 3 -` do not; `ACME LABS`, `Revision 4` and
+/// `Form QA-12 Page 3` do. Nor does `P age 3`, set with its letters apart.
+pub fn names_something(text: &str) -> bool {
+    const PAGING: &[&str] = &["page", "pages", "pg", "p", "pp", "of"];
+    let names = |text: &str| {
+        text.split(|c: char| !c.is_alphabetic())
+            .any(|w| w.chars().count() >= 2 && !PAGING.contains(&w.to_lowercase().as_str()))
+    };
+    let closed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    names(text) && names(&closed)
+}
+
+/// Whether a furniture line is a header or footer that
+/// [`names_something`]. A watermark is neither.
+pub fn identifies(text: &str, kind: Furniture) -> bool {
+    kind != Furniture::Watermark && names_something(text)
+}
+
+/// Put a document's running header and footer into its text, once.
+///
+/// Furniture is stripped from every page because a line that repeats on all
+/// of them says nothing about any one. But it does say something about the
+/// document: the running header is often the only place a document names
+/// its company, its form number or its revision, and a reader of the text
+/// should find them there as a reader of the page does.
+///
+/// As a Word file's are read: the header once, before the body, and the
+/// footer once, after it, marked `header` and `footer`. The header is the
+/// one printed on `first`, the first page converted, and the footer the one
+/// on `last`; a line whose page number changes is that page's copy. A
+/// running head that starts later in the document (a report's chapter
+/// title, the date on its even pages) stays out of the body, where it would
+/// stand between two pages' text: it is in the running text with the rest.
+///
+/// Run after anything that replaces a page's elements, so a page read
+/// again keeps its header. Element ids are renumbered.
+pub fn keep_running(
+    elements: &mut Vec<crate::document::Element>,
+    running: &[Running],
+    first: usize,
+    last: usize,
+) {
+    use crate::document::Element;
+    let mut seen = std::collections::HashSet::new();
+    let mut lines = |top: bool, page: usize| -> Vec<Element> {
+        running
+            .iter()
+            .filter(|r| r.top == top && r.page == page && seen.insert(signature(&r.text)))
+            .map(|r| Element {
+                page: r.page,
+                bbox: Some(r.bbox),
+                ..Element::new(
+                    "doco:Paragraph",
+                    r.text.trim(),
+                    "rust",
+                    if top { "header" } else { "footer" },
+                )
+            })
+            .collect()
+    };
+    let (head, foot) = (lines(true, first), lines(false, last));
+    if head.is_empty() && foot.is_empty() {
+        return;
+    }
+    let after = elements
+        .iter()
+        .rposition(|e| e.page <= last)
+        .map_or(0, |i| i + 1);
+    elements.splice(after..after, foot);
+    let before = elements
+        .iter()
+        .position(|e| e.page >= first)
+        .unwrap_or(elements.len());
+    elements.splice(before..before, head);
+    // A continued table names the part before it by id.
+    let mut renamed = std::collections::HashMap::new();
+    for (i, e) in elements.iter_mut().enumerate() {
+        let id = format!("elem-{:05}", i + 1);
+        let old = std::mem::replace(&mut e.id, id.clone());
+        renamed.insert(old, id);
+    }
+    for e in elements.iter_mut() {
+        if let Some(new) = e.continues.as_ref().and_then(|c| renamed.get(c)) {
+            e.continues = Some(new.clone());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,6 +552,95 @@ mod tests {
         assert_eq!(signature("Page 13 of 15"), "Page # of #");
         assert_eq!(signature("Page 1 of 15"), "Page # of #");
         assert_ne!(signature("Chapter One"), signature("Chapter Two"));
+    }
+
+    #[test]
+    fn a_running_line_identifies_when_it_names_something() {
+        assert!(identifies("ACME LABS", Furniture::Header));
+        assert!(identifies("Form QA-12 Page 3", Furniture::PageNumber));
+        assert!(!identifies("Page 3 of 15", Furniture::PageNumber));
+        assert!(!identifies("- 3 -", Furniture::PageNumber));
+        assert!(!identifies("p. 3", Furniture::PageNumber));
+        assert!(!identifies("P age 3", Furniture::PageNumber));
+        assert!(!identifies("DRAFT", Furniture::Watermark));
+        assert!(names_something("DRAFT"));
+        assert!(!names_something("3 of 15"));
+    }
+
+    #[test]
+    fn the_running_header_and_footer_are_kept_once() {
+        use crate::document::Element;
+        let el = |id: &str, page: usize, kind: &str, text: &str| Element {
+            id: id.into(),
+            page,
+            ..Element::new(kind, text, "rust", "test")
+        };
+        let mut elements = vec![
+            el("elem-00001", 0, "doco:Paragraph", "Body"),
+            el("elem-00002", 1, "doco:Table", "A | B"),
+            Element {
+                continues: Some("elem-00002".into()),
+                ..el("elem-00003", 2, "doco:Table", "C | D")
+            },
+        ];
+        let at = |page: usize, text: &str, top: bool| Running {
+            page,
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 1.0,
+                y1: 1.0,
+            },
+            text: text.into(),
+            top,
+        };
+        let mut running: Vec<Running> = (0..3)
+            .flat_map(|p| {
+                [
+                    at(p, "ACME LABS", true),
+                    at(p, &format!("Form QA-12 Page {}", p + 1), true),
+                    at(p, "Uncontrolled copy", false),
+                ]
+            })
+            .collect();
+        // A running head from the second page on, as a report's chapter
+        // title is: it would stand between two pages' text.
+        running.push(at(1, "Chapter Two", true));
+        running.push(at(2, "Chapter Two", true));
+        let mut later = elements.clone();
+        keep_running(&mut elements, &running, 0, 2);
+        let got: Vec<(&str, usize, &str, &str)> = elements
+            .iter()
+            .map(|e| (e.id.as_str(), e.page, e.evidence, e.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("elem-00001", 0, "header", "ACME LABS"),
+                ("elem-00002", 0, "header", "Form QA-12 Page 1"),
+                ("elem-00003", 0, "test", "Body"),
+                ("elem-00004", 1, "test", "A | B"),
+                ("elem-00005", 2, "test", "C | D"),
+                ("elem-00006", 2, "footer", "Uncontrolled copy"),
+            ]
+        );
+        assert_eq!(elements[4].continues.as_deref(), Some("elem-00004"));
+        // Converting from the second page on: its own copy, and the head
+        // that starts there.
+        later.retain(|e| e.page >= 1);
+        keep_running(&mut later, &running, 1, 2);
+        let texts: Vec<&str> = later.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "ACME LABS",
+                "Form QA-12 Page 2",
+                "Chapter Two",
+                "A | B",
+                "C | D",
+                "Uncontrolled copy"
+            ]
+        );
     }
 }
 

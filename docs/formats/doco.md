@@ -148,21 +148,22 @@ identifies a page rather than the document. A string, because front matter is
 ```
 
 The header and footer text [furniture detection](../design/furniture.md)
-removed from the body, kept once here. A Word file states its header and
-footer, so they are read into the text as elements marked `header` and
-`footer`, and their lines are kept here as well: a document's identity is in
-one place whatever it was read from.
+removed from the body, kept once here. The header a PDF prints on its first
+page and the footer on its last are also kept once in the text, as elements
+marked `header` and `footer`. A Word file states its header and footer, so
+they are read into the text the same way, and their lines are kept here as
+well: a document's identity is in one place whatever it was read from.
 
 Repetition is what makes a line noise *inside* the body and exactly what makes
 it identify the document. A controlled procedure puts its owner, title and
 number in a block on every page — on a three-page one, all three — so removing
 the repetition removes the identity, and the document comes out anonymous.
 
-Kept on the document node rather than in the text, because putting it back in
-the body would restore what was removed from it and shift every character
-offset in the graph. Bare page numbers are excluded: a folio identifies
-nothing about the document — it identifies a page, and lives on the page's
-entry in `doc:pages`.
+Every running line is kept here, including those the text leaves out: a
+running head that starts partway through the document has no place in the
+text that would not split two pages' content. Page numbers are excluded, bare
+or as `Page 3 of 15`: a folio identifies nothing about the document. It
+identifies a page, and is kept on that page's entry in `doc:pages`.
 
 ## Pages nothing read
 

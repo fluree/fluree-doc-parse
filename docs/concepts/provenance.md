@@ -47,6 +47,7 @@ Roughly in order of how often you will see them:
 | `numbering` | heading detected by a section-numbering pattern |
 | `outline` | the PDF bookmark tree named this heading |
 | `title` | the document-title heuristic on page 1 |
+| `header`, `footer` | a line repeated at the top or bottom of every page, kept once; see [furniture](../design/furniture.md#removed-from-the-body-kept-about-the-document) |
 
 The heading detectors form a ladder, tried in this order — `title`, `outline`,
 `numbering`, `bold`, `font-size` — each consulted only where the one before it

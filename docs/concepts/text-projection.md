@@ -43,8 +43,8 @@ separate PDF viewer, which requires reconciling two coordinate systems.
 `to_text` emits each text-bearing element's trimmed text in reading order,
 separated by blank lines. Nothing else — no headers, no page markers, no
 decoration. It is a projection *of the elements*, so anything the layout pass
-dropped (page [furniture](../design/furniture.md), watermarks) is absent from
-both outputs consistently.
+dropped (page [furniture](../design/furniture.md) on the pages it repeats on,
+watermarks) is absent from both outputs consistently.
 
 In Rust, `fluree_doc_model::doco::projection(&elements)` is the walk itself:
 each element that contributes text, with that text and its `begin..end` in

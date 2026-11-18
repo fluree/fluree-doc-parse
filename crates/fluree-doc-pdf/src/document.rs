@@ -58,6 +58,10 @@ pub struct Analysis {
     /// Every line removed as furniture, as `(page, text, kind)` — the record
     /// of what the pass above actually stripped, for a tool explaining it.
     pub furniture_marks: Vec<(usize, String, furniture::Furniture)>,
+    /// Every running header and footer line that names something, on every
+    /// page that printed it, in reading order; see
+    /// [`furniture::keep_running`].
+    pub running: Vec<furniture::Running>,
     pub tables: usize,
     /// Wall clock per stage; see [`StageTimings`].
     pub timings: StageTimings,
@@ -1126,6 +1130,25 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             furniture_marks.push((pi, flat_lines[pi].0[*li].text.clone(), *kind));
         }
     }
+    let mut running: Vec<furniture::Running> = Vec::new();
+    for (pi, m) in marks.iter().enumerate() {
+        let (lines, height) = &flat_lines[pi];
+        let mut at: Vec<usize> = m
+            .iter()
+            .filter(|(li, kind)| furniture::identifies(&lines[**li].text, **kind))
+            .map(|(li, _)| *li)
+            .collect();
+        at.sort_unstable();
+        for li in at {
+            let l = &lines[li];
+            running.push(furniture::Running {
+                page: pi,
+                bbox: l.bbox,
+                text: l.text.clone(),
+                top: (l.bbox.y0 + l.bbox.y1) / 2.0 < height / 2.0,
+            });
+        }
+    }
 
     // Furniture texts for cell scrubbing: grids capture their glyphs before
     // the cross-page furniture pass runs, so a footer crossing a table region
@@ -1729,6 +1752,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
     }
+    for r in running.iter_mut() {
+        if let Some(p) = raw.pages.get(r.page).filter(|p| p.rotation != 0) {
+            r.bbox = p.to_display(r.bbox);
+        }
+    }
 
     Analysis {
         elements,
@@ -1741,6 +1769,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         furniture: furniture_texts,
         folios,
         furniture_marks,
+        running,
         tables,
         timings,
     }

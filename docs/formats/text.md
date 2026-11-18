@@ -87,8 +87,9 @@ only, as a reference rendering of the table does.
 ## What is absent
 
 Anything the layout pass dropped: a PDF's page [furniture](../design/furniture.md),
-headers, footers, watermarks. A Word file's header and footer are read once,
-as the file stores them, and are text like the rest:
-see [DOCX](../inputs/office-and-web.md#docx). This is consistent with the graph — an element
+headers, footers, watermarks, on every page they repeat on. A running header
+and footer are text once: a Word file's as the file stores them (see
+[DOCX](../inputs/office-and-web.md#docx)), and a PDF's as its first page prints
+the header and its last page the footer. This is consistent with the graph — an element
 that does not exist has no text and no offsets — so the two outputs never
 disagree about what the document contains.

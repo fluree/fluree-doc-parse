@@ -146,8 +146,11 @@ def run_check(check, reading):
         ok = any(all(norm(c.get(k, "")) == v for k, v in want.items()) for c in reading.cells)
         return ok, None if ok else "no such cell"
     if "text" in check:
-        ok = norm(check["text"]) in norm(reading.text)
-        return ok, None if ok else "not in the text projection"
+        # Where a count is given, exactly that many times: a line kept once
+        # fails as surely by coming back on every page as by going.
+        hits = norm(reading.text).count(norm(check["text"]))
+        ok = hits == check["count"] if "count" in check else hits > 0
+        return ok, None if ok else f"{hits} times in the text projection"
     if "no_text" in check:
         hits = norm(reading.text).count(norm(check["no_text"]))
         return hits == 0, None if hits == 0 else f"{hits} times in the text projection"
