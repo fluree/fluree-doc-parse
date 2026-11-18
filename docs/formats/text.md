@@ -69,9 +69,26 @@ positions. When the first cell of the first row is empty (the corner above a
 column of row labels), the table's text starts with a tab, and so does its
 `nif:isString`. Compare an element's string with its slice untrimmed.
 
+A value merged down over several rows is on each of them. A line is read on
+its own, and a row whose merged cell is left blank has lost what it is
+about:
+
+```
+Grain	G-1
+Grain	G-2
+```
+
+The table's cells in the [DoCO graph](doco.md) carry the same value on every
+row, and a repeated one's offsets point at its copy on its own line. A value
+merged across columns is not repeated: a label over two columns names them
+both once. [Markdown](markdown.md) keeps a merged value on its first row
+only, as a reference rendering of the table does.
+
 ## What is absent
 
-Anything the layout pass dropped: page [furniture](../design/furniture.md),
-headers, footers, watermarks. This is consistent with the graph — an element
+Anything the layout pass dropped: a PDF's page [furniture](../design/furniture.md),
+headers, footers, watermarks. A Word file's header and footer are read once,
+as the file stores them, and are text like the rest:
+see [DOCX](../inputs/office-and-web.md#docx). This is consistent with the graph — an element
 that does not exist has no text and no offsets — so the two outputs never
 disagree about what the document contains.

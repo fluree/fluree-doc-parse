@@ -239,11 +239,39 @@ impl<'a> Iterator for Projection<'a> {
 /// the difference, silently. Anything mapping a projection offset back to an
 /// element walks [`projection`], which yields this text with where it sits.
 pub fn projection_text(e: &Element) -> String {
-    match (&e.cells, e.kind.as_str()) {
-        (Some(rows), "doco:Table") => table_projection(rows).0,
+    match (projected_cells(e), e.kind.as_str()) {
+        (Some(rows), "doco:Table") => table_projection(&rows).0,
         (None, "doco:Table") => strip_tags(&e.text).trim().to_string(),
         _ => e.text.trim().to_string(),
     }
+}
+
+/// A table's cells as the text projection shows them: a value merged down
+/// over the rows beneath it is shown on each of them.
+///
+/// The projection is what a model reads, a line per row, and a row whose
+/// merged cell is blank has lost what it is about: `\tG-2` under
+/// `Grain\tG-1`, with nothing to say whose code it is. The cell entities already carry the value on every row it spans;
+/// the projection now says the same. Merges across columns are not
+/// repeated: a label over two columns names them both once.
+pub fn projected_cells(e: &Element) -> Option<Vec<Vec<String>>> {
+    let mut rows = e.cells.clone()?;
+    let ncols = rows.first().map_or(0, Vec::len);
+    let Some(down) = e
+        .merged_down
+        .as_ref()
+        .filter(|m| ncols > 0 && m.len() == rows.len() * ncols)
+    else {
+        return Some(rows);
+    };
+    for r in 1..rows.len() {
+        for c in 0..ncols {
+            if down[r * ncols + c] && rows[r][c].trim().is_empty() && c < rows[r - 1].len() {
+                rows[r][c] = rows[r - 1][c].clone();
+            }
+        }
+    }
+    Some(rows)
 }
 
 /// A table's projection text together with each non-empty cell's char span
@@ -979,7 +1007,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                 if let Some(raw_rows) = &e.cells {
                     // Where each raw cell's text sits inside the table's
                     // projection block — the anchor for per-cell offsets.
-                    let cell_spans = table_projection(raw_rows).1;
+                    let projected = projected_cells(e).unwrap_or_else(|| raw_rows.clone());
+                    let cell_spans = table_projection(&projected).1;
                     // Each cell becomes an entity that must describe itself,
                     // so merged values are filled down here — a cell blanked
                     // by the rowspan convention would otherwise lose its row
@@ -1098,13 +1127,20 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             let own = raw_rows.get(r).and_then(|row| row.get(c)).map(|c| c.trim())
                                 == Some(value);
                             // Offsets only when the projection really shows
-                            // this value at (r, c); a copied value has no
-                            // span to point at. A cell's span slices the
+                            // this value at (r, c): the cell's own, or one
+                            // merged down from above, which the projection
+                            // repeats. A value copied otherwise has no span
+                            // to point at. A cell's span slices the
                             // projection to its `doc:cellValue`, which is
                             // its text, so it carries no `nif:isString`
                             // repeating it.
+                            let shown = projected
+                                .get(r)
+                                .and_then(|row| row.get(c))
+                                .map(|c| c.trim())
+                                == Some(value);
                             if let (true, Some(s), Some(&(b, t))) =
-                                (own, table_start, cell_spans.get(&(r, c)))
+                                (shown, table_start, cell_spans.get(&(r, c)))
                             {
                                 em.set_offsets(cell_idx, s + b, s + t);
                             }
@@ -1641,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn filled_down_cells_carry_no_offsets() {
+    fn a_value_merged_down_is_on_every_row_of_the_text() {
         let mut t = el("doco:Table", "", None);
         t.cells = Some(vec![
             vec!["H1".into(), "H2".into()],
@@ -1650,6 +1686,8 @@ mod tests {
         ]);
         // Row 2's first cell continues Alpha from the row above.
         t.merged_down = Some(vec![false, false, false, false, true, false]);
+        let text = to_text(std::slice::from_ref(&t));
+        assert_eq!(text.trim(), "H1\tH2\nAlpha\t1\nAlpha\t2");
         let g = graph(&[t]);
         let cells = find(&g, "doc:TableCell");
         let filled = cells
@@ -1657,13 +1695,14 @@ mod tests {
             .find(|c| c["doc:rowIndex"] == json!(1) && c["doc:columnIndex"] == json!(0))
             .expect("filled-down cell");
         assert_eq!(filled["doc:cellValue"], "Alpha");
-        assert!(
-            filled.get("nif:beginIndex").is_none(),
-            "a synthesised value has no place in the projection"
+        // Its offsets cut its own copy out of the projection, on its row.
+        let chars: Vec<char> = text.chars().collect();
+        let (b, e) = (
+            filled["nif:beginIndex"].as_u64().unwrap() as usize,
+            filled["nif:endIndex"].as_u64().unwrap() as usize,
         );
-        // Its projected neighbour still carries offsets.
-        let two = cells.iter().find(|c| c["doc:cellValue"] == "2").unwrap();
-        assert!(two.get("nif:beginIndex").is_some());
+        assert_eq!(chars[b..e].iter().collect::<String>(), "Alpha");
+        assert!(chars[..b].iter().filter(|c| **c == '\n').count() == 2);
     }
 
     #[test]
