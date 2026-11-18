@@ -35,11 +35,34 @@ inferred from position. See [the pipeline](../design/pipeline.md) for how.
 
 ## Text fidelity
 
-Two cleanup passes run before anything else:
+These cleanup passes run before anything else:
 
 **Faux-bold dedup.** PDFs fake bold by drawing text twice with a small offset.
 Left alone this produces `検検討討会会のの構構成成` instead of
-`検討会の構成`.
+`検討会の構成`. A glyph drawn again where the same glyph already stands is
+dropped however far apart the two draws are: a document printed with its
+highlighting draws each line once under the highlight and once over it, and
+read twice, every line came out with each letter doubled: `RReeccoorrdd`.
+
+**Underlines struck over text.** A line printer underlines by printing the
+line, then printing `_` under the letters it stresses. Read by position, the
+two interleave: `_D_O_ _N_O_T`. A run of underscores struck over another
+mark is dropped, and the words read whole. Underscores struck over nothing
+are a blank left to be filled in, and stay.
+
+**Tables drawn with characters.** The same printers draw a table's ruling
+with `|` (or `¦`) down each column's edge and a line of `_` or `-` between
+rows. Those characters are read back into the ruling they draw and leave the
+text, so the table is read like any ruled table, header row and all. A blank
+printed line inside a row parts it where the form means it to, so a step's
+instruction sits beside its result blank, `Weight:` beside `________ kg`,
+under the step's number.
+
+**Highlighting.** A reviewer's highlighting is drawn as a filled band fitted
+to each line it marks. Bands like that are not structure, so they are set
+aside before tables and figures are looked for: read as structure, a page of
+marked-up prose looked like a bar chart, or like a table of its numbered
+clauses.
 
 **NFKC normalization.** Ligatures arrive as single codepoints; searching
 un-normalized output for `profile` finds one occurrence in six. Normalization

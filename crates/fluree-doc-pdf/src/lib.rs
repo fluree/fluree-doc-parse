@@ -112,6 +112,7 @@ pub mod route;
 pub mod rule;
 pub mod table;
 pub mod text;
+pub mod textart;
 pub mod textgrid;
 
 pub use block::Block;

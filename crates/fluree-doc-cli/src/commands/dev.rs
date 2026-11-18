@@ -736,8 +736,9 @@ pub(crate) fn figures(pdf: &Path, page: Option<usize>) {
     let doc = extract_file(pdf).expect("extract");
     let mut total = 0usize;
     for p in &doc.pages {
-        let found =
-            fluree_doc_pdf::figure::detect(&p.fills, &p.rules, p.index, (p.width, p.height));
+        let mut fills = p.fills.clone();
+        fluree_doc_pdf::rule::strip_highlights(&mut fills, &p.glyphs);
+        let found = fluree_doc_pdf::figure::detect(&fills, &p.rules, p.index, (p.width, p.height));
         total += found.len();
         if found.is_empty() || (page.is_some() && page != Some(p.index)) {
             continue;
@@ -760,9 +761,12 @@ pub(crate) fn figures(pdf: &Path, page: Option<usize>) {
 }
 
 pub(crate) fn rules(pdf: &Path, page: Option<usize>) {
-    let doc = extract_file(pdf).expect("extract");
+    let mut doc = extract_file(pdf).expect("extract");
     let (mut h, mut v, mut f) = (0usize, 0usize, 0usize);
-    for p in &doc.pages {
+    for p in doc.pages.iter_mut() {
+        // Rules the page draws with characters, as the pipeline reads them.
+        fluree_doc_pdf::textart::draw_rules(&mut p.glyphs, &mut p.rules, p.index);
+        let p = &*p;
         let ph = p
             .rules
             .iter()
@@ -811,12 +815,14 @@ pub(crate) fn tables(pdf: &Path, page: Option<usize>) {
     let mut doc = extract_file(pdf).expect("extract");
     let mut total = 0usize;
     for p in &mut doc.pages {
-        let mut grids = fluree_doc_pdf::table::detect(&p.rules, p.index);
+        dedup::remove_faux_bold(&mut p.glyphs, 8);
+        let frames = fluree_doc_pdf::textart::draw_rules(&mut p.glyphs, &mut p.rules, p.index);
+        dedup::remove_struck_underlines(&mut p.glyphs);
+        let mut grids = fluree_doc_pdf::table::detect_framed(&p.rules, p.index, &frames);
         total += grids.len();
         if page != Some(p.index) {
             continue;
         }
-        dedup::remove_faux_bold(&mut p.glyphs, 8);
         for g in grids.iter_mut() {
             g.trim_to_content(&p.glyphs);
             let spanning = g.split_by_alignment(&p.glyphs);

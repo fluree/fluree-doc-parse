@@ -1396,7 +1396,7 @@ impl Grid {
 }
 
 /// Detect one table grid from a related set of ruling lines.
-fn detect_group(rules: &[Rule], page: usize) -> Vec<Grid> {
+fn detect_group(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
     let hs: Vec<&Rule> = rules
         .iter()
         .filter(|r| r.orientation == Orientation::Horizontal)
@@ -1519,7 +1519,7 @@ fn detect_group(rules: &[Rule], page: usize) -> Vec<Grid> {
     // Boundaries closer together than this hold no content — an artefact of a
     // border rule sitting alongside a cell edge, which produced a spurious
     // empty first column on one such table.
-    split_row_bands(xs, ys, rules, page)
+    split_row_bands(xs, ys, rules, page, frames)
 }
 
 /// Column boundaries for one row band, from the rules that lie within it.
@@ -1620,7 +1620,13 @@ const TABLE_SPLIT_GAP: f64 = 3.5;
 /// 8, 4 and 6 rows and returned a single 20-row grid; another carries two and
 /// returned one. Consecutive row boundaries separated by much more than the
 /// median row height are a gap between tables, not a tall row.
-fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> Vec<Grid> {
+fn split_row_bands(
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    rules: &[Rule],
+    page: usize,
+    frames: &[BBox],
+) -> Vec<Grid> {
     if ys.len() < 2 {
         return Vec::new();
     }
@@ -1771,11 +1777,47 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
         above.len() >= 2 && below.len() >= 2 && foreign(&above, &below) && foreign(&below, &above)
     };
 
+    // In a table drawn with characters, a band the box's own sides run down
+    // through, unbroken from the band beside it, is a tall row and not the
+    // space between two tables: a batch record's step whose instructions
+    // fill the page. A printer rules every row it means, with a line of its
+    // own or a blank one, so a band between its rules is one row. Ruled with
+    // lines, the same band is as often a body whose rows were never ruled,
+    // which the text reads better than one crammed row would. The sides of
+    // two boxes set apart stop where each box ends; both sides, so one long
+    // bar down a margin vouches for nothing.
+    let walled = |i: usize| {
+        let Some((lo, hi)) = reach[i] else {
+            return false;
+        };
+        let mid = (ys[i] + ys[i + 1]) / 2.0;
+        if !frames.iter().any(|f| {
+            f.y0 <= mid && mid <= f.y1 && f.x0 <= lo + EDGE_TOLERANCE && hi <= f.x1 + EDGE_TOLERANCE
+        }) {
+            return false;
+        }
+        let neighbours: Vec<f64> = [i.checked_sub(1), Some(i + 1)]
+            .into_iter()
+            .flatten()
+            .filter(|&k| k + 1 < ys.len())
+            .map(|k| (ys[k] + ys[k + 1]) / 2.0)
+            .collect();
+        let side = |x: f64| {
+            vs.iter().any(|r| {
+                (r.axis_pos() - x).abs() <= EDGE_TOLERANCE
+                    && r.bbox.y0 <= mid
+                    && r.bbox.y1 >= mid
+                    && neighbours.iter().any(|&m| r.bbox.y0 <= m && r.bbox.y1 >= m)
+            })
+        };
+        side(lo) && side(hi)
+    };
+
     let mut out = Vec::new();
     let mut start = 0usize;
     for i in 0..ys.len() - 1 {
         let is_last = i + 2 == ys.len();
-        let too_tall = (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP || is_gap(i);
+        let too_tall = (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP && !walled(i) || is_gap(i);
         let ends_run = !too_tall && (changes_after(i) || boxes_change_after(i));
         if too_tall || is_last || ends_run {
             // A band that is itself too tall is the gap: end the table before it.
@@ -1834,11 +1876,18 @@ fn split_row_bands(xs: Vec<f64>, ys: Vec<f64>, rules: &[Rule], page: usize) -> V
 /// geometry components. The latter prevents an unrelated page rule from
 /// inflating the span and making a real table's local dividers look too short.
 pub fn detect(rules: &[Rule], page: usize) -> Vec<Grid> {
-    let whole = detect_group(rules, page);
+    detect_framed(rules, page, &[])
+}
+
+/// [`detect`], knowing the frames of the tables the page draws with
+/// characters ([`crate::textart`]), whose every band between rules is a
+/// row however tall.
+pub fn detect_framed(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
+    let whole = detect_group(rules, page, frames);
     if !whole.is_empty() {
         return whole;
     }
-    detect_components(rules, page)
+    detect_components(rules, page, frames)
 }
 
 /// A table region whose detected structure should not be trusted.
@@ -2046,11 +2095,16 @@ fn row_height(g: &Grid) -> f64 {
 /// unconditionally is wrong: on ordinary one-table pages it fragments the
 /// grid, measured at TEDS −0.040.
 pub fn detect_by_component(rules: &[Rule], page: usize) -> Vec<Grid> {
-    detect_components(rules, page)
+    detect_components(rules, page, &[])
+}
+
+/// [`detect_by_component`], knowing the frames as [`detect_framed`] does.
+pub fn detect_by_component_framed(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
+    detect_components(rules, page, frames)
 }
 
 /// Group the rules into touching components and detect a grid in each.
-fn detect_components(rules: &[Rule], page: usize) -> Vec<Grid> {
+fn detect_components(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
     let mut remaining: Vec<usize> = (0..rules.len()).collect();
     let mut components: Vec<Vec<Rule>> = Vec::new();
     while let Some(seed) = remaining.pop() {
@@ -2082,7 +2136,7 @@ fn detect_components(rules: &[Rule], page: usize) -> Vec<Grid> {
     let mut out: Vec<Grid> = components
         .iter()
         .filter(|component| component.len() >= MIN_GRID_LINES)
-        .flat_map(|component| detect_group(component, page))
+        .flat_map(|component| detect_group(component, page, frames))
         .collect();
     out.sort_by(|a, b| {
         a.bbox

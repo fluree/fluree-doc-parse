@@ -7,7 +7,8 @@ from a specific failure.
 ```
 glyphs
   │
-  ├─ 1. dedup       faux-bold overprint
+  ├─ 1. dedup       overprint: faux bold, redrawn text, struck underlines;
+  │                 tables drawn in characters read back into ruling
   ├─ 2. tables      grids from ruling geometry; their glyphs withheld
   ├─ 3. columns     vertical whitespace projection
   ├─ 4. lines       within orientation buckets
@@ -23,7 +24,11 @@ glyphs
 **1. dedup, before anything counts glyphs.** PDFs fake bold by drawing text
 twice at a small offset. Every later stage counts glyphs — for word gaps, for
 weight statistics, for routing — so a doubled glyph run corrupts all of them
-if it survives to stage 2.
+if it survives to stage 2. The same stage drops underscores struck over text
+and reads a table drawn with `|` and `_` back into the rules it draws: both
+are drawing set in the font, and stage 2 has to see a drawn table as rules,
+not as text, or its glyphs go to prose and its repeated header row to the
+furniture pass.
 
 **2. tables, before prose.** Grids are found from ruling geometry, and the
 glyphs inside them are **withheld** from prose assembly. Without this a

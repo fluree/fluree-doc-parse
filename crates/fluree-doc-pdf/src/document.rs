@@ -204,6 +204,12 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
         if !aligned {
             continue;
         }
+        // A second part that is the first one over again, every row, is
+        // the next copy of a form printed box after box down the pages, not
+        // the rest of the first: no table carries on by repeating its body.
+        if head.len() == rows.len() && head.iter().zip(rows).all(|(a, b)| same(a, b)) {
+            continue;
+        }
         let n = prev.header_rows.unwrap_or(0).min(head.len());
         let repeats = n > 0 && rows.len() > n && (0..n).all(|r| same(&head[r], &rows[r]));
         let finishes_header = prev.header_only()
@@ -705,6 +711,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // otherwise take it for structure.
         crate::rule::strip_layout_lattice(&mut p.rules, p.width, p.height);
         crate::rule::strip_page_decoration(&mut p.rules, &mut p.fills, p.width, p.height);
+        // A table a line printer drew with `|` and `_` is ruled like any
+        // other once its drawing is read as rules; its underlines, struck
+        // over the words, are not text.
+        let char_frames = timed(&mut timings.dedup, || {
+            let frames = crate::textart::draw_rules(&mut p.glyphs, &mut p.rules, p.index);
+            dedup::remove_struck_underlines(&mut p.glyphs);
+            frames
+        });
+        // A reviewer's highlighting is drawn as fills fitted to the lines it
+        // marks, and is not the page's structure.
+        crate::rule::strip_highlights(&mut p.fills, &p.glyphs);
         // `Deterministic` is the right stand-in when nobody asks: both
         // consumers act only on `VlmRegions`, and both are unreachable in the
         // configurations that skip the call.
@@ -740,12 +757,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .sum()
         };
         let mut grids = timed(&mut timings.tables, || {
-            trim(table::detect(&p.rules, p.index))
+            trim(table::detect_framed(&p.rules, p.index, &char_frames))
         });
         let mut grid_sources = vec![GridSource::Ruled; grids.len()];
         if !grids.is_empty() {
             let parts = timed(&mut timings.tables, || {
-                trim(table::detect_by_component(&p.rules, p.index))
+                trim(table::detect_by_component_framed(
+                    &p.rules,
+                    p.index,
+                    &char_frames,
+                ))
             });
             // Comfortably more, so a tie — the same table found either way —
             // keeps the page-wide reading.
@@ -1320,8 +1341,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             };
             // A footer that merged into a unique line on one page escapes
             // the cross-page furniture match (singletons cannot repeat);
-            // known furniture texts are stripped as substrings instead.
-            let scrubbed = furniture::scrub_block(&text, &furniture_texts);
+            // known furniture texts are stripped as substrings instead,
+            // from a block that reaches the band headers and footers are
+            // set in. A block in the middle of the page holds none.
+            let height = raw.pages[pi].height;
+            let band = height * furniture::EDGE_BAND;
+            let scrubbed = if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
+                furniture::scrub_block(&text, &furniture_texts)
+            } else {
+                text.clone()
+            };
             // A block composed of furniture joined by punctuation ("Title:
             // Subtitle" as a one-off page header) scrubs down to the joiner
             // alone; carrying that residue forward can even leave a bare ":"

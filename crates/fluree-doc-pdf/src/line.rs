@@ -505,12 +505,18 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
     // of one visual row (split by a block gap) carry tops that differ by the
     // height of an ascender or by plain rounding, and strict (y, x) then puts
     // the right-hand fragment first. Within a row, left must come first.
+    // Tops alone mislead for one kind of line: nothing but underscores, a
+    // blank to fill in. Its top is below its own baseline, a few points
+    // above the top of the line printed under it, and the two do not
+    // overlap at all; a fragment of the blank's own row would.
+    let blank = |l: &Line| !l.text.trim().is_empty() && l.text.trim().chars().all(|c| c == '_');
     let mut start = 0;
     for i in 1..=lines.len() {
         if i < lines.len() && {
             let (a, b) = (&lines[start], &lines[i]);
             let tol = a.font_size.max(b.font_size).max(1.0) as f64 * BASELINE_TOLERANCE;
             (b.bbox.y0 - a.bbox.y0).abs() < tol
+                && (!(blank(a) || blank(b)) || a.bbox.y1.min(b.bbox.y1) > a.bbox.y0.max(b.bbox.y0))
         } {
             continue;
         }

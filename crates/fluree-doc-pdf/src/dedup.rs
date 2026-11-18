@@ -1,4 +1,4 @@
-//! Faux-bold overprint removal.
+//! Overprint removal: faux bold, and underlines struck over text.
 //!
 //! PDFs fake bold by drawing the same text twice with a sub-pixel offset. It is
 //! common in CJK documents — the Japanese and Chinese government PDFs in
@@ -52,6 +52,117 @@ pub fn remove_faux_bold(glyphs: &mut Vec<Glyph>, window: usize) -> usize {
 
     let mut it = keep.iter();
     glyphs.retain(|_| *it.next().unwrap());
+    removed + remove_redrawn(glyphs)
+}
+
+/// Drop glyphs drawn again where the same glyph already stands, however far
+/// back in the drawing it was.
+///
+/// Some producers draw a page's text twice. A document printed to PDF with
+/// its highlighting drew every line once under the highlight's band and once
+/// over it, the whole page's text apart in draw order; the window above
+/// never saw the copies meet, and every line read with each letter twice,
+/// `RReeccoorrdd tthhee`. Two identical glyphs at one position print as one, so the
+/// second is dropped wherever it comes. Found by baseline, the copies of one
+/// line are all that is compared.
+fn remove_redrawn(glyphs: &mut Vec<Glyph>) -> usize {
+    use std::collections::HashMap;
+    let band = |y: f64| (y / 2.0).floor() as i64;
+    let mut seen: HashMap<(&str, i64), Vec<usize>> = HashMap::new();
+    let mut keep = vec![true; glyphs.len()];
+    for i in 0..glyphs.len() {
+        let g = &glyphs[i];
+        if g.bbox.is_none() || g.text.trim().is_empty() {
+            continue;
+        }
+        let b = band(g.origin.1);
+        let redrawn = (b - 1..=b + 1).any(|k| {
+            seen.get(&(g.text.as_str(), k))
+                .is_some_and(|js| js.iter().any(|&j| is_overprint(&glyphs[j], g)))
+        });
+        if redrawn {
+            keep[i] = false;
+        } else {
+            seen.entry((g.text.as_str(), b)).or_default().push(i);
+        }
+    }
+    let removed = keep.iter().filter(|k| !**k).count();
+    if removed > 0 {
+        let mut it = keep.iter();
+        glyphs.retain(|_| *it.next().unwrap());
+    }
+    removed
+}
+
+/// Drop underscores struck over text: how a line printer underlines.
+///
+/// It prints the line, returns the carriage and prints `_` under the letters
+/// to stress them, so a word and its underline are two glyphs a character
+/// apart in draw order and none apart on the page. Read by position they
+/// interleave, `_D_O_ _N_O_T`, and a warning's key words are the ones lost. A run of underscores of which any one is struck over another mark
+/// on its line goes whole; the stress is not text, and the words are. A
+/// run struck over nothing is a blank left to be filled in, and stays.
+pub fn remove_struck_underlines(glyphs: &mut Vec<Glyph>) -> usize {
+    // Marks by baseline, to find what shares a line with each underscore.
+    let mut marks: Vec<usize> = (0..glyphs.len())
+        .filter(|&i| {
+            let t = glyphs[i].text.as_str();
+            glyphs[i].bbox.is_some()
+                && glyphs[i].is_horizontal()
+                && !t.trim().is_empty()
+                && t != "_"
+        })
+        .collect();
+    marks.sort_by(|&a, &b| glyphs[a].origin.1.total_cmp(&glyphs[b].origin.1));
+    let struck = |u: &Glyph| -> bool {
+        let Some(ub) = u.bbox else { return false };
+        let tol = u.font_size.max(1.0) as f64 * OFFSET_TOLERANCE;
+        let lo = marks.partition_point(|&m| glyphs[m].origin.1 < u.origin.1 - tol);
+        marks[lo..]
+            .iter()
+            .take_while(|&&m| glyphs[m].origin.1 <= u.origin.1 + tol)
+            .any(|&m| {
+                let b = glyphs[m].bbox.unwrap();
+                let overlap = ub.x1.min(b.x1) - ub.x0.max(b.x0);
+                overlap > 0.5 * ub.width().min(b.width()).max(0.1)
+            })
+    };
+    // Runs of underscores on one baseline, each a character from the last.
+    let mut unders: Vec<usize> = (0..glyphs.len())
+        .filter(|&i| glyphs[i].text == "_" && glyphs[i].bbox.is_some() && glyphs[i].is_horizontal())
+        .collect();
+    unders.sort_by(|&a, &b| {
+        let (ga, gb) = (&glyphs[a], &glyphs[b]);
+        ga.origin
+            .1
+            .total_cmp(&gb.origin.1)
+            .then(ga.origin.0.total_cmp(&gb.origin.0))
+    });
+    let mut drop = vec![false; glyphs.len()];
+    let mut run: Vec<usize> = Vec::new();
+    let flush = |run: &mut Vec<usize>, drop: &mut Vec<bool>| {
+        if run.iter().any(|&i| struck(&glyphs[i])) {
+            for &i in run.iter() {
+                drop[i] = true;
+            }
+        }
+        run.clear();
+    };
+    for &i in &unders {
+        if let Some(&p) = run.last() {
+            let (gp, g) = (&glyphs[p], &glyphs[i]);
+            let tol = g.font_size.max(1.0) as f64 * OFFSET_TOLERANCE;
+            let next = gp.bbox.unwrap().x1 + gp.advance.unwrap_or(0.0).max(1.0) * 0.5;
+            if (g.origin.1 - gp.origin.1).abs() > tol || g.bbox.unwrap().x0 > next {
+                flush(&mut run, &mut drop);
+            }
+        }
+        run.push(i);
+    }
+    flush(&mut run, &mut drop);
+    let removed = drop.iter().filter(|d| **d).count();
+    let mut it = drop.iter();
+    glyphs.retain(|_| !*it.next().unwrap());
     removed
 }
 
@@ -191,6 +302,92 @@ mod tests {
         // not a whole one.
         let mut v = vec![narrow("l", 0.0, 0), narrow("l", 0.12, 1)];
         assert_eq!(remove_faux_bold(&mut v, 8), 1);
+    }
+
+    #[test]
+    fn a_page_drawn_twice_reads_once() {
+        // The whole line, then other drawing, then the whole line again:
+        // the copies are further apart than any window.
+        let mut v: Vec<Glyph> = "Record"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| narrow(&c.to_string(), i as f64 * 3.0, i))
+            .collect();
+        for k in 0..40 {
+            v.push(g("x", 500.0, 300.0 + k as f64 * 20.0, 100 + k));
+        }
+        v.extend(
+            "Record"
+                .chars()
+                .enumerate()
+                .map(|(i, c)| narrow(&c.to_string(), i as f64 * 3.0, 200 + i)),
+        );
+        remove_faux_bold(&mut v, 8);
+        let line: String = v
+            .iter()
+            .filter(|g| g.origin.1 < 50.0)
+            .map(|g| g.text.as_str())
+            .collect();
+        assert_eq!(line, "Record");
+    }
+
+    /// A line-printer glyph: 7.2pt cells on a baseline at 100.
+    fn lp(text: &str, col: usize, idx: usize) -> Glyph {
+        let x = col as f64 * 7.2;
+        let bbox = if text == "_" {
+            BBox {
+                x0: x,
+                y0: 101.0,
+                x1: x + 7.2,
+                y1: 101.6,
+            }
+        } else {
+            BBox {
+                x0: x + 0.6,
+                y0: 93.0,
+                x1: x + 6.6,
+                y1: 100.0,
+            }
+        };
+        Glyph {
+            text: text.into(),
+            bbox: Some(bbox),
+            page: 0,
+            origin: (x, 100.0),
+            rotation_deg: 0.0,
+            font_size: 12.0,
+            weight: None,
+            advance: Some(7.2),
+            draw_index: idx,
+        }
+    }
+
+    #[test]
+    fn an_underline_struck_over_words_goes() {
+        // `DO NOT` printed, then underscores struck under it.
+        let mut v: Vec<Glyph> = "DO NOT"
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .map(|(i, c)| lp(&c.to_string(), i, i))
+            .collect();
+        for i in 0..6 {
+            v.push(lp("_", i, 20 + i));
+        }
+        assert_eq!(remove_struck_underlines(&mut v), 6);
+        let t: String = v.iter().map(|g| g.text.as_str()).collect();
+        assert_eq!(t, "DONOT");
+    }
+
+    #[test]
+    fn a_blank_to_fill_in_stays() {
+        // `Lot ______` — the underscores follow the label, under nothing.
+        let mut v = vec![lp("L", 0, 0), lp("o", 1, 1), lp("t", 2, 2)];
+        for i in 4..10 {
+            v.push(lp("_", i, i));
+        }
+        assert_eq!(remove_struck_underlines(&mut v), 0);
+        assert_eq!(v.len(), 9);
     }
 
     #[test]

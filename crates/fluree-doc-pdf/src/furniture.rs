@@ -481,19 +481,46 @@ pub fn scrub_cell(cell: &str, furniture: &[(String, bool)]) -> String {
 /// same width as the folio and are numbers by nature — every one of them was
 /// being deleted, so a contents page came out as a list of titles pointing
 /// nowhere.
+///
+/// And only at the block's start or end, where a header or footer merged
+/// into it sits: a running header is often a phrase the document uses in
+/// its sentences too, and stripping it wherever it occurs cut
+/// `Federal Open Market Committee` out of every sentence of the minutes
+/// that bore it as their header.
 pub fn scrub_block(text: &str, furniture: &[(String, bool)]) -> String {
-    scrub(text, furniture, false)
+    scrub_with(text, furniture, false, true)
 }
 
 fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: bool) -> String {
+    scrub_with(cell, furniture, bare_number_is_furniture, false)
+}
+
+/// `ends_only`: remove a match only where nothing but whitespace stands
+/// before it or after it.
+fn scrub_with(
+    cell: &str,
+    furniture: &[(String, bool)],
+    bare_number_is_furniture: bool,
+    ends_only: bool,
+) -> String {
     let mut out = cell.to_string();
+    let at_end = |out: &str, start: usize, end: usize| {
+        !ends_only || out[..start].trim().is_empty() || out[end..].trim().is_empty()
+    };
     for (pat, digits_vary) in furniture {
         if pat.is_empty() {
             continue;
         }
         if !*digits_vary {
-            while let Some(i) = out.find(pat.as_str()) {
-                out.replace_range(i..i + pat.len(), " ");
+            let mut from = 0;
+            while let Some(k) = out[from..].find(pat.as_str()) {
+                let i = from + k;
+                if at_end(&out, i, i + pat.len()) {
+                    out.replace_range(i..i + pat.len(), " ");
+                    from = 0;
+                } else {
+                    from = i + pat.len();
+                }
             }
             continue;
         }
@@ -540,12 +567,15 @@ fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: boo
             }
             continue;
         }
+        let mut from = 0;
         #[allow(clippy::while_let_loop)] // labeled break from a nested match reads clearer here
         'scan: loop {
             let Some(start) = (if segs[0].is_empty() {
-                Some(0)
+                (from == 0).then_some(0)
             } else {
-                out.find(segs[0])
+                out.get(from..)
+                    .and_then(|rest| rest.find(segs[0]))
+                    .map(|k| from + k)
             }) else {
                 break;
             };
@@ -563,7 +593,14 @@ fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: boo
                 }
                 pos = digit_end + seg.len();
             }
-            out.replace_range(start..pos, " ");
+            if at_end(&out, start, pos) {
+                out.replace_range(start..pos, " ");
+                from = 0;
+            } else if segs[0].is_empty() {
+                break;
+            } else {
+                from = start + segs[0].len();
+            }
         }
     }
     // A line that is a long prefix of a known furniture text is that
@@ -579,7 +616,33 @@ fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: boo
 
 #[cfg(test)]
 mod scrub_tests {
-    use super::scrub_cell;
+    use super::{scrub_block, scrub_cell};
+
+    #[test]
+    fn a_header_phrase_inside_a_sentence_stays() {
+        let f = vec![("Federal Open Market Committee".to_string(), false)];
+        assert_eq!(
+            scrub_block(
+                "A joint meeting of the Federal Open Market Committee was held",
+                &f
+            ),
+            "A joint meeting of the Federal Open Market Committee was held"
+        );
+        // Merged onto the block's first line, it goes.
+        assert_eq!(
+            scrub_block("Federal Open Market Committee Minutes of the meeting", &f),
+            "Minutes of the meeting"
+        );
+        let p = vec![("Page 4 of 15".to_string(), true)];
+        assert_eq!(
+            scrub_block("the rest of it Page 12 of 15", &p),
+            "the rest of it"
+        );
+        assert_eq!(
+            scrub_block("see Page 12 of 15 below", &p),
+            "see Page 12 of 15 below"
+        );
+    }
 
     #[test]
     fn constant_footer_is_removed_from_a_cell() {

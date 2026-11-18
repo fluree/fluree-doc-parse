@@ -38,6 +38,9 @@ Multiple passes over one parse, rather than multiple services:
 - **Filled rects** — thin filled rectangles used as rules.
 - **Alignment clustering** — column inference from the x-positions of text,
   for tables with genuinely no drawn geometry.
+- **Characters** — a table a line printer drew with `|` (or `¦`) and lines of
+  `_` or `-`, read back into the rules it draws before any of the above run.
+  See [Tables drawn with characters](#tables-drawn-with-characters).
 
 Alignment-based detection is **required to be corroborated** by drawn
 geometry. Ungated it measured TEDS 0.488 → 0.526 but NID 0.868 → 0.839 and
@@ -56,6 +59,41 @@ the whitespace between two ruled boxes. The band has to sit directly between
 two crossed bands, because in a table ruled with horizontals alone every band
 is uncrossed, and splitting on those alone turns a ruled table of contents into
 one table per entry.
+
+## Tables drawn with characters
+
+A line printer, and the systems that still print like one, has no ruling. It
+draws a table with the characters it has: a bar at the same position on line
+after line for a column's edge, a line of nothing but `_` and `|` between
+rows, and underscores struck over a line and across its bars to close a row
+beneath its text. Read as text, every row of such a table runs into one line
+per page, and its column heading, repeated on every page, is taken for a
+running header and dropped.
+
+So the drawing is read back as rules before table detection runs:
+
+- **A column's edge** is a bar at one position on three or more lines in a
+  row. Text too long for its cell is printed over the bar, so an edge runs on
+  across a line or two where a character stands in its place, and stops at a
+  line of rule characters, which is where one box ends and the next begins.
+- **A row's edge** is a line of nothing but rule characters across at least
+  half the frame, or an underscore run struck over a line's text and across
+  one of its bars. A line of underscores the bars do not meet is a separator
+  set apart from the table, and a run of underscores with nothing printed
+  over it is a blank to be filled in; both stay text.
+- **A label set across columns** leaves out the bar between them on its
+  line: an edge that starts partway down the first row starts a rule under
+  the label, as a table drawn with lines would have.
+- **Rows parted by a blank line.** A printer cannot rule a row it means to
+  part without a line of its own, so a batch record parts a step's
+  instructions with a blank one. Each part becomes a row, beside the result
+  blanks it asks for; the step's number spans the parts unless the part below
+  names a row of its own.
+
+Rows of a table drawn this way are kept whole however tall. A printer rules
+every row it means, so a band between its rules is one row, a step whose
+instructions fill the page. A band as tall in a table ruled with lines is as
+often a body whose rows were never ruled, and is left for the text to read.
 
 ## A one-column grid reads its columns from its text
 
@@ -176,7 +214,9 @@ no header of its own, unless:
 
 A second part that opens with a styled row of its own (bold over plain, or a
 shaded header band) that repeats nothing is a new table with the same
-columns, and is left alone. A single shaded first row is no evidence either
+columns, and is left alone. Nor is a second part that repeats the first one
+whole, every row: that is the next copy of a form printed box after box down
+the pages, and no table carries on by repeating its body. A single shaded first row is no evidence either
 way, since a table striped row by row opens a page with one.
 
 A table whose cells hold lettered lists is not a table of lists. A reading

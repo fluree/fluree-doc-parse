@@ -51,6 +51,13 @@ cells, and the match has to tolerate how the same text varies:
 An independent VLM labelling of the same page agrees with these deterministic
 furniture decisions line for line.
 
+Paragraphs are scrubbed too, for a header or footer that merged into a line of
+its own block on one page. There the match is held to where such a leak can
+be: the start or end of a block that reaches into the page's top or bottom
+band. A running header is often a phrase the document's sentences use, and
+stripped wherever it occurred, a set of minutes headed `Federal Open Market
+Committee` lost the committee's name from every sentence that named it.
+
 ## What is not furniture
 
 Two false positives worth knowing about, both fixed by tightening rather than

@@ -72,6 +72,91 @@ pub struct Fill {
     pub page: usize,
 }
 
+/// Share of a fill's width the text on it must cover for the fill to be a
+/// highlight behind that text.
+const HIGHLIGHT_COVERAGE: f64 = 0.6;
+
+/// Tallest a highlight stands over its line, in multiples of the text's
+/// size: a marker pen's band, not a box around a paragraph.
+const HIGHLIGHT_LINES: f64 = 2.0;
+
+/// How far past its text a highlight may reach at either end, in multiples
+/// of the text's size: a marker's band sits within a point or so of the
+/// words, where a table's shading leaves its cells their padding.
+const HIGHLIGHT_FIT: f64 = 0.2;
+
+/// Drop the fills that are highlights behind a line of text.
+///
+/// A reviewer marks up a document by highlighting passages, and each
+/// highlighted line is drawn as a filled band fitted to it. They are no part
+/// of the page's structure, and read as structure they did harm twice over:
+/// a stack of bands of assorted widths clusters as a bar chart does, so the
+/// page's prose became a figure sent to a model; and a band behind each
+/// line is the drawn geometry that vouches for text aligned as a table, so
+/// clauses with their numbers hung in the margin were cut into columns.
+///
+/// A highlight is no taller than its line, mostly covered by it, and fitted
+/// to it at both ends, as a marker pen leaves it. A table row's shading
+/// leaves its cells their padding and its columns their gaps; a bar's label
+/// covers a little of its bar, if it sits on it at all.
+pub fn strip_highlights(fills: &mut Vec<Fill>, glyphs: &[crate::glyph::Glyph]) {
+    // Inked glyphs by the height of their middle.
+    let mut marks: Vec<(f64, BBox, f64)> = glyphs
+        .iter()
+        .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+        .filter_map(|g| g.bbox.map(|b| ((b.y0 + b.y1) * 0.5, b, g.font_size as f64)))
+        .collect();
+    marks.sort_by(|a, b| a.0.total_cmp(&b.0));
+    fills.retain(|f| {
+        let b = f.bbox;
+        let lo = marks.partition_point(|m| m.0 < b.y0);
+        let on: Vec<&(f64, BBox, f64)> = marks[lo..]
+            .iter()
+            .take_while(|m| m.0 <= b.y1)
+            .filter(|m| {
+                let x = (m.1.x0 + m.1.x1) * 0.5;
+                x >= b.x0 && x <= b.x1
+            })
+            .collect();
+        if on.is_empty() {
+            return true;
+        }
+        let mut sizes: Vec<f64> = on.iter().map(|m| m.2).collect();
+        sizes.sort_by(f64::total_cmp);
+        let size = sizes[sizes.len() / 2].max(1.0);
+        if b.height() > HIGHLIGHT_LINES * size {
+            return true;
+        }
+        // The width the text covers, its marks' extents merged.
+        let mut spans: Vec<(f64, f64)> = on
+            .iter()
+            .map(|m| (m.1.x0.max(b.x0), m.1.x1.min(b.x1)))
+            .collect();
+        spans.sort_by(|a, c| a.0.total_cmp(&c.0));
+        let gap = size * 0.6;
+        let (mut covered, mut cur) = (0.0, None::<(f64, f64)>);
+        for (x0, x1) in spans {
+            cur = match cur {
+                // Word spaces belong to the text that spans them.
+                Some((a, e)) if x0 <= e + gap => Some((a, e.max(x1))),
+                Some((a, e)) => {
+                    covered += e - a;
+                    Some((x0, x1))
+                }
+                None => Some((x0, x1)),
+            };
+        }
+        if let Some((a, e)) = cur {
+            covered += e - a;
+        }
+        let text_x0 = on.iter().map(|m| m.1.x0).fold(f64::INFINITY, f64::min);
+        let text_x1 = on.iter().map(|m| m.1.x1).fold(f64::NEG_INFINITY, f64::max);
+        let fitted = (text_x0 - b.x0).abs() <= HIGHLIGHT_FIT * size
+            && (b.x1 - text_x1).abs() <= HIGHLIGHT_FIT * size;
+        !(fitted && covered >= HIGHLIGHT_COVERAGE * b.width())
+    });
+}
+
 /// Classify a drawn shape's bounding box. Returns `None` for shapes that are
 /// neither — glyph outlines drawn as paths, logos, curves.
 pub fn classify(bbox: BBox, page: usize) -> Option<Shape> {
@@ -495,5 +580,58 @@ mod tests {
     #[test]
     fn zero_area_is_rejected() {
         assert!(classify(bb(10.0, 10.0, 10.0, 10.0), 0).is_none());
+    }
+
+    fn fills(v: &[BBox]) -> Vec<Fill> {
+        v.iter().map(|b| Fill { bbox: *b, page: 0 }).collect()
+    }
+
+    /// A line of 10pt text from `x0`, one 5pt glyph per character.
+    fn line(text: &str, x0: f64, base: f64) -> Vec<crate::glyph::Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let x = x0 + i as f64 * 5.0;
+                crate::glyph::Glyph {
+                    text: c.to_string(),
+                    bbox: (c != ' ').then_some(bb(x, base - 7.0, x + 4.5, base)),
+                    page: 0,
+                    origin: (x, base),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(5.0),
+                    draw_index: i,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn highlighted_lines_are_not_a_drawing() {
+        // Three lines of a marked-up page, each behind a band fitted to it:
+        // stacked bands of assorted widths, as a bar chart's are.
+        let mut g = line("Remove all materials from the line", 100.0, 110.0);
+        g.extend(line("before the next lot", 100.0, 125.0));
+        g.extend(line("and record the clearance on the form", 100.0, 140.0));
+        let f = fills(&[
+            bb(99.0, 101.0, 270.5, 113.0),
+            bb(99.0, 116.0, 195.5, 128.0),
+            bb(99.0, 131.0, 280.5, 143.0),
+        ]);
+        let mut f = f;
+        strip_highlights(&mut f, &g);
+        assert!(f.is_empty());
+        // A bar with its value on it is still a bar.
+        let mut bar = fills(&[bb(98.0, 101.0, 400.0, 113.0)]);
+        let label = line("42%", 380.0, 110.0);
+        strip_highlights(&mut bar, &label);
+        assert_eq!(bar.len(), 1);
+        // A shaded table row, its cells padded and its columns apart.
+        let mut row = fills(&[bb(90.0, 101.0, 400.0, 113.0)]);
+        let mut cells = line("Sodium chloride", 96.0, 110.0);
+        cells.extend(line("0.9%", 300.0, 110.0));
+        strip_highlights(&mut row, &cells);
+        assert_eq!(row.len(), 1);
     }
 }
