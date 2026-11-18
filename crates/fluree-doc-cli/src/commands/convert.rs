@@ -262,7 +262,28 @@ fn convert_path(
         Some(SourceKind::Docx) => {
             let (elements, info) =
                 fluree_doc_docx::parse_with_info(&data).map_err(|e| e.to_string())?;
-            (elements, declared(info))
+            // The page header and footer are read into the text, marked as
+            // what they are; their lines are also the running text a PDF's
+            // identity block is kept in, so a graph finds a document's
+            // identity in one place whatever it was read from.
+            let running_text = elements
+                .iter()
+                .filter(|e| matches!(e.evidence, "header" | "footer"))
+                .flat_map(|e| {
+                    fluree_doc_model::doco::projection_text(e)
+                        .lines()
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|l| !l.trim().is_empty())
+                .collect();
+            (
+                elements,
+                fluree_doc_model::Notes {
+                    running_text,
+                    ..declared(info)
+                },
+            )
         }
         Some(SourceKind::Pptx) => {
             let (elements, info) =

@@ -148,7 +148,10 @@ identifies a page rather than the document. A string, because front matter is
 ```
 
 The header and footer text [furniture detection](../design/furniture.md)
-removed from the body, kept once here.
+removed from the body, kept once here. A Word file states its header and
+footer, so they are read into the text as elements marked `header` and
+`footer`, and their lines are kept here as well: a document's identity is in
+one place whatever it was read from.
 
 Repetition is what makes a line noise *inside* the body and exactly what makes
 it identify the document. A controlled procedure puts its owner, title and

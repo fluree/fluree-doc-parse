@@ -41,6 +41,50 @@ paragraph with no text, such as a step column's `1.` and `2.`. Bullets add no
 text. Formats spelled out in words (`First`, `Second`) are written as
 numbers.
 
+A document whose outline is only in its numbering is read for it. Many
+procedures use no heading style: `1. SCOPE` and `4.2. SAMPLE HANDLING` are
+list paragraphs like the steps under them, set apart only by
+being short and in capitals. A numbered paragraph that reads that way and
+heads something (items numbered deeper after it, or text before its next
+sibling) is a `doco:SectionTitle` at the level it is numbered at, and its
+section contains what follows. One that heads nothing is a step written in
+capitals (`DO NOT PROCEED`) and stays one.
+
+**Headers and footers.** A controlled document keeps its number, revision and
+title in its page header, and its body never repeats them. The header Word
+shows is read once, before the body, and the footer once, after it, as
+paragraphs and tables whose `evidence` is `header` or `footer`, so a consumer
+that wants the body alone can leave them out. A page number is the page Word
+last laid the file out on, whichever that was, so its field contributes
+nothing: `Page 3 of 7` reads `Page of`. A picture in a header is its logo, and is
+left out.
+
+**Line breaks.** A line break (Shift+Enter) ends a line, and the line stays
+one: `4.1 Equipment` and `4.2 Materials` are two lines of one paragraph. Two in a row leave a blank line, which parts the
+paragraph as an empty paragraph would, so a numbered heading, a blank line and
+a list of contents under it are a heading and the paragraphs after it.
+
+**Symbol fonts.** A character from Symbol or Wingdings is stored as the font's
+own code for it, which in any other font is nothing. It is read as the
+character it shows: `°`, `±` and `μ` from Symbol, arrows, check marks and
+boxes (`→`, `✔`, `☐`, `☑`) from Wingdings and Wingdings 2.
+
+**Pictures and embedded objects** — an image, a chart, an object embedded
+from another program — are each a `doco:Figure` where they stand, its text
+the alternative text the document gives it, less the notice Word appends to
+text it wrote itself. One with none is an empty figure: it marks where the
+picture is, in the graph and in `-f json`, and adds nothing to the text. Word
+also keeps a fallback copy of a drawing for readers that cannot show it,
+which is not read a second time.
+
+**A list set side by side with itself.** A long list is often set two-up to
+fill the page: `Group | Code | | Group | Code`, the list running down
+the left pair and on down the right. Read as one table, each row joins two
+entries that have nothing to do with each other, and the right one takes the
+left one's first cell as its row's name. A table whose header repeats its
+labels after a column left empty all the way down (or repeats at least two
+labels) is read as one table per group, one after the other.
+
 `page` is `0` throughout — a `.docx` stores a flow, not a layout, and page
 boundaries exist only once something lays it out.
 

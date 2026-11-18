@@ -18,6 +18,7 @@
 //!   structure is not a hypothesis.
 
 mod numbering;
+mod symbols;
 
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local, Package};
@@ -73,8 +74,139 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
     // part the document numbers nothing.
     let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
     let numbering = Numbering::new(pkg.read(&numbering).as_deref(), styles.as_deref());
-    let elements = parse_with_styles(&xml, &header_styles, &title_styles, numbering)?;
+    let body = parse_with_styles(&xml, &header_styles, &title_styles, numbering)?;
+    // The page header and footer: where a controlled document keeps its
+    // number, revision and title, which its body never repeats. Each is
+    // read once, the header before the body and the footer after it, and
+    // marked as what it is.
+    let settings = pkg.related(&main, "settings", "word/settings.xml");
+    let even_odd = pkg
+        .read(&settings)
+        .is_some_and(|x| toggled_on(&x, "evenAndOddHeaders"));
+    let rels = pkg.relationships(&main);
+    let mut read_parts = |kind: &str, evidence: &'static str| -> Vec<Element> {
+        let mut out: Vec<Element> = Vec::new();
+        for rid in shown_parts(&xml, kind, even_odd) {
+            let Some(part) = rels.iter().find(|r| r.id == rid && !r.external) else {
+                continue;
+            };
+            let Some(part_xml) = pkg.read(&part.target) else {
+                continue;
+            };
+            let Ok(found) = parse_with_styles(
+                &part_xml,
+                &header_styles,
+                &title_styles,
+                Numbering::default(),
+            ) else {
+                continue;
+            };
+            for mut e in found {
+                // A header's picture is its logo.
+                if e.kind == "doco:Figure" {
+                    continue;
+                }
+                // A heading set in the header is the page's furniture, not
+                // a section of the document.
+                if e.kind != "doco:Table" {
+                    e.kind = "doco:Paragraph".into();
+                    e.level = None;
+                }
+                e.evidence = evidence;
+                // The first page's header and the rest's often share lines.
+                if !out.iter().any(|o| o.kind == e.kind && o.text == e.text) {
+                    out.push(e);
+                }
+            }
+        }
+        out
+    };
+    let header = read_parts("header", "header");
+    let footer = read_parts("footer", "footer");
+    let mut elements = header;
+    elements.extend(body);
+    elements.extend(footer);
+    for (i, e) in elements.iter_mut().enumerate() {
+        e.id = format!("elem-{:05}", i + 1);
+    }
     Ok((elements, pkg.info()))
+}
+
+/// A toggle element in a part, present and not switched off.
+fn toggled_on(xml: &str, name: &str) -> bool {
+    let mut r = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(_) | Ok(Event::Eof) => return false,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) if local(e.name().as_ref()) == name => {
+                return !is_off(&e);
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// The relationship ids of the headers (`kind` `header`) or footers Word
+/// shows, in the order the document's sections name them: each section's
+/// default one, its first page's where the section has a title page, and
+/// its even pages' where the document sets odd and even apart. A part
+/// a section names but Word does not show is left out.
+fn shown_parts(document_xml: &str, kind: &str, even_odd: bool) -> Vec<String> {
+    let mut r = Reader::from_str(document_xml);
+    let mut buf = Vec::new();
+    let want = format!("{kind}Reference");
+    let mut out: Vec<String> = Vec::new();
+    // The section being read: its references by type, and its title page.
+    let mut refs: Vec<(String, String)> = Vec::new();
+    let mut title_page = false;
+    let mut in_sect = false;
+    let flush = |refs: &mut Vec<(String, String)>, title_page: bool, out: &mut Vec<String>| {
+        for want_type in ["first", "default", "even"] {
+            let shown = match want_type {
+                "first" => title_page,
+                "even" => even_odd,
+                _ => true,
+            };
+            if !shown {
+                continue;
+            }
+            for (t, id) in refs.iter() {
+                if t == want_type && !out.contains(id) {
+                    out.push(id.clone());
+                }
+            }
+        }
+        refs.clear();
+    };
+    loop {
+        match r.read_event_into(&mut buf) {
+            Err(_) | Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match local(e.name().as_ref()) {
+                "sectPr" => {
+                    in_sect = true;
+                    title_page = false;
+                    refs.clear();
+                }
+                "titlePg" if in_sect => title_page = !is_off(&e),
+                n if in_sect && n == want => {
+                    let t = attr(&e, "type").unwrap_or_else(|| "default".into());
+                    if let Some(id) = attr(&e, "id") {
+                        refs.push((t, id));
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::End(e)) if local(e.name().as_ref()) == "sectPr" => {
+                in_sect = false;
+                flush(&mut refs, title_page, &mut out);
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
 }
 
 /// The paragraph styles that are Word's built-in Title.
@@ -204,6 +336,46 @@ fn heading_level(style: &str) -> Option<usize> {
         .map(|n| n.min(6))
 }
 
+/// A picture, chart or embedded object, as the document describes it.
+#[derive(Default)]
+struct Pic {
+    /// Its alternative text, written for a reader who cannot see it.
+    alt: String,
+    title: String,
+    /// It holds an image or a chart, not only a shape or a text box.
+    image: bool,
+    /// It is an object embedded from another program (`w:object`).
+    object: bool,
+}
+
+impl Pic {
+    /// What the figure says in words: its alternative text, or its title,
+    /// without the notice Word appends to text it wrote itself.
+    fn text(&self) -> String {
+        let alt = if self.alt.trim().is_empty() {
+            &self.title
+        } else {
+            &self.alt
+        };
+        alt.lines()
+            .map(str::trim)
+            .filter(|l| {
+                !l.is_empty()
+                    && !l.starts_with("Description automatically generated")
+                    && !l.starts_with("AI-generated content may be incorrect")
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+/// Whether an element was read as an opening tag or a self-closing one.
+#[derive(Clone, Copy)]
+enum Kind {
+    Start,
+    Empty,
+}
+
 #[derive(Default)]
 struct Cell {
     text: String,
@@ -251,6 +423,8 @@ struct Para {
     /// The number Word shows at the head of the paragraph, with what
     /// follows it: `9.1.5. `.
     label: Option<String>,
+    /// The list level that number is counted at, from 0.
+    level: Option<usize>,
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -295,22 +469,112 @@ fn parse_with_styles(
     // `w:rPr` counts; the one inside `w:pPr` formats the paragraph mark.
     let mut in_ppr = false;
     let mut run_bold = false;
+    // The font a run sets for itself, where it is a symbol font whose text
+    // is written in the font's own codes.
+    let mut run_font: Option<String> = None;
     // A tracked change keeps the paragraph's properties as they were, inside
     // `w:pPrChange`: its style and numbering are not the paragraph's.
     let mut in_ppr_change = false;
     // Where the paragraph being read starts in its cell's text, so a
     // numbered one's label goes at its head.
     let mut cell_para_start = 0usize;
+    // Fields being read: each one's instruction, and whether its result
+    // (the text Word last computed for it) is being read. A page number's
+    // result is the page Word last laid out, `Page 3 of 7` whatever page
+    // document, and is no part of the text.
+    let mut fields: Vec<(String, bool)> = Vec::new();
+    let mut in_instr = false;
+    // Inside `mc:Fallback`: what Word reads in place of content it cannot,
+    // a second copy of what `mc:Choice` already holds.
+    let mut fallback = 0usize;
+    // A picture, chart or embedded object being read, and the figures read
+    // in the current paragraph or table, which follow it.
+    let mut pic_depth = 0usize;
+    let mut pic = Pic::default();
+    let mut figures: Vec<Element> = Vec::new();
+    let mut figure_count = 0usize;
+    // Each list item read, by its place in `out`: the level its number is
+    // counted at and whether it reads as a title, where it is numbered.
+    let mut outline: Vec<(usize, Option<(usize, bool)>)> = Vec::new();
+    let page_field = |instr: &str| {
+        let i = instr.trim_start().to_ascii_uppercase();
+        ["PAGE", "NUMPAGES", "SECTIONPAGES"]
+            .iter()
+            .any(|f| i.split_whitespace().next() == Some(f))
+    };
 
     loop {
-        match r.read_event_into(&mut buf) {
+        let event = r.read_event_into(&mut buf);
+        if fallback > 0 {
+            match &event {
+                Ok(Event::Start(e)) if local(e.name().as_ref()) == "Fallback" => fallback += 1,
+                Ok(Event::End(e)) if local(e.name().as_ref()) == "Fallback" => fallback -= 1,
+                Ok(Event::Eof) | Err(_) => {}
+                _ => {
+                    buf.clear();
+                    continue;
+                }
+            }
+            if fallback > 0 {
+                buf.clear();
+                continue;
+            }
+        }
+        match event {
             Err(e) => return Err(DocxError::Xml(e.to_string())),
             Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e)) if local(e.name().as_ref()) == "Fallback" => fallback = 1,
+            Ok(ev @ (Event::Start(_) | Event::Empty(_))) => {
+                let (e, ev_kind) = match ev {
+                    Event::Start(e) => (e, Kind::Start),
+                    Event::Empty(e) => (e, Kind::Empty),
+                    _ => unreachable!(),
+                };
                 let name = e.name();
                 let tag = local(name.as_ref());
                 match tag {
                     "t" => in_text = true,
+                    "instrText" => in_instr = true,
+                    // A picture or chart (DrawingML), an image (VML), or an
+                    // object embedded from another program.
+                    "drawing" | "pict" | "object" if matches!(ev_kind, Kind::Start) => {
+                        if pic_depth == 0 {
+                            pic = Pic::default();
+                        }
+                        pic.object |= tag == "object";
+                        pic_depth += 1;
+                    }
+                    "docPr" if pic_depth > 0 => {
+                        pic.alt = attr(&e, "descr").unwrap_or_default();
+                        pic.title = attr(&e, "title").unwrap_or_default();
+                    }
+                    "pic" | "chart" | "relIds" if pic_depth > 0 => pic.image = true,
+                    "imagedata" if pic_depth > 0 => {
+                        pic.image = true;
+                        if pic.title.is_empty() {
+                            pic.title = attr(&e, "title").unwrap_or_default();
+                        }
+                    }
+                    "shape" if pic_depth > 0 && pic.alt.is_empty() => {
+                        pic.alt = attr(&e, "alt").unwrap_or_default();
+                    }
+                    "fldChar" => match attr(&e, "fldCharType").as_deref() {
+                        Some("begin") => fields.push((String::new(), false)),
+                        Some("separate") => {
+                            if let Some(f) = fields.last_mut() {
+                                f.1 = true;
+                            }
+                        }
+                        Some("end") => {
+                            fields.pop();
+                        }
+                        _ => {}
+                    },
+                    // A simple field holds its result as its runs; an
+                    // empty one has none to read.
+                    "fldSimple" if matches!(ev_kind, Kind::Start) => {
+                        fields.push((attr(&e, "instr").unwrap_or_default(), true));
+                    }
                     "p" => {
                         // A paragraph's properties are its own: a style or a
                         // list read in a cell before it does not carry on.
@@ -319,6 +583,7 @@ fn parse_with_styles(
                         para.num_id = None;
                         para.ilvl = None;
                         para.label = None;
+                        para.level = None;
                         if in_cell {
                             cell_para_start = cell.text.len();
                         }
@@ -326,7 +591,34 @@ fn parse_with_styles(
                     "pPrChange" => in_ppr_change = true,
                     _ if in_ppr_change => {}
                     "pPr" => in_ppr = true,
-                    "r" => run_bold = false,
+                    "r" => {
+                        run_bold = false;
+                        run_font = None;
+                    }
+                    "rFonts" if !in_ppr => {
+                        run_font = attr(&e, "ascii")
+                            .or_else(|| attr(&e, "hAnsi"))
+                            .filter(|f| symbols::is_symbol_font(f));
+                    }
+                    // A character inserted from a symbol font, stored as
+                    // the font's code for it.
+                    "sym" => {
+                        let ch = attr(&e, "char")
+                            .and_then(|c| u32::from_str_radix(&c, 16).ok())
+                            .and_then(|c| {
+                                symbols::char_for(&attr(&e, "font").unwrap_or_default(), c)
+                            });
+                        if let Some(ch) = ch {
+                            if in_cell {
+                                if run_bold {
+                                    cell.bold_text = true;
+                                } else {
+                                    cell.plain_text = true;
+                                }
+                            }
+                            push(&mut para, &mut cell, in_cell, &ch.to_string());
+                        }
+                    }
                     "b" if !in_ppr => run_bold = !is_off(&e),
                     "rStyle" if !in_ppr => {
                         if attr(&e, "val").is_some_and(|v| v == "Strong") {
@@ -345,8 +637,17 @@ fn parse_with_styles(
                                 .is_some_and(|v| v & 0x0020 != 0),
                         };
                     }
-                    "tab" => push(&mut para, &mut cell, in_cell, "\t"),
-                    "br" | "cr" => push(&mut para, &mut cell, in_cell, " "),
+                    // A positional tab, which headers align their parts
+                    // with, sets text apart as a tab does.
+                    "tab" | "ptab" => push(&mut para, &mut cell, in_cell, "\t"),
+                    // A line break is a line's end; a cell's lines are
+                    // read as one value.
+                    "br" | "cr" => push(
+                        &mut para,
+                        &mut cell,
+                        in_cell,
+                        if in_cell { " " } else { "\n" },
+                    ),
                     "pStyle" => {
                         if let Some(v) = attr(&e, "val") {
                             para.style = v;
@@ -382,8 +683,32 @@ fn parse_with_styles(
                 }
             }
             Ok(Event::Text(t)) => {
-                if in_text {
-                    let s = t.unescape().unwrap_or_default().to_string();
+                if in_instr {
+                    if let Some(f) = fields.last_mut() {
+                        f.0.push_str(&t.unescape().unwrap_or_default());
+                    }
+                }
+                let page_number = fields
+                    .iter()
+                    .any(|(instr, result)| *result && page_field(instr));
+                if in_text && !page_number {
+                    let mut s = t.unescape().unwrap_or_default().to_string();
+                    // Text in a symbol font is the font's codes: `m` in
+                    // Symbol shows `μ`. A code the font maps to nothing
+                    // a reader knows is dropped, as Word's own text export
+                    // drops it, rather than shown as the letter it is not.
+                    if let Some(font) = &run_font {
+                        s = s
+                            .chars()
+                            .filter_map(|c| {
+                                if c.is_whitespace() {
+                                    Some(c)
+                                } else {
+                                    symbols::char_for(font, c as u32)
+                                }
+                            })
+                            .collect();
+                    }
                     if in_cell && !s.trim().is_empty() {
                         if run_bold {
                             cell.bold_text = true;
@@ -398,6 +723,19 @@ fn parse_with_styles(
                 let name = e.name();
                 match local(name.as_ref()) {
                     "t" => in_text = false,
+                    "instrText" => in_instr = false,
+                    "drawing" | "pict" | "object" if pic_depth > 0 => {
+                        pic_depth -= 1;
+                        if pic_depth == 0 && (pic.image || pic.object) {
+                            figure_count += 1;
+                            let mut f = element("doco:Figure", pic.text(), None);
+                            f.figure = Some(format!("figure-0-{figure_count}"));
+                            figures.push(f);
+                        }
+                    }
+                    "fldSimple" => {
+                        fields.pop();
+                    }
                     "pPrChange" => in_ppr_change = false,
                     _ if in_ppr_change => {}
                     "pPr" => {
@@ -410,6 +748,7 @@ fn parse_with_styles(
                             numbering.resolve(para.num_id.as_deref(), para.ilvl, style)
                         {
                             para.label = numbering.next(&id, level);
+                            para.level = para.label.is_some().then_some(level);
                         }
                     }
                     "p" => {
@@ -427,7 +766,30 @@ fn parse_with_styles(
                                 cell.text.push(' ');
                             }
                         } else {
+                            let at = out.len();
+                            let (level, label) = (para.level, para.label.clone());
                             flush_para(&mut out, &mut para, title_styles);
+                            // Whether it reads as a title is a question about
+                            // the element it became: a paragraph's lines after
+                            // a blank one are paragraphs of their own.
+                            let numbered_at = level.zip(out.get(at)).map(|(l, e)| {
+                                let label = label.as_deref().unwrap_or("").trim_end();
+                                (l, titled(e.text.strip_prefix(label).unwrap_or(&e.text)))
+                            });
+                            // Numbered on the paragraph or by its style, a
+                            // list item or not.
+                            if out.len() > at
+                                && matches!(
+                                    out[at].kind.as_str(),
+                                    "doc:ListItem" | "doco:Paragraph"
+                                )
+                            {
+                                outline.push((at, numbered_at));
+                            }
+                            // The paragraph's pictures follow its text.
+                            if table_depth == 0 {
+                                out.append(&mut figures);
+                            }
                         }
                     }
                     "tc" => {
@@ -444,6 +806,9 @@ fn parse_with_styles(
                                     .as_ref()
                                     .is_some_and(|s| header_styles.contains(s));
                             emit_table(&mut out, std::mem::take(&mut rows), styled);
+                            // A picture in a cell has no place in a grid of
+                            // text; it follows the table.
+                            out.append(&mut figures);
                         }
                     }
                     _ => {}
@@ -454,6 +819,8 @@ fn parse_with_styles(
         buf.clear();
     }
     flush_para(&mut out, &mut para, title_styles);
+    out.append(&mut figures);
+    promote_numbered_titles(&mut out, &outline);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
@@ -484,28 +851,101 @@ fn is_list_style(style: &str) -> bool {
     s.starts_with("list") || s.starts_with("bullet")
 }
 
+/// Longest a numbered title runs, in words.
+const MAX_TITLE_WORDS: usize = 12;
+
+/// Whether a numbered paragraph's text reads as a title: short, set in
+/// capitals, and not a sentence. `SCOPE`, `SAMPLE HANDLING`,
+/// `PUMP CALIBRATION:`.
+fn titled(text: &str) -> bool {
+    let t = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let letters: Vec<char> = t.chars().filter(|c| c.is_alphabetic()).collect();
+    letters.len() >= 2
+        && letters.iter().all(|c| !c.is_lowercase())
+        && t.split_whitespace().count() <= MAX_TITLE_WORDS
+        && !t.ends_with(['.', ';', ','])
+}
+
+/// Read the outline a document keeps in its numbering.
+///
+/// A procedure numbered `1. SCOPE`, `4.2. SAMPLE HANDLING`,
+/// `4.2.3. Label each sample` often uses no heading style at all: its
+/// titles are list items like its steps, set apart only by being short and
+/// in capitals, and its sections exist only in the numbers. A numbered item
+/// that reads as a title and heads something — deeper-numbered items after
+/// it, or text before its next sibling — is a section title, at the level
+/// its number is counted at. One that heads nothing is a step written in
+/// capitals for emphasis (`DO NOT PROCEED`), and stays one.
+fn promote_numbered_titles(out: &mut [Element], outline: &[(usize, Option<(usize, bool)>)]) {
+    let numbered: Vec<(usize, usize)> = outline
+        .iter()
+        .filter_map(|&(i, n)| n.map(|(level, _)| (i, level)))
+        .collect();
+    let mut promote: Vec<(usize, usize)> = Vec::new();
+    for (k, &(i, level)) in numbered.iter().enumerate() {
+        let titled = outline
+            .iter()
+            .any(|&(j, n)| j == i && n.is_some_and(|(_, t)| t));
+        if !titled {
+            continue;
+        }
+        let heads = match numbered.get(k + 1) {
+            Some(&(j, next)) => next > level || j > i + 1,
+            None => i + 1 < out.len(),
+        };
+        if heads {
+            promote.push((i, level));
+        }
+    }
+    for (i, level) in promote {
+        out[i].kind = "doco:SectionTitle".into();
+        out[i].level = Some((level + 1).min(6));
+    }
+}
+
 fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<String>) {
     let p = std::mem::take(para);
     // The number Word shows at the head of a numbered paragraph is part of
     // what it says: `9.1.5. Record the reading` is how it is cited.
     // Word shows it on an empty paragraph as well.
     let text = format!("{}{}", p.label.as_deref().unwrap_or(""), p.text);
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.is_empty() {
-        return;
+    // A paragraph's lines are where its line breaks put them, and a blank
+    // line between two of them parts the paragraph as an empty paragraph
+    // would: a numbered `METHOD`, a blank line, and the section's
+    // contents one entry to a line are a list item and what follows it.
+    let mut parts: Vec<Vec<String>> = vec![Vec::new()];
+    for line in text.split('\n') {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if line.is_empty() {
+            if parts.last().is_some_and(|p| !p.is_empty()) {
+                parts.push(Vec::new());
+            }
+        } else {
+            parts.last_mut().unwrap().push(line);
+        }
     }
+    parts.retain(|p| !p.is_empty());
+    let Some((first, rest)) = parts.split_first() else {
+        return;
+    };
     // `numId` 0 is a paragraph taken out of its list.
     let numbered = p.numbered && p.num_id.as_deref() != Some("0");
+    // A title is one line however Word breaks it.
+    let title = first.join(" ");
+    let lines = first.join("\n");
     // The title Word's Title style declares: the document's own, which
     // DoCO holds as the document's header rather than as a section's.
     if p.style == "Title" || title_styles.contains(&p.style) {
-        out.push(element("doco:Title", text, None));
+        out.push(element("doco:Title", title, None));
     } else if let Some(level) = heading_level(&p.style) {
-        out.push(element("doco:SectionTitle", text, Some(level)));
+        out.push(element("doco:SectionTitle", title, Some(level)));
     } else if numbered || is_list_style(&p.style) {
-        out.push(element("doc:ListItem", text, None));
+        out.push(element("doc:ListItem", lines, None));
     } else {
-        out.push(element("doco:Paragraph", text, None));
+        out.push(element("doco:Paragraph", lines, None));
+    }
+    for part in rest {
+        out.push(element("doco:Paragraph", part.join("\n"), None));
     }
 }
 
@@ -561,6 +1001,61 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Row>, styled: bool) {
         .map(|r| grid[r * width..(r + 1) * width].to_vec())
         .collect();
     let header_rows = header_rows(&rows, &cells, &m_left, &m_down, styled);
+    // A list set two or more to a page width: each group is a table of its
+    // own, read one after the other.
+    if let Some(groups) = side_by_side(&cells, &m_left, header_rows) {
+        // The labels repeated over each group are the header, whether or
+        // not its look said so: the empty column between the groups is
+        // one no header names.
+        let header_rows = header_rows.max(1);
+        for cols in groups {
+            let pick = |m: &[bool]| -> Vec<bool> {
+                (0..n_rows)
+                    .flat_map(|r| cols.clone().map(move |c| r * width + c))
+                    .map(|i| m[i])
+                    .collect()
+            };
+            let part: Vec<Vec<String>> = cells.iter().map(|r| r[cols.clone()].to_vec()).collect();
+            let (left, down) = (pick(&m_left), pick(&m_down));
+            // Rows the group leaves empty below its header: a shorter
+            // list's tail beside a longer one's.
+            let w = cols.len();
+            let keep: Vec<usize> = (0..n_rows)
+                .filter(|&r| r < header_rows || part[r].iter().any(|t| !t.is_empty()))
+                .collect();
+            let part: Vec<Vec<String>> = keep.iter().map(|&r| part[r].clone()).collect();
+            let take = |m: &[bool]| -> Vec<bool> {
+                keep.iter()
+                    .flat_map(|&r| m[r * w..(r + 1) * w].iter().copied())
+                    .collect()
+            };
+            let (left, mut down) = (take(&left), take(&down));
+            // A merge that ran down from a dropped row starts its run here.
+            for (k, &r) in keep.iter().enumerate() {
+                if k == 0 || keep[k - 1] + 1 != r {
+                    for c in 0..w {
+                        down[k * w + c] = false;
+                    }
+                }
+            }
+            push_table(out, part, left, down, vec![false; keep.len()], header_rows);
+        }
+        return;
+    }
+    push_table(out, cells, m_left, m_down, full_width, header_rows);
+}
+
+/// One table element from its grid.
+fn push_table(
+    out: &mut Vec<Element>,
+    cells: Vec<Vec<String>>,
+    m_left: Vec<bool>,
+    m_down: Vec<bool>,
+    full_width: Vec<bool>,
+    header_rows: usize,
+) {
+    let n_rows = cells.len();
+    let width = cells.first().map_or(0, Vec::len);
     // A body row that is one cell across the whole table labels the rows
     // beneath it, as a section band; the last row has nothing to label.
     let sub_headers: Vec<usize> = (header_rows..n_rows.saturating_sub(1))
@@ -578,6 +1073,63 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Row>, styled: bool) {
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
     out.push(e);
+}
+
+/// The column ranges of a table that sets one list side by side with
+/// itself, two or more up, to fill the page's width.
+///
+/// A long list of codes under `Group | Code` is set as `Group | Code | |
+/// Group | Code`: the list runs down the left pair and carries on down the
+/// right. Read as one table, each row joins two entries that have nothing
+/// to do with each other, and the right one takes the left one's first cell
+/// as its row's name: `G-1` filed under `Fruit`. The header says which kind of table it is: the same
+/// labels again, after a column left empty all the way down or at least
+/// two labels long, so that no single repeated name splits a table.
+fn side_by_side(
+    cells: &[Vec<String>],
+    m_left: &[bool],
+    header_rows: usize,
+) -> Option<Vec<std::ops::Range<usize>>> {
+    if header_rows > 1 || cells.len() < 3 {
+        return None;
+    }
+    let width = cells[0].len();
+    let head = &cells[0];
+    let empty_col = |c: usize| cells.iter().all(|r| r[c].trim().is_empty());
+    for k in 1..=width / 2 {
+        for gap in [1usize, 0] {
+            // `n` groups of `k`, `gap` empty columns between each.
+            if !(width + gap).is_multiple_of(k + gap) {
+                continue;
+            }
+            let n = (width + gap) / (k + gap);
+            if n < 2 || (gap == 0 && k < 2) {
+                continue;
+            }
+            let label = |c: usize| head[c].split_whitespace().collect::<Vec<_>>().join(" ");
+            // Labels, not values: a row of figures repeating is data.
+            if (0..k).any(|c| label(c).is_empty() || is_numeric(&label(c))) {
+                continue;
+            }
+            let groups: Vec<std::ops::Range<usize>> =
+                (0..n).map(|g| g * (k + gap)..g * (k + gap) + k).collect();
+            let same = groups
+                .iter()
+                .all(|g| (0..k).all(|c| label(g.start + c) == label(c)));
+            let spacers_empty =
+                (1..n).all(|g| (0..gap).all(|j| empty_col(g * (k + gap) - gap + j)));
+            // No cell crosses from one group into the next.
+            let apart = groups.iter().skip(1).all(|g| {
+                (0..cells.len()).all(|r| !m_left[r * width + g.start])
+                    && (0..gap)
+                        .all(|j| (0..cells.len()).all(|r| !m_left[r * width + g.start - gap + j]))
+            });
+            if same && spacers_empty && apart {
+                return Some(groups);
+            }
+        }
+    }
+    None
 }
 
 /// How many leading rows of a table are its header.
@@ -764,6 +1316,230 @@ mod tests {
             .into_iter()
             .map(|e| e.text)
             .collect()
+    }
+
+    fn read(body: &str) -> Vec<Element> {
+        parse_document_xml(&doc(body)).unwrap()
+    }
+
+    #[test]
+    fn a_line_break_ends_a_line_and_a_blank_line_ends_a_paragraph() {
+        let els = read(
+            "<w:p><w:r><w:t>Scope</w:t><w:br/><w:br/><w:t>Contents:</w:t><w:br/><w:br/>\
+             <w:t>1 First part</w:t><w:br/><w:t>2 Second part</w:t></w:r></w:p>",
+        );
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["Scope", "Contents:", "1 First part\n2 Second part"]);
+        // A heading broken over two lines is one heading.
+        let h = read("<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>Part</w:t><w:br/><w:t>One</w:t></w:r></w:p>");
+        assert_eq!(h[0].text, "Part One");
+    }
+
+    #[test]
+    fn symbol_font_characters_are_the_characters_they_show() {
+        let els = read(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Low </w:t></w:r>\
+             <w:r><w:sym w:font=\"Wingdings\" w:char=\"F0E0\"/></w:r>\
+             <w:r><w:t xml:space=\"preserve\"> High, 25 </w:t></w:r>\
+             <w:r><w:sym w:font=\"Symbol\" w:char=\"F0B1\"/></w:r>\
+             <w:r><w:t xml:space=\"preserve\"> 2 </w:t></w:r>\
+             <w:r><w:rPr><w:rFonts w:ascii=\"Symbol\" w:hAnsi=\"Symbol\"/></w:rPr><w:t>m</w:t></w:r>\
+             <w:r><w:t>g</w:t></w:r></w:p>",
+        );
+        assert_eq!(els[0].text, "Low → High, 25 ± 2 μg");
+    }
+
+    #[test]
+    fn a_page_number_field_shows_no_stale_page() {
+        let els = read(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Page </w:t></w:r>\
+             <w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>\
+             <w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>\
+             <w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>2</w:t></w:r>\
+             <w:r><w:fldChar w:fldCharType=\"end\"/></w:r>\
+             <w:r><w:t xml:space=\"preserve\"> of the record, see </w:t></w:r>\
+             <w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>\
+             <w:r><w:instrText xml:space=\"preserve\"> REF step4 </w:instrText></w:r>\
+             <w:r><w:fldChar w:fldCharType=\"separate\"/></w:r><w:r><w:t>step 4</w:t></w:r>\
+             <w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
+        );
+        assert_eq!(els[0].text, "Page of the record, see step 4");
+    }
+
+    #[test]
+    fn a_picture_leaves_a_figure_with_its_alternative_text() {
+        let pic = |descr: &str| {
+            format!(
+                "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"Picture 1\" descr=\"{descr}\"/>\
+                 <a:graphic><a:graphicData><pic:pic/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+            )
+        };
+        let els = read(&format!(
+            "{}{}{}",
+            para(None, "Before"),
+            pic("A flow chart of the steps&#xA;&#xA;AI-generated content may be incorrect."),
+            pic("")
+        ));
+        let kinds: Vec<&str> = els.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(kinds, ["doco:Paragraph", "doco:Figure", "doco:Figure"]);
+        assert_eq!(els[1].text, "A flow chart of the steps");
+        assert_eq!(els[2].text, "");
+        assert_ne!(els[1].figure, els[2].figure);
+        // An embedded object is a figure too; the fallback Word keeps for
+        // readers that cannot show the drawing is not a second one.
+        let obj = read(
+            "<w:p><w:r><w:object><v:shape><v:imagedata r:id=\"rId9\" o:title=\"\"/></v:shape>\
+             <o:OLEObject Type=\"Embed\" ProgID=\"Excel.Sheet.12\"/></w:object></w:r>\
+             <mc:AlternateContent><mc:Choice><w:r><w:t>Shown</w:t></w:r></mc:Choice>\
+             <mc:Fallback><w:r><w:t>Shown</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>",
+        );
+        assert_eq!(obj.len(), 2);
+        assert_eq!(obj[0].text, "Shown");
+        assert_eq!(obj[1].kind, "doco:Figure");
+    }
+
+    #[test]
+    fn a_list_set_two_up_is_two_tables() {
+        let row = |cells: &[&str]| {
+            let tcs: String = cells
+                .iter()
+                .map(|c| format!("<w:tc><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:tc>"))
+                .collect();
+            format!("<w:tr>{tcs}</w:tr>")
+        };
+        let merged = |c: &str| {
+            format!("<w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:tc>")
+        };
+        let cont = "<w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc>";
+        let cell = |c: &str| format!("<w:tc><w:p><w:r><w:t>{c}</w:t></w:r></w:p></w:tc>");
+        let empty = "<w:tc><w:p/></w:tc>";
+        let tbl = format!(
+            "<w:tbl>{}<w:tr>{}{}{empty}{}{}</w:tr><w:tr>{cont}{}{empty}{cont}{}</w:tr>\
+             <w:tr>{}{}{empty}{empty}{empty}</w:tr></w:tbl>",
+            row(&["Kind", "Code", "", "Kind", "Code"]),
+            merged("Fruit"),
+            cell("F-1"),
+            merged("Grain"),
+            cell("G-1"),
+            cell("F-2"),
+            cell("G-2"),
+            cell("Root"),
+            cell("R-1"),
+        );
+        let els = read(&tbl);
+        let tables: Vec<&Element> = els.iter().filter(|e| e.kind == "doco:Table").collect();
+        assert_eq!(tables.len(), 2);
+        let right = tables[1].cells.as_ref().unwrap();
+        assert_eq!(right[0], ["Kind", "Code"]);
+        assert_eq!(right[1], ["Grain", "G-1"]);
+        assert_eq!(right.len(), 3, "the shorter list's empty tail is dropped");
+        // A table whose header only repeats a single label is not split.
+        let one = read(&format!(
+            "<w:tbl>{}{}{}</w:tbl>",
+            row(&["Value", "Value"]),
+            row(&["1", "2"]),
+            row(&["3", "4"])
+        ));
+        assert_eq!(one.iter().filter(|e| e.kind == "doco:Table").count(), 1);
+    }
+
+    #[test]
+    fn headers_and_footers_are_read_once_as_what_they_are() {
+        use std::io::Write;
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let body = doc(&format!(
+            "{}<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rId1\"/>\
+             <w:headerReference w:type=\"first\" r:id=\"rId3\"/>\
+             <w:footerReference w:type=\"default\" r:id=\"rId2\"/></w:sectPr>",
+            para(None, "Body text")
+        ));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, xml) in [
+            ("word/document.xml", body),
+            (
+                "word/_rels/document.xml.rels",
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}/header\" Target=\"header1.xml\"/>\
+                     <Relationship Id=\"rId3\" Type=\"{rel}/header\" Target=\"header2.xml\"/>\
+                     <Relationship Id=\"rId2\" Type=\"{rel}/footer\" Target=\"footer1.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "word/header1.xml",
+                format!(
+                    "<w:hdr {NS}>{}{}</w:hdr>",
+                    para(Some("Heading1"), "Ref: QA-7"),
+                    para(None, "Revision 3")
+                ),
+            ),
+            // A first page's header, which no title page shows.
+            ("word/header2.xml", format!("<w:hdr {NS}>{}</w:hdr>", para(None, "Cover only"))),
+            ("word/footer1.xml", format!("<w:ftr {NS}>{}</w:ftr>", para(None, "Uncontrolled when printed"))),
+        ] {
+            z.start_file(name, opts).unwrap();
+            z.write_all(xml.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        let bytes = buf.into_inner();
+        let els = parse(&bytes).unwrap();
+        let got: Vec<(&str, &str, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str(), e.evidence))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:Paragraph", "Ref: QA-7", "header"),
+                ("doco:Paragraph", "Revision 3", "header"),
+                ("doco:Paragraph", "Body text", "docx"),
+                ("doco:Paragraph", "Uncontrolled when printed", "footer"),
+            ]
+        );
+        let ids: Vec<&str> = els.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["elem-00001", "elem-00002", "elem-00003", "elem-00004"]
+        );
+    }
+
+    #[test]
+    fn numbered_titles_in_capitals_are_the_outline() {
+        let numbering = numbering_xml(
+            &[("0", OUTLINE)],
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>",
+        );
+        let n = Numbering::new(Some(&numbering), None);
+        let body = [
+            item("1", 0, "OVERVIEW"),
+            para(None, "What this covers."),
+            item("1", 0, "METHOD"),
+            item("1", 1, "PREPARATION"),
+            item("1", 2, "Weigh the sample."),
+            item("1", 2, "DO NOT PROCEED"),
+            item("1", 2, "Record the weight."),
+        ]
+        .concat();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let got: Vec<(&str, Option<usize>, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.level, e.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:SectionTitle", Some(1), "1. OVERVIEW"),
+                ("doco:Paragraph", None, "What this covers."),
+                ("doco:SectionTitle", Some(1), "2. METHOD"),
+                ("doco:SectionTitle", Some(2), "2.1. PREPARATION"),
+                ("doc:ListItem", None, "2.1.1. Weigh the sample."),
+                // In capitals, but heading nothing: a step.
+                ("doc:ListItem", None, "2.1.2. DO NOT PROCEED"),
+                ("doc:ListItem", None, "2.1.3. Record the weight."),
+            ]
+        );
     }
 
     const OUTLINE: &[Lvl] = &[

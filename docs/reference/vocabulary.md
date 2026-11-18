@@ -38,7 +38,7 @@ those dates, so a store compares them as times.
 | `doco:Paragraph` | prose |
 | `doco:List` | a list; contains a `doco:Paragraph` per item |
 | `doco:Table` | a table; contains its cells |
-| `doco:Figure` | [anchor](../integration/anchors.md) placeholders for escalated regions |
+| `doco:Figure` | a chart or diagram's text, a picture or embedded object in a Word file, and [anchor](../integration/anchors.md) placeholders for escalated regions |
 | `doc:TableCell` | one cell of a table |
 | `doc:Link` | one hyperlink, with its anchor and target |
 | `doc:Message` | one message of an [email](../inputs/email.md); contains its elements |

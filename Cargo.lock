@@ -523,6 +523,7 @@ dependencies = [
  "fluree-doc-model",
  "fluree-doc-ooxml",
  "quick-xml",
+ "zip",
 ]
 
 [[package]]
