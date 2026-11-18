@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "fomcprojtabl20240918.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcprojtabl20240918.pdf",
+    "sha256": "fb5e0b1bbe836b8fbf11ec0086c9f5cb33c968d17073b932bdd8dfecec902e0a",
+    "about": "Summary of Economic Projections, September 2024: a ruled table whose body rows are not ruled, one tall band under the header."
+  },
+  "notes": [
+    "A guard, not a fix: keeping a tall ruled band as one row, which a table drawn in characters needs, broke this header apart when applied to every ruled table."
+  ],
+  "checks": [
+    {
+      "id": "header-row-whole",
+      "found": "2026-11-17",
+      "issue": "The header's labels became separate headings when the tall body band was kept as a row.",
+      "text": "Variable Median1 Central Tendency2 Range3"
+    }
+  ]
+}

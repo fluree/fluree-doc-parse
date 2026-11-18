@@ -151,6 +151,19 @@ def run_check(check, reading):
     if "no_text" in check:
         hits = norm(reading.text).count(norm(check["no_text"]))
         return hits == 0, None if hits == 0 else f"{hits} times in the text projection"
+    if "element" in check:
+        # An element of this type with exactly this string, line breaks and
+        # all, and where given, this evidence: what the text projection's
+        # runs of whitespace cannot tell apart, a heading from the line under
+        # it, or a header from the body.
+        want = check["element"]
+        ok = any(
+            n.get("@type") == want.get("type", n.get("@type"))
+            and n.get("nif:isString", "") == want.get("text", n.get("nif:isString", ""))
+            and n.get("doc:evidence") == want.get("evidence", n.get("doc:evidence"))
+            for n in reading.nodes.values()
+        )
+        return ok, None if ok else "no such element"
     if "no_column_header" in check:
         # Anywhere in the name: under a stacked header a row read as header
         # is one label in a path (`A / B / C`).

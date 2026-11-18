@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "fomcminutes20240131.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcminutes20240131.pdf",
+    "sha256": "6ce451a5bcf43bf90ac2172f6872cd245e04689c80d4b01e28a01519bb3f0dcc",
+    "about": "Minutes of the Federal Open Market Committee, January 2024: a running header underlined by underscores struck over its words, and the committee's name, which the header repeats, throughout the text."
+  },
+  "notes": [
+    "Once the struck underline read as words, the header was furniture, and the furniture scrub then cut the committee's name out of every sentence that used it. Both are checked."
+  ],
+  "checks": [
+    {
+      "id": "struck-header-reads-as-furniture",
+      "found": "2026-11-17",
+      "issue": "Underscores struck over the running header interleaved with its letters: _M_i_n_u_te_s_ o_f_ _th_e.",
+      "no_text": "_M_i_n_u_te_s"
+    },
+    {
+      "id": "header-phrase-stays-in-sentences",
+      "found": "2026-11-17",
+      "issue": "Furniture text was stripped from blocks wherever it occurred, sentences included.",
+      "text": "A joint meeting of the Federal Open Market Committee and the Board of Governors of the Federal Reserve System was held"
+    },
+    {
+      "id": "title-whole",
+      "found": "2026-11-17",
+      "issue": "As above, from the title.",
+      "text": "Minutes of the Federal Open Market Committee January 30–31, 2024"
+    }
+  ]
+}

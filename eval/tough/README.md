@@ -72,6 +72,7 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `cell` | some cell has this `value`, and the `column`, `row` and `section` names given |
 | `text` | the text projection contains this text |
 | `no_text` | the text projection does not contain this text anywhere |
+| `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence` |
 
 A row is the cells sharing a `doc:rowIndex` in one table, a table split by a
 page break counting as one (its parts are followed back by `doc:continues`).
