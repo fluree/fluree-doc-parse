@@ -425,6 +425,8 @@ struct Para {
     label: Option<String>,
     /// The list level that number is counted at, from 0.
     level: Option<usize>,
+    /// The list it is counted in.
+    list: Option<String>,
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -495,7 +497,7 @@ fn parse_with_styles(
     let mut figure_count = 0usize;
     // Each list item read, by its place in `out`: the level its number is
     // counted at and whether it reads as a title, where it is numbered.
-    let mut outline: Vec<(usize, Option<(usize, bool)>)> = Vec::new();
+    let mut outline: Vec<(usize, Option<Numbered>)> = Vec::new();
     let page_field = |instr: &str| {
         let i = instr.trim_start().to_ascii_uppercase();
         ["PAGE", "NUMPAGES", "SECTIONPAGES"]
@@ -584,6 +586,7 @@ fn parse_with_styles(
                         para.ilvl = None;
                         para.label = None;
                         para.level = None;
+                        para.list = None;
                         if in_cell {
                             cell_para_start = cell.text.len();
                         }
@@ -749,6 +752,7 @@ fn parse_with_styles(
                         {
                             para.label = numbering.next(&id, level);
                             para.level = para.label.is_some().then_some(level);
+                            para.list = numbering.list_of(&id).map(str::to_string);
                         }
                     }
                     "p" => {
@@ -768,13 +772,20 @@ fn parse_with_styles(
                         } else {
                             let at = out.len();
                             let (level, label) = (para.level, para.label.clone());
+                            let list = para.list.clone().unwrap_or_default();
                             flush_para(&mut out, &mut para, title_styles);
                             // Whether it reads as a title is a question about
                             // the element it became: a paragraph's lines after
                             // a blank one are paragraphs of their own.
-                            let numbered_at = level.zip(out.get(at)).map(|(l, e)| {
+                            let numbered_at = level.zip(out.get(at)).map(|(level, e)| {
                                 let label = label.as_deref().unwrap_or("").trim_end();
-                                (l, titled(e.text.strip_prefix(label).unwrap_or(&e.text)))
+                                let text = e.text.strip_prefix(label).unwrap_or(&e.text);
+                                Numbered {
+                                    level,
+                                    list,
+                                    titled: titled(text),
+                                    capitals: titled(text) && !text.chars().any(char::is_lowercase),
+                                }
                             });
                             // Numbered on the paragraph or by its style, a
                             // list item or not.
@@ -854,16 +865,48 @@ fn is_list_style(style: &str) -> bool {
 /// Longest a numbered title runs, in words.
 const MAX_TITLE_WORDS: usize = 12;
 
-/// Whether a numbered paragraph's text reads as a title: short, set in
-/// capitals, and not a sentence. `SCOPE`, `SAMPLE HANDLING`,
-/// `PUMP CALIBRATION:`.
+/// The words a title leaves in lowercase: articles, conjunctions and
+/// prepositions. Any other word set in lowercase is a sentence's.
+const MINOR_WORDS: &[&str] = &[
+    "a", "about", "after", "against", "among", "an", "and", "as", "at", "before", "between", "but",
+    "by", "during", "for", "from", "in", "into", "nor", "of", "on", "or", "over", "per", "than",
+    "the", "through", "to", "under", "until", "upon", "versus", "via", "vs", "with", "within",
+    "without",
+];
+
+/// Whether a numbered paragraph's text reads as a title: short, not a
+/// sentence, and set in capitals or in title case. `SCOPE`,
+/// `PUMP CALIBRATION:`, `SAMPLE HANDLING and STORAGE`,
+/// `Storage Conditions and Limits`, `REVIEWS - General Requirements`.
+/// A parenthesis is an aside and may say anything:
+/// `Report Approval and Filing (see form 5)`. A word counts as capitalized
+/// if it has a capital anywhere, as `100 mL` and `pH` do.
 fn titled(text: &str) -> bool {
     let t = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let letters: Vec<char> = t.chars().filter(|c| c.is_alphabetic()).collect();
-    letters.len() >= 2
-        && letters.iter().all(|c| !c.is_lowercase())
-        && t.split_whitespace().count() <= MAX_TITLE_WORDS
-        && !t.ends_with(['.', ';', ','])
+    let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+    if letters < 2 || t.split_whitespace().count() > MAX_TITLE_WORDS || t.ends_with(['.', ';', ','])
+    {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut first = true;
+    for w in t.split_whitespace() {
+        let aside = depth > 0 || w.starts_with('(');
+        depth += w.matches('(').count();
+        depth = depth.saturating_sub(w.matches(')').count());
+        if aside || !w.chars().any(char::is_alphabetic) {
+            continue;
+        }
+        let capital = w.chars().any(char::is_uppercase);
+        let bare = w
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        if !capital && (first || !MINOR_WORDS.contains(&bare.as_str())) {
+            return false;
+        }
+        first = false;
+    }
+    !first
 }
 
 /// Read the outline a document keeps in its numbering.
@@ -876,31 +919,66 @@ fn titled(text: &str) -> bool {
 /// it, or text before its next sibling — is a section title, at the level
 /// its number is counted at. One that heads nothing is a step written in
 /// capitals for emphasis (`DO NOT PROCEED`), and stays one.
-fn promote_numbered_titles(out: &mut [Element], outline: &[(usize, Option<(usize, bool)>)]) {
-    let numbered: Vec<(usize, usize)> = outline
+///
+/// Capitals are a title's own mark. Title case is weaker: a list of
+/// deliverables or of people is in title case too, and one of its entries
+/// with a note under it heads something. So an item in title case is a
+/// title only among siblings that are mostly titles heading something —
+/// the same list, at the same level, under the same parent — which is what
+/// an outline's sections are and a list's entries are not.
+fn promote_numbered_titles(out: &mut [Element], outline: &[(usize, Option<Numbered>)]) {
+    let numbered: Vec<(usize, &Numbered)> = outline
         .iter()
-        .filter_map(|&(i, n)| n.map(|(level, _)| (i, level)))
+        .filter_map(|(i, n)| n.as_ref().map(|n| (*i, n)))
         .collect();
-    let mut promote: Vec<(usize, usize)> = Vec::new();
-    for (k, &(i, level)) in numbered.iter().enumerate() {
-        let titled = outline
-            .iter()
-            .any(|&(j, n)| j == i && n.is_some_and(|(_, t)| t));
-        if !titled {
-            continue;
-        }
-        let heads = match numbered.get(k + 1) {
-            Some(&(j, next)) => next > level || j > i + 1,
+    // Levels are counted per list: the next item of another list is no
+    // deeper than this one whatever its level.
+    let heads: Vec<bool> = numbered
+        .iter()
+        .enumerate()
+        .map(|(k, &(i, n))| match numbered.get(k + 1) {
+            Some(&(j, next)) => (next.list == n.list && next.level > n.level) || j > i + 1,
             None => i + 1 < out.len(),
-        };
-        if heads {
-            promote.push((i, level));
+        })
+        .collect();
+    // Each item's siblings, as a run of the items in its list at its level,
+    // broken where the list goes back to a shallower one.
+    let mut group = vec![0usize; numbered.len()];
+    let mut open: HashMap<(&str, usize), usize> = HashMap::new();
+    let mut groups = 0usize;
+    for (k, &(_, n)) in numbered.iter().enumerate() {
+        open.retain(|&(list, level), _| list != n.list || level <= n.level);
+        group[k] = *open.entry((n.list.as_str(), n.level)).or_insert_with(|| {
+            groups += 1;
+            groups - 1
+        });
+    }
+    let mut sections = vec![(0usize, 0usize); groups];
+    for (k, &(_, n)) in numbered.iter().enumerate() {
+        let g = &mut sections[group[k]];
+        g.0 += usize::from(n.titled && heads[k]);
+        g.1 += 1;
+    }
+    for (k, &(i, n)) in numbered.iter().enumerate() {
+        let (titles, of) = sections[group[k]];
+        let outline = n.capitals || titles * 2 > of;
+        if n.titled && heads[k] && outline {
+            out[i].kind = "doco:SectionTitle".into();
+            out[i].level = Some((n.level + 1).min(6));
         }
     }
-    for (i, level) in promote {
-        out[i].kind = "doco:SectionTitle".into();
-        out[i].level = Some((level + 1).min(6));
-    }
+}
+
+/// A numbered paragraph, as the outline sees it.
+struct Numbered {
+    /// The level its number is counted at, from 0.
+    level: usize,
+    /// The list it is counted in.
+    list: String,
+    /// Reads as a title: see [`titled`].
+    titled: bool,
+    /// A title set in capitals.
+    capitals: bool,
 }
 
 fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<String>) {
@@ -1516,10 +1594,14 @@ mod tests {
             item("1", 0, "OVERVIEW"),
             para(None, "What this covers."),
             item("1", 0, "METHOD"),
-            item("1", 1, "PREPARATION"),
+            item("1", 1, "PREPARATION and STORAGE"),
             item("1", 2, "Weigh the sample."),
             item("1", 2, "DO NOT PROCEED"),
             item("1", 2, "Record the weight."),
+            item("1", 1, "Sample Handling (see appendix)"),
+            item("1", 2, "Label each sample."),
+            item("1", 1, "Check the label"),
+            item("1", 2, "Compare the lot number."),
         ]
         .concat();
         let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
@@ -1533,13 +1615,78 @@ mod tests {
                 ("doco:SectionTitle", Some(1), "1. OVERVIEW"),
                 ("doco:Paragraph", None, "What this covers."),
                 ("doco:SectionTitle", Some(1), "2. METHOD"),
-                ("doco:SectionTitle", Some(2), "2.1. PREPARATION"),
+                ("doco:SectionTitle", Some(2), "2.1. PREPARATION and STORAGE"),
                 ("doc:ListItem", None, "2.1.1. Weigh the sample."),
                 // In capitals, but heading nothing: a step.
                 ("doc:ListItem", None, "2.1.2. DO NOT PROCEED"),
                 ("doc:ListItem", None, "2.1.3. Record the weight."),
+                (
+                    "doco:SectionTitle",
+                    Some(2),
+                    "2.2. Sample Handling (see appendix)"
+                ),
+                ("doc:ListItem", None, "2.2.1. Label each sample."),
+                // Heading steps, but worded as one.
+                ("doc:ListItem", None, "2.3. Check the label"),
+                ("doc:ListItem", None, "2.3.1. Compare the lot number."),
             ]
         );
+    }
+
+    #[test]
+    fn a_list_in_title_case_is_not_an_outline() {
+        let numbering = numbering_xml(
+            &[("0", OUTLINE), ("1", &[("lowerLetter", "%1.", "")])],
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>\
+             <w:num w:numId=\"2\"><w:abstractNumId w:val=\"1\"/></w:num>",
+        );
+        let n = Numbering::new(Some(&numbering), None);
+        let body = [
+            para(None, "Deliverables:"),
+            // Entries in title case, one with a note under it.
+            item("1", 0, "Design Package"),
+            item("1", 0, "Test Templates"),
+            para(None, "Templates may arrive in stages."),
+            item("1", 0, "Rollout Plan"),
+            item("1", 0, "Release Notes"),
+            // One entry of another list, then a deeper item of the first:
+            // levels are not compared across lists.
+            item("2", 0, "The Review Board"),
+            item("1", 1, "Appendix Notes"),
+        ]
+        .concat();
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let titles: Vec<&str> = els
+            .iter()
+            .filter(|e| e.kind == "doco:SectionTitle")
+            .map(|e| e.text.as_str())
+            .collect();
+        assert!(titles.is_empty(), "{titles:?}");
+    }
+
+    #[test]
+    fn a_title_is_in_capitals_or_title_case() {
+        for t in [
+            "SCOPE",
+            "PUMP CALIBRATION:",
+            "SAMPLE HANDLING and STORAGE",
+            "REVIEWS - General Requirements",
+            "Storage Conditions and Limits",
+            "Preparing 100 mL Buffer for Use",
+            "Report Approval and Filing (see form 5)",
+        ] {
+            assert!(titled(t), "{t}");
+        }
+        for t in [
+            "Weigh the sample.",
+            "Check the label",
+            "Area Supervisor or designee",
+            "and Other Items",
+            "(see below)",
+            "Record the weight; then sign",
+        ] {
+            assert!(!titled(t), "{t}");
+        }
     }
 
     const OUTLINE: &[Lvl] = &[

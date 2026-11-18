@@ -233,6 +233,12 @@ impl Numbering {
         })
     }
 
+    /// The list a `num_id` counts in. Lists that share an abstract
+    /// definition share its counters, so they are one list as numbered.
+    pub fn list_of(&self, num_id: &str) -> Option<&str> {
+        self.nums.get(num_id).map(|n| n.abstract_id.as_str())
+    }
+
     /// Advance the counters for a paragraph numbered in list `num_id` at
     /// `ilvl`, and give its label as Word shows it (`9.1.5.`), with what
     /// follows the label: a space, or nothing where the level says so.

@@ -42,13 +42,23 @@ text. Formats spelled out in words (`First`, `Second`) are written as
 numbers.
 
 A document whose outline is only in its numbering is read for it. Many
-procedures use no heading style: `1. SCOPE` and `4.2. SAMPLE HANDLING` are
-list paragraphs like the steps under them, set apart only by
-being short and in capitals. A numbered paragraph that reads that way and
-heads something (items numbered deeper after it, or text before its next
-sibling) is a `doco:SectionTitle` at the level it is numbered at, and its
-section contains what follows. One that heads nothing is a step written in
-capitals (`DO NOT PROCEED`) and stays one.
+procedures use no heading style: `1. SCOPE` and `4.2. Sample Handling` are
+list paragraphs like the steps under them, set apart only by being short and
+worded as titles. A numbered paragraph that reads that way and heads
+something (items numbered deeper in its own list after it, or text before
+its next sibling) is a `doco:SectionTitle` at the level it is numbered at,
+and its section contains what follows. One that heads nothing is a step
+written in capitals (`DO NOT PROCEED`) and stays one.
+
+A title is set in capitals or in title case: `SAMPLE HANDLING and STORAGE`
+and `Storage Conditions and Limits` both are, with articles,
+conjunctions and prepositions in lowercase, and an aside in parentheses may
+say anything. `Check the label` is a step, whatever follows it. Title case is
+the weaker sign, because a list of deliverables or of roles is in title case
+too, and one of its entries with a note under it heads something. So an
+entry in title case is a section title only when most of its siblings (the
+same list, at the same level, under the same parent) are titles that head
+something, as an outline's sections are.
 
 **Headers and footers.** A controlled document keeps its number, revision and
 title in its page header, and its body never repeats them. The header Word
