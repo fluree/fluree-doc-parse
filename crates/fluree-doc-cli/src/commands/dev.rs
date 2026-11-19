@@ -1131,7 +1131,7 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
         // apart.
         let stem = crate::commands::common::stem_of(f);
         let hints = crate::escalate::jobs::hints(&doc, stem, layout, false);
-        let jobs = fluree_doc_pdf::escalate::plan(
+        let (jobs, reasons) = fluree_doc_pdf::escalate::plan_explained(
             &doc,
             &fluree_doc_pdf::outline::extract(&pdf),
             &tiers.options_for(stem),
@@ -1242,8 +1242,15 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
                     write_png(&name, 0, 0, w, h);
                     n_pages += 1;
                     let ls = links_in(None);
+                    // Why the page is read whole: a reader that cannot see
+                    // structure (OCR) has nothing to add to a doubt page.
+                    let reason = reasons
+                        .get(&page_idx)
+                        .expect("every whole page in a job list has a reason")
+                        .as_str();
                     let mut rec = serde_json::json!({
                         "doc": stem, "page": page_idx, "kind": "page", "png": name,
+                        "reason": reason,
                     });
                     if !ls.is_empty() {
                         rec["links"] = serde_json::Value::Array(ls);
@@ -1269,6 +1276,9 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
                             "doc": stem, "page": page_idx, "kind": "region", "png": name,
                             "bbox": [b.x0, b.y0, b.x1, b.y1],
                             "table": holds_a_table(b, &detected),
+                            "reason": fluree_doc_pdf::escalate::CropReason::of_region_tag(tag)
+                                .expect("a region crop's tag")
+                                .as_str(),
                         });
                         if !ls.is_empty() {
                             rec["links"] = serde_json::Value::Array(ls);

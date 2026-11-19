@@ -69,18 +69,39 @@ Renders every routed page and region to PNG at **2×** (≈144 dpi) with a small
 margin, and writes `manifest.jsonl` alongside:
 
 ```jsonl
-{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","table":true}
+{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","table":true}
+{"doc":"form","kind":"page","page":0,"png":"form_p0_full.png","reason":"heading_doubt"}
 ```
 
 The manifest maps every PNG back to its document, page and PDF-unit box, which
 is what lets a reading be spliced into the right place.
 
-`table` says the layout detector boxed a table inside this crop, so a reader
-can be told what the image holds instead of deciding for itself. It needs
-`FDOC_TITLE_BOXES`, and is `false` without it. The distinction is worth
-passing on: a routing trigger knows a region is unreadable but not what it
-is, and a model left to judge transcribes some grids as one value per line —
-which reads as a plausible answer and scores zero for structure.
+`reason` says why the crop exists:
+
+| reason | crop | the text layer |
+|---|---|---|
+| `scanned`, `near_blank`, `broken_text` | whole page | has nothing usable there |
+| `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
+| `table` | a table the grid does not trust | has the text, not the structure |
+| `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
+| `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |
+
+A reader that sees only characters (an OCR engine) has nothing to add to a
+`table` crop or a doubt page and should skip them. A `table_missing` crop it
+may skip only where the page's text covers it: a raster table too small for
+the router to send a reader is boxed by the layout detector alone. A table on
+a page read whole for a doubt has no crop of its own: it goes with its page,
+under the doubt's reason. A `full` reading replaces its page whatever the
+reason, so on a doubt page any character it gets wrong replaces text the PDF
+had right.
+
+The `table` field (not the reason) says the layout detector boxed a table
+inside this crop, so a reader can be told what the image holds instead of
+deciding for itself. It needs `FDOC_TITLE_BOXES`, and is `false` without it.
+The distinction is worth passing on: a routing trigger knows a region is
+unreadable but not what it is, and a model left to judge transcribes some
+grids as one value per line — which reads as a plausible answer and scores
+zero for structure.
 
 **Render on an opaque background.** If you rasterize pages yourself rather
 than using `render-routed`, note that a transparent background flattens to
