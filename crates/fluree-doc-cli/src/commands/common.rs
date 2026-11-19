@@ -63,9 +63,9 @@ pub(crate) fn stem_of(pdf: &Path) -> &str {
     pdf.file_stem().and_then(|x| x.to_str()).unwrap_or("doc")
 }
 
-/// The crop render scale and margin, the library's: the crops `render-routed`
+/// The crop render scale, the library's: the crops `render-routed`
 /// writes and the ones `convert --escalate` sends are the same pixels.
-pub(crate) use fluree_doc_pdf::escalate::{CROP_MARGIN, VLM_RENDER_SCALE};
+pub(crate) use fluree_doc_pdf::escalate::VLM_RENDER_SCALE;
 
 /// An opened OCR engine, shared by every document of a run.
 #[derive(Clone)]

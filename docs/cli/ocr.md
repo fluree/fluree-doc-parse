@@ -12,7 +12,7 @@ is the middle step of the three-step path, for when the crops, the reading and
 the conversion run in different places or at different times:
 
 ```bash
-fdoc dev render-routed report.pdf crops/ --ocr-regions
+fdoc dev render-routed report.pdf crops/ --ocr-regions --stored-resolution
 fdoc ocr crops/ --models ~/assets/ocr --out words/
 fdoc convert report.pdf --ocr-words words/
 ```

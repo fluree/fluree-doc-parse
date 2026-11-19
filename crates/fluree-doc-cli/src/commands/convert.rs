@@ -611,7 +611,15 @@ fn convert_bytes(
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
     let injected = if let Some(engine) = &cfg.ocr {
-        let pass = fluree_doc_pdf::ocr::read_pages(&mut doc, &raw, engine.0.as_ref(), pages);
+        // At the stored resolution of what is under each crop (#11): an
+        // engine reads small text a 2× render loses.
+        let pass = fluree_doc_pdf::ocr::read_pages(
+            &mut doc,
+            &raw,
+            engine.0.as_ref(),
+            pages,
+            fluree_doc_pdf::escalate::CropScale::Stored,
+        );
         for (crop, e) in &pass.failed {
             if !quiet {
                 eprintln!("warning: --ocr: {stem}_{crop}: {e}");

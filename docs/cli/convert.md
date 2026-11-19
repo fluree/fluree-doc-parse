@@ -88,10 +88,15 @@ no longer needed.
 engine (or with [`fdoc ocr`](ocr.md)), then convert with the words:
 
 ```bash
-fdoc dev render-routed scan.pdf crops/ --ocr-regions
+fdoc dev render-routed scan.pdf crops/ --ocr-regions --stored-resolution
 your-ocr crops/ --out words/          # or: fdoc ocr crops/ --models ~/assets/ocr --out words/
 fdoc convert scan.pdf --ocr-words words/
 ```
+
+Each crop is read at the resolution of the image under it, between 2× and
+300 dpi (`--stored-resolution` on `render-routed`; see [producing the
+crops](../integration/escalation-tiers.md#producing-the-crops)), where a model
+gets 2×.
 
 What either reads is the same: the pages whose text is pixels (scanned,
 near-blank, broken text), whole, and on other pages the raster regions the

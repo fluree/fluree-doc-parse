@@ -265,7 +265,12 @@ mod tests {
             glyphs: v,
             images: images
                 .into_iter()
-                .map(|(bbox, texty)| ImagePlacement { bbox, texty })
+                .map(|(bbox, texty)| ImagePlacement {
+                    bbox,
+                    texty,
+                    ppi: None,
+                    bitonal: false,
+                })
                 .collect(),
             rules: Vec::new(),
             fills: Vec::new(),
