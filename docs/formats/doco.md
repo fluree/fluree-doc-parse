@@ -181,6 +181,9 @@ saying 99% of it was missing.
 
 `reason` is the router's verdict: `Scanned`, `NearBlank` or `BrokenText`.
 Escalating the page clears the entry, because then something did read it.
+Or it is `LaterPage`: a page after the first of a multi-page image file (a
+TIFF), which nothing reads. Such a page has no entry in `doc:pages`, which
+holds the one page read, so its `pageIndex` joins to nothing there.
 
 Deliberately not an element. A marker element would have to carry text to be
 visible, and inventing text puts characters into the projection that every

@@ -140,6 +140,22 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         };
     }
 
+    // Readings are looked up by stem: two inputs of one stem (`report.pdf`
+    // and `report.png`) would each find the other's.
+    if (cfg.ocr_words.is_some() || cfg.tier_results.is_some()) && !quiet {
+        let mut seen: std::collections::HashMap<&str, &Path> = Default::default();
+        for f in &files {
+            let stem = common::stem_of(f);
+            if let Some(other) = seen.insert(stem, f) {
+                eprintln!(
+                    "warning: {} and {} share the name {stem}: readings looked up by it may be the other's",
+                    other.display(),
+                    f.display()
+                );
+            }
+        }
+    }
+
     if files.is_empty() {
         eprintln!("error: no PDF inputs found");
         return 2;
@@ -448,7 +464,12 @@ fn file_name(
     candidate
 }
 
-/// A bare image: one page of pixels, and only the deep reader can read it.
+/// A bare image: one page of pixels, read by an OCR engine or a model.
+///
+/// With an OCR engine (`--ocr`), or the words one wrote (`--ocr-words`,
+/// `<stem>_p0_full.json` or `<stem>.json`), its words are laid out like a
+/// scanned page's. Otherwise, or where OCR read nothing, only the deep reader
+/// can read it.
 ///
 /// Every other source has a deterministic reading to fall back on. This one
 /// has none, so with no reader configured the honest output is nothing — and
@@ -463,8 +484,42 @@ fn convert_image(
 ) -> Result<String, String> {
     let stem = src.stem;
     let format = fluree_doc_pdf::image::Format::sniff(&data).ok_or("not a recognised image")?;
-    let doc = fluree_doc_pdf::image::as_document(&data)
+    // Upright: a phone photo's page is the size the reader sees it at, as
+    // OCR's is. Only the header is read.
+    let header = fluree_doc_image::header(&data).ok();
+    let pages = header.map_or(1, |h| h.pages);
+    if pages > 1 && !quiet {
+        eprintln!("warning: {stem}: only the first of its {pages} pages is read");
+    }
+    // A model may read what OCR leaves unread, as on a scanned PDF page.
+    let model_after = cfg.escalate && cfg.tier_results.is_none();
+    if cfg.ocr.is_some() || cfg.ocr_words.is_some() {
+        match ocr_image(&data, header, src, cfg, quiet) {
+            Ok(read) if read.read_something || !model_after => {
+                if let (Some(note), false) = (read.notes.summary(), quiet) {
+                    eprintln!("warning: {note}");
+                }
+                return Ok(render(&read.elements, src, args, read.sizes, &read.notes));
+            }
+            Ok(_) => {
+                if !quiet {
+                    eprintln!("note: {stem}: OCR read nothing; the configured model reads it");
+                }
+            }
+            Err(e) if model_after => {
+                if !quiet {
+                    eprintln!("warning: {stem}: {e}; the configured model reads it");
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let (w, h) = header
+        .map(|h| (h.width, h.height))
+        .or_else(|| fluree_doc_pdf::image::dimensions(&data))
+        .filter(|&(w, h)| w > 0 && h > 0)
         .ok_or_else(|| format!("{} header declares no usable size", format.mime()))?;
+    let doc = fluree_doc_pdf::image::page_of(w, h, false);
     let sizes: Vec<fluree_doc_model::PageSize> = doc
         .pages
         .iter()
@@ -476,30 +531,40 @@ fn convert_image(
         })
         .collect();
     let mut elements: Vec<Element> = Vec::new();
-    if cfg.escalate {
-        let readings = crate::escalate::read_image(
-            std::path::Path::new(stem),
-            &data,
-            format.mime(),
-            &cfg.config,
-            cfg.verbose,
-        )?;
-        if !readings.is_empty() {
-            // One synthetic element for the splice to replace, so the image
-            // travels the same page-tier path a scanned PDF page does.
-            elements.push(Element {
-                bbox: Some(doc.pages[0].images[0].bbox),
-                ..Element::new("doco:Paragraph", String::new(), "rust", "layout")
-            });
-            fluree_doc_pdf::arbiter::splice_with_page(
-                &mut elements,
-                stem,
-                &readings,
-                None,
-                &[Vec::new()],
-            );
-            elements.retain(|e| !e.text.trim().is_empty());
-        }
+    // A reading someone already has (`--tier-results`, `<stem>_p0_full.json`),
+    // else the configured reader, as for a scanned PDF page.
+    let readings: Option<Box<dyn fluree_doc_pdf::arbiter::TierBackend>> =
+        if let Some(dir) = cfg.tier_results.as_deref() {
+            Some(Box::new(fluree_doc_pdf::arbiter::FixtureBackend::new(
+                dir.to_path_buf(),
+            )))
+        } else if cfg.escalate {
+            let readings = crate::escalate::read_image(
+                std::path::Path::new(stem),
+                &data,
+                format.mime(),
+                &cfg.config,
+                cfg.verbose,
+            )?;
+            (!readings.is_empty()).then(|| Box::new(readings) as Box<_>)
+        } else {
+            None
+        };
+    if let Some(readings) = readings {
+        // One synthetic element for the splice to replace, so the image
+        // travels the same page-tier path a scanned PDF page does.
+        elements.push(Element {
+            bbox: Some(doc.pages[0].images[0].bbox),
+            ..Element::new("doco:Paragraph", String::new(), "rust", "layout")
+        });
+        fluree_doc_pdf::arbiter::splice_with_page(
+            &mut elements,
+            stem,
+            readings.as_ref(),
+            None,
+            &[Vec::new()],
+        );
+        elements.retain(|e| !e.text.trim().is_empty());
     }
     if elements.is_empty() && !quiet {
         eprintln!(
@@ -508,20 +573,181 @@ fn convert_image(
         );
         eprintln!(
             "      {}",
-            if cfg.escalate {
+            if cfg.tier_results.is_some() {
+                "--tier-results holds no reading of it (`<stem>_p0_full.json`)"
+            } else if cfg.escalate {
                 "the reader returned nothing for it"
             } else {
                 "run `fdoc config gemini --credentials <key.json>` to enable one"
             }
         );
     }
-    Ok(render(
-        &elements,
-        src,
-        args,
+    // An image nothing read is listed unread, so the output says so too. A
+    // reading of the whole image read it, however short.
+    let mut unread = if elements.is_empty() {
+        fluree_doc_pdf::unread_pages(&doc, &elements)
+    } else {
+        Vec::new()
+    };
+    unread.extend(later_pages(pages));
+    let notes = fluree_doc_model::Notes {
+        unread,
+        ..Default::default()
+    };
+    Ok(render(&elements, src, args, sizes, &notes))
+}
+
+/// What OCR made of a bare image.
+struct ImageOcr {
+    elements: Vec<Element>,
+    sizes: Vec<fluree_doc_model::PageSize>,
+    notes: fluree_doc_model::Notes,
+    /// Some word was taken, or a reading spliced over the page.
+    read_something: bool,
+}
+
+/// A bare image read by OCR: its words laid on a one-page document and
+/// analysed like a scanned page. An engine reads the image decoded upright;
+/// words already read (`--ocr-words`) need only its header for the page.
+fn ocr_image(
+    data: &[u8],
+    header: Option<fluree_doc_image::Header>,
+    src: &Source,
+    cfg: &TierConfig,
+    quiet: bool,
+) -> Result<ImageOcr, String> {
+    let stem = src.stem;
+    let (mut doc, flag, injected) = match &cfg.ocr {
+        Some(engine) => {
+            let image = fluree_doc_image::decode(data)?;
+            if image.truncated && !quiet {
+                eprintln!(
+                    "warning: {stem}: the file ends before its image does; part of it may be blank"
+                );
+            }
+            let mut doc = fluree_doc_image::document(&image);
+            let reading = engine
+                .0
+                .read(&image.pixels)
+                .map_err(|e| format!("--ocr: {e}"))?;
+            let page = fluree_doc_pdf::ocr::Crop::Page;
+            let injected = fluree_doc_pdf::ocr::inject(&mut doc, &[(0, page, reading)]);
+            (doc, "--ocr", injected)
+        }
+        None => {
+            let h = header.ok_or("the image's header could not be read")?;
+            let mut doc = fluree_doc_pdf::image::page_of(h.width, h.height, h.bitonal);
+            let dir = cfg.ocr_words.as_deref().expect("words or an engine");
+            // The words of its crop (`<stem>_p0_full.json`), or of the
+            // image file (`<stem>.json`, as `fdoc ocr` names them): in a
+            // directory shared with a PDF of the same stem, the one read on
+            // this image is the one sized as it is.
+            let mut readings = common::ocr_readings(dir, stem, &doc, quiet);
+            readings.extend(image_words(dir, stem, quiet));
+            let sized = |r: &fluree_doc_pdf::ocr::WordReading| {
+                r.coords == fluree_doc_pdf::ocr::Coords::Pdf
+                    || (r.width, r.height) == (Some(f64::from(h.width)), Some(f64::from(h.height)))
+            };
+            let pages = readings
+                .iter()
+                .filter(|r| r.1 == fluree_doc_pdf::ocr::Crop::Page)
+                .count();
+            if let Some(k) = readings.iter().position(|r| sized(&r.2)) {
+                readings = vec![readings.swap_remove(k)];
+            } else if !readings.is_empty() {
+                if !quiet {
+                    eprintln!(
+                        "warning: --ocr-words: {stem}: no reading is sized as the image ({} × {}): none read",
+                        h.width, h.height
+                    );
+                }
+                readings.clear();
+            }
+            if pages > 1 && !quiet {
+                eprintln!(
+                    "warning: --ocr-words: {stem}: both {stem}_p0_full.json and {stem}.json; read the one sized as the image"
+                );
+            }
+            let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+            (doc, "--ocr-words", injected)
+        }
+    };
+    report_ocr(stem, flag, &injected, cfg.verbose, quiet);
+    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for(stem));
+    // Readings someone already has (`--tier-results`, `--structure-results`)
+    // replace what OCR made of the page, as on a PDF page.
+    let page_text: Vec<Vec<String>> = doc
+        .pages
+        .iter()
+        .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
+        .collect();
+    common::apply_tiers(
+        cfg.tier_results.as_deref(),
+        cfg.structure_results.as_deref(),
+        stem,
+        &mut a.elements,
+        &page_text,
+        &a.furniture,
+    );
+    fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
+    let sizes = doc
+        .pages
+        .iter()
+        .map(|p| fluree_doc_model::PageSize {
+            index: p.index,
+            width: p.width,
+            height: p.height,
+            folio: None,
+        })
+        .collect();
+    let unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    let read_something = unread.is_empty();
+    let mut notes = fluree_doc_model::Notes {
+        unread,
+        ..Default::default()
+    };
+    // The pages after the first of a multi-page TIFF, never read.
+    notes
+        .unread
+        .extend(later_pages(header.map_or(1, |h| h.pages)));
+    Ok(ImageOcr {
+        elements: a.elements,
         sizes,
-        &fluree_doc_model::Notes::default(),
-    ))
+        notes,
+        read_something,
+    })
+}
+
+/// The pages after the first of a file of `pages` (a multi-page TIFF): never
+/// read, so listed unread, for the output to say so.
+fn later_pages(pages: usize) -> impl Iterator<Item = fluree_doc_model::UnreadPage> {
+    (1..pages).map(|index| fluree_doc_model::UnreadPage {
+        index,
+        reason: "LaterPage".into(),
+    })
+}
+
+/// The words `fdoc ocr` read from the image file itself: `<stem>.json`.
+fn image_words(
+    dir: &Path,
+    stem: &str,
+    quiet: bool,
+) -> Option<(
+    usize,
+    fluree_doc_pdf::ocr::Crop,
+    fluree_doc_pdf::ocr::WordReading,
+)> {
+    let path = dir.join(format!("{stem}.json"));
+    let text = std::fs::read_to_string(&path).ok()?;
+    match fluree_doc_pdf::ocr::WordReading::from_json(&text) {
+        Ok(r) => Some((0, fluree_doc_pdf::ocr::Crop::Page, r)),
+        Err(e) => {
+            if !quiet {
+                eprintln!("warning: --ocr-words: {}: {e}", path.display());
+            }
+            None
+        }
+    }
 }
 
 /// Emit an element stream in the requested format. Shared by every source.

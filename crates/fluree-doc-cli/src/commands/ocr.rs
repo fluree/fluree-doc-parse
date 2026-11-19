@@ -125,7 +125,14 @@ fn images(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
                 .as_str()
                 .is_some_and(|r| OCR_REASONS.contains(&r))
             {
-                out.push(input.join(png));
+                let path = input.join(png);
+                if out.contains(&path) {
+                    return Err(format!(
+                        "{}: lists {png} twice (two inputs of one name cropped into one directory?)",
+                        manifest.display()
+                    ));
+                }
+                out.push(path);
             }
         }
     }
@@ -231,9 +238,22 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
 
 #[cfg(feature = "ocr")]
 fn read_one(engine: &dyn OcrEngine, path: &Path, out: &Path) -> Result<(String, usize), String> {
-    let pixels = fluree_doc_vision::oar::load_pixels(path)?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let image = fluree_doc_image::decode(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    if image.more_pages {
+        eprintln!(
+            "warning: {}: only the first page of a multi-page image is read",
+            path.display()
+        );
+    }
+    if image.truncated {
+        eprintln!(
+            "warning: {}: the file ends before its image does; part of it may be blank",
+            path.display()
+        );
+    }
     let reading = engine
-        .read(&pixels)
+        .read(&image.pixels)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     let stem = path
         .file_stem()
@@ -271,6 +291,17 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(got, ["a_p0_full.png", "a_p2_r0.png", "a_p2_r1.png"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_manifest_naming_a_crop_twice_is_refused_by_name() {
+        let dir = std::env::temp_dir().join(format!("fdoc-ocr-twice-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = r#"{"doc":"a","kind":"page","page":0,"png":"a_p0_full.png","reason":"scanned"}"#;
+        std::fs::write(dir.join("manifest.jsonl"), format!("{line}\n{line}\n")).unwrap();
+        let e = images(std::slice::from_ref(&dir)).unwrap_err();
+        assert!(e.contains("lists a_p0_full.png twice"), "{e}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

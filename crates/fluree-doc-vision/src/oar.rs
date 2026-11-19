@@ -326,15 +326,6 @@ fn quad_box(p: [(f64, f64); 4]) -> ([f64; 4], f64) {
 /// PaddleOCR's).
 const TALL_LINE: f64 = 1.5;
 
-/// Decode an image file (PNG, JPEG, TIFF, …) into [`Pixels`].
-pub fn load_pixels(path: &Path) -> Result<Pixels, String> {
-    let img = image::open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .to_rgba8();
-    let (w, h) = img.dimensions();
-    Pixels::new(w, h, img.into_raw()).ok_or_else(|| format!("{}: empty image", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

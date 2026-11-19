@@ -1,0 +1,16 @@
+[package]
+name = "fluree-doc-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A bare image (PNG, JPEG, TIFF) read as a one-page document: decoded upright, its words read by an OCR engine, laid out like a scanned page"
+
+[dependencies]
+fluree-doc-model.workspace = true
+fluree-doc-pdf = { path = "../fluree-doc-pdf" }
+fluree-doc-vision.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+
+[dev-dependencies]
+png = "0.17"
+tiff = "0.11"
