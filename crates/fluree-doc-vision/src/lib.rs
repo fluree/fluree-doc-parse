@@ -2,13 +2,61 @@
 //!
 //! A document's text is not always characters: a scanned page, a screenshot
 //! pasted into a report, a photographed form in an e-mail. This crate holds
-//! what every format needs to have such pixels read, and nothing that reads
-//! them: the format an OCR engine's words come in ([`WordReading`]), which is
-//! also the `--ocr-words` sidecar format. Laying the words out as text is the
-//! layout engine's job (`fluree_doc_pdf::ocr`), and running an engine is the
-//! caller's.
+//! what every format needs to have such pixels read:
+//!
+//! - the format an OCR engine's words come in ([`WordReading`]), which is
+//!   also the `--ocr-words` sidecar format;
+//! - the interface of an engine ([`OcrEngine`]), which reads an image held
+//!   in memory ([`Pixels`]) into that format;
+//! - with the `oar` feature, a built-in engine ([`oar::OarEngine`]):
+//!   PP-OCRv6 through oar-ocr, on an ONNX Runtime loaded from an assets
+//!   directory rather than linked in.
+//!
+//! Laying the words out as text is the layout engine's job
+//! (`fluree_doc_pdf::ocr`).
 
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "oar")]
+pub mod assets;
+#[cfg(feature = "oar")]
+pub mod oar;
+
+/// An image held in memory: 8-bit RGBA, rows top to bottom, no padding.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pixels {
+    pub width: u32,
+    pub height: u32,
+    /// `width * height * 4` bytes.
+    pub rgba: Vec<u8>,
+}
+
+impl Pixels {
+    /// `None` when the buffer does not hold `width * height` pixels.
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Option<Pixels> {
+        (width > 0 && height > 0 && rgba.len() == width as usize * height as usize * 4).then_some(
+            Pixels {
+                width,
+                height,
+                rgba,
+            },
+        )
+    }
+}
+
+/// An OCR engine: reads one image into words with their boxes.
+///
+/// The reading is in pixels of the image read ([`Coords::Px`], with its
+/// `width` and `height` set), in whatever unit the engine boxes: words or
+/// whole lines. `Send + Sync`, because a caller reads several crops at once
+/// with one engine, loaded once.
+pub trait OcrEngine: Send + Sync {
+    /// The engine's name, recorded in each reading as `engine`.
+    fn name(&self) -> &str;
+
+    /// Read one image.
+    fn read(&self, image: &Pixels) -> Result<WordReading, String>;
+}
 
 /// One word, or one line, as an OCR engine read it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

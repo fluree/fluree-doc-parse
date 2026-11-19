@@ -32,5 +32,6 @@ pub(crate) fn hints(
             .map(|p| (p.index, layout_tables(layout_boxes, stem, p.index)))
             .filter(|(_, boxes)| !boxes.is_empty())
             .collect(),
+        regions_apart: false,
     }
 }

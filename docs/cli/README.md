@@ -7,6 +7,7 @@ fdoc <command> [options]
 | command | what it does |
 |---|---|
 | [`convert`](convert.md) | documents → Markdown, XHTML, JSON, DoCO JSON-LD or text |
+| [`ocr`](ocr.md) | crops or images → OCR word files, with the built-in engine |
 | [`forms`](forms.md) | AcroForm fields with their filled values |
 | [`triage`](triage.md) | which pages would escalate, and why |
 | [`dev`](dev.md) | pipeline internals, for debugging (**unstable**) |

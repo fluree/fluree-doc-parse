@@ -52,7 +52,7 @@ fdoc dev <SUBCOMMAND> [args]
 | command | shows |
 |---|---|
 | `render-pages <path> [out]` | every page to PNG at 2× |
-| `render-routed <path> [out]` | routed pages/regions to PNG crops with a splice manifest |
+| `render-routed <path> [out] [--ocr-regions]` | routed pages/regions to PNG crops with a splice manifest; `--ocr-regions` adds the regions too small for a model, which an OCR engine reads |
 
 **Timing**
 

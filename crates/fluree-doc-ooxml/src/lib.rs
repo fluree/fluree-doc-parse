@@ -59,7 +59,11 @@ impl<'a> Package<'a> {
 
     /// Every part's name, in archive order.
     pub fn part_names(&self) -> Vec<String> {
-        self.zip.file_names().map(str::to_string).collect()
+        // A name the archive cannot decode names no part a reader can ask for.
+        self.zip
+            .file_names()
+            .filter_map(|n| n.ok().map(|n| n.into_owned()))
+            .collect()
     }
 
     /// A part's relationships, each internal target resolved to a part name.

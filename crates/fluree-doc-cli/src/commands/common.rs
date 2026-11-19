@@ -67,6 +67,16 @@ pub(crate) fn stem_of(pdf: &Path) -> &str {
 /// writes and the ones `convert --escalate` sends are the same pixels.
 pub(crate) use fluree_doc_pdf::escalate::{CROP_MARGIN, VLM_RENDER_SCALE};
 
+/// An opened OCR engine, shared by every document of a run.
+#[derive(Clone)]
+pub(crate) struct OcrHandle(pub std::sync::Arc<dyn fluree_doc_vision::OcrEngine>);
+
+impl std::fmt::Debug for OcrHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OcrHandle({})", self.0.name())
+    }
+}
+
 /// Where the optional model tiers read their sidecar files from. Flags
 /// override the corresponding `FDOC_*` environment variables; the environment
 /// remains so benchmark harnesses can configure tiers without touching the
@@ -78,6 +88,8 @@ pub(crate) struct TierConfig {
     pub structure_results: Option<PathBuf>,
     /// OCR word readings, added as glyphs before analysis.
     pub ocr_words: Option<PathBuf>,
+    /// An OCR engine reading routed pixels in this run, opened once.
+    pub ocr: Option<OcrHandle>,
     pub emit_anchors: bool,
     /// Call the configured reader during this run.
     pub escalate: bool,
@@ -95,6 +107,7 @@ impl TierConfig {
             tier_results: std::env::var_os("FDOC_TIER_RESULTS").map(PathBuf::from),
             structure_results: std::env::var_os("FDOC_STRUCTURE_RESULTS").map(PathBuf::from),
             ocr_words: std::env::var_os("FDOC_OCR_WORDS").map(PathBuf::from),
+            ocr: None,
             emit_anchors: std::env::var_os("FDOC_VLM_ANCHORS").is_some(),
             escalate: false,
             config: crate::config::Config::default(),
@@ -118,6 +131,7 @@ impl TierConfig {
                 .map(Path::to_path_buf)
                 .or(env.structure_results),
             ocr_words: ocr_words.map(Path::to_path_buf).or(env.ocr_words),
+            ocr: None,
             emit_anchors: emit_anchors || env.emit_anchors,
             escalate: env.escalate,
             config: env.config,
@@ -349,13 +363,10 @@ pub(crate) fn ocr_readings(
     fluree_doc_pdf::ocr::WordReading,
 )> {
     use fluree_doc_pdf::ocr::{Crop, WordReading};
-    use fluree_doc_pdf::route::{decide, Route};
     let mut out = Vec::new();
     for p in &doc.pages {
-        let regions = match decide(p).0 {
-            Route::VlmRegions(r) => r.len(),
-            _ => 0,
-        };
+        // Small regions too: an engine reads what a model call would not pay for.
+        let regions = fluree_doc_pdf::route::ocr_regions(p).len();
         let crops = std::iter::once(Crop::Page).chain((0..regions).map(Crop::Region));
         for crop in crops {
             let name = format!("{stem}_p{}_{}.json", p.index, crop.tag());

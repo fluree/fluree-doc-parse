@@ -171,9 +171,18 @@ uses [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark) (MIT),
 and the OOXML readers use [quick-xml](https://github.com/tafia/quick-xml) and
 [zip](https://github.com/zip-rs/zip2) (both MIT).
 
-No model code is linked and no weights ship here. Model readings enter
-through two doors: a deep reader configured over HTTPS, or JSON sidecars
-from any layout detector or reader you run yourself. The committed `eval/`
+No weights ship here. Model readings enter through three doors: a deep
+reader configured over HTTPS, JSON sidecars from any layout detector or
+reader you run yourself, and the built-in OCR engine. That engine links
+[oar-ocr](https://github.com/GreatV/oar-ocr) (Apache-2.0), with the
+[ort](https://github.com/pykeio/ort) bindings and
+[image](https://github.com/image-rs/image) (both MIT OR Apache-2.0); it can
+be left out by building `fdoc` without its `ocr` feature. ONNX Runtime (MIT)
+and the PP-OCRv6 models (Apache-2.0) it runs on are neither linked nor
+redistributed: they are loaded at run time from an assets directory, checked
+against the hashes `fdoc` is built with, which `tools/ocr-assets/build.py` builds from the
+publishers' own files, with their licences and a CycloneDX fragment declaring
+them for an SBOM. The committed `eval/`
 caches — kept so every published score reproduces without a GPU or an API
 key — include outputs produced during evaluation with PaddleX and PaddleOCR
 models (Apache-2.0), whose code and weights are not redistributed here.

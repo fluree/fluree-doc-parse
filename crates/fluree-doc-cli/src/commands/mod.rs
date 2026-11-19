@@ -4,6 +4,7 @@ pub mod config_cmd;
 pub mod convert;
 pub mod dev;
 pub mod forms;
+pub mod ocr;
 pub mod render;
 pub mod triage;
 
@@ -13,6 +14,7 @@ use crate::cli::{Cli, Commands, ConvertArgs, DevCommands, Format};
 pub fn run(cli: Cli) -> i32 {
     match cli.command {
         Commands::Convert(args) => convert::run(&args, cli.verbose, cli.quiet),
+        Commands::Ocr(args) => ocr::run(&args, cli.verbose, cli.quiet),
         Commands::Forms { pdf } => forms::run(&pdf),
         Commands::Triage { path } => triage::run(&path),
         Commands::Config { command } => config_cmd::run(command),
@@ -49,6 +51,8 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         tier_results: None,
         structure_results: None,
         ocr_words: None,
+        ocr: None,
+        models: None,
         emit_anchors: false,
         base_iri: None,
         doc_iri: None,
@@ -86,7 +90,11 @@ fn run_dev(cmd: DevCommands) {
         DevCommands::Glyphs { pdf, page, y0, y1 } => dev::glyphs(&pdf, page, y0, y1),
         DevCommands::RenderPages { path, out } => dev::render_pages(&path, &out),
         DevCommands::Timings { path, warmup, runs } => dev::timings(&path, warmup, runs),
-        DevCommands::RenderRouted { path, out } => dev::render_routed(&path, &out),
+        DevCommands::RenderRouted {
+            path,
+            out,
+            ocr_regions,
+        } => dev::render_routed(&path, &out, ocr_regions),
         DevCommands::RenderCrops {
             manifest,
             corpus,
