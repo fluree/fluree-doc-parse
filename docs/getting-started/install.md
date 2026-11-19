@@ -17,6 +17,15 @@ target/release/fdoc --version
 target/release/fdoc convert --help
 ```
 
+The release binary carries no symbol table, which keeps it a fifth smaller.
+A panic still names the file and line it happened at; a backtrace
+(`RUST_BACKTRACE=1`) shows addresses rather than function names. To chase
+one, build with the names kept:
+
+```bash
+CARGO_PROFILE_RELEASE_STRIP=false cargo build --release
+```
+
 ## Requirements
 
 A Rust toolchain (2021 edition). That is the whole list for the deterministic
