@@ -250,6 +250,8 @@ pub enum CropReason {
     /// A raster region too small to be worth a model's call, which an OCR
     /// engine still reads (listed only when crops are made for one).
     SmallRegion,
+    /// An image placed in an Office document's flow (a DOCX's picture).
+    EmbeddedImage,
     /// A table the deterministic grid found but does not trust.
     Table,
     /// A table a layout detector found and no grid covered: text the grid
@@ -273,6 +275,7 @@ impl CropReason {
             CropReason::BrokenText => "broken_text",
             CropReason::Region => "region",
             CropReason::SmallRegion => "small_region",
+            CropReason::EmbeddedImage => "embedded_image",
             CropReason::Table => "table",
             CropReason::TableMissing => "table_missing",
             CropReason::HeadingDoubt => "heading_doubt",

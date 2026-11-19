@@ -1115,7 +1115,7 @@ pub(crate) fn render_routed(
     };
     let mut manifest =
         std::fs::File::create(outdir.join("manifest.jsonl")).expect("create manifest");
-    let (mut n_pages, mut n_crops) = (0usize, 0usize);
+    let (mut n_pages, mut n_crops, mut n_media) = (0usize, 0usize, 0usize);
     let tiers = crate::commands::common::TierConfig::from_env();
     let layout = tiers.layout_boxes.as_deref();
     // Crops are named by stem: a second input of a stem already cropped
@@ -1134,7 +1134,26 @@ pub(crate) fn render_routed(
         }
         // A bare image is one page of pixels: its crop is the image itself,
         // decoded upright, at its own resolution. Its first bytes say so;
-        // nothing else is read twice.
+        // nothing else is read twice. A DOCX's crops are the images placed
+        // in its flow, one per figure.
+        if crate::commands::common::source_kind(f)
+            == Some(crate::commands::common::SourceKind::Docx)
+        {
+            let stem = crate::commands::common::stem_of(f);
+            match std::fs::read(f)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| media_crops(&bytes, stem, outdir))
+            {
+                Ok(recs) => {
+                    n_media += recs.len();
+                    for rec in recs {
+                        writeln!(manifest, "{rec}").unwrap();
+                    }
+                }
+                Err(e) => eprintln!("warning: {}: {e}", f.display()),
+            }
+            continue;
+        }
         if is_image_file(f) {
             let stem = crate::commands::common::stem_of(f);
             match std::fs::read(f)
@@ -1315,7 +1334,7 @@ pub(crate) fn render_routed(
         });
     }
     println!(
-        "{n_pages} full pages, {n_crops} region crops -> {}",
+        "{n_pages} full pages, {n_crops} region crops, {n_media} embedded images -> {}",
         outdir.display()
     );
 }
@@ -1366,20 +1385,74 @@ fn is_image_file(path: &Path) -> bool {
     fluree_doc_pdf::image::Format::sniff(&head[..n]).is_some()
 }
 
-/// A bare image's one crop: the image decoded upright, over white where it
-/// is transparent (as the renderer draws a page), and written as PNG, with
-/// its manifest record. Its scale is 1: the page's units are its pixels.
-fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Value, String> {
-    let mut image = fluree_doc_image::decode(bytes)?;
-    // A transparent screenshot is black ink on nothing: flattened by a
-    // reader that drops the alpha channel, it would be black on black.
-    for p in image.pixels.rgba.chunks_exact_mut(4) {
+/// A DOCX's crops: each image placed in its flow, decoded upright and
+/// written as `<stem>_m<n>.png` for the figure `figure-0-<n>`, with the
+/// figure and the package part it came from. An image that is not a raster
+/// (EMF, WMF) has no crop.
+fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let (_, _, media) = fluree_doc_docx::parse_with_media(bytes).map_err(|e| e.to_string())?;
+    let mut recs = Vec::new();
+    for m in media {
+        // One image at a time, read, decoded, written and dropped.
+        let data = match fluree_doc_docx::read_media(bytes, &m.part) {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("warning: {stem}: {e}");
+                continue;
+            }
+        };
+        let mut image = match fluree_doc_image::decode(&data) {
+            Ok(image) => image,
+            // A drawing (EMF, WMF) is no raster, and has no crop; anything
+            // else that fails is worth a word.
+            Err(e) => {
+                if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
+                    eprintln!("warning: {stem}: {}: {e}", m.part);
+                }
+                continue;
+            }
+        };
+        let name = format!("{stem}_{}.png", m.tag());
+        flatten_over_white(&mut image.pixels);
+        write_rgba_png(&outdir.join(&name), &image.pixels)?;
+        recs.push(serde_json::json!({
+            "doc": stem, "kind": "media", "png": name, "figure": m.figure, "part": m.part,
+            "reason": fluree_doc_pdf::escalate::CropReason::EmbeddedImage.as_str(), "scale": 1.0,
+        }));
+    }
+    Ok(recs)
+}
+
+/// Write an image as an 8-bit RGBA PNG.
+fn write_rgba_png(path: &Path, pixels: &fluree_doc_vision::Pixels) -> Result<(), String> {
+    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), pixels.width, pixels.height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .and_then(|mut w| w.write_image_data(&pixels.rgba))
+        .map_err(|e| e.to_string())
+}
+
+/// Lay an image over white where it is transparent, as the renderer draws a
+/// page. A transparent screenshot is black ink on nothing: flattened by a
+/// reader that drops the alpha channel, it would be black on black.
+fn flatten_over_white(pixels: &mut fluree_doc_vision::Pixels) {
+    for p in pixels.rgba.chunks_exact_mut(4) {
         let a = u16::from(p[3]);
         for c in &mut p[..3] {
             *c = ((u16::from(*c) * a + 255 * (255 - a)) / 255) as u8;
         }
         p[3] = 255;
     }
+}
+
+/// A bare image's one crop: the image decoded upright, over white where it
+/// is transparent, and written as PNG, with its manifest record. Its scale
+/// is 1: the page's units are its pixels.
+fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Value, String> {
+    let mut image = fluree_doc_image::decode(bytes)?;
+    flatten_over_white(&mut image.pixels);
     let doc = fluree_doc_image::document(&image);
     let reason = match fluree_doc_pdf::route::decide(&doc.pages[0]).0 {
         fluree_doc_pdf::route::Route::Vlm(r) => fluree_doc_pdf::escalate::CropReason::from(r),
@@ -1392,17 +1465,7 @@ fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Val
         eprintln!("warning: {stem}: the file ends before its image does; part of it may be blank");
     }
     let name = format!("{stem}_p0_full.png");
-    let file = std::fs::File::create(outdir.join(&name)).map_err(|e| e.to_string())?;
-    let mut enc = png::Encoder::new(
-        std::io::BufWriter::new(file),
-        image.pixels.width,
-        image.pixels.height,
-    );
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header()
-        .and_then(|mut w| w.write_image_data(&image.pixels.rgba))
-        .map_err(|e| e.to_string())?;
+    write_rgba_png(&outdir.join(&name), &image.pixels)?;
     Ok(serde_json::json!({
         "doc": stem, "page": 0, "kind": "page", "png": name,
         "reason": reason.as_str(), "scale": 1.0,

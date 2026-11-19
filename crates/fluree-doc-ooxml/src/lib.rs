@@ -57,6 +57,29 @@ impl<'a> Package<'a> {
         Some(s)
     }
 
+    /// A part's bytes, for a binary part such as an image, at most `max` of
+    /// them. Refused, naming the part, where the package has no such part or
+    /// it holds more: a few kilobytes of archive can inflate to gigabytes, and
+    /// the size an archive declares is checked as it is read, not believed.
+    pub fn read_bytes(&mut self, part: &str, max: u64) -> Result<Vec<u8>, String> {
+        let entry = self.zip.by_name(part).map_err(|e| format!("{part}: {e}"))?;
+        if entry.size() > max {
+            return Err(format!(
+                "{part}: {} bytes uncompressed, more than the {max} read",
+                entry.size()
+            ));
+        }
+        let mut v = Vec::new();
+        entry
+            .take(max + 1)
+            .read_to_end(&mut v)
+            .map_err(|e| format!("{part}: {e}"))?;
+        if v.len() as u64 > max {
+            return Err(format!("{part}: more than the {max} bytes read"));
+        }
+        Ok(v)
+    }
+
     /// Every part's name, in archive order.
     pub fn part_names(&self) -> Vec<String> {
         // A name the archive cannot decode names no part a reader can ask for.
@@ -154,7 +177,8 @@ pub fn relationships(rels_xml: &str, source: &str) -> Vec<Relationship> {
                     target: if external {
                         target
                     } else {
-                        resolve_part(dir, &target)
+                        // Some writers separate segments with backslashes.
+                        resolve_part(dir, &target.replace('\\', "/"))
                     },
                     external,
                 });
@@ -306,6 +330,25 @@ mod tests {
             "ppt/slides/_rels/slide3.xml.rels"
         );
         assert_eq!(rels_part(""), "_rels/.rels");
+    }
+
+    #[test]
+    fn a_target_written_with_backslashes_resolves_as_with_slashes() {
+        let rels = r#"<Relationships>
+            <Relationship Id="a" Target="media\image1.png"/>
+            <Relationship Id="b" Target="..\word\media\image2.png"/>
+            <Relationship Id="c" Target="\word\media\image3.png"/>
+        </Relationships>"#;
+        let r = relationships(rels, "word/document.xml");
+        let t: Vec<&str> = r.iter().map(|r| r.target.as_str()).collect();
+        assert_eq!(
+            t,
+            [
+                "word/media/image1.png",
+                "word/media/image2.png",
+                "word/media/image3.png"
+            ]
+        );
     }
 
     #[test]

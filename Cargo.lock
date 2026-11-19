@@ -954,14 +954,18 @@ dependencies = [
  "toml",
  "toml_edit",
  "ureq",
+ "zip",
 ]
 
 [[package]]
 name = "fluree-doc-docx"
 version = "0.1.0"
 dependencies = [
+ "fluree-doc-image",
  "fluree-doc-model",
  "fluree-doc-ooxml",
+ "fluree-doc-vision",
+ "image",
  "quick-xml",
  "zip",
 ]

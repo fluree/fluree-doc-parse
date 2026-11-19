@@ -328,21 +328,87 @@ pub struct ImageElements {
 
 /// Decode an image, read it and analyse it.
 pub fn elements(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageElements, String> {
-    let mut read = read(bytes, engine)?;
-    let page = &read.doc.pages[0];
+    let image = decode(bytes)?;
+    let reading = engine.read(&image.pixels)?;
+    Ok(analysed(document(&image), image.more_pages, reading))
+}
+
+/// As [`elements`], from the words an engine already read in the image
+/// (decoded upright, as [`decode`] gives it). Only the image's header is
+/// read, for the page the words are on.
+pub fn elements_from_words(
+    bytes: &[u8],
+    reading: fluree_doc_vision::WordReading,
+) -> Result<ImageElements, String> {
+    // Only the header: the words are already read.
+    let h = header(bytes)?;
+    let doc = fluree_doc_pdf::image::page_of(h.width, h.height, h.bitonal);
+    Ok(analysed(doc, h.pages > 1, reading))
+}
+
+fn analysed(
+    mut doc: Document,
+    more_pages: bool,
+    reading: fluree_doc_vision::WordReading,
+) -> ImageElements {
+    let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+    let page = &doc.pages[0];
     let size = fluree_doc_model::PageSize {
         index: 0,
         width: page.width,
         height: page.height,
         folio: None,
     };
-    let mut analysis = fluree_doc_pdf::document::analyze(&mut read.doc, &[]);
-    ocr::mark_provenance(&mut analysis.elements, &read.injected);
-    Ok(ImageElements {
+    let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+    ocr::mark_provenance(&mut analysis.elements, &injected);
+    ImageElements {
         elements: analysis.elements,
         size,
-        more_pages: read.more_pages,
-    })
+        more_pages,
+    }
+}
+
+/// Place the text read from a document's images in its flow, each image's
+/// elements right after the figure it is drawn as (`Element::figure`).
+///
+/// They take the figure's page. Their boxes are the image's own pixels,
+/// which mean nothing on a page without geometry, so they are dropped. A
+/// heading read in a screenshot is a heading of the screen, not of the
+/// document: it is read as a paragraph, so the document's outline stays its
+/// own. Tables stay tables. Ids are renumbered in order.
+pub fn place_after_figures(
+    elements: &mut Vec<fluree_doc_model::Element>,
+    readings: Vec<(String, Vec<fluree_doc_model::Element>)>,
+) {
+    if readings.is_empty() {
+        return;
+    }
+    // A figure may hold several images (a group of pictures): their texts
+    // follow it in order.
+    let mut by_figure: std::collections::HashMap<String, Vec<fluree_doc_model::Element>> =
+        std::collections::HashMap::new();
+    for (figure, read) in readings {
+        by_figure.entry(figure).or_default().extend(read);
+    }
+    let mut out = Vec::with_capacity(elements.len());
+    for e in elements.drain(..) {
+        let read = e.figure.as_ref().and_then(|f| by_figure.remove(f));
+        let page = e.page;
+        out.push(e);
+        for mut r in read.into_iter().flatten() {
+            r.page = page;
+            r.bbox = None;
+            if r.kind != "doco:Table" {
+                r.kind = "doco:Paragraph".into();
+                r.level = None;
+            }
+            out.push(r);
+        }
+    }
+    for (i, e) in out.iter_mut().enumerate() {
+        e.id = format!("elem-{:05}", i + 1);
+    }
+    *elements = out;
 }
 
 #[cfg(test)]
@@ -409,6 +475,69 @@ mod tests {
         assert!(
             elements.iter().all(|e| e.provenance == "ocr"),
             "{elements:?}"
+        );
+    }
+
+    #[test]
+    fn an_images_text_follows_its_figure() {
+        use fluree_doc_model::Element;
+        let mut figure = Element::new("doco:Figure", "A screenshot", "docx", "docx");
+        figure.figure = Some("figure-0-1".into());
+        // The figure's page, which the image's text takes for its own.
+        figure.page = 3;
+        let mut els = vec![
+            Element::new("doco:Paragraph", "See below.", "docx", "docx"),
+            figure,
+            Element::new("doco:Paragraph", "After.", "docx", "docx"),
+        ];
+        let read = elements(&png(600, 400), &TwoLines).unwrap().elements;
+        assert!(read.iter().all(|e| e.bbox.is_some()));
+        place_after_figures(&mut els, vec![("figure-0-1".into(), read)]);
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts[0..2], ["See below.", "A screenshot"]);
+        assert_eq!(texts.last(), Some(&"After."));
+        assert!(
+            texts[2..texts.len() - 1].join(" ").contains("4417-0093-21"),
+            "{texts:?}"
+        );
+        assert!(els[2..els.len() - 1]
+            .iter()
+            .all(|e| e.bbox.is_none() && e.provenance == "ocr" && e.page == 3));
+        let ids: std::collections::HashSet<&str> = els.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids.len(), els.len());
+    }
+
+    #[test]
+    fn a_heading_in_a_picture_is_a_paragraph_of_the_document() {
+        // A screen's title is no section of the document; a table stays one.
+        // Two images of one figure (a group) follow it in order.
+        use fluree_doc_model::Element;
+        let mut figure = Element::new("doco:Figure", "", "docx", "docx");
+        figure.figure = Some("figure-0-1".into());
+        let mut els = vec![figure];
+        let mut heading = Element::new("doco:SectionTitle", "Account summary", "rust", "ocr");
+        heading.level = Some(1);
+        let table = Element::new("doco:Table", "a | b", "rust", "ocr");
+        let after = Element::new("doco:Paragraph", "Second screen", "rust", "ocr");
+        place_after_figures(
+            &mut els,
+            vec![
+                ("figure-0-1".into(), vec![heading, table]),
+                ("figure-0-1".into(), vec![after]),
+            ],
+        );
+        let got: Vec<(&str, &str, Option<usize>)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str(), e.level))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:Figure", "", None),
+                ("doco:Paragraph", "Account summary", None),
+                ("doco:Table", "a | b", None),
+                ("doco:Paragraph", "Second screen", None),
+            ]
         );
     }
 
