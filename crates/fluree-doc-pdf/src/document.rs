@@ -1101,7 +1101,36 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let marks = timed(&mut timings.furniture, || furniture::detect(&flat_lines));
+    let mut marks = timed(&mut timings.furniture, || furniture::detect(&flat_lines));
+    // A line OCR read is never furniture. Repetition is furniture's only
+    // evidence, and on a scan the same content repeats for its own reasons: a
+    // fax that sends one ID card on every page, a form copied per applicant.
+    // Marked, its text would leave the body and its pattern be scrubbed from
+    // every table cell. A page number left in the body costs a line.
+    for (pi, page_marks) in marks.iter_mut().enumerate() {
+        let page = &raw.pages[pi];
+        if page.ocr.is_none() {
+            continue;
+        }
+        // By the ink inside the line's box: a line's glyph indices point into
+        // the glyphs it was assembled from (the page's outside its grids),
+        // not into the page's.
+        page_marks.retain(|li, _| {
+            let b = flat_lines[pi].0[*li].bbox;
+            let (mut ocr, mut all) = (0usize, 0usize);
+            for g in &page.glyphs {
+                let Some(gb) = g.bbox else { continue };
+                if g.text.trim().is_empty()
+                    || !b.contains((gb.x0 + gb.x1) * 0.5, (gb.y0 + gb.y1) * 0.5)
+                {
+                    continue;
+                }
+                all += 1;
+                ocr += usize::from(page.is_ocr(g));
+            }
+            all == 0 || ocr * 2 < all
+        });
+    }
     // The folio is read from the page's edges over *every* glyph, not from
     // the lines left after grids took theirs: a form's key/value grid that
     // runs down into the footer band takes the footer's glyphs with it, and
@@ -1683,6 +1712,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         if opts.emit_anchors {
             if let crate::route::Route::VlmRegions(regions) = &layout.route {
                 for (ri, b) in regions.iter().enumerate() {
+                    // A region OCR read is text now; its number stays taken.
+                    if raw.pages[pi].ocr_read_region(ri) {
+                        continue;
+                    }
                     table_elements.push(Element {
                         page: pi,
                         bbox: Some(*b),

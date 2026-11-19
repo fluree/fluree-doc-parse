@@ -27,7 +27,7 @@ pub struct Element {
     pub message: Option<Box<Message>>,    // email: the header of the message this opens
     pub resumes: Option<String>,          // email: id of the element opening the message this goes back to
     pub signature: bool,                  // email: part of a message's signature
-    pub provenance: &'static str,         // "rust" | "vlm"
+    pub provenance: &'static str,         // "rust" | "vlm" | "ocr"
     pub evidence: &'static str,           // which signal classified it
 }
 ```

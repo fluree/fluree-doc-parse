@@ -1,0 +1,13 @@
+[package]
+name = "fluree-doc-vision"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reading pixels: the OCR word format and the interfaces of the engines that read images"
+
+[dependencies]
+serde.workspace = true
+# Exact float parsing: a word box written by one process and read by another
+# must be the same number, or the three-step path's boxes drift in their
+# last digits from the in-memory one's.
+serde_json = { workspace = true, features = ["float_roundtrip"] }

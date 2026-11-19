@@ -135,3 +135,13 @@ look like spanning fragments, the page is in columns and none of them are.
 That one catches *justified* two-column text, where every line reaches the
 gutter. Ragged-right text defeats it, because only some lines do — which is
 how this survived until a field report.
+
+The cuts are rejoined right to left. A title over a page of screenshots, whose
+scattered words read as four columns, crosses two cuts and is in three pieces.
+Joined left to right, the first join moves the middle piece into the first
+column, and the second cut then finds nothing beside the third:
+`supporting scre` / `enshots — page 2`.
+
+A space the text layer draws at the cut is kept. A monospaced face draws the
+space with no gap of its own, so the gap between the halves is zero and only
+the space glyph shows there was one (`Screenshot|of what`).

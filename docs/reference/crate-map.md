@@ -4,6 +4,7 @@
 fluree-doc-cli          the fdoc binary
       │
       ├── fluree-doc-pdf      PDF: extraction, layout, routing, arbitration
+      │      └── fluree-doc-vision  reading pixels: the OCR word format
       ├── fluree-doc-markdown  Markdown reader
       ├── fluree-doc-html      HTML reader
       ├── fluree-doc-docx      DOCX reader ─┐
@@ -35,6 +36,7 @@ a PDF engine.**
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
+| `fluree-doc-vision` | `WordReading`, `OcrWord`, `Coords`: the words an OCR engine read in one image, and the `--ocr-words` sidecar format (`from_json`, `to_json`) |
 | `fluree-doc-cli` | argument parsing and the commands |
 
 ## Inside fluree-doc-pdf

@@ -188,6 +188,12 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "DIR")]
     pub structure_results: Option<PathBuf>,
 
+    /// Directory of OCR word readings (`<stem>_p<N>_full.json`,
+    /// `<stem>_p<N>_r<i>.json`) read as glyphs on the pages and regions the
+    /// router sends a reader [env: FDOC_OCR_WORDS]
+    #[arg(long, value_name = "DIR")]
+    pub ocr_words: Option<PathBuf>,
+
     /// Emit [[VLM:...]] anchor tokens where escalated crops belong, for an
     /// external tier to fill [env: FDOC_VLM_ANCHORS]
     #[arg(long)]

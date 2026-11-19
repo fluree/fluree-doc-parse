@@ -61,11 +61,18 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         args.layout_boxes.as_deref(),
         args.tier_results.as_deref(),
         args.structure_results.as_deref(),
+        args.ocr_words.as_deref(),
         args.emit_anchors,
     );
     // Once per invocation, not once per document.
     cfg.resolve_escalation(args.escalate, args.no_escalate, quiet);
     cfg.verbose = verbose;
+    // A word directory that is not there is a mistake in the command, not
+    // a batch with nothing read yet.
+    if let Some(dir) = cfg.ocr_words.as_deref().filter(|d| !d.is_dir()) {
+        eprintln!("error: --ocr-words: {} is not a directory", dir.display());
+        return 2;
+    }
     let cfg = &cfg;
 
     // Expand directories; `-` means stdin and must be the sole input.
@@ -547,6 +554,33 @@ fn convert_bytes(
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
     let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
+    // OCR words become glyphs before anything measures the pages: the
+    // analysis reads them like any text, and a region they fill no longer
+    // asks a model for a reading.
+    let injected = match cfg.ocr_words.as_deref() {
+        Some(dir) => {
+            let readings = common::ocr_readings(dir, stem, &doc, quiet);
+            let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+            for r in &injected {
+                let name = format!("{stem}_p{}_{}", r.page, r.crop.tag());
+                match r.refused {
+                    Some(why) if !quiet => eprintln!("warning: --ocr-words: {name}: {why}"),
+                    None if cfg.verbose => eprintln!(
+                        "ocr: {name}: {} words taken, {} dropped, skew {:.1}°{}",
+                        r.taken,
+                        r.dropped,
+                        r.skew_deg,
+                        r.mean_conf
+                            .map(|c| format!(", mean confidence {c:.3}"))
+                            .unwrap_or_default()
+                    ),
+                    _ => {}
+                }
+            }
+            injected
+        }
+        None => Vec::new(),
+    };
     // A configured reader reads the crops chosen from the document as
     // extracted, which the analysis below changes.
     let read_here = cfg.escalate && cfg.tier_results.is_none();
@@ -611,6 +645,9 @@ fn convert_bytes(
         None => (0, doc.pages.len().saturating_sub(1)),
     };
     fluree_doc_pdf::furniture::keep_running(&mut a.elements, &a.running, first, last);
+    // After the tiers, whose splices keep their own provenance, and after the
+    // running lines kept once, which may be OCR's too.
+    fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
     // After the tiers: an escalated reading replaces the text an anchor has to
     // be found in.
     fluree_doc_pdf::link::attach(

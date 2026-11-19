@@ -53,6 +53,12 @@ const MAX_GLYPHS_IN_UNREAD_REGION: usize = 15;
 /// "half the page", not a measurement.
 const COVERAGE_BINS: usize = 32;
 
+/// Margin, in PDF units, drawn around a region crop so the reader sees a
+/// clean edge rather than letters sliced mid-stroke. Part of the crop's
+/// definition, so whoever maps a reading back onto the page — the model
+/// splice, OCR words — measures from the same edge.
+pub const CROP_MARGIN: f64 = 6.0;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Route {
     /// The deterministic pipeline's output is trustworthy.
@@ -175,7 +181,10 @@ pub fn decide(page: &Page) -> (Route, Signals) {
                         Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
                         None => g.origin,
                     };
-                    !g.text.trim().is_empty() && p.bbox.contains(x, y)
+                    // An OCR reading's glyphs fill the void they read, and
+                    // are not the text layer: counted, the region would drop
+                    // out of the list and every region after it renumber.
+                    !g.text.trim().is_empty() && p.bbox.contains(x, y) && !page.is_ocr(g)
                 })
                 .count();
             inside < MAX_GLYPHS_IN_UNREAD_REGION
@@ -232,6 +241,7 @@ mod tests {
             width: 600.0,
             height: 800.0,
             rotation: 0,
+            ocr: None,
         }
     }
 

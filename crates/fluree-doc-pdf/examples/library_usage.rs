@@ -5,11 +5,14 @@
 //! is lying.
 //!
 //! ```text
-//! cargo run --release --example library_usage -- path/to/document.pdf
+//! cargo run --release --example library_usage -- path/to/document.pdf [ocr-words.json]
 //! ```
+//!
+//! The optional second argument is an `--ocr-words` sidecar reading of the
+//! first page (see `docs/integration/sidecar-formats.md`).
 
 use fluree_doc_model::{to_markdown, to_xhtml};
-use fluree_doc_pdf::{doco, document, extract_bytes, outline, route};
+use fluree_doc_pdf::{doco, document, extract_bytes, ocr, outline, route};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -35,7 +38,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let analysis = document::analyze(&mut doc, &ol);
+    // OCR words, where an engine read the page's pixels: glyphs before the
+    // analysis, taken only where the router sends a reader.
+    let injected = match std::env::args().nth(2) {
+        Some(words) => {
+            let reading = ocr::WordReading::from_json(&std::fs::read_to_string(words)?)?;
+            ocr::inject(&mut doc, &[(0, ocr::Crop::Page, reading)])
+        }
+        None => Vec::new(),
+    };
+
+    let mut analysis = document::analyze(&mut doc, &ol);
+    ocr::mark_provenance(&mut analysis.elements, &injected);
 
     for e in analysis.elements.iter().take(5) {
         println!("{}\tp{}\t{}", e.kind, e.page, e.text);
