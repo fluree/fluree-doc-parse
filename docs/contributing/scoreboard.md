@@ -323,4 +323,5 @@ TEST_PLAN. The list above is worth more than most of the code.
 
 **Read the caveats** in [evaluation.md](evaluation.md) before quoting any of
 this: TEDS covers only 42 of 200 documents and MHS 107, the corpus is 199/200
-Latin script, and there is no scanned PDF in it at all.
+Latin script, and there is no scanned PDF in it at all (those have [a set of
+their own](../benchmarks/scanned.md)).

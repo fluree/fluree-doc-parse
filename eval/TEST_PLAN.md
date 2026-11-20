@@ -62,7 +62,7 @@ ship in the tree.
 
 These are not "nice to have"; the router cannot be validated without the first one.
 
-- [ ] **Scanned / image-only PDF** — zero in the corpus. Blocks T3.1, the most important routing signal.
+- [x] **Scanned / image-only PDF** — none in the bench corpus; `eval/scanned/` generates 54 image-only pages under nine scan profiles, and four born-digital pages with a pasted screenshot (two letters, each at two screenshot densities), with gold facts. Unblocks T3.1's recall; its precision still wants a hard negative (a born-digital page that is mostly one picture, with little text).
 - [ ] **Broken CID fonts** (text extracts as garbage) — blocks T3.2.
 - [ ] **Korean** — 1 doc across everything we have.
 - [ ] **Form** (AcroForm fields, checkboxes).
@@ -163,7 +163,7 @@ is never replaced, so a routed region can only add.
 
 | id | signal | expected precision | corpus needed |
 |---|---|---|---|
-| T3.1 | zero glyphs / image-only → VLM | 1.00 | ❌ **missing scanned docs** |
+| T3.1 | zero glyphs / image-only → a reader (OCR or VLM) | 1.00 | recall ✅ `eval/scanned/`: 54/54 image-only pages routed (`Scanned`) (2026-11-20). Precision ⚠️ not measured: none of the 4 born-digital pages is listed unread, but each holds hundreds of characters, so none could be; no hard negative yet |
 | T3.2 | low Unicode resolution → VLM | 1.00 | ❌ **missing broken-CID docs** |
 | T3.3 | vector-outline text → VLM | 1.00 | ❌ **missing** |
 | T3.4 | table detector disagreement → VLM | — | bench corpus |

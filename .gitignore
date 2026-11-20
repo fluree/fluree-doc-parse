@@ -25,3 +25,6 @@ eval/tables-full/
 # the cases whose documents cannot be published.
 eval/tough/docs/
 eval/tough/private/
+
+# The scanned-PDF set, written by eval/scanned/make_scans.py.
+eval/scanned/corpus/

@@ -56,6 +56,7 @@
 
 - [Benchmarks](benchmarks/README.md)
   - [Where our output differs from the reference](benchmarks/where-we-differ.md)
+  - [Scanned PDFs](benchmarks/scanned.md)
 
 - [Design](design/README.md)
   - [The pipeline](design/pipeline.md)

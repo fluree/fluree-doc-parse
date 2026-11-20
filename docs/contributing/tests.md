@@ -67,6 +67,26 @@ failure without failing the run, and the run says when it starts passing.
 [`eval/tough/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/tough/README.md)
 has the case format.
 
+## Scanned PDFs
+
+```bash
+uv run eval/scanned/make_scans.py               # generate the set (not tracked)
+eval/scanned/check.py --models <ocr-assets>     # recall of gold facts, with and without OCR
+eval/scanned/check.py --no-ocr                  # routing only, no assets
+```
+
+Synthetic image-only pages under nine scan profiles, and born-digital pages
+with a pasted screenshot, each with the facts drawn on it. The run without OCR
+fails if an image-only page is not in `doc:unreadPages` as `Scanned`, a
+born-digital page is, a pasted screenshot is not in `doc:unreadRegions`, a
+pasted page's headings are not its gold's word for word, or a fact only pixels
+hold reaches the text; `--baseline eval/scanned/baseline.json` fails on a
+fact the OCR run used to find, a heading of the gold a page used to read as
+one, a heading other than the gold's a page did not read, a page it does not
+list or one it lists that the set does not hold, or a list it lacks.
+[`eval/scanned/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/scanned/README.md)
+has the details, and [Scanned PDFs](../benchmarks/scanned.md) the numbers.
+
 ## Adding tests
 
 - **A bug fix** gets a test reproducing the geometry that caused it, not the
