@@ -173,7 +173,7 @@ first printed: page by page, and down each page as it reads.
 ```json
 { "@type": "foaf:Document",
   "doc:unreadPages": { "@type": "@json",
-                       "@value": [ { "pageIndex": 0, "reason": "NearBlank" } ] } }
+                       "@value": [ { "pageIndex": 0, "reason": "Scanned" } ] } }
 ```
 
 Present only when a page carries content the output does not hold — a scan, a
@@ -182,7 +182,9 @@ supplied it. Without this an empty page and an unread page look identical;
 one document of engineering drawings produced 126 bytes of XHTML with nothing
 saying 99% of it was missing.
 
-`reason` is the router's verdict: `Scanned`, `NearBlank` or `BrokenText`;
+`reason` is the router's verdict: `Scanned` (an image covering half the page
+or more, and next to no text layer), `NearBlank` (next to no glyphs and a
+smaller image: a logo on a separator sheet, a signature) or `BrokenText`;
 or `OcrSparse`, a page an OCR reading (`--ocr-words`) read whole that still
 holds next to no text — an engine that gave a few words for a scan it could
 not read. Escalating the page clears the entry, because then something did

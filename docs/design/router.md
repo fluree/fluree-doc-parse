@@ -27,7 +27,7 @@ text worthless.
 |---|---|
 | `Deterministic` | the text layer is readable |
 | `Scanned` | few or no glyphs against high image coverage |
-| `NearBlank` | too little content to judge |
+| `NearBlank` | next to no glyphs and an image under half the page |
 | `BrokenText` | glyphs resolve to unusable Unicode |
 | `Regions(n)` | *n* raster regions the text layer does not cover |
 
@@ -92,11 +92,18 @@ the presence of an image:
 
 | verdict | condition |
 |---|---|
-| `NearBlank` | no glyphs at all under full image coverage |
-| `Scanned` | a few glyphs — a stamped header, a page number — over a page that is otherwise pixels |
+| `Scanned` | an image over half the page, and under 100 glyphs — none at all, or a stamped header, a page number |
+| `NearBlank` | under 20 glyphs and an image, but less than half the page of it — a logo on a separator sheet, a signature |
 
-The distinction matters because a page can be entirely image and entirely
-readable. Digitized newsprint is typically a full-page photograph with a
+The scan rule is checked first. Both verdicts send the page to the same
+reader, so the order only names the reason, and the reason is what a caller
+sorts by: `fdoc triage`, [`doc:unreadPages`](../formats/doco.md) and the
+crop manifest's `scanned` / `near_blank` all carry it, and a caller sends
+scans to an OCR engine and may skip a sheet with a logo on it. Checked the
+other way round, as it once was, every image-only scan came out `NearBlank`.
+
+Requiring the absence of text matters because a page can be entirely image
+and entirely readable. Digitized newsprint is typically a full-page photograph with a
 complete text layer laid over it: `img=1.00`, tens of thousands of glyphs, and
 nothing to gain from a model. It reports `deterministic` and routes nowhere,
 because the glyph void — not the image — is what the router is looking for.

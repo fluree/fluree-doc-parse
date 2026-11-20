@@ -37,7 +37,7 @@ worth measuring before sizing anything.
 |---|---|
 | `Deterministic` | the text layer is readable; no escalation |
 | `Scanned` | the page is pixels — few or no glyphs against high image coverage |
-| `NearBlank` | too little content to judge from the text layer |
+| `NearBlank` | next to no glyphs and a small image (under half the page): a logo on a separator sheet, a signature |
 | `BrokenText` | glyphs resolve to unusable Unicode (broken CID fonts) |
 | `Regions(n)` | `n` raster regions the text layer does not cover |
 | `Fragmented` | a table's detected columns disagree with themselves |

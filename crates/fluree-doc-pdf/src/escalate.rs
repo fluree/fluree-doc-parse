@@ -1298,8 +1298,8 @@ mod tests {
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[1]);
         assert_eq!(jobs.len(), 2, "the blank scan and the doubt page: {jobs:?}");
-        // No glyph at all under a full-page image: the router's near-blank.
-        assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
+        // No glyph at all under a full-page image: a scan.
+        assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
         assert_eq!(reasons.get(&1), Some(&CropReason::FigureDoubt));
         assert_eq!(reasons.get(&2), None);
         assert_eq!(CropReason::FigureDoubt.as_str(), "figure_doubt");
@@ -1337,13 +1337,27 @@ mod tests {
 
     #[test]
     fn each_router_verdict_names_its_reason() {
+        // A logo alone on a sheet: an image under half the page, no glyph.
+        let mut logo = page(3, 0, true);
+        logo.images[0].bbox = BBox {
+            x0: 250.0,
+            y0: 350.0,
+            x1: 350.0,
+            y1: 450.0,
+        };
         let doc = Document {
-            pages: vec![page(0, 0, true), page(1, 50, true), broken_page(2, 300)],
+            pages: vec![
+                page(0, 0, true),
+                page(1, 50, true),
+                broken_page(2, 300),
+                logo,
+            ],
         };
         let (_, reasons) = reasons_with_doubts(&doc, &[]);
-        assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
+        assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
         assert_eq!(reasons.get(&1), Some(&CropReason::Scanned));
         assert_eq!(reasons.get(&2), Some(&CropReason::BrokenText));
+        assert_eq!(reasons.get(&3), Some(&CropReason::NearBlank));
     }
 
     #[test]

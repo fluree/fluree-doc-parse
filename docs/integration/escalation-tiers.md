@@ -174,7 +174,7 @@ rotation, as `--ocr-words` does, not through `bbox × scale` alone.
 
 | reason | crop | the text layer |
 |---|---|---|
-| `scanned`, `near_blank`, `broken_text` | whole page | has nothing usable there |
+| `scanned` (an image over half the page), `near_blank` (a smaller one: a logo, a signature), `broken_text` | whole page | has nothing usable there |
 | `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
 | `small_region` | a raster region under a tenth of the page, cropped only with `--ocr-regions`: not worth a model's call, read by an OCR engine | lacks what the pixels hold |
 | `embedded_image` | an image placed in a DOCX's flow, once however many figures draw it (`kind: "media"`, with its first `figure`, every one of its `figures` and its package `part`), `<stem>_m<n>.png`; for an OCR engine only for now (see below) | has the text around it, not the image's |

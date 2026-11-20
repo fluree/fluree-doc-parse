@@ -87,9 +87,11 @@ pub enum Route {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
-    /// Image-dominated page with no meaningful text layer: a scan.
+    /// Image-dominated page with no meaningful text layer: a scan, with or
+    /// without a few glyphs (a stamped header, a page number) on it.
     Scanned,
-    /// Almost no glyphs, but at least one image: the content is the image.
+    /// Almost no glyphs and an image covering under half the page: a logo on
+    /// a separator sheet, a signature. The content, if any, is the image.
     NearBlank,
     /// Glyphs exist but their Unicode cannot be trusted.
     BrokenText,
@@ -220,11 +222,18 @@ pub fn ocr_regions(page: &Page) -> Vec<BBox> {
 pub fn decide(page: &Page) -> (Route, Signals) {
     let s = signals(page);
 
-    if s.glyphs < NEAR_BLANK_GLYPHS && !page.images.is_empty() {
-        return (Route::Vlm(Reason::NearBlank), s);
-    }
+    // The scan rule first: a page that is one large image is a scan whether
+    // or not it has a stamped number on it. Both verdicts send the page to
+    // the same reader, so the order changes only the reason, and the reason
+    // is what a caller sorts by (`fdoc triage`, `doc:unreadPages`, the crop
+    // manifest): scans to an OCR engine, a logo on a separator sheet to
+    // nothing. Checked the other way round, every image-only scan came out
+    // near-blank.
     if s.image_coverage >= IMAGE_DOMINANT_COVERAGE && s.glyphs < MIN_GLYPHS_FOR_TEXT_PAGE {
         return (Route::Vlm(Reason::Scanned), s);
+    }
+    if s.glyphs < NEAR_BLANK_GLYPHS && !page.images.is_empty() {
+        return (Route::Vlm(Reason::NearBlank), s);
     }
     // Gate on glyph *events*, not resolved glyphs: a fully broken font (a
     // Type3 subset with no ToUnicode, say) resolves nothing, so counting only
@@ -390,22 +399,16 @@ mod tests {
 
     #[test]
     fn a_full_page_scan_routes_to_the_vlm() {
-        // Near-blank fires first — same destination, more specific reason.
-        let p = page_with(
-            5,
-            0,
-            vec![(
-                BBox {
-                    x0: 0.0,
-                    y0: 0.0,
-                    x1: 600.0,
-                    y1: 800.0,
-                },
-                true,
-            )],
-        );
-        assert!(matches!(decide(&p).0, Route::Vlm(Reason::NearBlank)));
-        // With a thin caption layer it is a scan proper.
+        // One full-page image and no glyph at all: a scan, not a near-blank
+        // page. The two go to the same reader; only the reason differs, and
+        // callers sort scans from blank sheets by it.
+        let full = b(0.0, 0.0, 600.0, 800.0);
+        let p = page_with(0, 0, vec![(full, true)]);
+        assert_eq!(decide(&p).0, Route::Vlm(Reason::Scanned));
+        // A stamped page number on it changes nothing.
+        let p = page_with(5, 0, vec![(full, true)]);
+        assert_eq!(decide(&p).0, Route::Vlm(Reason::Scanned));
+        // With a thin caption layer it is a scan too.
         let p = page_with(
             60,
             0,
@@ -420,6 +423,23 @@ mod tests {
             )],
         );
         assert!(matches!(decide(&p).0, Route::Vlm(Reason::Scanned)));
+    }
+
+    #[test]
+    fn a_small_image_on_an_empty_page_is_near_blank() {
+        // A logo on a separator sheet: well under half the page, no text.
+        let logo = b(250.0, 350.0, 350.0, 450.0);
+        let p = page_with(0, 0, vec![(logo, false)]);
+        assert_eq!(decide(&p).0, Route::Vlm(Reason::NearBlank));
+        // Just under half the page is still not a scan; just over is.
+        let under = b(0.0, 0.0, 600.0, 375.0);
+        let p = page_with(0, 0, vec![(under, true)]);
+        assert!(signals(&p).image_coverage < IMAGE_DOMINANT_COVERAGE);
+        assert_eq!(decide(&p).0, Route::Vlm(Reason::NearBlank));
+        let over = b(0.0, 0.0, 600.0, 425.0);
+        let p = page_with(0, 0, vec![(over, true)]);
+        assert!(signals(&p).image_coverage >= IMAGE_DOMINANT_COVERAGE);
+        assert_eq!(decide(&p).0, Route::Vlm(Reason::Scanned));
     }
 
     #[test]

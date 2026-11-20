@@ -68,7 +68,7 @@ A page carrying content the output does not hold gets a comment:
 
 ```html
 <!-- fluree-doc-parse: page 1 carries content no reader transcribed
-     (NearBlank). This output is missing it. -->
+     (Scanned). This output is missing it. -->
 ```
 
 A comment rather than text, so extracting text from this file does not read a
