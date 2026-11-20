@@ -14,7 +14,10 @@
 //! gives; a title placeholder's text is a level-1 heading, every other text
 //! a paragraph per line. Where a slide's shapes hold no text (an older
 //! writer keeps it in the slide list instead) the slide list's text is read.
-//! **What is not**: speaker notes, the masters' placeholder prompts,
+//! A slide's **speaker notes**, the notes slide its own atom names, follow
+//! its content as paragraphs whose `evidence` is `notes`, so a consumer that
+//! wants what the audience saw leaves them out.
+//! **What is not**: the masters' placeholder prompts,
 //! bullets and list levels (so no list items), tables (their cells' text is
 //! read as paragraphs), pictures, charts and embedded objects, and the
 //! summary information. Encrypted files fail as malformed or unsupported.
@@ -46,6 +49,8 @@ const DOCUMENT: u16 = 0x03E8;
 const SLIDE: u16 = 0x03EE;
 const SLIDE_LIST: u16 = 0x0FF0;
 const SLIDE_PERSIST: u16 = 0x03F3;
+const SLIDE_ATOM: u16 = 0x03EF;
+const NOTES: u16 = 0x03F0;
 const TEXT_HEADER: u16 = 0x0F9F;
 const TEXT_CHARS: u16 = 0x0FA0;
 const TEXT_BYTES: u16 = 0x0FA8;
@@ -341,12 +346,49 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
             }
         }
     }
+    // The notes list (instance 2): each notes slide's id, and where it is.
+    let mut notes_at: HashMap<u32, u32> = HashMap::new();
+    if let Some(list) = children(&doc, &document)
+        .into_iter()
+        .find(|c| c.typ == SLIDE_LIST && c.instance == 2)
+    {
+        for c in children(&doc, &list)
+            .into_iter()
+            .filter(|c| c.typ == SLIDE_PERSIST)
+        {
+            let data = &doc[c.data.0..c.data.1];
+            if let (Some(persist), Some(id)) = (u32_at(data, 0), u32_at(data, 12)) {
+                notes_at.insert(id, persist);
+            }
+        }
+    }
     let mut out = Vec::new();
     for (page, (id, listed)) in slides.into_iter().enumerate() {
         let mut found = Vec::new();
-        if let Some(slide) = at(id).filter(|r| r.typ == SLIDE) {
-            texts(&doc, &slide, 0, &mut 4, false, &mut found);
+        let slide = at(id).filter(|r| r.typ == SLIDE);
+        if let Some(slide) = &slide {
+            texts(&doc, slide, 0, &mut 4, false, &mut found);
         }
+        // The speaker's notes: the notes slide the slide's own atom names
+        // (`notesIdRef`, after its layout, placeholders and master), read
+        // after the slide.
+        let notes: Vec<Text> = slide
+            .and_then(|s| {
+                children(&doc, &s)
+                    .into_iter()
+                    .find(|c| c.typ == SLIDE_ATOM)
+                    .and_then(|a| u32_at(&doc[a.data.0..a.data.1], 16))
+            })
+            .filter(|&n| n != 0)
+            .and_then(|n| notes_at.get(&n))
+            .and_then(|&p| at(p))
+            .filter(|r| r.typ == NOTES)
+            .map(|r| {
+                let mut v = Vec::new();
+                texts(&doc, &r, 0, &mut 2, false, &mut v);
+                v
+            })
+            .unwrap_or_default();
         let runs = if found.iter().any(|t| !t.text.trim().is_empty()) {
             found
         } else {
@@ -375,6 +417,22 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
                     page,
                     ..Element::new("doco:Paragraph", l, "ppt", "ppt")
                 });
+            }
+        }
+        for t in notes {
+            for l in t.text.split('\r').map(|l| {
+                l.split(['\u{b}'])
+                    .map(|x| x.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .filter(|x| !x.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }) {
+                if !l.is_empty() {
+                    out.push(Element {
+                        page,
+                        ..Element::new("doco:Paragraph", l, "ppt", "notes")
+                    });
+                }
             }
         }
     }

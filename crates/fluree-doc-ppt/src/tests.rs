@@ -39,6 +39,23 @@ fn slide_persist(id: u32) -> Vec<u8> {
     rec(false, 0, SLIDE_PERSIST, &d)
 }
 
+/// A notes slide's place in the notes list: where it is, and its id.
+fn notes_persist(persist: u32, id: u32) -> Vec<u8> {
+    let mut d = persist.to_le_bytes().to_vec();
+    d.extend([0u8; 8]);
+    d.extend(id.to_le_bytes());
+    d.extend([0u8; 4]);
+    rec(false, 0, SLIDE_PERSIST, &d)
+}
+
+/// A slide's own atom, naming its notes slide.
+fn slide_atom(notes: u32) -> Vec<u8> {
+    let mut d = vec![0u8; 16];
+    d.extend(notes.to_le_bytes());
+    d.extend([0u8; 4]);
+    rec(false, 0, SLIDE_ATOM, &d)
+}
+
 fn persist_dir(entries: &[(u32, u32)]) -> Vec<u8> {
     let mut d = Vec::new();
     for (id, off) in entries {
@@ -85,16 +102,28 @@ pub(crate) fn deck() -> Vec<u8> {
         ]
         .concat(),
     );
-    let document = rec(true, 0, DOCUMENT, &list);
+    let notes_list = rec(true, 2, SLIDE_LIST, &notes_persist(4, 256));
+    let document = rec(true, 0, DOCUMENT, &[list, notes_list].concat());
+    // The speaker's notes, as PowerPoint keeps them: a notes slide of its
+    // own, with the slide's picture (no text) and the notes' text box.
+    let notes = rec(
+        true,
+        0,
+        NOTES,
+        &[
+            textbox(&[header(2)]),
+            textbox(&[header(2), chars("Say the totals slowly.\rThen pause.")]),
+        ]
+        .concat(),
+    );
     let slide1 = rec(
         true,
         0,
         SLIDE,
         &[
+            slide_atom(256),
             textbox(&[header(0), chars("Quarterly review")]),
             textbox(&[header(1), chars("Orders up\rCosts down\u{b}by 3%")]),
-            // Notes text in a notes-only header is still the slide's text
-            // here; a speaker's notes live in other containers, unread.
         ]
         .concat(),
     );
@@ -107,8 +136,10 @@ pub(crate) fn deck() -> Vec<u8> {
     s.extend(&slide1);
     let st = s.len() as u32;
     s.extend(&stale);
+    let n1 = s.len() as u32;
+    s.extend(&notes);
     let dir1 = s.len() as u32;
-    s.extend(persist_dir(&[(1, doc_at), (2, s1), (3, st)]));
+    s.extend(persist_dir(&[(1, doc_at), (2, s1), (3, st), (4, n1)]));
     let edit1 = s.len() as u32;
     s.extend(user_edit(0, dir1, 1));
     let s2 = s.len() as u32;
@@ -140,12 +171,17 @@ fn slides_read_in_order_through_the_last_edit() {
             (0, "doco:Paragraph", "Orders up"),
             (0, "doco:Paragraph", "Costs down"),
             (0, "doco:Paragraph", "by 3%"),
+            // The notes, after the slide.
+            (0, "doco:Paragraph", "Say the totals slowly."),
+            (0, "doco:Paragraph", "Then pause."),
             // The second save's slide holds no text: its list's is read,
             // and the first save's `Stale` is not.
             (1, "doco:SectionTitle", "Detail"),
             (1, "doco:Paragraph", "Owner: Alex Sample"),
         ]
     );
+    assert_eq!(els[4].evidence, "notes");
+    assert_eq!(els[3].evidence, "ppt");
     assert!(els
         .iter()
         .all(|e| e.provenance == "ppt" && e.bbox.is_none()));

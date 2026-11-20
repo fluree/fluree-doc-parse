@@ -290,9 +290,12 @@ slide's shapes hold its text in text atoms (UTF-16 or one byte a
 character). A title placeholder's text, by the shape's placeholder or by
 the text's own header, is a level-1 heading; every other text is a
 paragraph a line. A slide whose shapes hold no text, as an older writer
-keeps it, is read from the slide list.
+keeps it, is read from the slide list. A slide's **speaker notes** (the
+notes slide its own atom names) follow its content on its page, as
+paragraphs whose `evidence` is `notes`: what the presenter said, kept apart
+from what the audience saw.
 
-Not read: speaker notes, the masters' placeholder prompts, bullets and
+Not read: the masters' placeholder prompts, bullets and
 list levels (so no list items), tables (their cells' text is read as
 paragraphs), pictures, charts, embedded objects and summary information.
 An encrypted file is refused. A file is recognised by its content, a
