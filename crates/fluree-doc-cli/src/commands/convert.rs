@@ -406,6 +406,16 @@ fn convert_path(
                 },
             )
         }
+        // A delimited file: one table under its header row. A `.tsv` is
+        // tab-separated; a `.csv`'s delimiter is sniffed.
+        SourceKind::Csv => {
+            let tsv = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("tsv"));
+            let elements = fluree_doc_csv::parse_with(&data, tsv.then_some('\t'))
+                .map_err(|e| e.to_string())?;
+            (elements, fluree_doc_model::Notes::default())
+        }
         _ => return convert_bytes(data, &src, cfg, args, pages, quiet),
     };
     Ok(render(&elements, &src, args, Vec::new(), &notes))

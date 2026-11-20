@@ -23,6 +23,7 @@ fluree-doc-docx.workspace = true
 fluree-doc-html.workspace = true
 fluree-doc-pptx.workspace = true
 fluree-doc-xlsx.workspace = true
+fluree-doc-csv.workspace = true
 fluree-doc-transcript.workspace = true
 fluree-doc-email.workspace = true
 fluree-doc-vision.workspace = true

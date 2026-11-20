@@ -14,6 +14,8 @@ pub(crate) enum SourceKind {
     Docx,
     Pptx,
     Xlsx,
+    /// A delimited file: CSV, or TSV by its extension.
+    Csv,
     Transcript,
     Email,
     Image,
@@ -39,6 +41,7 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
         &["pptx", "pptm", "potx", "potm", "ppsx", "ppsm"],
     ),
     (SourceKind::Xlsx, &["xlsx", "xlsm", "xltx", "xltm"]),
+    (SourceKind::Csv, &["csv", "tsv"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
@@ -56,8 +59,6 @@ const UNSUPPORTED: &[(&str, &str)] = &[
     ("xlt", "Excel 97-2003 template"),
     ("xlsb", "Excel binary workbook"),
     ("ods", "OpenDocument spreadsheet"),
-    ("csv", "comma-separated values"),
-    ("tsv", "tab-separated values"),
     ("xps", "XPS document"),
     ("oxps", "OpenXPS document"),
     ("ppt", "PowerPoint 97-2003 presentation"),
@@ -149,7 +150,8 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
             | SourceKind::Html
             | SourceKind::Docx
             | SourceKind::Pptx
-            | SourceKind::Xlsx),
+            | SourceKind::Xlsx
+            | SourceKind::Csv),
         ) => k,
         _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
         _ if is_pdf(data) => SourceKind::Pdf,

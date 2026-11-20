@@ -931,6 +931,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "clap_complete",
+ "fluree-doc-csv",
  "fluree-doc-docx",
  "fluree-doc-email",
  "fluree-doc-html",
@@ -956,6 +957,14 @@ dependencies = [
  "toml_edit",
  "ureq",
  "zip",
+]
+
+[[package]]
+name = "fluree-doc-csv"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "fluree-doc-model",
 ]
 
 [[package]]

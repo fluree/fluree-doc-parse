@@ -12,6 +12,7 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-docx      DOCX reader ─┐
       ├── fluree-doc-pptx      PPTX reader ─┼── fluree-doc-ooxml  the package layer they share
       ├── fluree-doc-xlsx      XLSX reader ─┘
+      ├── fluree-doc-csv       CSV and TSV reader
       ├── fluree-doc-transcript  WebVTT and SubRip reader
       └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
                 │
@@ -38,6 +39,7 @@ PDF layout.
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `parse_with_media` the pictures anchored to its cells, `read_pictures` and `read_media` as the DOCX crate's; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
+| `fluree-doc-csv` | `parse(&[u8]) -> Result<Vec<Element>, CsvError>`: one table under its header row, the delimiter sniffed; `parse_with` names it; `decode`, `sniff` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments, `media` (the images its body shows, drawn as figures), `media_bytes` and `media_attachment`; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
@@ -84,7 +86,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |
 | cfb | Outlook `.msg` containers | MIT |
-| encoding_rs | email charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
+| encoding_rs | email and CSV charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |
 | unicode-normalization | NFC, reading PDF presentation forms | MIT OR Apache-2.0 |

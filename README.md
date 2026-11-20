@@ -50,6 +50,7 @@ fdoc convert deck.pptx  -f doco              # PPTX in, slides become pages
                                              #   (charts become tables)
 fdoc convert book.xlsx  -f doco              # XLSX in, sheets become pages
                                              #   (blocks of cells become tables)
+fdoc convert orders.csv -f doco              # CSV or TSV in, one table
 fdoc convert call.vtt   -f doco              # WebVTT or SubRip in, one paragraph
                                              #   per speaker turn, with who and when
 fdoc convert reply.eml  -f doco              # .eml or .msg in, the thread split
@@ -158,6 +159,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-html` — HTML reader
 - `crates/fluree-doc-pptx` — PPTX (OOXML) reader
 - `crates/fluree-doc-xlsx` — XLSX (OOXML) reader
+- `crates/fluree-doc-csv` — CSV and TSV reader
 - `crates/fluree-doc-transcript` — WebVTT and SubRip transcript reader
 - `crates/fluree-doc-vision` — reading pixels: the OCR word format shared by the readers of images
 - `crates/fluree-doc-image` — bare images (PNG, JPEG, TIFF) read by OCR as one-page documents
