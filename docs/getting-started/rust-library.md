@@ -137,6 +137,14 @@ rest is read. The engine is `Send + Sync`: share one
 across threads. Any other engine plugs in by implementing
 `fluree_doc_vision::OcrEngine`.
 
+A bare image (PNG, JPEG, TIFF) is one call, decoded upright and laid out as a
+scanned page:
+
+```rust
+let read = fluree_doc_image::elements(&bytes, &engine)?;
+// read.elements, read.size (the page, in the image's pixels), read.more_pages
+```
+
 ## Read a non-PDF source
 
 Each reader returns the same `Vec<Element>`:

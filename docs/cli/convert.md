@@ -98,6 +98,9 @@ Each crop is read at the resolution of the image under it, between 2× and
 crops](../integration/escalation-tiers.md#producing-the-crops)), where a model
 gets 2×.
 
+A bare PNG, JPEG or TIFF is read the same way, as one page decoded upright;
+see [Images](../inputs/images.md).
+
 What either reads is the same: the pages whose text is pixels (scanned,
 near-blank, broken text), whole, and on other pages the raster regions the
 text layer does not cover. A model is only asked for regions over a tenth of

@@ -353,7 +353,9 @@ pub struct UnreadPage {
     /// 0-based physical page, the same space as [`Element::page`].
     #[serde(rename = "pageIndex")]
     pub index: usize,
-    /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`.
+    /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`; or
+    /// `LaterPage`, a page after the first of a multi-page image file, which
+    /// is not read.
     pub reason: String,
 }
 

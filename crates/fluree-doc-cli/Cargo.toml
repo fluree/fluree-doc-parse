@@ -25,6 +25,7 @@ fluree-doc-xlsx.workspace = true
 fluree-doc-transcript.workspace = true
 fluree-doc-email.workspace = true
 fluree-doc-vision.workspace = true
+fluree-doc-image.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 serde.workspace = true
@@ -38,6 +39,10 @@ ureq = { version = "3.3.0", features = ["json"] }
 rsa = "0.9"
 sha2 = { version = "0.10", features = ["oid"] }
 base64 = "0.22"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+tiff = "0.11"
 
 [features]
 default = ["ocr"]

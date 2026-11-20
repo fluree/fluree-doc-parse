@@ -294,6 +294,17 @@ impl CropReason {
     }
 }
 
+impl From<crate::route::Reason> for CropReason {
+    /// The router's verdict on a page read whole.
+    fn from(r: crate::route::Reason) -> Self {
+        match r {
+            crate::route::Reason::Scanned => CropReason::Scanned,
+            crate::route::Reason::NearBlank => CropReason::NearBlank,
+            crate::route::Reason::BrokenText => CropReason::BrokenText,
+        }
+    }
+}
+
 /// Why each whole page in a job list was asked for, by page index. Region
 /// crops carry theirs in their tag ([`CropReason::of_region_tag`]).
 pub type PageReasons = std::collections::BTreeMap<usize, CropReason>;
@@ -447,7 +458,7 @@ pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) ->
 /// the first reason that asked for it: the router's verdict before any
 /// doubt, a heading doubt before a figure doubt.
 fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, PageReasons) {
-    use crate::route::{Reason, Route};
+    use crate::route::Route;
     let mut jobs: CropJobs = Vec::new();
     let mut reasons = PageReasons::new();
     for p in &doc.pages {
@@ -457,14 +468,7 @@ fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, 
         match crate::route::decide(p).0 {
             Route::Vlm(r) => {
                 jobs.push((p.index, None));
-                reasons.insert(
-                    p.index,
-                    match r {
-                        Reason::Scanned => CropReason::Scanned,
-                        Reason::NearBlank => CropReason::NearBlank,
-                        Reason::BrokenText => CropReason::BrokenText,
-                    },
-                );
+                reasons.insert(p.index, CropReason::from(r));
             }
             Route::VlmRegions(r) => {
                 let unread: Vec<(String, BBox)> = r

@@ -27,7 +27,8 @@ Given a crops directory, `fdoc ocr` reads its `manifest.jsonl` and only the crop
 whose words a page takes, by their `reason`: `scanned`, `near_blank`,
 `broken_text`, `region` and `small_region`. A page asked for on a doubt about its
 structure already has its text, and a table crop asks about structure; both are
-left for a model. Given image files (PNG, JPEG, TIFF, …), it reads them all.
+left for a model. Given image files (PNG, JPEG, TIFF), it reads them all,
+decoded upright by their EXIF orientation; of a multi-page TIFF, the first page.
 
 ## Options
 

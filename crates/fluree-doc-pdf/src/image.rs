@@ -49,7 +49,12 @@ impl Format {
         if bytes.starts_with(&[0xFF, 0xD8]) {
             return Some(Format::Jpeg);
         }
-        if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        // Classic TIFF (version 42) and BigTIFF (43).
+        if bytes.starts_with(b"II*\0")
+            || bytes.starts_with(b"MM\0*")
+            || bytes.starts_with(b"II+\0")
+            || bytes.starts_with(b"MM\0+")
+        {
             return Some(Format::Tiff);
         }
         None
@@ -116,8 +121,14 @@ fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
 const MAX_JPEG_SEGMENTS: usize = 512;
 const MAX_TIFF_ENTRIES: usize = 512;
 
-/// Read `ImageWidth` (256) and `ImageLength` (257) from the first IFD.
+/// Read `ImageWidth` (256) and `ImageLength` (257) from the first IFD of a
+/// classic TIFF. A BigTIFF's layout is another (8-byte offsets): none.
 fn tiff_size(b: &[u8]) -> Option<(u32, u32)> {
+    if b.get(2..4)
+        .is_some_and(|v| v == [0x2B, 0x00] || v == [0x00, 0x2B])
+    {
+        return None;
+    }
     let little = b.starts_with(b"II*\0");
     let u16at = |o: usize| -> Option<u16> {
         let s = b.get(o..o + 2)?;
@@ -178,27 +189,38 @@ fn be32(b: &[u8]) -> u32 {
 /// choice: a bare image declares no physical size, and inventing one from an
 /// assumed DPI would put a wrong number in `doc:pages` for every consumer
 /// that scales by it.
+///
+/// Sized as stored: a phone photo's EXIF orientation is not applied here.
+/// `fluree_doc_image::header` gives the upright size, for [`page_of`].
 pub fn as_document(bytes: &[u8]) -> Option<Document> {
     let (w, h) = dimensions(bytes)?;
     if w == 0 || h == 0 {
         return None;
     }
-    let (width, height) = (f64::from(w), f64::from(h));
+    Some(page_of(w, h, false))
+}
+
+/// The one-page document an image `width` × `height` pixels stands for, as
+/// [`as_document`] builds it, for a caller that has decoded the image (and
+/// turned it upright) itself. `bitonal` says the image is one bit deep.
+pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
+    let (width, height) = (f64::from(width), f64::from(height));
     let bbox = BBox {
         x0: 0.0,
         y0: 0.0,
         x1: width,
         y1: height,
     };
-    Some(Document {
+    Document {
         pages: vec![Page {
             index: 0,
             glyphs: Vec::new(),
             images: vec![ImagePlacement {
                 bbox,
                 texty: true,
-                ppi: None,
-                bitonal: false,
+                // One pixel per unit: 72 per inch of the page's units.
+                ppi: Some(72.0),
+                bitonal,
             }],
             rules: Vec::new(),
             fills: Vec::new(),
@@ -207,7 +229,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
             rotation: 0,
             ocr: None,
         }],
-    })
+    }
 }
 
 #[cfg(test)]
@@ -289,6 +311,13 @@ mod tests {
         pad.extend(std::iter::repeat_n(0xFFu8, 4096));
         assert_eq!(jpeg_size(&pad), None);
         assert_eq!(dimensions(b"II*\0"), None);
+        // A BigTIFF's first directory is laid out otherwise: no size read.
+        let mut big = b"II+\0".to_vec();
+        big.extend(8u16.to_le_bytes());
+        big.extend(0u16.to_le_bytes());
+        big.extend(16u64.to_le_bytes());
+        big.extend([0u8; 64]);
+        assert_eq!(dimensions(&big), None);
     }
 
     #[test]
