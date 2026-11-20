@@ -16,6 +16,8 @@ pub(crate) enum SourceKind {
     Xlsx,
     /// A delimited file: CSV, or TSV by its extension.
     Csv,
+    /// An Excel 97-2003 workbook (BIFF8).
+    Xls,
     Transcript,
     Email,
     Image,
@@ -42,6 +44,7 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     ),
     (SourceKind::Xlsx, &["xlsx", "xlsm", "xltx", "xltm"]),
     (SourceKind::Csv, &["csv", "tsv"]),
+    (SourceKind::Xls, &["xls", "xlt"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
@@ -55,8 +58,6 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
 const UNSUPPORTED: &[(&str, &str)] = &[
     ("doc", "Word 97-2003 document"),
     ("dot", "Word 97-2003 template"),
-    ("xls", "Excel 97-2003 workbook"),
-    ("xlt", "Excel 97-2003 template"),
     ("xlsb", "Excel binary workbook"),
     ("ods", "OpenDocument spreadsheet"),
     ("xps", "XPS document"),
@@ -126,7 +127,8 @@ fn is_pdf(data: &[u8]) -> bool {
 /// The reader a file goes to, by its content where that says, else by its
 /// extension: what `convert` reads it as, and `render-routed` crops it as.
 ///
-/// A transcript and an email by their content first: `.vtt` has no
+/// A transcript, an email and an Excel 97-2003 workbook by their content
+/// first: `.vtt` has no
 /// registered type on most systems, and a saved message is `.eml`, `.mht`,
 /// `.txt` or nothing at all, so either arrives renamed as often as not. Then
 /// the formats an extension names (Markdown, plain text, HTML and the Office
@@ -142,6 +144,11 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     }
     if fluree_doc_email::Format::sniff(data).is_some() || kind == Some(SourceKind::Email) {
         return SourceKind::Email;
+    }
+    // An Excel 97-2003 workbook by its content: a compound file holding a
+    // workbook stream, whatever its name.
+    if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_xls::is_xls(data) {
+        return SourceKind::Xls;
     }
     match kind {
         Some(

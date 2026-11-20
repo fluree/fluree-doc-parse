@@ -12,6 +12,7 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-docx      DOCX reader ─┐
       ├── fluree-doc-pptx      PPTX reader ─┼── fluree-doc-ooxml  the package layer they share
       ├── fluree-doc-xlsx      XLSX reader ─┘
+      ├── fluree-doc-xls       Excel 97-2003 reader (lays out with the XLSX reader)
       ├── fluree-doc-csv       CSV and TSV reader
       ├── fluree-doc-transcript  WebVTT and SubRip reader
       └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
@@ -19,8 +20,9 @@ fluree-doc-cli          the fdoc binary
                 └── fluree-doc-model   element model + emitters (source-agnostic)
 ```
 
-Every reader depends on `fluree-doc-model`, and on no other reader but one:
-the email reader reads HTML bodies with the HTML reader. The three Office
+Every reader depends on `fluree-doc-model`, and on no other reader but two:
+the email reader reads HTML bodies with the HTML reader, and the `.xls`
+reader lays its sheets out with the XLSX reader. The three Office
 readers share `fluree-doc-ooxml`, the package layer under all three formats.
 That is the point of the split: **a Markdown or DOCX consumer never compiles
 a PDF engine.** Only the DOCX and XLSX readers' `ocr` feature, which reads
@@ -38,7 +40,8 @@ PDF layout.
 | `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them; `PartNames` (a relationship's image, found as the format finds it), `read_media` (an image part of an opened `Package`, capped), `read_pictures` (each image once within a per-document `Allowance`), `alt_text` |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
-| `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `parse_with_media` the pictures anchored to its cells, `read_pictures` and `read_media` as the DOCX crate's; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
+| `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `grid_elements`, sheets another workbook format's reader read, laid out as an XLSX sheet; `parse_with_media` the pictures anchored to its cells, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
+| `fluree-doc-xls` | `parse(&[u8]) -> Result<Vec<Element>, XlsError>`, BIFF8 through calamine after a bounds check of its own; `parse_with_info`; `is_xls` |
 | `fluree-doc-csv` | `parse(&[u8]) -> Result<Vec<Element>, CsvError>`: one table under its header row, the delimiter sniffed; `parse_with` names it; `decode`, `sniff` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments, `media` (the images its body shows, drawn as figures), `media_bytes` and `media_attachment`; `Format::sniff` |
@@ -85,7 +88,8 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | html5ever | spec-compliant HTML parsing | MIT OR Apache-2.0 |
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |
-| cfb | Outlook `.msg` containers | MIT |
+| cfb | Outlook `.msg` and Excel 97-2003 containers | MIT |
+| calamine | Excel 97-2003 (BIFF8) cells, pinned | MIT |
 | encoding_rs | email and CSV charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |

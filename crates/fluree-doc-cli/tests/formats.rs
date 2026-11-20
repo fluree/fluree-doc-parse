@@ -102,3 +102,90 @@ fn walk(v: &serde_json::Value, f: &mut dyn FnMut(&serde_json::Value)) {
         _ => {}
     }
 }
+
+/// One BIFF record.
+fn rec(typ: u16, data: &[u8]) -> Vec<u8> {
+    [
+        &typ.to_le_bytes()[..],
+        &(data.len() as u16).to_le_bytes(),
+        data,
+    ]
+    .concat()
+}
+
+/// A LABEL record: a string in a cell, written in the record itself.
+fn biff_label(row: u16, col: u16, text: &str) -> Vec<u8> {
+    let mut d: Vec<u8> = [row, col, 0, text.len() as u16]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    d.push(0);
+    d.extend(text.as_bytes());
+    rec(0x0204, &d)
+}
+
+fn biff_number(row: u16, col: u16, v: f64) -> Vec<u8> {
+    let mut d: Vec<u8> = [row, col, 0].iter().flat_map(|x| x.to_le_bytes()).collect();
+    d.extend(v.to_le_bytes());
+    rec(0x0203, &d)
+}
+
+/// A one-sheet BIFF8 workbook of `cells`, in a version 3 compound file as
+/// Excel writes one.
+fn xls(sheet: &str, cells: &[Vec<u8>]) -> Vec<u8> {
+    use std::io::Write;
+    let bof = |dt: u16| {
+        rec(
+            0x0809,
+            &[0x0600u16, dt, 0, 0, 0, 0, 0, 0]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )
+    };
+    let globals = |offset: u32| {
+        let mut bs = offset.to_le_bytes().to_vec();
+        bs.extend([0, 0, sheet.len() as u8, 0]);
+        bs.extend(sheet.as_bytes());
+        [bof(0x0005), rec(0x0085, &bs), rec(0x000A, &[])].concat()
+    };
+    let at = globals(0).len() as u32;
+    let stream = [globals(at), bof(0x0010), cells.concat(), rec(0x000A, &[])].concat();
+    let mut cf =
+        cfb::CompoundFile::create_with_version(cfb::Version::V3, std::io::Cursor::new(Vec::new()))
+            .unwrap();
+    cf.create_stream("/Workbook")
+        .unwrap()
+        .write_all(&stream)
+        .unwrap();
+    cf.flush().unwrap();
+    cf.into_inner().into_inner()
+}
+
+#[test]
+fn an_xls_workbook_reads_in_every_output_whatever_its_name() {
+    let dir = scratch("xls");
+    let book = xls(
+        "Orders",
+        &[
+            biff_label(0, 0, "Customer"),
+            biff_label(0, 1, "Amount"),
+            biff_label(1, 0, "Alex Sample"),
+            biff_number(1, 1, 12.5),
+            biff_label(2, 0, "Sam Example"),
+            biff_number(2, 1, 7.0),
+        ],
+    );
+    let input = dir.join("orders.xls");
+    std::fs::write(&input, &book).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(&out, "doco:Table", &["Orders", "Alex Sample", "12.5"]);
+    assert!(doc_has_cell(&out[2].1, "Sam Example"));
+    assert!(out[2].1.contains("doc:cellDatum"), "{}", out[2].1);
+    // Renamed, it is still read as what it is.
+    let renamed = dir.join("orders.dat");
+    std::fs::write(&renamed, &book).unwrap();
+    let o = convert(&dir, &renamed, "md", &[]);
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample"));
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -24,6 +24,7 @@ fluree-doc-html.workspace = true
 fluree-doc-pptx.workspace = true
 fluree-doc-xlsx.workspace = true
 fluree-doc-csv.workspace = true
+fluree-doc-xls.workspace = true
 fluree-doc-transcript.workspace = true
 fluree-doc-email.workspace = true
 fluree-doc-vision.workspace = true
@@ -45,6 +46,7 @@ base64 = "0.22"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 tiff = "0.11"
+cfb = "0.15"
 zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
 
 [features]

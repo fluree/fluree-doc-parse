@@ -5,6 +5,7 @@
 //! crate free of any source-format dependency is what lets a Markdown or
 //! DOCX consumer avoid compiling a PDF engine.
 
+pub mod budget;
 pub mod doco;
 pub mod element;
 pub mod emit;

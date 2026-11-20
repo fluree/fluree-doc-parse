@@ -19,7 +19,7 @@ fdoc convert reply.eml
 
 ## What each reader knows
 
-| | [PDF](pdf.md) | [DOCX](office-and-web.md) | [PPTX](office-and-web.md) | [XLSX](office-and-web.md) | [CSV, TSV](csv.md) | [HTML](office-and-web.md) | [Markdown](office-and-web.md) | [WebVTT, SubRip](transcripts.md) | [Email](email.md) | [Plain text](office-and-web.md#plain-text) |
+| | [PDF](pdf.md) | [DOCX](office-and-web.md) | [PPTX](office-and-web.md) | [XLSX, XLS](office-and-web.md#xlsx) | [CSV, TSV](csv.md) | [HTML](office-and-web.md) | [Markdown](office-and-web.md) | [WebVTT, SubRip](transcripts.md) | [Email](email.md) | [Plain text](office-and-web.md#plain-text) |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | structure is | measured | declared | declared | measured from the grid | declared, one table | declared | declared | declared, turns decided | declared, thread split | lines, headings shown |
 | bounding boxes | ✅ | — | — | — | — | — | — | — | — | — |
@@ -41,8 +41,8 @@ structure](../concepts/geometry-vs-declared.md).
 ## Detection
 
 By extension: `.pdf`, `.md`/`.markdown`, `.html`/`.htm`, `.docx`, `.pptx`, `.xlsx`,
-`.csv`, `.tsv`, `.vtt`, `.srt`, `.eml`, `.msg`, and plain text, `.txt`/`.text`. A text
-file that writes Markdown's markup is read as Markdown. A transcript or an email is
+`.xls`, `.csv`, `.tsv`, `.vtt`, `.srt`, `.eml`, `.msg`, and plain text, `.txt`/`.text`. A
+text file that writes Markdown's markup is read as Markdown. A transcript or an email is
 also recognised by its content whatever its name, because both often arrive
 renamed or untyped; see [Transcripts](transcripts.md#detection) and
 [Email](email.md#detection). A PDF-only command given another format fails cleanly rather
@@ -51,10 +51,11 @@ than producing empty output.
 A format with no reader yet is refused by name: `convert` fails on it with
 `unsupported format (.ppt, PowerPoint 97-2003 presentation): no reader for it
 yet`, rather than reading it as a PDF and failing as a corrupt one. That holds
-for `.doc`, `.dot`, `.xls`, `.xlt`, `.xlsb`, `.ods`, `.xps`,
+for `.doc`, `.dot`, `.xlsb`, `.ods`, `.xps`,
 `.oxps`, `.ppt`, `.pps`, `.pot`, `.rtf`, `.odt` and `.odp`, and for an OLE compound
 file that is not an Outlook message (a Word, Excel or PowerPoint 97-2003 file)
-whatever its name, on stdin too. A directory's files of these formats are
+whatever its name, on stdin too; an Excel 97-2003 workbook is recognised by
+its content and read. A directory's files of these formats are
 listed with the rest, so a batch counts them among its failures. A file whose
 content is a PDF or an image is read as one, whatever its extension.
 
@@ -62,7 +63,7 @@ content is a PDF or an image is read as one, whatever its extension.
 
 - **PDF** — real pages, 0-based.
 - **PPTX** — slides are pages, so `page` is the slide index.
-- **XLSX** — sheets are pages, so `page` is the sheet's index in the workbook.
+- **XLSX, XLS** — sheets are pages, so `page` is the sheet's index in the workbook.
 - **DOCX, HTML, Markdown, CSV, plain text** — no pagination; `page` is `0` throughout. A DOCX
   has page breaks only once something lays it out, and that something is not
   this.

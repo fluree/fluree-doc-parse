@@ -297,6 +297,54 @@ read. A workbook without pictures converts as it did. In a library,
 
 Returns `XlsxError` for a malformed or non-archive file.
 
+### Excel 97-2003 (`.xls`)
+
+```bash
+fdoc convert old-book.xls -f doco
+```
+
+A BIFF8 workbook (`.xls`, `.xlt`) is read by
+[calamine](https://crates.io/crates/calamine) and laid out by the same code
+as an XLSX one: each sheet a page opened by its name, blocks of cells tables
+with their titles and notes, merges as continuations, rows frozen by a pane
+a table's header, a bold first row a header. One thing reads differently:
+calamine types a number as a date by its format and gives no other format,
+so a number reads as Excel's General format shows it (`0.125`, not `12.5%`;
+`1234.5`, not `1,234.50`), while a date reads as an ISO date. What each cell
+stores rides beside it typed (`datums`, `doc:cellDatum`) as an XLSX cell's
+does, and the workbook's summary information gives its title, author and
+dates. A file is recognised as a workbook by its content, a compound file
+holding a `Workbook` stream, whatever its name. Provenance and evidence are
+`xls`. Pictures are not read.
+
+calamine is not given the file. It reads a compound file with a reader of
+its own, which follows a looping sector chain; it reserves what a sheet's
+`DIMENSIONS` record declares, lays each sheet out as a grid from its first
+used cell to its last, copies a shared string into every cell naming it,
+and indexes record data without checking its length. So the file is read
+first: its compound file opened by the `cfb` crate, which refuses a sector
+chain that loops or runs past the file; its workbook stream at most
+256 MiB; and its records walked as calamine would walk them, each one
+calamine reads checked against what calamine indexes in it. A workbook
+whose cells, sheets' grids or merged ranges pass about four million in all
+(a sheet named twice counting twice), or whose cells would copy more than
+64 million characters of text, fails as too large; one whose records are
+cut short, or whose sheet offsets point at no sheet, fails as malformed.
+calamine then reads a compound file written for it, holding a workbook
+stream of only the records it needs, each sheet once and its formulas
+emptied to their cached values, and the summary information where it is
+under 32 KiB.
+
+`.xlsb` and `.ods` are not read yet. calamine reads both, but it expands
+an ODS sheet's repeated rows and columns as it opens the file, up to Excel's
+whole grid, which a check from outside could only bound by parsing the sheet
+first; and an `.xlsb` (binary records in a zip) has no synthetic fixture yet
+to test a reader on. Both fail as an
+[unsupported format](README.md#detection).
+
+Returns `XlsError` (from `fluree_doc_xls::parse`) for a file that is not a
+workbook, is malformed, or is past a bound.
+
 ## HTML
 
 ```bash

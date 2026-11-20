@@ -224,6 +224,88 @@ pub fn parse_with_media(
     Ok((out, pkg.info(), media))
 }
 
+/// One cell of a sheet another workbook format's reader read (`.xls`,
+/// `.xlsb`): where it is, 0-based, the text Excel shows, and what it stores.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridCell {
+    pub row: u32,
+    pub col: u32,
+    /// What the cell shows. Runs of whitespace, line breaks among them,
+    /// become one space, as a sheet cell's do here; a cell with no text is
+    /// no cell.
+    pub text: String,
+    /// What it stores, typed, where its type is not text ([`cell_datum`]).
+    pub datum: Option<Datum>,
+    pub bold: bool,
+}
+
+/// A sheet another workbook format's reader read, for [`grid_elements`]
+/// to lay out as an XLSX sheet is laid out.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GridSheet {
+    pub name: String,
+    pub cells: Vec<GridCell>,
+    /// Merged ranges, each `(first row, first column, last row, last
+    /// column)`, inclusive, 0-based.
+    pub merges: Vec<(u32, u32, u32, u32)>,
+    /// Rows frozen at the top, which name the columns.
+    pub frozen_rows: u32,
+}
+
+/// Sheets read by another workbook format's reader, laid out exactly as an
+/// XLSX workbook's are: each a page opened by its name, its islands of
+/// cells tables with their titles and notes peeled off, merges as
+/// continuations. Every element's provenance and evidence is `source`
+/// (`xls`, `xlsb`). A cell set larger than the rest is not known here, so
+/// only weight (`bold`) sets a title apart. A cell past Excel's grid
+/// ([`MAX_ROWS`], [`MAX_COLUMNS`]) is no cell, as in an XLSX sheet, and a
+/// merge is cut at the grid's edge.
+pub fn grid_elements(sheets: Vec<GridSheet>, source: &'static str) -> Vec<Element> {
+    let mut out = Vec::new();
+    for (page, g) in sheets.into_iter().enumerate() {
+        let mut sheet = Sheet {
+            frozen_rows: g.frozen_rows,
+            ..Sheet::default()
+        };
+        for c in g.cells {
+            if c.row >= MAX_ROWS || c.col >= MAX_COLUMNS {
+                continue;
+            }
+            let text = c.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                continue;
+            }
+            sheet.cells.insert(
+                (c.row, c.col),
+                Cell {
+                    text,
+                    datum: c.datum,
+                    bold: c.bold,
+                    size: CellStyle::default().size,
+                },
+            );
+        }
+        sheet.merges = g
+            .merges
+            .into_iter()
+            .map(|(r0, c0, r1, c1)| Range {
+                r0: r0.min(r1),
+                c0: c0.min(c1),
+                r1: r0.max(r1).min(MAX_ROWS - 1),
+                c1: c0.max(c1).min(MAX_COLUMNS - 1),
+            })
+            .filter(|m| m.r0 < MAX_ROWS && m.c0 < MAX_COLUMNS)
+            .collect();
+        out.extend(sheet_elements(&g.name, &sheet, page, Vec::new()));
+    }
+    for (i, e) in out.iter_mut().enumerate() {
+        e.id = format!("elem-{:05}", i + 1);
+        e.provenance = source;
+        e.evidence = source;
+    }
+    out
+}
+
 /// A picture a drawing anchors to a sheet's cells.
 #[derive(Debug, PartialEq, Eq)]
 struct Picture {
@@ -1916,6 +1998,90 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_grid_cell_past_excels_grid_is_no_cell() {
+        let text_cell = |row, col, text: &str| GridCell {
+            row,
+            col,
+            text: text.into(),
+            datum: None,
+            bold: false,
+        };
+        // An `.xlsb` cell record names its column in 32 bits: the last
+        // column a u32 holds was the neighbour of column 0, one island over
+        // every column, walked a row at a time.
+        let sheets = vec![GridSheet {
+            name: "S".into(),
+            cells: vec![
+                text_cell(0, 0, "a"),
+                text_cell(0, u32::MAX, "far"),
+                text_cell(1, 0, "b"),
+                text_cell(1, 1, "c"),
+                text_cell(MAX_ROWS, 0, "below"),
+            ],
+            merges: vec![(0, 0, 1, u32::MAX), (MAX_ROWS, 0, MAX_ROWS, 1)],
+            frozen_rows: 0,
+        }];
+        let els = grid_elements(sheets, "xlsb");
+        let all: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert!(all.iter().any(|t| t.contains('a')), "{all:?}");
+        assert!(
+            all.iter()
+                .all(|t| !t.contains("far") && !t.contains("below")),
+            "{all:?}"
+        );
+    }
+
+    #[test]
+    fn a_grid_from_another_format_is_laid_out_as_a_sheet_is() {
+        let cell = |row, col, text: &str, bold| GridCell {
+            row,
+            col,
+            text: text.into(),
+            datum: None,
+            bold,
+        };
+        let sheets = vec![GridSheet {
+            name: "Orders".into(),
+            cells: vec![
+                cell(0, 0, "Quarterly orders", true),
+                cell(2, 0, "Customer", false),
+                cell(2, 1, "Amount", false),
+                cell(3, 0, "Alex  Sample", false),
+                GridCell {
+                    datum: Some(Datum::new("xsd:decimal", "12.5")),
+                    ..cell(3, 1, "12.5", false)
+                },
+                cell(4, 0, "Region West", false),
+                cell(5, 0, "Sam Example", false),
+                cell(5, 1, "7", false),
+            ],
+            // `Region West` spans the table: a band inside it.
+            merges: vec![(4, 0, 4, 1)],
+            frozen_rows: 0,
+        }];
+        let els = grid_elements(sheets, "xls");
+        let kinds: Vec<(&str, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(kinds[0], ("doco:SectionTitle", "Orders"));
+        assert_eq!(kinds[1], ("doco:SectionTitle", "Quarterly orders"));
+        let t = &els[2];
+        assert_eq!(t.kind, "doco:Table");
+        assert_eq!(t.cells.as_ref().unwrap()[1], ["Alex Sample", "12.5"]);
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.sub_headers, Some(vec![2]));
+        assert_eq!(
+            t.datums.as_ref().unwrap()[1][1],
+            Some(Datum::new("xsd:decimal", "12.5"))
+        );
+        assert!(els
+            .iter()
+            .all(|e| e.provenance == "xls" && e.evidence == "xls"));
+        assert_eq!(els[2].id, "elem-00003");
+    }
 
     const NS: &str = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
 
