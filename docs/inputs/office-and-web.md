@@ -204,6 +204,46 @@ boundaries exist only once something lays it out.
 
 Returns `DocxError` for a malformed or non-archive file.
 
+### Word 97-2003 (`.doc`)
+
+```bash
+fdoc convert old-memo.doc -f doco
+```
+
+A `.doc` (or `.dot`) is read for its text, through its piece table: the
+`WordDocument` stream holds the text in pieces, anywhere and in any order
+after a fast save, one byte a character (Windows-1252) or two (UTF-16), and
+the piece table says which run of the document each holds. What is read:
+
+- The main text, as paragraphs at Word's paragraph marks; a line break keeps
+  its line, and a page break parts lines.
+- **Tables**, by each paragraph's own properties (in a table; the end of a
+  row), as `doco:Table`s of their cells, a cell's paragraphs joined.
+- A field shows its result (`PAGE` its last page number), not its code;
+  a footnote reference in the body adds nothing to it.
+- **Footnotes, endnotes and comments** after the body, marked by `evidence`
+  `footnote`, `endnote` and `comment` as in a DOCX; a note opens with its
+  number (`1`, `2`, … and `i`, `ii`, … for endnotes).
+
+What this round leaves out, and says so here rather than guessing: styles
+(so no heading, title or list is told apart from a paragraph, and list
+numbers Word computes are absent), headers and footers, text boxes, comment
+authors, a table's header row (`header_rows` is left undetected), merged
+cells, pictures, and the summary information. Word 95 and earlier and
+encrypted files are refused. Provenance and evidence are `doc`.
+
+A file is recognised as a Word document by its content, a compound file
+holding a `WordDocument` stream, whatever its name. As for any compound
+file, the container is opened by the `cfb` crate, which refuses a sector
+chain that loops or runs past the file; the `WordDocument` stream is read
+to at most 256 MiB and the table stream to 64 MiB, and at most a million
+pieces and 64 million characters, a piece table whose positions go
+backwards (pieces that overlap, reading the same characters again) failing
+as malformed. Each page of paragraph properties is read once however many
+times the bin table names it, at most about four million runs of them, and
+a paragraph finds its own by a binary search. Returns `DocError`
+(`fluree_doc_doc::parse`) otherwise.
+
 ## PPTX
 
 ```bash

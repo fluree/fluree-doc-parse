@@ -12,6 +12,7 @@ members = [
     "crates/fluree-doc-csv",
     "crates/fluree-doc-xls",
     "crates/fluree-doc-xps",
+    "crates/fluree-doc-doc",
     "crates/fluree-doc-transcript",
     "crates/fluree-doc-email",
     "crates/fluree-doc-vision",
@@ -39,6 +40,7 @@ fluree-doc-xlsx = { path = "crates/fluree-doc-xlsx" }
 fluree-doc-csv = { path = "crates/fluree-doc-csv" }
 fluree-doc-xls = { path = "crates/fluree-doc-xls" }
 fluree-doc-xps = { path = "crates/fluree-doc-xps" }
+fluree-doc-doc = { path = "crates/fluree-doc-doc" }
 fluree-doc-ooxml = { path = "crates/fluree-doc-ooxml" }
 fluree-doc-transcript = { path = "crates/fluree-doc-transcript" }
 fluree-doc-email = { path = "crates/fluree-doc-email" }

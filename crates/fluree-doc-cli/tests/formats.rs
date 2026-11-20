@@ -569,3 +569,61 @@ fn an_xps_document_reads_as_a_pdf_does_and_its_pictured_page_as_a_scan() {
     assert!(crops.join("report_p1_full.png").is_file());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A Word 97 document of `paragraphs`, its text one Windows-1252 piece
+/// after the file information block, in a version 3 compound file.
+fn word97(paragraphs: &[&str]) -> Vec<u8> {
+    use std::io::Write;
+    let text: String = paragraphs.iter().map(|p| format!("{p}\r")).collect();
+    let mut wd = vec![0u8; 0x200];
+    let fc = wd.len() as u32;
+    wd.extend(text.bytes());
+    let mut clx = vec![0x02u8];
+    let mut plc = Vec::new();
+    for cp in [0u32, text.len() as u32] {
+        plc.extend(cp.to_le_bytes());
+    }
+    plc.extend(0u16.to_le_bytes());
+    plc.extend(((fc * 2) | 0x4000_0000).to_le_bytes());
+    plc.extend(0u16.to_le_bytes());
+    clx.extend((plc.len() as u32).to_le_bytes());
+    clx.extend(&plc);
+    let put = |wd: &mut Vec<u8>, at: usize, v: &[u8]| wd[at..at + v.len()].copy_from_slice(v);
+    put(&mut wd, 0, &0xA5ECu16.to_le_bytes());
+    put(&mut wd, 2, &0x00C1u16.to_le_bytes());
+    put(&mut wd, 0x0A, &0x0200u16.to_le_bytes());
+    put(&mut wd, 0x4C, &(text.len() as u32).to_le_bytes());
+    put(
+        &mut wd,
+        0x9A + 8 * 33 + 4,
+        &(clx.len() as u32).to_le_bytes(),
+    );
+    let mut cf =
+        cfb::CompoundFile::create_with_version(cfb::Version::V3, std::io::Cursor::new(Vec::new()))
+            .unwrap();
+    for (name, data) in [("/WordDocument", &wd), ("/1Table", &clx)] {
+        cf.create_stream(name).unwrap().write_all(data).unwrap();
+    }
+    cf.flush().unwrap();
+    cf.into_inner().into_inner()
+}
+
+#[test]
+fn a_word_97_document_reads_in_every_output_whatever_its_name() {
+    let dir = scratch("doc");
+    let bytes = word97(&["Quarterly report", "Alex Sample signed the orders."]);
+    let input = dir.join("memo.doc");
+    std::fs::write(&input, &bytes).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(
+        &out,
+        "doco:Paragraph",
+        &["Quarterly report", "Alex Sample signed the orders."],
+    );
+    // Renamed, it is still read as what it is.
+    let renamed = dir.join("memo.bin");
+    std::fs::write(&renamed, &bytes).unwrap();
+    let o = convert(&dir, &renamed, "md", &[]);
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample signed"));
+    let _ = std::fs::remove_dir_all(dir);
+}

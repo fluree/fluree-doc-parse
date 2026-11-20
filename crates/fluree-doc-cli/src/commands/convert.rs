@@ -133,27 +133,39 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         }
         let src = Source::stdin(&data, args);
         // By its content, as a file is (`input_kind`): with no name to go
-        // by, a transcript, an e-mail, an image, an Excel 97-2003 workbook;
-        // a format no reader reads is refused by name; anything else is
-        // read as a PDF.
-        let converted = match common::input_kind(Path::new("-"), &data) {
-            common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
-            common::SourceKind::Email => convert_email(&data, &src, cfg, args, quiet),
-            common::SourceKind::Image => convert_image(data, &src, cfg, args, quiet),
-            common::SourceKind::Xls => fluree_doc_xls::parse_with_info(&data)
-                .map_err(|e| e.to_string())
-                .map(|(elements, info)| {
-                    let notes = fluree_doc_model::Notes {
-                        info,
-                        ..Default::default()
-                    };
-                    render(&elements, &src, args, Vec::new(), &notes)
-                }),
-            _ => match common::unsupported(None, &data) {
-                Some(why) => Err(why),
-                None => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
-            },
-        };
+        // by, a transcript, an e-mail, an image, a Word or Excel 97-2003
+        // file; a format no reader reads is refused by name; anything else
+        // is read as a PDF.
+        let converted =
+            match common::input_kind(Path::new("-"), &data) {
+                common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
+                common::SourceKind::Email => convert_email(&data, &src, cfg, args, quiet),
+                common::SourceKind::Image => convert_image(data, &src, cfg, args, quiet),
+                common::SourceKind::Xls => fluree_doc_xls::parse_with_info(&data)
+                    .map_err(|e| e.to_string())
+                    .map(|(elements, info)| {
+                        let notes = fluree_doc_model::Notes {
+                            info,
+                            ..Default::default()
+                        };
+                        render(&elements, &src, args, Vec::new(), &notes)
+                    }),
+                common::SourceKind::Doc => fluree_doc_doc::parse(&data)
+                    .map_err(|e| e.to_string())
+                    .map(|elements| {
+                        render(
+                            &elements,
+                            &src,
+                            args,
+                            Vec::new(),
+                            &fluree_doc_model::Notes::default(),
+                        )
+                    }),
+                _ => match common::unsupported(None, &data) {
+                    Some(why) => Err(why),
+                    None => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
+                },
+            };
         return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
             Err(e) => {
@@ -447,6 +459,11 @@ fn convert_source(
                 .map_err(|e| e.to_string())?;
             (elements, fluree_doc_model::Notes::default())
         }
+        // A Word 97-2003 document's text, through its piece table.
+        SourceKind::Doc => (
+            fluree_doc_doc::parse(&data).map_err(|e| e.to_string())?,
+            fluree_doc_model::Notes::default(),
+        ),
         // An Excel 97-2003 workbook, laid out as an XLSX one is.
         SourceKind::Xls => {
             let (elements, info) =

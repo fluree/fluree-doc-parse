@@ -988,6 +988,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "fluree-doc-csv",
+ "fluree-doc-doc",
  "fluree-doc-docx",
  "fluree-doc-email",
  "fluree-doc-html",
@@ -1021,6 +1022,15 @@ dependencies = [
 name = "fluree-doc-csv"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
+ "fluree-doc-model",
+]
+
+[[package]]
+name = "fluree-doc-doc"
+version = "0.1.0"
+dependencies = [
+ "cfb",
  "encoding_rs",
  "fluree-doc-model",
 ]

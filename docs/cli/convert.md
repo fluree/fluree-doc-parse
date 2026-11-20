@@ -188,16 +188,17 @@ pages in doubt about their structure, and tables.
 ## Inputs
 
 Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email, a
-transcript, an image** (PNG, JPEG, TIFF) **or an Excel 97-2003 workbook**,
-which are told apart by their content; Markdown, HTML and the other Office
-formats are known only by their extension, so they are read from a file.
+transcript, an image** (PNG, JPEG, TIFF) **or a Word or Excel 97-2003
+file**, which are told apart by their content; Markdown, HTML and the other
+Office formats are known only by their extension, so they are read from a
+file.
 
 Directories are scanned for every extension `convert` reads, including
 Word, PowerPoint and Excel's macro-enabled, template and show variants
 (`.docm`, `.dotx`, `.potx`, `.ppsx`, `.xltx`, …). Multiple inputs are
 allowed; with more than one you need `--out-dir` rather than `--output`.
 
-A format no reader reads yet (`.ppt`, `.rtf`, `.odt`, an Office 97-2003
+A format no reader reads yet (`.ppt`, `.rtf`, `.odt`, a PowerPoint 97-2003
 compound file, …) fails with `unsupported format (…)`, naming it, rather than
 as a corrupt PDF; directory scans list such files, so a batch counts them
 among its failures. See [Detection](../inputs/README.md#detection).
