@@ -73,6 +73,76 @@ pub const CROP_MARGIN: f64 = 6.0;
 /// A page's render jobs: `None` = the whole page, else named crops.
 pub type CropJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 
+/// Why a crop was asked for.
+///
+/// Two families with opposite needs. A scan, a near-blank page, a page of
+/// broken Unicode and a raster region carry content the text layer does
+/// not: any reader adds to them. A table the grid does not trust, and a page
+/// asked for on a doubt about its headings, figures or columns, have all
+/// their text already and want a reader that sees structure: an OCR engine
+/// has nothing to add there, and should skip them. A table no grid covered
+/// usually has its text too, but may be a raster table too small for the
+/// router to send a reader: skip it only where the page's text covers it.
+/// A table on a page read whole for a doubt goes with its page, under the
+/// doubt's reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CropReason {
+    /// A whole page with no meaningful text layer.
+    Scanned,
+    /// A whole page with almost no glyphs, whose content is its image.
+    NearBlank,
+    /// A whole page whose glyphs' Unicode cannot be trusted.
+    BrokenText,
+    /// A raster region of a text page that the text layer does not cover, or
+    /// a whole page read for a doubt that also carries one.
+    Region,
+    /// A table the deterministic grid found but does not trust.
+    Table,
+    /// A table a layout detector found and no grid covered: text the grid
+    /// missed, or a raster table too small to route as a region.
+    TableMissing,
+    /// A whole page whose hierarchy rests on nothing but font size.
+    HeadingDoubt,
+    /// A whole page whose text sits inside its drawings.
+    FigureDoubt,
+    /// A whole page whose column structure is in doubt (asked for only
+    /// with [`CropHints::on_column_doubt`]).
+    ColumnDoubt,
+}
+
+impl CropReason {
+    /// The name the `render-routed` manifest records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CropReason::Scanned => "scanned",
+            CropReason::NearBlank => "near_blank",
+            CropReason::BrokenText => "broken_text",
+            CropReason::Region => "region",
+            CropReason::Table => "table",
+            CropReason::TableMissing => "table_missing",
+            CropReason::HeadingDoubt => "heading_doubt",
+            CropReason::FigureDoubt => "figure_doubt",
+            CropReason::ColumnDoubt => "column_doubt",
+        }
+    }
+
+    /// The reason for a region crop, from its tag: `r{i}` a routed region,
+    /// `n{i}` a table only a layout detector found, `t{i}` a table the grid
+    /// does not trust. `None` for a tag no region crop carries.
+    pub fn of_region_tag(tag: &str) -> Option<Self> {
+        match tag.chars().next() {
+            Some('r') => Some(CropReason::Region),
+            Some('n') => Some(CropReason::TableMissing),
+            Some('t') => Some(CropReason::Table),
+            _ => None,
+        }
+    }
+}
+
+/// Why each whole page in a job list was asked for, by page index. Region
+/// crops carry theirs in their tag ([`CropReason::of_region_tag`]).
+pub type PageReasons = std::collections::BTreeMap<usize, CropReason>;
+
 /// One rendered crop, named the way the splice will ask for it.
 pub struct Crop {
     /// `p{page}_{tag}` — the crop name a reading is filed under.
@@ -169,13 +239,23 @@ pub fn plan(
     opts: &AnalyzeOptions,
     hints: &CropHints,
 ) -> CropJobs {
+    plan_explained(doc, outline, opts, hints).0
+}
+
+/// As [`plan`], with the reason each whole page was asked for.
+pub fn plan_explained(
+    doc: &Document,
+    outline: &[OutlineItem],
+    opts: &AnalyzeOptions,
+    hints: &CropHints,
+) -> (CropJobs, PageReasons) {
     let mut copy = doc.clone();
     let opts = AnalyzeOptions {
         emit_anchors: true,
         ..opts.clone()
     };
     let analysis = crate::document::analyze_with(&mut copy, outline, &opts);
-    crops_for_with(doc, &analysis, hints)
+    select(doc, &analysis, hints)
 }
 
 /// Every crop this document asks for, in page order, without hints.
@@ -200,11 +280,30 @@ pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> 
 /// case: over the evaluation corpus 113 of 200 documents ask for nothing.
 /// `analysis` comes with anchors on, as for [`crops_for`].
 pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) -> CropJobs {
+    select(doc, analysis, hints).0
+}
+
+/// The selection itself, with the reason for each whole page. A page keeps
+/// the first reason that asked for it: the router's verdict before any
+/// doubt, a heading doubt before a figure doubt.
+fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, PageReasons) {
+    use crate::route::{Reason, Route};
     let mut jobs: CropJobs = Vec::new();
+    let mut reasons = PageReasons::new();
     for p in &doc.pages {
         match crate::route::decide(p).0 {
-            crate::route::Route::Vlm(_) => jobs.push((p.index, None)),
-            crate::route::Route::VlmRegions(r) => jobs.push((
+            Route::Vlm(r) => {
+                jobs.push((p.index, None));
+                reasons.insert(
+                    p.index,
+                    match r {
+                        Reason::Scanned => CropReason::Scanned,
+                        Reason::NearBlank => CropReason::NearBlank,
+                        Reason::BrokenText => CropReason::BrokenText,
+                    },
+                );
+            }
+            Route::VlmRegions(r) => jobs.push((
                 p.index,
                 Some(
                     r.iter()
@@ -213,14 +312,33 @@ pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) ->
                         .collect(),
                 ),
             )),
-            crate::route::Route::Deterministic => {}
+            Route::Deterministic => {}
         }
     }
-    // The whole page, superseding any region or table crop on it.
-    let whole = |jobs: &mut CropJobs, page: usize| match jobs.iter_mut().find(|(pi, _)| *pi == page)
-    {
-        Some((_, slot)) => *slot = None,
-        None => jobs.push((page, None)),
+    // The whole page, superseding any region crop on it (table crops are
+    // added after the doubts, and none is added to a page read whole).
+    // A page that had routed regions keeps `Region` as its reason: the whole
+    // page now carries pixels only a reader can read, and a reader skipping
+    // doubt pages must not skip those.
+    let whole = |jobs: &mut CropJobs, reasons: &mut PageReasons, page: usize, why: CropReason| {
+        let why = match jobs.iter_mut().find(|(pi, _)| *pi == page) {
+            Some((_, slot)) => {
+                // A slot here holds routed regions only: `VlmRegions` is never
+                // empty, and table crops are added after the doubts.
+                let had_regions = slot.is_some();
+                *slot = None;
+                if had_regions {
+                    CropReason::Region
+                } else {
+                    why
+                }
+            }
+            None => {
+                jobs.push((page, None));
+                why
+            }
+        };
+        reasons.entry(page).or_insert(why);
     };
 
     // A hierarchy resting on nothing but font size is a whole-page
@@ -239,7 +357,7 @@ pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) ->
     // page, and a long document with one badly organised page should cost
     // one reading rather than all of them.
     for d in &analysis.suspect_headings {
-        whole(&mut jobs, d.page);
+        whole(&mut jobs, &mut reasons, d.page, CropReason::HeadingDoubt);
     }
     // A page whose text sits inside its drawings is a designed layout, and
     // a designed layout is where every geometric inference this library
@@ -247,7 +365,7 @@ pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) ->
     // figure boundaries. Recognising it and handing it to a reader is
     // cheaper than decoding it, and correct more often.
     for d in &analysis.suspect_figures {
-        whole(&mut jobs, d.page);
+        whole(&mut jobs, &mut reasons, d.page, CropReason::FigureDoubt);
     }
     // Column doubt escalates only when asked for, because whether it helps
     // depends on the document and nothing on the page tells you which kind
@@ -265,7 +383,7 @@ pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) ->
     if hints.on_column_doubt {
         for p in &doc.pages {
             if crate::document::column_doubt(p, analysis).is_some() {
-                whole(&mut jobs, p.index);
+                whole(&mut jobs, &mut reasons, p.index, CropReason::ColumnDoubt);
             }
         }
     }
@@ -338,7 +456,7 @@ pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) ->
             None => jobs.push((e.page, Some(vec![(t.to_string(), bbox)]))),
         }
     }
-    jobs
+    (jobs, reasons)
 }
 
 /// How many readings a job list asks for: one per whole page, one per
@@ -767,6 +885,223 @@ mod tests {
                 y1: 10.0,
             },
         )
+    }
+
+    /// The crops and their reasons for `doc`, with a figure doubt on each
+    /// of `doubted`.
+    fn reasons_with_doubts(doc: &Document, doubted: &[usize]) -> (CropJobs, PageReasons) {
+        let mut copy = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let mut analysis = crate::document::analyze_with(&mut copy, &[], &opts);
+        analysis.suspect_figures = doubted
+            .iter()
+            .map(|&page| crate::figure::Doubt {
+                page,
+                share: 0.9,
+                chars: 500,
+            })
+            .collect();
+        select(doc, &analysis, &CropHints::default())
+    }
+
+    #[test]
+    fn a_page_read_whole_says_why() {
+        let doc = Document {
+            pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
+        };
+        let (jobs, reasons) = reasons_with_doubts(&doc, &[1]);
+        assert_eq!(jobs.len(), 2, "the blank scan and the doubt page: {jobs:?}");
+        // No glyph at all under a full-page image: the router's near-blank.
+        assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
+        assert_eq!(reasons.get(&1), Some(&CropReason::FigureDoubt));
+        assert_eq!(reasons.get(&2), None);
+        assert_eq!(CropReason::FigureDoubt.as_str(), "figure_doubt");
+    }
+
+    #[test]
+    fn each_reason_has_its_documented_name() {
+        // The names are the manifest's contract (escalation-tiers.md).
+        let all = [
+            (CropReason::Scanned, "scanned"),
+            (CropReason::NearBlank, "near_blank"),
+            (CropReason::BrokenText, "broken_text"),
+            (CropReason::Region, "region"),
+            (CropReason::Table, "table"),
+            (CropReason::TableMissing, "table_missing"),
+            (CropReason::HeadingDoubt, "heading_doubt"),
+            (CropReason::FigureDoubt, "figure_doubt"),
+            (CropReason::ColumnDoubt, "column_doubt"),
+        ];
+        for (reason, name) in all {
+            assert_eq!(reason.as_str(), name);
+        }
+        let names: std::collections::HashSet<&str> = all.iter().map(|(r, _)| r.as_str()).collect();
+        assert_eq!(names.len(), all.len());
+    }
+
+    /// A page of `glyphs` glyphs, none of whose Unicode resolves.
+    fn broken_page(index: usize, glyphs: usize) -> crate::extract::Page {
+        let mut p = page(index, glyphs, false);
+        for g in &mut p.glyphs {
+            g.text = String::new();
+        }
+        p
+    }
+
+    #[test]
+    fn each_router_verdict_names_its_reason() {
+        let doc = Document {
+            pages: vec![page(0, 0, true), page(1, 50, true), broken_page(2, 300)],
+        };
+        let (_, reasons) = reasons_with_doubts(&doc, &[]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
+        assert_eq!(reasons.get(&1), Some(&CropReason::Scanned));
+        assert_eq!(reasons.get(&2), Some(&CropReason::BrokenText));
+    }
+
+    #[test]
+    fn the_routers_verdict_comes_before_a_doubt() {
+        // A scan or a page of broken Unicode that is also doubted is still
+        // read for its text: the doubt must not relabel it as a page an OCR
+        // engine may skip.
+        let doc = Document {
+            pages: vec![page(0, 50, true), broken_page(1, 300)],
+        };
+        let (jobs, reasons) = reasons_with_doubts(&doc, &[0, 1]);
+        assert_eq!(jobs, vec![(0, None), (1, None)]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
+        assert_eq!(reasons.get(&1), Some(&CropReason::BrokenText));
+    }
+
+    #[test]
+    fn a_heading_doubt_comes_before_a_figure_doubt() {
+        let doc = Document {
+            pages: vec![page(0, 500, false), page(1, 500, false)],
+        };
+        let mut copy = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let mut analysis = crate::document::analyze_with(&mut copy, &[], &opts);
+        analysis.suspect_headings = vec![crate::heading::Doubt {
+            page: 0,
+            titles: 10,
+            elements: 12,
+            density: 0.8,
+            corroborated: 0,
+            template: 0,
+        }];
+        analysis.suspect_figures = [0, 1]
+            .iter()
+            .map(|&page| crate::figure::Doubt {
+                page,
+                share: 0.9,
+                chars: 500,
+            })
+            .collect();
+        let (jobs, reasons) = select(&doc, &analysis, &CropHints::default());
+        assert_eq!(jobs, vec![(0, None), (1, None)]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::HeadingDoubt));
+        assert_eq!(reasons.get(&1), Some(&CropReason::FigureDoubt));
+    }
+
+    #[test]
+    fn a_column_doubt_names_its_reason_when_asked_for() {
+        // A full-width header over three panels: the page-wide pass sees one
+        // gutter of two, which is the column doubt.
+        let mut p = page(0, 0, false);
+        let mut i = 0;
+        let mut put = |p: &mut crate::extract::Page, x: f64, y: f64| {
+            p.glyphs.push(crate::glyph::Glyph {
+                text: "a".into(),
+                bbox: Some(BBox {
+                    x0: x,
+                    y0: y,
+                    x1: x + 6.0,
+                    y1: y + 9.0,
+                }),
+                page: 0,
+                origin: (x, y + 9.0),
+                rotation_deg: 0.0,
+                font_size: 9.0,
+                weight: None,
+                advance: Some(6.0),
+                draw_index: i,
+            });
+            i += 1;
+        };
+        for row in 0..7 {
+            for k in 0..30 {
+                put(&mut p, 50.0 + k as f64 * 10.0, 100.0 + row as f64 * 12.0);
+            }
+        }
+        for k in 0..45 {
+            put(&mut p, 50.0 + k as f64 * 10.0, 184.0);
+        }
+        for row in 0..14 {
+            for x0 in [50.0, 250.0, 460.0] {
+                for k in 0..12 {
+                    put(&mut p, x0 + k as f64 * 10.0, 220.0 + row as f64 * 12.0);
+                }
+            }
+        }
+        let doc = Document { pages: vec![p] };
+        let mut copy = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let analysis = crate::document::analyze_with(&mut copy, &[], &opts);
+        assert!(crate::document::column_doubt(&doc.pages[0], &analysis).is_some());
+        let off = select(&doc, &analysis, &CropHints::default());
+        assert!(off.0.is_empty(), "not asked for: {:?}", off.0);
+        let hints = CropHints {
+            on_column_doubt: true,
+            ..Default::default()
+        };
+        let (jobs, reasons) = select(&doc, &analysis, &hints);
+        assert_eq!(jobs, vec![(0, None)]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::ColumnDoubt));
+    }
+
+    #[test]
+    fn a_doubt_page_with_raster_regions_keeps_their_reason() {
+        // A text page with a raster table the glyphs do not cover, doubted
+        // as a whole: read whole now, it still holds pixels only a reader
+        // can read, so a reader skipping doubt pages must not skip it.
+        let mut p = page(0, 1500, false);
+        p.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 550.0,
+                y1: 300.0,
+            },
+            texty: true,
+        }];
+        assert!(matches!(
+            crate::route::decide(&p).0,
+            crate::route::Route::VlmRegions(_)
+        ));
+        let doc = Document { pages: vec![p] };
+        let (jobs, reasons) = reasons_with_doubts(&doc, &[0]);
+        assert_eq!(jobs, vec![(0, None)], "the doubt reads the page whole");
+        assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+    }
+
+    #[test]
+    fn region_tags_name_their_reason() {
+        assert_eq!(CropReason::of_region_tag("r0"), Some(CropReason::Region));
+        assert_eq!(
+            CropReason::of_region_tag("n1"),
+            Some(CropReason::TableMissing)
+        );
+        assert_eq!(CropReason::of_region_tag("t2"), Some(CropReason::Table));
+        assert_eq!(CropReason::of_region_tag("full"), None);
     }
 
     #[test]
