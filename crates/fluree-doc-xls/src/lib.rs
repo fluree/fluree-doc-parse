@@ -1,4 +1,5 @@
-//! Excel 97-2003 workbooks (`.xls`, BIFF8) to DoCO-typed document elements.
+//! Excel 97-2003 workbooks (`.xls`, BIFF8) to DoCO-typed document elements,
+//! and Excel binary workbooks (`.xlsb`, see [`parse_xlsb`]).
 //!
 //! The cells are read by [calamine](https://crates.io/crates/calamine), and
 //! laid out by the XLSX reader ([`fluree_doc_xlsx::grid_elements`]): each
@@ -30,6 +31,9 @@
 //! many rows each sheet freezes.
 
 mod scan;
+mod xlsb;
+
+pub use xlsb::{is_xlsb, parse_xlsb};
 
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_xlsx::{GridCell, GridSheet};

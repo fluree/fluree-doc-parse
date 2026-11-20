@@ -160,7 +160,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-pptx` — PPTX (OOXML) reader
 - `crates/fluree-doc-xlsx` — XLSX (OOXML) reader
 - `crates/fluree-doc-doc` — Word 97-2003 (`.doc`) reader
-- `crates/fluree-doc-xls` — Excel 97-2003 (`.xls`) reader
+- `crates/fluree-doc-xls` — Excel 97-2003 (`.xls`) and binary (`.xlsb`) reader
 - `crates/fluree-doc-xps` — XPS and OpenXPS reader (pages for the PDF layout)
 - `crates/fluree-doc-odf` — OpenDocument reader (`.odt`, `.ods`, `.odp`)
 - `crates/fluree-doc-csv` — CSV and TSV reader

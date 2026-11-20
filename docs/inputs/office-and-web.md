@@ -397,15 +397,23 @@ stream of only the records it needs, each sheet once and its formulas
 emptied to their cached values, and the summary information where it is
 under 32 KiB.
 
-`.xlsb` and `.ods` are not read yet. calamine reads both, but it expands
-an ODS sheet's repeated rows and columns as it opens the file, up to Excel's
-whole grid, which a check from outside could only bound by parsing the sheet
-first; and an `.xlsb` (binary records in a zip) has no synthetic fixture yet
-to test a reader on. Both fail as an
-[unsupported format](README.md#detection).
+### Excel binary workbooks (`.xlsb`)
 
-Returns `XlsError` (from `fluree_doc_xls::parse`) for a file that is not a
-workbook, is malformed, or is past a bound.
+A `.xlsb` is a workbook saved as binary records in a zip. Its records are
+read here, each checked against its length, rather than by calamine, which
+indexes them unchecked; a sheet's cells are laid out the same way as an
+`.xls`'s, and provenance and evidence are `xlsb`. Numbers read as General,
+dates as ISO dates, as for `.xls`; bold cells, frozen rows and merges are
+not read. Every part is first inflated to nowhere against 64 MiB each and
+256 MiB in all (and at most 10,000 parts); at most about four million cells
+are read, and a shared string's text, copied for each cell that names it,
+is counted each time against 256 MiB. A file is
+recognised by its content, a zip holding `xl/workbook.bin`, whatever its
+name and on stdin. `.ods` is read by its own reader
+([OpenDocument](opendocument.md)).
+
+Returns `XlsError` (from `fluree_doc_xls::parse` or `parse_xlsb`) for a file
+that is not a workbook, is malformed, or is past a bound.
 
 ## HTML
 

@@ -1181,7 +1181,9 @@ dependencies = [
  "calamine",
  "cfb",
  "fluree-doc-model",
+ "fluree-doc-ooxml",
  "fluree-doc-xlsx",
+ "zip",
 ]
 
 [[package]]

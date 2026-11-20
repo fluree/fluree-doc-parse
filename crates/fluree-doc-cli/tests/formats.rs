@@ -716,3 +716,80 @@ fn opendocument_text_sheets_and_slides_reach_every_output() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A one-sheet Excel binary workbook of inline strings and numbers, by row.
+fn xlsb(rows: &[&[&str]]) -> Vec<u8> {
+    use std::io::Write;
+    let rec = |typ: u16, data: &[u8]| {
+        let mut v = if typ >= 0x80 {
+            vec![(typ & 0x7F) as u8 | 0x80, (typ >> 7) as u8]
+        } else {
+            vec![typ as u8]
+        };
+        assert!(data.len() < 0x80);
+        v.push(data.len() as u8);
+        v.extend(data);
+        v
+    };
+    let wide = |s: &str| {
+        let mut v = (s.encode_utf16().count() as u32).to_le_bytes().to_vec();
+        v.extend(s.encode_utf16().flat_map(u16::to_le_bytes));
+        v
+    };
+    let mut bundle = [0u32, 1]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<u8>>();
+    bundle.extend(wide("rId1"));
+    bundle.extend(wide("Orders"));
+    let workbook = [rec(0x9C, &bundle), rec(0x90, &[]), rec(0x9D, &[0; 4])].concat();
+    let mut sheet = [rec(0x94, &[0; 16]), rec(0x91, &[])].concat();
+    for (r, row) in rows.iter().enumerate() {
+        sheet.extend(rec(
+            0x00,
+            &[(r as u32).to_le_bytes().to_vec(), vec![0; 13]].concat(),
+        ));
+        for (c, v) in row.iter().enumerate() {
+            let head = [(c as u32).to_le_bytes(), 0u32.to_le_bytes()].concat();
+            sheet.extend(match v.parse::<f64>() {
+                Ok(n) => rec(0x05, &[head, n.to_le_bytes().to_vec()].concat()),
+                Err(_) => rec(0x06, &[head, wide(v)].concat()),
+            });
+        }
+    }
+    sheet.extend(rec(0x92, &[]));
+    let rels = "<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.bin\"/></Relationships>";
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    for (name, data) in [
+        ("xl/workbook.bin", workbook),
+        ("xl/_rels/workbook.bin.rels", rels.as_bytes().to_vec()),
+        ("xl/worksheets/sheet1.bin", sheet),
+    ] {
+        z.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(&data).unwrap();
+    }
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn an_xlsb_workbook_reads_in_every_output_whatever_its_name() {
+    let dir = scratch("xlsb");
+    let book = xlsb(&[
+        &["Customer", "Amount"],
+        &["Alex Sample", "12.5"],
+        &["Sam", "7"],
+    ]);
+    let input = dir.join("orders.xlsb");
+    std::fs::write(&input, &book).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(&out, "doco:Table", &["Orders", "Alex Sample", "12.5"]);
+    assert!(doc_has_cell(&out[2].1, "Alex Sample"));
+    let renamed = dir.join("orders.bin");
+    std::fs::write(&renamed, &book).unwrap();
+    let o = convert(&dir, &renamed, "md", &[]);
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample"));
+    let _ = std::fs::remove_dir_all(dir);
+}

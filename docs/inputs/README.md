@@ -41,7 +41,7 @@ structure](../concepts/geometry-vs-declared.md).
 ## Detection
 
 By extension: `.pdf`, `.md`/`.markdown`, `.html`/`.htm`, `.docx`, `.doc`, `.pptx`, `.xlsx`,
-`.xls`, `.odt`/`.ods`/`.odp`, `.csv`, `.tsv`, `.xps`/`.oxps`, `.vtt`, `.srt`, `.eml`, `.msg`, and plain text, `.txt`/`.text`. A
+`.xls`, `.xlsb`, `.odt`/`.ods`/`.odp`, `.csv`, `.tsv`, `.xps`/`.oxps`, `.vtt`, `.srt`, `.eml`, `.msg`, and plain text, `.txt`/`.text`. A
 text file that writes Markdown's markup is read as Markdown. A transcript or an email is
 also recognised by its content whatever its name, because both often arrive
 renamed or untyped; see [Transcripts](transcripts.md#detection) and
@@ -51,7 +51,7 @@ than producing empty output.
 A format with no reader yet is refused by name: `convert` fails on it with
 `unsupported format (.key, Apple Keynote presentation): no reader for it
 yet`, rather than reading it as a PDF and failing as a corrupt one. That holds
-for `.xlsb`, `.ppt`, `.pps`, `.pot`, `.rtf`, WordPerfect's `.wpd` and Apple's
+for `.ppt`, `.pps`, `.pot`, `.rtf`, WordPerfect's `.wpd` and Apple's
 `.pages`, `.numbers` and `.key`, and for an OLE compound file that is no
 document a reader here reads nor an Outlook message, whatever its name, on
 stdin too. Word and Excel 97-2003 files, and [OpenDocument](opendocument.md)

@@ -45,7 +45,7 @@ PDF layout.
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `grid_elements`, sheets another workbook format's reader read, laid out as an XLSX sheet; `parse_with_media` the pictures anchored to its cells, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-doc` | `parse(&[u8]) -> Result<Vec<Element>, DocError>`: a `.doc`'s text, tables and notes through its piece table; `is_doc` |
-| `fluree-doc-xls` | `parse(&[u8]) -> Result<Vec<Element>, XlsError>`, BIFF8 through calamine after a bounds check of its own; `parse_with_info`; `is_xls` |
+| `fluree-doc-xls` | `parse(&[u8]) -> Result<Vec<Element>, XlsError>`, BIFF8 through calamine, given a workbook rewritten from the records a walk of its own checked; `parse_with_info`; `is_xls`; `parse_xlsb` and `is_xlsb`, the binary workbook, its package inflated against bounds first and its records read here |
 | `fluree-doc-odf` | `parse_with_info(&[u8]) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError>`: `.odt`, `.ods`, `.odp`; `Format::sniff` by the `mimetype` |
 | `fluree-doc-csv` | `parse(&[u8]) -> Result<Vec<Element>, CsvError>`: one table under its header row, the delimiter sniffed; `parse_with` names it; `decode`, `sniff` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
@@ -97,7 +97,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |
 | cfb | Outlook `.msg`, Word and Excel 97-2003 containers | MIT |
-| calamine | Excel 97-2003 (BIFF8) cells, pinned | MIT |
+| calamine | Excel 97-2003 (BIFF8) and binary (`.xlsb`) cells, pinned | MIT |
 | encoding_rs | email and CSV charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |

@@ -134,8 +134,8 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         let src = Source::stdin(&data, args);
         // By its content, as a file is (`input_kind`): with no name to go
         // by, a transcript, an e-mail, an image, a Word or Excel 97-2003
-        // file, an OpenDocument file; a format no reader reads is refused
-        // by name; anything else is read as a PDF.
+        // file, an Excel binary workbook, an OpenDocument file; a format no
+        // reader reads is refused by name; anything else is read as a PDF.
         let converted =
             match common::input_kind(Path::new("-"), &data) {
                 common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
@@ -153,6 +153,15 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                 common::SourceKind::Odf => fluree_doc_odf::parse_with_info(&data)
                     .map_err(|e| e.to_string())
                     .map(|(elements, info, _)| {
+                        let notes = fluree_doc_model::Notes {
+                            info,
+                            ..Default::default()
+                        };
+                        render(&elements, &src, args, Vec::new(), &notes)
+                    }),
+                common::SourceKind::Xlsb => fluree_doc_xls::parse_xlsb(&data)
+                    .map_err(|e| e.to_string())
+                    .map(|(elements, info)| {
                         let notes = fluree_doc_model::Notes {
                             info,
                             ..Default::default()
@@ -473,6 +482,11 @@ fn convert_source(
         SourceKind::Odf => {
             let (elements, info, _) =
                 fluree_doc_odf::parse_with_info(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        // An Excel binary workbook, laid out as an XLSX one is.
+        SourceKind::Xlsb => {
+            let (elements, info) = fluree_doc_xls::parse_xlsb(&data).map_err(|e| e.to_string())?;
             (elements, declared(info))
         }
         // A Word 97-2003 document's text, through its piece table.

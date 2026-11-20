@@ -24,6 +24,8 @@ pub(crate) enum SourceKind {
     Doc,
     /// An OpenDocument text, spreadsheet or presentation.
     Odf,
+    /// An Excel binary workbook.
+    Xlsb,
     Transcript,
     Email,
     Image,
@@ -54,6 +56,7 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     (SourceKind::Xps, &["xps", "oxps"]),
     (SourceKind::Doc, &["doc", "dot"]),
     (SourceKind::Odf, &["odt", "ott", "ods", "ots", "odp", "otp"]),
+    (SourceKind::Xlsb, &["xlsb"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
@@ -65,7 +68,6 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
 /// a batch, rather than read as a PDF and failing as a corrupt one. A format
 /// leaves this list when its reader lands.
 const UNSUPPORTED: &[(&str, &str)] = &[
-    ("xlsb", "Excel binary workbook"),
     ("ppt", "PowerPoint 97-2003 presentation"),
     ("pps", "PowerPoint 97-2003 slide show"),
     ("pot", "PowerPoint 97-2003 template"),
@@ -160,6 +162,10 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     if fluree_doc_odf::Format::sniff(data).is_some() {
         return SourceKind::Odf;
     }
+    // An Excel binary workbook: a zip holding `xl/workbook.bin`.
+    if fluree_doc_xls::is_xlsb(data) {
+        return SourceKind::Xlsb;
+    }
     // And a Word 97-2003 document: one holding a WordDocument stream.
     if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_doc::is_doc(data) {
         return SourceKind::Doc;
@@ -175,7 +181,8 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
             | SourceKind::Csv
             | SourceKind::Xps
             | SourceKind::Doc
-            | SourceKind::Odf),
+            | SourceKind::Odf
+            | SourceKind::Xlsb),
         ) => k,
         _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
         _ if is_pdf(data) => SourceKind::Pdf,
