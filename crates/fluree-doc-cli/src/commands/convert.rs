@@ -309,8 +309,18 @@ fn convert_path(
             )
         }
         Some(SourceKind::Docx) => {
-            let (elements, info) =
-                fluree_doc_docx::parse_with_info(&data).map_err(|e| e.to_string())?;
+            let (mut elements, info, media) =
+                fluree_doc_docx::parse_with_media(&data).map_err(|e| e.to_string())?;
+            // The images placed in the flow: a pasted screenshot's text
+            // follows its figure, read by OCR. Their bytes are only read
+            // when something is there to read them.
+            let read = if cfg.ocr.is_some() || cfg.ocr_words.is_some() {
+                read_media(src.stem, &data, &media, cfg, quiet)
+            } else {
+                note_unread_media(src.stem, media.len(), quiet);
+                Vec::new()
+            };
+            fluree_doc_image::place_after_figures(&mut elements, read);
             // The page header and footer are read into the text, marked as
             // what they are; their lines are also the running text a PDF's
             // identity block is kept in, so a graph finds a document's
@@ -595,6 +605,76 @@ fn convert_image(
         ..Default::default()
     };
     Ok(render(&elements, src, args, sizes, &notes))
+}
+
+/// Read the images a document places in its flow, by figure: with the OCR
+/// engine, or from the words an engine wrote (`<stem>_m<n>.json`). An image
+/// that is not a raster (a Word drawing kept as EMF or WMF) or that nothing
+/// read is counted in one note, so the output's silence is not mistaken for
+/// an empty image.
+fn read_media(
+    stem: &str,
+    docx: &[u8],
+    media: &[fluree_doc_docx::Media],
+    cfg: &TierConfig,
+    quiet: bool,
+) -> Vec<(String, Vec<fluree_doc_model::Element>)> {
+    let mut read = Vec::new();
+    let mut unread = 0usize;
+    for m in media {
+        let name = format!("{stem}_{}", m.tag());
+        // Read one image at a time, and dropped once read.
+        let bytes = || fluree_doc_docx::read_media(docx, &m.part);
+        let got = if let Some(engine) = &cfg.ocr {
+            Some(bytes().and_then(|b| fluree_doc_image::elements(&b, engine.0.as_ref())))
+        } else if let Some(dir) = cfg.ocr_words.as_deref() {
+            let path = dir.join(format!("{name}.json"));
+            std::fs::read_to_string(&path).ok().map(|text| {
+                let reading = fluree_doc_vision::WordReading::from_json(&text)?;
+                fluree_doc_image::elements_from_words(&bytes()?, reading)
+            })
+        } else {
+            None
+        };
+        match got {
+            // Read, whatever it held: a photo with no text was read too.
+            Some(Ok(image)) => {
+                if cfg.verbose {
+                    eprintln!("ocr: {name}: {} element(s)", image.elements.len());
+                }
+                if image.more_pages && !quiet {
+                    eprintln!("warning: {name}: only the first page of a multi-page image is read");
+                }
+                read.push((m.figure.clone(), image.elements));
+            }
+            // A picture that could not be read is the user's to know about,
+            // as a PDF page that failed is.
+            Some(Err(e)) => {
+                if !quiet {
+                    eprintln!("warning: {name}: {e}");
+                }
+                unread += 1;
+            }
+            None => unread += 1,
+        }
+    }
+    if unread > 0 && !quiet {
+        eprintln!(
+            "note: {stem}: {unread} of {} image(s) in the document were not read",
+            media.len(),
+        );
+    }
+    read
+}
+
+/// The note for a document whose images nothing was asked to read.
+fn note_unread_media(stem: &str, images: usize, quiet: bool) {
+    if images > 0 && !quiet {
+        eprintln!(
+            "note: {stem}: {images} of {images} image(s) in the document were not read \
+             (read them with --ocr or --ocr-words)"
+        );
+    }
 }
 
 /// What OCR made of a bare image.

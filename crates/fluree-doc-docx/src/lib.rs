@@ -58,6 +58,104 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
 /// its styles the part the document relates to as such; `word/document.xml`
 /// and `word/styles.xml` are where a package that does not say keeps them.
 pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), DocxError> {
+    parse_with_media(bytes).map(|(elements, info, _)| (elements, info))
+}
+
+/// An image placed in the document's flow: the figure it is drawn as and
+/// the package part holding it. Its bytes are read on demand
+/// ([`read_media`]), one image at a time, so a document of many large
+/// pictures is never held decompressed all at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Media {
+    /// The figure element it is drawn as (`Element::figure`).
+    pub figure: String,
+    /// Its part in the package, e.g. `word/media/image1.png`.
+    pub part: String,
+    /// Its place among the figure's images: a group of pictures is one
+    /// figure holding several.
+    pub index: usize,
+}
+
+impl Media {
+    /// The name its crop and its words go by, `m<n>` for the figure
+    /// `figure-0-<n>`, `m<n>_<k>` for the figure's `k`-th image after the
+    /// first.
+    pub fn tag(&self) -> String {
+        let n = self.figure.rsplit('-').next().unwrap_or("0");
+        match self.index {
+            0 => format!("m{n}"),
+            k => format!("m{n}_{k}"),
+        }
+    }
+}
+
+/// The most bytes one image part is read to: 64 MiB, more than any picture
+/// a document pastes in.
+pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+
+/// The bytes of a media part of the package `bytes`, at most
+/// [`MAX_MEDIA_BYTES`] of them.
+pub fn read_media(bytes: &[u8], part: &str) -> Result<Vec<u8>, String> {
+    Package::open(bytes)?.read_bytes(part, MAX_MEDIA_BYTES)
+}
+
+/// What [`parse_with_ocr`] gives.
+#[cfg(feature = "ocr")]
+#[derive(Debug, Clone)]
+pub struct OcrParse {
+    pub elements: Vec<Element>,
+    pub info: DocumentInfo,
+    /// The images not read, each with why: not a raster image (EMF, WMF),
+    /// not in the package, or not readable by the engine. Each is left as
+    /// its figure.
+    pub unread: Vec<(Media, String)>,
+    /// Images of more than one page (a multi-page TIFF), of which only the
+    /// first was read.
+    pub first_page_only: Vec<Media>,
+}
+
+/// [`parse_with_info`], with the text in the document's pictures read by
+/// `engine` and placed right after each picture's figure
+/// ([`fluree_doc_image::place_after_figures`]).
+#[cfg(feature = "ocr")]
+pub fn parse_with_ocr(
+    bytes: &[u8],
+    engine: &dyn fluree_doc_vision::OcrEngine,
+) -> Result<OcrParse, DocxError> {
+    let (mut elements, info, media) = parse_with_media(bytes)?;
+    let mut read = Vec::new();
+    let mut unread = Vec::new();
+    let mut first_page_only = Vec::new();
+    // One image at a time: read, decoded, read by the engine and dropped.
+    for m in media {
+        match read_media(bytes, &m.part)
+            .and_then(|image| fluree_doc_image::elements(&image, engine))
+        {
+            Ok(r) => {
+                if r.more_pages {
+                    first_page_only.push(m.clone());
+                }
+                read.push((m.figure.clone(), r.elements));
+            }
+            Err(e) => unread.push((m, e)),
+        }
+    }
+    fluree_doc_image::place_after_figures(&mut elements, read);
+    Ok(OcrParse {
+        elements,
+        info,
+        unread,
+        first_page_only,
+    })
+}
+
+/// [`parse_with_info`], with the images of each figure in the body that has
+/// any, in reading order: what an OCR engine or a model can read, and the
+/// figure its text belongs after. Only where they are is read here; their
+/// bytes are read by [`read_media`].
+pub fn parse_with_media(
+    bytes: &[u8],
+) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
     let main = pkg.main_part("word/document.xml");
     let xml = pkg.read(&main).ok_or(DocxError::NoDocument)?;
@@ -74,7 +172,7 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
     // part the document numbers nothing.
     let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
     let numbering = Numbering::new(pkg.read(&numbering).as_deref(), styles.as_deref());
-    let body = parse_with_styles(&xml, &header_styles, &title_styles, numbering)?;
+    let (body, figure_rids) = parse_body(&xml, &header_styles, &title_styles, numbering)?;
     // The page header and footer: where a controlled document keeps its
     // number, revision and title, which its body never repeats. Each is
     // read once, the header before the body and the footer after it, and
@@ -129,7 +227,42 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
     for (i, e) in elements.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok((elements, pkg.info()))
+    // Each figure's images, by the relationships its drawing names. A part
+    // name is matched as the package format matches it, ignoring case, and
+    // a target written with backslashes, as some writers do, is read with
+    // slashes. An image that resolves to nothing in the package (a link to a
+    // file outside it, a part that is not there) is still listed, under the
+    // name it was given, so its reading fails and is counted.
+    let names = pkg.part_names();
+    let exact: HashSet<&str> = names.iter().map(String::as_str).collect();
+    let folded: HashMap<String, &str> = names
+        .iter()
+        .map(|p| (p.to_lowercase(), p.as_str()))
+        .collect();
+    let media = figure_rids
+        .into_iter()
+        .map(|(figure, rid, index)| {
+            let part = match rels.iter().find(|r| r.id == rid) {
+                Some(r) if !r.external => {
+                    if exact.contains(r.target.as_str()) {
+                        r.target.clone()
+                    } else {
+                        folded
+                            .get(&r.target.to_lowercase())
+                            .map_or_else(|| r.target.clone(), |p| p.to_string())
+                    }
+                }
+                Some(r) => r.target.clone(),
+                None => format!("{rid} (no such relationship)"),
+            };
+            Media {
+                figure,
+                part,
+                index,
+            }
+        })
+        .collect();
+    Ok((elements, pkg.info(), media))
 }
 
 /// A toggle element in a part, present and not switched off.
@@ -346,6 +479,10 @@ struct Pic {
     image: bool,
     /// It is an object embedded from another program (`w:object`).
     object: bool,
+    /// The relationships naming its image parts (`a:blip r:embed`, or VML's
+    /// `v:imagedata r:id`), in order: one for a picture, several for a group
+    /// of them.
+    embed: Vec<String>,
 }
 
 impl Pic {
@@ -448,8 +585,23 @@ fn parse_with_styles(
     xml: &str,
     header_styles: &HashSet<String>,
     title_styles: &HashSet<String>,
-    mut numbering: Numbering,
+    numbering: Numbering,
 ) -> Result<Vec<Element>, DocxError> {
+    parse_body(xml, header_styles, title_styles, numbering).map(|(elements, _)| elements)
+}
+
+/// A figure's id (`Element::figure`) and the relationship id naming its
+/// image part, and its place among the figure's images.
+type FigureImage = (String, String, usize);
+
+/// [`parse_with_styles`], with each figure's image relationship, in reading
+/// order.
+fn parse_body(
+    xml: &str,
+    header_styles: &HashSet<String>,
+    title_styles: &HashSet<String>,
+    mut numbering: Numbering,
+) -> Result<(Vec<Element>, Vec<FigureImage>), DocxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
 
@@ -493,8 +645,19 @@ fn parse_with_styles(
     // in the current paragraph or table, which follow it.
     let mut pic_depth = 0usize;
     let mut pic = Pic::default();
+    // Inside a picture's `pic:pic`, the one place its image is: a shape's
+    // image fill (`a:blipFill` in its properties) is a texture, not a
+    // picture.
+    let mut in_pic = 0usize;
+    // Inside a tracked deletion (`w:del`, `w:moveFrom`): what the document
+    // no longer holds, and a picture there is none of its content.
+    let mut deleted = 0usize;
+    // Drawings opened inside a deletion, which are no figure: their ends
+    // close nothing.
+    let mut skipped = 0usize;
     let mut figures: Vec<Element> = Vec::new();
     let mut figure_count = 0usize;
+    let mut media: Vec<FigureImage> = Vec::new();
     // Each list item read, by its place in `out`: the level its number is
     // counted at and whether it reads as a title, where it is numbered.
     let mut outline: Vec<(usize, Option<Numbered>)> = Vec::new();
@@ -539,6 +702,12 @@ fn parse_with_styles(
                     "instrText" => in_instr = true,
                     // A picture or chart (DrawingML), an image (VML), or an
                     // object embedded from another program.
+                    "del" | "moveFrom" if matches!(ev_kind, Kind::Start) => deleted += 1,
+                    "drawing" | "pict" | "object"
+                        if matches!(ev_kind, Kind::Start) && deleted > 0 =>
+                    {
+                        skipped += 1;
+                    }
                     "drawing" | "pict" | "object" if matches!(ev_kind, Kind::Start) => {
                         if pic_depth == 0 {
                             pic = Pic::default();
@@ -546,18 +715,38 @@ fn parse_with_styles(
                         pic.object |= tag == "object";
                         pic_depth += 1;
                     }
-                    "docPr" if pic_depth > 0 => {
+                    "docPr" if pic_depth > 0 && deleted == 0 => {
                         pic.alt = attr(&e, "descr").unwrap_or_default();
                         pic.title = attr(&e, "title").unwrap_or_default();
                     }
-                    "pic" | "chart" | "relIds" if pic_depth > 0 => pic.image = true,
-                    "imagedata" if pic_depth > 0 => {
+                    "pic" | "chart" | "relIds" if pic_depth > 0 && deleted == 0 => {
                         pic.image = true;
+                        if tag == "pic" && matches!(ev_kind, Kind::Start) {
+                            in_pic += 1;
+                        }
+                    }
+                    "blip" if pic_depth > 0 && in_pic > 0 && deleted == 0 => {
+                        // An image linked to a file outside the package
+                        // names it by `r:link`: listed, so it is counted
+                        // among those not read.
+                        if let Some(rid) = attr(&e, "embed").or_else(|| attr(&e, "link")) {
+                            if !pic.embed.contains(&rid) {
+                                pic.embed.push(rid);
+                            }
+                        }
+                    }
+                    "imagedata" if pic_depth > 0 && deleted == 0 => {
+                        pic.image = true;
+                        if let Some(rid) = attr(&e, "id") {
+                            if !pic.embed.contains(&rid) {
+                                pic.embed.push(rid);
+                            }
+                        }
                         if pic.title.is_empty() {
                             pic.title = attr(&e, "title").unwrap_or_default();
                         }
                     }
-                    "shape" if pic_depth > 0 && pic.alt.is_empty() => {
+                    "shape" if pic_depth > 0 && deleted == 0 && pic.alt.is_empty() => {
                         pic.alt = attr(&e, "alt").unwrap_or_default();
                     }
                     "fldChar" => match attr(&e, "fldCharType").as_deref() {
@@ -727,12 +916,19 @@ fn parse_with_styles(
                 match local(name.as_ref()) {
                     "t" => in_text = false,
                     "instrText" => in_instr = false,
+                    "del" | "moveFrom" if deleted > 0 => deleted -= 1,
+                    "pic" if in_pic > 0 && deleted == 0 => in_pic -= 1,
+                    "drawing" | "pict" | "object" if skipped > 0 => skipped -= 1,
                     "drawing" | "pict" | "object" if pic_depth > 0 => {
                         pic_depth -= 1;
                         if pic_depth == 0 && (pic.image || pic.object) {
                             figure_count += 1;
                             let mut f = element("doco:Figure", pic.text(), None);
-                            f.figure = Some(format!("figure-0-{figure_count}"));
+                            let id = format!("figure-0-{figure_count}");
+                            for (k, rid) in std::mem::take(&mut pic.embed).into_iter().enumerate() {
+                                media.push((id.clone(), rid, k));
+                            }
+                            f.figure = Some(id);
                             figures.push(f);
                         }
                     }
@@ -835,7 +1031,7 @@ fn parse_with_styles(
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok(out)
+    Ok((out, media))
 }
 
 fn push(para: &mut Para, cell: &mut Cell, in_cell: bool, s: &str) {
@@ -1442,6 +1638,453 @@ mod tests {
              <w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
         );
         assert_eq!(els[0].text, "Page of the record, see step 4");
+    }
+
+    #[cfg(feature = "ocr")]
+    #[test]
+    fn a_pictures_text_is_read_after_its_figure() {
+        use std::io::Write;
+        /// Reads one line across whatever it is shown.
+        struct OneLine;
+        impl fluree_doc_vision::OcrEngine for OneLine {
+            fn name(&self) -> &str {
+                "one-line"
+            }
+            fn read(
+                &self,
+                image: &fluree_doc_vision::Pixels,
+            ) -> Result<fluree_doc_vision::WordReading, String> {
+                let (w, h) = (image.width as f64, image.height as f64);
+                Ok(fluree_doc_vision::WordReading {
+                    coords: fluree_doc_vision::Coords::Px,
+                    width: Some(w),
+                    height: Some(h),
+                    engine: None,
+                    words: vec![fluree_doc_vision::OcrWord {
+                        text: "Reference 4417-0093-21".into(),
+                        bbox: [w * 0.1, h * 0.4, w * 0.9, h * 0.6],
+                        angle: None,
+                        conf: Some(0.9),
+                    }],
+                })
+            }
+        }
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            400,
+            120,
+            image::Rgb([240, 240, 240]),
+        ))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let body = doc(&format!(
+            "{}<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"Picture 1\"/>\
+             <a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"rId7\"/>\
+             </pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>{}",
+            para(None, "See below."),
+            para(None, "After.")
+        ));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let parts: [(&str, Vec<u8>); 3] = [
+            ("word/document.xml", body.into_bytes()),
+            (
+                "word/_rels/document.xml.rels",
+                format!("<Relationships><Relationship Id=\"rId7\" Type=\"{rel}/image\" Target=\"media/image1.png\"/></Relationships>")
+                    .into_bytes(),
+            ),
+            ("word/media/image1.png", png),
+        ];
+        for (name, bytes) in parts {
+            z.start_file(name, opts).unwrap();
+            z.write_all(&bytes).unwrap();
+        }
+        z.finish().unwrap();
+        let read = parse_with_ocr(&buf.into_inner(), &OneLine).unwrap();
+        assert!(read.unread.is_empty(), "{:?}", read.unread);
+        let els = read.elements;
+        let got: Vec<(&str, &str)> = els
+            .iter()
+            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:Paragraph", "See below."),
+                ("doco:Figure", ""),
+                ("doco:Paragraph", "Reference 4417-0093-21"),
+                ("doco:Paragraph", "After."),
+            ]
+        );
+        assert_eq!(els[2].provenance, "ocr");
+    }
+
+    #[test]
+    fn a_pictures_image_comes_with_its_figure() {
+        use std::io::Write;
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let pic = |rid: &str| {
+            format!(
+                "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"Picture 1\"/>\
+                 <a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"{rid}\"/>\
+                 </pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+            )
+        };
+        // A picture in the package, one whose image is elsewhere, and text.
+        let body = doc(&format!(
+            "{}{}{}{}",
+            para(None, "See the screenshot below."),
+            pic("rId7"),
+            pic("rId8"),
+            para(None, "After")
+        ));
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let parts: [(&str, Vec<u8>); 3] = [
+            ("word/document.xml", body.into_bytes()),
+            (
+                "word/_rels/document.xml.rels",
+                format!(
+                    "<Relationships><Relationship Id=\"rId7\" Type=\"{rel}/image\" Target=\"media/image1.png\"/>\
+                     <Relationship Id=\"rId8\" Type=\"{rel}/image\" Target=\"https://example.org/x.png\" TargetMode=\"External\"/>\
+                     </Relationships>"
+                )
+                .into_bytes(),
+            ),
+            ("word/media/image1.png", b"\x89PNG not really".to_vec()),
+        ];
+        for (name, bytes) in parts {
+            z.start_file(name, opts).unwrap();
+            z.write_all(&bytes).unwrap();
+        }
+        z.finish().unwrap();
+        let docx = buf.into_inner();
+        let (els, _, media) = parse_with_media(&docx).unwrap();
+        let figures: Vec<&Element> = els.iter().filter(|e| e.kind == "doco:Figure").collect();
+        assert_eq!(figures.len(), 2);
+        // Both are listed; only the image the package holds can be read.
+        assert_eq!(media.len(), 2, "{media:?}");
+        assert_eq!(media[0].part, "word/media/image1.png");
+        assert_eq!(media[0].tag(), "m1");
+        assert_eq!(
+            read_media(&docx, &media[0].part).unwrap(),
+            b"\x89PNG not really"
+        );
+        assert_eq!(Some(&media[0].figure), figures[0].figure.as_ref());
+        assert_eq!(media[1].part, "https://example.org/x.png");
+        assert!(read_media(&docx, &media[1].part).is_err());
+    }
+
+    #[test]
+    fn a_figures_images_are_named_by_its_number() {
+        let m = |figure: &str, index| Media {
+            figure: figure.into(),
+            part: String::new(),
+            index,
+        };
+        assert_eq!(m("figure-0-3", 0).tag(), "m3");
+        assert_eq!(m("figure-0-12", 0).tag(), "m12");
+        assert_eq!(m("figure-0-12", 2).tag(), "m12_2");
+    }
+
+    #[test]
+    fn a_group_of_pictures_is_one_figure_with_each_image() {
+        // A group shape holding two pictures, and a picture after it.
+        let pic = |rid: &str| {
+            format!("<pic:pic><pic:blipFill><a:blip r:embed=\"{rid}\"/></pic:blipFill></pic:pic>")
+        };
+        let body = format!(
+            "<w:document><w:body><w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"Group\"/>\
+             <a:graphic><a:graphicData><wpg:wgp>{}{}</wpg:wgp></a:graphicData></a:graphic></wp:inline>\
+             </w:drawing></w:r></w:p><w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"2\" name=\"P\"/>\
+             <a:graphic><a:graphicData>{}</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>\
+             </w:body></w:document>",
+            pic("rId1"),
+            pic("rId2"),
+            pic("rId3")
+        );
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let rels: String = (1..=3)
+            .map(|i| {
+                format!("<Relationship Id=\"rId{i}\" Type=\"{rel}/image\" Target=\"media/image{i}.png\"/>")
+            })
+            .collect();
+        let mut parts = vec![
+            ("word/document.xml".to_string(), body.into_bytes()),
+            (
+                "word/_rels/document.xml.rels".to_string(),
+                format!("<Relationships>{rels}</Relationships>").into_bytes(),
+            ),
+        ];
+        for i in 1..=3 {
+            parts.push((format!("word/media/image{i}.png"), vec![i as u8]));
+        }
+        let docx = zipped(&parts);
+        let (els, _, media) = parse_with_media(&docx).unwrap();
+        let figures = els.iter().filter(|e| e.kind == "doco:Figure").count();
+        assert_eq!(figures, 2);
+        let tags: Vec<String> = media.iter().map(Media::tag).collect();
+        assert_eq!(tags, ["m1", "m1_1", "m2"]);
+        assert_eq!(read_media(&docx, &media[1].part).unwrap(), [2]);
+    }
+
+    /// A package of `body` (inside `w:body`), the image relationships
+    /// `rels` (id, target) and the parts `parts`.
+    fn package(body: &str, rels: &[(&str, &str)], parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let rels: String = rels
+            .iter()
+            .map(|(id, target)| {
+                format!("<Relationship Id=\"{id}\" Type=\"{rel}/image\" Target=\"{target}\"/>")
+            })
+            .collect();
+        let mut all = vec![
+            (
+                "word/document.xml".to_string(),
+                format!("<w:document><w:body>{body}</w:body></w:document>").into_bytes(),
+            ),
+            (
+                "word/_rels/document.xml.rels".to_string(),
+                format!("<Relationships>{rels}</Relationships>").into_bytes(),
+            ),
+        ];
+        all.extend(parts.iter().map(|(n, b)| (n.to_string(), b.to_vec())));
+        zipped(&all)
+    }
+
+    /// A paragraph holding one DrawingML picture of `rid`.
+    fn picture(rid: &str) -> String {
+        format!(
+            "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/><a:graphic><a:graphicData>\
+             <pic:pic><pic:blipFill><a:blip r:embed=\"{rid}\"/></pic:blipFill></pic:pic>\
+             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        )
+    }
+
+    #[test]
+    fn a_picture_deleted_under_tracked_changes_is_no_figure() {
+        let body = format!(
+            "<w:p><w:r><w:t>Before.</w:t></w:r></w:p>\
+             <w:p><w:del w:id=\"1\" w:author=\"A\"><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/>\
+             <a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed=\"rId1\"/></pic:blipFill></pic:pic>\
+             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:del></w:p>\
+             <w:p><w:moveFrom w:id=\"2\" w:author=\"A\"><w:r><w:pict><v:shape><v:imagedata r:id=\"rId1\"/></v:shape></w:pict></w:r></w:moveFrom></w:p>\
+             {}",
+            picture("rId2")
+        );
+        let docx = package(
+            &body,
+            &[("rId1", "media/image1.png"), ("rId2", "media/image2.png")],
+            &[
+                ("word/media/image1.png", b"1"),
+                ("word/media/image2.png", b"2"),
+            ],
+        );
+        let (els, _, media) = parse_with_media(&docx).unwrap();
+        let figures: Vec<&Element> = els.iter().filter(|e| e.kind == "doco:Figure").collect();
+        assert_eq!(figures.len(), 1, "only the picture the document holds");
+        assert_eq!(media.len(), 1, "{media:?}");
+        assert_eq!(media[0].part, "word/media/image2.png");
+        assert_eq!(
+            media[0].tag(),
+            "m1",
+            "numbered as if the deleted ones were not there"
+        );
+    }
+
+    #[test]
+    fn a_picture_deleted_inside_a_text_box_is_no_figure() {
+        // A group holding a text box with a deleted picture in it, then a
+        // live picture: one figure, of the live picture.
+        let body = "<w:p><w:r><w:drawing><wp:anchor><wp:docPr id=\"1\" name=\"Group\"/><a:graphic><a:graphicData>\
+             <wpg:wgp><wps:wsp><wps:txbx><w:txbxContent><w:p><w:del w:id=\"1\" w:author=\"A\"><w:r><w:drawing>\
+             <wp:inline><wp:docPr id=\"2\" name=\"P\"/><a:graphic><a:graphicData><pic:pic><pic:blipFill>\
+             <a:blip r:embed=\"rId1\"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline>\
+             </w:drawing></w:r></w:del></w:p><w:p><w:r><w:t>Live text</w:t></w:r></w:p></w:txbxContent></wps:txbx>\
+             </wps:wsp><pic:pic><pic:blipFill><a:blip r:embed=\"rId2\"/></pic:blipFill></pic:pic></wpg:wgp>\
+             </a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>";
+        let docx = package(
+            body,
+            &[("rId1", "media/image1.png"), ("rId2", "media/image2.png")],
+            &[
+                ("word/media/image1.png", b"1"),
+                ("word/media/image2.png", b"2"),
+            ],
+        );
+        let (els, _, media) = parse_with_media(&docx).unwrap();
+        let figures = els.iter().filter(|e| e.kind == "doco:Figure").count();
+        assert_eq!(figures, 1, "{els:?}");
+        let parts: Vec<&str> = media.iter().map(|m| m.part.as_str()).collect();
+        assert_eq!(parts, ["word/media/image2.png"]);
+    }
+
+    #[test]
+    fn a_linked_picture_and_a_missing_relationship_are_listed_unreadable() {
+        // Insert > Picture > Link to File writes `r:link`, no `r:embed`.
+        let linked = "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/><a:graphic><a:graphicData>\
+             <pic:pic><pic:blipFill><a:blip r:link=\"rId3\"/></pic:blipFill></pic:pic>\
+             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>";
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let body = format!(
+            "<w:document><w:body>{linked}{}</w:body></w:document>",
+            picture("rId9")
+        );
+        let docx = zipped(&[
+            ("word/document.xml".to_string(), body.into_bytes()),
+            (
+                "word/_rels/document.xml.rels".to_string(),
+                format!(
+                    "<Relationships><Relationship Id=\"rId3\" Type=\"{rel}/image\" \
+                     Target=\"file:///C:/pics/logo.png\" TargetMode=\"External\"/></Relationships>"
+                )
+                .into_bytes(),
+            ),
+        ]);
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        let parts: Vec<&str> = media.iter().map(|m| m.part.as_str()).collect();
+        assert_eq!(
+            parts,
+            ["file:///C:/pics/logo.png", "rId9 (no such relationship)"]
+        );
+        assert!(media.iter().all(|m| read_media(&docx, &m.part).is_err()));
+    }
+
+    #[test]
+    fn a_part_named_exactly_wins_over_one_differing_in_case() {
+        let docx = package(
+            &picture("rId1"),
+            &[("rId1", "media/image1.png")],
+            &[
+                ("word/media/image1.png", b"lower"),
+                ("word/media/IMAGE1.png", b"upper"),
+            ],
+        );
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        assert_eq!(read_media(&docx, &media[0].part).unwrap(), b"lower");
+    }
+
+    #[test]
+    fn a_shapes_image_fill_is_not_one_of_its_pictures() {
+        // A group holding a shape filled with a texture, then a picture.
+        let body = "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"G\"/><a:graphic><a:graphicData>\
+             <wpg:wgp><wps:wsp><wps:spPr><a:blipFill><a:blip r:embed=\"rId2\"/></a:blipFill></wps:spPr></wps:wsp>\
+             <pic:pic><pic:blipFill><a:blip r:embed=\"rId1\"/></pic:blipFill></pic:pic></wpg:wgp>\
+             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>";
+        let docx = package(
+            body,
+            &[("rId1", "media/image1.png"), ("rId2", "media/image2.png")],
+            &[
+                ("word/media/image1.png", b"1"),
+                ("word/media/image2.png", b"2"),
+            ],
+        );
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        let parts: Vec<&str> = media.iter().map(|m| m.part.as_str()).collect();
+        assert_eq!(parts, ["word/media/image1.png"]);
+    }
+
+    #[test]
+    fn an_image_part_is_found_whatever_the_case_or_slashes_of_its_name() {
+        let body = format!("{}{}{}", picture("rId1"), picture("rId2"), picture("rId3"));
+        let docx = package(
+            &body,
+            &[
+                ("rId1", "media/Image1.PNG"),
+                ("rId2", "media\\image2.png"),
+                ("rId3", "media/missing.png"),
+            ],
+            &[
+                ("word/media/image1.png", b"1"),
+                ("word/media/image2.png", b"2"),
+            ],
+        );
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        assert_eq!(media.len(), 3);
+        assert_eq!(read_media(&docx, &media[0].part).unwrap(), b"1");
+        assert_eq!(read_media(&docx, &media[1].part).unwrap(), b"2");
+        // A part that is not there is still listed, and fails to read.
+        assert!(read_media(&docx, &media[2].part).is_err());
+    }
+
+    #[test]
+    fn a_vml_image_and_a_repeated_blip_are_each_read_once() {
+        // A VML image, and a picture naming its image twice (as a picture
+        // with an alternate-content copy may).
+        let body = "<w:p><w:r><w:pict><v:shape><v:imagedata r:id=\"rId1\" o:title=\"Logo\"/></v:shape></w:pict></w:r></w:p>\
+             <w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"2\" name=\"P\"/><a:graphic><a:graphicData>\
+             <pic:pic><pic:blipFill><a:blip r:embed=\"rId2\"/><a:blip r:embed=\"rId2\"/></pic:blipFill></pic:pic>\
+             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>";
+        let docx = package(
+            body,
+            &[("rId1", "media/image1.png"), ("rId2", "media/image2.png")],
+            &[
+                ("word/media/image1.png", b"1"),
+                ("word/media/image2.png", b"2"),
+            ],
+        );
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        let tags: Vec<String> = media.iter().map(Media::tag).collect();
+        assert_eq!(tags, ["m1", "m2"]);
+        assert_eq!(media[0].part, "word/media/image1.png");
+    }
+
+    #[cfg(feature = "ocr")]
+    #[test]
+    fn pictures_not_read_are_reported_with_why() {
+        struct Never;
+        impl fluree_doc_vision::OcrEngine for Never {
+            fn name(&self) -> &str {
+                "never"
+            }
+            fn read(
+                &self,
+                _: &fluree_doc_vision::Pixels,
+            ) -> Result<fluree_doc_vision::WordReading, String> {
+                Err("no engine".into())
+            }
+        }
+        let docx = package(
+            &format!("{}{}", picture("rId1"), picture("rId2")),
+            &[("rId1", "media/image1.emf"), ("rId2", "media/gone.png")],
+            &[("word/media/image1.emf", b"\x01\x00\x00\x00 an EMF")],
+        );
+        let read = parse_with_ocr(&docx, &Never).unwrap();
+        let why: Vec<(String, bool)> = read
+            .unread
+            .iter()
+            .map(|(m, e)| (m.tag(), !e.is_empty()))
+            .collect();
+        assert_eq!(why, [("m1".to_string(), true), ("m2".to_string(), true)]);
+    }
+
+    #[test]
+    fn an_image_part_past_the_cap_is_not_read() {
+        // A part that inflates to more than the cap: refused as it is read,
+        // whatever size the archive declares for it.
+        let big = vec![0u8; (MAX_MEDIA_BYTES + 1) as usize];
+        let docx = zipped(&[("word/media/image1.png".to_string(), big)]);
+        let e = read_media(&docx, "word/media/image1.png").unwrap_err();
+        assert!(e.contains("image1.png"), "{e}");
+    }
+
+    /// A deflated archive of `parts`.
+    fn zipped(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in parts {
+            z.start_file(name.as_str(), opts).unwrap();
+            z.write_all(bytes).unwrap();
+        }
+        z.finish().unwrap();
+        buf.into_inner()
     }
 
     #[test]

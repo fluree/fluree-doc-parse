@@ -9,6 +9,15 @@ description = "DOCX (OOXML) to Fluree document elements (DoCO-typed)"
 fluree-doc-model.workspace = true
 quick-xml = "0.36"
 fluree-doc-ooxml.workspace = true
+fluree-doc-vision = { workspace = true, optional = true }
+fluree-doc-image = { workspace = true, optional = true }
 
 [dev-dependencies]
 zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[features]
+# Read the text in the document's pictures with an OCR engine
+# (`parse_with_ocr`). Off by default: it brings in the PDF layout engine,
+# which a DOCX reader otherwise does without.
+ocr = ["dep:fluree-doc-vision", "dep:fluree-doc-image"]
