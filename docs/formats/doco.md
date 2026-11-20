@@ -231,6 +231,35 @@ which only an OCR engine is offered, is not listed: below a tenth of the page
 it is a logo or an ornament as often as content, and listing it would put a
 warning on every letterhead.
 
+## What the parser reported
+
+```json
+{ "@type": "foaf:Document",
+  "doc:parseWarnings": { "@type": "@json",
+                         "@value": [ { "pageIndex": 3,
+                                       "kind": "ImageDecodeFailure",
+                                       "count": 1 } ] } }
+```
+
+What the PDF interpreter reported while reading a page, once per page and
+kind, with how many times. `ImageDecodeFailure` is an image it could not
+decode: it is placed all the same, so without this the page reads exactly
+like one whose image decoded and held nothing to read. `UnsupportedFont`, a
+font it cannot read, is passed on too, though the interpreter this version
+uses never reports it. An image several pages share is decoded each time a
+page draws it, so it is reported on every page that draws it. An image mask
+(a stencil, the 1-bit form some scans arrive in) is not decoded while a page
+is read, so one that is broken is not reported.
+
+Each kind is also one warning on stderr, naming its pages (the first ten):
+
+```
+warning: report: ImageDecodeFailure on page 4: an image could not be decoded; what it shows is missing
+```
+
+Over the PDFs in this repository's test and evaluation fixtures, none is
+reported: a clean document says nothing.
+
 ## Sections are explicit
 
 The flat element list becomes a tree here. A `doco:Section` node is minted per

@@ -336,6 +336,7 @@ mod tests {
             height: 792.0,
             rotation: 0,
             ocr: None,
+            warnings: Vec::new(),
         }
     }
 

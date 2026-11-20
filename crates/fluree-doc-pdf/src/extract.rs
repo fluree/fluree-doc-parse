@@ -91,6 +91,15 @@ pub struct Page {
     /// What an OCR reading added to this page, when one did. See
     /// [`crate::ocr`].
     pub ocr: Option<OcrRead>,
+    /// What the PDF interpreter reported while reading this page, once per
+    /// time it did, by its name: `ImageDecodeFailure`, an image it could not
+    /// decode. Such an image is still placed, so the page looks exactly like
+    /// one whose image decoded; this is the only trace of the difference.
+    /// An image shared by several pages is reported on each that draws it:
+    /// the interpreter decodes it at every placement. An image mask (a
+    /// stencil) is not decoded while the page is read, so a broken one is
+    /// not reported.
+    pub warnings: Vec<&'static str>,
 }
 
 /// The mark an OCR reading leaves on a page.
@@ -1108,7 +1117,20 @@ impl std::error::Error for ExtractError {}
 pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let pdf = Pdf::new(Arc::new(data)).map_err(|e| ExtractError::Parse(format!("{e:?}")))?;
     let cache = InterpreterCache::new();
-    let settings = InterpreterSettings::default();
+    // The interpreter's warnings, gathered per page: by default they go
+    // nowhere, and an image that failed to decode is placed all the same.
+    let heard: Arc<std::sync::Mutex<Vec<&'static str>>> = Arc::default();
+    let settings = InterpreterSettings {
+        warning_sink: {
+            let heard = Arc::clone(&heard);
+            Arc::new(move |w| {
+                if let Ok(mut h) = heard.lock() {
+                    h.push(warning_name(w));
+                }
+            })
+        },
+        ..InterpreterSettings::default()
+    };
     let mut pages = Vec::new();
     let mut ink: Vec<Vec<Option<(u128, f64)>>> = Vec::new();
     let mut letters = crate::ligature::Letters::default();
@@ -1153,6 +1175,10 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         dev.read_symbols();
         letters = std::mem::take(&mut dev.letters);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
+        let warnings = heard
+            .lock()
+            .map(|mut h| h.drain(..).collect())
+            .unwrap_or_default();
         let mut page = Page {
             index,
             glyphs: dev.glyphs,
@@ -1164,6 +1190,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             height: h as f64,
             rotation: 0,
             ocr: None,
+            warnings,
         };
         read_upright(&mut page);
         synthesize_missing_boxes(&mut page.glyphs);
@@ -1183,6 +1210,15 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     }
 
     Ok(Document { pages })
+}
+
+/// The name a warning is reported by, as the interpreter names it.
+fn warning_name(w: hayro_interpret::InterpreterWarning) -> &'static str {
+    use hayro_interpret::InterpreterWarning as W;
+    match w {
+        W::UnsupportedFont => "UnsupportedFont",
+        W::ImageDecodeFailure => "ImageDecodeFailure",
+    }
 }
 
 /// Whether an image stream is coded by a filter that only codes one bit per
@@ -1477,6 +1513,7 @@ mod tests {
             height: 800.0,
             rotation: 0,
             ocr: None,
+            warnings: Vec::new(),
         }
     }
 

@@ -930,6 +930,7 @@ fn render(
                 pages,
                 unread: notes.unread.clone(),
                 unread_regions: notes.unread_regions.clone(),
+                warnings: notes.warnings.clone(),
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
@@ -1128,9 +1129,12 @@ fn convert_bytes(
     unread.retain(|u| asked(u.index));
     let mut unread_regions = fluree_doc_pdf::unread_regions(&doc, &a.elements);
     unread_regions.retain(|u| asked(u.page));
+    let mut warnings = fluree_doc_pdf::parse_warnings(&doc);
+    warnings.retain(|w| asked(w.page));
     let notes = fluree_doc_model::Notes {
         unread,
         unread_regions,
+        warnings,
         // A page number identifies nothing, bare or as `Page 3 of 15`; the
         // rest of the running block is the document's own name for itself.
         running_text: a
@@ -1145,6 +1149,11 @@ fn convert_bytes(
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
     }
+    if !quiet {
+        for line in parse_warning_lines(&notes.warnings) {
+            eprintln!("warning: {stem}: {line}");
+        }
+    }
     let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
     if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
         if args.strict {
@@ -1155,6 +1164,47 @@ fn convert_bytes(
         }
     }
     Ok(render(&a.elements, src, args, sizes, &notes))
+}
+
+/// How many pages a parser warning names on stderr; `doc:parseWarnings`
+/// lists them all.
+const LISTED_PAGES: usize = 10;
+
+/// One line per kind of parser warning, naming its pages (1-based, the
+/// first [`LISTED_PAGES`] of them) and what it costs the output.
+fn parse_warning_lines(warnings: &[fluree_doc_model::ParseWarning]) -> Vec<String> {
+    let mut kinds: Vec<&str> = warnings.iter().map(|w| w.kind.as_str()).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
+        .into_iter()
+        .map(|kind| {
+            let all: Vec<usize> = warnings
+                .iter()
+                .filter(|w| w.kind == kind)
+                .map(|w| w.page + 1)
+                .collect();
+            let mut pages: Vec<String> = all
+                .iter()
+                .take(LISTED_PAGES)
+                .map(usize::to_string)
+                .collect();
+            if all.len() > LISTED_PAGES {
+                pages.push(format!("and {} more", all.len() - LISTED_PAGES));
+            }
+            let what = match kind {
+                "ImageDecodeFailure" => "an image could not be decoded; what it shows is missing",
+                // Any other kind the interpreter may name (it declares
+                // `UnsupportedFont`, but never reports it).
+                _ => "the parser reported a problem",
+            };
+            format!(
+                "{kind} on page{} {}: {what}",
+                if all.len() == 1 { "" } else { "s" },
+                pages.join(", ")
+            )
+        })
+        .collect()
 }
 
 /// Why a PDF's output holds nothing at all, when it does: no element, and
@@ -1293,6 +1343,35 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_warnings_read_as_one_line_a_kind() {
+        let w = |page, kind: &str| fluree_doc_model::ParseWarning {
+            page,
+            kind: kind.into(),
+            count: 1,
+        };
+        let lines = parse_warning_lines(&[
+            w(2, "ImageDecodeFailure"),
+            w(0, "UnsupportedFont"),
+            w(4, "ImageDecodeFailure"),
+        ]);
+        assert_eq!(
+            lines,
+            [
+                "ImageDecodeFailure on pages 3, 5: an image could not be decoded; what it shows is missing",
+                "UnsupportedFont on page 1: the parser reported a problem",
+            ]
+        );
+        // A long document names its first pages, and counts the rest.
+        let many: Vec<_> = (0..13).map(|p| w(p, "ImageDecodeFailure")).collect();
+        let line = &parse_warning_lines(&many)[0];
+        assert!(
+            line.contains("pages 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, and 3 more:"),
+            "{line}"
+        );
+        assert!(parse_warning_lines(&[]).is_empty());
+    }
 
     #[test]
     fn colliding_stems_get_disambiguated() {

@@ -74,11 +74,16 @@ fn scratch(test: &str) -> PathBuf {
 
 /// `fdoc convert <inputs> -f text <args>` with no reader configured.
 fn convert(dir: &Path, inputs: &[&Path], args: &[&str]) -> Output {
+    convert_as(dir, inputs, "text", args)
+}
+
+/// `fdoc convert <inputs> -f <format> <args>` with no reader configured.
+fn convert_as(dir: &Path, inputs: &[&Path], format: &str, args: &[&str]) -> Output {
     let home = dir.join("home");
     Command::new(env!("CARGO_BIN_EXE_fdoc"))
         .arg("convert")
         .args(inputs)
-        .args(["-f", "text", "--no-escalate"])
+        .args(["-f", format, "--no-escalate"])
         .args(args)
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", &home)
@@ -232,5 +237,117 @@ fn a_scan_nothing_read_is_reported_unread_not_empty() {
         stderr(&o)
     );
     assert!(!stderr(&o).contains("nothing was read"), "{}", stderr(&o));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The DoCO document node of an output.
+fn document(o: &Output) -> serde_json::Value {
+    let graph: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    graph["@graph"]
+        .as_array()
+        .and_then(|g| g.iter().find(|n| n["@type"] == "foaf:Document"))
+        .cloned()
+        .unwrap()
+}
+
+#[test]
+fn an_image_that_does_not_decode_is_listed_for_its_page() {
+    // A text page with a "JPEG" that is not one: the image is placed all
+    // the same, and only the interpreter knows it held nothing it could
+    // show.
+    let dir = scratch("undecodable");
+    let input = dir.join("broken.pdf");
+    let junk = b"this is not a JPEG stream".to_vec();
+    let bytes = pdf(
+        &[(612.0, 792.0)],
+        &format!("{CONTENT}\nq 300 0 0 200 100 300 cm /I0 Do Q"),
+        FONT,
+        &[(
+            "I0".into(),
+            format!(
+                "/Width 64 /Height 64 /ColorSpace /DeviceGray /BitsPerComponent 8 \
+                 /Filter /DCTDecode /Length {}",
+                junk.len()
+            ),
+            junk,
+        )],
+    );
+    std::fs::write(&input, bytes).unwrap();
+    let o = convert_as(&dir, &[&input], "doco", &[]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(
+        document(&o)["doc:parseWarnings"],
+        serde_json::json!({ "@type": "@json", "@value": [
+            { "pageIndex": 0, "kind": "ImageDecodeFailure", "count": 1 }
+        ] })
+    );
+    assert!(
+        stderr(&o).contains(
+            "warning: broken: ImageDecodeFailure on page 1: an image could not be decoded"
+        ),
+        "{}",
+        stderr(&o)
+    );
+    // Not when `--pages` leaves the page out, nor under `-q` on stderr.
+    let o = convert_as(&dir, &[&input], "doco", &["--pages", "2", "-q"]);
+    assert!(document(&o).get("doc:parseWarnings").is_none());
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    // A clean page says nothing.
+    let good_pdf = dir.join("good.pdf");
+    std::fs::write(&good_pdf, good()).unwrap();
+    let o = convert_as(&dir, &[&good_pdf], "doco", &[]);
+    assert!(document(&o).get("doc:parseWarnings").is_none());
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_image_that_does_not_decode_is_listed_for_its_own_page_only() {
+    // Three text pages, the broken "JPEG" drawn on the second alone: the
+    // interpreter's report goes to that page, not to the one after it.
+    let dir = scratch("undecodable-page");
+    let input = dir.join("broken.pdf");
+    let junk = b"this is not a JPEG stream".to_vec();
+    let page = |contents: usize| {
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << {FONT} \
+             /XObject << /I0 9 0 R >> >> /Contents {contents} 0 R >>"
+        )
+        .into_bytes()
+    };
+    let stream =
+        |s: &str| format!("<< /Length {} >>\nstream\n{s}\nendstream", s.len()).into_bytes();
+    let drawn = format!("{CONTENT}\nq 300 0 0 200 100 300 cm /I0 Do Q");
+    let bytes = objects_pdf(&[
+        CATALOG.as_bytes().to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>".to_vec(),
+        page(4),
+        stream(CONTENT),
+        page(6),
+        stream(&drawn),
+        page(8),
+        stream(CONTENT),
+        [
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 \
+                 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode \
+                 /Length {} >>\nstream\n",
+                junk.len()
+            )
+            .into_bytes(),
+            junk,
+            b"\nendstream".to_vec(),
+        ]
+        .concat(),
+    ]);
+    std::fs::write(&input, bytes).unwrap();
+    let o = convert_as(&dir, &[&input], "doco", &[]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert_eq!(
+        document(&o)["doc:parseWarnings"],
+        serde_json::json!({ "@type": "@json", "@value": [
+            { "pageIndex": 1, "kind": "ImageDecodeFailure", "count": 1 }
+        ] })
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

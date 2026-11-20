@@ -384,6 +384,25 @@ pub struct UnreadRegion {
     pub reason: String,
 }
 
+/// Something the source's parser reported while reading a page.
+///
+/// A PDF interpreter that cannot decode an image still places it, so the
+/// page looks exactly like one whose image decoded and held nothing to
+/// read; only the parser knows the difference. Listed once per page and
+/// kind, with how many times it was reported there.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ParseWarning {
+    /// 0-based physical page, the same space as [`Element::page`].
+    #[serde(rename = "pageIndex")]
+    pub page: usize,
+    /// As the parser names it: `ImageDecodeFailure`, an image it could not
+    /// decode. Any other kind is passed on as named; the PDF interpreter
+    /// also declares `UnsupportedFont`, but the version used never reports
+    /// it.
+    pub kind: String,
+    pub count: usize,
+}
+
 /// A box as `doc:bbox` writes it, so one parser reads both.
 fn bbox_string<S: serde::Serializer>(b: &crate::geom::BBox, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&format!("{:.2},{:.2},{:.2},{:.2}", b.x0, b.y0, b.x1, b.y1))
@@ -542,6 +561,8 @@ pub struct Notes {
     pub unread: Vec<UnreadPage>,
     /// Raster regions of pages otherwise read, which nothing read.
     pub unread_regions: Vec<UnreadRegion>,
+    /// What the parser reported while reading the pages.
+    pub warnings: Vec<ParseWarning>,
     /// Running header and footer text, kept once because it identifies the
     /// document even though it is noise inside the body.
     pub running_text: Vec<String>,
@@ -553,6 +574,7 @@ impl Notes {
     pub fn is_empty(&self) -> bool {
         self.unread.is_empty()
             && self.unread_regions.is_empty()
+            && self.warnings.is_empty()
             && self.running_text.is_empty()
             && self.info.is_empty()
             && self.attachments.is_empty()

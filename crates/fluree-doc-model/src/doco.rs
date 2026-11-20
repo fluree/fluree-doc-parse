@@ -87,6 +87,10 @@ pub struct DocoOptions {
     /// `doc:unreadPages` and for the same reason: a page of prose whose
     /// pasted screenshot nobody read looks read.
     pub unread_regions: Vec<crate::element::UnreadRegion>,
+    /// What the parser reported while reading the pages. Emitted on the
+    /// document node as `doc:parseWarnings`: an image that failed to decode
+    /// is otherwise indistinguishable from one that held nothing.
+    pub warnings: Vec<crate::element::ParseWarning>,
     /// Page sizes, in PDF user units, for sources that have pages.
     ///
     /// Emitted on the document node as `doc:pages`. A `doc:bbox` cannot be
@@ -885,6 +889,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         em.nodes[doc_idx].insert(
             "doc:unreadPages".into(),
             json!({ "@type": "@json", "@value": opts.unread }),
+        );
+    }
+    if !opts.warnings.is_empty() {
+        em.nodes[doc_idx].insert(
+            "doc:parseWarnings".into(),
+            json!({ "@type": "@json", "@value": opts.warnings }),
         );
     }
     if !opts.unread_regions.is_empty() {
@@ -2008,6 +2018,31 @@ mod tests {
         // Structural wrappers are stamped too (retract-on-rerun must catch them).
         let doc = &find(&g, "foaf:Document")[0];
         assert_eq!(doc["doc:sourceDocument"]["@id"], "urn:test:doc");
+    }
+
+    #[test]
+    fn parse_warnings_are_declared_on_the_document_node() {
+        use crate::element::ParseWarning;
+        let els = vec![el("doco:Paragraph", "Review memo", None)];
+        let o = DocoOptions {
+            warnings: vec![ParseWarning {
+                page: 2,
+                kind: "ImageDecodeFailure".into(),
+                count: 3,
+            }],
+            ..opts()
+        };
+        let v: Value = serde_json::from_str(&to_doco(&els, &o)).unwrap();
+        let g = v["@graph"].as_array().unwrap();
+        assert_eq!(
+            find(g, "foaf:Document")[0]["doc:parseWarnings"],
+            json!({ "@type": "@json", "@value": [
+                { "pageIndex": 2, "kind": "ImageDecodeFailure", "count": 3 }
+            ] })
+        );
+        assert!(find(&graph(&els), "foaf:Document")[0]
+            .get("doc:parseWarnings")
+            .is_none());
     }
 
     #[test]

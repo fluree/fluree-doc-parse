@@ -29,6 +29,7 @@
 //! - [`route::decide`] and [`route::signals`] — escalation verdicts
 //! - [`unread_pages`] and [`unread_regions`] — what the router sent a reader
 //!   to and nothing read
+//! - [`parse_warnings`] — what the PDF interpreter reported, per page
 //! - [`forms::fields`] — AcroForm values
 //! - [`outline::extract`] — the PDF bookmark tree
 //! - [`link::extract`] / [`link::attach`] — link annotations and their anchors
@@ -195,6 +196,25 @@ pub fn unread_regions(
     out
 }
 
+/// What the PDF interpreter reported on each page ([`Page::warnings`]),
+/// once per page and kind, with how many times, in page order.
+pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
+    let mut out: Vec<fluree_doc_model::ParseWarning> = Vec::new();
+    for p in &doc.pages {
+        for &kind in &p.warnings {
+            match out.iter_mut().find(|w| w.page == p.index && w.kind == kind) {
+                Some(w) => w.count += 1,
+                None => out.push(fluree_doc_model::ParseWarning {
+                    page: p.index,
+                    kind: kind.into(),
+                    count: 1,
+                }),
+            }
+        }
+    }
+    out
+}
+
 /// Two boxes for the same region, computed the same way: equal but for
 /// floating-point noise.
 fn same_box(a: &BBox, b: &BBox) -> bool {
@@ -278,6 +298,7 @@ mod tests {
             height: 800.0,
             rotation: 0,
             ocr: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -419,6 +440,35 @@ mod tests {
         assert_eq!(got[0].bbox, shown);
         // And a reading spliced at the displayed box reads it.
         assert!(unread_regions(&doc, &[spliced(shown, "region-splice")]).is_empty());
+    }
+
+    #[test]
+    fn parser_warnings_are_listed_once_a_page_and_kind() {
+        let mut a = page(&[]);
+        a.warnings = vec![
+            "ImageDecodeFailure",
+            "UnsupportedFont",
+            "ImageDecodeFailure",
+        ];
+        let mut b = page(&[]);
+        b.index = 1;
+        b.warnings = vec!["ImageDecodeFailure"];
+        let doc = Document {
+            pages: vec![a, page(&[]), b],
+        };
+        let got = parse_warnings(&doc);
+        let got: Vec<(usize, &str, usize)> = got
+            .iter()
+            .map(|w| (w.page, w.kind.as_str(), w.count))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (0, "ImageDecodeFailure", 2),
+                (0, "UnsupportedFont", 1),
+                (1, "ImageDecodeFailure", 1)
+            ]
+        );
     }
 
     #[test]
