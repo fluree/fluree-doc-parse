@@ -294,6 +294,16 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub no_escalate: bool,
 
+    /// Fail a PDF that yields nothing: no text, and no page or region
+    /// reported unread
+    ///
+    /// Such a PDF is warned about either way: a damaged file (a broken
+    /// page tree, a flipped byte) reads exactly like a blank one, or one
+    /// whose text is drawn as vector outlines. With this
+    /// flag it counts as a failed input, and the exit status is non-zero.
+    #[arg(long)]
+    pub strict: bool,
+
     /// Save each email's attachments under DIR/<email stem>/, to convert
     /// on their own
     ///

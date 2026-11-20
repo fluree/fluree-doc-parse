@@ -1,5 +1,8 @@
 //! Synthetic PDFs shared by the integration tests.
 
+// Each test binary compiles this module and uses only some of it.
+#![allow(dead_code)]
+
 /// A 600 × 120 px grey image of two lines of text, drawn by rendering a text
 /// PDF: what a screenshot pasted into a page holds.
 pub fn capture() -> (u32, u32, Vec<u8>) {
@@ -61,6 +64,12 @@ pub fn pdf(
             .concat(),
         );
     }
+    objects_pdf(&objects)
+}
+
+/// A PDF of these objects, numbered from 1, the first its catalog, with a
+/// cross-reference table that finds each.
+pub fn objects_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
     let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
     for (i, body) in objects.iter().enumerate() {

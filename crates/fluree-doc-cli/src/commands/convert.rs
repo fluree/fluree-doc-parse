@@ -1145,7 +1145,55 @@ fn convert_bytes(
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
     }
+    let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
+    if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
+        if args.strict {
+            return Err(why);
+        }
+        if !quiet {
+            eprintln!("warning: {stem}: {why}");
+        }
+    }
     Ok(render(&a.elements, src, args, sizes, &notes))
+}
+
+/// Why a PDF's output holds nothing at all, when it does: no element, and
+/// nothing reported unread.
+///
+/// Every page the router can tell carries content is reported unread when
+/// nothing read it, so an output that is empty *and* reports nothing is a
+/// document with no text layer and no image: blank, its text drawn as
+/// vector outlines (the router does not count drawing operations), or one
+/// the parser could not open properly: a page tree that loops or nests
+/// past what the parser follows, or a reference one flipped bit broke, all
+/// come out as a valid, empty document. They cannot be told apart from
+/// here, and a batch must not take any of them for a successful parse in
+/// silence.
+///
+/// `pages` is the document's page count, `asked` how many of them `--pages`
+/// kept. A selection that keeps none of them read nothing either: page
+/// numbers past the end of a document, in a batch, must not pass in silence.
+fn read_nothing(
+    pages: usize,
+    asked: usize,
+    elements: &[Element],
+    notes: &fluree_doc_model::Notes,
+) -> Option<String> {
+    if !elements.is_empty() || !notes.unread.is_empty() || !notes.unread_regions.is_empty() {
+        return None;
+    }
+    Some(match (pages, asked) {
+        (0, _) => "nothing was read: no page was found (the file may be damaged)".into(),
+        (n, 0) => format!(
+            "nothing was read: --pages selects none of its {n} page{}",
+            if n == 1 { "" } else { "s" }
+        ),
+        (_, n) => format!(
+            "nothing was read: {n} page{} with no text layer and no image \
+             (blank, drawn as vector outlines, or damaged)",
+            if n == 1 { "" } else { "s" }
+        ),
+    })
 }
 
 /// A name per input for its outputs in one run: its stem, unless another

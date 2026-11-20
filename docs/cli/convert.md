@@ -43,6 +43,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. Env: `FDOC_VLM_ANCHORS` |
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
+| `--strict` | fail a PDF that yields nothing: no text, and no page or region reported unread. See [Exit codes](#exit-codes) |
 
 The flags from `--layout-boxes` down wire the [escalation
 tiers](../integration/escalation-tiers.md); without them you get tier 1.
@@ -160,6 +161,28 @@ analyzed; the filter applies to the emitted elements, so cross-page structure
 ## Exit codes
 
 `0` on success, non-zero if any input failed.
+
+A PDF can open without error and still give nothing: a page tree that
+loops, one nested deeper than the parser follows, a page reference broken
+by one flipped bit. Each reads as a valid document with no pages, exactly
+like a blank one. Every page or region the router can tell carries content
+is [reported unread](../formats/doco.md#pages-nothing-read) when nothing
+reads it, so an output that holds no element *and* reports nothing unread
+is warned about:
+
+```
+warning: report: nothing was read: no page was found (the file may be damaged)
+```
+
+With `--strict` that input fails instead: `error:` on stderr, no output
+written, and a non-zero exit (in a batch, it counts among the failed
+inputs). A page left out by `--pages` was not asked for and does not count,
+but a `--pages` that keeps none of the document's pages reads nothing, and
+is warned about (or fails) the same way.
+A page with no text layer and no image warns too, whatever it is: blank,
+its text drawn as vector outlines (the router does not count drawing
+operations, so such a page is never reported unread), or damaged; nothing
+in the output tells them apart. Only PDFs are checked this way.
 
 ## Compatibility forms
 
