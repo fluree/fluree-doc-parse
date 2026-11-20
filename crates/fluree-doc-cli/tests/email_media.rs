@@ -532,6 +532,72 @@ fn render_routed_crops_an_inline_image_as_media() {
 }
 
 #[test]
+fn two_pasted_images_of_one_name_are_each_read_where_they_are_shown() {
+    // Two inline images a client called alike, without a Content-ID: each
+    // has its own words, its own crop, and neither is read for the other.
+    let dir = scratch("same-name");
+    let input = dir.join("mail.eml");
+    let mut m = b"From: a@example.org\r\n\
+Subject: Record\r\n\
+MIME-Version: 1.0\r\n\
+Content-Type: multipart/mixed; boundary=\"mix\"\r\n\
+\r\n\
+--mix\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+See both.\r\n"
+        .to_vec();
+    for image in [screen(300, 100), screen(320, 100)] {
+        m.extend(
+            b"--mix\r\n\
+Content-Type: image/png\r\n\
+Content-Disposition: inline; filename=\"image.png\"\r\n\
+Content-Transfer-Encoding: binary\r\n\r\n",
+        );
+        m.extend(image);
+        m.extend(b"\r\n");
+    }
+    m.extend(b"--mix--\r\n");
+    std::fs::write(&input, &m).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    for (tag, text) in [("m1", "ALPHA-1111"), ("m2", "BRAVO-2222")] {
+        let reading = serde_json::json!({
+            "width": 300, "height": 100,
+            "words": [{ "text": text, "box": [20, 30, 200, 50] }]
+        });
+        std::fs::write(words.join(format!("mail_{tag}.json")), reading.to_string()).unwrap();
+    }
+    let out = convert(
+        &dir,
+        &input,
+        &[
+            "-f".as_ref(),
+            "text".as_ref(),
+            "--ocr-words".as_ref(),
+            words.as_os_str(),
+        ],
+    );
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text.matches("ALPHA-1111").count(), 1, "{text}");
+    assert_eq!(text.matches("BRAVO-2222").count(), 1, "{text}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("not converted"), "{err}");
+    let crops = dir.join("crops");
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["dev", "render-routed"])
+        .arg(&input)
+        .arg(&crops)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(crops.join("mail_m1.png").exists());
+    assert!(crops.join("mail_m2.png").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn a_model_reading_supplied_for_the_image_is_placed_where_it_is() {
     let dir = scratch("tier");
     let input = dir.join("mail.eml");
@@ -566,5 +632,67 @@ fn a_model_reading_supplied_for_the_image_is_placed_where_it_is() {
     assert!(before < read && read < after, "{text}");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!err.contains("were not read"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_inline_image_read_into_the_body_is_not_an_attachment_left_out() {
+    let dir = scratch("note");
+    let input = dir.join("mail.eml");
+    // The screenshot, and a PDF attached.
+    let mut m = eml();
+    let end = b"\r\n--rel-7f3a--\r\n";
+    m.truncate(m.len() - end.len());
+    m.extend(
+        b"\r\n--rel-7f3a\r\n\
+Content-Type: application/pdf\r\n\
+Content-Disposition: attachment; filename=\"budget.pdf\"\r\n\
+\r\n\
+%PDF-1.7 stand-in\r\n\
+--rel-7f3a--\r\n",
+    );
+    std::fs::write(&input, &m).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let ocr = [
+        "-f".as_ref(),
+        "text".as_ref(),
+        "--ocr-words".as_ref(),
+        words.as_os_str(),
+    ];
+    // Not read: both files are left out.
+    let out = convert(&dir, &input, &ocr);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("2 attachments not converted (shot.png, budget.pdf); pass"),
+        "{err}"
+    );
+    // Read, but no text in it: nothing of it is in the body, and it is
+    // still a file left out.
+    let empty = serde_json::json!({ "width": 300, "height": 100, "words": [] });
+    std::fs::write(words.join("mail_m1.json"), empty.to_string()).unwrap();
+    let out = convert(&dir, &input, &ocr);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("2 attachments not converted (shot.png, budget.pdf); pass"),
+        "{err}"
+    );
+    // Read: only the PDF is.
+    let reading = serde_json::json!({
+        "width": 300, "height": 100,
+        "words": [{ "text": "Account 4417-0093-21", "box": [20, 30, 200, 50] }]
+    });
+    std::fs::write(words.join("mail_m1.json"), reading.to_string()).unwrap();
+    let out = convert(&dir, &input, &ocr);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("1 attachment not converted (budget.pdf); 1 inline image read into the body"),
+        "{err}"
+    );
+    // The image alone, read: nothing is left out.
+    std::fs::write(&input, eml()).unwrap();
+    let out = convert(&dir, &input, &ocr);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("not converted"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }

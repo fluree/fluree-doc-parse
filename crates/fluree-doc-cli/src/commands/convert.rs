@@ -446,8 +446,22 @@ fn convert_email(
 ) -> Result<String, String> {
     let stem = src.stem;
     let email = fluree_doc_email::parse(data).map_err(|e| e.to_string())?;
+    // The images the body shows: a pasted screenshot's text follows its
+    // figure, read as a DOCX picture's is.
+    let media = read_media(
+        stem,
+        email.media.clone(),
+        &|part| {
+            email
+                .media_bytes(part)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| format!("{part}: not in the message"))
+        },
+        cfg,
+        quiet,
+    );
     let count = email.attachments.len();
-    let plural = if count == 1 { "" } else { "s" };
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
     match &args.attachments {
         Some(dir) if count > 0 => {
             // The slot, not the stem: two `mail.eml` in one batch would
@@ -463,44 +477,58 @@ fn convert_email(
             }
             if !quiet {
                 eprintln!(
-                    "note: {stem}: {count} attachment{plural} saved to {}",
+                    "note: {stem}: {count} attachment{} saved to {}",
+                    plural(count),
                     dir.display()
                 );
             }
         }
         None if count > 0 && !quiet => {
+            // An image the body shows, read into the body where it is shown,
+            // is converted with the message; any other file is a document
+            // of its own, and this output does not hold it. So is an image
+            // read with no text in it: the body holds nothing of it.
+            let read: std::collections::HashSet<usize> = email
+                .media
+                .iter()
+                .filter(|m| {
+                    (media.read.iter()).any(|(figure, els)| *figure == m.figure && !els.is_empty())
+                })
+                .filter_map(|m| email.media_attachment(m.source.part()?))
+                .collect();
             let names: Vec<String> = email
                 .attachments
                 .iter()
-                .map(|a| {
+                .enumerate()
+                .filter(|(i, _)| !read.contains(i))
+                .map(|(_, a)| {
                     a.info
                         .filename
                         .clone()
                         .unwrap_or_else(|| a.info.content_type.clone())
                 })
                 .collect();
-            eprintln!(
-                "note: {stem}: {count} attachment{plural} not converted ({}); \
-                 pass --attachments DIR to save them",
-                names.join(", ")
-            );
+            let left = names.len();
+            let images = if read.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; {} inline image{} read into the body",
+                    read.len(),
+                    plural(read.len())
+                )
+            };
+            if left > 0 {
+                eprintln!(
+                    "note: {stem}: {left} attachment{} not converted ({}){images}; \
+                     pass --attachments DIR to save them",
+                    plural(left),
+                    names.join(", ")
+                );
+            }
         }
         _ => {}
     }
-    // The images the body shows: a pasted screenshot's text follows its
-    // figure, read by OCR, as a DOCX picture's does.
-    let media = read_media(
-        stem,
-        email.media.clone(),
-        &|part| {
-            email
-                .media_bytes(part)
-                .map(<[u8]>::to_vec)
-                .ok_or_else(|| format!("{part}: not in the message"))
-        },
-        cfg,
-        quiet,
-    );
     let notes = fluree_doc_model::Notes {
         unread_images: media.unread,
         ..email.notes()

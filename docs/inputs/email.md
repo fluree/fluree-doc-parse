@@ -214,7 +214,9 @@ this output. Attachments are described instead:
 - In DoCO, on the document node as `doc:attachments`: filename, content
   type, size in bytes, the SHA-256 of its bytes, and whether the file is
   shown inline in the body (an image pasted into the message).
-- On stderr, `fdoc` lists the files it left out.
+- On stderr, `fdoc` lists the files it left out. An inline image read into
+  the body (see [Images in the body](#images-in-the-body)) is not one of
+  them: the note counts it apart, as read.
 
 `--attachments DIR` saves each email's files under `DIR/<email name>/` so
 you can convert them on their own:

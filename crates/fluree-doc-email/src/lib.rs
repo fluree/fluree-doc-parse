@@ -72,11 +72,17 @@ impl Email {
     /// The bytes of the image of [`Email::media`] held under `part` (its
     /// source's [`MediaSource::part`]).
     pub fn media_bytes(&self, part: &str) -> Option<&[u8]> {
+        Some(&self.attachments[self.media_attachment(part)?].bytes)
+    }
+
+    /// Which of [`Email::attachments`] the image of [`Email::media`] held
+    /// under `part` is.
+    pub fn media_attachment(&self, part: &str) -> Option<usize> {
         let i = self
             .media
             .iter()
             .position(|m| m.source.part() == Some(part))?;
-        Some(&self.attachments[self.media_at[i]].bytes)
+        Some(self.media_at[i])
     }
 
     /// What an emitter carries beside the elements: the document's info and
@@ -1451,15 +1457,19 @@ Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
         parse(src.as_bytes()).unwrap()
     }
 
-    /// Each image's key, and the bytes its key gives back.
-    fn keyed(email: &Email) -> Vec<(String, String)> {
+    /// Each image's key, and the bytes and file its key gives back.
+    fn keyed(email: &Email) -> Vec<(String, String, usize)> {
         email
             .media
             .iter()
             .map(|m| {
                 let part = m.source.part().unwrap();
                 let bytes = String::from_utf8(email.media_bytes(part).unwrap().to_vec()).unwrap();
-                (part.to_string(), bytes)
+                (
+                    part.to_string(),
+                    bytes,
+                    email.media_attachment(part).unwrap(),
+                )
             })
             .collect()
     }
@@ -1474,8 +1484,8 @@ Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
         assert_eq!(
             keyed(&email),
             [
-                ("attachment 1".into(), "ALPHA".into()),
-                ("attachment 2".into(), "BRAVO".into())
+                ("attachment 1".into(), "ALPHA".into(), 0),
+                ("attachment 2".into(), "BRAVO".into(), 1)
             ]
         );
         assert_eq!(fluree_doc_model::pictures(email.media.clone()).len(), 2);
@@ -1500,9 +1510,9 @@ Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
         assert_eq!(
             keyed(&email),
             [
-                ("attachment 1".into(), "ALPHA".into()),
-                ("cid:y@example.org".into(), "CHARLIE".into()),
-                ("attachment 2".into(), "BRAVO".into())
+                ("attachment 1".into(), "ALPHA".into(), 0),
+                ("cid:y@example.org".into(), "CHARLIE".into(), 2),
+                ("attachment 2".into(), "BRAVO".into(), 1)
             ]
         );
         assert_eq!(fluree_doc_model::pictures(email.media.clone()).len(), 3);
@@ -1519,7 +1529,7 @@ Content-Type: multipart/related; boundary=\"rel\"\r\n\r\n\
         );
         let f: Vec<&str> = figures(&email).iter().map(|f| f.1).collect();
         assert_eq!(f, ["figure-0-1", "figure-0-1"]);
-        assert_eq!(keyed(&email), [("attachment 1".into(), "ALPHA".into())]);
+        assert_eq!(keyed(&email), [("attachment 1".into(), "ALPHA".into(), 0)]);
         let pictures = fluree_doc_model::pictures(email.media.clone());
         assert_eq!(pictures.len(), 1);
     }
