@@ -334,6 +334,62 @@ fn ocr_words_of_the_region_read_it() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn only_the_crop_listed_is_warned_of_its_scores() {
+    // Two readings of the page: its region's, listed, and a whole one sized
+    // for the page turned a quarter, set aside. Each is judged by its page
+    // and its crop: the page having a reading listed says nothing of the
+    // other one.
+    let dir = scratch("conf-crop", &page(true));
+    let reading = |coords: serde_json::Value, conf: f64| {
+        let mut r = serde_json::json!({
+            "words": [{ "text": "Account 4417 ref", "box": [80, 600, 300, 620], "conf": conf }]
+        });
+        r.as_object_mut()
+            .unwrap()
+            .extend(coords.as_object().unwrap().clone());
+        r.to_string()
+    };
+    let turned = || serde_json::json!({ "coords": "px", "width": 792, "height": 612 });
+    let run = |region: f64, whole: f64| {
+        let w = sidecars(
+            &dir,
+            &format!("words-{region}-{whole}"),
+            &[
+                (
+                    "memo_p0_r0.json",
+                    reading(serde_json::json!({ "coords": "page" }), region),
+                ),
+                ("memo_p0_full.json", reading(turned(), whole)),
+            ],
+        );
+        let (doc, stderr, _) = convert(&dir, &["--ocr-words", w.to_str().unwrap()]);
+        assert!(
+            stderr.contains("memo_p0_full: the reading is sized for the image turned a quarter"),
+            "{stderr}"
+        );
+        let crops: Vec<String> = doc["doc:ocrReadings"]["@value"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{doc}"))
+            .iter()
+            .map(|r| r["crop"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(crops, ["r0"], "{doc}");
+        stderr
+    };
+    // The one set aside, scored 0-100, is not warned of.
+    let stderr = run(0.9, 95.0);
+    assert!(!stderr.contains("outside 0-1"), "{stderr}");
+    // The one listed is, and only it.
+    let stderr = run(95.0, 0.9);
+    assert!(
+        stderr.contains("memo_p0_r0.json: 1 of 1 word score(s) outside 0-1"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("memo_p0_full.json"), "{stderr}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The page of [`page`] with, between its prose and its capture, a second
 /// capture under a caption the page draws twice in one place, as a
 /// producer drawing bold may: 22 glyphs over it as drawn, 11 once analysis
@@ -561,6 +617,49 @@ fn a_photograph_is_read_by_nothing_and_a_captures_noise_leaves_it_listed() {
         );
         assert!(!stderr.contains("fluree-doc-parse:"), "{stderr}");
     }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_regions_reading_scored_0_100_is_judged_by_its_boxes_alone() {
+    const CAPTURE: &str = "56.00,672.00,456.00,732.00";
+    let dir = scratch(
+        "small-noise-100",
+        &page_placing(Some(("400 0 0 60 56 60", capture()))),
+    );
+    // Scored 0-100, the foliage's fragments have no confidence: a reading
+    // with none is not judged noise by it, as one scored not at all is not,
+    // and the warning says so. Its boxes still are: a fragment over the
+    // whole crop is noise whatever its scores.
+    let reading = serde_json::json!({ "coords": "page", "words": foliage_words(100.0) });
+    let w = sidecars(&dir, "words", &[("memo_p0_r0.json", reading.to_string())]);
+    let (doc, stderr, text) = convert(&dir, &["--ocr-words", w.to_str().unwrap()]);
+    assert!(texts(&text).iter().any(|t| t.contains("I7")), "{text}");
+    assert_eq!(
+        doc["doc:unreadRegions"]["@value"],
+        serde_json::Value::Null,
+        "{doc}"
+    );
+    assert!(
+        stderr.contains(
+            "memo_p0_r0.json: 5 of 5 word score(s) outside 0-1, so no confidence is reported for it, nor, for a region or a picture, is it judged noise by its confidence"
+        ),
+        "{stderr}"
+    );
+    let all_of_it = serde_json::json!([{ "text": "7", "box": [50, 666, 462, 738], "conf": 66 }]);
+    let reading = serde_json::json!({ "coords": "page", "words": all_of_it });
+    let w = sidecars(
+        &dir,
+        "words-all",
+        &[("memo_p0_r0.json", reading.to_string())],
+    );
+    let (doc, _, text) = convert(&dir, &["--ocr-words", w.to_str().unwrap()]);
+    assert!(!texts(&text).iter().any(|t| t.contains('7')), "{text}");
+    assert_eq!(
+        doc["doc:unreadRegions"]["@value"],
+        serde_json::json!([{ "pageIndex": 0, "bbox": CAPTURE, "reason": "Small" }]),
+        "{doc}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 

@@ -162,7 +162,9 @@ The pictures of a DOCX, their text after each figure (`fluree-doc-docx`'s
 let read = fluree_doc_docx::parse_with_ocr(&bytes, &engine)?;
 // read.elements, read.info; read.unread: each picture not read, with why, as
 // doc:unreadImages lists it (read.errors: what went wrong, by picture);
-// read.first_page_only: multi-page images of which only the first page was read
+// read.first_page_only: multi-page images of which only the first page was read;
+// read.ocr: each reading taken, with its confidence, as doc:ocrReadings lists it
+// (a fluree_doc_model::OcrReading, new, as is the `ocr` field of each parse)
 ```
 
 Each image is read once however many figures draw it, and a document has at
@@ -358,6 +360,24 @@ build them.
     `fluree_doc_image::ImageElements` gains `not_texty` and `noise`, and
     `ocr::Injected` gains `pasted`, the regions it may read that cover less
     of their page than `route::IMAGE_DOMINANT_COVERAGE`, half.
+
+### OCR readings and their confidence
+
+- `DocoOptions` and `Notes` gain `ocr_readings` (`ocr`, on `Notes`), listed
+  as `doc:ocrReadings`.
+- New in this release, nothing to change from main; listed for a caller
+  of this work's earlier pull requests:
+  - The OCR parses of `fluree_doc_docx`, `fluree_doc_xlsx` and
+    `fluree_doc_image` (`ImageElements`, `PlacedRead`) gain `ocr`, and
+    `ImageElements` gains `refused`.
+  - `ocr::Injected` gains `min_conf`, `engine` and `regions`;
+    `ocr::readings` lists the readings an output holds;
+    `WordReading::scores_out_of_range` and `words_with_text` count the
+    scores outside 0-1 a warning names.
+  - A reading none of whose words land on what it read, or a region's most
+    of whose words land off its crop, is refused, where it was taken as a
+    reading that came back blank; a placed picture whose reading is
+    refused so is `Failed` in `doc:unreadImages`.
 
 ## Errors
 

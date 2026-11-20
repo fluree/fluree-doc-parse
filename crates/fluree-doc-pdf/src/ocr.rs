@@ -153,8 +153,12 @@ pub struct Injected {
     /// region read, or with no usable box.
     pub taken: usize,
     pub dropped: usize,
-    /// Mean confidence of the words taken, where the engine gave one.
+    /// Mean and lowest confidence of the words taken, where the engine
+    /// gave one.
     pub mean_conf: Option<f64>,
+    pub min_conf: Option<f64>,
+    /// The engine the reading names, if it names one.
+    pub engine: Option<String>,
     /// Skew of the reading's level lines, degrees counter-clockwise, as
     /// estimated and corrected for.
     pub skew_deg: f64,
@@ -175,6 +179,13 @@ pub struct Injected {
     /// more, a scan with a stamped line of text of its own, whole or stored
     /// in strips.
     pub pasted: Vec<BBox>,
+    /// The regions the reading was to read, in the display frame: the one a
+    /// region's reading read, or every region an engine reads on a page a
+    /// whole reading gives only the regions of ([`route::ocr_regions`]: the
+    /// routed ones, then those no model is sent); none for a page read
+    /// whole. Each is the box a model's reading of the same region is
+    /// spliced in with, where a model reads it.
+    pub regions: Vec<BBox>,
 }
 
 impl Injected {
@@ -186,10 +197,13 @@ impl Injected {
             taken: 0,
             dropped: 0,
             mean_conf: None,
+            min_conf: None,
+            engine: None,
             skew_deg: 0.0,
             chars: Vec::new(),
             regions_taken: Vec::new(),
             pasted: Vec::new(),
+            regions: Vec::new(),
         }
     }
 }
@@ -506,14 +520,28 @@ fn fragment(text: &str) -> bool {
 /// Whether a reading of the one page of `page`, a picture read on its own,
 /// is noise ([`MIN_PICTURE_CONFIDENCE`], [`MIN_FRAGMENTS_CONFIDENCE`],
 /// [`NOISE_BOX_SHARE`]): a photograph or a chart read for text it does not
-/// hold. The rule a region of a PDF page the pixel probe does not take for
-/// text is held to, for the pictures of a DOCX, an XLSX or an e-mail and
-/// for an image read as a file. A reading that cannot be placed is not
-/// noise: [`inject`] says why it is refused.
+/// hold. The rule an OCR reading of a region of a PDF page is held to, for
+/// the pictures of a DOCX, an XLSX or an e-mail: a net behind the pixel
+/// probe, which has taken the picture for text before it is read. Not for
+/// an image read as a file, read as a scan is. A reading that cannot be
+/// placed is not noise: [`inject`] says why it is refused. Nor is one it refuses for
+/// where its words land, none of them on the picture or under half of
+/// them: that is decided first, so a reading of the wrong origin or scale
+/// is listed as failed, not set aside as one of a picture with no text.
 pub fn is_noise(page: &Page, reading: &WordReading) -> bool {
     let Ok(placed) = place(page, None, reading) else {
         return false;
     };
+    // As `inject_one` judges a whole-page reading of a page with no text of
+    // its own, where each word that lands on the page is taken.
+    let on = placed
+        .iter()
+        .flatten()
+        .filter(|w| lands_on(page, None, w))
+        .count();
+    if on == 0 || on * 2 < placed.len() {
+        return false;
+    }
     let words: Vec<&Placed> = placed.iter().flatten().collect();
     noise(&words, page.width * page.height)
 }
@@ -604,8 +632,16 @@ fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordRea
         None => p.glyphs.iter().map(|g| g.draw_index + 1).max().unwrap_or(0),
     };
     let offered = placed.len();
+    let on_crop = (placed.iter().flatten())
+        .filter(|w| lands_on(p, t.shown, w))
+        .count();
     let added_from = p.glyphs.iter().map(|g| g.draw_index + 1).max().unwrap_or(0);
-    let (result, regions_read) = add_words(p, crop, &t.area, first_glyph, t.replaces, ink, placed);
+    let (mut result, regions_read) =
+        add_words(p, crop, &t.area, first_glyph, t.replaces, ink, placed);
+    result.engine = reading.engine.clone();
+    if let Area::Regions(within) = &t.area {
+        result.regions = within.iter().map(|(_, r)| p.to_display(*r)).collect();
+    }
     // A whole-page reading most of whose words land nowhere is not a
     // reading of this page: a stray word must not mark a scan as read, or
     // take the place of a text layer.
@@ -616,6 +652,26 @@ fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordRea
         }
     };
     if matches!(t.area, Area::Page) && result.taken > 0 && result.taken * 2 < offered {
+        p.glyphs.retain(|g| g.draw_index < added_from);
+        unturn(p);
+        return refused(page, crop, "most of the reading could not be placed");
+    }
+    // Nor is one none of whose words land on what it read, as an origin or
+    // a scale not the crop's puts them: the page, or the region with its
+    // margin. Set aside, not taken as a reading that came back blank. Words
+    // on the page but over its text layer, or a whole-page reading's words
+    // outside the regions it may land in, are not this: the page is read,
+    // and holds nothing more.
+    if offered > 0 && on_crop == 0 {
+        unturn(p);
+        return refused(page, crop, "none of the reading could be placed");
+    }
+    // Nor, as a whole-page reading is, a region's most of whose words land
+    // off its crop: at twice the crop's scale, the words of its top left
+    // corner land on it and the rest off. Counted on the crop, its margin
+    // included, not on the region: a word read in the margin, of the text
+    // beside the image, is dropped but was placed where it was read.
+    if !matches!(t.area, Area::Page) && on_crop * 2 < offered {
         p.glyphs.retain(|g| g.draw_index < added_from);
         unturn(p);
         return refused(page, crop, "most of the reading could not be placed");
@@ -703,30 +759,6 @@ fn place(
 ) -> Result<Vec<Option<Placed>>, &'static str> {
     use unicode_normalization::UnicodeNormalization;
     let rect = crop_rect(p, shown);
-    // A score outside 0-1 says the whole reading is on another scale
-    // (Tesseract's 0-100, not divided), where its other scores mean
-    // something else too: a 0 or a 1 out of 100 is no score of 0-1. The
-    // reading then has no confidence, decided once for all its words: judged
-    // word by word, its zeros would sink the mean of a reading of text under
-    // the noise rule's floor.
-    let unscored;
-    let reading = if (reading.words.iter())
-        .filter(|w| !w.text.trim().is_empty())
-        .any(|w| w.conf.is_some_and(|c| !(0.0..=1.0).contains(&c)))
-    {
-        unscored = WordReading {
-            words: (reading.words.iter())
-                .map(|w| OcrWord {
-                    conf: None,
-                    ..w.clone()
-                })
-                .collect(),
-            ..reading.clone()
-        };
-        &unscored
-    } else {
-        reading
-    };
     // Pixels of the image read → display frame. A reading in page units is
     // already there.
     let (sx, sy, ox, oy) = match (reading.coords, reading.width, reading.height) {
@@ -739,6 +771,12 @@ fn place(
         (Coords::Px, _, _) => return Err("pixel coordinates without a size"),
         (Coords::Page, _, _) => (1.0, 1.0, 0.0, 0.0),
     };
+    // A score outside 0-1 says the reading is scored on another scale
+    // (Tesseract's 0-100, not divided), where its other scores mean
+    // something else too: a 1 out of 100 is not near certain. The reading
+    // then has no confidence, rather than one made of its words that
+    // happen to fall in 0-1.
+    let scored = reading.scores_out_of_range() == 0;
     let placed = reading
         .words
         .iter()
@@ -798,7 +836,7 @@ fn place(
                 // The page turned to read upright turns the word's baseline
                 // too.
                 angle: normalise_deg(angle + f64::from(p.rotation)),
-                conf: w.conf.filter(|c| (0.0..=1.0).contains(c)),
+                conf: w.conf.filter(|_| scored),
             })
         })
         .collect();
@@ -832,6 +870,15 @@ fn normalise_deg(a: f64) -> f64 {
     } else {
         r
     }
+}
+
+/// Whether a placed word lands on the image read: its box's center falls
+/// on the crop `shown` is ([`crop_rect`]), the whole page as [`add_words`]
+/// judges a word of a whole-page reading, or a region with its margin.
+fn lands_on(p: &Page, shown: Option<BBox>, w: &Placed) -> bool {
+    let (bx, by) = quad_bounds(&w.quad);
+    let (cx, cy) = ((bx.0 + bx.1) * 0.5, (by.0 + by.1) * 0.5);
+    p.from_display(crop_rect(p, shown)).contains(cx, cy)
 }
 
 /// Add a reading's placed words to the page; returns what was taken and
@@ -901,6 +948,7 @@ fn add_words(
     }
     let confs: Vec<f64> = kept.iter().filter_map(|w| w.conf).collect();
     result.mean_conf = (!confs.is_empty()).then(|| confs.iter().sum::<f64>() / confs.len() as f64);
+    result.min_conf = confs.iter().copied().reduce(f64::min);
     result.taken = kept.len();
 
     let mut next = p.glyphs.iter().map(|g| g.draw_index + 1).max().unwrap_or(0);
@@ -2016,6 +2064,90 @@ pub fn read_pages(
     }
 }
 
+/// The readings [`inject`] took into the page that are still in `elements`,
+/// the final output, as it reports them (`doc:ocrReadings`): one per
+/// reading, in page then crop order, with the engine's own confidence
+/// rounded to four decimals.
+///
+/// A reading is in the output when an element the deterministic engine
+/// assembled holds one of its characters: one [`mark_provenance`] marked as
+/// OCR's, or a line of the text layer its few words were joined to (a
+/// scanned amount after a native label). Not listed, then: a reading set
+/// aside, and one whose words a model's reading replaced (a whole page read
+/// by a model through `--tier-results` drops what OCR made of it). A reading that
+/// took no word is listed unless a model's reading replaced its page or read
+/// every region the reading was to read (its region, for a region's reading),
+/// so a reading that came back empty still shows.
+///
+/// No threshold is applied here. The built-in engine's confidence is packed
+/// near 1; it shows a reading that failed as a whole, not a misread word. A
+/// reading of a region the probe does not take for text that is noise
+/// ([`MIN_PICTURE_CONFIDENCE`]) is set aside before it is taken, and is
+/// listed as one that took no word.
+pub fn readings(
+    injected: &[Injected],
+    elements: &[fluree_doc_model::Element],
+) -> Vec<fluree_doc_model::OcrReading> {
+    let round = |c: f64| (c * 1e4).round() / 1e4;
+    // Per page once, not the whole document once per reading: a long scan
+    // has a reading or more on every page.
+    let mut by_page: std::collections::HashMap<usize, Vec<&fluree_doc_model::Element>> =
+        std::collections::HashMap::new();
+    for e in elements {
+        by_page.entry(e.page).or_default().push(e);
+    }
+    let in_output = |r: &Injected| {
+        let on_page = by_page.get(&r.page).map_or(&[][..], Vec::as_slice);
+        if r.chars.is_empty() {
+            // A reading that took nothing leaves its regions to a model:
+            // one that read them all replaced the empty reading, as one of
+            // the whole page does.
+            let spliced = |shown: &BBox| {
+                on_page.iter().any(|e| {
+                    matches!(e.evidence, "region-splice" | "region-chart")
+                        && e.bbox.is_some_and(|b| crate::same_box(&b, shown))
+                })
+            };
+            let replaced = on_page.iter().any(|e| e.evidence == "page-tier")
+                || (!r.regions.is_empty() && r.regions.iter().all(spliced));
+            return !replaced;
+        }
+        on_page
+            .iter()
+            .filter(|e| matches!(e.provenance, "ocr" | "rust"))
+            .filter_map(|e| e.bbox)
+            .any(|b| {
+                r.chars
+                    .iter()
+                    .any(|c| b.contains((c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5))
+            })
+    };
+    let mut kept: Vec<&Injected> = injected
+        .iter()
+        .filter(|r| r.refused.is_none() && in_output(r))
+        .collect();
+    kept.sort_by_key(|r| {
+        (
+            r.page,
+            match r.crop {
+                Crop::Page => None,
+                Crop::Region(i) => Some(i),
+            },
+        )
+    });
+    kept.into_iter()
+        .map(|r| fluree_doc_model::OcrReading {
+            page: Some(r.page),
+            image: None,
+            crop: r.crop.tag(),
+            engine: r.engine.clone(),
+            words: r.taken,
+            mean_confidence: r.mean_conf.map(round),
+            min_confidence: r.min_conf.map(round),
+        })
+        .collect()
+}
+
 /// Mark the elements OCR words make up as `provenance: "ocr"`.
 ///
 /// Called on the final elements, after analysis has turned glyphs into
@@ -2767,6 +2899,219 @@ mod tests {
     }
 
     #[test]
+    fn a_reading_taken_is_reported_with_its_engine_and_confidence() {
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+        };
+        let conf = |w: OcrWord, c: Option<f64>| OcrWord { conf: c, ..w };
+        let reading = WordReading {
+            engine: Some("test-engine".into()),
+            ..px(vec![
+                conf(word("Account", [144.0, 200.0, 284.0, 226.0]), Some(0.95)),
+                conf(word("number", [300.0, 200.0, 420.0, 226.0]), Some(0.62111)),
+                // A word with no score counts as a word, not as a score.
+                conf(word("4471", [440.0, 200.0, 520.0, 226.0]), None),
+            ])
+        };
+        let r = inject(
+            &mut doc,
+            &[
+                (0, Crop::Page, reading),
+                // A region the page does not have: set aside, not reported.
+                (
+                    0,
+                    Crop::Region(3),
+                    px(vec![word("x", [144.0, 300.0, 160.0, 320.0])]),
+                ),
+            ],
+        );
+        assert_eq!(r[1].refused, Some("region not routed to a reader"));
+        let elements = analysed(&mut doc, &r);
+        assert_eq!(
+            readings(&r, &elements),
+            vec![fluree_doc_model::OcrReading {
+                page: Some(0),
+                image: None,
+                crop: "full".into(),
+                engine: Some("test-engine".into()),
+                words: 3,
+                mean_confidence: Some(0.7856),
+                min_confidence: Some(0.6211),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_reading_scored_on_another_scale_reports_no_confidence() {
+        // Tesseract's 0-100, not divided: its 1 and its 0.5 are not near
+        // certain and even odds, so no word's score is reported.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+        };
+        let conf = |w: OcrWord, c: f64| OcrWord { conf: Some(c), ..w };
+        let reading = px(vec![
+            conf(word("Account", [144.0, 200.0, 284.0, 226.0]), 96.0),
+            conf(word("number", [300.0, 200.0, 420.0, 226.0]), 1.0),
+            conf(word("4471", [440.0, 200.0, 520.0, 226.0]), 0.5),
+        ]);
+        let r = inject(&mut doc, &[(0, Crop::Page, reading)]);
+        assert_eq!((r[0].taken, r[0].mean_conf, r[0].min_conf), (3, None, None));
+        let elements = analysed(&mut doc, &r);
+        let listed = readings(&r, &elements);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            (listed[0].mean_confidence, listed[0].min_confidence),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn a_region_reading_scored_0_100_is_judged_noise_by_its_boxes_alone() {
+        // One decision for the whole reading: a score outside 0-1 says all
+        // of them are on another scale, a 0 out of 100 among them. Judged
+        // word by word, the 0 would be a score of 0-1 and the mean of the
+        // words that have one under the noise rule's floor.
+        let mut doc = prose_with_a_photograph();
+        let reading = scored(
+            &[
+                ("Account", [60.0, 382.0, 100.0, 398.0]),
+                ("4471", [110.0, 382.0, 140.0, 398.0]),
+                ("ref", [150.0, 382.0, 170.0, 398.0]),
+            ],
+            None,
+        );
+        let reading = WordReading {
+            words: (reading.words.into_iter().zip([96.0, 0.0, 88.0]))
+                .map(|(w, c)| OcrWord { conf: Some(c), ..w })
+                .collect(),
+            ..reading
+        };
+        assert_eq!(reading.scores_out_of_range(), 2);
+        let r = inject(&mut doc, &[(0, Crop::Region(0), reading)]);
+        assert_eq!((r[0].taken, r[0].mean_conf), (3, None), "{r:?}");
+    }
+
+    #[test]
+    fn readings_are_reported_in_page_then_crop_order() {
+        let r = [
+            Injected::new(1, Crop::Page),
+            Injected::new(0, Crop::Region(10)),
+            Injected::new(0, Crop::Page),
+            Injected::new(0, Crop::Region(2)),
+        ];
+        let order: Vec<(Option<usize>, String)> = readings(&r, &[])
+            .into_iter()
+            .map(|o| (o.page, o.crop))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                (Some(0), "full".to_string()),
+                (Some(0), "r2".into()),
+                (Some(0), "r10".into()),
+                (Some(1), "full".into()),
+            ]
+        );
+        // A reading with no scored word reports none.
+        assert_eq!(readings(&r, &[])[0].mean_confidence, None);
+    }
+
+    #[test]
+    fn a_reading_a_models_page_reading_replaced_is_not_reported() {
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Page,
+                px(vec![word("Account", [144.0, 200.0, 284.0, 226.0])]),
+            )],
+        );
+        let mut elements = analysed(&mut doc, &r);
+        assert_eq!(readings(&r, &elements).len(), 1);
+        // Only an element of the reading's own page holds its words.
+        let elsewhere: Vec<fluree_doc_model::Element> = elements
+            .iter()
+            .map(|e| fluree_doc_model::Element {
+                page: 1,
+                ..e.clone()
+            })
+            .collect();
+        assert!(readings(&r, &elsewhere).is_empty());
+        // A model's reading of the whole page, as `--tier-results` splices
+        // it: OCR's elements are gone, and so is its reading.
+        // Its element covers the page, OCR's characters included: only its
+        // provenance tells it apart.
+        elements = vec![fluree_doc_model::Element {
+            page: 0,
+            bbox: Some(full_page_image().bbox),
+            ..fluree_doc_model::Element::new("doco:Paragraph", "Account", "vlm", "page-tier")
+        }];
+        assert!(readings(&r, &elements).is_empty());
+        // A reading that took no word shows, unless its page was replaced.
+        let empty = [Injected::new(0, Crop::Page)];
+        assert!(readings(&empty, &elements).is_empty());
+        assert_eq!(readings(&empty, &[]).len(), 1);
+        // Another page's model reading does not replace this one's.
+        assert_eq!(
+            readings(&[Injected::new(1, Crop::Page)], &elements).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_reading_joined_to_a_native_line_is_reported() {
+        // A native label with a scanned amount just after it: the amount's
+        // word joins the label's line, which is then OCR's, a character read
+        // from pixels never being presented as the PDF's own. Text enough
+        // elsewhere for the page to be read as it is.
+        let mut glyphs = native("Total amount due:", 60.0, 500.0);
+        glyphs.extend(
+            (0..1500)
+                .flat_map(|i| native("a", 20.0 + (i % 50) as f64 * 10.0, 600.0 + (i / 50) as f64)),
+        );
+        let mut doc = Document {
+            pages: vec![page(
+                glyphs,
+                vec![ImagePlacement {
+                    bbox: BBox {
+                        x0: 164.0,
+                        y0: 488.0,
+                        x1: 260.0,
+                        y1: 506.0,
+                    },
+                    texty: true,
+                    ppi: None,
+                    bitonal: false,
+                    grid: (1000, 1000),
+                    key: None,
+                }],
+            )],
+        };
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Region(0),
+                page_units(vec![word("4471", [168.0, 491.0, 192.0, 502.0])]),
+            )],
+        );
+        assert_eq!(r[0].taken, 1, "{r:?}");
+        let elements = analysed(&mut doc, &r);
+        let line = elements
+            .iter()
+            .find(|e| e.text.contains("4471"))
+            .expect("the amount is in the output");
+        assert!(line.text.contains("Total amount due"), "{elements:?}");
+        assert_eq!(line.provenance, "ocr");
+        let listed = readings(&r, &elements);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!((listed[0].crop.as_str(), listed[0].words), ("r0", 1));
+    }
+
+    #[test]
     fn a_born_digital_page_refuses_a_whole_page_reading() {
         // Two hundred glyphs of text and no image: nothing routes, and a
         // reading of it would only replace good text with a guess at it.
@@ -2808,6 +3153,131 @@ mod tests {
         );
         assert_eq!((r[0].taken, r[0].dropped), (1, 1));
         assert_eq!(text_of(&doc.pages[0]), "REFHolder");
+    }
+
+    #[test]
+    fn a_reading_none_of_whose_words_land_on_the_page_is_set_aside() {
+        // Every word off the page, as an origin or a scale not the page's
+        // puts them: not a reading that came back blank, listed with no
+        // word, but one that could not be placed, and is not listed.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+        };
+        let off = vec![
+            word("Account", [1000.0, 100.0, 1080.0, 116.0]),
+            word("4417", [1100.0, 100.0, 1140.0, 116.0]),
+        ];
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(off.clone()))]);
+        assert_eq!(r[0].refused, Some("none of the reading could be placed"));
+        assert!(readings(&r, &[]).is_empty());
+        // So is a reading of a page of text, whole or of one of its regions.
+        for crop in [Crop::Page, Crop::Region(0)] {
+            let mut doc = page_with_regions(&[UPPER, LOWER]);
+            let r = inject(&mut doc, &[(0, crop, page_units(off.clone()))]);
+            let why = Some("none of the reading could be placed");
+            assert_eq!(r[0].refused, why, "{crop:?}");
+            assert!(readings(&r, &[]).is_empty(), "{crop:?}");
+        }
+        // A region's reading whose words land on the page, but in another
+        // region: the origin is not the region's either. Also on a page
+        // drawn turned, whose crops are cut in the display frame.
+        for rotation in [0, 90] {
+            let doc = || {
+                let mut doc = page_with_regions(&[UPPER, LOWER]);
+                doc.pages[0].rotation = rotation;
+                doc
+            };
+            // A word in the lower region, as the image read shows it.
+            let (cx, cy) = doc().pages[0].to_display_point((100.0, 508.0));
+            let lower = vec![word("Account", [cx - 8.0, cy - 8.0, cx + 8.0, cy + 8.0])];
+            let mut upper = doc();
+            let r = inject(
+                &mut upper,
+                &[(0, Crop::Region(0), page_units(lower.clone()))],
+            );
+            let why = Some("none of the reading could be placed");
+            assert_eq!(r[0].refused, why, "{rotation}");
+            assert!(readings(&r, &[]).is_empty(), "{rotation}");
+            // Read as the other region's, the word lands on what was read.
+            let r = inject(&mut doc(), &[(0, Crop::Region(1), page_units(lower))]);
+            assert_eq!((r[0].refused, r[0].taken), (None, 1), "{rotation}");
+        }
+        // Every word over the text layer of a scan with a stamped header:
+        // the page is read, and holds nothing more. That reading is listed.
+        let mut doc = Document {
+            pages: vec![page(native("REF", 72.0, 60.0), vec![full_page_image()])],
+        };
+        let over = px(vec![word("REF", [144.0, 100.0, 180.0, 124.0])]);
+        let r = inject(&mut doc, &[(0, Crop::Page, over)]);
+        assert_eq!((r[0].refused, r[0].taken, r[0].dropped), (None, 0, 1));
+        assert_eq!(readings(&r, &[]).len(), 1);
+        // A reading with no word at all came back blank, and is listed.
+        let mut doc = Document {
+            pages: vec![page(Vec::new(), vec![full_page_image()])],
+        };
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(Vec::new()))]);
+        assert_eq!(r[0].refused, None);
+        assert_eq!(readings(&r, &[]).len(), 1);
+    }
+
+    #[test]
+    fn a_region_reading_most_of_whose_words_land_off_its_crop_is_set_aside() {
+        // The upper region's crop, its margin included, is 502 x 212
+        // units: read at 4 pixels a unit, its words boxed at 8, as a crop
+        // rendered at twice the scale its reading says. A grid of 16 words
+        // over the image read: the 4 of its top left corner land on the
+        // crop, the rest off it.
+        let (w, h) = (502.0 * 4.0, 212.0 * 4.0);
+        let grid: Vec<OcrWord> = (0..16)
+            .map(|k| {
+                let (x, y) = (
+                    f64::from(k % 4) * 2.0 * w / 4.0,
+                    f64::from(k / 4) * 2.0 * h / 4.0,
+                );
+                word("Account", [x + 40.0, y + 60.0, x + 400.0, y + 140.0])
+            })
+            .collect();
+        let at = |words: Vec<OcrWord>| WordReading {
+            coords: Coords::Px,
+            width: Some(w),
+            height: Some(h),
+            engine: None,
+            words,
+        };
+        let mut doc = page_with_regions(&[UPPER, LOWER]);
+        let glyphs = doc.pages[0].glyphs.len();
+        let r = inject(&mut doc, &[(0, Crop::Region(0), at(grid.clone()))]);
+        let why = Some("most of the reading could not be placed");
+        assert_eq!(r[0].refused, why, "{r:?}");
+        assert_eq!(doc.pages[0].glyphs.len(), glyphs);
+        assert!(readings(&r, &[]).is_empty());
+        // At its own scale, every word lands. A word in the crop's margin,
+        // the text beside the image, is placed where it was read, though
+        // not in the region: with one in the region, the reading is taken.
+        let own: Vec<OcrWord> = (grid.iter())
+            .map(|g| {
+                let [x0, y0, x1, y1] = g.bbox;
+                word("Account", [x0 / 2.0, y0 / 2.0, x1 / 2.0, y1 / 2.0])
+            })
+            .collect();
+        let r = inject(
+            &mut page_with_regions(&[UPPER, LOWER]),
+            &[(0, Crop::Region(0), at(own))],
+        );
+        assert_eq!((r[0].refused, r[0].taken), (None, 16), "{r:?}");
+        let margin = vec![
+            word("Fig", [2.0, 2.0, 20.0, 20.0]),
+            word("Account", [100.0, 100.0, 400.0, 160.0]),
+        ];
+        let r = inject(
+            &mut page_with_regions(&[UPPER, LOWER]),
+            &[(0, Crop::Region(0), at(margin))],
+        );
+        assert_eq!(
+            (r[0].refused, r[0].taken, r[0].dropped),
+            (None, 1, 1),
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -3024,37 +3494,6 @@ mod tests {
         assert_eq!(r.taken, 1, "{r:?}");
         assert_eq!(added, "ACCT 4417");
         assert_eq!(unread, ["NotTexty"]);
-    }
-
-    #[test]
-    fn a_region_reading_scored_out_of_100_is_judged_by_its_boxes() {
-        // One decision for the whole reading: a score outside 0-1 says all
-        // of them are on another scale, a 0 out of 100 among them. Judged
-        // word by word, the 0 would be a score of 0-1, and the mean of the
-        // words that have one under the noise rule's floor.
-        let reading = scored(
-            &[
-                ("Account", [60.0, 382.0, 100.0, 398.0]),
-                ("4471", [110.0, 382.0, 140.0, 398.0]),
-                ("ref", [150.0, 382.0, 170.0, 398.0]),
-            ],
-            None,
-        );
-        let reading = WordReading {
-            words: (reading.words.into_iter().zip([96.0, 0.0, 88.0]))
-                .map(|(w, c)| OcrWord { conf: Some(c), ..w })
-                .collect(),
-            ..reading
-        };
-        let r = inject(
-            &mut prose_with_a_photograph(),
-            &[(0, Crop::Region(0), reading)],
-        );
-        assert_eq!(
-            (r[0].taken, r[0].dropped, r[0].mean_conf),
-            (3, 0, None),
-            "{r:?}"
-        );
     }
 
     #[test]
@@ -4826,6 +5265,102 @@ mod tests {
         x1: 550.0,
         y1: 600.0,
     };
+
+    /// An element a model's reading of a region is spliced in as: with the
+    /// region's box, in the display frame.
+    fn spliced(b: BBox, evidence: &'static str) -> fluree_doc_model::Element {
+        fluree_doc_model::Element {
+            page: 0,
+            bbox: Some(b),
+            ..fluree_doc_model::Element::new("doco:Paragraph", "Balance", "vlm", evidence)
+        }
+    }
+
+    #[test]
+    fn an_empty_region_reading_a_model_then_read_is_not_reported() {
+        // Also on a page drawn turned: the model's reading is spliced in the
+        // display frame, the region read in the page's own.
+        for rotation in [0, 90] {
+            let mut doc = page_with_regions(&[UPPER, LOWER]);
+            doc.pages[0].rotation = rotation;
+            let r = inject(
+                &mut doc,
+                &[
+                    (0, Crop::Region(0), page_units(Vec::new())),
+                    (0, Crop::Region(1), page_units(Vec::new())),
+                ],
+            );
+            let shown = |b: BBox| doc.pages[0].to_display(b);
+            assert_eq!(r[0].regions, [shown(UPPER)], "{rotation}");
+            assert_eq!(readings(&r, &[]).len(), 2, "{rotation}");
+            for evidence in ["region-splice", "region-chart"] {
+                let listed = readings(&r, &[spliced(shown(UPPER), evidence)]);
+                assert_eq!(
+                    listed.iter().map(|o| o.crop.as_str()).collect::<Vec<_>>(),
+                    ["r1"],
+                    "{evidence} {rotation}"
+                );
+            }
+            // Another element in the same box is not a model's reading of it.
+            assert_eq!(
+                readings(&r, &[spliced(shown(UPPER), "layout-block")]).len(),
+                2,
+                "{rotation}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_whole_reading_of_regions_a_model_all_read_is_not_reported() {
+        // A whole reading of a page of text is a reading of its regions: a
+        // model that read each of them replaced it, one that read only one
+        // did not.
+        let mut doc = page_with_regions(&[UPPER, LOWER]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(Vec::new()))]);
+        let shown = |b: BBox| doc.pages[0].to_display(b);
+        assert_eq!(r[0].regions, [shown(UPPER), shown(LOWER)]);
+        let listed = |els: &[fluree_doc_model::Element]| {
+            readings(&r, els)
+                .iter()
+                .map(|o| (o.crop.clone(), o.words))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(listed(&[]), [("full".to_string(), 0)]);
+        let upper = spliced(shown(UPPER), "region-splice");
+        assert_eq!(
+            listed(std::slice::from_ref(&upper)),
+            [("full".to_string(), 0)]
+        );
+        let lower = spliced(shown(LOWER), "region-chart");
+        assert!(listed(&[upper, lower]).is_empty());
+    }
+
+    #[test]
+    fn an_empty_whole_reading_of_a_region_no_model_reads_is_reported() {
+        // A routed region and a capture too small for a model: a whole
+        // reading is a reading of both, and a model's reading of the first
+        // leaves the second read by nothing but the empty reading.
+        let small = BBox {
+            x0: 60.0,
+            y0: 430.0,
+            x1: 260.0,
+            y1: 460.0,
+        };
+        let mut doc = page_with_regions(&[UPPER, small]);
+        assert_eq!(
+            route::decide(&doc.pages[0]).0,
+            Route::VlmRegions(vec![UPPER])
+        );
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(Vec::new()))]);
+        let shown = |b: BBox| doc.pages[0].to_display(b);
+        assert_eq!(r[0].regions, [shown(UPPER), shown(small)]);
+        let model = spliced(shown(UPPER), "region-splice");
+        let listed: Vec<(String, usize)> = readings(&r, &[model])
+            .iter()
+            .map(|o| (o.crop.clone(), o.words))
+            .collect();
+        assert_eq!(listed, [("full".to_string(), 0)]);
+    }
 
     #[test]
     fn a_region_the_whole_reading_did_not_read_keeps_its_own_reading() {

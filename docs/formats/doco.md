@@ -185,10 +185,15 @@ saying 99% of it was missing.
 `reason` is the router's verdict: `Scanned` (an image covering half the page
 or more, and next to no text layer), `NearBlank` (next to no glyphs and a
 smaller image: a logo on a separator sheet, a signature) or `BrokenText`;
-or `OcrSparse`, a page an OCR reading (`--ocr-words`) read whole that still
-holds next to no text — an engine that gave a few words for a scan it could
-not read. Escalating the page clears the entry, however short the model's
-reading, because then something did read it.
+or `OcrSparse`, a PDF's page an OCR reading (`--ocr-words`) read whole that
+still holds next to no text — an engine that gave a few words for a scan it
+could not read. An image given on its own is read once OCR took a word in
+it, however few: its words may be all it holds. Escalating the page clears
+the entry, however short the model's reading, because then something did
+read it. A reading that came back with
+no text, by OCR or by a model, does not: the router took the page for
+content, and nothing in the output stands for it. A placed picture is held
+to another rule ([below](#images-nothing-read)).
 
 Or it is `LaterPage`: a page after the first of a multi-page image file (a
 TIFF), which nothing reads. Its `pageIndex` is the page's place in the input
@@ -338,12 +343,19 @@ or TIFF: a vector drawing kept as EMF or WMF, a GIF), `PastAllowance` (past
 what one document may have read: 256 images, 512 million pixels as their
 headers state them), `Small` (nothing else read it, and the configured model
 is not sent it: under 400 pixels on its longer side or 48 on its shorter),
-`NotTexty` (OCR read it, and what it read was noise, as a photograph or a
-gradient read for text gives: the rule a
-[`NotTexty` region](#regions-nothing-read)'s reading is held to; nothing
-else read it) or `Failed` (its reading failed, the part it names is not
-there, or its part is empty or ends before its format can be told; stderr
-says why). An image read that held no text was read, and is not listed.
+`NotTexty` (the pixel probe a PDF's regions are routed by does not take it
+for text, a photograph, a chart or a logo, or it is too thin for a line of
+text, under 10 pixels on its shorter side, as a region must have them, and
+nothing read it; or the probe did, OCR read it, and what it read was noise,
+by the rule an OCR reading of a [region](#regions-nothing-read) is held to,
+and nothing else read it) or `Failed` (its reading failed, the part it names
+is not there, or its reading was set aside because its words could not be
+placed on it, which is told before the reading is judged noise, or its part
+is empty or ends before its format can be told; stderr says why). An
+image read that held no text was read, and is not listed, whether OCR or a
+model read it: no router judged its pixels to hold content, as it judges a
+page's or a region's, which a reading with no text leaves listed
+([the rule](../reference/vocabulary.md)).
 
 Unlike an unread page, it adds no comment to Markdown or XHTML: most
 documents carry a logo or a photo with no text in it, and a warning on each
@@ -357,6 +369,63 @@ signed e-mail carries a logo, a GIF or a small PNG, a vector drawing
 has no text to read anyway, and a photograph is what it is as often as
 not, so these are listed here only, as a PDF's `Small` and `NotTexty`
 regions are.
+
+## OCR readings
+
+```json
+{ "@type": "foaf:Document",
+  "doc:ocrReadings": { "@type": "@json",
+                       "@value": [
+    { "pageIndex": 0, "crop": "full", "engine": "pp-ocrv6-small/oar-ocr", "words": 212,
+      "meanConfidence": 0.9843, "minConfidence": 0.3121 },
+    { "pageIndex": 2, "crop": "r1", "words": 9 } ] } }
+```
+
+Present only when an OCR reading (`--ocr`, `--ocr-words`) was taken into the
+output: one entry per reading, in page then crop order. `crop` is the crop
+read, `full` or the region `r{i}`, as the crop files are named: the routed
+regions first, numbered as a model's crops are, then the small ones no model
+is sent (`Small`), which only an OCR engine reads. A picture placed in a
+document's flow (a DOCX's, an XLSX sheet's, an image an e-mail shows in its
+body) has no `pageIndex`; it goes by `image`, the name its words go by (`m1`,
+`m3_1`). `engine` is the engine the reading names, `words` the words taken,
+or the lines for an engine that boxes lines rather than words (the built-in
+one does), so the count is not comparable across engines. `meanConfidence`
+and `minConfidence` are over the words (or lines) taken, to four decimals,
+and absent when the engine gave no score. One score outside 0-1 (Tesseract's
+0-100, not divided) leaves the whole reading without them, with a warning on
+stderr: its other scores are on that scale too, and could not be told apart
+from 0-1 ones. A reading whose words are not in the output is not listed: one
+set aside (not routed to a reader, superseded by the page's whole reading,
+unplaceable: all of its words land off what it read (the page, or its region
+with the crop's margin) or have no usable box, or most of them do in a
+region's reading or in a whole reading of a page whose text is all pixels),
+and one a model's reading replaced (a page or a picture read whole through
+`--tier-results` or the configured model). One that took no word is, with
+`words: 0`, unless a model's reading replaced its page or read every region
+the reading was to read: its region, for a region's reading; every region an
+OCR engine reads on its page, for a whole reading of a page of text. Those
+include the small regions no model is sent (`Small`), so a whole reading of a
+page carrying one stays listed: it is the only reading of that region.
+
+The confidence is the engine's own score, reported as information. The
+built-in engine's (PP-OCRv6 small) is packed near 1: the measurements in
+[issue #4](https://github.com/fluree/fluree-doc-parse/issues/4) find it much
+the same whether that engine read well or poorly. So it is useful to spot a
+reading that failed as a whole — a low mean, a page that came back as noise —
+not as a guarantee about any one fact: a single misread digit barely moves
+it. Another engine's score, given through `--ocr-words`, may tell good
+readings from bad better (Tesseract's did in those measurements). Whatever
+the engine, nothing is routed on it, and the one rule applied is a net
+behind the pixel probe, for a photograph or a gradient it took for text: a
+reading of a region (`r{i}`) or of a picture whose mean is under 0.5, or
+under 0.8 with most of its words fragments, or with one fragment, or one
+word read under 0.8, boxed over nearly all of it, is noise, set aside before
+it is taken ([regions](#regions-nothing-read), [images](#images-nothing-read)),
+and listed here with `words: 0`. A reading of a whole page (`full`) or of an
+image read as a file is not judged: a scan's lines are words. A consumer that wants a second reading where OCR
+may be wrong is better served by comparing two engines than by a cut on this
+number.
 
 ## Sections are explicit
 

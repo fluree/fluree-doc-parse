@@ -443,6 +443,44 @@ pub struct UnreadImage {
     pub reason: String,
 }
 
+/// One OCR reading whose words were laid into the output, with the engine's
+/// own confidence in the words it took.
+///
+/// Information, not a verdict. The built-in engine's confidence is packed
+/// near 1 and drops on a reading that failed as a whole, not on one misread
+/// digit; no threshold is applied to any engine's here, and nothing is
+/// routed on it. Only a reading of pixels that need not hold any text (a
+/// PDF region the pixel probe does not take for text, a picture a document
+/// places) is set aside as noise under a mean of 0.5, before it is taken:
+/// it is then listed as one that took no word.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct OcrReading {
+    /// 0-based physical page read, the space of [`Element::page`]; absent
+    /// for a picture inside a document without pages.
+    #[serde(rename = "pageIndex", skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
+    /// The picture read, by the name its words go by (`m0`, `m3_1`), for a
+    /// picture placed in a document's flow (a DOCX's, an XLSX's, an e-mail's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    /// Which crop of the page or picture was read: `full`, or `r{i}` for the
+    /// page's region *i* as an OCR engine numbers them: the routed regions,
+    /// numbered as a model's crops are, then those no model is sent.
+    pub crop: String,
+    /// The engine that read it, when the reading names one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
+    /// Words taken into the output, or lines for an engine that boxes lines
+    /// rather than words (the built-in one does).
+    pub words: usize,
+    /// Mean and lowest confidence (0-1) of the words (or lines) taken, to
+    /// four decimals; absent when the engine gave none.
+    #[serde(rename = "meanConfidence", skip_serializing_if = "Option::is_none")]
+    pub mean_confidence: Option<f64>,
+    #[serde(rename = "minConfidence", skip_serializing_if = "Option::is_none")]
+    pub min_confidence: Option<f64>,
+}
+
 /// What a document says about itself: its title, who made it, and when.
 ///
 /// Declared, never inferred: a PDF's Info dictionary, an Office file's core
@@ -590,7 +628,7 @@ pub struct Attachment {
 ///
 /// Additive: the emitters take this where they can carry it, and their
 /// existing signatures stay valid with an empty one. Not `Eq`: a region's
-/// box is floating-point.
+/// box and a reading's confidence are floating-point.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Notes {
     pub unread: Vec<UnreadPage>,
@@ -600,6 +638,8 @@ pub struct Notes {
     pub warnings: Vec<ParseWarning>,
     /// Images placed in the flow whose text nothing read.
     pub unread_images: Vec<UnreadImage>,
+    /// The OCR readings taken into the output, with their confidence.
+    pub ocr: Vec<OcrReading>,
     /// Running header and footer text, kept once because it identifies the
     /// document even though it is noise inside the body.
     pub running_text: Vec<String>,
@@ -613,6 +653,7 @@ impl Notes {
             && self.unread_regions.is_empty()
             && self.warnings.is_empty()
             && self.unread_images.is_empty()
+            && self.ocr.is_empty()
             && self.running_text.is_empty()
             && self.info.is_empty()
             && self.attachments.is_empty()

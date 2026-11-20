@@ -200,6 +200,355 @@ fn a_page_reading_replaces_ocr_on_an_image() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn the_confidence_of_the_reading_taken_is_in_the_output() {
+    // The engine's own scores, reported on the document node as they came:
+    // information for the caller, nothing decided on them.
+    let dir = scratch("confidence");
+    let input = dir.join("scan.jpg");
+    std::fs::write(&input, jpeg(None)).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "coords": "px", "width": 300, "height": 100, "engine": "some-engine",
+        "words": [
+            { "text": "Account", "box": [20, 30, 120, 50], "conf": 0.98 },
+            { "text": "4417", "box": [130, 30, 200, 50], "conf": 0.5 }
+        ]
+    });
+    std::fs::write(words.join("scan_p0_full.json"), reading.to_string()).unwrap();
+    let out = convert(&input, &["--ocr-words", words.to_str().unwrap()]);
+    let r = &document(&out)["doc:ocrReadings"];
+    assert_eq!(r["@type"], "@json", "{out}");
+    assert_eq!(
+        r["@value"],
+        serde_json::json!([{
+            "pageIndex": 0, "crop": "full", "engine": "some-engine", "words": 2,
+            "meanConfidence": 0.74, "minConfidence": 0.5
+        }]),
+        "{out}"
+    );
+    // Without OCR, nothing is said about it.
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    tier_reading(&tiers, "scan", "Account");
+    let out = convert(&input, &["--tier-results", tiers.to_str().unwrap()]);
+    assert!(document(&out).get("doc:ocrReadings").is_none(), "{out}");
+    // Both, and the model's reading of the whole image replaces OCR's: none
+    // of OCR's words are in the output, so its reading is not listed either.
+    let out = convert(
+        &input,
+        &[
+            "--ocr-words",
+            words.to_str().unwrap(),
+            "--tier-results",
+            tiers.to_str().unwrap(),
+        ],
+    );
+    assert!(document(&out).get("doc:ocrReadings").is_none(), "{out}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A one-page PDF, 400 × 400 pt, that is one grey image and no text: a scan.
+fn scan_pdf() -> Vec<u8> {
+    scan_pdf_of(1)
+}
+
+/// A PDF of `pages` such scanned pages, all drawing the same image.
+fn scan_pdf_of(pages: usize) -> Vec<u8> {
+    let content = "q 400 0 0 400 0 0 cm /Im0 Do Q";
+    let pixels = [0x20u8, 0xe0, 0xe0, 0x20];
+    let kids: Vec<String> = (0..pages).map(|i| format!("{} 0 R", i + 5)).collect();
+    let mut objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {pages} >>",
+            kids.join(" ")
+        )
+        .into_bytes(),
+        format!(
+            "<< /Length {} >>\nstream\n{content}\nendstream",
+            content.len()
+        )
+        .into_bytes(),
+        [
+            b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 \
+              /ColorSpace /DeviceGray /Length 4 >>\nstream\n"
+                .to_vec(),
+            pixels.to_vec(),
+            b"\nendstream".to_vec(),
+        ]
+        .concat(),
+    ];
+    objects.extend((0..pages).map(|_| {
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] \
+           /Resources << /XObject << /Im0 4 0 R >> >> /Contents 3 0 R >>"
+            .to_vec()
+    }));
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+        out.extend(body);
+        out.extend(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").into_bytes());
+    }
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .into_bytes(),
+    );
+    out
+}
+
+#[test]
+fn a_scanned_pdf_pages_reading_is_reported_with_its_confidence() {
+    let dir = scratch("pdf-confidence");
+    let input = dir.join("scan.pdf");
+    std::fs::write(&input, scan_pdf()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "coords": "page",
+        "words": [
+            { "text": "Account", "box": [40, 40, 120, 56], "conf": 0.9 },
+            { "text": "4417", "box": [130, 40, 180, 56], "conf": 0.7 }
+        ]
+    });
+    std::fs::write(words.join("scan_p0_full.json"), reading.to_string()).unwrap();
+    let out = convert(&input, &["--ocr-words", words.to_str().unwrap()]);
+    assert_eq!(
+        document(&out)["doc:ocrReadings"]["@value"],
+        serde_json::json!([{
+            "pageIndex": 0, "crop": "full", "words": 2,
+            "meanConfidence": 0.8, "minConfidence": 0.7
+        }]),
+        "{out}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_reading_scored_outside_zero_to_one_reports_no_confidence_aloud() {
+    // Tesseract's 0-100 scores, not divided: its 0.7 is not 70 in 100, so
+    // the reading reports no confidence at all.
+    let dir = scratch("conf-range");
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = |name: &str, coords: serde_json::Value| {
+        let mut r = serde_json::json!({
+            "words": [
+                { "text": "Account", "box": [40, 40, 120, 56], "conf": 96 },
+                { "text": "4417", "box": [130, 40, 180, 56], "conf": 0.7 },
+                // Tesseract's row of a line, which holds no text: no word
+                // of the reading, nor of the warning's count.
+                { "text": "", "box": [40, 40, 180, 56], "conf": -1 }
+            ]
+        });
+        r.as_object_mut()
+            .unwrap()
+            .extend(coords.as_object().unwrap().clone());
+        std::fs::write(words.join(name), r.to_string()).unwrap();
+    };
+    let run = |input: &Path| {
+        let home = dir.join("home");
+        let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(input)
+            .args(["-f", "doco", "--ocr-words"])
+            .arg(&words)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &home)
+            .env_remove("FDOC_TIER_RESULTS")
+            .env_remove("FDOC_OCR_MODELS")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let mean = document(&doc)["doc:ocrReadings"]["@value"][0]["meanConfidence"].clone();
+        (String::from_utf8_lossy(&out.stderr).into_owned(), mean)
+    };
+    // A PDF page's reading.
+    let pdf = dir.join("scan.pdf");
+    std::fs::write(&pdf, scan_pdf()).unwrap();
+    reading("scan_p0_full.json", serde_json::json!({ "coords": "page" }));
+    let (err, mean) = run(&pdf);
+    assert_eq!(mean, serde_json::Value::Null, "{err}");
+    assert!(
+        err.contains("scan_p0_full.json: 1 of 2 word score(s) outside 0-1, so no confidence"),
+        "{err}"
+    );
+    // A bare image's, named after the file as `fdoc ocr` names it.
+    let image = dir.join("photo.jpg");
+    std::fs::write(&image, jpeg(None)).unwrap();
+    reading(
+        "photo.json",
+        serde_json::json!({ "coords": "px", "width": 300, "height": 100 }),
+    );
+    let (err, mean) = run(&image);
+    assert_eq!(mean, serde_json::Value::Null, "{err}");
+    assert!(
+        err.contains("photo.json: 1 of 2 word score(s) outside 0-1, so no confidence"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn only_a_reading_taken_is_warned_of_its_scores() {
+    let dir = scratch("conf-taken");
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = |name: &str, conf: f64, size: serde_json::Value| {
+        let mut r = serde_json::json!({
+            "words": [{ "text": "Account", "box": [40, 40, 120, 56], "conf": conf }]
+        });
+        r.as_object_mut()
+            .unwrap()
+            .extend(size.as_object().unwrap().clone());
+        std::fs::write(words.join(name), r.to_string()).unwrap();
+    };
+    // `fdoc convert` without `-q`: its stderr.
+    let stderr = |input: &Path, args: &[&str]| {
+        let home = dir.join("home");
+        let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(input)
+            .args(["-f", "doco", "--ocr-words"])
+            .arg(&words)
+            .args(args)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &home)
+            .env_remove("FDOC_TIER_RESULTS")
+            .env_remove("FDOC_OCR_MODELS")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    // A bare image with two candidates: the one sized as the image is read,
+    // the other, scored 0-100, is not, and is not warned of.
+    let image = dir.join("photo.jpg");
+    std::fs::write(&image, jpeg(None)).unwrap();
+    let px = |w: u32, h: u32| serde_json::json!({ "coords": "px", "width": w, "height": h });
+    reading("photo.json", 0.9, px(300, 100));
+    reading("photo_p0_full.json", 95.0, px(999, 99));
+    let err = stderr(&image, &[]);
+    assert!(!err.contains("outside 0-1"), "{err}");
+    reading("photo.json", 95.0, px(999, 99));
+    reading("photo_p0_full.json", 0.9, px(300, 100));
+    let err = stderr(&image, &[]);
+    assert!(!err.contains("outside 0-1"), "{err}");
+    // The same file taken is warned of.
+    reading("photo_p0_full.json", 95.0, px(300, 100));
+    let err = stderr(&image, &[]);
+    assert!(
+        err.contains("photo_p0_full.json: 1 of 1 word score(s) outside 0-1"),
+        "{err}"
+    );
+    // So is one whose one word is boxed over all of the image: an image
+    // read as a file is not judged noise, and it is taken.
+    let noise = serde_json::json!({
+        "coords": "px", "width": 300, "height": 100,
+        "words": [{ "text": "7", "box": [0, 0, 300, 100], "conf": 66 }]
+    });
+    std::fs::write(words.join("photo_p0_full.json"), noise.to_string()).unwrap();
+    let err = stderr(&image, &[]);
+    assert!(
+        err.contains("photo_p0_full.json: 1 of 1 word score(s) outside 0-1"),
+        "{err}"
+    );
+    reading("photo_p0_full.json", 95.0, px(300, 100));
+    // Nor is one a model's reading replaced, as of a placed picture: the
+    // output lists no confidence it could have lost.
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    tier_reading(&tiers, "photo", "Account");
+    let err = stderr(&image, &["--tier-results", tiers.to_str().unwrap()]);
+    assert!(!err.contains("outside 0-1"), "{err}");
+    // A reading set aside is not warned of: most of its words land off
+    // the image (or the page), so none is read.
+    let strays = |name: &str, size: serde_json::Value| {
+        let w = |x: u32| serde_json::json!({ "text": "Account", "box": [x, 40, x + 80, 56], "conf": 95.0 });
+        let mut r = serde_json::json!({ "words": [w(40), w(1000), w(2000)] });
+        r.as_object_mut()
+            .unwrap()
+            .extend(size.as_object().unwrap().clone());
+        std::fs::write(words.join(name), r.to_string()).unwrap();
+    };
+    strays("photo_p0_full.json", px(300, 100));
+    let err = stderr(&image, &[]);
+    assert!(err.contains("could not be placed"), "{err}");
+    assert!(!err.contains("outside 0-1"), "{err}");
+    // A page not asked for is not read, and not warned of.
+    let pdf = dir.join("scan.pdf");
+    std::fs::write(&pdf, scan_pdf_of(2)).unwrap();
+    let pdf_units = serde_json::json!({ "coords": "page" });
+    reading("scan_p0_full.json", 95.0, pdf_units.clone());
+    reading("scan_p1_full.json", 0.9, pdf_units);
+    let err = stderr(&pdf, &["--pages", "2"]);
+    assert!(!err.contains("outside 0-1"), "{err}");
+    let err = stderr(&pdf, &[]);
+    assert!(
+        err.contains("scan_p0_full.json: 1 of 1 word score(s) outside 0-1"),
+        "{err}"
+    );
+    tier_reading(&tiers, "scan", "Account");
+    let err = stderr(&pdf, &["--tier-results", tiers.to_str().unwrap()]);
+    assert!(!err.contains("outside 0-1"), "{err}");
+    strays("scan_p0_full.json", serde_json::json!({ "coords": "page" }));
+    let err = stderr(&pdf, &[]);
+    assert!(err.contains("could not be placed"), "{err}");
+    assert!(!err.contains("outside 0-1"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn only_the_readings_of_the_pages_asked_for_are_reported() {
+    let dir = scratch("pdf-pages");
+    let input = dir.join("scan.pdf");
+    std::fs::write(&input, scan_pdf_of(2)).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    // The first page's reading came back empty: no word of it in the
+    // output tells it is not wanted, only the pages asked for do. Two
+    // filters keep it out, each enough alone: `--ocr-words` injects only the
+    // readings of the pages asked for, and only theirs are listed. This
+    // fails only when both go.
+    let account = serde_json::json!([{ "text": "Account", "box": [40, 40, 120, 56] }]);
+    for (page, words_of) in [(0, serde_json::json!([])), (1, account)] {
+        let reading = serde_json::json!({ "coords": "page", "words": words_of });
+        std::fs::write(
+            words.join(format!("scan_p{page}_full.json")),
+            reading.to_string(),
+        )
+        .unwrap();
+    }
+    let all = convert(&input, &["--ocr-words", words.to_str().unwrap()]);
+    let listed = |out: &serde_json::Value| -> Vec<u64> {
+        document(out)["doc:ocrReadings"]["@value"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["pageIndex"].as_u64().unwrap())
+            .collect()
+    };
+    assert_eq!(listed(&all), [0, 1], "{all}");
+    let second = convert(
+        &input,
+        &["--ocr-words", words.to_str().unwrap(), "--pages", "2"],
+    );
+    assert_eq!(listed(&second), [1], "{second}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A one-word OCR reading of the whole image, in its pixels.
 fn words(w: f64, h: f64, text: &str) -> String {
     serde_json::json!({
@@ -417,6 +766,79 @@ fn an_image_ocr_left_unread_goes_to_the_configured_model() {
     assert!(err.contains("the configured model reads it"), "{err}");
     // Not reported missing before the model is even asked.
     assert!(!err.contains("This output is missing it"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_empty_reading_handed_to_the_model_is_not_warned_of_before_it_reads() {
+    // OCR read nothing the image's reading takes: a word scored 96, on
+    // Tesseract's 0-100, that lands off the image. The image goes to the
+    // configured model, whose reading would replace OCR's: the reading's
+    // scores are warned of only once it is known to be listed, not before
+    // the model is asked. The model here has a key it cannot use, so nothing
+    // leaves the machine and OCR's reading is kept, which was set aside:
+    // nothing is listed, and nothing is warned of.
+    let dir = scratch("empty-to-model");
+    let input = dir.join("scan.jpg");
+    std::fs::write(&input, jpeg(None)).unwrap();
+    let w = dir.join("words");
+    std::fs::create_dir_all(&w).unwrap();
+    let write = |words: serde_json::Value| {
+        let reading = serde_json::json!({
+            "coords": "px", "width": 300, "height": 100, "words": words
+        });
+        std::fs::write(w.join("scan.json"), reading.to_string()).unwrap();
+    };
+    write(serde_json::json!([{ "text": "Total", "box": [1000, 20, 1080, 50], "conf": 96 }]));
+    let home = dir.join("fdoc-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let key = home.join("key.json");
+    std::fs::write(&key, "{}").unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[escalation]\nprovider = \"gemini\"\n[escalation.gemini]\ncredentials = {:?}\n",
+            key.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let run = |home: &Path| {
+        let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .current_dir(&dir)
+            .arg("convert")
+            .arg(&input)
+            .args(["-f", "doco", "--ocr-words"])
+            .arg(&w)
+            .env("FDOC_HOME", home)
+            .env_remove("FDOC_TIER_RESULTS")
+            .env_remove("FDOC_OCR_MODELS")
+            .output()
+            .unwrap();
+        (
+            out.stdout,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (_, err) = run(&home);
+    assert!(err.contains("the configured model reads it"), "{err}");
+    assert!(!err.contains("outside 0-1"), "{err}");
+    // With no model, the reading set aside is not listed, nor warned of.
+    let (stdout, err) = run(&dir.join("no-config"));
+    assert!(!err.contains("outside 0-1"), "{err}");
+    let doc: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert!(document(&doc).get("doc:ocrReadings").is_none(), "{doc}");
+    // Tesseract's row for a block with no word, an empty text scored -1 on
+    // any scale, is no word: the reading that took nothing is listed, and
+    // its scores are not warned of.
+    write(serde_json::json!([{ "text": "", "box": [0, 0, 300, 100], "conf": -1 }]));
+    let (stdout, err) = run(&dir.join("no-config"));
+    assert!(!err.contains("outside 0-1"), "{err}");
+    let doc: serde_json::Value = serde_json::from_slice(&stdout).unwrap();
+    assert_eq!(
+        document(&doc)["doc:ocrReadings"]["@value"],
+        serde_json::json!([{ "pageIndex": 0, "crop": "full", "words": 0 }]),
+        "{doc}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -674,5 +1096,133 @@ fn a_stamp_ocr_read_a_word_in_is_read_and_asks_no_model() {
     let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(doc.to_string().contains("PAID"), "{doc}");
     assert!(document(&doc).get("doc:unreadPages").is_none(), "{doc}");
+    // Its reading is listed: its word is in the output.
+    assert_eq!(
+        document(&doc)["doc:ocrReadings"]["@value"],
+        serde_json::json!([{
+            "pageIndex": 0, "crop": "full", "words": 1,
+            "meanConfidence": 0.97, "minConfidence": 0.97
+        }]),
+        "{doc}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_photo_ocr_took_one_doubtful_word_in_is_read_by_the_model() {
+    // A photograph OCR took one "word" in, at a confidence a placed
+    // picture's reading is noise under: the configured model is asked, as
+    // for an image OCR took nothing in (its key unusable here, so it is
+    // known to be asked without a call leaving the machine). Without a
+    // model, OCR's word is the output.
+    let dir = scratch("photo-doubt");
+    let input = dir.join("photo.png");
+    let img = image::GrayImage::from_fn(600, 400, |x, y| {
+        image::Luma([((x * 37 + y * 91) % 251) as u8])
+    });
+    img.save(&input).unwrap();
+    let w = dir.join("words");
+    std::fs::create_dir_all(&w).unwrap();
+    let reading = serde_json::json!({
+        "coords": "px", "width": 600, "height": 400,
+        "words": [{ "text": "Il", "box": [280, 180, 300, 210], "conf": 0.21 }]
+    });
+    std::fs::write(w.join("photo.json"), reading.to_string()).unwrap();
+    let run = |home: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(&input)
+            .args(["-f", "doco", "--ocr-words"])
+            .arg(&w)
+            .env("FDOC_HOME", home)
+            .env_remove("FDOC_TIER_RESULTS")
+            .env_remove("FDOC_OCR_MODELS")
+            .output()
+            .unwrap()
+    };
+    let home = dir.join("fdoc-home");
+    unusable_model(&home);
+    let out = run(&home);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("note: photo: OCR read only words it doubts; the configured model reads it"),
+        "{err}"
+    );
+    // The model failing, OCR's reading is kept, its word with it.
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("warning: photo: the configured model could not read it:"),
+        "{err}"
+    );
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(doc.to_string().contains("\"Il\""), "{doc}");
+    assert_eq!(
+        document(&doc)["doc:ocrReadings"]["@value"],
+        serde_json::json!([{
+            "pageIndex": 0, "crop": "full", "words": 1,
+            "meanConfidence": 0.21, "minConfidence": 0.21
+        }]),
+        "{doc}"
+    );
+    let bare = dir.join("no-model");
+    std::fs::create_dir_all(&bare).unwrap();
+    let out = run(&bare);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("configured model"), "{err}");
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(doc.to_string().contains("\"Il\""), "{doc}");
+    assert!(document(&doc).get("doc:unreadPages").is_none(), "{doc}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_model_failing_after_ocr_leaves_ocrs_reading() {
+    // OCR read the image and took no word (Tesseract's row for a block
+    // with none), so the configured model is asked, and fails (its key
+    // unusable): the conversion keeps what OCR made of it, warned of,
+    // rather than failing; its reading, which took no word, is listed.
+    let dir = scratch("model-fails");
+    let input = dir.join("scan.jpg");
+    std::fs::write(&input, jpeg(None)).unwrap();
+    let w = dir.join("words");
+    std::fs::create_dir_all(&w).unwrap();
+    let reading = serde_json::json!({
+        "coords": "px", "width": 300, "height": 100,
+        "words": [{ "text": "", "box": [0, 0, 300, 100], "conf": -1 }]
+    });
+    std::fs::write(w.join("scan.json"), reading.to_string()).unwrap();
+    let home = dir.join("fdoc-home");
+    unusable_model(&home);
+    let run = |extra: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(&input)
+            .args(["-f", "doco"])
+            .args(extra)
+            .env("FDOC_HOME", &home)
+            .env_remove("FDOC_TIER_RESULTS")
+            .env_remove("FDOC_OCR_MODELS")
+            .output()
+            .unwrap()
+    };
+    let out = run(&["--ocr-words", w.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(err.contains("the configured model reads it"), "{err}");
+    assert!(
+        err.contains("warning: scan: the configured model could not read it:"),
+        "{err}"
+    );
+    assert!(err.contains("This output is missing it"), "{err}");
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        document(&doc)["doc:ocrReadings"]["@value"],
+        serde_json::json!([{ "pageIndex": 0, "crop": "full", "words": 0 }]),
+        "{doc}"
+    );
+    assert!(document(&doc).get("doc:unreadPages").is_some(), "{doc}");
+    // Without OCR, the model failing is the conversion's failure, as it was.
+    assert!(!run(&[]).status.success());
     let _ = std::fs::remove_dir_all(dir);
 }

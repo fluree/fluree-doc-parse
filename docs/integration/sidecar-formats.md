@@ -162,7 +162,7 @@ page does, and every character keeps a position for
 | `words[].text` | yes | a word, or a whole line: a space inside it is a space |
 | `words[].box` | yes | `[x0, y0, x1, y1]`, y down: the word's own extent |
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
-| `words[].conf` | no | the engine's confidence, 0-1 |
+| `words[].conf` | no | the engine's confidence, 0-1; its mean and minimum over the words taken are reported in [`doc:ocrReadings`](../formats/doco.md#ocr-readings). A score outside 0-1 says the reading is scored on another scale, where its other scores mean something else too (a Tesseract 1 is 1 in 100): the reading then reports no confidence at all, with a warning on stderr, and a reading of a region (`r{i}`) or of a placed picture is judged noise by its boxes alone, as a reading with no `conf` is. A word with no text is not counted, whatever its score: it is never placed, and Tesseract scores its rows of blocks and lines -1. Divide Tesseract's 0-100 scores by 100 |
 
 The format is stable: `--ocr-words` (`FDOC_OCR_WORDS`), the file names, the
 fields above and their units. A release changes or removes one only as a
@@ -276,7 +276,9 @@ word reads nothing: the page or region stays as it was, routed
 and reported unread (in
 [`doc:unreadPages`](../formats/doco.md#pages-nothing-read) or
 [`doc:unreadRegions`](../formats/doco.md#regions-nothing-read)). So does a whole-page reading
-most of whose words land nowhere: it is refused. When a page has both a
+most of whose words land nowhere, or a region's most of whose words land off
+its crop (its margin included), or any reading all of whose words do: it is
+refused, and not listed in `doc:ocrReadings` as one that came back blank. When a page has both a
 `full` reading and `r{i}` readings, the whole-page one is taken first, and a
 region reading is refused where the whole-page one took words in its region
 (or, on a page whose text is all pixels, anywhere); the others stand.

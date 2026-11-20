@@ -360,6 +360,7 @@ fn convert_path(
                 fluree_doc_model::Notes {
                     running_text,
                     unread_images: media.unread,
+                    ocr: media.ocr,
                     ..declared(info)
                 },
             )
@@ -392,6 +393,7 @@ fn convert_path(
                 elements,
                 fluree_doc_model::Notes {
                     unread_images: media.unread,
+                    ocr: media.ocr,
                     ..declared(info)
                 },
             )
@@ -525,6 +527,7 @@ fn convert_email(
     }
     let notes = fluree_doc_model::Notes {
         unread_images: media.unread,
+        ocr: media.ocr,
         ..email.notes()
     };
     let mut elements = email.elements;
@@ -585,18 +588,27 @@ fn convert_image(
     }
     // A model may read what OCR leaves unread, as on a scanned PDF page.
     let model_after = cfg.escalate && cfg.tier_results.is_none();
+    // What OCR made of it when it took no word, or only words it doubts:
+    // kept should the model fail, and its reading, empty, listed should the
+    // model read nothing either.
+    let mut ocr_read = None;
     if cfg.ocr.is_some() || cfg.ocr_words.is_some() {
         match ocr_image(&data, header, src, cfg, quiet) {
-            Ok(read) if read.read_something || !model_after => {
-                if let (Some(note), false) = (read.notes.summary(), quiet) {
-                    eprintln!("warning: {stem}: {note}");
-                }
-                return Ok(render(&read.elements, src, args, read.sizes, &read.notes));
+            Ok(read) if (read.read_something && !read.doubtful) || !model_after => {
+                return Ok(render_image_ocr(read, src, args, quiet));
             }
-            Ok(_) => {
+            Ok(read) => {
                 if !quiet {
-                    eprintln!("note: {stem}: OCR read nothing; the configured model reads it");
+                    eprintln!(
+                        "note: {stem}: OCR read {}; the configured model reads it",
+                        if read.read_something {
+                            "only words it doubts"
+                        } else {
+                            "nothing"
+                        }
+                    );
                 }
+                ocr_read = Some(read);
             }
             Err(e) if model_after => {
                 if !quiet {
@@ -624,7 +636,23 @@ fn convert_image(
         .collect();
     let mut elements: Vec<Element> = Vec::new();
     let page = "p0_full";
-    if let Some(readings) = image_readings(stem, page, &data, format.mime(), cfg, cfg.escalate)? {
+    let readings = match image_readings(stem, page, &data, format.mime(), cfg, cfg.escalate) {
+        Ok(readings) => readings,
+        // OCR read it and took no word, or only words it doubts: the model
+        // failing leaves that reading, as it leaves a placed picture's, not
+        // the conversion failed. Where OCR had no reading of it (no words written for it),
+        // the model was its only reader, and its failure the conversion's.
+        Err(e) => match ocr_read {
+            Some(read) if read.readings > 0 => {
+                if !quiet {
+                    eprintln!("warning: {stem}: the configured model could not read it: {e}");
+                }
+                return Ok(render_image_ocr(read, src, args, quiet));
+            }
+            _ => return Err(e),
+        },
+    };
+    if let Some(readings) = readings {
         // One synthetic element for the splice to replace, so the image
         // travels the same page-tier path a scanned PDF page does.
         elements.push(Element {
@@ -641,10 +669,18 @@ fn convert_image(
         Vec::new()
     };
     unread.extend(later_pages(pages));
-    let notes = fluree_doc_model::Notes {
+    let mut notes = fluree_doc_model::Notes {
         unread,
         ..Default::default()
     };
+    // The model read nothing either: OCR's reading, which took no word, is
+    // still the image's, as an empty reading of a PDF page is. One that
+    // took only words it doubts is not listed: the model, which read the
+    // image for them, found no text, and its words are not in the output.
+    if let Some(read) = ocr_read.filter(|r| elements.is_empty() && !r.read_something) {
+        warn_listed_scores(read.scores, &read.notes.ocr, quiet);
+        notes.ocr = read.notes.ocr;
+    }
     // Warned about as a PDF's page nothing read is, with what could read it.
     if !quiet {
         if let Some(note) = notes.summary() {
@@ -747,6 +783,8 @@ struct MediaRead {
     read: Vec<(String, Vec<Element>)>,
     /// The images nothing read, and why, once for each figure drawing them.
     unread: Vec<fluree_doc_model::UnreadImage>,
+    /// The OCR readings whose words are in the output, by image.
+    ocr: Vec<fluree_doc_model::OcrReading>,
 }
 
 /// Read the images a document places in its flow, each once however many
@@ -849,6 +887,14 @@ fn read_media_with(
     read_by_model(stem, &mut placed, cfg, quiet);
     let mut out = MediaRead::default();
     for (picture, p) in placed {
+        // Of a reading listed only, taken or set aside as noise: one refused,
+        // or one a model's replaced, says nothing in the output.
+        if let (Some((n, words)), false) = (p.scores, p.ocr_read.is_empty()) {
+            let name = format!("{stem}_{}.json", p.tag);
+            common::warn_scores_out_of_range(&name, n, words, quiet);
+        }
+        // Taken, or set aside as noise and listed as one that took no word.
+        out.ocr.extend(p.ocr_read);
         match p.read {
             Some(elements) => out.read.extend(picture.after_each_figure(elements)),
             None => {
@@ -1012,6 +1058,10 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         let mut failure: Option<(&'static str, String)> = None;
         // What OCR read in it: `None` where OCR did not read it.
         let mut read: Option<Vec<Element>> = None;
+        // The OCR reading behind `read`, for `doc:ocrReadings`.
+        let mut ocr_read: Vec<fluree_doc_model::OcrReading> = Vec::new();
+        // Its words' scores outside 0-1, of how many, where a sidecar gave them.
+        let mut scores: Option<(usize, usize)> = None;
         if ocr {
             // The words an engine wrote, where they are what is read.
             let words = match &cfg.ocr {
@@ -1025,8 +1075,10 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                 // No words were written for it: OCR did not read it.
                 (Some(None), None) => None,
                 (Some(Some(text)), _) => Some(
-                    fluree_doc_vision::WordReading::from_json(text)
-                        .and_then(|reading| fluree_doc_image::elements_from_words(b, reading)),
+                    fluree_doc_vision::WordReading::from_json(text).and_then(|reading| {
+                        scores = Some((reading.scores_out_of_range(), reading.words_with_text()));
+                        fluree_doc_image::elements_from_words(b, reading)
+                    }),
                 ),
                 (_, Some(engine)) => Some(
                     decoded
@@ -1043,6 +1095,25 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                         eprintln!("ocr: {name}: the reading is noise, set aside");
                     }
                     failure = Some(("NotTexty", String::new()));
+                    // Listed all the same, as a reading that took no word.
+                    ocr_read.extend(image.ocr.into_iter().map(|r| fluree_doc_model::OcrReading {
+                        page: None,
+                        image: Some(tag.clone()),
+                        ..r
+                    }));
+                }
+                // A reading set aside because its words could not be placed
+                // on the image (an origin or a scale not the image's) read
+                // nothing of it: a failure, warned of and counted, as a PDF
+                // page it is refused on stays unread; a model may still be
+                // sent it.
+                Some(Ok(fluree_doc_image::ImageElements {
+                    refused: Some(why), ..
+                })) => {
+                    if !quiet {
+                        eprintln!("warning: {name}: {why}");
+                    }
+                    failure = Some(("Failed", why.to_string()));
                 }
                 // Read, whatever it held: a photo with no text was read too.
                 Some(Ok(image)) => {
@@ -1054,6 +1125,13 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
                             "warning: {name}: only the first page of a multi-page image is read"
                         );
                     }
+                    // A picture has no page of the document's: it goes by
+                    // its name, as its words do.
+                    ocr_read.extend(image.ocr.into_iter().map(|r| fluree_doc_model::OcrReading {
+                        page: None,
+                        image: Some(tag.clone()),
+                        ..r
+                    }));
                     read = Some(image.elements);
                 }
                 // A picture that could not be read is the user's to know
@@ -1075,6 +1153,8 @@ impl fluree_doc_model::PictureReader for MediaReader<'_> {
         let mut p = Placed {
             read,
             failure,
+            ocr_read,
+            scores,
             ..Placed::new(tag, None)
         };
         let max = cfg.config.escalation.max_crops;
@@ -1170,6 +1250,12 @@ struct Placed {
     read: Option<Vec<Element>>,
     /// Why it is not read, should nothing read it.
     failure: Option<(&'static str, String)>,
+    /// The OCR reading behind `read`, for `doc:ocrReadings`.
+    ocr_read: Vec<fluree_doc_model::OcrReading>,
+    /// Of the words a sidecar gave it, those scored outside 0-1, of how
+    /// many: warned of only once its reading is taken, not when the reading
+    /// is set aside or a model's replaces it.
+    scores: Option<(usize, usize)>,
     /// Its bytes are no image OCR or a model reads (EMF, WMF).
     unsupported: bool,
     /// Its bytes and their MIME type, to send to the configured model.
@@ -1184,6 +1270,8 @@ impl Placed {
             tag,
             read: None,
             failure,
+            ocr_read: Vec::new(),
+            scores: None,
             unsupported: false,
             send: None,
         }
@@ -1213,6 +1301,8 @@ impl Placed {
             }
             self.read = Some(els);
             self.failure = None;
+            // The model's reading replaced OCR's words.
+            self.ocr_read.clear();
         }
     }
 
@@ -1293,13 +1383,49 @@ fn settle<'p>(
     }
 }
 
+/// Warn of a bare image's sidecar reading scored outside 0-1, once it is
+/// known to be listed (`listed`, the image's readings in the output), as a
+/// PDF page's is: one set aside, or one a model's reading replaced, says
+/// nothing in the output.
+fn warn_listed_scores(
+    scores: Option<(String, usize, usize)>,
+    listed: &[fluree_doc_model::OcrReading],
+    quiet: bool,
+) {
+    if let (Some((name, n, words)), false) = (scores, listed.is_empty()) {
+        common::warn_scores_out_of_range(&name, n, words, quiet);
+    }
+}
+
+/// The output of a bare image as OCR read it ([`ocr_image`]), warned about
+/// as a PDF's page nothing read is.
+fn render_image_ocr(read: ImageOcr, src: &Source, args: &ConvertArgs, quiet: bool) -> String {
+    warn_listed_scores(read.scores, &read.notes.ocr, quiet);
+    if let (Some(note), false) = (read.notes.summary(), quiet) {
+        eprintln!("warning: {}: {note}", src.stem);
+    }
+    render(&read.elements, src, args, read.sizes, &read.notes)
+}
+
 /// What OCR made of a bare image.
 struct ImageOcr {
     elements: Vec<Element>,
     sizes: Vec<fluree_doc_model::PageSize>,
     notes: fluree_doc_model::Notes,
-    /// Some word was taken, or a reading spliced over the page.
+    /// Some word was taken, or a model's reading supplied spliced over the
+    /// page.
     read_something: bool,
+    /// Every reading that took a word is noise by the confidence a placed
+    /// picture's is held to ([`fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE`]):
+    /// a configured model reads the image instead.
+    doubtful: bool,
+    /// The OCR readings of it, taken or set aside: none where no words
+    /// were written for it.
+    readings: usize,
+    /// The sidecar reading taken, by its file's name, with those of its
+    /// words' scores outside 0-1, of how many: warned of only where the
+    /// reading is listed, which the caller decides.
+    scores: Option<(String, usize, usize)>,
 }
 
 /// A bare image read by OCR: its words laid on a one-page document and
@@ -1313,7 +1439,8 @@ fn ocr_image(
     quiet: bool,
 ) -> Result<ImageOcr, String> {
     let stem = src.stem;
-    let (mut doc, flag, injected) = match &cfg.ocr {
+    // With the words of the sidecar reading taken, those scored outside 0-1.
+    let (mut doc, flag, injected, scores) = match &cfg.ocr {
         Some(engine) => {
             let image = fluree_doc_image::decode(data)?;
             if image.truncated && !quiet {
@@ -1328,7 +1455,7 @@ fn ocr_image(
                 .map_err(|e| format!("--ocr: {e}"))?;
             let page = fluree_doc_pdf::ocr::Crop::Page;
             let injected = fluree_doc_pdf::ocr::inject(&mut doc, &[(0, page, reading)]);
-            (doc, "--ocr", injected)
+            (doc, "--ocr", injected, None)
         }
         None => {
             let h = header.ok_or("the image's header could not be read")?;
@@ -1338,35 +1465,42 @@ fn ocr_image(
             // image file (`<stem>.json`, as `fdoc ocr` names them): in a
             // directory shared with a PDF of the same stem, the one read on
             // this image is the one sized as it is.
-            let mut readings = common::ocr_readings(dir, stem, &doc, quiet);
-            readings.extend(image_words(dir, stem, quiet));
+            let mut readings: Vec<_> = common::ocr_readings(dir, stem, &doc, quiet)
+                .into_iter()
+                .map(|r| (format!("{stem}_p{}_{}.json", r.0, r.1.tag()), r))
+                .collect();
+            readings.extend(image_words(dir, stem, quiet).map(|r| (format!("{stem}.json"), r)));
             let sized = |r: &fluree_doc_pdf::ocr::WordReading| {
                 r.coords == fluree_doc_pdf::ocr::Coords::Page
                     || (r.width, r.height) == (Some(f64::from(h.width)), Some(f64::from(h.height)))
             };
             let pages = readings
                 .iter()
-                .filter(|r| r.1 == fluree_doc_pdf::ocr::Crop::Page)
+                .filter(|(_, r)| r.1 == fluree_doc_pdf::ocr::Crop::Page)
                 .count();
-            if let Some(k) = readings.iter().position(|r| sized(&r.2)) {
-                readings = vec![readings.swap_remove(k)];
-            } else if !readings.is_empty() {
-                if !quiet {
+            let (name, readings) = if let Some(k) = readings.iter().position(|(_, r)| sized(&r.2)) {
+                let (name, taken) = readings.swap_remove(k);
+                (name, vec![taken])
+            } else {
+                if !readings.is_empty() && !quiet {
                     eprintln!(
                         "warning: --ocr-words: {stem}: no reading is sized as the image ({} × {}): none read",
                         h.width, h.height
                     );
                 }
-                readings.clear();
-            }
+                (String::new(), Vec::new())
+            };
             if pages > 1 && !quiet {
                 eprintln!(
                     "warning: --ocr-words: {stem}: both {stem}_p0_full.json and {stem}.json; read the one sized as the image"
                 );
             }
-            // Noise set aside as an engine's reading of the image is.
+            // Of the reading taken only: the other candidate is not read.
+            let scores = readings
+                .first()
+                .map(|(_, _, r)| (name, r.scores_out_of_range(), r.words_with_text()));
             let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
-            (doc, "--ocr-words", injected)
+            (doc, "--ocr-words", injected, scores)
         }
     };
     report_ocr(stem, flag, &injected, cfg.verbose, quiet);
@@ -1405,6 +1539,20 @@ fn ocr_image(
     // pages of text, not an image whose few words may be all it holds.
     let read_something = injected.iter().any(|r| r.refused.is_none() && r.taken > 0)
         || a.elements.iter().any(|e| e.evidence == "page-tier");
+    // But where all OCR took is words it doubts, a photograph's one "word"
+    // at 0.21 or a whiteboard's stray letters, a configured model reads it
+    // instead, as it reads an image OCR took nothing in: the rule a placed
+    // picture's reading is held to, its words' mean confidence, which a
+    // stamp's `PAID` at 0.97 passes. Without a model, OCR's words are the
+    // output, as a scan read poorly gives its.
+    let doubtful = !a.elements.iter().any(|e| e.evidence == "page-tier")
+        && injected
+            .iter()
+            .filter(|r| r.refused.is_none() && r.taken > 0)
+            .all(|r| {
+                r.mean_conf
+                    .is_some_and(|c| c < fluree_doc_pdf::ocr::MIN_PICTURE_CONFIDENCE)
+            });
     let unread = if read_something {
         Vec::new()
     } else {
@@ -1412,6 +1560,7 @@ fn ocr_image(
     };
     let mut notes = fluree_doc_model::Notes {
         unread,
+        ocr: fluree_doc_pdf::ocr::readings(&injected, &a.elements),
         ..Default::default()
     };
     // The pages after the first of a multi-page TIFF, never read.
@@ -1423,6 +1572,9 @@ fn ocr_image(
         sizes,
         notes,
         read_something,
+        doubtful,
+        readings: injected.len(),
+        scores,
     })
 }
 
@@ -1498,6 +1650,7 @@ fn render(
                 unread_regions: notes.unread_regions.clone(),
                 warnings: notes.warnings.clone(),
                 unread_images: notes.unread_images.clone(),
+                ocr_readings: notes.ocr.clone(),
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
@@ -1560,7 +1713,9 @@ fn convert_bytes(
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
-    let injected = if let Some(engine) = &cfg.ocr {
+    // With the words of each sidecar reading, those scored outside 0-1, by
+    // page and crop: warned of once the readings listed are known (below).
+    let (injected, scores) = if let Some(engine) = &cfg.ocr {
         let max = cfg.config.ocr.max_crops();
         // At the stored resolution of what is under each crop (#11): an
         // engine reads small text a 2× render loses.
@@ -1581,7 +1736,7 @@ fn convert_bytes(
             eprintln!("{}", ocr_cap_note(stem, max, pass.capped));
         }
         report_ocr(stem, "--ocr", &pass.injected, cfg.verbose, quiet);
-        pass.injected
+        (pass.injected, Vec::new())
     } else if let Some(dir) = cfg.ocr_words.as_deref() {
         // Only the pages asked for, as the engine reads only those: words
         // already read for the others must not change how these read.
@@ -1594,10 +1749,21 @@ fn convert_bytes(
         // earlier one's reading, as `--ocr` gives it.
         let readings = fluree_doc_pdf::ocr::with_copies(&doc, pages, readings);
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        let scores = readings
+            .iter()
+            .map(|(page, crop, r)| {
+                (
+                    *page,
+                    crop.tag(),
+                    r.scores_out_of_range(),
+                    r.words_with_text(),
+                )
+            })
+            .collect();
         report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
-        injected
+        (injected, scores)
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     // A configured reader reads the crops chosen from the document as
     // extracted, which the analysis below changes.
@@ -1716,6 +1882,21 @@ fn convert_bytes(
     unread_regions.retain(|u| asked(u.page));
     let mut warnings = fluree_doc_pdf::parse_warnings(&doc);
     warnings.retain(|w| asked(w.page));
+    let mut ocr = fluree_doc_pdf::ocr::readings(&injected, &a.elements);
+    // Nothing to drop while `--ocr` reads only the pages asked for and
+    // `--ocr-words` injects only their readings. A second guard behind
+    // those: an empty reading of a page left out has no element to tell it
+    // is not wanted, and would otherwise be listed.
+    ocr.retain(|r| r.page.is_none_or(asked));
+    // Of the readings listed only, as of a placed picture: one of a page not
+    // asked for, one set aside, or one a model's reading replaced says
+    // nothing in the output.
+    for (page, tag, n, words) in scores {
+        if ocr.iter().any(|r| r.page == Some(page) && r.crop == tag) {
+            let name = format!("{stem}_p{page}_{tag}.json");
+            common::warn_scores_out_of_range(&name, n, words, quiet);
+        }
+    }
     let notes = fluree_doc_model::Notes {
         unread,
         unread_regions,
@@ -1729,6 +1910,7 @@ fn convert_bytes(
             .map(|(text, _)| text.clone())
             .collect(),
         info: fluree_doc_pdf::info::read(&raw),
+        ocr,
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
