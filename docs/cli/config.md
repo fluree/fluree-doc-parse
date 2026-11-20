@@ -111,6 +111,11 @@ lives in a corpus's configuration.
 fdoc config set escalation.on_column_doubt true
 ```
 
+`fdoc triage` and `fdoc dev render-routed` follow it too, so that they count
+and write the crops `convert --escalate` sends; each says on stderr when the
+file made it read pages whole. `FDOC_ESCALATE_COLUMNS=0` turns it off for one
+run, as a benchmark run that must not depend on the machine does.
+
 ## How much one document may send
 
 `fdoc convert` says what it is about to pay for before the first call:
@@ -120,7 +125,8 @@ note: chart.pdf: 21 crop(s) to read with gemini-3-flash-preview
 ```
 
 and `fdoc triage <file>` prints the same count as a `CROPS` line without
-sending anything. Past `max_crops` the most valuable crops are read — a
+sending anything, given the same structure readings
+(`FDOC_STRUCTURE_RESULTS`): a table they veto is not read. Past `max_crops` the most valuable crops are read — a
 scanned page before a doubted table — and the rest keep their deterministic
 reading, with a note saying how many were left. The deterministic pass is
 complete on its own, so the limit truncates rather than fails; see [how many

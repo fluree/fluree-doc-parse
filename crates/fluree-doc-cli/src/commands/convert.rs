@@ -675,7 +675,9 @@ fn convert_bytes(
 /// The crops are the analysis's own anchors
 /// ([`fluree_doc_pdf::escalate::crops_at_anchors`]), so each reading fills
 /// the anchor its crop was named after; `extracted`, the document before
-/// the analysis changed it, chooses the whole pages.
+/// the analysis changed it, chooses the whole pages. A table the
+/// `--structure-results` veto would keep deterministic whatever the model
+/// read is left out.
 ///
 /// The splice runs even when `read` returned nothing: the analysis carries an
 /// anchor for every crop it could have asked for, and a crop goes unread when
@@ -700,14 +702,17 @@ fn read_in_run(
         &fluree_doc_pdf::escalate::CropHints,
     ) -> Result<fluree_doc_pdf::escalate::Readings, String>,
 ) -> Result<(), String> {
-    let hints = crate::escalate::jobs::hints(
+    let hints = crate::escalate::jobs::hints(extracted, stem, cfg);
+    // A table the structure readings veto keeps its grid whatever the model
+    // reads, so reading it would be paid for and thrown away, and take the
+    // place of a crop under `escalation.max_crops`.
+    let (jobs, reasons) = crate::escalate::jobs::at_anchors(
         extracted,
+        a,
         stem,
-        cfg.layout_boxes.as_deref(),
-        cfg.config.escalation.on_column_doubt,
+        &hints,
+        cfg.structure_results.as_deref(),
     );
-    let (jobs, reasons) =
-        fluree_doc_pdf::escalate::crops_at_anchors_explained(extracted, a, &hints);
     let jobs = crate::escalate::to_read(
         std::path::Path::new(stem),
         jobs,
@@ -721,7 +726,7 @@ fn read_in_run(
         &mut a.elements,
         stem,
         &readings,
-        None,
+        cfg.structure_results.as_deref(),
         page_text,
         &a.furniture,
     );
@@ -1067,10 +1072,12 @@ mod tests {
         );
     }
 
-    /// The crops `dev render-routed` writes for an external reader, from
-    /// `plan`, are the crops a live run sends: each named after the anchor
-    /// of `convert --tier-results` it fills, so a sidecar reading lands
-    /// where its crop sits, as a live one does.
+    /// The crops `dev render-routed` writes for an external reader
+    /// (`jobs::to_render`, from an analysis with anchors on, as that command
+    /// makes it) are named after the anchor of `convert --tier-results` each
+    /// fills, so a sidecar reading lands where its crop sits, as a live one
+    /// does. So are the crops of the library's `plan`, for a caller that
+    /// has only the extracted document.
     #[test]
     fn render_routed_names_its_crops_after_the_anchors_they_fill() {
         let cfg = TierConfig {
@@ -1079,6 +1086,17 @@ mod tests {
         };
         let extracted = page_with_faux_bold_over_a_region();
         let hints = fluree_doc_pdf::escalate::CropHints::default();
+        let rendered = {
+            let options = fluree_doc_pdf::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..TierConfig::default().options_for("doc")
+            };
+            let a = fluree_doc_pdf::document::analyze_with(&mut extracted.clone(), &[], &options);
+            let (jobs, _, vetoed) =
+                crate::escalate::jobs::to_render(&extracted, &a, "doc", &hints, None);
+            assert!(vetoed.is_empty());
+            jobs
+        };
         let planned =
             fluree_doc_pdf::escalate::plan(&extracted, &[], &cfg.options_for("doc"), &hints);
         let mut doc = extracted.clone();
@@ -1096,16 +1114,18 @@ mod tests {
                 ("[[VLM:p0:r1]]".into(), 420.0)
             ]
         );
-        let crops: Vec<(String, f64)> = planned
-            .iter()
-            .flat_map(|(page, regions)| {
-                regions
-                    .iter()
-                    .flatten()
-                    .map(move |(tag, bbox)| (format!("[[VLM:p{page}:{tag}]]"), bbox.y0))
-            })
-            .collect();
-        assert_eq!(crops, anchors);
+        let crops = |jobs: &fluree_doc_pdf::escalate::CropJobs| -> Vec<(String, f64)> {
+            jobs.iter()
+                .flat_map(|(page, regions)| {
+                    regions
+                        .iter()
+                        .flatten()
+                        .map(move |(tag, bbox)| (format!("[[VLM:p{page}:{tag}]]"), bbox.y0))
+                })
+                .collect()
+        };
+        assert_eq!(crops(&rendered), anchors);
+        assert_eq!(crops(&planned), anchors);
     }
 
     /// `triage` prices the crops a live run is about to pay for, from the
@@ -1206,6 +1226,115 @@ mod tests {
         assert_eq!(asked, [(1, None)], "the scan, not the region's page");
     }
 
+    /// `dev render-routed` writes a reason for every whole page it writes:
+    /// a page read whole in place of its region gives the region's.
+    #[test]
+    fn render_routed_gives_a_page_read_for_its_region_that_reason() {
+        let cfg = TierConfig::default();
+        let extracted = a_scan_after_a_page_read_whole_for_its_region();
+        let mut doc = extracted.clone();
+        let a = fluree_doc_pdf::document::analyze_with(
+            &mut doc,
+            &[],
+            &fluree_doc_pdf::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..cfg.options_for("doc")
+            },
+        );
+        let hints = crate::escalate::jobs::hints(&extracted, "doc", &cfg);
+        let (jobs, reasons, _) =
+            crate::escalate::jobs::to_render(&extracted, &a, "doc", &hints, None);
+        assert_eq!(jobs, [(0, None), (1, None)]);
+        let named: Vec<&str> = jobs
+            .iter()
+            .map(|(page, _)| reasons.get(page).expect("a reason").as_str())
+            .collect();
+        assert_eq!(named, ["region", "near_blank"]);
+    }
+
+    /// A page of prose in three panels under a full-width header: a page-wide
+    /// projection finds one gutter of the two, so the page is in column
+    /// doubt.
+    fn page_in_column_doubt() -> fluree_doc_pdf::Document {
+        let mut doc = page_with_a_raster_region();
+        let page = &mut doc.pages[0];
+        page.images.clear();
+        page.glyphs.clear();
+        let mut put = |x: f64, y: f64| {
+            let draw_index = page.glyphs.len();
+            page.glyphs.push(fluree_doc_pdf::Glyph {
+                text: "x".into(),
+                bbox: Some(fluree_doc_pdf::BBox {
+                    x0: x,
+                    y0: y,
+                    x1: x + 9.0,
+                    y1: y + 10.0,
+                }),
+                page: 0,
+                origin: (x, y + 10.0),
+                rotation_deg: 0.0,
+                font_size: 10.0,
+                advance: None,
+                weight: None,
+                draw_index,
+            });
+        };
+        for row in 0..7 {
+            for i in 0..30 {
+                put(50.0 + f64::from(i) * 10.0, 100.0 + f64::from(row) * 12.0);
+            }
+        }
+        for i in 0..45 {
+            put(50.0 + f64::from(i) * 10.0, 184.0);
+        }
+        for row in 0..14 {
+            for x0 in [50.0, 250.0, 460.0] {
+                for i in 0..12 {
+                    put(x0 + f64::from(i) * 10.0, 220.0 + f64::from(row) * 12.0);
+                }
+            }
+        }
+        doc
+    }
+
+    /// `triage` reads the configuration a live run reads: a page in column
+    /// doubt is read whole when `escalation.on_column_doubt` says so, or
+    /// `FDOC_ESCALATE_COLUMNS` over it, and counted then, and neither
+    /// otherwise.
+    #[test]
+    fn triage_prices_column_doubt_as_the_configuration_has_it() {
+        let counts = |on_column_doubt: bool, columns: Option<bool>| {
+            let mut cfg = TierConfig {
+                escalate: true,
+                columns,
+                ..Default::default()
+            };
+            cfg.config.escalation.on_column_doubt = on_column_doubt;
+            let extracted = page_in_column_doubt();
+            let mut doc = extracted.clone();
+            let mut a =
+                fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+            assert!(
+                fluree_doc_pdf::document::column_doubt(&extracted.pages[0], &a).is_some(),
+                "the page is in column doubt"
+            );
+            let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg);
+            let mut read = 0;
+            read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
+                read = fluree_doc_pdf::escalate::crop_count(&jobs);
+                Ok(fluree_doc_pdf::escalate::Readings::default())
+            })
+            .expect("a stand-in reader does not fail");
+            (priced, read)
+        };
+        // `TierConfig` holds the run's override; the default one has none,
+        // whatever this process's environment says.
+        assert_eq!(counts(true, None), (1, 1));
+        assert_eq!(counts(false, None), (0, 0));
+        assert_eq!(counts(true, Some(false)), (0, 0));
+        assert_eq!(counts(false, Some(true)), (1, 1));
+    }
+
     /// A crop the reader found nothing on was read: asked for anchors, the
     /// run still drops its anchor, as no one is left to fill it.
     #[test]
@@ -1249,6 +1378,244 @@ mod tests {
         let answered = convert_live(true, Some("Revenue rose 12% to 4.2 billion."));
         assert!(answered.iter().all(|e| !e.text.contains("[[VLM")));
         assert!(answered.iter().any(|e| e.provenance == "vlm"));
+    }
+
+    /// The prose of [`page_with_a_raster_region`] without its image: a page
+    /// nothing routes, whose crops are those of the anchors its analysis is
+    /// given.
+    fn page_of_prose() -> fluree_doc_pdf::Document {
+        let mut doc = page_with_a_raster_region();
+        doc.pages[0].images.clear();
+        doc
+    }
+
+    /// A table anchor and the 2x2 grid it labels.
+    fn an_anchored_grid() -> Vec<Element> {
+        vec![
+            Element::new(
+                "doco:Figure",
+                "[[VLMTAB:p0:t0]]",
+                "rust",
+                "table-confidence",
+            ),
+            Element {
+                cells: Some(vec![
+                    vec!["12".into(), "34".into()],
+                    vec!["56".into(), "78".into()],
+                ]),
+                ..Element::new("doco:Table", "12 34 56 78", "rust", "grid")
+            },
+        ]
+    }
+
+    /// A deep reading of that table, of its own shape: unopposed, it wins.
+    const DEEP_READING: &str =
+        "<table><tr><td>12</td><td>34</td></tr><tr><td>56</td><td>78</td></tr></table>";
+
+    /// A directory holding `doc_p0_t0.json`, a reading of one table block
+    /// `html`, in the sidecar format; removed with the returned guard.
+    struct Sidecars(PathBuf);
+
+    impl Sidecars {
+        fn holding(kind: &str, html: &str) -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!("fdoc-{kind}-{nonce}"));
+            std::fs::create_dir(&dir).unwrap();
+            let block = serde_json::json!([{"parsing_res_list": [
+                {"block_label": "table", "block_content": html}
+            ]}]);
+            std::fs::write(dir.join("doc_p0_t0.json"), block.to_string()).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for Sidecars {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// The same two rows with one column fewer than the grid: the structure
+    /// reading that corroborates it.
+    fn corroborating_structure() -> Sidecars {
+        Sidecars::holding(
+            "structure",
+            "<table><tr><td>12 34</td></tr><tr><td>56 78</td></tr></table>",
+        )
+    }
+
+    /// A live reader's reading of a table answers to the structure reading
+    /// as a sidecar's does: where `--structure-results` corroborates the
+    /// grid, the three-way veto keeps it. And since the veto would discard
+    /// whatever the model read, the model is not asked to read it. Asked for
+    /// anchors, the vetoed table's anchor is answered all the same, by the
+    /// veto, and drops rather than waiting for a reading the veto discards.
+    #[test]
+    fn a_live_table_reading_answers_to_the_structure_veto() {
+        let structure = corroborating_structure();
+        let read_live = |structure_results: Option<PathBuf>, emit_anchors: bool| {
+            let cfg = TierConfig {
+                escalate: true,
+                emit_anchors,
+                structure_results,
+                ..Default::default()
+            };
+            let extracted = page_of_prose();
+            let mut a = fluree_doc_pdf::document::analyze_with(
+                &mut extracted.clone(),
+                &[],
+                &cfg.options_for("doc"),
+            );
+            a.elements = an_anchored_grid();
+            let mut asked = Vec::new();
+            let mut pages = Vec::new();
+            read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
+                pages = jobs.iter().map(|(page, _)| *page).collect();
+                let mut readings = fluree_doc_pdf::escalate::Readings::default();
+                for (page, regions) in &jobs {
+                    for (tag, _) in regions.iter().flatten() {
+                        let crop = format!("p{page}_{tag}");
+                        readings.insert(crop.clone(), DEEP_READING.into());
+                        asked.push(crop);
+                    }
+                }
+                Ok(readings)
+            })
+            .expect("a stand-in reader does not fail");
+            (pages, asked, a.elements)
+        };
+        let (pages, asked, unopposed) = read_live(None, false);
+        assert_eq!(pages, [0]);
+        assert_eq!(asked, ["p0_t0"]);
+        assert_eq!(unopposed.len(), 1);
+        assert_eq!(unopposed[0].provenance, "vlm", "the reading alone wins");
+        for emit_anchors in [false, true] {
+            let (pages, asked, vetoed) = read_live(Some(structure.0.clone()), emit_anchors);
+            assert!(asked.is_empty(), "a vetoed table is not paid for");
+            assert!(
+                pages.is_empty(),
+                "nor is the page it leaves with nothing to read"
+            );
+            assert_eq!(vetoed.len(), 1, "{emit_anchors}: {vetoed:?}");
+            assert_eq!(vetoed[0].provenance, "rust", "the veto keeps the grid");
+        }
+    }
+
+    /// `triage` does not price a table the structure readings veto, as a
+    /// live run does not read it.
+    #[test]
+    fn triage_does_not_price_a_vetoed_table() {
+        let structure = corroborating_structure();
+        let priced = |structure_results: Option<PathBuf>| {
+            let cfg = TierConfig {
+                escalate: true,
+                structure_results,
+                ..Default::default()
+            };
+            let extracted = page_of_prose();
+            let mut a = fluree_doc_pdf::document::analyze_with(
+                &mut extracted.clone(),
+                &[],
+                &cfg.options_for("doc"),
+            );
+            a.elements = an_anchored_grid();
+            crate::commands::triage::priced(&extracted, &a, "doc", &cfg)
+        };
+        assert_eq!(priced(None), 1);
+        assert_eq!(priced(Some(structure.0.clone())), 0);
+    }
+
+    /// `dev render-routed` writes a table the structure readings veto, since
+    /// the structure reader reads it too, and names it apart: less what it
+    /// names, it writes the crops `triage` counts and a live run sends.
+    #[test]
+    fn render_routed_writes_a_vetoed_table_and_names_it() {
+        let structure = corroborating_structure();
+        let cfg = TierConfig {
+            escalate: true,
+            structure_results: Some(structure.0.clone()),
+            ..Default::default()
+        };
+        let extracted = page_of_prose();
+        let mut a = fluree_doc_pdf::document::analyze_with(
+            &mut extracted.clone(),
+            &[],
+            &cfg.options_for("doc"),
+        );
+        a.elements = an_anchored_grid();
+        let hints = crate::escalate::jobs::hints(&extracted, "doc", &cfg);
+        let names = |jobs: &fluree_doc_pdf::escalate::CropJobs| -> Vec<String> {
+            jobs.iter()
+                .flat_map(|(page, regions)| {
+                    regions
+                        .iter()
+                        .flatten()
+                        .map(move |(tag, _)| format!("p{page}_{tag}"))
+                })
+                .collect()
+        };
+        let render = |structure_results| {
+            crate::escalate::jobs::to_render(&extracted, &a, "doc", &hints, structure_results)
+        };
+        let (written, _, vetoed) = render(cfg.structure_results.as_deref());
+        assert_eq!(
+            names(&written),
+            ["p0_t0"],
+            "written for the structure reader"
+        );
+        assert_eq!(vetoed, ["p0_t0"]);
+        let (sent, _) = crate::escalate::jobs::at_anchors(
+            &extracted,
+            &a,
+            "doc",
+            &hints,
+            cfg.structure_results.as_deref(),
+        );
+        let left: Vec<String> = names(&written)
+            .into_iter()
+            .filter(|n| !vetoed.contains(n))
+            .collect();
+        assert_eq!(left, names(&sent));
+        assert_eq!(
+            crate::commands::triage::priced(&extracted, &a, "doc", &cfg),
+            left.len()
+        );
+        let (written, _, vetoed) = render(None);
+        assert_eq!(names(&written), ["p0_t0"]);
+        assert!(
+            vetoed.is_empty(),
+            "nothing vetoes without structure readings"
+        );
+    }
+
+    /// `--tier-results` with `--structure-results`: the sidecar reading of a
+    /// table answers to the same veto.
+    #[test]
+    fn a_sidecar_table_reading_answers_to_the_structure_veto() {
+        let tiers = Sidecars::holding("tiers", DEEP_READING);
+        let structure = corroborating_structure();
+        let splice = |structure_results: Option<&std::path::Path>| {
+            let mut elements = an_anchored_grid();
+            common::apply_tiers(
+                Some(&tiers.0),
+                structure_results,
+                false,
+                "doc",
+                &mut elements,
+                &[],
+                &[],
+            );
+            elements
+        };
+        let unopposed = splice(None);
+        assert_eq!(unopposed.len(), 1);
+        assert_eq!(unopposed[0].provenance, "vlm", "the reading alone wins");
+        let vetoed = splice(Some(&structure.0));
+        assert_eq!(vetoed.len(), 1);
+        assert_eq!(vetoed[0].provenance, "rust", "the veto keeps the grid");
     }
 
     #[test]
