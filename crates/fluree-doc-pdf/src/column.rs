@@ -655,11 +655,19 @@ fn full_width(g: &[&Glyph]) -> Vec<Column> {
 /// Rotated glyphs and outline-less spaces go to the column their position falls
 /// in, so a column's glyph sequence stays complete for line assembly.
 pub fn partition(glyphs: &[Glyph], cols: &[Column]) -> Vec<Vec<Glyph>> {
+    partition_indices(glyphs, cols)
+        .into_iter()
+        .map(|part| part.into_iter().map(|i| glyphs[i].clone()).collect())
+        .collect()
+}
+
+/// As [`partition`], the glyphs of each column as indices into `glyphs`.
+pub fn partition_indices(glyphs: &[Glyph], cols: &[Column]) -> Vec<Vec<usize>> {
     if cols.len() <= 1 {
-        return vec![glyphs.to_vec()];
+        return vec![(0..glyphs.len()).collect()];
     }
     let mut out = vec![Vec::new(); cols.len()];
-    for g in glyphs {
+    for (i, g) in glyphs.iter().enumerate() {
         let x = match g.bbox {
             Some(b) => (b.x0 + b.x1) * 0.5,
             None => g.origin.0,
@@ -668,7 +676,7 @@ pub fn partition(glyphs: &[Glyph], cols: &[Column]) -> Vec<Vec<Glyph>> {
             .iter()
             .position(|c| c.contains(x))
             .unwrap_or(cols.len() - 1);
-        out[idx].push(g.clone());
+        out[idx].push(i);
     }
     out
 }

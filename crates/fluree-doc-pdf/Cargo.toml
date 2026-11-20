@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 fluree-doc-model.workspace = true
+fluree-doc-vision.workspace = true
 hayro-syntax.workspace = true
 hayro-interpret.workspace = true
 kurbo.workspace = true

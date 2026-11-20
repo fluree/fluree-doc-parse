@@ -66,9 +66,7 @@ use std::collections::HashMap;
 /// threshold, and 3× costs two and a half times as many and reads *worse*.
 pub const VLM_RENDER_SCALE: f32 = 2.0;
 
-/// Margin, in PDF units, drawn around a region crop so the model sees a
-/// clean edge rather than letters sliced mid-stroke.
-pub const CROP_MARGIN: f64 = 6.0;
+pub use crate::route::CROP_MARGIN;
 
 /// A page's render jobs: `None` = the whole page, else named crops.
 pub type CropJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
@@ -291,6 +289,9 @@ fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, 
     let mut jobs: CropJobs = Vec::new();
     let mut reasons = PageReasons::new();
     for p in &doc.pages {
+        // What an OCR reading already read is not asked for again. A region
+        // keeps its number either way, so a crop named before the reading
+        // still names the same region.
         match crate::route::decide(p).0 {
             Route::Vlm(r) => {
                 jobs.push((p.index, None));
@@ -303,15 +304,17 @@ fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, 
                     },
                 );
             }
-            Route::VlmRegions(r) => jobs.push((
-                p.index,
-                Some(
-                    r.iter()
-                        .enumerate()
-                        .map(|(i, b)| (format!("r{i}"), *b))
-                        .collect(),
-                ),
-            )),
+            Route::VlmRegions(r) => {
+                let unread: Vec<(String, BBox)> = r
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !p.ocr_read_region(*i))
+                    .map(|(i, b)| (format!("r{i}"), *b))
+                    .collect();
+                if !unread.is_empty() {
+                    jobs.push((p.index, Some(unread)));
+                }
+            }
             Route::Deterministic => {}
         }
     }
@@ -456,6 +459,19 @@ fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, 
             None => jobs.push((e.page, Some(vec![(t.to_string(), bbox)]))),
         }
     }
+    // A page OCR read whole asks for nothing more here: its headings and
+    // tables were assembled from the reading's own boxes, whose sizes are
+    // estimates, so a doubt about them says more about the estimate than
+    // about the page, and a model reading would replace the OCR text
+    // outright. Escalating past OCR is a decision of its own, taken on the
+    // reading's confidence.
+    let whole_ocr = |pi: usize| {
+        doc.pages
+            .iter()
+            .any(|p| p.index == pi && p.ocr.as_ref().is_some_and(|o| o.whole))
+    };
+    jobs.retain(|(pi, _)| !whole_ocr(*pi));
+    reasons.retain(|pi, _| !whole_ocr(*pi));
     (jobs, reasons)
 }
 
@@ -872,6 +888,7 @@ mod tests {
             width: 600.0,
             height: 800.0,
             rotation: 0,
+            ocr: None,
         }
     }
 
@@ -1091,6 +1108,33 @@ mod tests {
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(jobs, vec![(0, None)], "the doubt reads the page whole");
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+    }
+
+    #[test]
+    fn a_region_ocr_read_is_not_asked_for_again() {
+        // A text page with a raster table the glyphs do not cover: one crop
+        // for it, until OCR has read the region.
+        let mut p = page(0, 1500, false);
+        p.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 550.0,
+                y1: 300.0,
+            },
+            texty: true,
+        }];
+        let doc = Document { pages: vec![p] };
+        let (jobs, _) = reasons_with_doubts(&doc, &[]);
+        assert_eq!(jobs.len(), 1);
+        let mut read = doc.clone();
+        read.pages[0].ocr = Some(crate::extract::OcrRead {
+            first_glyph: 1500,
+            whole: false,
+            regions: vec![0],
+        });
+        let (jobs, _) = reasons_with_doubts(&read, &[]);
+        assert!(jobs.is_empty(), "{jobs:?}");
     }
 
     #[test]

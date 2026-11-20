@@ -31,6 +31,7 @@
 //! - [`outline::extract`] — the PDF bookmark tree
 //! - [`link::extract`] / [`link::attach`] — link annotations and their anchors
 //! - [`arbiter::TierBackend`] and [`arbiter::splice`] — the model-tier contract
+//! - [`ocr::inject`] and [`ocr::mark_provenance`] — OCR words as glyphs
 //! - [`overlay::rects_for_glyph_range`] — glyph span → highlight rectangles
 //! - [`overlay::highlight`] — a text-projection span → its page and rectangles
 //! - `render::page` — rasterising a page, behind the `render` feature
@@ -65,6 +66,7 @@ pub mod image;
 pub mod info;
 pub mod line;
 pub mod link;
+pub mod ocr;
 pub mod outline;
 pub mod overlay;
 
@@ -96,7 +98,8 @@ pub fn unread_pages(
             .filter(|e| e.page == p.index && !matches!(e.evidence, "header" | "footer"))
             .map(|e| e.text.trim().chars().count())
             .sum();
-        if text >= NEARLY_EMPTY {
+        // A page an OCR reading read whole was read, however little it held.
+        if text >= NEARLY_EMPTY || p.ocr.as_ref().is_some_and(|o| o.whole) {
             continue;
         }
         if let route::Route::Vlm(reason) = route::decide(p).0 {

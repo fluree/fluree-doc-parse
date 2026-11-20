@@ -111,8 +111,8 @@ pub struct Line {
     pub bbox: BBox,
     pub page: usize,
     pub rotation_bucket: i32,
-    /// Indices into the page's glyph vector, in visual order. Keeps the
-    /// offset→bbox chain intact through the layout layer.
+    /// Indices into the glyphs the line was assembled from, in visual
+    /// order. Keeps the offset→bbox chain intact through the layout layer.
     pub glyphs: Vec<usize>,
     /// Median font size — the primary heading signal downstream.
     pub font_size: f32,
@@ -225,20 +225,19 @@ fn ruler_banded(
             1
         }
     };
-    let mut above: Vec<Glyph> = Vec::new();
-    let mut inside: Vec<Glyph> = Vec::new();
-    let mut after: Vec<Glyph> = Vec::new();
-    for g in glyphs {
+    let mut above: Vec<usize> = Vec::new();
+    let mut inside: Vec<usize> = Vec::new();
+    let mut after: Vec<usize> = Vec::new();
+    for (i, g) in glyphs.iter().enumerate() {
         match band_of(g) {
-            0 => above.push(g.clone()),
-            2 => after.push(g.clone()),
-            _ => inside.push(g.clone()),
+            0 => above.push(i),
+            2 => after.push(i),
+            _ => inside.push(i),
         }
     }
     if inside.is_empty() {
         return None;
     }
-    let below = inside;
 
     let cols: Vec<crate::column::Column> = {
         let mut out = Vec::with_capacity(r.cuts.len() + 1);
@@ -256,17 +255,32 @@ fn ruler_banded(
 
     let mut result: Vec<Vec<Line>> = Vec::with_capacity(cols.len() + 1);
     if !above.is_empty() {
-        result.push(assemble(&above));
+        result.push(assemble_subset(glyphs, &above));
     }
-    for part in crate::column::partition(&below, &cols) {
+    let band: Vec<Glyph> = inside.iter().map(|&i| glyphs[i].clone()).collect();
+    for part in crate::column::partition_indices(&band, &cols) {
         if !part.is_empty() {
-            result.push(assemble(&part));
+            let part: Vec<usize> = part.into_iter().map(|k| inside[k]).collect();
+            result.push(assemble_subset(glyphs, &part));
         }
     }
     if !after.is_empty() {
-        result.push(assemble(&after));
+        result.push(assemble_subset(glyphs, &after));
     }
     Some(result)
+}
+
+/// Lines of the glyphs `subset` picks from `glyphs`, their glyph indices
+/// into `glyphs`, so lines of different subsets index one vector.
+fn assemble_subset(glyphs: &[Glyph], subset: &[usize]) -> Vec<Line> {
+    let part: Vec<Glyph> = subset.iter().map(|&i| glyphs[i].clone()).collect();
+    let mut lines = assemble(&part);
+    for l in &mut lines {
+        for g in &mut l.glyphs {
+            *g = subset[*g];
+        }
+    }
+    lines
 }
 
 /// As [`assemble_columns`], also given the page's drawn rules so a rank of
@@ -283,12 +297,13 @@ pub fn assemble_columns_with_rules(
     if cols.len() <= 1 {
         return vec![assemble(glyphs)];
     }
-    let mut per_col: Vec<Vec<Line>> = crate::column::partition(glyphs, &cols)
+    let parts = crate::column::partition_indices(glyphs, &cols);
+    let mut per_col: Vec<Vec<Line>> = parts
         .iter()
-        .map(|part| assemble(part))
+        .map(|part| assemble_subset(glyphs, part))
         .collect();
     if std::env::var("FDOC_NO_REJOIN").is_err() {
-        rejoin_spanning_lines(&mut per_col, &cols);
+        rejoin_spanning_lines(&mut per_col, glyphs, &cols);
     }
     per_col
 }
@@ -300,7 +315,20 @@ pub fn assemble_columns_with_rules(
 /// `"TPS543x 3A, Wide Input R"` / `"ange, Step-Down Converter"`. Where a line
 /// ends flush against a cut and another begins flush on the far side at the
 /// same baseline, they were one line; move the fragment back and rejoin.
-fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Column]) {
+///
+/// The cuts are taken right to left. A line crossing two cuts is in three
+/// fragments, and joined left to right the first join carries the middle
+/// fragment off into the first column, where the second cut no longer finds
+/// it beside the third: `supporting scre` / `enshots — page 2`. Right to left,
+/// the middle fragment takes in the third before it moves.
+///
+/// `glyphs` are the glyphs every column's lines index into, so a space the
+/// text layer draws at the cut is seen even though line assembly trims it.
+fn rejoin_spanning_lines(
+    per_col: &mut [Vec<Line>],
+    glyphs: &[Glyph],
+    cols: &[crate::column::Column],
+) {
     // Tolerance for "flush against the cut", in font-size units.
     const FLUSH: f64 = 1.5;
 
@@ -327,7 +355,7 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
     /// `Ethics Statement` on the academic papers that dominate the MHS gap.
     const MAX_SPANNING_FRACTION: f64 = 0.25;
 
-    for i in 0..per_col.len().saturating_sub(1) {
+    for i in (0..per_col.len().saturating_sub(1)).rev() {
         let cut = cols[i].x1;
         // Snapshot the left column's line geometry so the retain closure below
         // does not borrow `per_col` while it is being mutated.
@@ -382,6 +410,14 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
                 true
             }
         });
+        // An explicit space at either end of a fragment: line assembly trims
+        // it, and a monospaced face draws it with no gap of its own to
+        // measure (`Screenshot|of what`).
+        let spaced = |at: Option<&usize>| {
+            at.and_then(|&g| glyphs.get(g))
+                // A glyph with no text resolved is no space.
+                .is_some_and(|g| !g.text.is_empty() && g.text.chars().all(char::is_whitespace))
+        };
         for m in moved {
             if let Some(l) = per_col[i].iter_mut().find(|l| {
                 let fs = l.font_size.max(1.0) as f64;
@@ -390,7 +426,10 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
                 // Fragments of one word must not gain a space: rejoin exactly
                 // unless the geometry shows a real gap.
                 let fs = l.font_size.max(1.0) as f64;
-                if m.bbox.x0 - l.bbox.x1 > fs * SPACE_GAP_RATIO && !l.text.ends_with(' ') {
+                let space = m.bbox.x0 - l.bbox.x1 > fs * SPACE_GAP_RATIO
+                    || spaced(l.glyphs.last())
+                    || spaced(m.glyphs.first());
+                if space && !l.text.ends_with(' ') {
                     l.text.push(' ');
                 }
                 l.text.push_str(&m.text);
@@ -1049,6 +1088,65 @@ mod tests {
         }
     }
 
+    /// One glyph `text` at `x`, `size` points, on `baseline`.
+    fn sized_at(text: &str, x: f64, baseline: f64, size: f32) -> Glyph {
+        let s = f64::from(size);
+        Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: baseline - 0.8 * s,
+                x1: x + 0.55 * s * text.chars().count() as f64,
+                y1: baseline + 0.2 * s,
+            }),
+            page: 0,
+            origin: (x, baseline),
+            rotation_deg: 0.0,
+            font_size: size,
+            weight: None,
+            advance: Some(0.55 * s * text.chars().count() as f64),
+            draw_index: 0,
+        }
+    }
+
+    /// `text` laid a glyph per character from `x`.
+    fn word(text: &str, x: f64, baseline: f64, size: f32) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                sized_at(
+                    &c.to_string(),
+                    x + i as f64 * 0.55 * f64::from(size),
+                    baseline,
+                    size,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_large_numeral_beside_smaller_text_shares_its_line() {
+        // A 30-point section number centred on a 10-point title, its
+        // baseline 7 points below the title's: one line, as drawn.
+        let mut v = vec![sized_at("1", 40.0, 107.0, 30.0)];
+        v.extend(word("Introduction", 70.0, 100.0, 10.0));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].text.starts_with('1') && lines[0].text.ends_with("Introduction"));
+    }
+
+    #[test]
+    fn a_small_raised_mark_stays_on_its_line() {
+        // A registered mark at 4 points, raised 2.5 points after a word set
+        // at 10.
+        let mut v = word("Widget", 40.0, 100.0, 10.0);
+        v.push(sized_at("®", 73.0, 97.5, 4.0));
+        v.extend(word("is", 80.0, 100.0, 10.0));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].text.contains("Widget®"), "{}", lines[0].text);
+    }
+
     #[test]
     fn groups_one_line_and_reconstructs_spaces() {
         let v = vec![
@@ -1467,7 +1565,7 @@ mod tests {
             vec![ln(", Wide Input R", 60.0, 301.5, 100.0, 15.0)],
             vec![ln("ange, Step-Down", 302.0, 500.0, 100.0, 15.0)],
         ];
-        rejoin_spanning_lines(&mut split, &cols);
+        rejoin_spanning_lines(&mut split, &[], &cols);
         assert_eq!(split[1].len(), 0, "a bisected title belongs to one line");
 
         // Two columns: same baseline, both flush to the cut, but held apart
@@ -1488,7 +1586,7 @@ mod tests {
                 10.0,
             )],
         ];
-        rejoin_spanning_lines(&mut columns, &cols);
+        rejoin_spanning_lines(&mut columns, &[], &cols);
         assert_eq!(columns[1].len(), 1, "a gutter is not a word space");
         assert_eq!(columns[0].len(), 1);
     }
@@ -1511,7 +1609,84 @@ mod tests {
             vec![ln("Table of", 240.0, 301.2, 80.0, 12.0)],
             vec![ln("Contents", 304.8, 380.0, 80.0, 12.0)],
         ];
-        rejoin_spanning_lines(&mut v, &cols);
+        rejoin_spanning_lines(&mut v, &[], &cols);
         assert_eq!(v[1].len(), 0);
+    }
+
+    #[test]
+    fn a_title_across_two_cuts_rejoins_whole() {
+        // Screenshots below a page title read as four columns; the title
+        // crosses two of the cuts.
+        let col = |x0: f64, x1: f64| crate::column::Column { x0, x1 };
+        let cols = vec![
+            col(53.0, 117.0),
+            col(117.0, 197.0),
+            col(197.0, 265.0),
+            col(265.0, 343.0),
+        ];
+        let mut v = vec![
+            vec![ln("ACT-2025-000040", 53.0, 116.2, 48.2, 8.1)],
+            vec![ln("4 — supporting scre", 116.2, 196.1, 48.2, 8.1)],
+            vec![ln("enshots — page 2", 196.1, 263.5, 48.2, 8.1)],
+            vec![],
+        ];
+        rejoin_spanning_lines(&mut v, &[], &cols);
+        assert_eq!(
+            v[0][0].text,
+            "ACT-2025-0000404 — supporting screenshots — page 2"
+        );
+        assert!(v[1].is_empty() && v[2].is_empty());
+    }
+
+    #[test]
+    fn a_drawn_space_at_the_cut_is_kept() {
+        // A monospaced face draws `t` up to `o` and its space, unboxed, in
+        // between: no gap to measure, but a space all the same.
+        let cols = vec![
+            crate::column::Column {
+                x0: 54.0,
+                x1: 410.0,
+            },
+            crate::column::Column {
+                x0: 410.0,
+                x1: 533.0,
+            },
+        ];
+        let glyph = |text: &str, x: f64, w: f64| Glyph {
+            text: text.into(),
+            bbox: (w > 0.0).then_some(BBox {
+                x0: x,
+                y0: 134.0,
+                x1: x + w,
+                y1: 144.0,
+            }),
+            page: 0,
+            origin: (x, 141.75),
+            rotation_deg: 0.0,
+            font_size: 9.75,
+            weight: None,
+            advance: (w > 0.0).then_some(w),
+            draw_index: 0,
+        };
+        let glyphs = vec![
+            glyph("t", 405.6, 5.4),
+            glyph(" ", 408.3, 0.0),
+            glyph("o", 411.0, 5.4),
+            glyph("f", 416.4, 5.4),
+        ];
+        let mut left = ln("Screenshot", 350.0, 411.0, 134.0, 9.75);
+        left.glyphs = vec![0, 1];
+        let mut right = ln("of", 411.0, 421.8, 134.0, 9.75);
+        right.glyphs = vec![2, 3];
+        let mut v = vec![vec![left.clone()], vec![right.clone()]];
+        rejoin_spanning_lines(&mut v, &glyphs, &cols);
+        assert_eq!(v[0][0].text, "Screenshot of");
+        assert_eq!(v[0][0].glyphs, [0, 1, 2, 3], "one vector's indices");
+        // A glyph whose text never resolved is no space.
+        let mut unresolved = glyphs.clone();
+        unresolved[1].text = String::new();
+        let mut v = vec![vec![left], vec![right]];
+        rejoin_spanning_lines(&mut v, &unresolved, &cols);
+        assert_eq!(v[0][0].text, "Screenshotof");
     }
 }

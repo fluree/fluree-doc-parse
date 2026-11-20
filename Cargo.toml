@@ -10,6 +10,7 @@ members = [
     "crates/fluree-doc-xlsx",
     "crates/fluree-doc-transcript",
     "crates/fluree-doc-email",
+    "crates/fluree-doc-vision",
     "crates/fluree-doc-pdf",
     "crates/fluree-doc-cli",
 ]
@@ -32,6 +33,7 @@ fluree-doc-xlsx = { path = "crates/fluree-doc-xlsx" }
 fluree-doc-ooxml = { path = "crates/fluree-doc-ooxml" }
 fluree-doc-transcript = { path = "crates/fluree-doc-transcript" }
 fluree-doc-email = { path = "crates/fluree-doc-email" }
+fluree-doc-vision = { path = "crates/fluree-doc-vision" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
 hayro = "0.7"

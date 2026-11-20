@@ -76,6 +76,8 @@ pub(crate) struct TierConfig {
     pub layout_boxes: Option<PathBuf>,
     pub tier_results: Option<PathBuf>,
     pub structure_results: Option<PathBuf>,
+    /// OCR word readings, added as glyphs before analysis.
+    pub ocr_words: Option<PathBuf>,
     pub emit_anchors: bool,
     /// Call the configured reader during this run.
     pub escalate: bool,
@@ -92,6 +94,7 @@ impl TierConfig {
             layout_boxes: std::env::var_os("FDOC_TITLE_BOXES").map(PathBuf::from),
             tier_results: std::env::var_os("FDOC_TIER_RESULTS").map(PathBuf::from),
             structure_results: std::env::var_os("FDOC_STRUCTURE_RESULTS").map(PathBuf::from),
+            ocr_words: std::env::var_os("FDOC_OCR_WORDS").map(PathBuf::from),
             emit_anchors: std::env::var_os("FDOC_VLM_ANCHORS").is_some(),
             escalate: false,
             config: crate::config::Config::default(),
@@ -104,6 +107,7 @@ impl TierConfig {
         layout_boxes: Option<&Path>,
         tier_results: Option<&Path>,
         structure_results: Option<&Path>,
+        ocr_words: Option<&Path>,
         emit_anchors: bool,
     ) -> Self {
         let env = Self::from_env();
@@ -113,6 +117,7 @@ impl TierConfig {
             structure_results: structure_results
                 .map(Path::to_path_buf)
                 .or(env.structure_results),
+            ocr_words: ocr_words.map(Path::to_path_buf).or(env.ocr_words),
             emit_anchors: emit_anchors || env.emit_anchors,
             escalate: env.escalate,
             config: env.config,
@@ -318,6 +323,64 @@ pub(crate) fn arbitrate_layout_titles(
             }
         }
     }
+}
+
+/// The OCR word readings `dir` holds for one document: for each page, the
+/// whole-page reading `{stem}_p{N}_full.json` and one `{stem}_p{N}_r{i}.json`
+/// per region the router routes, in page and crop order.
+///
+/// The names are asked for, not searched: a batch shares one directory, and
+/// listing it once per document would cost every document the whole batch.
+/// Region readings are asked for only up to the page's routed regions; a
+/// whole-page reading is asked for on every page, so one the router would
+/// not send a reader is still found and refused aloud.
+///
+/// Unlike the model-tier sidecars, a file that does not parse is reported
+/// (unless `--quiet`): a word reading is produced by the embedder's own
+/// pipeline, and one it cannot read is a defect in it, not a partial batch.
+pub(crate) fn ocr_readings(
+    dir: &Path,
+    stem: &str,
+    doc: &fluree_doc_pdf::Document,
+    quiet: bool,
+) -> Vec<(
+    usize,
+    fluree_doc_pdf::ocr::Crop,
+    fluree_doc_pdf::ocr::WordReading,
+)> {
+    use fluree_doc_pdf::ocr::{Crop, WordReading};
+    use fluree_doc_pdf::route::{decide, Route};
+    let mut out = Vec::new();
+    for p in &doc.pages {
+        let regions = match decide(p).0 {
+            Route::VlmRegions(r) => r.len(),
+            _ => 0,
+        };
+        let crops = std::iter::once(Crop::Page).chain((0..regions).map(Crop::Region));
+        for crop in crops {
+            let name = format!("{stem}_p{}_{}.json", p.index, crop.tag());
+            let path = dir.join(&name);
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: --ocr-words: {name}: {e}");
+                    }
+                    continue;
+                }
+            };
+            match WordReading::from_json(&text) {
+                Ok(r) => out.push((p.index, crop, r)),
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: --ocr-words: {name}: {e}");
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Splice model-tier readings (VLM crops, and optionally table-structure
