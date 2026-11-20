@@ -996,9 +996,11 @@ dependencies = [
  "fluree-doc-markdown",
  "fluree-doc-model",
  "fluree-doc-odf",
+ "fluree-doc-ooxml",
  "fluree-doc-pdf",
  "fluree-doc-ppt",
  "fluree-doc-pptx",
+ "fluree-doc-rtf",
  "fluree-doc-text",
  "fluree-doc-transcript",
  "fluree-doc-vision",
@@ -1155,6 +1157,14 @@ dependencies = [
  "fluree-doc-ooxml",
  "quick-xml 0.36.2",
  "zip",
+]
+
+[[package]]
+name = "fluree-doc-rtf"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "fluree-doc-model",
 ]
 
 [[package]]

@@ -41,7 +41,7 @@ structure](../concepts/geometry-vs-declared.md).
 ## Detection
 
 By extension: `.pdf`, `.md`/`.markdown`, `.html`/`.htm`, `.docx`, `.doc`, `.pptx`, `.ppt`, `.xlsx`,
-`.xls`, `.xlsb`, `.odt`/`.ods`/`.odp`, `.csv`, `.tsv`, `.xps`/`.oxps`, `.vtt`, `.srt`, `.eml`, `.msg`, and plain text, `.txt`/`.text`. A
+`.xls`, `.xlsb`, `.odt`/`.ods`/`.odp`, `.rtf`, `.csv`, `.tsv`, `.xps`/`.oxps`, `.vtt`, `.srt`, `.eml`, `.msg`, and plain text, `.txt`/`.text`. A
 text file that writes Markdown's markup is read as Markdown. A transcript or an email is
 also recognised by its content whatever its name, because both often arrive
 renamed or untyped; see [Transcripts](transcripts.md#detection) and
@@ -51,11 +51,11 @@ than producing empty output.
 A format with no reader yet is refused by name: `convert` fails on it with
 `unsupported format (.key, Apple Keynote presentation): no reader for it
 yet`, rather than reading it as a PDF and failing as a corrupt one. That holds
-for `.rtf`, WordPerfect's `.wpd` and Apple's
+for WordPerfect's `.wpd` and Apple's
 `.pages`, `.numbers` and `.key`, and for an OLE compound file that is no
 document a reader here reads nor an Outlook message, whatever its name, on
 stdin too. Word, Excel and PowerPoint 97-2003 files, and [OpenDocument](opendocument.md)
-files by their `mimetype`, are recognised by their content and read. A
+files by their `mimetype` and [RTF](rtf.md) by its opening, are recognised by their content and read. A
 directory's files of these formats are listed with the rest, so a batch
 counts them among its failures. A file whose content is a PDF or an image is
 read as one, whatever its extension.

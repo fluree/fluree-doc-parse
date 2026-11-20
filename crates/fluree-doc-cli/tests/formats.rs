@@ -882,3 +882,31 @@ fn a_powerpoint_97_deck_reads_in_every_output_whatever_its_name() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample presents."));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_rtf_document_reads_in_every_output_whatever_its_name() {
+    let dir = scratch("rtf");
+    let rtf = "{\\rtf1\\ansi{\\stylesheet{\\s1\\outlinelevel0 heading 1;}}\\pard\\s1 Orders\\par
+\\pard Alex Sample signed the orders.\\par
+\\trowd\\cellx3000\\pard\\intbl Customer\\cell Amount\\cell\\row
+\\trowd\\cellx3000\\pard\\intbl Sam\\cell 7\\cell\\row}";
+    let input = dir.join("memo.rtf");
+    std::fs::write(&input, rtf).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(
+        &out,
+        "doco:SectionTitle",
+        &["Orders", "Alex Sample signed the orders.", "Customer"],
+    );
+    assert!(doc_has_cell(&out[2].1, "Sam"));
+    // Saved as `.doc`, as Word and Outlook often do, it is still RTF.
+    let renamed = dir.join("memo.doc");
+    std::fs::write(&renamed, rtf).unwrap();
+    let o = convert(&dir, &renamed, "md", &[]);
+    assert!(
+        String::from_utf8_lossy(&o.stdout).contains("Alex Sample signed"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

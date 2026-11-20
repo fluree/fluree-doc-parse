@@ -132,70 +132,18 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             return 1;
         }
         let src = Source::stdin(&data, args);
-        // By its content, as a file is (`input_kind`): with no name to go
-        // by, a transcript, an e-mail, an image, a Word, Excel or PowerPoint
-        // 97-2003 file, an Excel binary workbook, an OpenDocument file; a
-        // format no reader reads is refused by name; anything else is read
-        // as a PDF.
-        let converted =
-            match common::input_kind(Path::new("-"), &data) {
-                common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
-                common::SourceKind::Email => convert_email(&data, &src, cfg, args, quiet),
-                common::SourceKind::Image => convert_image(data, &src, cfg, args, quiet),
-                common::SourceKind::Xls => fluree_doc_xls::parse_with_info(&data)
-                    .map_err(|e| e.to_string())
-                    .map(|(elements, info)| {
-                        let notes = fluree_doc_model::Notes {
-                            info,
-                            ..Default::default()
-                        };
-                        render(&elements, &src, args, Vec::new(), &notes)
-                    }),
-                common::SourceKind::Odf => fluree_doc_odf::parse_with_info(&data)
-                    .map_err(|e| e.to_string())
-                    .map(|(elements, info, _)| {
-                        let notes = fluree_doc_model::Notes {
-                            info,
-                            ..Default::default()
-                        };
-                        render(&elements, &src, args, Vec::new(), &notes)
-                    }),
-                common::SourceKind::Xlsb => fluree_doc_xls::parse_xlsb(&data)
-                    .map_err(|e| e.to_string())
-                    .map(|(elements, info)| {
-                        let notes = fluree_doc_model::Notes {
-                            info,
-                            ..Default::default()
-                        };
-                        render(&elements, &src, args, Vec::new(), &notes)
-                    }),
-                common::SourceKind::Doc => fluree_doc_doc::parse(&data)
-                    .map_err(|e| e.to_string())
-                    .map(|elements| {
-                        render(
-                            &elements,
-                            &src,
-                            args,
-                            Vec::new(),
-                            &fluree_doc_model::Notes::default(),
-                        )
-                    }),
-                common::SourceKind::Ppt => fluree_doc_ppt::parse(&data)
-                    .map_err(|e| e.to_string())
-                    .map(|elements| {
-                        render(
-                            &elements,
-                            &src,
-                            args,
-                            Vec::new(),
-                            &fluree_doc_model::Notes::default(),
-                        )
-                    }),
-                _ => match common::unsupported(None, &data) {
-                    Some(why) => Err(why),
-                    None => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
-                },
-            };
+        // Named as nothing: read by what its content is, through the one
+        // dispatch every input takes (`input_kind`), so a format told by
+        // its content is read from stdin as from a file.
+        let converted = convert_source(
+            Path::new("-"),
+            data,
+            &src,
+            cfg,
+            args,
+            pages.as_deref(),
+            quiet,
+        );
         return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
             Err(e) => {
@@ -499,6 +447,12 @@ fn convert_source(
         // An Excel binary workbook, laid out as an XLSX one is.
         SourceKind::Xlsb => {
             let (elements, info) = fluree_doc_xls::parse_xlsb(&data).map_err(|e| e.to_string())?;
+            (elements, declared(info))
+        }
+        // A Rich Text Format document, mapped as a Word file is.
+        SourceKind::Rtf => {
+            let (elements, info) =
+                fluree_doc_rtf::parse_with_info(&data).map_err(|e| e.to_string())?;
             (elements, declared(info))
         }
         // A PowerPoint 97-2003 deck's slide text, a slide a page.

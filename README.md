@@ -164,6 +164,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-xls` — Excel 97-2003 (`.xls`) and binary (`.xlsb`) reader
 - `crates/fluree-doc-xps` — XPS and OpenXPS reader (pages for the PDF layout)
 - `crates/fluree-doc-odf` — OpenDocument reader (`.odt`, `.ods`, `.odp`)
+- `crates/fluree-doc-rtf` — RTF reader
 - `crates/fluree-doc-csv` — CSV and TSV reader
 - `crates/fluree-doc-transcript` — WebVTT and SubRip transcript reader
 - `crates/fluree-doc-vision` — reading pixels: the OCR word format shared by the readers of images

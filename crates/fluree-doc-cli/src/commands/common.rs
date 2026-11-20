@@ -28,6 +28,8 @@ pub(crate) enum SourceKind {
     Xlsb,
     /// A PowerPoint 97-2003 presentation.
     Ppt,
+    /// A Rich Text Format document.
+    Rtf,
     Transcript,
     Email,
     Image,
@@ -60,6 +62,7 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     (SourceKind::Odf, &["odt", "ott", "ods", "ots", "odp", "otp"]),
     (SourceKind::Xlsb, &["xlsb"]),
     (SourceKind::Ppt, &["ppt", "pps", "pot"]),
+    (SourceKind::Rtf, &["rtf"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
@@ -71,7 +74,6 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
 /// a batch, rather than read as a PDF and failing as a corrupt one. A format
 /// leaves this list when its reader lands.
 const UNSUPPORTED: &[(&str, &str)] = &[
-    ("rtf", "Rich Text Format document"),
     ("wpd", "WordPerfect document"),
     ("pages", "Apple Pages document"),
     ("numbers", "Apple Numbers spreadsheet"),
@@ -132,19 +134,135 @@ fn is_pdf(data: &[u8]) -> bool {
         .any(|w| w == b"%PDF-")
 }
 
-/// The reader a file goes to, by its content where that says, else by its
-/// extension: what `convert` reads it as, and `render-routed` crops it as.
+/// The reader a file's signature names: the bytes it opens with, which no
+/// file of another format shares, so they win over any name. A PDF; an
+/// image; an OLE compound file by the stream that makes it an Outlook
+/// message, an Excel, Word or PowerPoint 97-2003 file; a zip by the part
+/// that makes it an XPS document, an OpenDocument file, an Excel binary
+/// workbook or an Office package; RTF by `{\rtf`. `None` for anything
+/// else, a compound file or a zip none of them included.
+fn by_signature(data: &[u8]) -> Option<SourceKind> {
+    if data.starts_with(b"%PDF-") {
+        return Some(SourceKind::Pdf);
+    }
+    if fluree_doc_pdf::image::Format::sniff(data).is_some() {
+        return Some(SourceKind::Image);
+    }
+    if data.starts_with(&COMPOUND_MAGIC) {
+        return if fluree_doc_email::Format::sniff(data).is_some() {
+            Some(SourceKind::Email)
+        } else if fluree_doc_xls::is_xls(data) {
+            Some(SourceKind::Xls)
+        } else if fluree_doc_doc::is_doc(data) {
+            Some(SourceKind::Doc)
+        } else if fluree_doc_ppt::is_ppt(data) {
+            Some(SourceKind::Ppt)
+        } else {
+            None
+        };
+    }
+    if data.starts_with(b"PK") {
+        if fluree_doc_odf::Format::sniff(data).is_some() {
+            return Some(SourceKind::Odf);
+        }
+        if fluree_doc_xls::is_xlsb(data) {
+            return Some(SourceKind::Xlsb);
+        }
+        return by_content(data, false);
+    }
+    fluree_doc_rtf::is_rtf(data).then_some(SourceKind::Rtf)
+}
+
+/// The reader a file's content names, where its name does not: an XPS
+/// document, or an Office package by the part its root relationship names
+/// as the document (`word/`, `ppt/`, `xl/`); a web page; and, where
+/// `delimited` (a file named as an Office 97-2003 one, which spreadsheet
+/// exports are), comma-, semicolon- or tab-separated text.
+fn by_content(data: &[u8], delimited: bool) -> Option<SourceKind> {
+    if data.starts_with(b"PK") {
+        if fluree_doc_xps::is_xps(data) {
+            return Some(SourceKind::Xps);
+        }
+        let main = fluree_doc_ooxml::Package::open(data)
+            .ok()?
+            .root("officeDocument")?;
+        return match main.split('/').next()? {
+            "word" => Some(SourceKind::Docx),
+            "ppt" => Some(SourceKind::Pptx),
+            "xl" => Some(SourceKind::Xlsx),
+            _ => None,
+        };
+    }
+    if is_html(data) {
+        return Some(SourceKind::Html);
+    }
+    (delimited && is_delimited(data)).then_some(SourceKind::Csv)
+}
+
+/// Whether `data` opens as a web page: past a byte-order mark and
+/// whitespace, a doctype or an `html` element, or markup holding one, or a
+/// table, within its first kilobyte.
+fn is_html(data: &[u8]) -> bool {
+    let data = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
+    let start = data
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(data.len());
+    let head = data[start..data.len().min(start + 1024)].to_ascii_lowercase();
+    let has = |s: &[u8]| head.windows(s.len()).any(|w| w == s);
+    head.starts_with(b"<!doctype html")
+        || head.starts_with(b"<html")
+        || (head.starts_with(b"<") && (has(b"<html") || has(b"<table")))
+}
+
+/// Whether `data` reads as delimited text: no NUL in the text of its first
+/// 64 KiB, decoded as the CSV reader decodes it (UTF-16 is half zero bytes,
+/// and no NUL), and its first lines (two at least, twenty at most) each
+/// separated into the same number of fields, more than one, by the
+/// delimiter the CSV reader finds.
+fn is_delimited(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(64 << 10)];
+    let text = fluree_doc_csv::decode(head);
+    if text.contains('\0') {
+        return false;
+    }
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    // The last line of a file cut at 64 KiB may be cut too.
+    if head.len() < data.len() {
+        lines.pop();
+    }
+    lines.truncate(20);
+    if lines.len() < 2 {
+        return false;
+    }
+    let d = fluree_doc_csv::sniff(&lines.join("\n"));
+    let fields = |l: &str| l.matches(d).count();
+    let first = fields(lines[0]);
+    first > 0 && lines.iter().all(|l| fields(l) == first)
+}
+
+/// The reader a file goes to, by its content first, its extension only
+/// where the content cannot tell: what `convert` reads it as, and
+/// `render-routed` crops it as.
 ///
-/// A transcript, an email and an Excel 97-2003 workbook by their content
-/// first: `.vtt` has no
-/// registered type on most systems, and a saved message is `.eml`, `.mht`,
-/// `.txt` or nothing at all, so either arrives renamed as often as not. Then
-/// the formats an extension names (Markdown, plain text, HTML and the Office
-/// packages); then an image by its first bytes. A format no reader reads yet,
-/// by its extension (unless its content is a PDF or an image) or as a
-/// compound file that is not a message, is [`SourceKind::Unsupported`];
-/// anything else is read as a PDF.
+/// A file's signature first ([`by_signature`]): a PDF named `.doc`, a
+/// screenshot named `.csv` or a workbook named `.csv` is what it holds, and
+/// its name is a mistake. Then text formats by their content: a transcript
+/// and an email, since `.vtt` has no registered type on most systems and a
+/// saved message is `.eml`, `.mht`, `.txt` or nothing at all, so either
+/// arrives renamed as often as not; and, for a file named as an Office
+/// 97-2003 one or named as nothing, a web page or (named as an Office
+/// 97-2003 one, which spreadsheet exports are) delimited text. Then the
+/// formats an extension names, each to its own reader, which says what is
+/// wrong with a file that is not what its name says: never to the PDF
+/// reader, whose `parse: Invalid` would read as a corrupt PDF. A format no
+/// reader reads yet, by its extension or as a compound file that is not a
+/// message, is [`SourceKind::Unsupported`]; anything else is read as a PDF,
+/// whose header may come anywhere in its first kilobyte.
 pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
+    if let Some(k) = by_signature(data) {
+        return k;
+    }
     let kind = source_kind(path);
     if fluree_doc_transcript::Format::sniff(data).is_some() || kind == Some(SourceKind::Transcript)
     {
@@ -153,44 +271,20 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     if fluree_doc_email::Format::sniff(data).is_some() || kind == Some(SourceKind::Email) {
         return SourceKind::Email;
     }
-    // An Excel 97-2003 workbook by its content: a compound file holding a
-    // workbook stream, whatever its name.
-    if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_xls::is_xls(data) {
-        return SourceKind::Xls;
-    }
-    // An OpenDocument file by its `mimetype`, whatever its name.
-    if fluree_doc_odf::Format::sniff(data).is_some() {
-        return SourceKind::Odf;
-    }
-    // An Excel binary workbook: a zip holding `xl/workbook.bin`.
-    if fluree_doc_xls::is_xlsb(data) {
-        return SourceKind::Xlsb;
-    }
-    // And a Word 97-2003 document: one holding a WordDocument stream.
-    if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_doc::is_doc(data) {
-        return SourceKind::Doc;
-    }
-    // A PowerPoint 97-2003 presentation: one holding a PowerPoint Document
-    // stream.
-    if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_ppt::is_ppt(data) {
-        return SourceKind::Ppt;
+    let office_97 = matches!(
+        kind,
+        Some(SourceKind::Xls | SourceKind::Doc | SourceKind::Ppt)
+    );
+    if (office_97 || kind.is_none()) && !data.starts_with(&COMPOUND_MAGIC) {
+        if let Some(k) = by_content(data, office_97) {
+            return k;
+        }
     }
     match kind {
-        Some(
-            k @ (SourceKind::Markdown
-            | SourceKind::Text
-            | SourceKind::Html
-            | SourceKind::Docx
-            | SourceKind::Pptx
-            | SourceKind::Xlsx
-            | SourceKind::Csv
-            | SourceKind::Xps
-            | SourceKind::Doc
-            | SourceKind::Odf
-            | SourceKind::Xlsb
-            | SourceKind::Ppt),
-        ) => k,
-        _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
+        Some(SourceKind::Pdf | SourceKind::Unsupported) | None => {}
+        Some(k) => return k,
+    }
+    match kind {
         _ if is_pdf(data) => SourceKind::Pdf,
         Some(SourceKind::Unsupported) => SourceKind::Unsupported,
         _ if data.starts_with(&COMPOUND_MAGIC) => SourceKind::Unsupported,
@@ -812,7 +906,7 @@ mod tests {
             ("letter.wpd", &compound),
             ("Letter.PAGES", &compound),
             ("slides.key", &zip),
-            ("notes.rtf", &b"{\\rtf1 text}".to_vec()),
+            ("notes.numbers", &zip),
         ] {
             let path = Path::new(name);
             assert_eq!(input_kind(path, data), SourceKind::Unsupported, "{name}");
@@ -838,13 +932,148 @@ mod tests {
             .contains("compound file"));
         // Content that is a PDF or an image is read as one, whatever its name.
         let pdf = b"%PDF-1.4\n%junk".to_vec();
-        assert_eq!(input_kind(Path::new("x.rtf"), &pdf), SourceKind::Pdf);
+        assert_eq!(input_kind(Path::new("x.pages"), &pdf), SourceKind::Pdf);
         assert_eq!(input_kind(Path::new("x.dat"), &pdf), SourceKind::Pdf);
         assert_eq!(unsupported(None, &pdf), None);
         let png = b"\x89PNG\r\n\x1a\n....".to_vec();
         assert_eq!(input_kind(Path::new("x.wpd"), &png), SourceKind::Image);
         // Anything else still goes to the PDF reader, as before.
         assert_eq!(input_kind(Path::new("x.bin"), b"junk"), SourceKind::Pdf);
+    }
+
+    #[test]
+    fn content_with_a_signature_is_read_as_what_it_is_whatever_its_name() {
+        use std::io::Write;
+        let pdf = b"%PDF-1.7\n1 0 obj\n<< >>\nendobj\n".to_vec();
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        z.start_file("_rels/.rels", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(
+            b"<Relationships><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/\
+              officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>\
+              </Relationships>",
+        )
+        .unwrap();
+        z.finish().unwrap();
+        let xlsx = buf.into_inner();
+        for (name, data, kind) in [
+            ("scan.doc", &pdf, SourceKind::Pdf),
+            ("report.xls", &pdf, SourceKind::Pdf),
+            ("report.ppt", &pdf, SourceKind::Pdf),
+            ("report.rtf", &pdf, SourceKind::Pdf),
+            ("report.csv", &pdf, SourceKind::Pdf),
+            ("report.docx", &pdf, SourceKind::Pdf),
+            ("report.odt", &pdf, SourceKind::Pdf),
+            ("report.xps", &pdf, SourceKind::Pdf),
+            ("report.md", &pdf, SourceKind::Pdf),
+            ("shot.doc", &png, SourceKind::Image),
+            ("shot.csv", &png, SourceKind::Image),
+            ("shot.key", &png, SourceKind::Image),
+            ("book.csv", &xlsx, SourceKind::Xlsx),
+            ("book.doc", &xlsx, SourceKind::Xlsx),
+            ("-", &pdf, SourceKind::Pdf),
+            ("-", &png, SourceKind::Image),
+        ] {
+            assert_eq!(input_kind(Path::new(name), data), kind, "{name}");
+        }
+        // RTF by its opening, whatever its name.
+        assert_eq!(
+            input_kind(Path::new("memo.csv"), b"{\\rtf1\\ansi Hello}"),
+            SourceKind::Rtf
+        );
+    }
+
+    #[test]
+    fn a_file_named_as_an_office_97_one_is_read_as_what_it_holds() {
+        use std::io::Write;
+        let package = |main: &str| {
+            let mut buf = std::io::Cursor::new(Vec::new());
+            let mut z = zip::ZipWriter::new(&mut buf);
+            z.start_file("_rels/.rels", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            write!(
+                z,
+                "<Relationships><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/\
+                 officeDocument/2006/relationships/officeDocument\" Target=\"{main}\"/></Relationships>"
+            )
+            .unwrap();
+            z.finish().unwrap();
+            buf.into_inner()
+        };
+        let html = b"\xEF\xBB\xBF\n<html><body><table><tr><td>a</td></tr></table></body></html>";
+        for (name, data, kind) in [
+            ("export.xls", &html[..], SourceKind::Html),
+            (
+                "webpage.doc",
+                b"<!DOCTYPE html><p>Saved as doc</p>",
+                SourceKind::Html,
+            ),
+            ("tab.xls", b"col1\tcol2\n1\t2\n", SourceKind::Csv),
+            ("semi.xls", b"a;b;c\r\n1;2;3\r\n", SourceKind::Csv),
+            (
+                "renamed.doc",
+                &package("word/document.xml")[..],
+                SourceKind::Docx,
+            ),
+            (
+                "renamed.ppt",
+                &package("ppt/presentation.xml")[..],
+                SourceKind::Pptx,
+            ),
+            (
+                "renamed.xls",
+                &package("xl/workbook.xml")[..],
+                SourceKind::Xlsx,
+            ),
+            // Named as nothing, as stdin is: a package and a web page by
+            // their content, but plain text is no table for it.
+            ("stdin", &package("word/document.xml")[..], SourceKind::Docx),
+            ("stdin", b"<html><p>Hi</p></html>", SourceKind::Html),
+        ] {
+            assert_eq!(input_kind(Path::new(name), data), kind, "{name}");
+        }
+        // What none of them is still goes to the reader its name says,
+        // which says what it is not, never to the PDF reader.
+        for (name, kind) in [
+            ("notes.xls", SourceKind::Xls),
+            ("notes.doc", SourceKind::Doc),
+            ("notes.ppt", SourceKind::Ppt),
+            ("notes.docx", SourceKind::Docx),
+            ("notes.xps", SourceKind::Xps),
+            ("photo.png", SourceKind::Image),
+        ] {
+            assert_eq!(
+                input_kind(Path::new(name), b"just some words"),
+                kind,
+                "{name}"
+            );
+        }
+        assert_eq!(input_kind(Path::new("one.xls"), b"a\tb\n"), SourceKind::Xls);
+        assert_eq!(
+            input_kind(Path::new("ragged.xls"), b"a\tb\nc d e\n"),
+            SourceKind::Xls
+        );
+        assert_eq!(
+            input_kind(Path::new("stdin"), b"a\tb\n1\t2\n"),
+            SourceKind::Pdf
+        );
+    }
+
+    #[test]
+    fn unicode_text_named_xls_is_delimited_text() {
+        // Excel's "Unicode Text" export: UTF-16 with no byte-order mark,
+        // tab-separated, which it names `.txt` and users rename `.xls`.
+        let tsv: Vec<u8> = "Name\tAmount\nAlex\t12\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(input_kind(Path::new("export.xls"), &tsv), SourceKind::Csv);
+        assert_eq!(
+            input_kind(Path::new("export.xls"), b"a\tb\0\n1\t2\n"),
+            SourceKind::Xls
+        );
     }
 
     #[test]

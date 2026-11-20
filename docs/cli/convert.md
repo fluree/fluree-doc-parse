@@ -189,9 +189,10 @@ pages in doubt about their structure, and tables.
 
 Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email, a
 transcript, an image** (PNG, JPEG, TIFF), **a Word, Excel or PowerPoint
-97-2003 file, an Excel binary workbook or an OpenDocument file**, which are
-told apart by their content; Markdown, HTML and the other Office formats are
-known only by their extension, so they are read from a file.
+97-2003 file, an Excel binary workbook, an OpenDocument file, RTF, a DOCX,
+PPTX or XLSX package, an XPS document or a web page**, which are told apart
+by their content; the other readers (Markdown, plain text, CSV) identify the
+format by extension, so they are read from a file.
 
 Directories are scanned for every extension `convert` reads, including
 Word, PowerPoint and Excel's macro-enabled, template and show variants

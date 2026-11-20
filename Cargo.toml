@@ -15,6 +15,7 @@ members = [
     "crates/fluree-doc-doc",
     "crates/fluree-doc-odf",
     "crates/fluree-doc-ppt",
+    "crates/fluree-doc-rtf",
     "crates/fluree-doc-transcript",
     "crates/fluree-doc-email",
     "crates/fluree-doc-vision",
@@ -45,6 +46,7 @@ fluree-doc-xps = { path = "crates/fluree-doc-xps" }
 fluree-doc-doc = { path = "crates/fluree-doc-doc" }
 fluree-doc-odf = { path = "crates/fluree-doc-odf" }
 fluree-doc-ppt = { path = "crates/fluree-doc-ppt" }
+fluree-doc-rtf = { path = "crates/fluree-doc-rtf" }
 fluree-doc-ooxml = { path = "crates/fluree-doc-ooxml" }
 fluree-doc-transcript = { path = "crates/fluree-doc-transcript" }
 fluree-doc-email = { path = "crates/fluree-doc-email" }

@@ -17,6 +17,7 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-doc       Word 97-2003 text, through the piece table
       ├── fluree-doc-xls       Excel 97-2003 reader (lays out with the XLSX reader)
       ├── fluree-doc-odf       OpenDocument text, sheets (with the XLSX layout), slides
+      ├── fluree-doc-rtf       RTF reader
       ├── fluree-doc-csv       CSV and TSV reader
       ├── fluree-doc-transcript  WebVTT and SubRip reader
       └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
@@ -49,6 +50,7 @@ PDF layout.
 | `fluree-doc-doc` | `parse(&[u8]) -> Result<Vec<Element>, DocError>`: a `.doc`'s text, tables and notes through its piece table; `is_doc` |
 | `fluree-doc-xls` | `parse(&[u8]) -> Result<Vec<Element>, XlsError>`, BIFF8 through calamine, given a workbook rewritten from the records a walk of its own checked; `parse_with_info`; `is_xls`; `parse_xlsb` and `is_xlsb`, the binary workbook, its package inflated against bounds first and its records read here |
 | `fluree-doc-odf` | `parse_with_info(&[u8]) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError>`: `.odt`, `.ods`, `.odp`; `Format::sniff` by the `mimetype` |
+| `fluree-doc-rtf` | `parse_with_info(&[u8]) -> Result<(Vec<Element>, DocumentInfo), RtfError>`: paragraphs, headings by outline level or style, lists, tables, notes, comments, header and footer; `is_rtf` |
 | `fluree-doc-csv` | `parse(&[u8]) -> Result<Vec<Element>, CsvError>`: one table under its header row, the delimiter sniffed; `parse_with` names it; `decode`, `sniff` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments, `media` (the images its body shows, drawn as figures), `media_bytes` and `media_attachment`; `Format::sniff`; `parse_attachments`, the attachments down through attached messages, within `AttachmentLimits`, read by a reader the caller supplies |
@@ -99,8 +101,8 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |
 | cfb | Outlook `.msg`, Word, Excel and PowerPoint 97-2003 containers | MIT |
-| calamine | Excel 97-2003 (BIFF8) and binary (`.xlsb`) cells, pinned | MIT |
-| encoding_rs | email and CSV charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
+| calamine | Excel 97-2003 (BIFF8) cells, pinned | MIT |
+| encoding_rs | email, CSV and RTF charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |
 | unicode-normalization | NFC, reading PDF presentation forms | MIT OR Apache-2.0 |
