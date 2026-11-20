@@ -218,8 +218,9 @@ this output. Attachments are described instead:
   the body (see [Images in the body](#images-in-the-body)) is not one of
   them: the note counts it apart, as read.
 
-`--attachments DIR` saves each email's files under `DIR/<email name>/` so
-you can convert them on their own:
+`--attachments DIR` saves each email's files under `DIR/<email name>/`, the
+name without its extension (two inputs of one name in a batch keep theirs,
+then are numbered), so you can convert them on their own:
 
 ```bash
 fdoc convert reply.eml --attachments ./att
@@ -235,7 +236,9 @@ A message forwarded *as an attachment* comes back as an `.eml` of its own,
 including one embedded in an Outlook `.msg`. Signature parts
 (`application/pkcs7-signature`, `application/pgp-signature`) are skipped.
 Attachment names never contain a directory: `../../report.pdf` is
-`report.pdf`.
+`report.pdf`. A name `--parse-attachments` could write a conversion under
+(64 hexadecimal digits, alone or before a `.`) is saved with a `_` before
+it, so no file the sender names passes for another's conversion.
 
 In Rust, `fluree_doc_email::parse` returns the attachments beside the
 elements, as bytes with their description, for your own pipeline to read:
@@ -246,6 +249,43 @@ for file in &email.attachments {
     // file.info.filename, file.info.content_type, file.info.sha256, file.bytes
 }
 let notes = email.notes(); // document info and attachment descriptions, for the emitters
+```
+
+### Reading the attachments too
+
+`--parse-attachments` (with `--attachments DIR`) also converts each file,
+in the format asked for, into `DIR/<email name>/<sha256>.<format>` beside
+the saved files: one output per file by its bytes, however often and under
+whatever names it was sent, so the output's name is the join to
+`doc:attachments`. A message attached to the message is converted too, and
+its own attachments followed, three levels deep. Each file is converted as
+`convert` would convert it on its own, but as a document of its own: the
+flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
+`--source-name`) are not its. An image the body shows is read with the body
+(see below), not again; another image only when something is configured to
+read it. At most 200 files, of 64 MiB each and 256 MiB in all, are
+converted; one note on stderr counts what was and says why each other was
+not (`no reader`, its error, `TooLarge`, `TooMany`).
+
+```bash
+fdoc convert reply.eml --attachments ./att --parse-attachments -f doco
+```
+
+In Rust, `fluree_doc_email::parse_attachments` does the walk with a reader
+you supply, so this crate still compiles no other reader:
+
+```rust
+let children = fluree_doc_email::parse_attachments(
+    &email,
+    &fluree_doc_email::AttachmentLimits::default(), // depth 3, 64 MiB, 256 MiB, 200 files
+    &mut |file, depth| match file.info.content_type.as_str() {
+        "text/csv" => Some(fluree_doc_csv::parse(&file.bytes).map_err(|e| e.to_string())),
+        _ => None, // no reader: `Outcome::NoReader`
+    },
+);
+for c in &children {
+    // c.info (sha256 is the key), c.depth, c.parent (the attached message's sha256), c.outcome
+}
 ```
 
 ## Images in the body

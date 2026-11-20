@@ -67,6 +67,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
         no_escalate: true,
         strict: false,
         attachments: None,
+        parse_attachments: false,
     }
 }
 

@@ -24,6 +24,10 @@ struct Source<'a> {
     name: Option<String>,
     /// The input's bytes as lowercase hex SHA-256.
     sha256: String,
+    /// A file an e-mail carries, converted by `--parse-attachments`: the
+    /// files it carries in turn are followed, or not, by that run, not
+    /// saved by it.
+    carried: bool,
 }
 
 impl<'a> Source<'a> {
@@ -35,6 +39,7 @@ impl<'a> Source<'a> {
             named: true,
             name: args.source_name.clone().or(name),
             sha256: fluree_doc_model::sha256_hex(data),
+            carried: false,
         }
     }
 
@@ -45,6 +50,7 @@ impl<'a> Source<'a> {
             named: false,
             name: args.source_name.clone(),
             sha256: fluree_doc_model::sha256_hex(data),
+            carried: false,
         }
     }
 }
@@ -288,17 +294,31 @@ fn convert_path(
     pages: Option<&[usize]>,
     quiet: bool,
 ) -> Result<String, String> {
-    use common::SourceKind;
     // What the OCR engine says about an image it reads names this file.
     let _doc = super::ocr::Reading::of(path);
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let src = Source::file(path, slot, &data, args);
+    convert_source(path, data, &src, cfg, args, pages, quiet)
+}
+
+/// Convert `data`, named by `path` (whose extension may say what it is),
+/// as the input `src`.
+fn convert_source(
+    path: &Path,
+    data: Vec<u8>,
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Result<String, String> {
+    use common::SourceKind;
     // By its content where that says, else by its name (`input_kind`).
     let kind = common::input_kind(path, &data);
     match kind {
-        SourceKind::Transcript => return convert_transcript(&data, &src, args, quiet),
-        SourceKind::Email => return convert_email(&data, &src, cfg, args, quiet),
-        SourceKind::Image => return convert_image(data, &src, cfg, args, quiet),
+        SourceKind::Transcript => return convert_transcript(&data, src, args, quiet),
+        SourceKind::Email => return convert_email(&data, src, cfg, args, quiet),
+        SourceKind::Image => return convert_image(data, src, cfg, args, quiet),
         SourceKind::Unsupported => {
             return Err(common::unsupported(Some(path), &data)
                 .unwrap_or_else(|| "unsupported format".into()))
@@ -432,9 +452,9 @@ fn convert_path(
                 fluree_doc_xls::parse_with_info(&data).map_err(|e| e.to_string())?;
             (elements, declared(info))
         }
-        _ => return convert_bytes(data, &src, cfg, args, pages, quiet),
+        _ => return convert_bytes(data, src, cfg, args, pages, quiet),
     };
-    Ok(render(&elements, &src, args, Vec::new(), &notes))
+    Ok(render(&elements, src, args, Vec::new(), &notes))
 }
 
 /// A meeting transcript or a caption file: one paragraph per speaker turn.
@@ -507,6 +527,9 @@ fn convert_email(
         .collect();
     let read: Vec<usize> = read.into_iter().collect();
     save_attachments(&files, src, args, &read, "attachment", quiet)?;
+    if args.parse_attachments {
+        convert_attachments(&email, src, cfg, args, quiet)?;
+    }
     let notes = fluree_doc_model::Notes {
         unread_images: media.unread,
         ocr: media.ocr,
@@ -521,7 +544,10 @@ fn convert_email(
 /// embedded files, `what` names them) under `--attachments DIR`, in the
 /// input's own directory; without it, say on stderr what was left out. The
 /// files at `read` (images read into the body) were converted with it and
-/// are not counted as left out.
+/// are not counted as left out. A carried file's files are not saved: an
+/// attached message's are converted by the run that carries it, and of any
+/// other's, what is left out is said without asking for a directory the run
+/// was given.
 fn save_attachments(
     files: &[(&fluree_doc_model::Attachment, &[u8])],
     src: &Source,
@@ -554,6 +580,7 @@ fn save_attachments(
                 );
             }
         }
+        None if src.carried && what == "attachment" => {}
         None if count > 0 && !quiet => {
             let names: Vec<String> = files
                 .iter()
@@ -575,10 +602,14 @@ fn save_attachments(
                     plural(read.len())
                 )
             };
+            let hint = if src.carried {
+                "; the files a carried file holds are not saved"
+            } else {
+                "; pass --attachments DIR to save them"
+            };
             if left > 0 {
                 eprintln!(
-                    "note: {stem}: {left} {what}{} not converted ({}){images}; \
-                     pass --attachments DIR to save them",
+                    "note: {stem}: {left} {what}{} not converted ({}){images}{hint}",
                     plural(left),
                     names.join(", ")
                 );
@@ -589,8 +620,114 @@ fn save_attachments(
     Ok(())
 }
 
+/// Convert the files an e-mail carries, down through attached messages
+/// (`fluree_doc_email::parse_attachments`, its default bounds), each into
+/// `DIR/<slot>/<sha256>.<format>` beside the saved files: one output per
+/// file, by its bytes, however often and under whatever names it was sent.
+///
+/// A file is converted as `convert` would convert it on its own, by its
+/// content and the extension of its name, but as a document of its own: the
+/// flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
+/// `--source-name`) are not its, and it saves no files of its own (the
+/// attachments of a message attached are followed here). An image the body
+/// shows is converted with the body, not again; another image only when
+/// something is configured to read it.
+fn convert_attachments(
+    email: &fluree_doc_email::Email,
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    quiet: bool,
+) -> Result<(), String> {
+    use fluree_doc_email::Outcome;
+    let Some(dir) = args.attachments.as_ref().map(|d| d.join(&src.slot)) else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let child_args = ConvertArgs {
+        doc_iri: None,
+        base_iri: None,
+        source_name: None,
+        attachments: None,
+        parse_attachments: false,
+        ..args.clone()
+    };
+    let readable_images =
+        cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
+    let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
+        let name = f
+            .info
+            .filename
+            .clone()
+            .unwrap_or_else(|| f.info.sha256.clone());
+        let path = Path::new(&name);
+        match common::input_kind(path, &f.bytes) {
+            common::SourceKind::Unsupported => return None,
+            common::SourceKind::Image if f.info.inline || !readable_images => return None,
+            _ => {}
+        }
+        let child = Source {
+            stem: common::stem_of(path),
+            slot: f.info.sha256.clone(),
+            named: true,
+            name: Some(name.clone()),
+            sha256: f.info.sha256.clone(),
+            carried: true,
+        };
+        Some(convert_source(
+            path,
+            f.bytes.clone(),
+            &child,
+            cfg,
+            &child_args,
+            None,
+            quiet,
+        ))
+    };
+    let children = fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
+    let mut converted = 0usize;
+    let mut left: Vec<String> = Vec::new();
+    for c in &children {
+        let name = c
+            .info
+            .filename
+            .clone()
+            .unwrap_or_else(|| c.info.content_type.clone());
+        match &c.outcome {
+            Outcome::Read(out) => {
+                let path = dir.join(format!("{}.{}", c.info.sha256, ext(args.format)));
+                std::fs::write(&path, out)
+                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
+                converted += 1;
+            }
+            Outcome::NoReader => left.push(format!("{name}: no reader")),
+            Outcome::Failed(e) => left.push(format!("{name}: {e}")),
+            Outcome::Skipped(why) => left.push(format!("{name}: {why}")),
+        }
+    }
+    if !quiet && !children.is_empty() {
+        let tail = if left.is_empty() {
+            String::new()
+        } else {
+            format!("; not converted: {}", left.join("; "))
+        };
+        eprintln!(
+            "note: {}: {converted} of {} attached file(s) converted to {}{tail}",
+            src.stem,
+            children.len(),
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
 /// A safe, unique file name for an attachment: its own name with any path
 /// taken off, or a numbered stand-in, and unique within its email.
+///
+/// A name of the form `--parse-attachments` writes a conversion under
+/// (`<sha256>.<format>`, beside the saved files) is the sender's to choose,
+/// and would pass a file of theirs off as another's conversion: it is saved
+/// with a `_` before it, which no conversion's name has.
 fn file_name(
     name: Option<&str>,
     index: usize,
@@ -601,6 +738,11 @@ fn file_name(
         .map(|n| n.trim().trim_start_matches('.').to_string())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| format!("attachment-{}", index + 1));
+    let base = if names_a_conversion(&base) {
+        format!("_{base}")
+    } else {
+        base
+    };
     let mut candidate = base.clone();
     let mut n = 2;
     while !taken.insert(candidate.clone()) {
@@ -611,6 +753,16 @@ fn file_name(
         n += 1;
     }
     candidate
+}
+
+/// Whether `name` is one a conversion's output could take: 64 hexadecimal
+/// digits, in either case (a file system may not tell them apart), alone or
+/// before a `.`.
+fn names_a_conversion(name: &str) -> bool {
+    let b = name.as_bytes();
+    b.len() >= 64
+        && b[..64].iter().all(u8::is_ascii_hexdigit)
+        && matches!(b.get(64), None | Some(b'.'))
 }
 
 /// A bare image: one page of pixels, read by an OCR engine or a model.
@@ -2195,6 +2347,27 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_attachment_cannot_take_a_conversions_name() {
+        let sha = fluree_doc_model::sha256_hex(b"invoice");
+        let mut taken = std::collections::HashSet::new();
+        for (name, saved) in [
+            (format!("{sha}.md"), format!("_{sha}.md")),
+            (
+                format!("{}.json", sha.to_uppercase()),
+                format!("_{}.json", sha.to_uppercase()),
+            ),
+            (sha.clone(), format!("_{sha}")),
+            (format!("x/{sha}.md"), format!("_{sha} (2).md")),
+            // Not 64 digits before the dot: the sender's name, as given.
+            (format!("{}.md", &sha[..63]), format!("{}.md", &sha[..63])),
+            (format!("{sha}0.md"), format!("{sha}0.md")),
+            ("invoice.pdf".into(), "invoice.pdf".into()),
+        ] {
+            assert_eq!(file_name(Some(&name), 0, &mut taken), saved, "{name}");
+        }
+    }
 
     #[test]
     fn parser_warnings_read_as_one_line_a_kind() {

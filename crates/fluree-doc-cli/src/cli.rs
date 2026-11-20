@@ -185,7 +185,7 @@ impl From<MdLinks> for fluree_doc_model::MdLinks {
     }
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
     /// transcript, an email or a PNG, JPEG or TIFF image)
@@ -313,6 +313,15 @@ pub struct ConvertArgs {
     /// output describes the attachments and does not include them.
     #[arg(long, value_name = "DIR")]
     pub attachments: Option<PathBuf>,
+
+    /// Also convert each email's attachments, and those of the messages
+    /// attached to it, into DIR/<email stem>/<sha256>.<format>
+    ///
+    /// Each file once, by the SHA-256 of its bytes, in the format asked
+    /// for; three levels of attached messages deep, at most 200 files of
+    /// 64 MiB each and 256 MiB in all. Needs --attachments.
+    #[arg(long, requires = "attachments")]
+    pub parse_attachments: bool,
 }
 
 #[derive(Args, Debug)]

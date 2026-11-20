@@ -352,3 +352,64 @@ fn a_pdfs_notes_and_embedded_files_reach_every_output() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_emails_attachments_are_converted_on_request_once_each() {
+    let dir = scratch("email-children");
+    let part = |name: &str, ty: &str, body: &str| {
+        format!(
+            "--b\r\nContent-Type: {ty}\r\nContent-Disposition: attachment; filename=\"{name}\"\r\n\r\n{body}\r\n"
+        )
+    };
+    let inner = "From: Sam Example <sam@example.com>\r\nTo: Alex Sample <alex@example.com>\r\n\
+                 Subject: Codes\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"c\"\r\n\r\n\
+                 --c\r\nContent-Type: text/plain\r\n\r\nThe codes.\r\n\
+                 --c\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"codes.csv\"\r\n\r\n\
+                 Code,Label\r\nA1,First\r\n--c--\r\n";
+    let mail = format!(
+        "From: Alex Sample <alex@example.com>\r\nTo: Sam Example <sam@example.com>\r\n\
+         Subject: Orders\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+         --b\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n{}{}{}--b--\r\n",
+        part("orders.csv", "text/csv", "Customer,Amount\r\nAlex Sample,12.50"),
+        part("fwd.eml", "message/rfc822", inner),
+        part("same.csv", "text/csv", "Customer,Amount\r\nAlex Sample,12.50"),
+    );
+    let input = dir.join("mail.eml");
+    std::fs::write(&input, mail).unwrap();
+    let att = dir.join("att");
+    let o = convert(
+        &dir,
+        &input,
+        "md",
+        &[
+            "--attachments",
+            att.to_str().unwrap(),
+            "--parse-attachments",
+        ],
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert!(err.contains("3 of 3 attached file(s) converted"), "{err}");
+    // The attached message's own file was converted by this run: nothing
+    // says it was left out, or asks for the directory the run was given.
+    assert!(!err.contains("not converted"), "{err}");
+    let mut outputs: Vec<String> = std::fs::read_dir(att.join("mail"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    outputs.sort();
+    assert_eq!(outputs.len(), 3, "{outputs:?}");
+    assert!(outputs
+        .iter()
+        .any(|o| o.contains("Alex Sample") && o.contains("12.50")));
+    assert!(outputs
+        .iter()
+        .any(|o| o.contains("A1") && o.contains("First")));
+    assert!(outputs.iter().any(|o| o.contains("The codes.")));
+    // Without --attachments it is refused.
+    let o = convert(&dir, &input, "md", &["--parse-attachments"]);
+    assert!(!o.status.success());
+    let _ = std::fs::remove_dir_all(dir);
+}
