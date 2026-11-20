@@ -189,14 +189,9 @@ impl Injected {
 /// against the page as extracted, not against each other.
 pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Vec<Injected> {
     let routes: Vec<Route> = doc.pages.iter().map(|p| route::decide(p).0).collect();
-    // The regions an engine may fill: the routed ones.
-    let regions: Vec<Vec<BBox>> = routes
-        .iter()
-        .map(|r| match r {
-            Route::VlmRegions(r) => r.clone(),
-            _ => Vec::new(),
-        })
-        .collect();
+    // The regions an engine may fill: the routed ones, then those too small
+    // for a model (see `route::ocr_regions`).
+    let regions: Vec<Vec<BBox>> = doc.pages.iter().map(route::ocr_regions).collect();
     // Each reading judged against the router first: where on its page it may
     // land, or why it may not.
     let judged: Vec<Result<Target, &'static str>> = readings
@@ -1527,6 +1522,84 @@ fn quad_bounds(q: &[(f64, f64); 4]) -> ((f64, f64), (f64, f64)) {
     )
 }
 
+/// Per page, `None` to read it whole, else its regions by crop tag: the
+/// shape of the model tier's crop jobs.
+pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
+
+/// The crops an OCR engine reads: each page whose text is pixels, whole,
+/// and on every other page its unread raster regions
+/// ([`route::ocr_regions`]), small ones included. Limited to `only`'s pages
+/// when given.
+pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>) -> OcrJobs {
+    let mut jobs = Vec::new();
+    for p in &doc.pages {
+        if only.is_some_and(|keep| !keep.contains(&p.index)) {
+            continue;
+        }
+        if let Route::Vlm(_) = route::decide(p).0 {
+            jobs.push((p.index, None));
+            continue;
+        }
+        let regions = route::ocr_regions(p);
+        if !regions.is_empty() {
+            jobs.push((
+                p.index,
+                Some(
+                    regions
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, b)| (Crop::Region(i).tag(), b))
+                        .collect(),
+                ),
+            ));
+        }
+    }
+    jobs
+}
+
+/// What one OCR pass over a document did.
+#[derive(Debug, Default)]
+pub struct OcrPass {
+    /// One per reading, as [`inject`] reports it.
+    pub injected: Vec<Injected>,
+    /// Crops the engine could not read, with its error, by crop name
+    /// (`p{page}_{tag}`). The rest of the document is read regardless.
+    pub failed: Vec<(String, String)>,
+}
+
+/// Read a document's pixels with an engine and lay the words on its pages:
+/// [`ocr_jobs`], rendered one crop at a time, read, then [`inject`]ed.
+///
+/// Runs on the document as extracted, before analysis, as [`inject`] does;
+/// no file is written. The crops are rendered as the model tier renders
+/// them (`escalate::for_each_crop`), so a reading of the same crop gives the
+/// same words through this call or through `--ocr-words`.
+#[cfg(feature = "render")]
+pub fn read_pages(
+    doc: &mut Document,
+    pdf: &hayro_syntax::Pdf,
+    engine: &dyn fluree_doc_vision::OcrEngine,
+    only: Option<&[usize]>,
+) -> OcrPass {
+    let jobs = ocr_jobs(doc, only);
+    let mut readings = Vec::new();
+    let mut failed = Vec::new();
+    crate::escalate::for_each_crop(pdf, &jobs, |crop| {
+        let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
+        let Some(which) = Crop::from_tag(tag) else {
+            return;
+        };
+        match engine.read(&crop.pixels) {
+            Ok(reading) => readings.push((crop.page, which, reading)),
+            Err(e) => failed.push((crop.name, e)),
+        }
+    });
+    OcrPass {
+        injected: inject(doc, &readings),
+        failed,
+    }
+}
+
 /// Mark the elements OCR words make up as `provenance: "ocr"`.
 ///
 /// Called on the final elements, after analysis has turned glyphs into
@@ -1646,6 +1719,149 @@ mod tests {
 
     fn text_of(p: &Page) -> String {
         p.glyphs.iter().map(|g| g.text.as_str()).collect()
+    }
+
+    /// A one-page PDF, 200 × 100 pt, that is one grey image and no text.
+    #[cfg(feature = "render")]
+    fn image_only_pdf() -> Vec<u8> {
+        let content = b"q 200 0 0 100 0 0 cm /Im0 Do Q";
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] \
+               /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>"
+                .to_vec(),
+            [
+                format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(),
+                content.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+            [
+                b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray \
+                   /BitsPerComponent 8 /Length 4 >>\nstream\n"
+                    .to_vec(),
+                vec![0x20, 0xe0, 0xe0, 0x20],
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            out.extend(body);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").into_bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    /// An engine that reads one word across the middle of whatever it is
+    /// shown, and remembers the sizes it was shown.
+    #[cfg(feature = "render")]
+    struct OneWord(std::sync::Mutex<Vec<(u32, u32)>>);
+
+    #[cfg(feature = "render")]
+    impl fluree_doc_vision::OcrEngine for OneWord {
+        fn name(&self) -> &str {
+            "one-word"
+        }
+        fn read(&self, image: &fluree_doc_vision::Pixels) -> Result<WordReading, String> {
+            self.0.lock().unwrap().push((image.width, image.height));
+            let (w, h) = (image.width as f64, image.height as f64);
+            Ok(WordReading {
+                coords: Coords::Px,
+                width: Some(w),
+                height: Some(h),
+                engine: Some("one-word".into()),
+                words: vec![OcrWord {
+                    text: "HELLO".into(),
+                    bbox: [w * 0.25, h * 0.4, w * 0.75, h * 0.6],
+                    angle: None,
+                    conf: Some(0.9),
+                }],
+            })
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn an_engine_reads_the_rendered_page_and_its_words_land_on_it() {
+        let bytes = image_only_pdf();
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+        let mut doc = crate::extract::extract_bytes(bytes).unwrap();
+        assert!(matches!(route::decide(&doc.pages[0]).0, Route::Vlm(_)));
+        let engine = OneWord(Default::default());
+        let pass = read_pages(&mut doc, &pdf, &engine, None);
+        // The page whole, at the model tier's scale: 2 × 200 by 2 × 100.
+        assert_eq!(*engine.0.lock().unwrap(), vec![(400, 200)]);
+        assert!(pass.failed.is_empty());
+        assert_eq!(pass.injected.len(), 1);
+        assert_eq!(pass.injected[0].taken, 1);
+        assert!(text_of(&doc.pages[0]).contains("HELLO"));
+        // Asked only for another page, it reads nothing.
+        let mut again = crate::extract::extract_bytes(image_only_pdf()).unwrap();
+        let pass = read_pages(&mut again, &pdf, &engine, Some(&[3]));
+        assert!(pass.injected.is_empty());
+        assert_eq!(engine.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_small_region_takes_its_reading() {
+        // A text page carrying a capture too small for a model: region 0 is
+        // the engine's.
+        let mut doc = Document {
+            pages: vec![page(
+                (0..1500)
+                    .flat_map(|i| {
+                        native("a", 20.0 + (i % 50) as f64 * 10.0, 600.0 + (i / 50) as f64)
+                    })
+                    .collect(),
+                vec![ImagePlacement {
+                    bbox: BBox {
+                        x0: 100.0,
+                        y0: 100.0,
+                        x1: 300.0,
+                        y1: 130.0,
+                    },
+                    texty: true,
+                }],
+            )],
+        };
+        assert_eq!(route::decide(&doc.pages[0]).0, Route::Deterministic);
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Region(0),
+                pdf_units(vec![word("ACCT 4417", [120.0, 108.0, 200.0, 122.0])]),
+            )],
+        );
+        assert_eq!(r[0].refused, None, "{r:?}");
+        assert_eq!(r[0].taken, 1);
+        // A region the page does not have is still refused.
+        let r = inject(
+            &mut doc,
+            &[(
+                0,
+                Crop::Region(1),
+                pdf_units(vec![word("x", [120.0, 108.0, 130.0, 122.0])]),
+            )],
+        );
+        assert_eq!(r[0].refused, Some("region not routed to a reader"));
     }
 
     #[test]

@@ -28,6 +28,14 @@ pub struct Cli {
     pub no_color: bool,
 }
 
+/// An OCR engine this build can run.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrEngineName {
+    /// PP-OCRv6 small through oar-ocr, on ONNX Runtime
+    #[value(name = "oar-ocr")]
+    OarOcr,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
@@ -42,6 +50,19 @@ pub enum Commands {
     ///   fdoc convert ./docs/ --out-dir ./out -j 8
     ///   cat report.pdf | fdoc convert -
     Convert(ConvertArgs),
+
+    /// Read crops or images with the built-in OCR engine into word files
+    ///
+    /// Writes one `--ocr-words` sidecar per image, `<image stem>.json`, for
+    /// `fdoc convert --ocr-words`. Given the directory `fdoc dev
+    /// render-routed` wrote, reads only the crops whose words a page takes
+    /// (by the manifest's `reason`); given image files, reads them all.
+    ///
+    /// Examples:
+    ///   fdoc dev render-routed report.pdf crops/
+    ///   fdoc ocr crops/ --models ~/assets/ocr --out words/
+    ///   fdoc convert report.pdf --ocr-words words/
+    Ocr(OcrArgs),
 
     /// Extract AcroForm fields: name, type, value, bbox (JSON)
     ///
@@ -191,8 +212,21 @@ pub struct ConvertArgs {
     /// Directory of OCR word readings (`<stem>_p<N>_full.json`,
     /// `<stem>_p<N>_r<i>.json`) read as glyphs on the pages and regions the
     /// router sends a reader [env: FDOC_OCR_WORDS]
-    #[arg(long, value_name = "DIR")]
+    #[arg(long, value_name = "DIR", conflicts_with = "ocr")]
     pub ocr_words: Option<PathBuf>,
+
+    /// Read routed pages and regions with this OCR engine, in this one
+    /// command, before analysis [env: FDOC_OCR]
+    ///
+    /// Needs the assets directory (`--models`). Overrides `ocr.engine` in
+    /// the config.
+    #[arg(long, value_enum, value_name = "ENGINE")]
+    pub ocr: Option<OcrEngineName>,
+
+    /// The OCR assets directory: the models and ONNX Runtime, each checked
+    /// against the hash this build pins before loading [env: FDOC_OCR_MODELS]
+    #[arg(long, value_name = "DIR")]
+    pub models: Option<PathBuf>,
 
     /// Emit [[VLM:...]] anchor tokens where escalated crops belong, for an
     /// external tier to fill [env: FDOC_VLM_ANCHORS]
@@ -235,6 +269,30 @@ pub struct ConvertArgs {
     /// output describes the attachments and does not include them.
     #[arg(long, value_name = "DIR")]
     pub attachments: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+pub struct OcrArgs {
+    /// A crops directory with its `manifest.jsonl`, or image files (PNG,
+    /// JPEG, TIFF, …)
+    #[arg(required = true, value_name = "DIR|IMAGE")]
+    pub inputs: Vec<PathBuf>,
+
+    /// The engine
+    #[arg(long, value_enum, default_value_t = OcrEngineName::OarOcr)]
+    pub engine: OcrEngineName,
+
+    /// The OCR assets directory [env: FDOC_OCR_MODELS]
+    #[arg(long, value_name = "DIR")]
+    pub models: Option<PathBuf>,
+
+    /// Where to write the word files
+    #[arg(long, value_name = "DIR")]
+    pub out: PathBuf,
+
+    /// Images read at once, each on one thread (0 = one per core)
+    #[arg(long, short = 'j', default_value_t = 0, value_name = "N")]
+    pub jobs: usize,
 }
 
 #[derive(Subcommand, Debug)]
@@ -330,6 +388,10 @@ pub enum DevCommands {
         path: PathBuf,
         #[arg(default_value = "routed-crops")]
         out: PathBuf,
+        /// Also crop the raster regions too small to be worth a model's call,
+        /// which an OCR engine still reads (reason `small_region`)
+        #[arg(long)]
+        ocr_regions: bool,
     },
     /// Render a region manifest's crops via the pipeline's own crop path
     RenderCrops {

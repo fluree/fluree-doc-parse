@@ -32,6 +32,21 @@ pub const HOME_ENV: &str = "FDOC_HOME";
 pub struct Config {
     #[serde(default)]
     pub escalation: Escalation,
+    #[serde(default)]
+    pub ocr: Ocr,
+}
+
+/// The built-in OCR engine. Unlike a model reader it reaches nothing outside
+/// the machine: it is configured here only so a deployment names its assets
+/// once. `--ocr` and `--models` override it per run.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct Ocr {
+    /// Which engine reads routed pixels. Only `oar-ocr` is built in.
+    pub engine: Option<String>,
+    /// The assets directory: the models and ONNX Runtime.
+    pub models: Option<PathBuf>,
+    /// ONNX Runtime threads per crop read (default 1).
+    pub threads: Option<usize>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

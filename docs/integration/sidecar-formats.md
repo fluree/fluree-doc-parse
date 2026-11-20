@@ -150,25 +150,35 @@ read whole pages there, or give the boxes in `pdf` units.
 
 - a `full` reading for a page routed `Scanned`, `NearBlank` or `BrokenText`
   (whose garbled glyphs it replaces);
-- a `full` reading for a page with routed regions, keeping only the words
+- a `full` reading for a page with unread regions, keeping only the words
   inside them — the crop `render-routed` writes when the page is also asked
   for on a doubt, which supersedes its region crops;
-- an `r{i}` reading for one of the page's routed regions, keeping only the
+- an `r{i}` reading for one of the page's unread regions, keeping only the
   words whose center falls inside the region, not its margin.
+
+A page's unread regions are its raster images that look like text and that
+the text layer does not cover. The router sends a model only those over a
+tenth of the page, a price rather than a property of the pixels: an OCR
+engine is cheap per pixel, and a capture an inch high still holds a date. So
+OCR reads them all, the routed ones first, numbered as the router numbers
+them (`r0`, `r1`, …), then the small ones after them: a model's `r1` and an
+engine's `r1` are the same region. `render-routed --ocr-regions` crops the
+small ones too, with the reason `small_region`.
 
 A whole-page reading for any other page is refused with a warning, so the
 text layer of a born-digital page is never replaced by a reading of it — a
 page asked for on a doubt about its headings included. Region readings are
-looked up only for the regions the router routes. A word over a glyph the
+looked up only for the page's unread regions. A word over a glyph the
 page already has is dropped, so a stamp the text layer carries is not read
 twice.
 
-Only those names are looked up — `full` on every page, `r{i}` for each routed region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`.
+Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`.
 
 **What to read.** The `render-routed` manifest says why each crop exists
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine
 needs to read only the crops whose `reason` is `scanned`, `near_blank`,
-`broken_text` or `region`: those are the ones whose readings the page takes.
+`broken_text`, `region` or `small_region`: those are the ones whose readings
+the page takes. [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
 and a `table` or `table_missing` crop asks about structure; read, they would
 only be refused or ignored.
@@ -234,9 +244,9 @@ skipped silently: it comes from your pipeline, not from a partial batch. A
 `--ocr-words` directory that does not exist is an error.
 
 ```bash
-fdoc dev render-routed scan.pdf ./crops
+fdoc dev render-routed scan.pdf ./crops --ocr-regions
 # the crops whose readings the page takes
-jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region")) | "./crops/" + .png' \
+jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region")) | "./crops/" + .png' \
   ./crops/manifest.jsonl > ./crops/for-ocr.txt
 your-ocr $(cat ./crops/for-ocr.txt) --out ./words   # one {stem}_p{N}_{tag}.json per crop
 fdoc convert scan.pdf -f doco --ocr-words ./words

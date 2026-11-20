@@ -78,6 +78,25 @@ project = "my-project"          # optional; read from the key when absent
 | `gemini.credentials` | path to the service-account JSON key |
 | `gemini.project` | overrides the project named in the key |
 
+## OCR
+
+```toml
+[ocr]
+engine = "oar-ocr"
+models = "/opt/fluree/assets/ocr"
+threads = 1
+```
+
+| key | means |
+|---|---|
+| `engine` | the built-in engine `convert` reads pixels with; `oar-ocr` is the one this build has |
+| `models` | the OCR assets directory (models and ONNX Runtime) |
+| `threads` | ONNX Runtime threads per crop read (default 1: a batch runs one per worker) |
+
+`--ocr` and `--models` override these per run, and `FDOC_OCR` and
+`FDOC_OCR_MODELS` override the file. Unlike the model reader, OCR runs on the
+machine and calls nothing outside it.
+
 ## Pages that read across their panels
 
 A page laid out as panels side by side under a full-width heading has columns

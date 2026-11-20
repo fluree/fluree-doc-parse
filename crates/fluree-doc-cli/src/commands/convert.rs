@@ -67,11 +67,37 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     // Once per invocation, not once per document.
     cfg.resolve_escalation(args.escalate, args.no_escalate, quiet);
     cfg.verbose = verbose;
+    // A flag beats the environment: `--ocr` given on the command line reads
+    // the pixels, whatever `FDOC_OCR_WORDS` holds (the two flags together are
+    // refused by the parser).
+    if args.ocr.is_some() && args.ocr_words.is_none() && cfg.ocr_words.take().is_some() && verbose {
+        eprintln!("note: --ocr given, FDOC_OCR_WORDS ignored");
+    }
     // A word directory that is not there is a mistake in the command, not
     // a batch with nothing read yet.
     if let Some(dir) = cfg.ocr_words.as_deref().filter(|d| !d.is_dir()) {
         eprintln!("error: --ocr-words: {} is not a directory", dir.display());
         return 2;
+    }
+    // Words already read win over reading them again with an engine the
+    // config names, as `--tier-results` wins over a configured model.
+    if cfg.ocr_words.is_none() {
+        match crate::commands::ocr::engine_for_convert(
+            args.ocr,
+            args.models.as_deref(),
+            &cfg.config.ocr,
+        ) {
+            Ok(engine) => cfg.ocr = engine.map(common::OcrHandle),
+            Err(e) => {
+                eprintln!("error: --ocr: {e}");
+                return 2;
+            }
+        }
+    }
+    if args.models.is_some() && cfg.ocr.is_none() && !quiet {
+        eprintln!(
+            "warning: --models names an OCR engine's assets, but no engine reads with them (--ocr)"
+        );
     }
     let cfg = &cfg;
 
@@ -541,6 +567,33 @@ fn render(
     }
 }
 
+/// One stderr line per OCR reading set aside, and with `--verbose` one per
+/// reading taken.
+fn report_ocr(
+    stem: &str,
+    flag: &str,
+    injected: &[fluree_doc_pdf::ocr::Injected],
+    verbose: bool,
+    quiet: bool,
+) {
+    for r in injected {
+        let name = format!("{stem}_p{}_{}", r.page, r.crop.tag());
+        match r.refused {
+            Some(why) if !quiet => eprintln!("warning: {flag}: {name}: {why}"),
+            None if verbose => eprintln!(
+                "ocr: {name}: {} words taken, {} dropped, skew {:.1}°{}",
+                r.taken,
+                r.dropped,
+                r.skew_deg,
+                r.mean_conf
+                    .map(|c| format!(", mean confidence {c:.3}"))
+                    .unwrap_or_default()
+            ),
+            _ => {}
+        }
+    }
+}
+
 fn convert_bytes(
     data: Vec<u8>,
     src: &Source,
@@ -557,29 +610,27 @@ fn convert_bytes(
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
-    let injected = match cfg.ocr_words.as_deref() {
-        Some(dir) => {
-            let readings = common::ocr_readings(dir, stem, &doc, quiet);
-            let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
-            for r in &injected {
-                let name = format!("{stem}_p{}_{}", r.page, r.crop.tag());
-                match r.refused {
-                    Some(why) if !quiet => eprintln!("warning: --ocr-words: {name}: {why}"),
-                    None if cfg.verbose => eprintln!(
-                        "ocr: {name}: {} words taken, {} dropped, skew {:.1}°{}",
-                        r.taken,
-                        r.dropped,
-                        r.skew_deg,
-                        r.mean_conf
-                            .map(|c| format!(", mean confidence {c:.3}"))
-                            .unwrap_or_default()
-                    ),
-                    _ => {}
-                }
+    let injected = if let Some(engine) = &cfg.ocr {
+        let pass = fluree_doc_pdf::ocr::read_pages(&mut doc, &raw, engine.0.as_ref(), pages);
+        for (crop, e) in &pass.failed {
+            if !quiet {
+                eprintln!("warning: --ocr: {stem}_{crop}: {e}");
             }
-            injected
         }
-        None => Vec::new(),
+        report_ocr(stem, "--ocr", &pass.injected, cfg.verbose, quiet);
+        pass.injected
+    } else if let Some(dir) = cfg.ocr_words.as_deref() {
+        // Only the pages asked for, as the engine reads only those: words
+        // already read for the others must not change how these read.
+        let mut readings = common::ocr_readings(dir, stem, &doc, quiet);
+        if let Some(keep) = pages {
+            readings.retain(|(page, _, _)| keep.contains(page));
+        }
+        let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
+        injected
+    } else {
+        Vec::new()
     };
     // A configured reader reads the crops chosen from the document as
     // extracted, which the analysis below changes.

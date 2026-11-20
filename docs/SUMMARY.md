@@ -31,6 +31,7 @@
 
 - [CLI reference](cli/README.md)
   - [convert](cli/convert.md)
+  - [ocr](cli/ocr.md)
   - [config](cli/config.md)
   - [forms](cli/forms.md)
   - [triage](cli/triage.md)
