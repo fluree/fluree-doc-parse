@@ -133,9 +133,10 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         }
         let src = Source::stdin(&data, args);
         // By its content, as a file is (`input_kind`): with no name to go
-        // by, a transcript, an e-mail, an image, a Word or Excel 97-2003
-        // file, an Excel binary workbook, an OpenDocument file; a format no
-        // reader reads is refused by name; anything else is read as a PDF.
+        // by, a transcript, an e-mail, an image, a Word, Excel or PowerPoint
+        // 97-2003 file, an Excel binary workbook, an OpenDocument file; a
+        // format no reader reads is refused by name; anything else is read
+        // as a PDF.
         let converted =
             match common::input_kind(Path::new("-"), &data) {
                 common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
@@ -169,6 +170,17 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
                         render(&elements, &src, args, Vec::new(), &notes)
                     }),
                 common::SourceKind::Doc => fluree_doc_doc::parse(&data)
+                    .map_err(|e| e.to_string())
+                    .map(|elements| {
+                        render(
+                            &elements,
+                            &src,
+                            args,
+                            Vec::new(),
+                            &fluree_doc_model::Notes::default(),
+                        )
+                    }),
+                common::SourceKind::Ppt => fluree_doc_ppt::parse(&data)
                     .map_err(|e| e.to_string())
                     .map(|elements| {
                         render(
@@ -489,6 +501,11 @@ fn convert_source(
             let (elements, info) = fluree_doc_xls::parse_xlsb(&data).map_err(|e| e.to_string())?;
             (elements, declared(info))
         }
+        // A PowerPoint 97-2003 deck's slide text, a slide a page.
+        SourceKind::Ppt => (
+            fluree_doc_ppt::parse(&data).map_err(|e| e.to_string())?,
+            fluree_doc_model::Notes::default(),
+        ),
         // A Word 97-2003 document's text, through its piece table.
         SourceKind::Doc => (
             fluree_doc_doc::parse(&data).map_err(|e| e.to_string())?,

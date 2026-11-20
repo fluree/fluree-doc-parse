@@ -29,7 +29,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `type` | yes | DoCO class, or `doc:ListItem` for a member of a list — in the [DoCO graph](doco.md), a `doco:Paragraph` its `doco:List` contains |
 | `page` | yes | 0-based; `0` for formats without pages |
 | `text` | yes | the characters as printed; a PDF's ligatures read as letters (see [normalization](text.md#normalization)) |
-| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, `xls`, `xlsb`, `doc`, `odt`, `ods`, `odp`, `csv`, `vtt`, `srt`, `eml`, `msg` |
+| `provenance` | yes | which reader: `rust`, `vlm`, `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, `xls`, `xlsb`, `doc`, `ppt`, `odt`, `ods`, `odp`, `csv`, `vtt`, `srt`, `eml`, `msg` |
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |
 | `level` | headings | 1–6 |

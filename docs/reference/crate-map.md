@@ -13,6 +13,7 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-docx      DOCX reader ─┐
       ├── fluree-doc-pptx      PPTX reader ─┼── fluree-doc-ooxml  the package layer they share
       ├── fluree-doc-xlsx      XLSX reader ─┘
+      ├── fluree-doc-ppt       PowerPoint 97-2003 slide text
       ├── fluree-doc-doc       Word 97-2003 text, through the piece table
       ├── fluree-doc-xls       Excel 97-2003 reader (lays out with the XLSX reader)
       ├── fluree-doc-odf       OpenDocument text, sheets (with the XLSX layout), slides
@@ -44,6 +45,7 @@ PDF layout.
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `grid_elements`, sheets another workbook format's reader read, laid out as an XLSX sheet; `parse_with_media` the pictures anchored to its cells, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
+| `fluree-doc-ppt` | `parse(&[u8]) -> Result<Vec<Element>, PptError>`: a `.ppt`'s slide text through its last edit's persist directory; `is_ppt` |
 | `fluree-doc-doc` | `parse(&[u8]) -> Result<Vec<Element>, DocError>`: a `.doc`'s text, tables and notes through its piece table; `is_doc` |
 | `fluree-doc-xls` | `parse(&[u8]) -> Result<Vec<Element>, XlsError>`, BIFF8 through calamine, given a workbook rewritten from the records a walk of its own checked; `parse_with_info`; `is_xls`; `parse_xlsb` and `is_xlsb`, the binary workbook, its package inflated against bounds first and its records read here |
 | `fluree-doc-odf` | `parse_with_info(&[u8]) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError>`: `.odt`, `.ods`, `.odp`; `Format::sniff` by the `mimetype` |
@@ -96,7 +98,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | html5ever | spec-compliant HTML parsing | MIT OR Apache-2.0 |
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |
-| cfb | Outlook `.msg`, Word and Excel 97-2003 containers | MIT |
+| cfb | Outlook `.msg`, Word, Excel and PowerPoint 97-2003 containers | MIT |
 | calamine | Excel 97-2003 (BIFF8) and binary (`.xlsb`) cells, pinned | MIT |
 | encoding_rs | email and CSV charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |

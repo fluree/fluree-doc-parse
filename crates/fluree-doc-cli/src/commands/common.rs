@@ -26,6 +26,8 @@ pub(crate) enum SourceKind {
     Odf,
     /// An Excel binary workbook.
     Xlsb,
+    /// A PowerPoint 97-2003 presentation.
+    Ppt,
     Transcript,
     Email,
     Image,
@@ -57,6 +59,7 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     (SourceKind::Doc, &["doc", "dot"]),
     (SourceKind::Odf, &["odt", "ott", "ods", "ots", "odp", "otp"]),
     (SourceKind::Xlsb, &["xlsb"]),
+    (SourceKind::Ppt, &["ppt", "pps", "pot"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
@@ -68,9 +71,6 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
 /// a batch, rather than read as a PDF and failing as a corrupt one. A format
 /// leaves this list when its reader lands.
 const UNSUPPORTED: &[(&str, &str)] = &[
-    ("ppt", "PowerPoint 97-2003 presentation"),
-    ("pps", "PowerPoint 97-2003 slide show"),
-    ("pot", "PowerPoint 97-2003 template"),
     ("rtf", "Rich Text Format document"),
     ("wpd", "WordPerfect document"),
     ("pages", "Apple Pages document"),
@@ -116,8 +116,8 @@ pub(crate) fn unsupported(path: Option<&Path>, data: &[u8]) -> Option<String> {
             "unsupported format (.{e}, {what}): no reader for it yet"
         )),
         None if data.starts_with(&COMPOUND_MAGIC) => Some(
-            "unsupported format (an OLE compound file that is no Word or Excel 97-2003 document \
-             nor Outlook message, such as a PowerPoint 97-2003 file): no reader for it yet"
+            "unsupported format (an OLE compound file that is no Word, Excel or PowerPoint 97-2003 \
+             document nor Outlook message): no reader for it yet"
                 .into(),
         ),
         None => None,
@@ -170,6 +170,11 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_doc::is_doc(data) {
         return SourceKind::Doc;
     }
+    // A PowerPoint 97-2003 presentation: one holding a PowerPoint Document
+    // stream.
+    if data.starts_with(&COMPOUND_MAGIC) && fluree_doc_ppt::is_ppt(data) {
+        return SourceKind::Ppt;
+    }
     match kind {
         Some(
             k @ (SourceKind::Markdown
@@ -182,7 +187,8 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
             | SourceKind::Xps
             | SourceKind::Doc
             | SourceKind::Odf
-            | SourceKind::Xlsb),
+            | SourceKind::Xlsb
+            | SourceKind::Ppt),
         ) => k,
         _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
         _ if is_pdf(data) => SourceKind::Pdf,
@@ -803,8 +809,8 @@ mod tests {
         let compound = [&COMPOUND_MAGIC[..], &[0u8; 504]].concat();
         let zip = b"PK\x03\x04 an Apple package".to_vec();
         for (name, data) in [
-            ("letter.pot", &compound),
-            ("Letter.PPT", &compound),
+            ("letter.wpd", &compound),
+            ("Letter.PAGES", &compound),
             ("slides.key", &zip),
             ("notes.rtf", &b"{\\rtf1 text}".to_vec()),
         ] {

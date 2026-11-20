@@ -275,6 +275,34 @@ level next to the plot is read.
 
 Returns `PptxError` for a malformed or non-archive file.
 
+### PowerPoint 97-2003 (`.ppt`)
+
+```bash
+fdoc convert old-deck.ppt -f doco
+```
+
+A `.ppt` (or `.pps`, `.pot`) is read for its slides' text. Its `PowerPoint
+Document` stream is a tree of records saved edit after edit: the `Current
+User` stream names the last edit, each edit the one before it and a persist
+directory of where each object is, the newest saying where an object is
+now. Through it, the slide list gives the slides in order, each a page; each
+slide's shapes hold its text in text atoms (UTF-16 or one byte a
+character). A title placeholder's text, by the shape's placeholder or by
+the text's own header, is a level-1 heading; every other text is a
+paragraph a line. A slide whose shapes hold no text, as an older writer
+keeps it, is read from the slide list.
+
+Not read: speaker notes, the masters' placeholder prompts, bullets and
+list levels (so no list items), tables (their cells' text is read as
+paragraphs), pictures, charts, embedded objects and summary information.
+An encrypted file is refused. A file is recognised by its content, a
+compound file holding a `PowerPoint Document` stream, whatever its name and
+on stdin. The container is opened by the `cfb` crate, which refuses a
+looping sector chain; the stream is read to at most 256 MiB, records nest
+at most 64 deep, at most 4,096 edits are followed (each once, so an edit
+chain that loops ends) and 10,000 slides read. Provenance and evidence are
+`ppt`. Returns `PptError` (`fluree_doc_ppt::parse`) otherwise.
+
 ## XLSX
 
 ```bash

@@ -793,3 +793,92 @@ fn an_xlsb_workbook_reads_in_every_output_whatever_its_name() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A one-slide PowerPoint 97 deck: a title and a line of body text, in a
+/// shape's text box.
+fn ppt() -> Vec<u8> {
+    use std::io::Write;
+    let rec = |container: bool, typ: u16, data: &[u8]| {
+        let mut v = (if container { 0x0Fu16 } else { 0 }).to_le_bytes().to_vec();
+        v.extend(typ.to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let text = |kind: u32, s: &str| {
+        [
+            rec(false, 0x0F9F, &kind.to_le_bytes()),
+            rec(
+                false,
+                0x0FA0,
+                &s.encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<u8>>(),
+            ),
+        ]
+        .concat()
+    };
+    let persist = rec(
+        false,
+        0x03F3,
+        &[2u32.to_le_bytes().to_vec(), vec![0; 16]].concat(),
+    );
+    let document = rec(true, 0x03E8, &rec(true, 0x0FF0, &persist));
+    let slide = rec(
+        true,
+        0x03EE,
+        &rec(
+            true,
+            0xF00D,
+            &[
+                text(0, "Quarterly review"),
+                text(1, "Alex Sample presents."),
+            ]
+            .concat(),
+        ),
+    );
+    let mut s = document.clone();
+    let slide_at = s.len() as u32;
+    s.extend(&slide);
+    let dir_at = s.len() as u32;
+    let mut dir = Vec::new();
+    for (id, off) in [(1u32, 0u32), (2, slide_at)] {
+        dir.extend(((1u32 << 20) | id).to_le_bytes());
+        dir.extend(off.to_le_bytes());
+    }
+    s.extend(rec(false, 0x1772, &dir));
+    let edit_at = s.len() as u32;
+    let mut edit = vec![0u8; 8];
+    for v in [0u32, dir_at, 1] {
+        edit.extend(v.to_le_bytes());
+    }
+    s.extend(rec(false, 0x0FF5, &edit));
+    let mut user = vec![0u8; 16];
+    user.extend(edit_at.to_le_bytes());
+    let mut cf =
+        cfb::CompoundFile::create_with_version(cfb::Version::V3, std::io::Cursor::new(Vec::new()))
+            .unwrap();
+    for (name, data) in [("/PowerPoint Document", &s), ("/Current User", &user)] {
+        cf.create_stream(name).unwrap().write_all(data).unwrap();
+    }
+    cf.flush().unwrap();
+    cf.into_inner().into_inner()
+}
+
+#[test]
+fn a_powerpoint_97_deck_reads_in_every_output_whatever_its_name() {
+    let dir = scratch("ppt");
+    let input = dir.join("deck.ppt");
+    std::fs::write(&input, ppt()).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(
+        &out,
+        "doco:SectionTitle",
+        &["Quarterly review", "Alex Sample presents."],
+    );
+    let renamed = dir.join("deck.bin");
+    std::fs::write(&renamed, ppt()).unwrap();
+    let o = convert(&dir, &renamed, "md", &[]);
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample presents."));
+    let _ = std::fs::remove_dir_all(dir);
+}
