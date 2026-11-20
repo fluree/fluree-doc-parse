@@ -49,6 +49,11 @@ impl Relationship {
 /// a document pastes in.
 pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
 
+/// The most bytes an XML part read beside a document's main one (its
+/// relationships, its core properties, its notes, comments and settings)
+/// is inflated to: 64 MiB, far more than any holds.
+pub const MAX_XML_BYTES: u64 = 64 << 20;
+
 /// The bytes of an image part of an opened package, at most
 /// [`MAX_MEDIA_BYTES`] of them. The package is opened once for all of a
 /// document's pictures: opening it reads the archive's whole directory.
@@ -171,6 +176,28 @@ impl<'a> Package<'a> {
         Some(s)
     }
 
+    /// A part's text, at most `max` bytes of it, checked as it inflates:
+    /// `Ok(None)` where the package has no such part, or it does not read
+    /// (a broken entry, text that is not UTF-8), and refused, naming the
+    /// part, where it holds more.
+    pub fn read_capped(&mut self, part: &str, max: u64) -> Result<Option<String>, String> {
+        let Ok(entry) = self.zip.by_name(part) else {
+            return Ok(None);
+        };
+        let too_large = || format!("{part}: more than the {max} bytes read");
+        if entry.size() > max {
+            return Err(too_large());
+        }
+        let mut v = Vec::new();
+        if entry.take(max + 1).read_to_end(&mut v).is_err() {
+            return Ok(None);
+        }
+        if v.len() as u64 > max {
+            return Err(too_large());
+        }
+        Ok(String::from_utf8(v).ok())
+    }
+
     /// A part's bytes, for a binary part such as an image, at most `max` of
     /// them. Refused, naming the part, where the package has no such part or
     /// it holds more: a few kilobytes of archive can inflate to gigabytes, and
@@ -204,9 +231,12 @@ impl<'a> Package<'a> {
     }
 
     /// A part's relationships, each internal target resolved to a part name.
-    /// Empty where the part has none.
+    /// Empty where the part has none, or its relationships part holds more
+    /// than [`MAX_XML_BYTES`].
     pub fn relationships(&mut self, part: &str) -> Vec<Relationship> {
-        self.read(&rels_part(part))
+        self.read_capped(&rels_part(part), MAX_XML_BYTES)
+            .ok()
+            .flatten()
             .map(|xml| relationships(&xml, part))
             .unwrap_or_default()
     }
@@ -241,12 +271,15 @@ impl<'a> Package<'a> {
     }
 
     /// What the file declares about itself in its core properties: title,
-    /// author, and when it was made and last saved.
+    /// author, and when it was made and last saved; nothing where the part
+    /// holds more than [`MAX_XML_BYTES`].
     pub fn info(&mut self) -> DocumentInfo {
         let part = self
             .root("core-properties")
             .unwrap_or_else(|| "docProps/core.xml".to_string());
-        self.read(&part)
+        self.read_capped(&part, MAX_XML_BYTES)
+            .ok()
+            .flatten()
             .map(|xml| core_properties(&xml))
             .unwrap_or_default()
     }
@@ -564,6 +597,68 @@ mod tests {
         assert_eq!(p.main_part("word/document.xml"), "word/document.xml");
         assert_eq!(p.info().creators, ["Ada"]);
         assert!(info(b"not a zip").is_empty());
+    }
+
+    /// A package of these parts, deflated, as a hostile one holds a part
+    /// of gigabytes in a few kilobytes.
+    fn deflated(parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, body) in parts {
+            z.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(body).unwrap();
+        }
+        z.finish().unwrap();
+        buf.into_inner()
+    }
+
+    /// `head`, padded with spaces to one byte past `max`.
+    fn past(head: &str, max: u64) -> Vec<u8> {
+        let mut v = head.as_bytes().to_vec();
+        v.resize(max as usize + 1, b' ');
+        v
+    }
+
+    #[test]
+    fn a_part_past_its_bound_is_refused_as_it_inflates() {
+        let notes = "<w:notes/>";
+        let bytes = package(&[("word/notes.xml", notes)]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert!(p.read_capped("word/notes.xml", 9).is_err());
+        assert_eq!(
+            p.read_capped("word/notes.xml", 10).unwrap().as_deref(),
+            Some(notes)
+        );
+        assert_eq!(p.read_capped("word/none.xml", 9), Ok(None));
+        // A part's relationships and the core properties, each past the
+        // bound: refused, and the package reads as one that does not say.
+        let rels = format!(
+            "<Relationships><Relationship Id=\"rId1\" Type=\"{REL}/styles\" Target=\"styles.xml\"/></Relationships>"
+        );
+        let bytes = deflated(&[
+            ("word/_rels/document.xml.rels", &past(&rels, MAX_XML_BYTES)),
+            (
+                "docProps/core.xml",
+                &past(
+                    "<cp:coreProperties><dc:title>Unread</dc:title>",
+                    MAX_XML_BYTES,
+                ),
+            ),
+        ]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert!(p.read_capped("docProps/core.xml", MAX_XML_BYTES).is_err());
+        assert!(p.relationships("word/document.xml").is_empty());
+        assert!(p.info().is_empty());
+        // Its size declared as a few bytes: no more than those are read.
+        let mut bytes = deflated(&[("big.xml", &past("<a/>", 1 << 20))]);
+        for (sig, at) in [(b"PK\x03\x04", 22), (b"PK\x01\x02", 24)] {
+            let h = bytes.windows(4).position(|w| w == sig).unwrap();
+            bytes[h + at..h + at + 4].copy_from_slice(&16u32.to_le_bytes());
+        }
+        let mut p = Package::open(&bytes).unwrap();
+        let read = p.read_capped("big.xml", 1 << 20);
+        assert!(read.is_err() || read.unwrap().is_none_or(|s| s.len() <= 16));
     }
 
     #[test]

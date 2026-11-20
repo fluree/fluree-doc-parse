@@ -356,10 +356,22 @@ fn read_style_numbering(xml: &str) -> HashMap<String, StyleNum> {
     out
 }
 
+/// The most letters a letter label repeats (`aaaa…`): past them, and past
+/// what Roman numerals write (3,999), a number is written in decimal. A
+/// label's length otherwise grows with the number, and a document of a
+/// million notes or list items with it, as their square.
+const MAX_LABEL_LETTERS: u32 = 16;
+
 /// A counter's value in one of Word's number formats. Formats without a
 /// rule here (`ordinal`, `cardinalText`, the East Asian ones) are written in
-/// decimal, which keeps the number if not its spelling.
-fn format_number(n: u32, format: &str) -> String {
+/// decimal, which keeps the number if not its spelling; so are numbers past
+/// [`MAX_LABEL_LETTERS`] letters or 3,999.
+pub(crate) fn format_number(n: u32, format: &str) -> String {
+    let letters = matches!(format, "lowerLetter" | "upperLetter");
+    let numerals = matches!(format, "lowerRoman" | "upperRoman");
+    if (letters && (n.max(1) - 1) / 26 >= MAX_LABEL_LETTERS) || (numerals && n > 3_999) {
+        return n.to_string();
+    }
     match format {
         "lowerLetter" | "upperLetter" => {
             // Word repeats the letter past z: aa, bb, … not Excel's aa, ab.

@@ -189,3 +189,65 @@ fn an_xls_workbook_reads_in_every_output_whatever_its_name() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_word_files_footnotes_and_comments_reach_every_output() {
+    use std::io::Write;
+    let dir = scratch("docx-notes");
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+    let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let parts = [
+        (
+            "word/document.xml",
+            format!(
+                "<w:document {ns}><w:body><w:p><w:r><w:t>Yield rose</w:t></w:r>\
+                 <w:r><w:footnoteReference w:id=\"1\"/></w:r>\
+                 <w:r><w:commentReference w:id=\"0\"/></w:r></w:p></w:body></w:document>"
+            ),
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            format!(
+                "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}/footnotes\" Target=\"footnotes.xml\"/>\
+                 <Relationship Id=\"rId2\" Type=\"{rel}/comments\" Target=\"comments.xml\"/></Relationships>"
+            ),
+        ),
+        (
+            "word/footnotes.xml",
+            format!(
+                "<w:footnotes {ns}><w:footnote w:id=\"1\"><w:p><w:r><w:t>Survey of Alex Sample.</w:t></w:r></w:p></w:footnote></w:footnotes>"
+            ),
+        ),
+        (
+            "word/comments.xml",
+            format!(
+                "<w:comments {ns}><w:comment w:id=\"0\" w:author=\"Sam Example\"><w:p><w:r><w:t>Source?</w:t></w:r></w:p></w:comment></w:comments>"
+            ),
+        ),
+    ];
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    let opts = zip::write::SimpleFileOptions::default();
+    for (name, xml) in &parts {
+        z.start_file(*name, opts).unwrap();
+        z.write_all(xml.as_bytes()).unwrap();
+    }
+    z.finish().unwrap();
+    let input = dir.join("memo.docx");
+    std::fs::write(&input, buf.into_inner()).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(
+        &out,
+        "doco:Paragraph",
+        &[
+            "Yield rose",
+            "1 Survey of Alex Sample.",
+            "Sam Example: Source?",
+        ],
+    );
+    for evidence in ["\"footnote\"", "\"comment\""] {
+        assert!(out[1].1.contains(evidence), "{}", out[1].1);
+        assert!(out[2].1.contains(evidence), "{}", out[2].1);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

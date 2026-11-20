@@ -69,6 +69,22 @@ last laid the file out on, whichever that was, so its field contributes
 nothing: `Page 3 of 7` reads `Page of`. A picture in a header is its logo, and is
 left out.
 
+**Footnotes, endnotes and comments.** A citation is often only in a
+footnote, and a reviewer's question only in a comment. Each footnote and
+endnote the body cites is read after the body, in the order the body first
+cites it, its paragraphs marked `evidence` `footnote` or `endnote` and its
+first one opening with the label Word shows for it: `1`, `2`, … for
+footnotes and `i`, `ii`, … for endnotes, or the format the document sets
+(`w:footnotePr`, `w:endnotePr`). The reference mark in the body adds nothing
+to the body's text, so the body reads as it did. A note no reference cites,
+or cited only inside a tracked deletion, is not shown by Word and is not
+read; Word's separator lines are no notes. Comments come last, after the
+footer, since Word does not print them: in the order the body anchors them,
+then any anchored elsewhere, each `evidence` `comment` and opening with its
+author (`Sam Example: Source?`). A heading inside a note is read as a
+paragraph, and a picture in one is left out. Footnote reference marks set
+as custom symbols, and comment replies' threading, are not read.
+
 **Line breaks.** A line break (Shift+Enter) ends a line, and the line stays
 one: `4.1 Equipment` and `4.2 Materials` are two lines of one paragraph. Two in a row leave a blank line, which parts the
 paragraph as an empty paragraph would, so a numbered heading, a blank line and
