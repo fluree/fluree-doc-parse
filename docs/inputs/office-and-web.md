@@ -299,8 +299,15 @@ notes slide its own atom names) follow its content on its page, as
 paragraphs whose `evidence` is `notes`: what the presenter said, kept apart
 from what the audience saw.
 
-Not read: the masters' placeholder prompts, tables (their cells' text is read as
-paragraphs), pictures, charts, embedded objects and summary information.
+**Tables** are drawn in a `.ppt` as a group of shapes whose first shape says
+it is a table: each other shape is a cell, placed in the group, holding its
+text. The grid is rebuilt from the cells' edges, a cell spanning several
+columns or rows making the cells it covers continuations (`merged_left`,
+`merged_down`); border lines are no cells. PowerPoint declares no header
+row, so `header_rows` is left undetected. A table of more than 10,000 cells,
+or whose grid would pass a million, is read as its cells' text.
+
+Not read: the masters' placeholder prompts, pictures, charts, embedded objects and summary information.
 An encrypted file is refused. A file is recognised by its content, a
 compound file holding a `PowerPoint Document` stream, whatever its name and
 on stdin. The container is opened by the `cfb` crate, which refuses a

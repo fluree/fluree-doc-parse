@@ -305,7 +305,13 @@ fn a_title_placeholder_is_the_title_whatever_its_text_header_says() {
     let r = record(&slide, 0).unwrap();
     let mut out = Vec::new();
     texts(&slide, &r, 0, &mut 4, false, &mut out);
-    let kinds: Vec<(u32, &str)> = out.iter().map(|t| (t.kind, t.text.as_str())).collect();
+    let kinds: Vec<(u32, &str)> = out
+        .iter()
+        .filter_map(|i| match i {
+            Item::Text(t) => Some((t.kind, t.text.as_str())),
+            Item::Table(_) => None,
+        })
+        .collect();
     assert_eq!(kinds, [(0, "Review"), (4, "Body text")]);
 }
 
@@ -379,4 +385,92 @@ fn bullets_and_indent_levels_make_list_items() {
         paras: Vec::new(),
     };
     assert_eq!(paragraphs(&other), [("Caption".to_string(), false)]);
+}
+
+/// A shape's properties: each id and value, none complex.
+fn opt(typ: u16, props: &[(u16, u32)]) -> Vec<u8> {
+    let d: Vec<u8> = props
+        .iter()
+        .flat_map(|(id, v)| [id.to_le_bytes().to_vec(), v.to_le_bytes().to_vec()].concat())
+        .collect();
+    rec(true, props.len() as u16, typ, &d)[..].to_vec()
+}
+
+/// A table cell: a shape placed at `l, t, r, b` in its group, holding
+/// `text`.
+fn cell(l: i32, t: i32, r: i32, b: i32, text: &str) -> Vec<u8> {
+    let anchor: Vec<u8> = [l, t, r, b].iter().flat_map(|v| v.to_le_bytes()).collect();
+    rec(
+        true,
+        0,
+        SHAPE,
+        &[
+            rec(false, 1, SHAPE_HEADER, &[0; 8]),
+            rec(false, 0, CHILD_ANCHOR, &anchor),
+            rec(true, 0, 0xF00D, &[header(4), chars(text)].concat()),
+        ]
+        .concat(),
+    )
+}
+
+#[test]
+fn a_group_drawn_as_a_table_is_a_table() {
+    // As LibreOffice writes one: the group's first shape says it is a
+    // table; the cells are shapes placed in a grid, `Region` spanning both
+    // columns of its row; a border line is no cell.
+    let line = rec(
+        true,
+        0,
+        SHAPE,
+        &[
+            rec(false, LINE_SHAPE, SHAPE_HEADER, &[0; 8]),
+            rec(false, 0, CHILD_ANCHOR, &[0u8; 16]),
+        ]
+        .concat(),
+    );
+    let group = rec(
+        true,
+        0,
+        GROUP,
+        &[
+            rec(
+                true,
+                0,
+                SHAPE,
+                &opt(TERTIARY_OPT, &[(0x039F, 1), (TABLE_PROPERTIES, 0xE)]),
+            ),
+            cell(0, 0, 200, 50, "Region West"),
+            cell(0, 50, 100, 100, "Owner"),
+            cell(100, 50, 200, 100, "Alex Sample"),
+            line,
+        ]
+        .concat(),
+    );
+    let slide = rec(true, 0, SLIDE, &rec(true, 0, 0x040C, &group));
+    let r = record(&slide, 0).unwrap();
+    let mut out = Vec::new();
+    texts(&slide, &r, 0, &mut 4, false, &mut out);
+    let [Item::Table(t)] = out.as_slice() else {
+        panic!("{out:?}");
+    };
+    assert_eq!(
+        t.rows,
+        [vec!["Region West", ""], vec!["Owner", "Alex Sample"]]
+    );
+    assert_eq!(t.left, [false, true, false, false]);
+    let e = table_element(t.clone(), 3);
+    assert_eq!(e.kind, "doco:Table");
+    assert_eq!(e.page, 3);
+    assert!(e.merged_down.is_none());
+    // The same group without the table property is its shapes' text.
+    let plain = rec(
+        true,
+        0,
+        GROUP,
+        &[rec(true, 0, SHAPE, &[]), cell(0, 0, 10, 10, "Loose")].concat(),
+    );
+    let r = record(&plain, 0).unwrap();
+    let mut out = Vec::new();
+    texts(&plain, &r, 0, &mut 4, false, &mut out);
+    assert!(matches!(out.as_slice(), [Item::Text(t)] if t.text == "Loose"));
 }

@@ -20,9 +20,10 @@
 //! slide list's text is read. A slide's **speaker notes**, the notes slide
 //! its own atom names, follow its content as paragraphs whose `evidence` is
 //! `notes`, so a consumer that wants what the audience saw leaves them out.
+//! A **table**, a group of shapes whose first says it is one, is rebuilt
+//! from its cells' positions.
 //! **What is not**: the masters' placeholder prompts, the list level itself
-//! (the element model keeps a level on headings only), tables (their cells'
-//! text is read as paragraphs), pictures, charts and embedded objects, and the
+//! (the element model keeps a level on headings only), pictures, charts and embedded objects, and the
 //! summary information. Encrypted files fail as malformed or unsupported.
 //!
 //! **Bounds**: the compound file is opened by the `cfb` crate, which
@@ -346,9 +347,169 @@ fn atom_text(typ: u16, data: &[u8]) -> String {
     }
 }
 
-/// Every text atom under `r`, each with the header before it, in order.
+/// What a slide shows, in its shapes' order: text, or a table.
+#[derive(Debug, Clone, PartialEq)]
+enum Item {
+    Text(Text),
+    Table(Table),
+}
+
+/// A table rebuilt from its cells' positions.
+#[derive(Debug, Clone, PartialEq, Default)]
+struct Table {
+    rows: Vec<Vec<String>>,
+    /// Same shape as `rows`: the cell continues the one to its left, or the
+    /// one above it (a merged cell spans it).
+    left: Vec<bool>,
+    down: Vec<bool>,
+}
+
+/// The most cells a table is rebuilt from, and the most its grid may hold;
+/// past either its cells are read as text.
+const MAX_TABLE_CELLS: usize = 10_000;
+const MAX_TABLE_GRID: usize = 1 << 20;
+
+/// An OfficeArt group (`SpgrContainer`) and the anchor a shape inside one
+/// is placed by (`ChildAnchor`, left, top, right, bottom).
+const GROUP: u16 = 0xF003;
+const CHILD_ANCHOR: u16 = 0xF00F;
+/// A shape's header (`FSP`), its instance the shape's type; and its
+/// properties, in the primary and the tertiary tables.
+const SHAPE_HEADER: u16 = 0xF00A;
+const OPT: u16 = 0xF00B;
+const TERTIARY_OPT: u16 = 0xF122;
+/// `tableProperties`: set on the group a table is drawn as.
+const TABLE_PROPERTIES: u16 = 0x03A0;
+/// `msosptLine`: a cell's border, not a cell.
+const LINE_SHAPE: u16 = 20;
+
+/// The properties an `OPT` record lists: each id, its value, and for a
+/// complex one the bytes its value counts, which follow the list in order.
+fn properties(d: &[u8], r: &Record) -> Vec<(u16, u32, Option<Vec<u8>>)> {
+    let n = r.instance as usize;
+    let data = &d[r.data.0..r.data.1];
+    let mut out = Vec::with_capacity(n.min(1024));
+    let mut complex = 6 * n;
+    for k in 0..n {
+        let (Some(op), Some(value)) = (u16_at(data, 6 * k), u32_at(data, 6 * k + 2)) else {
+            break;
+        };
+        let bytes = if op & 0x8000 != 0 {
+            let end = complex.saturating_add(value as usize);
+            let b = data.get(complex..end).map(<[u8]>::to_vec);
+            complex = end;
+            b
+        } else {
+            None
+        };
+        out.push((op & 0x3FFF, value, bytes));
+    }
+    out
+}
+
+/// Whether a shape (or a group's first shape) sets property `id`.
+fn has_property(d: &[u8], shape: &Record, id: u16) -> bool {
+    children(d, shape)
+        .iter()
+        .filter(|c| matches!(c.typ, OPT | TERTIARY_OPT))
+        .any(|c| properties(d, c).iter().any(|(p, _, _)| *p == id))
+}
+
+/// A table drawn as a group of shapes: the group's first shape says it is
+/// one (`tableProperties`), each other shape is a cell placed by its child
+/// anchor, holding its text. The grid is rebuilt from the cells' edges: a
+/// cell spanning several columns or rows makes the cells it covers
+/// continuations. `None` where the group is no table, or one past the
+/// bounds above.
+fn table(d: &[u8], group: &Record, depth: usize) -> Option<Table> {
+    let shapes: Vec<Record> = children(d, group)
+        .into_iter()
+        .filter(|c| c.typ == SHAPE && c.container)
+        .collect();
+    let first = shapes.first()?;
+    if !has_property(d, first, TABLE_PROPERTIES) {
+        return None;
+    }
+    let mut cells: Vec<([i32; 4], String)> = Vec::new();
+    for s in &shapes[1..] {
+        let parts = children(d, s);
+        if parts
+            .iter()
+            .any(|p| p.typ == SHAPE_HEADER && p.instance == LINE_SHAPE)
+        {
+            continue;
+        }
+        let Some(a) = parts.iter().find(|p| p.typ == CHILD_ANCHOR) else {
+            continue;
+        };
+        let at = |k: usize| {
+            u32_at(d, a.data.0 + 4 * k)
+                .filter(|_| a.data.0 + 4 * k + 4 <= a.data.1)
+                .map(|v| v as i32)
+        };
+        let (Some(l), Some(t), Some(r), Some(b)) = (at(0), at(1), at(2), at(3)) else {
+            continue;
+        };
+        if r <= l || b <= t {
+            continue;
+        }
+        let mut found = Vec::new();
+        texts(d, s, depth + 1, &mut 4, false, &mut found);
+        let text = found
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text(t) => Some(tidy(&t.text.replace('\r', " "))),
+                Item::Table(_) => None,
+            })
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        cells.push(([l, t, r, b], text));
+        if cells.len() > MAX_TABLE_CELLS {
+            return None;
+        }
+    }
+    if cells.is_empty() {
+        return None;
+    }
+    let edges = |a: usize, b: usize| {
+        let mut v: Vec<i32> = cells.iter().flat_map(|(c, _)| [c[a], c[b]]).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let (xs, ys) = (edges(0, 2), edges(1, 3));
+    let (ncols, nrows) = (xs.len() - 1, ys.len() - 1);
+    if ncols == 0 || nrows == 0 || ncols.saturating_mul(nrows) > MAX_TABLE_GRID {
+        return None;
+    }
+    let pos = |v: &[i32], x: i32| v.binary_search(&x).unwrap_or(0);
+    let mut grid = Table {
+        rows: vec![vec![String::new(); ncols]; nrows],
+        left: vec![false; ncols * nrows],
+        down: vec![false; ncols * nrows],
+    };
+    for ([l, t, r, b], text) in cells {
+        let (c0, c1, r0, r1) = (pos(&xs, l), pos(&xs, r), pos(&ys, t), pos(&ys, b));
+        grid.rows[r0][c0] = text;
+        for row in r0..r1 {
+            for col in c0..c1 {
+                if col > c0 {
+                    grid.left[row * ncols + col] = true;
+                }
+                if row > r0 && col == c0 {
+                    grid.down[row * ncols + col] = true;
+                }
+            }
+        }
+    }
+    Some(grid)
+}
+
+/// What a container shows, in order: each text atom with the header before
+/// it and the paragraph properties after it, and each table.
 /// `title` makes every text a title, the shape being a title placeholder.
-fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &mut Vec<Text>) {
+fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &mut Vec<Item>) {
     if depth > MAX_DEPTH {
         return;
     }
@@ -356,17 +517,25 @@ fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &
         let data = &d[c.data.0..c.data.1];
         match c.typ {
             TEXT_HEADER => *kind = u32_at(data, 0).unwrap_or(4),
-            TEXT_CHARS | TEXT_BYTES => out.push(Text {
+            TEXT_CHARS | TEXT_BYTES => out.push(Item::Text(Text {
                 kind: if title { 0 } else { *kind },
                 text: atom_text(c.typ, data),
                 paras: Vec::new(),
-            }),
+            })),
             // The properties of the text just read, beside it.
             STYLE_TEXT_PROP => {
-                if let Some(t) = out.last_mut().filter(|t| t.paras.is_empty()) {
-                    t.paras = para_runs(data, t.text.encode_utf16().count());
+                if let Some(Item::Text(t)) = out.last_mut() {
+                    if t.paras.is_empty() {
+                        t.paras = para_runs(data, t.text.encode_utf16().count());
+                    }
                 }
             }
+            // A group a table is drawn as is the table; any other group
+            // is its shapes.
+            GROUP if c.container => match table(d, &c, depth + 1) {
+                Some(t) => out.push(Item::Table(t)),
+                None => texts(d, &c, depth + 1, kind, title, out),
+            },
             // A shape: a placeholder that is a slide's title makes its text
             // the title, whatever its text header says (LibreOffice writes
             // `Other` for every slide text).
@@ -378,6 +547,25 @@ fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &
             _ => {}
         }
     }
+}
+
+/// A rebuilt table as a `doco:Table`. PowerPoint declares no header row,
+/// so `header_rows` is left undetected.
+fn table_element(t: Table, page: usize) -> Element {
+    let text = t
+        .rows
+        .iter()
+        .map(|r| r.join(" | "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut e = Element {
+        page,
+        ..Element::new("doco:Table", text, "ppt", "ppt")
+    };
+    e.merged_left = t.left.iter().any(|x| *x).then_some(t.left);
+    e.merged_down = t.down.iter().any(|x| *x).then_some(t.down);
+    e.cells = Some(t.rows);
+    e
 }
 
 /// A text's paragraphs, split at their marks, a line break kept as a line;
@@ -506,7 +694,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
         // The speaker's notes: the notes slide the slide's own atom names
         // (`notesIdRef`, after its layout, placeholders and master), read
         // after the slide.
-        let notes: Vec<Text> = slide
+        let notes: Vec<Item> = slide
             .and_then(|s| {
                 children(&doc, &s)
                     .into_iter()
@@ -523,12 +711,23 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
                 v
             })
             .unwrap_or_default();
-        let runs = if found.iter().any(|t| !t.text.trim().is_empty()) {
+        let shows = |i: &Item| match i {
+            Item::Text(t) => !t.text.trim().is_empty(),
+            Item::Table(_) => true,
+        };
+        let runs = if found.iter().any(shows) {
             found
         } else {
-            listed
+            listed.into_iter().map(Item::Text).collect()
         };
-        for t in runs {
+        for item in runs {
+            let t = match item {
+                Item::Text(t) => t,
+                Item::Table(t) => {
+                    out.push(table_element(t, page));
+                    continue;
+                }
+            };
             let title = matches!(t.kind, 0 | 6);
             if title {
                 let line = tidy(&t.text.replace(['\r', '\u{b}'], " "));
@@ -553,7 +752,10 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
                 });
             }
         }
-        for t in notes {
+        for t in notes.into_iter().filter_map(|i| match i {
+            Item::Text(t) => Some(t),
+            Item::Table(_) => None,
+        }) {
             for (l, _) in paragraphs(&t) {
                 out.push(Element {
                     page,
