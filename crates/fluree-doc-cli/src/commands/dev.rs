@@ -1176,6 +1176,7 @@ pub(crate) fn render_routed(
             SourceKind::Docx => Some(docx_crops),
             SourceKind::Xlsx => Some(xlsx_crops),
             SourceKind::Email => Some(email_crops),
+            SourceKind::Xps => Some(xps_crops),
             _ => None,
         };
         if let Some(crops) = crops {
@@ -1620,6 +1621,39 @@ fn write_png(path: &Path, pixels: &mut fluree_doc_vision::Pixels) -> Result<(), 
     enc.write_header()
         .and_then(|mut w| w.write_image_data(&pixels.data))
         .map_err(|e| e.to_string())
+}
+
+/// An XPS document's crops: each page that is only a picture (a screen
+/// printed to XPS), the picture decoded upright at its own resolution, as
+/// `<stem>_p<N>_full.png`, the name a reading of the page is looked up by.
+fn xps_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let xps = fluree_doc_xps::parse(bytes).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for p in &xps.doc.pages {
+        let fluree_doc_pdf::route::Route::Vlm(r) = fluree_doc_pdf::route::decide(p).0 else {
+            continue;
+        };
+        let Some(img) = xps.page_image(p.index) else {
+            continue;
+        };
+        let read =
+            fluree_doc_xps::read_image(bytes, &img.part).and_then(|b| fluree_doc_image::decode(&b));
+        let mut image = match read {
+            Ok(image) => image,
+            Err(e) => {
+                eprintln!("warning: {stem}_p{}_full: {e}", p.index);
+                continue;
+            }
+        };
+        let name = format!("{stem}_p{}_full.png", p.index);
+        write_png(&outdir.join(&name), &mut image.pixels)?;
+        out.push(serde_json::json!({
+            "doc": stem, "page": p.index, "kind": "page", "png": name,
+            "reason": fluree_doc_pdf::escalate::CropReason::from(r).as_str(), "scale": 1.0,
+            "part": img.part,
+        }));
+    }
+    Ok(out)
 }
 
 /// A bare image's one crop: the image decoded upright, over white where it

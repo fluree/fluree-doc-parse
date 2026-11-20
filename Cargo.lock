@@ -1001,6 +1001,7 @@ dependencies = [
  "fluree-doc-vision",
  "fluree-doc-xls",
  "fluree-doc-xlsx",
+ "fluree-doc-xps",
  "hayro",
  "hayro-syntax",
  "image",
@@ -1170,6 +1171,18 @@ dependencies = [
  "fluree-doc-ooxml",
  "fluree-doc-vision",
  "image",
+ "quick-xml 0.36.2",
+ "zip",
+]
+
+[[package]]
+name = "fluree-doc-xps"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "fluree-doc-model",
+ "fluree-doc-ooxml",
+ "fluree-doc-pdf",
  "quick-xml 0.36.2",
  "zip",
 ]

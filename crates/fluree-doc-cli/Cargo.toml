@@ -25,6 +25,7 @@ fluree-doc-pptx.workspace = true
 fluree-doc-xlsx.workspace = true
 fluree-doc-csv.workspace = true
 fluree-doc-xls.workspace = true
+fluree-doc-xps.workspace = true
 fluree-doc-transcript.workspace = true
 fluree-doc-email.workspace = true
 fluree-doc-vision.workspace = true

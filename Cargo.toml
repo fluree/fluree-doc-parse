@@ -11,6 +11,7 @@ members = [
     "crates/fluree-doc-xlsx",
     "crates/fluree-doc-csv",
     "crates/fluree-doc-xls",
+    "crates/fluree-doc-xps",
     "crates/fluree-doc-transcript",
     "crates/fluree-doc-email",
     "crates/fluree-doc-vision",
@@ -37,11 +38,13 @@ fluree-doc-pptx = { path = "crates/fluree-doc-pptx" }
 fluree-doc-xlsx = { path = "crates/fluree-doc-xlsx" }
 fluree-doc-csv = { path = "crates/fluree-doc-csv" }
 fluree-doc-xls = { path = "crates/fluree-doc-xls" }
+fluree-doc-xps = { path = "crates/fluree-doc-xps" }
 fluree-doc-ooxml = { path = "crates/fluree-doc-ooxml" }
 fluree-doc-transcript = { path = "crates/fluree-doc-transcript" }
 fluree-doc-email = { path = "crates/fluree-doc-email" }
 fluree-doc-vision = { path = "crates/fluree-doc-vision" }
 fluree-doc-image = { path = "crates/fluree-doc-image" }
+fluree-doc-pdf = { path = "crates/fluree-doc-pdf" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
 hayro = "0.7"

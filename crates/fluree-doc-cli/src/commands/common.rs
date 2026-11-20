@@ -18,6 +18,8 @@ pub(crate) enum SourceKind {
     Csv,
     /// An Excel 97-2003 workbook (BIFF8).
     Xls,
+    /// An XPS or OpenXPS document.
+    Xps,
     Transcript,
     Email,
     Image,
@@ -45,6 +47,7 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     (SourceKind::Xlsx, &["xlsx", "xlsm", "xltx", "xltm"]),
     (SourceKind::Csv, &["csv", "tsv"]),
     (SourceKind::Xls, &["xls", "xlt"]),
+    (SourceKind::Xps, &["xps", "oxps"]),
     (SourceKind::Transcript, &["vtt", "srt"]),
     (SourceKind::Email, &["eml", "msg"]),
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
@@ -60,8 +63,6 @@ const UNSUPPORTED: &[(&str, &str)] = &[
     ("dot", "Word 97-2003 template"),
     ("xlsb", "Excel binary workbook"),
     ("ods", "OpenDocument spreadsheet"),
-    ("xps", "XPS document"),
-    ("oxps", "OpenXPS document"),
     ("ppt", "PowerPoint 97-2003 presentation"),
     ("pps", "PowerPoint 97-2003 slide show"),
     ("pot", "PowerPoint 97-2003 template"),
@@ -158,7 +159,8 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
             | SourceKind::Docx
             | SourceKind::Pptx
             | SourceKind::Xlsx
-            | SourceKind::Csv),
+            | SourceKind::Csv
+            | SourceKind::Xps),
         ) => k,
         _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
         _ if is_pdf(data) => SourceKind::Pdf,
@@ -777,11 +779,11 @@ mod tests {
     #[test]
     fn a_format_with_no_reader_is_refused_by_name_not_read_as_a_pdf() {
         let compound = [&COMPOUND_MAGIC[..], &[0u8; 504]].concat();
-        let zip = b"PK\x03\x04 an XPS package".to_vec();
+        let zip = b"PK\x03\x04 an OpenDocument package".to_vec();
         for (name, data) in [
             ("letter.doc", &compound),
             ("Letter.PPT", &compound),
-            ("printed.xps", &zip),
+            ("slides.odp", &zip),
             ("notes.rtf", &b"{\\rtf1 text}".to_vec()),
         ] {
             let path = Path::new(name);
@@ -795,7 +797,7 @@ mod tests {
         }
         // Discovery lists them, so a batch counts them.
         assert_eq!(
-            source_kind(Path::new("a.oxps")),
+            source_kind(Path::new("a.odt")),
             Some(SourceKind::Unsupported)
         );
         // A compound file by its content alone, renamed or from stdin.
@@ -812,7 +814,7 @@ mod tests {
         assert_eq!(input_kind(Path::new("x.dat"), &pdf), SourceKind::Pdf);
         assert_eq!(unsupported(None, &pdf), None);
         let png = b"\x89PNG\r\n\x1a\n....".to_vec();
-        assert_eq!(input_kind(Path::new("x.xps"), &png), SourceKind::Image);
+        assert_eq!(input_kind(Path::new("x.odt"), &png), SourceKind::Image);
         // Anything else still goes to the PDF reader, as before.
         assert_eq!(input_kind(Path::new("x.bin"), b"junk"), SourceKind::Pdf);
     }

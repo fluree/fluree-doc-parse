@@ -413,3 +413,159 @@ fn an_emails_attachments_are_converted_on_request_once_each() {
     assert!(!o.status.success());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A two-page XPS document: a page of text, then a page that is only a
+/// picture, as a screen printed to XPS is.
+fn xps() -> Vec<u8> {
+    use std::io::Write;
+    let ns = "http://schemas.microsoft.com/xps/2005/06";
+    let glyphs = |y: f64, em: f64, text: &str| {
+        let indices: Vec<&str> = text
+            .chars()
+            .map(|c| if c == ' ' { ",25" } else { ",55" })
+            .collect();
+        format!(
+            "<Glyphs OriginX=\"96\" OriginY=\"{y}\" FontRenderingEmSize=\"{em}\" UnicodeString=\"{text}\" Indices=\"{}\"/>",
+            indices.join(";")
+        )
+    };
+    let mut png = Vec::new();
+    image::GrayImage::from_pixel(160, 200, image::Luma([255u8]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let parts: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "_rels/.rels",
+            format!(
+                "<Relationships><Relationship Id=\"R0\" Type=\"{ns}/fixedrepresentation\" Target=\"/seq.fdseq\"/></Relationships>"
+            )
+            .into_bytes(),
+        ),
+        (
+            "seq.fdseq",
+            format!("<FixedDocumentSequence xmlns=\"{ns}\"><DocumentReference Source=\"/Documents/1/doc.fdoc\"/></FixedDocumentSequence>").into_bytes(),
+        ),
+        (
+            "Documents/1/doc.fdoc",
+            format!("<FixedDocument xmlns=\"{ns}\"><PageContent Source=\"Pages/1.fpage\"/><PageContent Source=\"Pages/2.fpage\"/></FixedDocument>").into_bytes(),
+        ),
+        (
+            "Documents/1/Pages/1.fpage",
+            format!(
+                "<FixedPage Width=\"816\" Height=\"1056\" xmlns=\"{ns}\">{}{}</FixedPage>",
+                glyphs(120.0, 32.0, "Quarterly report"),
+                glyphs(180.0, 16.0, "Alex Sample signed the orders on Monday.")
+            )
+            .into_bytes(),
+        ),
+        (
+            "Documents/1/Pages/2.fpage",
+            format!(
+                "<FixedPage Width=\"816\" Height=\"1056\" xmlns=\"{ns}\"><Path Data=\"M 0,0 L 816,0 816,1056 0,1056 Z\">\
+                 <Path.Fill><ImageBrush ImageSource=\"../Resources/screen.png\" Viewport=\"0,0,816,1056\" ViewportUnits=\"Absolute\" \
+                 Viewbox=\"0,0,160,200\" ViewboxUnits=\"Absolute\"/></Path.Fill></Path></FixedPage>"
+            )
+            .into_bytes(),
+        ),
+        ("Documents/1/Resources/screen.png", png),
+    ];
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    for (name, body) in &parts {
+        z.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(body).unwrap();
+    }
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+/// The value of `key` on the graph's document node, as written.
+fn document_value(doco: &str, key: &str) -> String {
+    let v: serde_json::Value = serde_json::from_str(doco).unwrap();
+    let mut found = String::new();
+    walk(&v, &mut |n| {
+        if let Some(x) = n.get(key) {
+            found = x.to_string();
+        }
+    });
+    found
+}
+
+#[test]
+fn an_xps_document_reads_as_a_pdf_does_and_its_pictured_page_as_a_scan() {
+    let dir = scratch("xps");
+    let input = dir.join("report.xps");
+    std::fs::write(&input, xps()).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(
+        &out,
+        "doco:SectionTitle",
+        &[
+            "Quarterly report",
+            "Alex Sample signed the orders on Monday.",
+        ],
+    );
+    let doco = &out[2].1;
+    assert!(doco.contains("doc:bbox"), "{doco}");
+    // The pictured page is unread, as a scan nothing read is.
+    let unread = document_value(doco, "doc:unreadPages");
+    assert!(
+        unread.contains("\"pageIndex\":1") && unread.contains("Scanned"),
+        "{unread}"
+    );
+
+    // Words read from it (`--ocr-words`) are its text, laid out there.
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "coords": "page",
+        "words": [
+            {"text": "Invoice", "box": [72.0, 100.0, 130.0, 114.0], "conf": 0.98},
+            {"text": "4417", "box": [136.0, 100.0, 170.0, 114.0], "conf": 0.97}
+        ]
+    });
+    std::fs::write(words.join("report_p1_full.json"), reading.to_string()).unwrap();
+    let o = convert(
+        &dir,
+        &input,
+        "doco",
+        &["--ocr-words", words.to_str().unwrap()],
+    );
+    let doco = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(doco.contains("Invoice 4417"), "{doco}");
+    assert!(
+        !document_value(&doco, "doc:unreadPages").contains("Scanned"),
+        "{doco}"
+    );
+
+    // A model's reading someone already has (`--tier-results`) reads it too.
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    let page = serde_json::json!([{ "parsing_res_list": [
+        { "block_label": "text", "block_content": "Ticket 92 closed by Sam Example", "block_order": 0 }
+    ]}]);
+    std::fs::write(tiers.join("report_p1_full.json"), page.to_string()).unwrap();
+    let o = convert(
+        &dir,
+        &input,
+        "md",
+        &["--tier-results", tiers.to_str().unwrap()],
+    );
+    let md = String::from_utf8_lossy(&o.stdout).into_owned();
+    assert!(md.contains("Ticket 92 closed by Sam Example"), "{md}");
+    assert!(md.contains("Quarterly report"), "{md}");
+
+    // `render-routed` writes the picture under the name its reading takes.
+    let crops = dir.join("crops");
+    let o = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["dev", "render-routed"])
+        .arg(&input)
+        .arg(&crops)
+        .env("HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(crops.join("report_p1_full.png").is_file());
+    let _ = std::fs::remove_dir_all(dir);
+}

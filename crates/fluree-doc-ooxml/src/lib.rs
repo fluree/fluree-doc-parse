@@ -242,9 +242,12 @@ impl<'a> Package<'a> {
     }
 
     /// The package's own relationship of type `name` (`officeDocument`,
-    /// `core-properties`), from its root relationships part.
-    fn root(&mut self, name: &str) -> Option<String> {
-        self.read("_rels/.rels")
+    /// `core-properties`), from its root relationships part; none where that
+    /// part holds more than [`MAX_XML_BYTES`].
+    pub fn root(&mut self, name: &str) -> Option<String> {
+        self.read_capped("_rels/.rels", MAX_XML_BYTES)
+            .ok()
+            .flatten()
             .map(|xml| relationships(&xml, ""))
             .unwrap_or_default()
             .into_iter()
@@ -659,6 +662,25 @@ mod tests {
         let mut p = Package::open(&bytes).unwrap();
         let read = p.read_capped("big.xml", 1 << 20);
         assert!(read.is_err() || read.unwrap().is_none_or(|s| s.len() <= 16));
+    }
+
+    #[test]
+    fn the_root_relationships_are_read_within_their_bound() {
+        // A root relationships part past the bound, naming the main part
+        // in its first bytes: refused, so it names none.
+        let rels = format!(
+            "<Relationships><Relationship Id=\"rId1\" Type=\"{REL}/officeDocument\" \
+             Target=\"word/document.xml\"/></Relationships>"
+        );
+        let bytes = deflated(&[("_rels/.rels", &past(&rels, MAX_XML_BYTES))]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert_eq!(p.root("officeDocument"), None);
+        let bytes = package(&[("_rels/.rels", &rels)]);
+        let mut p = Package::open(&bytes).unwrap();
+        assert_eq!(
+            p.root("officeDocument").as_deref(),
+            Some("word/document.xml")
+        );
     }
 
     #[test]

@@ -319,6 +319,7 @@ fn convert_source(
         SourceKind::Transcript => return convert_transcript(&data, src, args, quiet),
         SourceKind::Email => return convert_email(&data, src, cfg, args, quiet),
         SourceKind::Image => return convert_image(data, src, cfg, args, quiet),
+        SourceKind::Xps => return convert_xps(&data, src, cfg, args, pages, quiet),
         SourceKind::Unsupported => {
             return Err(common::unsupported(Some(path), &data)
                 .unwrap_or_else(|| "unsupported format".into()))
@@ -2157,6 +2158,216 @@ fn convert_bytes(
         for line in parse_warning_lines(&notes.warnings) {
             eprintln!("warning: {stem}: {line}");
         }
+    }
+    let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
+    if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
+        if args.strict {
+            return Err(why);
+        }
+        if !quiet {
+            eprintln!("warning: {stem}: {why}");
+        }
+    }
+    Ok(render(&a.elements, src, args, sizes, &notes))
+}
+
+/// An XPS or OpenXPS document: its pages' glyphs laid out by the PDF
+/// pipeline, as a PDF's are, with their geometry.
+///
+/// A page that is only a picture (a screen printed to XPS) routes as a
+/// scanned PDF page does, and is read the ways one is: by OCR (`--ocr`,
+/// which reads the picture's own pixels; `--ocr-words`,
+/// `<stem>_p<N>_full.json`), by a reading someone already has
+/// (`--tier-results`, `<stem>_p<N>_full.json`), or by the configured model,
+/// sent the picture's bytes. A page nothing read is listed unread.
+fn convert_xps(
+    data: &[u8],
+    src: &Source,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Result<String, String> {
+    use fluree_doc_pdf::ocr::{Crop, WordReading};
+    let stem = src.stem;
+    let xps = fluree_doc_xps::parse(data).map_err(|e| e.to_string())?;
+    let mut doc = xps.doc.clone();
+    let asked = |page: usize| pages.is_none_or(|keep| keep.contains(&page));
+    // The pages that are pictures nothing else on them reads: the router
+    // sends them to a reader as it would a scan.
+    let pictured: Vec<(usize, &fluree_doc_xps::PageImage)> = doc
+        .pages
+        .iter()
+        .filter(|p| asked(p.index))
+        .filter(|p| {
+            matches!(
+                fluree_doc_pdf::route::decide(p).0,
+                fluree_doc_pdf::route::Route::Vlm(_)
+            )
+        })
+        .filter_map(|p| Some((p.index, xps.page_image(p.index)?)))
+        .collect();
+    let image = |img: &fluree_doc_xps::PageImage| fluree_doc_xps::read_image(data, &img.part);
+    let injected = if let Some(engine) = &cfg.ocr {
+        // The picture's own pixels, its words placed where it is drawn.
+        let mut readings = Vec::new();
+        for (page, img) in &pictured {
+            let read = image(img)
+                .and_then(|b| fluree_doc_image::decode(&b))
+                .and_then(|im| {
+                    engine
+                        .0
+                        .read(&im.pixels)
+                        .map(|r| (r, im.pixels.width, im.pixels.height))
+                });
+            match read {
+                Ok((r, w, h)) => {
+                    let r = fluree_doc_xps::reading_on_page(r, img, w, h);
+                    readings.push((*page, Crop::Page, r));
+                }
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: --ocr: {stem}_p{page}_full: {e}");
+                    }
+                }
+            }
+        }
+        let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        report_ocr(stem, "--ocr", &injected, cfg.verbose, quiet);
+        injected
+    } else if let Some(dir) = cfg.ocr_words.as_deref() {
+        let mut readings: Vec<(usize, Crop, WordReading)> =
+            common::ocr_readings(dir, stem, &doc, quiet);
+        readings.retain(|(page, _, _)| asked(*page));
+        let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
+        injected
+    } else {
+        Vec::new()
+    };
+    let opts = cfg.options_for(stem);
+    let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &opts);
+    let page_text: Vec<Vec<String>> = doc
+        .pages
+        .iter()
+        .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
+        .collect();
+    // The regions a screen pasted into a page of text fills, as a PDF's.
+    let screens = common::pasted_regions(&a.elements, &doc.pages);
+    common::apply_tiers(
+        cfg.tier_results.as_deref(),
+        cfg.structure_results.as_deref(),
+        stem,
+        &mut a.elements,
+        &page_text,
+        &a.furniture,
+        &screens,
+    );
+    // The configured model, for a pictured page nothing read yet, sent the
+    // picture as it is, within the document's `escalation.max_crops`.
+    if cfg.escalate && cfg.tier_results.is_none() {
+        let unread: Vec<usize> = fluree_doc_pdf::unread_pages(&doc, &a.elements)
+            .iter()
+            .map(|u| u.index)
+            .collect();
+        let max = cfg.config.escalation.max_crops;
+        let mut sent: Vec<(String, Vec<u8>, &'static str)> = Vec::new();
+        for (page, img) in pictured.iter().filter(|(p, _)| unread.contains(p)) {
+            if max != 0 && sent.len() >= max {
+                break;
+            }
+            match image(img) {
+                Ok(b) => match fluree_doc_pdf::image::Format::sniff(&b) {
+                    Some(f) => sent.push((format!("p{page}_full"), b, f.mime())),
+                    None => {
+                        if !quiet {
+                            eprintln!(
+                                "warning: {stem}_p{page}_full: not a PNG, JPEG or TIFF image"
+                            );
+                        }
+                    }
+                },
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: {stem}_p{page}_full: {e}");
+                    }
+                }
+            }
+        }
+        if !sent.is_empty() {
+            let crops: Vec<(&str, &[u8], &str)> = sent
+                .iter()
+                .map(|(c, b, m)| (c.as_str(), b.as_slice(), *m))
+                .collect();
+            match crate::escalate::read_images(Path::new(stem), &crops, &cfg.config, cfg.verbose) {
+                // A picture read and found to hold no text leaves its page
+                // unread, as a page of a PDF is left.
+                Ok(read) => {
+                    for (crop, e) in &read.failures {
+                        if !quiet {
+                            eprintln!("warning: {stem}_{crop}: the configured model: {e}");
+                        }
+                    }
+                    fluree_doc_pdf::arbiter::splice_with_page(
+                        &mut a.elements,
+                        stem,
+                        &read.readings,
+                        None,
+                        &page_text,
+                    );
+                }
+                Err(e) => {
+                    if !quiet {
+                        eprintln!("warning: {stem}: the configured model: {e}");
+                    }
+                }
+            }
+        }
+    }
+    let (first, last) = match pages {
+        Some(keep) => (
+            keep.iter().copied().min().unwrap_or(0),
+            keep.iter().copied().max().unwrap_or(0),
+        ),
+        None => (0, doc.pages.len().saturating_sub(1)),
+    };
+    fluree_doc_pdf::furniture::keep_running(&mut a.elements, &a.running, first, last);
+    fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
+    if pages.is_some() {
+        a.elements.retain(|e: &Element| asked(e.page));
+    }
+    let sizes = doc
+        .pages
+        .iter()
+        .filter(|p| asked(p.index))
+        .map(|p| fluree_doc_model::PageSize {
+            index: p.index,
+            width: p.width,
+            height: p.height,
+            folio: a.folios.get(p.index).cloned().flatten(),
+        })
+        .collect();
+    let mut unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    unread.retain(|u| asked(u.index));
+    let mut unread_regions = fluree_doc_pdf::unread_regions(&doc, &a.elements);
+    unread_regions.retain(|u| asked(u.page));
+    let mut ocr = fluree_doc_pdf::ocr::readings(&injected, &a.elements);
+    ocr.retain(|r| r.page.is_none_or(asked));
+    let notes = fluree_doc_model::Notes {
+        unread,
+        unread_regions,
+        running_text: a
+            .furniture
+            .iter()
+            .filter(|(text, _)| fluree_doc_pdf::furniture::names_something(text))
+            .map(|(text, _)| text.clone())
+            .collect(),
+        info: xps.info.clone(),
+        ocr,
+        ..Default::default()
+    };
+    if let (Some(note), false) = (notes.summary(), quiet) {
+        eprintln!("warning: {stem}: {note}");
     }
     let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
     if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {
