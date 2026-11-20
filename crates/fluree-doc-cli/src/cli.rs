@@ -188,7 +188,7 @@ impl From<MdLinks> for fluree_doc_model::MdLinks {
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
-    /// transcript or an email)
+    /// transcript, an email or a PNG, JPEG or TIFF image)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 

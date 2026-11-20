@@ -124,9 +124,10 @@ pages in doubt about their structure, and tables.
 
 ## Inputs
 
-Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email or
-a transcript**, which are told apart by their content; the other readers
-identify the format by extension.
+Files, directories, or `-` for stdin. **Stdin is read as a PDF, an email, a
+transcript or an image** (PNG, JPEG, TIFF), which are told apart by their
+content; Markdown, HTML and the Office formats are known only by their
+extension, so they are read from a file.
 
 Directories are scanned for every extension `convert` reads, including
 Word, PowerPoint and Excel's macro-enabled, template and show variants

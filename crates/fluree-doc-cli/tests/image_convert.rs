@@ -228,6 +228,36 @@ fn words_named_after_the_image_are_read() {
 }
 
 #[test]
+fn an_image_piped_in_is_read_as_one() {
+    // Standard input has no name: the image is told by its first bytes, and
+    // its words go by the name `stdin`.
+    let dir = scratch("stdin");
+    let w = dir.join("words");
+    std::fs::create_dir_all(&w).unwrap();
+    std::fs::write(w.join("stdin.json"), words(300.0, 100.0, "Invoice")).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["convert", "-", "-f", "text", "--ocr-words"])
+        .arg(&w)
+        .env("FDOC_HOME", dir.join("home"))
+        .env_remove("FDOC_OCR_WORDS")
+        .env_remove("FDOC_TIER_RESULTS")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), &jpeg(None)).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Invoice"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn words_already_read_need_no_decode() {
     // A one-bit PNG stating 30,000 × 30,000 pixels: too large to decode,
     // and with words already read, nothing needs decoding.

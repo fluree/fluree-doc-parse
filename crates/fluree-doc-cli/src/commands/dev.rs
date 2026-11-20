@@ -1156,23 +1156,30 @@ pub(crate) fn render_routed(
             );
             continue;
         }
-        // A bare image is one page of pixels: its crop is the image itself,
-        // decoded upright, at its own resolution. Its first bytes say so;
-        // nothing else is read twice. A DOCX's crops are the images placed
-        // in its flow, one per figure; an XLSX's, the pictures anchored to
-        // its sheets' cells; an e-mail's, the images its body shows.
-        let crops: Option<MediaCrops> = match crate::commands::common::source_kind(f) {
-            Some(crate::commands::common::SourceKind::Docx) => Some(docx_crops),
-            Some(crate::commands::common::SourceKind::Xlsx) => Some(xlsx_crops),
-            Some(crate::commands::common::SourceKind::Email) => Some(email_crops),
+        // What the input is, by its content where that says, as `convert`
+        // tells it. A bare image is one page of pixels: its crop is the
+        // image itself, decoded upright, at its own resolution. A DOCX's
+        // crops are the images placed in its flow, one per figure; an
+        // XLSX's, the pictures anchored to its sheets' cells; an e-mail's,
+        // the images its body shows. A source with no pixels to crop
+        // (Markdown, HTML, a transcript, a deck) has none.
+        let bytes = match std::fs::read(f) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("warning: {}: {e}", f.display());
+                continue;
+            }
+        };
+        use crate::commands::common::SourceKind;
+        let kind = crate::commands::common::input_kind(f, &bytes);
+        let crops: Option<MediaCrops> = match kind {
+            SourceKind::Docx => Some(docx_crops),
+            SourceKind::Xlsx => Some(xlsx_crops),
+            SourceKind::Email => Some(email_crops),
             _ => None,
         };
         if let Some(crops) = crops {
-            let stem = crate::commands::common::stem_of(f);
-            match std::fs::read(f)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| crops(&bytes, stem, outdir))
-            {
+            match crops(&bytes, stem, outdir) {
                 Ok(recs) => {
                     n_media += recs.len();
                     for rec in recs {
@@ -1183,26 +1190,30 @@ pub(crate) fn render_routed(
             }
             continue;
         }
-        if is_image_file(f) {
-            let stem = crate::commands::common::stem_of(f);
-            match std::fs::read(f)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| image_crop(&bytes, stem, outdir))
-            {
-                Ok(rec) => {
-                    n_pages += 1;
-                    writeln!(manifest, "{rec}").unwrap();
+        match kind {
+            SourceKind::Image => {
+                match image_crop(&bytes, stem, outdir) {
+                    Ok(rec) => {
+                        n_pages += 1;
+                        writeln!(manifest, "{rec}").unwrap();
+                    }
+                    Err(e) => eprintln!("warning: {}: {e}", f.display()),
                 }
-                Err(e) => eprintln!("warning: {}: {e}", f.display()),
+                continue;
             }
-            continue;
+            SourceKind::Pdf => {}
+            _ => continue,
         }
-        let doc = match extract_file(f) {
+        // Whatever no other kind claims is read as a PDF, as `convert` reads
+        // it: one that does not parse is warned of, as `convert` fails it.
+        let doc = match fluree_doc_pdf::extract_bytes(bytes.clone()) {
             Ok(d) => d,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("warning: {}: {e}", f.display());
+                continue;
+            }
         };
-        let data = std::fs::read(f).expect("read pdf");
-        let pdf = Pdf::new(Arc::new(data)).expect("parse pdf");
+        let pdf = Pdf::new(Arc::new(bytes)).expect("parse pdf");
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
         // (named crops so the adapter can find each by its anchor token).
@@ -1431,16 +1442,6 @@ pub(crate) fn add_ocr_jobs(
     }
     jobs.extend(doubted);
     small
-}
-
-/// Whether a file starts like a PNG, JPEG or TIFF, by its first bytes.
-fn is_image_file(path: &Path) -> bool {
-    use std::io::Read;
-    let mut head = [0u8; 8];
-    let n = std::fs::File::open(path)
-        .and_then(|mut f| f.read(&mut head))
-        .unwrap_or(0);
-    fluree_doc_pdf::image::Format::sniff(&head[..n]).is_some()
 }
 
 /// A container's crops of the images placed in its flow, from its bytes,

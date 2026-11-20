@@ -696,3 +696,78 @@ Content-Disposition: attachment; filename=\"budget.pdf\"\r\n\
     assert!(!err.contains("not converted"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn render_routed_warns_of_an_input_it_cannot_read_as_convert_fails_it() {
+    // Text saved as a PDF, and bytes no kind claims: read as PDFs, as
+    // `convert` reads them, and warned of, not skipped in silence.
+    let dir = scratch("render-junk");
+    for (name, bytes) in [
+        ("junk.pdf", &b"not a PDF at all\n"[..]),
+        ("junk.bin", b"\x00\x01\x02"),
+    ] {
+        let input = dir.join(name);
+        std::fs::write(&input, bytes).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .args(["dev", "render-routed"])
+            .arg(&input)
+            .arg(dir.join(format!("crops-{name}")))
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(&format!("warning: {}: ", input.display())),
+            "{name}: {err}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn render_routed_knows_a_message_by_its_content_as_convert_does() {
+    // Saved under a name that says nothing of mail, or says text.
+    let dir = scratch("render-sniff");
+    for name in ["mail.txt", "mail"] {
+        let input = dir.join(name);
+        std::fs::write(&input, eml()).unwrap();
+        let crops = dir.join(format!("crops-{name}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .args(["dev", "render-routed"])
+            .arg(&input)
+            .arg(&crops)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(said.contains("1 embedded images"), "{name}: {said}");
+        assert!(crops.join("mail_m1.png").exists(), "{name}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_text_file_that_is_no_message_is_converted_as_text() {
+    // Told apart from a message by its content, a `.txt` that is none is
+    // read by the reader its extension names, not as a PDF.
+    let dir = scratch("plain-text");
+    let input = dir.join("notes.txt");
+    std::fs::write(&input, "Meeting notes\n\nThe budget is agreed.\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["convert", "-f", "text"])
+        .arg(&input)
+        .env("FDOC_HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("The budget is agreed."), "{said}");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -49,6 +49,38 @@ pub(crate) fn source_kind(path: &Path) -> Option<SourceKind> {
         .map(|(kind, _)| *kind)
 }
 
+/// The reader a file goes to, by its content where that says, else by its
+/// extension: what `convert` reads it as, and `render-routed` crops it as.
+///
+/// A transcript and an email by their content first: `.vtt` has no
+/// registered type on most systems, and a saved message is `.eml`, `.mht`,
+/// `.txt` or nothing at all, so either arrives renamed as often as not. Then
+/// the formats an extension names (Markdown, plain text, HTML and the Office
+/// packages); then an image by its first bytes; anything else is read as a
+/// PDF.
+pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
+    let kind = source_kind(path);
+    if fluree_doc_transcript::Format::sniff(data).is_some() || kind == Some(SourceKind::Transcript)
+    {
+        return SourceKind::Transcript;
+    }
+    if fluree_doc_email::Format::sniff(data).is_some() || kind == Some(SourceKind::Email) {
+        return SourceKind::Email;
+    }
+    match kind {
+        Some(
+            k @ (SourceKind::Markdown
+            | SourceKind::Text
+            | SourceKind::Html
+            | SourceKind::Docx
+            | SourceKind::Pptx
+            | SourceKind::Xlsx),
+        ) => k,
+        _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
+        _ => SourceKind::Pdf,
+    }
+}
+
 /// The files in a directory `convert` reads, in name order.
 pub(crate) fn sources_in(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<_> = std::fs::read_dir(dir)

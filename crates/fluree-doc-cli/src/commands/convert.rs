@@ -126,12 +126,13 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
             return 1;
         }
         let src = Source::stdin(&data, args);
-        let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
-            convert_transcript(&data, &src, args, quiet)
-        } else if fluree_doc_email::Format::sniff(&data).is_some() {
-            convert_email(&data, &src, cfg, args, quiet)
-        } else {
-            convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet)
+        // By its content, as a file is (`input_kind`): with no name to go
+        // by, a transcript, an e-mail, an image, else a PDF.
+        let converted = match common::input_kind(Path::new("-"), &data) {
+            common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
+            common::SourceKind::Email => convert_email(&data, &src, cfg, args, quiet),
+            common::SourceKind::Image => convert_image(data, &src, cfg, args, quiet),
+            _ => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
         };
         return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
@@ -278,17 +279,13 @@ fn convert_path(
     let _doc = super::ocr::Reading::of(path);
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let src = Source::file(path, slot, &data, args);
-    let kind = common::source_kind(path);
-    // A transcript by its content before anything by its name: `.vtt` has no
-    // registered type on most systems, so it arrives renamed as often as not.
-    if fluree_doc_transcript::Format::sniff(&data).is_some() || kind == Some(SourceKind::Transcript)
-    {
-        return convert_transcript(&data, &src, args, quiet);
-    }
-    // An email by its content too: a saved message is `.eml`, `.mht`, `.txt`
-    // or nothing at all, depending on who saved it.
-    if fluree_doc_email::Format::sniff(&data).is_some() || kind == Some(SourceKind::Email) {
-        return convert_email(&data, &src, cfg, args, quiet);
+    // By its content where that says, else by its name (`input_kind`).
+    let kind = common::input_kind(path, &data);
+    match kind {
+        SourceKind::Transcript => return convert_transcript(&data, &src, args, quiet),
+        SourceKind::Email => return convert_email(&data, &src, cfg, args, quiet),
+        SourceKind::Image => return convert_image(data, &src, cfg, args, quiet),
+        _ => {}
     }
     // What a file declares about itself: its title, author and dates.
     let declared = |info| fluree_doc_model::Notes {
@@ -298,7 +295,7 @@ fn convert_path(
     // Structural formats: the source declares what a PDF makes us infer, so
     // these readers map rather than measure and carry no geometry.
     let (elements, notes) = match kind {
-        Some(SourceKind::Markdown) => {
+        SourceKind::Markdown => {
             let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
             (
                 fluree_doc_markdown::parse(&text),
@@ -308,7 +305,7 @@ fn convert_path(
         // Plain text is read as lines, not as Markdown: an indented line
         // is not code and a row of `=` makes no heading. Markdown saved
         // under a text file's name is told by its markup and read as such.
-        Some(SourceKind::Text) => {
+        SourceKind::Text => {
             let text = fluree_doc_text::decode(&data);
             let elements = if fluree_doc_text::is_markdown(&text) {
                 fluree_doc_markdown::parse(&text)
@@ -317,14 +314,14 @@ fn convert_path(
             };
             (elements, fluree_doc_model::Notes::default())
         }
-        Some(SourceKind::Html) => {
+        SourceKind::Html => {
             let text = fluree_doc_html::decode(&data);
             (
                 fluree_doc_html::parse(&text),
                 declared(fluree_doc_html::info(&text)),
             )
         }
-        Some(SourceKind::Docx) => {
+        SourceKind::Docx => {
             let (mut elements, info, media) =
                 fluree_doc_docx::parse_with_media(&data).map_err(|e| e.to_string())?;
             // The images placed in the flow: a pasted screenshot's text
@@ -367,7 +364,7 @@ fn convert_path(
                 },
             )
         }
-        Some(SourceKind::Pptx) => {
+        SourceKind::Pptx => {
             let (elements, info) =
                 fluree_doc_pptx::parse_with_info(&data).map_err(|e| e.to_string())?;
             (elements, declared(info))
@@ -375,7 +372,7 @@ fn convert_path(
         // A workbook: each sheet is a page, its islands of cells are tables.
         // A picture anchored to its cells is read as a DOCX's is, its text
         // placed after its figure.
-        Some(SourceKind::Xlsx) => {
+        SourceKind::Xlsx => {
             let (mut elements, info, media) =
                 fluree_doc_xlsx::parse_with_media(&data).map_err(|e| e.to_string())?;
             // Each image's first bytes are read from a package of their own,
@@ -398,9 +395,6 @@ fn convert_path(
                     ..declared(info)
                 },
             )
-        }
-        _ if fluree_doc_pdf::image::Format::sniff(&data).is_some() => {
-            return convert_image(data, &src, cfg, args, quiet);
         }
         _ => return convert_bytes(data, &src, cfg, args, pages, quiet),
     };
