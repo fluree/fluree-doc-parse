@@ -106,7 +106,7 @@ pub(crate) fn read_document(
     } else {
         jobs
     };
-    let crops = escalate::render_crops(pdf, &jobs);
+    let crops = escalate::render_crops(pdf, doc, &jobs);
     if crops.is_empty() {
         return Ok(Readings::default());
     }

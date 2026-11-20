@@ -139,12 +139,11 @@ page does, and every character keeps a position for
 of `r{i}` covers the region plus a 6-unit margin, clipped to the page —
 what `render-routed` draws. Any resolution works: `width` and `height` scale
 the reading onto the crop, so an engine may read the same crop rendered
-finer. The image embedded in the page is not that crop: it may cover only
-part of the page, and a region crop includes its margin.
-
-On a page turned to read upright (`/Rotate`, or text drawn sideways),
-`render-routed` does not yet crop regions where this mapping expects them;
-read whole pages there, or give the boxes in `pdf` units.
+finer, as `render-routed --stored-resolution` renders it. The image embedded
+in the page is not that crop: it may cover only part of the page, and a
+region crop includes its margin. On a page turned to read upright
+(`/Rotate`, or text drawn sideways), a region crop is cut where the region
+shows on the page as displayed, which is where this mapping places it.
 
 **What the page takes.** Only what the router sends a reader:
 
@@ -244,7 +243,7 @@ skipped silently: it comes from your pipeline, not from a partial batch. A
 `--ocr-words` directory that does not exist is an error.
 
 ```bash
-fdoc dev render-routed scan.pdf ./crops --ocr-regions
+fdoc dev render-routed scan.pdf ./crops --ocr-regions --stored-resolution
 # the crops whose readings the page takes
 jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region")) | "./crops/" + .png' \
   ./crops/manifest.jsonl > ./crops/for-ocr.txt
