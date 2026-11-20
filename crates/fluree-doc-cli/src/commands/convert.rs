@@ -127,12 +127,16 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         }
         let src = Source::stdin(&data, args);
         // By its content, as a file is (`input_kind`): with no name to go
-        // by, a transcript, an e-mail, an image, else a PDF.
+        // by, a transcript, an e-mail, an image; a format no reader reads
+        // is refused by name; anything else is read as a PDF.
         let converted = match common::input_kind(Path::new("-"), &data) {
             common::SourceKind::Transcript => convert_transcript(&data, &src, args, quiet),
             common::SourceKind::Email => convert_email(&data, &src, cfg, args, quiet),
             common::SourceKind::Image => convert_image(data, &src, cfg, args, quiet),
-            _ => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
+            _ => match common::unsupported(None, &data) {
+                Some(why) => Err(why),
+                None => convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet),
+            },
         };
         return match converted {
             Ok(out) => write_out(&out, args.output.as_deref()),
@@ -285,6 +289,10 @@ fn convert_path(
         SourceKind::Transcript => return convert_transcript(&data, &src, args, quiet),
         SourceKind::Email => return convert_email(&data, &src, cfg, args, quiet),
         SourceKind::Image => return convert_image(data, &src, cfg, args, quiet),
+        SourceKind::Unsupported => {
+            return Err(common::unsupported(Some(path), &data)
+                .unwrap_or_else(|| "unsupported format".into()))
+        }
         _ => {}
     }
     // What a file declares about itself: its title, author and dates.

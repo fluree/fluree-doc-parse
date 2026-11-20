@@ -17,6 +17,10 @@ pub(crate) enum SourceKind {
     Transcript,
     Email,
     Image,
+    /// A format recognised, by its extension or its content, that no reader
+    /// reads yet ([`unsupported`]): refused by name rather than handed to the
+    /// PDF reader, whose `parse: Invalid` would read as a corrupt PDF.
+    Unsupported,
 }
 
 /// Every extension `convert` reads, by the reader it goes to. Conversion
@@ -40,13 +44,82 @@ const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     (SourceKind::Image, fluree_doc_pdf::image::EXTENSIONS),
 ];
 
-/// The reader a file's extension names, if it names one.
+/// Document formats with no reader yet, by extension, with what each is.
+///
+/// Listed so that a file of one is refused by name, and counted as such in
+/// a batch, rather than read as a PDF and failing as a corrupt one. A format
+/// leaves this list when its reader lands.
+const UNSUPPORTED: &[(&str, &str)] = &[
+    ("doc", "Word 97-2003 document"),
+    ("dot", "Word 97-2003 template"),
+    ("xls", "Excel 97-2003 workbook"),
+    ("xlt", "Excel 97-2003 template"),
+    ("xlsb", "Excel binary workbook"),
+    ("ods", "OpenDocument spreadsheet"),
+    ("csv", "comma-separated values"),
+    ("tsv", "tab-separated values"),
+    ("xps", "XPS document"),
+    ("oxps", "OpenXPS document"),
+    ("ppt", "PowerPoint 97-2003 presentation"),
+    ("pps", "PowerPoint 97-2003 slide show"),
+    ("pot", "PowerPoint 97-2003 template"),
+    ("rtf", "Rich Text Format document"),
+    ("odt", "OpenDocument text"),
+    ("odp", "OpenDocument presentation"),
+];
+
+/// The reader a file's extension names, if it names one; [`SourceKind::Unsupported`]
+/// for a format no reader reads yet.
 pub(crate) fn source_kind(path: &Path) -> Option<SourceKind> {
     let ext = path.extension()?.to_str()?;
+    if UNSUPPORTED.iter().any(|(e, _)| ext.eq_ignore_ascii_case(e)) {
+        return Some(SourceKind::Unsupported);
+    }
     SOURCE_EXTENSIONS
         .iter()
         .find(|(_, exts)| exts.iter().any(|e| ext.eq_ignore_ascii_case(e)))
         .map(|(kind, _)| *kind)
+}
+
+/// An OLE compound file's signature: Word, Excel and PowerPoint 97-2003
+/// files, and Outlook's `.msg`, all start with it.
+const COMPOUND_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+
+/// Why `convert` refuses a file it has no reader for, naming the format: by
+/// its extension where that names one ([`UNSUPPORTED`]), else by its content.
+/// `None` for a file some reader takes.
+///
+/// Only called for an input [`input_kind`] found unsupported, or for one read
+/// as a PDF: a compound file that is not an Outlook message (the e-mail
+/// reader takes those first) is an Office 97-2003 file, never a PDF.
+pub(crate) fn unsupported(path: Option<&Path>, data: &[u8]) -> Option<String> {
+    let ext = path
+        .and_then(|p| p.extension())
+        .and_then(|e| e.to_str())
+        .and_then(|ext| {
+            UNSUPPORTED
+                .iter()
+                .find(|(e, _)| ext.eq_ignore_ascii_case(e))
+        });
+    match ext {
+        Some((e, what)) => Some(format!(
+            "unsupported format (.{e}, {what}): no reader for it yet"
+        )),
+        None if data.starts_with(&COMPOUND_MAGIC) => Some(
+            "unsupported format (an OLE compound file: a Word, Excel or PowerPoint 97-2003 file): \
+             no reader for it yet"
+                .into(),
+        ),
+        None => None,
+    }
+}
+
+/// Whether `data` is a PDF by its header, which a reader finds within the
+/// first kilobyte.
+fn is_pdf(data: &[u8]) -> bool {
+    data[..data.len().min(1024)]
+        .windows(5)
+        .any(|w| w == b"%PDF-")
 }
 
 /// The reader a file goes to, by its content where that says, else by its
@@ -56,8 +129,10 @@ pub(crate) fn source_kind(path: &Path) -> Option<SourceKind> {
 /// registered type on most systems, and a saved message is `.eml`, `.mht`,
 /// `.txt` or nothing at all, so either arrives renamed as often as not. Then
 /// the formats an extension names (Markdown, plain text, HTML and the Office
-/// packages); then an image by its first bytes; anything else is read as a
-/// PDF.
+/// packages); then an image by its first bytes. A format no reader reads yet,
+/// by its extension (unless its content is a PDF or an image) or as a
+/// compound file that is not a message, is [`SourceKind::Unsupported`];
+/// anything else is read as a PDF.
 pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     let kind = source_kind(path);
     if fluree_doc_transcript::Format::sniff(data).is_some() || kind == Some(SourceKind::Transcript)
@@ -77,6 +152,9 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
             | SourceKind::Xlsx),
         ) => k,
         _ if fluree_doc_pdf::image::Format::sniff(data).is_some() => SourceKind::Image,
+        _ if is_pdf(data) => SourceKind::Pdf,
+        Some(SourceKind::Unsupported) => SourceKind::Unsupported,
+        _ if data.starts_with(&COMPOUND_MAGIC) => SourceKind::Unsupported,
         _ => SourceKind::Pdf,
     }
 }
@@ -685,6 +763,49 @@ mod tests {
         splice_readings(&mut elements, "doc", &Titled, None, &[], &[], &screens);
         let texts: Vec<&str> = elements.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["Balance of p0_r0", "# Balance of p0_r1"]);
+    }
+
+    #[test]
+    fn a_format_with_no_reader_is_refused_by_name_not_read_as_a_pdf() {
+        let compound = [&COMPOUND_MAGIC[..], &[0u8; 504]].concat();
+        let zip = b"PK\x03\x04 an XPS package".to_vec();
+        for (name, data) in [
+            ("letter.doc", &compound),
+            ("Letter.PPT", &compound),
+            ("printed.xps", &zip),
+            ("notes.rtf", &b"{\\rtf1 text}".to_vec()),
+        ] {
+            let path = Path::new(name);
+            assert_eq!(input_kind(path, data), SourceKind::Unsupported, "{name}");
+            let why = unsupported(Some(path), data).unwrap();
+            let ext = path.extension().unwrap().to_str().unwrap().to_lowercase();
+            assert!(
+                why.starts_with(&format!("unsupported format (.{ext}, ")),
+                "{why}"
+            );
+        }
+        // Discovery lists them, so a batch counts them.
+        assert_eq!(
+            source_kind(Path::new("a.oxps")),
+            Some(SourceKind::Unsupported)
+        );
+        // A compound file by its content alone, renamed or from stdin.
+        assert_eq!(
+            input_kind(Path::new("scan"), &compound),
+            SourceKind::Unsupported
+        );
+        assert!(unsupported(None, &compound)
+            .unwrap()
+            .contains("compound file"));
+        // Content that is a PDF or an image is read as one, whatever its name.
+        let pdf = b"%PDF-1.4\n%junk".to_vec();
+        assert_eq!(input_kind(Path::new("x.doc"), &pdf), SourceKind::Pdf);
+        assert_eq!(input_kind(Path::new("x.dat"), &pdf), SourceKind::Pdf);
+        assert_eq!(unsupported(None, &pdf), None);
+        let png = b"\x89PNG\r\n\x1a\n....".to_vec();
+        assert_eq!(input_kind(Path::new("x.xps"), &png), SourceKind::Image);
+        // Anything else still goes to the PDF reader, as before.
+        assert_eq!(input_kind(Path::new("x.bin"), b"junk"), SourceKind::Pdf);
     }
 
     #[test]

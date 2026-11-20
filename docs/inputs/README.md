@@ -47,6 +47,16 @@ renamed or untyped; see [Transcripts](transcripts.md#detection) and
 [Email](email.md#detection). A PDF-only command given another format fails cleanly rather
 than producing empty output.
 
+A format with no reader yet is refused by name: `convert` fails on it with
+`unsupported format (.ppt, PowerPoint 97-2003 presentation): no reader for it
+yet`, rather than reading it as a PDF and failing as a corrupt one. That holds
+for `.doc`, `.dot`, `.xls`, `.xlt`, `.xlsb`, `.ods`, `.csv`, `.tsv`, `.xps`,
+`.oxps`, `.ppt`, `.pps`, `.pot`, `.rtf`, `.odt` and `.odp`, and for an OLE compound
+file that is not an Outlook message (a Word, Excel or PowerPoint 97-2003 file)
+whatever its name, on stdin too. A directory's files of these formats are
+listed with the rest, so a batch counts them among its failures. A file whose
+content is a PDF or an image is read as one, whatever its extension.
+
 ## Pages
 
 - **PDF** — real pages, 0-based.

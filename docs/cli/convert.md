@@ -196,6 +196,11 @@ Word, PowerPoint and Excel's macro-enabled, template and show variants
 (`.docm`, `.dotx`, `.potx`, `.ppsx`, `.xltx`, …). Multiple inputs are
 allowed; with more than one you need `--out-dir` rather than `--output`.
 
+A format no reader reads yet (`.ppt`, `.rtf`, `.odt`, an Office 97-2003
+compound file, …) fails with `unsupported format (…)`, naming it, rather than
+as a corrupt PDF; directory scans list such files, so a batch counts them
+among its failures. See [Detection](../inputs/README.md#detection).
+
 ## Output naming
 
 With `--out-dir`, each output is the input stem plus the format's extension
