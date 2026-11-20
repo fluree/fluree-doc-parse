@@ -565,7 +565,7 @@ fn convert_bytes(
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
     let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
-    // A configured reader reads the crops chosen from the document as
+    // A configured reader reads the whole pages chosen from the document as
     // extracted, which the analysis below changes.
     let read_here = cfg.escalate && cfg.tier_results.is_none();
     let extracted = read_here.then(|| doc.clone());
@@ -582,6 +582,7 @@ fn convert_bytes(
     common::apply_tiers(
         cfg.tier_results.as_deref(),
         cfg.structure_results.as_deref(),
+        cfg.emit_anchors,
         stem,
         &mut a.elements,
         &page_text,
@@ -591,33 +592,25 @@ fn convert_bytes(
     // present: `--tier-results` names readings someone already has, and
     // paying to produce them again would be surprising.
     if let Some(extracted) = &extracted {
-        let hints = crate::escalate::jobs::hints(
+        read_in_run(
+            &mut a,
             extracted,
+            cfg,
             stem,
-            cfg.layout_boxes.as_deref(),
-            cfg.config.escalation.on_column_doubt,
-        );
-        let jobs = fluree_doc_pdf::escalate::plan(extracted, &ol, &opts, &hints);
-        let readings = crate::escalate::read_document(
-            std::path::Path::new(stem),
-            jobs,
-            &hints,
-            &doc,
-            &raw,
-            &cfg.config,
+            &page_text,
             pages,
-            cfg.verbose,
+            |jobs, hints| {
+                crate::escalate::read_document(
+                    std::path::Path::new(stem),
+                    jobs,
+                    hints,
+                    &doc,
+                    &raw,
+                    &cfg.config,
+                    cfg.verbose,
+                )
+            },
         )?;
-        if !readings.is_empty() {
-            fluree_doc_pdf::arbiter::splice_with_page(
-                &mut a.elements,
-                stem,
-                &readings,
-                None,
-                &page_text,
-            );
-            fluree_doc_pdf::arbiter::scrub_furniture(&mut a.elements, &a.furniture);
-        }
     }
     // After the tiers, which replace whole pages; before the links, which a
     // footer carries as often as the body does.
@@ -674,6 +667,65 @@ fn convert_bytes(
         eprintln!("warning: {note}");
     }
     Ok(render(&a.elements, src, args, sizes, &notes))
+}
+
+/// Take the crops the analysis asks for, have `read` read them, and splice
+/// what it returned into that analysis.
+///
+/// The crops are the analysis's own anchors
+/// ([`fluree_doc_pdf::escalate::crops_at_anchors`]), so each reading fills
+/// the anchor its crop was named after; `extracted`, the document before
+/// the analysis changed it, chooses the whole pages.
+///
+/// The splice runs even when `read` returned nothing: the analysis carries an
+/// anchor for every crop it could have asked for, and a crop goes unread when
+/// `--pages` or `escalation.max_crops` leaves it out or the reader finds
+/// nothing printed on it. The splice is what drops an anchor no reading
+/// answers, so skipping it would print the bare token where nobody asked for
+/// one. With `--emit-anchors` the splice keeps it, on purpose.
+///
+/// `read` is the reader `convert` calls, taken as an argument so a test can
+/// stand one in without the network. It is handed the crops
+/// [`crate::escalate::to_read`] leaves: those on the pages `pages` names,
+/// within `escalation.max_crops`, ranked by the reasons they were chosen for.
+fn read_in_run(
+    a: &mut fluree_doc_pdf::document::Analysis,
+    extracted: &fluree_doc_pdf::Document,
+    cfg: &TierConfig,
+    stem: &str,
+    page_text: &[Vec<String>],
+    pages: Option<&[usize]>,
+    read: impl FnOnce(
+        fluree_doc_pdf::escalate::CropJobs,
+        &fluree_doc_pdf::escalate::CropHints,
+    ) -> Result<fluree_doc_pdf::escalate::Readings, String>,
+) -> Result<(), String> {
+    let hints = crate::escalate::jobs::hints(
+        extracted,
+        stem,
+        cfg.layout_boxes.as_deref(),
+        cfg.config.escalation.on_column_doubt,
+    );
+    let (jobs, reasons) =
+        fluree_doc_pdf::escalate::crops_at_anchors_explained(extracted, a, &hints);
+    let jobs = crate::escalate::to_read(
+        std::path::Path::new(stem),
+        jobs,
+        &reasons,
+        &cfg.config,
+        pages,
+    );
+    let readings = read(jobs, &hints)?;
+    common::splice(
+        cfg.emit_anchors,
+        &mut a.elements,
+        stem,
+        &readings,
+        None,
+        page_text,
+        &a.furniture,
+    );
+    Ok(())
 }
 
 /// A name per input for its outputs in one run: its stem, unless another
@@ -812,6 +864,391 @@ mod tests {
             assert_eq!(run(&args, false, true), 2, "{flag}");
         }
         assert_eq!(single_input_flag(&convert(&[])), None);
+    }
+
+    /// A text page with a raster table the glyph layer cannot read: prose
+    /// above and below, a texty image between. The router asks for that
+    /// region alone, which is what a live reader is then paid to read.
+    fn page_with_a_raster_region() -> fluree_doc_pdf::Document {
+        let mut doc = fluree_doc_pdf::image::as_document(
+            &[
+                b"\x89PNG\r\n\x1a\n".as_slice(),
+                &13u32.to_be_bytes(),
+                b"IHDR",
+                &600u32.to_be_bytes(),
+                &800u32.to_be_bytes(),
+            ]
+            .concat(),
+        )
+        .expect("a page of pixels");
+        let page = &mut doc.pages[0];
+        page.images[0].bbox = fluree_doc_pdf::BBox {
+            x0: 50.0,
+            y0: 300.0,
+            x1: 550.0,
+            y1: 550.0,
+        };
+        let line = "The figures below are printed as an image of a table.";
+        let baselines = (0..14)
+            .map(|i| 60.0 + 14.0 * f64::from(i))
+            .chain((0..14).map(|i| 580.0 + 14.0 * f64::from(i)));
+        for y in baselines {
+            for (i, c) in line.chars().enumerate() {
+                let x = 50.0 + 5.0 * i as f64;
+                let draw_index = page.glyphs.len();
+                page.glyphs.push(fluree_doc_pdf::Glyph {
+                    text: c.to_string(),
+                    bbox: (c != ' ').then_some(fluree_doc_pdf::BBox {
+                        x0: x,
+                        y0: y - 8.0,
+                        x1: x + 5.0,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (x, y),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    advance: Some(5.0),
+                    weight: None,
+                    draw_index,
+                });
+            }
+        }
+        doc
+    }
+
+    /// `convert --escalate` with a configured reader and no sidecars, with a
+    /// stand-in for the network: the options it analyses with, then
+    /// [`read_in_run`] as `convert_bytes` calls it, with a reader answering
+    /// the crop it is asked for with `answer`, or with nothing.
+    fn convert_live(emit_anchors: bool, answer: Option<&str>) -> Vec<Element> {
+        let cfg = TierConfig {
+            escalate: true,
+            emit_anchors,
+            ..Default::default()
+        };
+        let extracted = page_with_a_raster_region();
+        let mut doc = extracted.clone();
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let page_text = vec![fluree_doc_pdf::fidelity::page_lines(&doc.pages[0].glyphs)];
+        read_in_run(
+            &mut a,
+            &extracted,
+            &cfg,
+            "doc",
+            &page_text,
+            None,
+            |jobs, _| {
+                let crops: Vec<String> = jobs
+                    .iter()
+                    .flat_map(|(page, regions)| {
+                        regions
+                            .iter()
+                            .flatten()
+                            .map(move |(tag, _)| format!("p{page}_{tag}"))
+                    })
+                    .collect();
+                assert_eq!(crops, ["p0_r0"], "the region alone is read");
+                let mut readings = fluree_doc_pdf::escalate::Readings::default();
+                if let Some(text) = answer {
+                    readings.insert(crops[0].clone(), text.into());
+                }
+                Ok(readings)
+            },
+        )
+        .expect("a stand-in reader does not fail");
+        a.elements
+    }
+
+    /// A page of prose with two raster regions, A above B, and a label
+    /// printed over A in faux bold: each of its ten letters drawn twice at
+    /// one spot. As extracted, A holds twenty glyphs and the glyph layer
+    /// reads it; once the analysis drops the doubles it holds ten, and A is
+    /// a region the router asks a reader for, as B is.
+    fn page_with_faux_bold_over_a_region() -> fluree_doc_pdf::Document {
+        let mut doc = page_with_a_raster_region();
+        let page = &mut doc.pages[0];
+        let (a, b) = (
+            fluree_doc_pdf::BBox {
+                x0: 50.0,
+                y0: 260.0,
+                x1: 550.0,
+                y1: 400.0,
+            },
+            fluree_doc_pdf::BBox {
+                x0: 50.0,
+                y0: 420.0,
+                x1: 550.0,
+                y1: 560.0,
+            },
+        );
+        page.images[0].bbox = a;
+        let mut second = page.images[0];
+        second.bbox = b;
+        page.images.push(second);
+        // Prose above and below the two regions only.
+        page.glyphs.retain(|g| {
+            let y = g.origin.1;
+            !(a.y0..=b.y1).contains(&y)
+        });
+        for pass in 0..2 {
+            for (i, c) in "LABELTEXTS".chars().enumerate() {
+                let x = 200.0 + 6.0 * i as f64;
+                let draw_index = page.glyphs.len();
+                page.glyphs.push(fluree_doc_pdf::Glyph {
+                    text: c.to_string(),
+                    bbox: Some(fluree_doc_pdf::BBox {
+                        x0: x + 0.1 * f64::from(pass),
+                        y0: 322.0,
+                        x1: x + 5.0 + 0.1 * f64::from(pass),
+                        y1: 330.0,
+                    }),
+                    page: 0,
+                    origin: (x + 0.1 * f64::from(pass), 330.0),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    advance: Some(6.0),
+                    weight: None,
+                    draw_index,
+                });
+            }
+        }
+        doc
+    }
+
+    /// A reading lands where the crop it was read from sits. The crops a
+    /// live run sends and the anchors its analysis mints are one set: a
+    /// region the analysis counts the router out of as extracted is still
+    /// asked for, and every reading is filed under the anchor of its own
+    /// crop, not under a neighbour's that took its index.
+    #[test]
+    fn a_live_region_reading_lands_at_its_own_crop() {
+        let cfg = TierConfig {
+            escalate: true,
+            ..Default::default()
+        };
+        let extracted = page_with_faux_bold_over_a_region();
+        let mut doc = extracted.clone();
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let page_text = vec![fluree_doc_pdf::fidelity::page_lines(&doc.pages[0].glyphs)];
+        read_in_run(
+            &mut a,
+            &extracted,
+            &cfg,
+            "doc",
+            &page_text,
+            None,
+            |jobs, _| {
+                let mut readings = fluree_doc_pdf::escalate::Readings::default();
+                for (page, regions) in &jobs {
+                    for (tag, bbox) in regions.iter().flatten() {
+                        readings.insert(
+                            format!("p{page}_{tag}"),
+                            format!("Reading of the crop at y0={}.", bbox.y0),
+                        );
+                    }
+                }
+                Ok(readings)
+            },
+        )
+        .expect("a stand-in reader does not fail");
+        let read: Vec<(f64, &str)> = a
+            .elements
+            .iter()
+            .filter(|e| e.provenance == "vlm")
+            .map(|e| (e.rect().y0, e.text.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (260.0, "Reading of the crop at y0=260."),
+                (420.0, "Reading of the crop at y0=420."),
+            ]
+        );
+    }
+
+    /// The crops `dev render-routed` writes for an external reader, from
+    /// `plan`, are the crops a live run sends: each named after the anchor
+    /// of `convert --tier-results` it fills, so a sidecar reading lands
+    /// where its crop sits, as a live one does.
+    #[test]
+    fn render_routed_names_its_crops_after_the_anchors_they_fill() {
+        let cfg = TierConfig {
+            tier_results: Some(PathBuf::from("readings")),
+            ..Default::default()
+        };
+        let extracted = page_with_faux_bold_over_a_region();
+        let hints = fluree_doc_pdf::escalate::CropHints::default();
+        let planned =
+            fluree_doc_pdf::escalate::plan(&extracted, &[], &cfg.options_for("doc"), &hints);
+        let mut doc = extracted.clone();
+        let a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let anchors: Vec<(String, f64)> = a
+            .elements
+            .iter()
+            .filter(|e| e.evidence == "route")
+            .map(|e| (e.text.clone(), e.rect().y0))
+            .collect();
+        assert_eq!(
+            anchors,
+            [
+                ("[[VLM:p0:r0]]".into(), 260.0),
+                ("[[VLM:p0:r1]]".into(), 420.0)
+            ]
+        );
+        let crops: Vec<(String, f64)> = planned
+            .iter()
+            .flat_map(|(page, regions)| {
+                regions
+                    .iter()
+                    .flatten()
+                    .map(move |(tag, bbox)| (format!("[[VLM:p{page}:{tag}]]"), bbox.y0))
+            })
+            .collect();
+        assert_eq!(crops, anchors);
+    }
+
+    /// `triage` prices the crops a live run is about to pay for, from the
+    /// same anchors: on a page where the analysis counts a region the page
+    /// as extracted does not, it counts both regions, as the run reads both.
+    #[test]
+    fn triage_prices_the_crops_a_live_run_reads() {
+        let cfg = TierConfig {
+            escalate: true,
+            ..Default::default()
+        };
+        let extracted = page_with_faux_bold_over_a_region();
+        let mut doc = extracted.clone();
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg);
+        let mut read = 0;
+        read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
+            read = fluree_doc_pdf::escalate::crop_count(&jobs);
+            Ok(fluree_doc_pdf::escalate::Readings::default())
+        })
+        .expect("a stand-in reader does not fail");
+        assert_eq!((priced, read), (2, 2));
+    }
+
+    /// Two pages read whole: a scan, and before it a page that routes a
+    /// region as extracted and reads as a scan once its faux-bold label
+    /// counts once, so it is read whole in place of that region.
+    fn a_scan_after_a_page_read_whole_for_its_region() -> fluree_doc_pdf::Document {
+        let mut doc = page_with_a_raster_region();
+        let mut scan = doc.pages[0].clone();
+        scan.index = 1;
+        scan.glyphs.clear();
+        let page = &mut doc.pages[0];
+        page.images[0].bbox = fluree_doc_pdf::BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 600.0,
+            y1: 500.0,
+        };
+        page.glyphs.clear();
+        for line in 0..6 {
+            for (i, c) in "LABELTEXTS".chars().enumerate() {
+                for pass in 0..2 {
+                    let x = 50.0 + 6.0 * i as f64 + 0.1 * f64::from(pass);
+                    let y = 600.0 + 14.0 * f64::from(line);
+                    let draw_index = page.glyphs.len();
+                    page.glyphs.push(fluree_doc_pdf::Glyph {
+                        text: c.to_string(),
+                        bbox: Some(fluree_doc_pdf::BBox {
+                            x0: x,
+                            y0: y - 8.0,
+                            x1: x + 5.0,
+                            y1: y,
+                        }),
+                        page: 0,
+                        origin: (x, y),
+                        rotation_deg: 0.0,
+                        font_size: 10.0,
+                        advance: Some(6.0),
+                        weight: None,
+                        draw_index,
+                    });
+                }
+            }
+        }
+        doc.pages.push(scan);
+        doc
+    }
+
+    /// Under `escalation.max_crops`, a page a live run reads whole in place
+    /// of its region ranks with routed regions, after a scan, by the reason
+    /// it was chosen for: routed again as analysed, it would read as a scan
+    /// and come first.
+    #[test]
+    fn under_the_ceiling_a_page_read_for_its_region_comes_after_a_scan() {
+        let mut cfg = TierConfig {
+            escalate: true,
+            ..Default::default()
+        };
+        cfg.config.escalation.max_crops = 1;
+        let extracted = a_scan_after_a_page_read_whole_for_its_region();
+        let mut doc = extracted.clone();
+        let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
+        assert!(matches!(
+            fluree_doc_pdf::route::decide(&extracted.pages[0]).0,
+            fluree_doc_pdf::route::Route::VlmRegions(_)
+        ));
+        assert!(matches!(
+            fluree_doc_pdf::route::decide(&doc.pages[0]).0,
+            fluree_doc_pdf::route::Route::Vlm(_)
+        ));
+        let mut asked = Vec::new();
+        read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
+            asked = jobs;
+            Ok(fluree_doc_pdf::escalate::Readings::default())
+        })
+        .expect("a stand-in reader does not fail");
+        assert_eq!(asked, [(1, None)], "the scan, not the region's page");
+    }
+
+    /// A crop the reader found nothing on was read: asked for anchors, the
+    /// run still drops its anchor, as no one is left to fill it.
+    #[test]
+    fn asked_for_anchors_a_crop_found_empty_leaves_none() {
+        let elements = convert_live(true, Some(""));
+        assert!(elements.iter().all(|e| !e.text.contains("[[VLM")));
+        assert!(elements.iter().all(|e| e.provenance != "vlm"));
+    }
+
+    #[test]
+    fn a_region_a_live_reader_reads_lands_in_the_output() {
+        let elements = convert_live(false, Some("Revenue rose 12% to 4.2 billion."));
+        let read: Vec<&Element> = elements.iter().filter(|e| e.provenance == "vlm").collect();
+        assert_eq!(read.len(), 1, "the reading was paid for and must be used");
+        assert_eq!(read[0].text, "Revenue rose 12% to 4.2 billion.");
+        assert!(elements.iter().all(|e| !e.text.contains("[[VLM")));
+    }
+
+    #[test]
+    fn a_region_no_reading_answers_leaves_no_anchor_behind() {
+        let elements = convert_live(false, None);
+        assert!(!elements.is_empty());
+        assert!(
+            elements.iter().all(|e| !e.text.contains("[[VLM")),
+            "an unanswered anchor must drop, not print"
+        );
+    }
+
+    /// Asked for anchors, a run that reads some of them itself leaves the
+    /// rest for whoever fills anchors: what it read lands, what it did not
+    /// stays marked.
+    #[test]
+    fn asked_for_anchors_a_live_run_leaves_the_unanswered_ones() {
+        let unanswered = convert_live(true, None);
+        let anchors: Vec<&str> = unanswered
+            .iter()
+            .filter(|e| e.text.contains("[[VLM"))
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(anchors, ["[[VLM:p0:r0]]"]);
+        let answered = convert_live(true, Some("Revenue rose 12% to 4.2 billion."));
+        assert!(answered.iter().all(|e| !e.text.contains("[[VLM")));
+        assert!(answered.iter().any(|e| e.provenance == "vlm"));
     }
 
     #[test]

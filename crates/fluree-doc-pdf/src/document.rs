@@ -157,6 +157,22 @@ struct TableFrame {
 /// layout on both pages, so its edges agree to within a rule's stroke.
 const CONTINUED_EDGE_TOLERANCE: f64 = 3.0;
 
+/// Number `elements` in emission order, `elem-00001` on, after a pass added
+/// or removed some, and keep each continued table naming the part before it.
+/// A part removed with its element leaves the one after it continuing
+/// nothing, rather than naming whatever element took its id.
+pub(crate) fn renumber(elements: &mut [Element]) {
+    let mut renamed = std::collections::HashMap::new();
+    for (i, e) in elements.iter_mut().enumerate() {
+        let id = format!("elem-{:05}", i + 1);
+        let old = std::mem::replace(&mut e.id, id.clone());
+        renamed.insert(old, id);
+    }
+    for e in elements.iter_mut() {
+        e.continues = e.continues.take().and_then(|c| renamed.get(&c).cloned());
+    }
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the

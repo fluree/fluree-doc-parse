@@ -1139,9 +1139,10 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
         // (named crops so the adapter can find each by its anchor token).
-        // The crop set is the library's `escalate::plan`, which
-        // `convert --escalate` and `triage` take too, so they cannot drift
-        // apart.
+        // The crop set is the library's `escalate::plan`: the anchors of an
+        // analysis made with the options `convert` uses, as `triage` and
+        // `convert --escalate` take them, so each crop file fills the
+        // anchor of its name.
         let stem = crate::commands::common::stem_of(f);
         let hints = crate::escalate::jobs::hints(&doc, stem, layout, false);
         let (jobs, reasons) = fluree_doc_pdf::escalate::plan_explained(

@@ -160,7 +160,13 @@ impl TierConfig {
     pub fn options_for(&self, stem: &str) -> fluree_doc_pdf::document::AnalyzeOptions {
         fluree_doc_pdf::document::AnalyzeOptions {
             layout_prefix: self.layout_boxes.as_ref().map(|d| d.join(stem)),
-            emit_anchors: self.emit_anchors || self.tier_results.is_some(),
+            // Anchors whenever this run splices readings, from sidecars or
+            // from a reader it calls itself: a region, table or inserted
+            // table reading lands only at its anchor, and one with nowhere
+            // to land was paid for and dropped. The splice removes every
+            // anchor no reading answers, so none reaches the output unless
+            // `--emit-anchors` asked for them.
+            emit_anchors: self.emit_anchors || self.tier_results.is_some() || self.escalate,
             table_conf_debug: std::env::var_os("FDOC_TABLE_CONF").is_some(),
             insert_missing_tables: std::env::var_os("FDOC_INSERT_TABLES").is_some(),
         }
@@ -327,6 +333,7 @@ pub(crate) fn arbitrate_layout_titles(
 pub(crate) fn apply_tiers(
     tier_results: Option<&Path>,
     structure_results: Option<&Path>,
+    emit_anchors: bool,
     stem: &str,
     elements: &mut Vec<fluree_doc_pdf::document::Element>,
     pages: &[Vec<String>],
@@ -338,7 +345,8 @@ pub(crate) fn apply_tiers(
     let vlm = fluree_doc_pdf::arbiter::FixtureBackend::new(dir.to_path_buf());
     let structure =
         structure_results.map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()));
-    fluree_doc_pdf::arbiter::splice_with_page(
+    splice(
+        emit_anchors,
         elements,
         stem,
         &vlm,
@@ -346,7 +354,32 @@ pub(crate) fn apply_tiers(
             .as_ref()
             .map(|s| s as &dyn fluree_doc_pdf::arbiter::TierBackend),
         pages,
+        furniture,
     );
+}
+
+/// Splice readings into the element stream, from sidecars or from a reader
+/// called in this run.
+///
+/// An anchor no reading answers drops, unless the anchors were asked for
+/// (`--emit-anchors`): then it stays where it is for a later tier to fill,
+/// and only what was read in this run lands.
+pub(crate) fn splice(
+    emit_anchors: bool,
+    elements: &mut Vec<fluree_doc_pdf::document::Element>,
+    stem: &str,
+    readings: &dyn fluree_doc_pdf::arbiter::TierBackend,
+    structure: Option<&dyn fluree_doc_pdf::arbiter::TierBackend>,
+    pages: &[Vec<String>],
+    furniture: &[(String, bool)],
+) {
+    if emit_anchors {
+        fluree_doc_pdf::arbiter::splice_leaving_unanswered(
+            elements, stem, readings, structure, pages,
+        );
+    } else {
+        fluree_doc_pdf::arbiter::splice_with_page(elements, stem, readings, structure, pages);
+    }
     // The same furniture the deterministic pass already stripped, so a page
     // reads the same whether or not it escalated.
     fluree_doc_pdf::arbiter::scrub_furniture(elements, furniture);

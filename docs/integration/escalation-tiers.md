@@ -130,7 +130,7 @@ is what lets a reading be spliced into the right place.
 | reason | crop | the text layer |
 |---|---|---|
 | `scanned`, `near_blank`, `broken_text` | whole page | has nothing usable there |
-| `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
+| `region` | a raster region, or a whole page read for one: widened by a doubt, or read whole because it reads as a scan once its doubled glyphs are dropped | lacks what the pixels hold |
 | `table` | a table the grid does not trust | has the text, not the structure |
 | `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
 | `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |

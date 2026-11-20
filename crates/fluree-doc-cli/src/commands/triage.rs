@@ -4,6 +4,21 @@ use crate::commands::common::{opts_for, sources_in};
 use fluree_doc_pdf::extract_file;
 use std::path::{Path, PathBuf};
 
+/// How many crops `convert --escalate` would pay for: the crop set
+/// `render-routed` takes, the anchors of `analysis`, which comes with anchors
+/// on. `extracted` is the document before the analysis changed it.
+pub(crate) fn priced(
+    extracted: &fluree_doc_pdf::Document,
+    analysis: &fluree_doc_pdf::document::Analysis,
+    stem: &str,
+    tiers: &crate::commands::common::TierConfig,
+) -> usize {
+    let hints = crate::escalate::jobs::hints(extracted, stem, tiers.layout_boxes.as_deref(), false);
+    fluree_doc_pdf::escalate::crop_count(&fluree_doc_pdf::escalate::crops_at_anchors(
+        extracted, analysis, &hints,
+    ))
+}
+
 /// Routing decisions with the signals behind them, one line per routed page,
 /// with pages numbered the way they are printed.
 ///
@@ -114,17 +129,11 @@ pub fn run(path: &Path) -> i32 {
                         fluree_doc_pdf::document::column_doubt(p, &a).map(|c| (p.index, c))
                     })
                     .collect();
-                // The crop set `render-routed` and `convert --escalate`
-                // take, from the same analysis `plan` would make.
-                let layout = crate::commands::common::TierConfig::from_env().layout_boxes;
-                let hints = crate::escalate::jobs::hints(
+                crops = priced(
                     &extracted,
+                    &a,
                     crate::commands::common::stem_of(f),
-                    layout.as_deref(),
-                    false,
-                );
-                crops = fluree_doc_pdf::escalate::crop_count(
-                    &fluree_doc_pdf::escalate::crops_for_with(&extracted, &a, &hints),
+                    &crate::commands::common::TierConfig::from_env(),
                 );
                 tables_total += a.tables;
                 tables_suspect += a.suspect_tables.len();

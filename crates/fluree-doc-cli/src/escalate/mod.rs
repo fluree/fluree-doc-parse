@@ -13,7 +13,7 @@ pub(crate) mod gemini;
 pub(crate) mod jobs;
 
 use crate::config::Config;
-use fluree_doc_pdf::escalate::{self, Crop, CropHints, CropJobs, Readings};
+use fluree_doc_pdf::escalate::{self, Crop, CropHints, CropJobs, PageReasons, Readings};
 use fluree_doc_pdf::Document;
 use std::path::Path;
 
@@ -59,24 +59,21 @@ pub(crate) fn read_image(
     Ok(readings)
 }
 
-/// Read the crops a document asks for: `jobs`, from
-/// [`fluree_doc_pdf::escalate::plan`], with the `hints` they were chosen
-/// with. `doc` is the document as analysed, whose pages give link anchors
-/// their text.
+/// The crops of `jobs` a run reads: those on the pages `keep` names, and of
+/// those at most `escalation.max_crops`, the most valuable first
+/// ([`fluree_doc_pdf::escalate::within_budget`]). Says on stderr how many
+/// are about to be paid for, and how many the ceiling left out.
 ///
-/// Returns an empty set — not an error — when the document asks for nothing,
-/// which is the common case and must stay silent.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn read_document(
+/// `reasons` are those the selection that chose `jobs` gave its whole
+/// pages ([`fluree_doc_pdf::escalate::crops_at_anchors_explained`]), by
+/// which the budget ranks them.
+pub(crate) fn to_read(
     file: &Path,
     mut jobs: CropJobs,
-    hints: &CropHints,
-    doc: &Document,
-    pdf: &hayro_syntax::Pdf,
+    reasons: &PageReasons,
     config: &Config,
     keep: Option<&[usize]>,
-    verbose: bool,
-) -> Result<Readings, String> {
+) -> CropJobs {
     // `--pages` narrows what is *read*, not only what is printed. Paying for
     // a whole document to print one page of it is the kind of surprise a
     // metered API should never hand anyone.
@@ -84,7 +81,7 @@ pub(crate) fn read_document(
         jobs.retain(|(page, _)| keep.contains(page));
     }
     if jobs.is_empty() {
-        return Ok(Readings::default());
+        return jobs;
     }
     // Say what is about to be paid for, before the first call. A chart of
     // a thousand templated tables asked for a reading each and printed
@@ -96,8 +93,8 @@ pub(crate) fn read_document(
         config.model()
     );
     let max = config.escalation.max_crops;
-    let jobs = if max > 0 && planned > max {
-        let (kept, dropped) = fluree_doc_pdf::escalate::within_budget(doc, jobs, max);
+    if max > 0 && planned > max {
+        let (kept, dropped) = fluree_doc_pdf::escalate::within_budget(jobs, reasons, max);
         eprintln!(
             "note: {}: reading the {max} most valuable and leaving {dropped} to the deterministic pass — raise `escalation.max_crops` (0 for no limit) to read them all",
             file.display()
@@ -105,7 +102,28 @@ pub(crate) fn read_document(
         kept
     } else {
         jobs
-    };
+    }
+}
+
+/// Read the crops a document asks for: `jobs`, from
+/// [`fluree_doc_pdf::escalate::crops_at_anchors`] narrowed by [`to_read`],
+/// with the `hints` they were chosen with. `doc` is the document as
+/// analysed, whose pages give link anchors their text.
+///
+/// Returns an empty set — not an error — when the document asks for nothing,
+/// which is the common case and must stay silent.
+pub(crate) fn read_document(
+    file: &Path,
+    jobs: CropJobs,
+    hints: &CropHints,
+    doc: &Document,
+    pdf: &hayro_syntax::Pdf,
+    config: &Config,
+    verbose: bool,
+) -> Result<Readings, String> {
+    if jobs.is_empty() {
+        return Ok(Readings::default());
+    }
     let crops = escalate::render_crops(pdf, &jobs);
     if crops.is_empty() {
         return Ok(Readings::default());
@@ -131,6 +149,28 @@ pub(crate) fn read_document(
     }
 
     let workers = config.escalation.concurrency.clamp(1, 32).min(crops.len());
+    read_crops(
+        &crops,
+        workers,
+        |crop| {
+            let anchors = escalate::links_in(&links, crop, doc);
+            escalate::prompt_for_crop_with(crop, hints, &anchors)
+        },
+        |crop, prompt| reader.read(&crop.png, prompt),
+    )
+}
+
+/// Read every crop with `read`, prompted by `prompt`, on `workers` threads,
+/// and file each answer under its crop's name.
+///
+/// Apart from [`read_document`], which hands it the configured model, so
+/// what is filed can be checked with a stand-in reader and no network.
+fn read_crops(
+    crops: &[Crop],
+    workers: usize,
+    prompt: impl Fn(&Crop) -> String + Sync,
+    read: impl Fn(&Crop, &str) -> Result<Option<String>, String> + Sync,
+) -> Result<Readings, String> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let out: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
     let failures: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
@@ -140,12 +180,8 @@ pub(crate) fn read_document(
             s.spawn(|| loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(crop) = crops.get(i) else { break };
-                let anchors = escalate::links_in(&links, crop, doc);
-                let prompt = escalate::prompt_for_crop_with(crop, hints, &anchors);
-                match reader.read(&crop.png, &prompt) {
-                    Ok(Some(text)) => out.lock().unwrap().push((crop.name.clone(), text)),
-                    // A crop with nothing printed on it is a real answer.
-                    Ok(None) => {}
+                match read(crop, &prompt(crop)) {
+                    Ok(text) => out.lock().unwrap().push(answer(&crop.name, text)),
                     Err(e) => failures.lock().unwrap().push(format!("{}: {e}", crop.name)),
                 }
             });
@@ -171,4 +207,67 @@ pub(crate) fn read_document(
             .into_iter()
             .collect(),
     ))
+}
+
+/// The reading a crop is filed under: what the reader read, or an empty
+/// reading where it found nothing printed.
+///
+/// A crop with nothing printed on it is a real answer, and the splice must
+/// see it as one. Left out, the crop would look unread: with
+/// `--emit-anchors` its anchor would stay in the output, and whoever fills
+/// anchors downstream would pay for the same reading again. An empty
+/// reading answers the anchor with no text, so it drops.
+fn answer(crop: &str, text: Option<String>) -> (String, String) {
+    (crop.to_string(), text.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn crop(name: &str) -> Crop {
+        Crop {
+            name: name.into(),
+            page: 0,
+            bbox: None,
+            png: Vec::new(),
+        }
+    }
+
+    /// What `read_document` files for each crop its reader answers: the
+    /// reading, or an empty one where the reader found nothing printed.
+    #[test]
+    fn a_crop_the_reader_found_nothing_on_is_answered() {
+        let crops = [crop("p0_r0"), crop("p0_r1")];
+        let readings = read_crops(
+            &crops,
+            2,
+            |_| String::new(),
+            |c, _| Ok((c.name == "p0_r1").then(|| "Revenue rose.".to_string())),
+        )
+        .expect("a stand-in reader does not fail");
+        let filed = readings.to_map();
+        assert_eq!(filed.get("p0_r0").map(String::as_str), Some(""));
+        assert_eq!(
+            filed.get("p0_r1").map(String::as_str),
+            Some("Revenue rose.")
+        );
+    }
+
+    /// One crop that fails fails the document, rather than leaving it
+    /// partly read.
+    #[test]
+    fn a_crop_that_cannot_be_read_fails_the_document() {
+        let crops = [crop("p0_r0"), crop("p0_r1")];
+        let read = read_crops(
+            &crops,
+            1,
+            |_| String::new(),
+            |c, _| match c.name.as_str() {
+                "p0_r1" => Err("quota".into()),
+                _ => Ok(None),
+            },
+        );
+        assert!(read.is_err_and(|e| e.contains("p0_r1: quota")));
+    }
 }

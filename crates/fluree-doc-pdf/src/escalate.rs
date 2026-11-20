@@ -16,6 +16,17 @@
 //! prompts without them; [`crops_for_with`] and [`prompt_for_crop_with`]
 //! take them.
 //!
+//! A caller that splices the readings back into the analysis it chose the
+//! crops from, as `fdoc` does, takes them with [`crops_at_anchors`]: its
+//! region crops are that analysis's anchors, so a reading cannot land at
+//! another region's anchor. [`crops_for`] and [`crops_for_with`] route each
+//! page again: handed the document the analysis changed, their region crops
+//! are the anchors, by name and by box; handed a copy of it as extracted,
+//! they can disagree on which images are regions.
+//!
+//! Every crop box is in the page's display frame, the frame a render and
+//! the analysis's boxes are in, also on a page turned to be read upright.
+//!
 //! ```no_run
 //! # use fluree_doc_pdf::{document, escalate, extract_bytes, outline};
 //! # let bytes: Vec<u8> = vec![];
@@ -33,22 +44,21 @@
 //!     let hints = escalate::links_in(&links, crop, &doc);
 //!     let prompt = escalate::prompt_for_crop(crop, &hints);
 //!     // let text = your_reader(&crop.png, &prompt)?;  // any VLM
-//!     # let text = Some(String::new());
-//!     if let Some(text) = text {
-//!         readings.insert(crop.name.clone(), text);
-//!     }
+//!     # let text: Option<String> = None;
+//!     // Nothing printed on the crop is an answer too: an empty reading.
+//!     readings.insert(crop.name.clone(), text.unwrap_or_default());
 //! }
-//! if !readings.is_empty() {
-//!     let page_text: Vec<Vec<String>> = doc
-//!         .pages
-//!         .iter()
-//!         .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
-//!         .collect();
-//!     fluree_doc_pdf::arbiter::splice_with_page(
-//!         &mut analysis.elements, "doc", &readings, None, &page_text);
-//!     fluree_doc_pdf::arbiter::scrub_furniture(
-//!         &mut analysis.elements, &analysis.furniture);
-//! }
+//! // Even with no readings: the splice is what drops the anchors no
+//! // reading answers.
+//! let page_text: Vec<Vec<String>> = doc
+//!     .pages
+//!     .iter()
+//!     .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
+//!     .collect();
+//! fluree_doc_pdf::arbiter::splice_with_page(
+//!     &mut analysis.elements, "doc", &readings, None, &page_text);
+//! fluree_doc_pdf::arbiter::scrub_furniture(
+//!     &mut analysis.elements, &analysis.furniture);
 //! ```
 
 use crate::arbiter::{Block, TierBackend};
@@ -229,13 +239,17 @@ pub struct CropHints {
 
 /// The crops a document asks for, chosen from the document as extracted.
 ///
-/// The selection reads table anchors, which an analysis emits only with
-/// `emit_anchors` on, and an analysis changes the pages it reads (doubled
-/// glyphs removed, layout rules stripped). So a copy is analysed here with
-/// anchors on and `opts` otherwise, and pages are routed as extracted, as
-/// every caller of this sees them: the crops `fdoc dev render-routed` writes
-/// for a reader, the ones `fdoc convert --escalate` sends one, and the count
-/// `fdoc triage` prices are one set.
+/// The selection reads anchors, which an analysis emits only with
+/// `emit_anchors` on. So a copy is analysed here with anchors on and `opts`
+/// otherwise, and the crops are [`crops_at_anchors`] of that copy: a region
+/// crop is named after the anchor the same analysis mints for it, so the
+/// crops `fdoc dev render-routed` writes for a reader fill the anchors of a
+/// `fdoc convert` run with the same options, and the count `fdoc triage`
+/// prices is the one `fdoc convert --escalate` pays.
+///
+/// A caller that splices the readings into an analysis of its own, as
+/// `fdoc convert --escalate` does, takes [`crops_at_anchors`] of that
+/// analysis directly rather than analysing a second copy.
 pub fn plan(
     doc: &Document,
     outline: &[OutlineItem],
@@ -258,7 +272,7 @@ pub fn plan_explained(
         ..opts.clone()
     };
     let analysis = crate::document::analyze_with(&mut copy, outline, &opts);
-    select(doc, &analysis, hints)
+    crops_at_anchors_explained(doc, &analysis, hints)
 }
 
 /// Every crop this document asks for, in page order, without hints.
@@ -266,6 +280,15 @@ pub fn plan_explained(
 /// `analysis` MUST come from [`crate::document::analyze_with`] with
 /// `emit_anchors: true` — the table anchors this scans for are only
 /// emitted then, and the splice later replaces those same anchors.
+///
+/// `doc` is the document `analyze_with` was handed, after it changed it.
+/// Its pages are routed again for their regions, and as analysed they route
+/// as the analysis did when it minted its region anchors, each box turned
+/// back to the display frame of the anchors and of a render where the
+/// page was turned to be read upright; a copy taken as
+/// extracted can disagree with them on which images are regions, and its
+/// `r0` name another anchor's crop. [`crops_at_anchors`] takes the anchors
+/// themselves and cannot disagree.
 pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> CropJobs {
     crops_for_with(
         doc,
@@ -281,18 +304,93 @@ pub fn crops_for(doc: &Document, analysis: &Analysis, on_column_doubt: bool) -> 
 ///
 /// Empty when it is read deterministically end to end, which is the common
 /// case: over the evaluation corpus 113 of 200 documents ask for nothing.
-/// `analysis` comes with anchors on, as for [`crops_for`].
+/// `analysis` comes with anchors on, and `doc` is the document as analysed,
+/// as for [`crops_for`].
 pub fn crops_for_with(doc: &Document, analysis: &Analysis, hints: &CropHints) -> CropJobs {
-    select(doc, analysis, hints).0
+    crops_for_with_explained(doc, analysis, hints).0
+}
+
+/// As [`crops_for_with`], with the reason each whole page was asked for.
+pub fn crops_for_with_explained(
+    doc: &Document,
+    analysis: &Analysis,
+    hints: &CropHints,
+) -> (CropJobs, PageReasons) {
+    select(doc, analysis, hints, false)
+}
+
+/// Every crop `analysis` asks for, for a caller that splices the readings
+/// back into that same analysis.
+///
+/// As [`crops_for_with`], except that a region crop is the region anchor
+/// (`[[VLM:pN:rI]]`) the analysis minted, with its index and box, rather
+/// than the page routed again as extracted. The analysis routes a page
+/// after cleaning it (doubled glyphs dropped, layout rules stripped), and
+/// the router counts the glyphs inside an image: a label in faux bold over
+/// a raster region doubles that count, so the page as extracted and the
+/// page as analysed can disagree on which images are regions. Routed
+/// again, `r0` could name the analysis's `r1`, and its reading land in the
+/// other region's place. Taken from the anchors, a crop and the anchor its
+/// reading fills cannot disagree.
+///
+/// `analysis` comes with anchors on, as for [`crops_for`]. Whole pages are
+/// still chosen from `doc` as extracted, so `doc` is the document before
+/// the analysis changed it. A page that routes regions as extracted and
+/// carries no region anchor was routed whole by the analysis, which mints
+/// none then: it is read whole, as no region crop of it could land, for
+/// the reason [`CropReason::Region`].
+pub fn crops_at_anchors(doc: &Document, analysis: &Analysis, hints: &CropHints) -> CropJobs {
+    crops_at_anchors_explained(doc, analysis, hints).0
+}
+
+/// As [`crops_at_anchors`], with the reason each whole page was asked for.
+pub fn crops_at_anchors_explained(
+    doc: &Document,
+    analysis: &Analysis,
+    hints: &CropHints,
+) -> (CropJobs, PageReasons) {
+    select(doc, analysis, hints, true)
 }
 
 /// The selection itself, with the reason for each whole page. A page keeps
 /// the first reason that asked for it: the router's verdict before any
-/// doubt, a heading doubt before a figure doubt.
-fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, PageReasons) {
+/// doubt, a heading doubt before a figure doubt. With `at_anchors`, region
+/// crops are the analysis's region anchors ([`crops_at_anchors`]); without,
+/// each page is routed again ([`crops_for_with`]).
+fn select(
+    doc: &Document,
+    analysis: &Analysis,
+    hints: &CropHints,
+    at_anchors: bool,
+) -> (CropJobs, PageReasons) {
     use crate::route::{Reason, Route};
     let mut jobs: CropJobs = Vec::new();
     let mut reasons = PageReasons::new();
+    // The region anchors by page, gathered in one pass over the elements.
+    let mut anchored: HashMap<usize, Vec<(String, BBox)>> = HashMap::new();
+    if at_anchors {
+        for e in analysis.elements.iter().filter(|e| e.evidence == "route") {
+            let Some((_, r)) = e
+                .text
+                .strip_prefix("[[VLM:")
+                .and_then(|t| t.strip_suffix("]]"))
+                .and_then(|t| t.split_once(':'))
+            else {
+                continue;
+            };
+            anchored
+                .entry(e.page)
+                .or_default()
+                .push((r.to_string(), e.rect()));
+        }
+        // The anchors come in reading order, the routed regions in the
+        // router's: list a page's crops by index, as routing again lists
+        // them, so neither the manifest nor the budget's order within a
+        // page depends on where a region falls in the reading.
+        for list in anchored.values_mut() {
+            list.sort_by_key(|(tag, _)| tag[1..].parse::<usize>().unwrap_or(usize::MAX));
+        }
+    }
     for p in &doc.pages {
         match crate::route::decide(p).0 {
             Route::Vlm(r) => {
@@ -306,12 +404,32 @@ fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, 
                     },
                 );
             }
+            route if at_anchors => match anchored.remove(&p.index) {
+                Some(regions) => jobs.push((p.index, Some(regions))),
+                // Regions as extracted and no anchor once cleaned. Cleaning
+                // only drops glyphs, which leaves a region a region, so the
+                // analysis routed the page whole: a texty image over half
+                // the page reads as a scan once a faux-bold label beside it
+                // counts once. It minted no anchor for the regions, so no
+                // region crop of the page can land, and left alone the page
+                // goes unread. The whole page needs no anchor. It is read
+                // for the pixels of its regions, so it keeps their reason,
+                // as a page whose regions a doubt widens does.
+                None if matches!(route, Route::VlmRegions(_)) => {
+                    jobs.push((p.index, None));
+                    reasons.insert(p.index, CropReason::Region);
+                }
+                None => {}
+            },
+            // The router works in the page's reading frame; a crop is cut
+            // from a render, which is in the display frame, as the anchors
+            // and every other box of the analysis are.
             Route::VlmRegions(r) => jobs.push((
                 p.index,
                 Some(
                     r.iter()
                         .enumerate()
-                        .map(|(i, b)| (format!("r{i}"), *b))
+                        .map(|(i, b)| (format!("r{i}"), p.to_display(*b)))
                         .collect(),
                 ),
             )),
@@ -486,10 +604,20 @@ pub fn crop_count(jobs: &CropJobs) -> usize {
 /// 5. whole pages asked for on a doubt about their hierarchy or layout,
 ///    whose every word the deterministic pass already has.
 ///
-/// Within a rank, earlier pages first. A whole-page job that superseded
-/// region crops on its page is one crop, kept or dropped as one, and ranks
-/// with routed regions: the pixels it carries are still the text layer's gap.
-pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJobs, usize) {
+/// Within a rank, earlier pages first. A whole-page job on a page that
+/// routes regions is one crop, kept or dropped as one, and ranks with
+/// routed regions: read in their place, or widened over them by a doubt,
+/// the pixels it carries are still the text layer's gap.
+///
+/// `reasons` are those the selection that chose `jobs` gave its whole
+/// pages ([`plan_explained`], [`crops_at_anchors_explained`],
+/// [`crops_for_with_explained`]), and rank them: a scan, a near-blank page
+/// or broken Unicode first, [`CropReason::Region`] with the routed regions,
+/// any other reason, or none, with the doubts. A page is not routed again
+/// here: routed as extracted, a page whose region exists only once cleaned
+/// would rank with the doubts, and routed as analysed, a page read whole in
+/// place of regions the analysis did not mint would rank with the scans.
+pub fn within_budget(jobs: CropJobs, reasons: &PageReasons, max_crops: usize) -> (CropJobs, usize) {
     let total = crop_count(&jobs);
     if total <= max_crops {
         return (jobs, 0);
@@ -505,18 +633,14 @@ pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJ
     for (order, (page, regions)) in jobs.into_iter().enumerate() {
         match regions {
             None => {
-                // Ranked by what the router sent the page: a page whose
-                // routed regions a doubt widened to the whole page still
-                // holds pixels only a reader can read, so it ranks with
-                // those regions, not with the doubt pages.
-                let routed = doc
-                    .pages
-                    .iter()
-                    .find(|p| p.index == page)
-                    .map(|p| crate::route::decide(p).0);
-                let rank = match routed {
-                    Some(crate::route::Route::Vlm(_)) => 0,
-                    Some(crate::route::Route::VlmRegions(_)) => 1,
+                // Ranked by the reason the page was chosen for: a page whose
+                // routed regions a doubt widened to the whole page, or that
+                // is read whole in their place, still holds pixels only a
+                // reader can read, so it ranks with those regions, not with
+                // the scans or the doubt pages.
+                let rank = match reasons.get(&page) {
+                    Some(CropReason::Scanned | CropReason::NearBlank | CropReason::BrokenText) => 0,
+                    Some(CropReason::Region) => 1,
                     _ => 4,
                 };
                 crops.push(Ranked {
@@ -919,7 +1043,7 @@ mod tests {
                 chars: 500,
             })
             .collect();
-        select(doc, &analysis, &CropHints::default())
+        select(doc, &analysis, &CropHints::default(), true)
     }
 
     #[test]
@@ -1018,7 +1142,7 @@ mod tests {
                 chars: 500,
             })
             .collect();
-        let (jobs, reasons) = select(&doc, &analysis, &CropHints::default());
+        let (jobs, reasons) = select(&doc, &analysis, &CropHints::default(), true);
         assert_eq!(jobs, vec![(0, None), (1, None)]);
         assert_eq!(reasons.get(&0), Some(&CropReason::HeadingDoubt));
         assert_eq!(reasons.get(&1), Some(&CropReason::FigureDoubt));
@@ -1072,13 +1196,13 @@ mod tests {
         };
         let analysis = crate::document::analyze_with(&mut copy, &[], &opts);
         assert!(crate::document::column_doubt(&doc.pages[0], &analysis).is_some());
-        let off = select(&doc, &analysis, &CropHints::default());
+        let off = select(&doc, &analysis, &CropHints::default(), true);
         assert!(off.0.is_empty(), "not asked for: {:?}", off.0);
         let hints = CropHints {
             on_column_doubt: true,
             ..Default::default()
         };
-        let (jobs, reasons) = select(&doc, &analysis, &hints);
+        let (jobs, reasons) = select(&doc, &analysis, &hints, true);
         assert_eq!(jobs, vec![(0, None)]);
         assert_eq!(reasons.get(&0), Some(&CropReason::ColumnDoubt));
     }
@@ -1129,7 +1253,7 @@ mod tests {
         let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
         jobs.push((1, Some(vec![region("t0")])));
-        let (kept, dropped) = within_budget(&doc, jobs, 1);
+        let (kept, dropped) = within_budget(jobs, &reasons, 1);
         assert_eq!(dropped, 1);
         assert_eq!(kept, vec![(0, None)], "the region page before the table");
     }
@@ -1147,9 +1271,6 @@ mod tests {
 
     #[test]
     fn the_budget_keeps_what_would_otherwise_be_lost() {
-        let doc = Document {
-            pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
-        };
         // A scanned page, a page escalated on heading doubt, and a page
         // with one untrusted table and one missing one.
         let jobs: CropJobs = vec![
@@ -1157,8 +1278,9 @@ mod tests {
             (1, None),
             (2, Some(vec![region("t0"), region("n0")])),
         ];
+        let reasons = PageReasons::from([(0, CropReason::Scanned), (1, CropReason::HeadingDoubt)]);
         assert_eq!(crop_count(&jobs), 4);
-        let (kept, dropped) = within_budget(&doc, jobs.clone(), 2);
+        let (kept, dropped) = within_budget(jobs.clone(), &reasons, 2);
         assert_eq!(dropped, 2);
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].0, 0, "the scanned page is read before anything");
@@ -1170,9 +1292,264 @@ mod tests {
             "a missing table before a doubted one"
         );
 
-        let (all, none) = within_budget(&doc, jobs, 4);
+        let (all, none) = within_budget(jobs, &reasons, 4);
         assert_eq!(none, 0);
         assert_eq!(crop_count(&all), 4);
+    }
+
+    /// A page a texty image fills most of, under a label of sixty letters
+    /// in faux bold, each drawn twice at one spot. As extracted it holds a
+    /// hundred and twenty glyphs, a text page with an image region; once the
+    /// analysis drops the doubles, sixty, too few beside that image for a
+    /// text page: a scan, read whole.
+    fn page_that_reads_as_a_scan_once_cleaned() -> crate::extract::Page {
+        let mut p = page(0, 0, false);
+        p.images.push(crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 600.0,
+                y1: 500.0,
+            },
+            texty: true,
+        });
+        for line in 0..6 {
+            for (i, c) in "LABELTEXTS".chars().enumerate() {
+                for pass in 0..2 {
+                    let x = 50.0 + 6.0 * i as f64 + 0.1 * f64::from(pass);
+                    let y = 600.0 + 14.0 * f64::from(line);
+                    let draw_index = p.glyphs.len();
+                    p.glyphs.push(crate::glyph::Glyph {
+                        text: c.to_string(),
+                        bbox: Some(BBox {
+                            x0: x,
+                            y0: y - 8.0,
+                            x1: x + 5.0,
+                            y1: y,
+                        }),
+                        page: 0,
+                        origin: (x, y),
+                        rotation_deg: 0.0,
+                        font_size: 10.0,
+                        weight: None,
+                        advance: Some(6.0),
+                        draw_index,
+                    });
+                }
+            }
+        }
+        p
+    }
+
+    /// The analysis mints no region anchor on a page it routes whole, so a
+    /// page that routes regions only as extracted is read whole: no region
+    /// crop of it could land, and nothing else would read it.
+    #[test]
+    fn a_page_that_routes_whole_once_cleaned_is_read_whole() {
+        let extracted = Document {
+            pages: vec![page_that_reads_as_a_scan_once_cleaned()],
+        };
+        assert!(matches!(
+            crate::route::decide(&extracted.pages[0]).0,
+            crate::route::Route::VlmRegions(_)
+        ));
+        let mut doc = extracted.clone();
+        let opts = crate::document::AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let analysis = crate::document::analyze_with(&mut doc, &[], &opts);
+        assert!(matches!(
+            crate::route::decide(&doc.pages[0]).0,
+            crate::route::Route::Vlm(_)
+        ));
+        assert!(!analysis.elements.iter().any(|e| e.evidence == "route"));
+        let jobs = crops_at_anchors(&extracted, &analysis, &CropHints::default());
+        assert_eq!(jobs, [(0, None)]);
+        // Read for the pixels of its regions, it says so: the manifest of
+        // `dev render-routed` asks every whole page its reason.
+        let (planned, reasons) = plan_explained(
+            &extracted,
+            &[],
+            &AnalyzeOptions::default(),
+            &CropHints::default(),
+        );
+        assert_eq!(planned, [(0, None)]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+    }
+
+    /// Under a budget, that whole page ranks with the regions it is read in
+    /// place of, by the reason the selection gave it: after a scan, before a
+    /// table.
+    #[test]
+    fn a_page_read_whole_for_its_regions_ranks_with_them() {
+        let doc = Document {
+            pages: vec![
+                page_that_reads_as_a_scan_once_cleaned(),
+                page(1, 500, false),
+                page(2, 50, true),
+            ],
+        };
+        let (planned, reasons) =
+            plan_explained(&doc, &[], &AnalyzeOptions::default(), &CropHints::default());
+        assert_eq!(planned, [(0, None), (2, None)]);
+        let jobs: CropJobs = vec![(0, None), (1, Some(vec![region("n0")]))];
+        let (kept, dropped) = within_budget(jobs, &reasons, 1);
+        assert_eq!((kept, dropped), (vec![(0, None)], 1));
+        let (kept, dropped) = within_budget(planned, &reasons, 1);
+        assert_eq!((kept, dropped), (vec![(2, None)], 1), "the scan first");
+    }
+
+    /// A page with half of its text over a texty image, the image under a
+    /// label of ten letters in faux bold, each drawn twice at one spot: as
+    /// extracted, twenty glyphs cover the image and it is no region; once
+    /// cleaned, ten leave it one.
+    fn page_with_a_region_only_once_cleaned() -> crate::extract::Page {
+        let mut p = page(0, 500, false);
+        p.images.push(crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 200.0,
+                x1: 550.0,
+                y1: 400.0,
+            },
+            texty: true,
+        });
+        for (i, c) in "LABELTEXTS".chars().enumerate() {
+            for pass in 0..2 {
+                let x = 100.0 + 6.0 * i as f64 + 0.1 * f64::from(pass);
+                let y = 300.0;
+                let draw_index = p.glyphs.len();
+                p.glyphs.push(crate::glyph::Glyph {
+                    text: c.to_string(),
+                    bbox: Some(BBox {
+                        x0: x,
+                        y0: y - 8.0,
+                        x1: x + 5.0,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (x, y),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(6.0),
+                    draw_index,
+                });
+            }
+        }
+        p
+    }
+
+    /// That region is anchored only once cleaned, and a doubt widens its
+    /// page to the whole page: the selection gives the page the reason
+    /// `Region`, and the budget ranks it so, before a table, though the
+    /// page as extracted routes nothing.
+    #[test]
+    fn a_doubt_page_over_a_region_found_once_cleaned_ranks_with_regions() {
+        let doc = Document {
+            pages: vec![page_with_a_region_only_once_cleaned(), page(1, 500, false)],
+        };
+        assert_eq!(
+            crate::route::decide(&doc.pages[0]).0,
+            crate::route::Route::Deterministic
+        );
+        let mut cleaned = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let analysis = crate::document::analyze_with(&mut cleaned, &[], &opts);
+        assert!(matches!(
+            crate::route::decide(&cleaned.pages[0]).0,
+            crate::route::Route::VlmRegions(_)
+        ));
+        assert!(analysis
+            .elements
+            .iter()
+            .any(|e| e.evidence == "route" && e.page == 0));
+        let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
+        assert_eq!(jobs, [(0, None)]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+        jobs.push((1, Some(vec![region("t0")])));
+        let (kept, dropped) = within_budget(jobs, &reasons, 1);
+        assert_eq!((kept, dropped), (vec![(0, None)], 1));
+    }
+
+    /// Every whole page a plan asks for carries a reason, whichever way it
+    /// came to be read whole: `dev render-routed` writes one for each.
+    #[test]
+    fn every_whole_page_of_a_plan_has_a_reason() {
+        let mut regions = page(3, 1500, false);
+        regions.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 550.0,
+                y1: 300.0,
+            },
+            texty: true,
+        }];
+        let mut cleaned = page_that_reads_as_a_scan_once_cleaned();
+        cleaned.index = 2;
+        for g in &mut cleaned.glyphs {
+            g.page = 2;
+        }
+        let doc = Document {
+            pages: vec![page(0, 0, true), broken_page(1, 300), cleaned, regions],
+        };
+        let (jobs, reasons) =
+            plan_explained(&doc, &[], &AnalyzeOptions::default(), &CropHints::default());
+        let whole: Vec<usize> = jobs
+            .iter()
+            .filter(|(_, r)| r.is_none())
+            .map(|(p, _)| *p)
+            .collect();
+        assert_eq!(whole, [0, 1, 2]);
+        for p in whole {
+            assert!(reasons.contains_key(&p), "page {p}: {reasons:?}");
+        }
+        assert_eq!(reasons.get(&2), Some(&CropReason::Region));
+        assert!(!reasons.contains_key(&3), "region crops carry their tag");
+    }
+
+    /// A page whose second routed region sits above its first: the anchors
+    /// come in reading order, `r1` first, and the crops by index.
+    #[test]
+    fn region_crops_at_anchors_are_listed_by_index() {
+        let mut p = page(0, 500, false);
+        let image = |y0: f64| crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0,
+                x1: 550.0,
+                y1: y0 + 150.0,
+            },
+            texty: true,
+        };
+        p.images = vec![image(550.0), image(150.0)];
+        let doc = Document { pages: vec![p] };
+        let mut cleaned = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let analysis = crate::document::analyze_with(&mut cleaned, &[], &opts);
+        let anchors: Vec<&str> = analysis
+            .elements
+            .iter()
+            .filter(|e| e.evidence == "route")
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(anchors, ["[[VLM:p0:r1]]", "[[VLM:p0:r0]]"]);
+        let jobs = crops_at_anchors(&doc, &analysis, &CropHints::default());
+        let tags: Vec<&str> = jobs[0]
+            .1
+            .iter()
+            .flatten()
+            .map(|(tag, _)| tag.as_str())
+            .collect();
+        assert_eq!(tags, ["r0", "r1"]);
     }
 
     #[test]
@@ -1241,5 +1618,115 @@ mod tests {
 
         let replay = Readings::from_map(r.to_map().clone());
         assert_eq!(replay.read("doc", "p3_full").unwrap()[0].content, "# Title");
+    }
+
+    /// A one-page PDF of prose above and below a raster image of vertical
+    /// stripes, drawn upright on a portrait page (PDF units, y up) with
+    /// `rotate` as its `/Rotate`.
+    fn pdf_with_a_striped_image(rotate: i32) -> Vec<u8> {
+        let line = "The figures below are printed as an image of a table.";
+        let mut content = String::from("BT /F1 10 Tf\n");
+        let baselines = (0..8)
+            .map(|i| 760 - 14 * i)
+            .chain((0..8).map(|i| 250 - 14 * i));
+        for y in baselines {
+            content.push_str(&format!("1 0 0 1 50 {y} Tm ({line}) Tj\n"));
+        }
+        content.push_str("ET\nq 500 0 0 200 50 320 cm /Im1 Do Q\n");
+        // Eight pixels of ink, eight of ground, across every row.
+        let pixels: Vec<u8> = (0..64 * 64)
+            .map(|i| if (i % 64) / 8 % 2 == 0 { 0 } else { 255 })
+            .collect();
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Rotate {rotate} \
+                 /Resources << /Font << /F1 4 0 R >> /XObject << /Im1 5 0 R >> >> \
+                 /Contents 6 0 R >>"
+            )
+            .into_bytes(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+            [
+                format!(
+                    "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 \
+                     /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {} >>\nstream\n",
+                    pixels.len()
+                )
+                .as_bytes(),
+                &pixels,
+                b"\nendstream",
+            ]
+            .concat(),
+            [
+                format!("<< /Length {} >>\nstream\n", content.len()).as_bytes(),
+                content.as_bytes(),
+                b"\nendstream",
+            ]
+            .concat(),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    /// The share of a PNG's pixels that are ink.
+    fn ink(png_bytes: &[u8]) -> f64 {
+        let mut reader = png::Decoder::new(png_bytes).read_info().expect("a png");
+        let mut buf = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buf).expect("a frame");
+        let px = &buf[..info.buffer_size()];
+        let dark = px.chunks_exact(4).filter(|p| p[0] < 128).count();
+        dark as f64 / (px.len() / 4) as f64
+    }
+
+    /// On a page displayed sideways (`/Rotate 90`) and read upright, a
+    /// region crop is cut from the render over the image it names, by the
+    /// anchors and by `crops_for_with` alike: their boxes are in the frame
+    /// the render is in, not in the frame the page was read in.
+    #[test]
+    fn a_region_crop_of_a_turned_page_covers_its_image() {
+        for rotate in [0, 90] {
+            let bytes = pdf_with_a_striped_image(rotate);
+            let mut doc = crate::extract_bytes(bytes.clone()).expect("a pdf");
+            assert_eq!(doc.pages[0].rotation != 0, rotate != 0, "read upright");
+            let extracted = doc.clone();
+            let opts = crate::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..Default::default()
+            };
+            let analysis = crate::document::analyze_with(&mut doc, &[], &opts);
+            let at_anchors = crops_at_anchors(&extracted, &analysis, &CropHints::default());
+            let routed = crops_for_with(&doc, &analysis, &CropHints::default());
+            assert_eq!(at_anchors.len(), 1, "{rotate}: {at_anchors:?}");
+            assert_eq!(routed, at_anchors, "{rotate}");
+            let pdf = Pdf::new(std::sync::Arc::new(bytes)).expect("a pdf");
+            let crops = render_crops(&pdf, &at_anchors);
+            assert_eq!(crops.len(), 1);
+            assert_eq!(crops[0].name, "p0_r0");
+            // Half the image is ink; the margin round it is not.
+            let share = ink(&crops[0].png);
+            assert!(share > 0.4, "{rotate}: the crop is {share:.2} ink");
+        }
     }
 }
