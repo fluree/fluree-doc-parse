@@ -196,8 +196,9 @@ paragraph are kept, so a signature's name, title and company stay on
 separate lines. Lines starting with `-`, `*`, `•` or `1.` are list items.
 `format=flowed` text is rejoined where the sender's client wrapped it.
 Placeholders for inline images, Outlook's `[cid:image001.png@…]` and Apple
-Mail's `<image001.png>`, are removed, and so are the zero-width characters
-clients leave at the ends of lines.
+Mail's `<image001.png>`, are not text: they are removed, and the image they
+name is drawn there (see [Images in the body](#images-in-the-body)). So are
+the zero-width characters clients leave at the ends of lines.
 
 Bodies are decoded from base64 and quoted-printable, and from their declared
 charset. Text labelled `us-ascii` or `iso-8859-1` that is valid UTF-8 is
@@ -244,6 +245,50 @@ for file in &email.attachments {
 }
 let notes = email.notes(); // document info and attachment descriptions, for the emitters
 ```
+
+## Images in the body
+
+An image the message shows in its body — a screenshot pasted into a reply,
+a scanned form, a signature's logo — is one of its files, listed with
+`inline: true`, and it is also drawn where the body shows it: a
+`doco:Figure`, `figure-0-<n>` in the order the body first shows its images,
+after the paragraph, list item or table holding it. The body says where by
+Outlook's `[cid:…]` or Apple Mail's `<name.png>` in plain text, or by
+`<img src="cid:…">` in HTML, matched to the file by its `Content-ID` (or
+its name): the one written exactly so, else one written in another case.
+An image shown twice is one image, its figure drawn twice.
+
+Its text is read by OCR when `convert` has an engine (`--ocr`) or the words
+one wrote (`--ocr-words`, `<stem>_m<n>.json`), and placed right after its
+figure, marked `provenance: "ocr"`, as a DOCX picture's is (see
+[Office files](office-and-web.md)). `fdoc dev render-routed` writes each
+image as `<stem>_m<n>.png`, `kind: "media"`, reason `embedded_image`, with
+its `figure` and its `part`: the `cid:` URL the message names it by, or
+`attachment <n>` (its place in `doc:attachments`, from 1) where no
+Content-ID names that part alone. Each part is one image, whatever its file
+name: two pasted images a client called `image.png` alike are read apart. An
+image nothing read is counted on stderr and listed in
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read).
+
+Where the body does not mark it — the plain text is read and only the HTML
+version shows the image, as most clients send it — an inline image is drawn
+at the end of the file's own message, before anything it quotes. An image
+the HTML shows by its `cid:` is inline whatever its part's disposition
+says, wherever the message nests its `multipart/related` (inside the
+`multipart/alternative` or around it): some libraries mark a related image
+`attachment` for its file name. The `cid:` is read as the HTML body reads
+it (RFC 2392): `CID:` as `cid:`, `%40` as `@`, and an image the HTML hides
+shows nothing; it is matched to its part as a figure's is, so a message
+reads the same whichever version is its body. A mark
+naming no image the message carries is dropped as before: a reply keeps the
+`[cid:…]` of images its quoted messages no longer hold. A message without
+images converts as it did.
+
+In Rust, `email.media` lists the images (figure, `cid:` or `attachment <n>`
+part),
+`email.media_bytes(&m)` gives one's bytes, and
+`fluree_doc_image::place_after_figures` puts what was read after its
+figure.
 
 ## Document metadata
 

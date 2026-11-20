@@ -128,7 +128,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         let converted = if fluree_doc_transcript::Format::sniff(&data).is_some() {
             convert_transcript(&data, &src, args, quiet)
         } else if fluree_doc_email::Format::sniff(&data).is_some() {
-            convert_email(&data, &src, args, quiet)
+            convert_email(&data, &src, cfg, args, quiet)
         } else {
             convert_bytes(data, &src, cfg, args, pages.as_deref(), quiet)
         };
@@ -287,7 +287,7 @@ fn convert_path(
     // An email by its content too: a saved message is `.eml`, `.mht`, `.txt`
     // or nothing at all, depending on who saved it.
     if fluree_doc_email::Format::sniff(&data).is_some() || kind == Some(SourceKind::Email) {
-        return convert_email(&data, &src, args, quiet);
+        return convert_email(&data, &src, cfg, args, quiet);
     }
     // What a file declares about itself: its title, author and dates.
     let declared = |info| fluree_doc_model::Notes {
@@ -411,10 +411,12 @@ fn convert_transcript(
 ///
 /// An attachment is a document of its own, so it is not in this output.
 /// `--attachments DIR` saves the files for converting on their own; without
-/// it, the note on stderr says what was left out.
+/// it, the note on stderr says what was left out. An image the body shows
+/// is also drawn where it is shown, and its text, read by OCR, placed there.
 fn convert_email(
     data: &[u8],
     src: &Source,
+    cfg: &TierConfig,
     args: &ConvertArgs,
     quiet: bool,
 ) -> Result<String, String> {
@@ -461,13 +463,27 @@ fn convert_email(
         }
         _ => {}
     }
-    Ok(render(
-        &email.elements,
-        src,
-        args,
-        Vec::new(),
-        &email.notes(),
-    ))
+    // The images the body shows: a pasted screenshot's text follows its
+    // figure, read by OCR, as a DOCX picture's does.
+    let media = read_media(
+        stem,
+        email.media.clone(),
+        &mut |part| {
+            email
+                .media_bytes(part)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| format!("{part}: not in the message"))
+        },
+        cfg,
+        quiet,
+    );
+    let notes = fluree_doc_model::Notes {
+        unread_images: media.unread,
+        ..email.notes()
+    };
+    let mut elements = email.elements;
+    fluree_doc_image::place_after_figures(&mut elements, media.read);
+    Ok(render(&elements, src, args, Vec::new(), &notes))
 }
 
 /// A safe, unique file name for an attachment: its own name with any path

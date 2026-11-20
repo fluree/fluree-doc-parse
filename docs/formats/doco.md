@@ -325,7 +325,9 @@ none.
 `figure` joins to the figure's `doc:figure`; `image` is the name its crop
 and its words go by (`<stem>_m1.png`, `<stem>_m1.json`); `part` is where the
 file keeps it: a package part, or for an e-mail the `cid:` URL its body
-names it by (or its attachment name). An image several figures draw (a logo
+names it by, or `attachment <n>` (its place in `doc:attachments`, from 1)
+where no Content-ID names that part alone, never its file name, which two
+images can share. An image several figures draw (a logo
 or a screenshot pasted more than once) is read once, under the name of the
 first figure drawing it, and listed unread once for each figure. `reason` is
 `NotRead` (nothing was asked to read it, or no reading of it was supplied),

@@ -425,7 +425,8 @@ fn analysed(
 /// which mean nothing on a page without geometry, so they are dropped. A
 /// heading read in a screenshot is a heading of the screen, not of the
 /// document: it is read as a paragraph, so the document's outline stays its
-/// own. Tables stay tables. Ids are renumbered in order.
+/// own. Tables stay tables. Ids are renumbered in order, and an element's
+/// reference to another by id (`resumes`, `continues`) follows it.
 pub fn place_after_figures(
     elements: &mut Vec<fluree_doc_model::Element>,
     readings: Vec<(String, Vec<fluree_doc_model::Element>)>,
@@ -446,6 +447,10 @@ pub fn place_after_figures(
         let page = e.page;
         out.push(e);
         for mut r in read.into_iter().flatten() {
+            // The reading's own ids (`elem-00001`… from its analysis) name
+            // nothing of this document: kept, they would take the place of
+            // the document's elements of the same id in the renaming below.
+            r.id.clear();
             r.page = page;
             r.bbox = None;
             if r.kind != "doco:Table" {
@@ -455,8 +460,20 @@ pub fn place_after_figures(
             out.push(r);
         }
     }
+    let mut renamed = std::collections::HashMap::new();
     for (i, e) in out.iter_mut().enumerate() {
-        e.id = format!("elem-{:05}", i + 1);
+        let id = format!("elem-{:05}", i + 1);
+        let old = std::mem::replace(&mut e.id, id.clone());
+        if !old.is_empty() {
+            renamed.insert(old, id);
+        }
+    }
+    for e in &mut out {
+        for r in [&mut e.resumes, &mut e.continues].into_iter().flatten() {
+            if let Some(id) = renamed.get(r.as_str()) {
+                r.clone_from(id);
+            }
+        }
     }
     *elements = out;
 }
@@ -555,6 +572,52 @@ mod tests {
             .all(|e| e.bbox.is_none() && e.provenance == "ocr" && e.page == 3));
         let ids: std::collections::HashSet<&str> = els.iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids.len(), els.len());
+    }
+
+    #[test]
+    fn an_element_naming_another_by_id_still_names_it_once_text_is_placed() {
+        // A message's opener, a picture, a quote, then the message going on
+        // after it (`resumes`) and a table continued (`continues`): the text
+        // read in the picture moves every id after it. That text comes with
+        // ids of its own analysis, the same `elem-0000N` as the document's,
+        // which must not be taken for the document's.
+        use fluree_doc_model::Element;
+        let el = |kind: &str, text: &str, id: &str, by: &'static str| {
+            let mut e = Element::new(kind, text, "eml", by);
+            e.id = id.into();
+            e
+        };
+        let opener = el("doco:Paragraph", "From: A", "elem-00001", "eml");
+        let mut figure = el("doco:Figure", "", "elem-00002", "eml");
+        figure.figure = Some("figure-0-1".into());
+        let quoted = el("doco:Table", "", "elem-00003", "eml");
+        let mut back = el("doco:Paragraph", "A's signature", "elem-00004", "eml");
+        back.resumes = Some("elem-00001".into());
+        let mut part = el("doco:Table", "", "elem-00005", "eml");
+        part.continues = Some("elem-00003".into());
+        let mut els = vec![opener, figure, quoted, back, part];
+        let read = vec![
+            el("doco:Paragraph", "Read 1", "elem-00001", "ocr"),
+            el("doco:Paragraph", "Read 2", "elem-00002", "ocr"),
+            el("doco:Paragraph", "Read 3", "elem-00003", "ocr"),
+        ];
+        place_after_figures(&mut els, vec![("figure-0-1".into(), read)]);
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "From: A",
+                "",
+                "Read 1",
+                "Read 2",
+                "Read 3",
+                "",
+                "A's signature",
+                ""
+            ]
+        );
+        assert_eq!(els[6].resumes.as_deref(), Some("elem-00001"));
+        assert_eq!(els[7].continues.as_deref(), Some("elem-00006"));
     }
 
     #[test]

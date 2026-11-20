@@ -256,7 +256,8 @@ pub enum CropReason {
     /// A raster region too small to be worth a model's call, which an OCR
     /// engine still reads (listed only when crops are made for one).
     SmallRegion,
-    /// An image placed in an Office document's flow (a DOCX's picture).
+    /// An image placed in a document's flow (a DOCX's picture, an e-mail's
+    /// inline image).
     EmbeddedImage,
     /// A table the deterministic grid found but does not trust.
     Table,

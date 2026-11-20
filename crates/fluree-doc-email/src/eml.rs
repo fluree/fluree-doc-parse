@@ -33,15 +33,27 @@ pub fn read(bytes: &[u8]) -> Result<Read, EmailError> {
     let own = message(&headers);
     let header = crate::header_text(&own, headers.get("date"));
     let body = match (found.plain, found.html) {
-        (Some(p), _) => Body::Plain(p),
+        (Some(p), h) => {
+            found.set_aside.extend(h);
+            Body::Plain(p)
+        }
         (None, Some(h)) => Body::Html(h),
         (None, None) => Body::None,
     };
+    // The images an HTML version the body is not shows: shown in the
+    // message all the same (see `assemble`). Each version is parsed once,
+    // here or as the body.
+    let shown = found
+        .set_aside
+        .iter()
+        .flat_map(|h| fluree_doc_html::cid_ids(h))
+        .collect();
     Ok(Read {
         own,
         header,
         body,
         attachments: found.attachments,
+        shown,
         provenance: "eml",
     })
 }
@@ -114,6 +126,9 @@ struct Found {
     plain: Option<String>,
     html: Option<String>,
     attachments: Vec<AttachedFile>,
+    /// The HTML versions read that are not the body (an alternative to
+    /// the one chosen): they still say which images the message shows.
+    set_aside: Vec<String>,
 }
 
 fn append(slot: &mut Option<String>, text: String) {
@@ -190,7 +205,9 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
                         append(&mut found.plain, alt.plain.take().unwrap_or_default());
                     }
                 }
+                found.set_aside.extend(alt.html.take());
                 found.attachments.append(&mut alt.attachments);
+                found.set_aside.append(&mut alt.set_aside);
             }
             return;
         }
@@ -247,7 +264,8 @@ fn walk(h: &Headers, body: &[u8], found: &mut Found, depth: usize) {
         Some(d) => d.value == "inline",
         None => h.get("content-id").is_some(),
     };
-    found
-        .attachments
-        .push(AttachedFile::new(filename, kind.to_string(), inline, bytes));
+    found.attachments.push(
+        AttachedFile::new(filename, kind.to_string(), inline, bytes)
+            .with_content_id(h.get("content-id")),
+    );
 }

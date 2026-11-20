@@ -114,7 +114,9 @@ of the two, it reads the one sized as it is. A DOCX's pictures are read from
 `{stem}_m{n}.json`, for the figure `figure-0-{n}`, and `{stem}_m{n}_{k}.json`
 for the figure's `k`-th image after the first; their text follows the figure.
 An image several figures draw is read once, from the name of the first figure
-drawing it, and its text follows each of them (see [Office files](../inputs/office-and-web.md)). Readings are looked up by
+drawing it, and its text follows each of them (see [Office files](../inputs/office-and-web.md)).
+So are the images an e-mail shows in its body (see
+[E-mail](../inputs/email.md#images-in-the-body)). Readings are looked up by
 stem, so two inputs of one stem in a batch (`report.pdf` and `report.png`)
 are warned about, and `render-routed` crops only the first.
 
@@ -198,7 +200,7 @@ Only those names are looked up — `full` on every page, `r{i}` for each unread 
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine
 needs to read only the crops whose `reason` is `scanned`, `near_blank`,
 `broken_text`, `region`, `small_region` or `embedded_image` (a DOCX's
-picture): those are the ones whose readings the document takes. A
+picture, an e-mail's inline image): those are the ones whose readings the document takes. A
 `table_missing` crop it reads only where the page's text does not cover it
 (see [escalation tiers](escalation-tiers.md#producing-the-crops)). [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,

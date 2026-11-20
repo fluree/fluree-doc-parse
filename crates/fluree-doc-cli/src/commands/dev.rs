@@ -1159,14 +1159,18 @@ pub(crate) fn render_routed(
         // A bare image is one page of pixels: its crop is the image itself,
         // decoded upright, at its own resolution. Its first bytes say so;
         // nothing else is read twice. A DOCX's crops are the images placed
-        // in its flow, one per figure.
-        if crate::commands::common::source_kind(f)
-            == Some(crate::commands::common::SourceKind::Docx)
-        {
+        // in its flow, one per figure; an e-mail's, the images its body
+        // shows.
+        let crops: Option<MediaCrops> = match crate::commands::common::source_kind(f) {
+            Some(crate::commands::common::SourceKind::Docx) => Some(docx_crops),
+            Some(crate::commands::common::SourceKind::Email) => Some(email_crops),
+            _ => None,
+        };
+        if let Some(crops) = crops {
             let stem = crate::commands::common::stem_of(f);
             match std::fs::read(f)
                 .map_err(|e| e.to_string())
-                .and_then(|bytes| docx_crops(&bytes, stem, outdir))
+                .and_then(|bytes| crops(&bytes, stem, outdir))
             {
                 Ok(recs) => {
                     n_media += recs.len();
@@ -1438,6 +1442,10 @@ fn is_image_file(path: &Path) -> bool {
     fluree_doc_pdf::image::Format::sniff(&head[..n]).is_some()
 }
 
+/// A container's crops of the images placed in its flow, from its bytes,
+/// stem and the crops directory: their manifest records.
+type MediaCrops = fn(&[u8], &str, &Path) -> Result<Vec<serde_json::Value>, String>;
+
 /// A DOCX's crops ([`media_crops`]), read from its package, opened once.
 fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
     let (_, _, media) = fluree_doc_docx::parse_with_media(bytes).map_err(|e| e.to_string())?;
@@ -1445,6 +1453,24 @@ fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json:
     media_crops(
         media,
         &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
+        stem,
+        outdir,
+    )
+}
+
+/// An e-mail's crops ([`media_crops`]): each image its body shows,
+/// `<stem>_m<n>.png` for the figure `figure-0-<n>`, its `part` the `cid:` URL
+/// the message names it by.
+fn email_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let email = fluree_doc_email::parse(bytes).map_err(|e| e.to_string())?;
+    media_crops(
+        email.media.clone(),
+        &mut |part| {
+            email
+                .media_bytes(part)
+                .map(<[u8]>::to_vec)
+                .ok_or_else(|| format!("{part}: not in the message"))
+        },
         stem,
         outdir,
     )

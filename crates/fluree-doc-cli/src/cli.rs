@@ -233,7 +233,8 @@ pub struct ConvertArgs {
 
     /// Directory of OCR word readings (`<stem>_p<N>_full.json`,
     /// `<stem>_p<N>_r<i>.json`; `<stem>.json` for a bare image,
-    /// `<stem>_m<n>[_<k>].json` for a DOCX's pictures) read as glyphs on the
+    /// `<stem>_m<n>[_<k>].json` for a DOCX's pictures and an e-mail's inline
+    /// images) read as glyphs on the
     /// pages and regions the router sends a reader [env: FDOC_OCR_WORDS]
     #[arg(long, value_name = "DIR", conflicts_with = "ocr")]
     pub ocr_words: Option<PathBuf>,

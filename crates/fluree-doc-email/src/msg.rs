@@ -50,6 +50,7 @@ pub fn read(bytes: &[u8]) -> Result<Read, EmailError> {
         header: m.header,
         body: m.body,
         attachments: m.attachments,
+        shown: Vec::new(),
         provenance: "msg",
     })
 }
@@ -417,9 +418,12 @@ fn attachments(cf: &mut Cf, props: &Store, depth: usize) -> Vec<AttachedFile> {
             .map(|t| t.to_ascii_lowercase())
             .unwrap_or_else(|| guess_type(filename.as_deref()).to_string());
         let hidden = a.fixed.get(&ATTACHMENT_HIDDEN).is_some_and(|v| v[0] != 0);
-        let inline = hidden
-            || (content_type.starts_with("image/") && a.string(cf, ATTACH_CONTENT_ID).is_some());
-        out.push(AttachedFile::new(filename, content_type, inline, bytes));
+        let content_id = a.string(cf, ATTACH_CONTENT_ID);
+        let inline = hidden || (content_type.starts_with("image/") && content_id.is_some());
+        out.push(
+            AttachedFile::new(filename, content_type, inline, bytes)
+                .with_content_id(content_id.as_deref()),
+        );
     }
     out
 }
@@ -505,8 +509,16 @@ fn write_eml(m: &Msg) -> Vec<u8> {
             .as_deref()
             .unwrap_or("attachment")
             .replace('"', "'");
+        // The id its body shows it by, so the message written keeps its
+        // images where they are drawn. A line break would end the header.
+        let cid = a
+            .content_id
+            .as_deref()
+            .filter(|id| !id.contains(['\r', '\n']))
+            .map(|id| format!("Content-ID: <{id}>\r\n"))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "--{boundary}\r\nContent-Type: {}\r\nContent-Disposition: {}; filename=\"{name}\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{}\r\n",
+            "--{boundary}\r\nContent-Type: {}\r\n{cid}Content-Disposition: {}; filename=\"{name}\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{}\r\n",
             a.info.content_type,
             if a.info.inline { "inline" } else { "attachment" },
             base64_lines(&a.bytes)
@@ -681,6 +693,65 @@ pub(crate) mod tests {
         let inner = crate::parse(&fwd.bytes).unwrap();
         assert_eq!(inner.info.title.as_deref(), Some("Kickoff"));
         assert_eq!(inner.elements[1].text, "See you Tuesday.");
+    }
+
+    #[test]
+    fn an_outlook_screenshot_is_drawn_where_its_body_marks_it() {
+        let mut cf = CompoundFile::create(Cursor::new(Vec::new())).unwrap();
+        put(&mut cf, "/__properties_version1.0", &[0u8; 32]);
+        put(&mut cf, "/__substg1.0_0037001F", &unicode("Record"));
+        put(&mut cf, "/__substg1.0_0C1A001F", &unicode("Lena Holt"));
+        put(
+            &mut cf,
+            "/__substg1.0_1000001F",
+            &unicode("The record:\r\n\r\n[cid:image001.png@01DC0000.00000000]\r\n\r\nLena\r\n"),
+        );
+        let a0 = "/__attach_version1.0_#00000000";
+        cf.create_storage(a0).unwrap();
+        let mut p = vec![0u8; 8];
+        p.extend(prop(ATTACH_METHOD, 0x0003, 1));
+        put(&mut cf, &format!("{a0}/__properties_version1.0"), &p);
+        put(
+            &mut cf,
+            &format!("{a0}/__substg1.0_3707001F"),
+            &unicode("image001.png"),
+        );
+        put(
+            &mut cf,
+            &format!("{a0}/__substg1.0_370E001F"),
+            &unicode("image/png"),
+        );
+        put(
+            &mut cf,
+            &format!("{a0}/__substg1.0_3712001F"),
+            &unicode("image001.png@01DC0000.00000000"),
+        );
+        put(&mut cf, &format!("{a0}/__substg1.0_37010102"), b"pixels");
+        cf.flush().unwrap();
+        let email = crate::parse(&cf.into_inner().into_inner()).unwrap();
+        let got: Vec<(&str, &str)> = email
+            .elements
+            .iter()
+            .skip(1)
+            .map(|e| (e.kind.as_str(), e.figure.as_deref().unwrap_or(&e.text)))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("doco:Paragraph", "The record:"),
+                ("doco:Figure", "figure-0-1"),
+                ("doco:Paragraph", "Lena"),
+            ]
+        );
+        assert_eq!(
+            email.media[0].source.name(),
+            "cid:image001.png@01DC0000.00000000"
+        );
+        assert_eq!(
+            email.media_bytes(email.media[0].source.name()),
+            Some(&b"pixels"[..])
+        );
+        assert!(email.attachments[0].info.inline);
     }
 
     #[test]
