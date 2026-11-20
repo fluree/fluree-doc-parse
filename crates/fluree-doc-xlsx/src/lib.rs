@@ -39,7 +39,18 @@
 //!
 //! No `bbox`: a cell address is not a position on a page, and a consumer
 //! wanting the address has the table's row and column.
+//!
+//! **Bounds.** A cell past Excel's grid ([`MAX_ROWS`], [`MAX_COLUMNS`]) is
+//! not read. Every cell read and every copy the layout makes of it, every
+//! cell a merge covers or a table's grid holds, every element made and the
+//! text of each cell are spent from the workbook's [`Budget`] before they
+//! are allocated, and the passes that mend islands into blocks, which
+//! compare them pairwise, spend its work; past either, the workbook is
+//! refused. A sheet's merges past about a million cells are read unmerged,
+//! its tables past about four million cells of grid as their cells' text,
+//! and past 2,048 islands no island is mended.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Datum, DocumentInfo, Element};
 pub use fluree_doc_ooxml::Package;
 use fluree_doc_ooxml::{attr, local, PartNames};
@@ -64,6 +75,8 @@ pub enum XlsxError {
     Zip(String),
     Xml(String),
     NoWorkbook,
+    /// Past the workbook's budget.
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for XlsxError {
@@ -72,7 +85,14 @@ impl std::fmt::Display for XlsxError {
             Self::Zip(e) => write!(f, "not a readable .xlsx: {e}"),
             Self::Xml(e) => write!(f, "malformed workbook XML: {e}"),
             Self::NoWorkbook => write!(f, "package has no workbook part"),
+            Self::TooLarge(e) => write!(f, "workbook too large: {e}"),
         }
+    }
+}
+
+impl From<TooLarge> for XlsxError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e)
     }
 }
 
@@ -171,6 +191,7 @@ pub fn parse_with_media(
         .unwrap_or_default();
     let (sheets, date1904) = parse_workbook_xml(&workbook)?;
     let names = PartNames::new(&pkg);
+    let mut budget = Budget::default();
 
     let mut out = Vec::new();
     let mut media = Vec::new();
@@ -187,7 +208,7 @@ pub fn parse_with_media(
             styles: &styles,
             date1904,
         };
-        let sheet = read_sheet(&xml, &ctx)?;
+        let sheet = read_sheet(&xml, &ctx, &mut budget)?;
         // The sheet's drawing, by the relationship it names: the pictures
         // anchored to its cells, each a figure where it is anchored.
         let mut figures = Vec::new();
@@ -201,6 +222,8 @@ pub fn parse_with_media(
                 let drawing_rels = pkg.relationships(&part);
                 let by_id = fluree_doc_ooxml::by_id(&drawing_rels);
                 for pic in pictures(&xml) {
+                    budget.spend_elements(1)?;
+                    budget.spend_text(&pic.alt)?;
                     figure_count += 1;
                     let id = format!("figure-{page}-{figure_count}");
                     for (index, rid) in pic.rids.iter().enumerate() {
@@ -216,7 +239,13 @@ pub fn parse_with_media(
                 }
             }
         }
-        out.extend(sheet_elements(&sheet_ref.name, &sheet, page, figures));
+        out.extend(sheet_elements(
+            &sheet_ref.name,
+            &sheet,
+            page,
+            figures,
+            &mut budget,
+        )?);
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
@@ -260,13 +289,23 @@ pub struct GridSheet {
 /// only weight (`bold`) sets a title apart. A cell past Excel's grid
 /// ([`MAX_ROWS`], [`MAX_COLUMNS`]) is no cell, as in an XLSX sheet, and a
 /// merge is cut at the grid's edge.
-pub fn grid_elements(sheets: Vec<GridSheet>, source: &'static str) -> Vec<Element> {
+///
+/// The cells and their text were spent from `budget` by the reader that
+/// made them; what the layout makes of them is spent here, before it is
+/// made, and past `budget` the workbook is refused.
+pub fn grid_elements(
+    sheets: Vec<GridSheet>,
+    source: &'static str,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, TooLarge> {
     let mut out = Vec::new();
     for (page, g) in sheets.into_iter().enumerate() {
         let mut sheet = Sheet {
             frozen_rows: g.frozen_rows,
             ..Sheet::default()
         };
+        // The sheet's own copy of its cells.
+        budget.spend_cells(g.cells.len() as u64)?;
         for c in g.cells {
             if c.row >= MAX_ROWS || c.col >= MAX_COLUMNS {
                 continue;
@@ -296,14 +335,14 @@ pub fn grid_elements(sheets: Vec<GridSheet>, source: &'static str) -> Vec<Elemen
             })
             .filter(|m| m.r0 < MAX_ROWS && m.c0 < MAX_COLUMNS)
             .collect();
-        out.extend(sheet_elements(&g.name, &sheet, page, Vec::new()));
+        out.extend(sheet_elements(&g.name, &sheet, page, Vec::new(), budget)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
         e.provenance = source;
         e.evidence = source;
     }
-    out
+    Ok(out)
 }
 
 /// A picture a drawing anchors to a sheet's cells.
@@ -1259,8 +1298,9 @@ pub fn parse_sheet_xml(
     page: usize,
     ctx: &Context<'_>,
 ) -> Result<Vec<Element>, XlsxError> {
-    let sheet = read_sheet(xml, ctx)?;
-    Ok(sheet_elements(name, &sheet, page, Vec::new()))
+    let mut budget = Budget::default();
+    let sheet = read_sheet(xml, ctx, &mut budget)?;
+    Ok(sheet_elements(name, &sheet, page, Vec::new(), &mut budget)?)
 }
 
 /// A sheet's elements: its name, then its cells laid out with the figures
@@ -1270,18 +1310,23 @@ fn sheet_elements(
     sheet: &Sheet,
     page: usize,
     figures: Vec<((u32, u32), Element)>,
-) -> Vec<Element> {
+    budget: &mut Budget,
+) -> Result<Vec<Element>, TooLarge> {
+    budget.spend_elements(1)?;
+    budget.spend_text(name)?;
     let mut out = vec![element(
         "doco:SectionTitle",
         name.to_string(),
         Some(1),
         page,
     )];
-    out.extend(layout(sheet, page, figures));
-    out
+    out.extend(layout(sheet, page, figures, budget)?);
+    Ok(out)
 }
 
-fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
+/// A sheet's cells, each and its text spent from `budget` before it is
+/// kept: a shared string is copied into every cell that names it.
+fn read_sheet(xml: &str, ctx: &Context<'_>, budget: &mut Budget) -> Result<Sheet, XlsxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -1325,8 +1370,22 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
                             .filter(|(p, ..)| p.0 < MAX_ROWS && p.1 < MAX_COLUMNS)
                         {
                             let st = ctx.styles.get(style);
+                            // A shared string before it is copied; any other
+                            // text, at most a format's few literals over the
+                            // value, once made.
+                            if let Some(s) = (kind == "s")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                                .and_then(|i| ctx.shared.get(i))
+                            {
+                                budget.spend_text(s)?;
+                            }
                             let text = cell_text(&kind, &value, &st, ctx);
+                            if kind != "s" {
+                                budget.spend_text(&text)?;
+                            }
                             if !text.is_empty() {
+                                budget.spend_cells(1)?;
                                 sheet.cells.insert(
                                     pos,
                                     Cell {
@@ -1434,13 +1493,26 @@ fn cell_text(kind: &str, value: &str, st: &CellStyle, ctx: &Context<'_>) -> Stri
 /// `figures` are set among them by the cell each is anchored to: after the
 /// elements whose first cell comes before it, in rows then columns, as an
 /// island is placed by its first cell.
-fn layout(sheet: &Sheet, page: usize, figures: Vec<((u32, u32), Element)>) -> Vec<Element> {
+fn layout(
+    sheet: &Sheet,
+    page: usize,
+    figures: Vec<((u32, u32), Element)>,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, TooLarge> {
     // Merged ranges show their anchor and hide the rest. The hidden cells
     // still occupy their positions — they are part of what the range
     // covers — but carry no text of their own.
+    let merges = bounded_merges(sheet);
+    // Each cell a merge covers is an entry of two maps; and the cells are
+    // copied once.
+    let covered = merges
+        .iter()
+        .fold(0u64, |n, m| n.saturating_add(m.height() * m.width()));
+    budget.spend_cells(covered.saturating_mul(2))?;
+    budget.spend_cells(sheet.cells.len() as u64)?;
     let mut cells: BTreeMap<(u32, u32), Cell> = sheet.cells.clone();
     let mut merge_of: HashMap<(u32, u32), Range> = HashMap::new();
-    for m in &sheet.merges {
+    for m in &merges {
         for r in m.r0..=m.r1 {
             for c in m.c0..=m.c1 {
                 if (r, c) != (m.r0, m.c0) {
@@ -1451,7 +1523,7 @@ fn layout(sheet: &Sheet, page: usize, figures: Vec<((u32, u32), Element)>) -> Ve
         }
     }
     let mut occupied: HashSet<(u32, u32)> = cells.keys().copied().collect();
-    for m in &sheet.merges {
+    for m in &merges {
         if cells.contains_key(&(m.r0, m.c0)) {
             for r in m.r0..=m.r1 {
                 for c in m.c0..=m.c1 {
@@ -1476,22 +1548,107 @@ fn layout(sheet: &Sheet, page: usize, figures: Vec<((u32, u32), Element)>) -> Ve
             .unwrap_or(11.0)
     };
 
-    let mut islands = islands(&occupied);
-    absorb_fragments(&mut islands);
-    join_labels_to_amounts(&mut islands, &cells, modal_size);
+    let mut islands = islands(&occupied, budget)?;
+    // Both compare islands pairwise, each comparison counted as work: past
+    // a few thousand, a sheet is no invoice whose totals they mend.
+    if islands.len() <= MAX_MENDED_ISLANDS {
+        absorb_fragments(&mut islands, budget)?;
+        join_labels_to_amounts(&mut islands, &cells, modal_size, budget)?;
+    }
     islands.sort_by_key(|isl| (isl.range.r0, isl.range.c0));
 
     let mut placed: Vec<((u32, u32), Element)> = Vec::new();
+    let mut grids = 0u64;
     for isl in islands {
+        // A table is laid out as a grid over its range: an island whose
+        // range is mostly empty (cells set down a diagonal) would ask for
+        // its square. Past the bound, its cells are read as paragraphs.
+        let area = isl.range.height() * isl.range.width();
+        grids = grids.saturating_add(area);
+        if grids > MAX_LAID_OUT_CELLS {
+            placed.extend(island_paragraphs(&isl, &cells, page, budget)?);
+            continue;
+        }
+        // Its rows are read across its range, a cell at a time.
+        budget.spend_work(area)?;
         placed.extend(island_elements(
-            &isl, &cells, &merge_of, sheet, modal_size, page,
-        ));
+            &isl, &cells, &merge_of, sheet, modal_size, page, budget,
+        )?);
     }
     // After the islands: a figure anchored to an island's first cell
     // follows it.
     placed.extend(figures);
     placed.sort_by_key(|(at, _)| *at);
-    placed.into_iter().map(|(_, e)| e).collect()
+    Ok(placed.into_iter().map(|(_, e)| e).collect())
+}
+
+/// The most cells a sheet's merged ranges may cover, each clipped to the
+/// cells the sheet holds; merges past it are read as unmerged.
+const MAX_MERGED_CELLS: u64 = 1 << 20;
+
+/// The most islands the pairwise mending of a sheet's blocks looks at: past
+/// it, a sheet is no invoice whose totals need mending, and its islands are
+/// left as found rather than the workbook refused for the work.
+const MAX_MENDED_ISLANDS: usize = 2_048;
+
+/// The most cells the grids of a sheet's tables may span, summed; an island
+/// past it is read as its cells' text.
+const MAX_LAID_OUT_CELLS: u64 = 1 << 22;
+
+/// A sheet's merged ranges, each cut at the last row and column its cells
+/// reach (what a merge covers past them holds nothing to read; its anchor
+/// stays where it is), as many as fit in [`MAX_MERGED_CELLS`]: a range a
+/// few bytes declare can otherwise cover every cell of the grid, each one
+/// a cell laid out.
+fn bounded_merges(sheet: &Sheet) -> Vec<Range> {
+    let Some((r1, c1)) = sheet
+        .cells
+        .keys()
+        .fold(None, |e: Option<(u32, u32)>, &(r, c)| {
+            Some(e.map_or((r, c), |(r1, c1)| (r1.max(r), c1.max(c))))
+        })
+    else {
+        return Vec::new();
+    };
+    let mut covered = 0u64;
+    let mut out = Vec::new();
+    for m in &sheet.merges {
+        if m.r0 > r1 || m.c0 > c1 {
+            continue;
+        }
+        let m = Range {
+            r1: m.r1.min(r1),
+            c1: m.c1.min(c1),
+            ..*m
+        };
+        covered = covered.saturating_add(m.height() * m.width());
+        if covered > MAX_MERGED_CELLS {
+            break;
+        }
+        out.push(m);
+    }
+    out
+}
+
+/// An element and the cell it is placed by.
+type Placed = ((u32, u32), Element);
+
+/// An island too large to lay out as a grid: its cells' text, a paragraph
+/// each, in rows then columns.
+fn island_paragraphs(
+    isl: &Island,
+    cells: &BTreeMap<(u32, u32), Cell>,
+    page: usize,
+    budget: &mut Budget,
+) -> Result<Vec<Placed>, TooLarge> {
+    budget.spend_elements(isl.members.len() as u64)?;
+    let mut at: Vec<(u32, u32)> = isl.members.iter().copied().collect();
+    at.sort_unstable();
+    Ok(at
+        .into_iter()
+        .filter_map(|p| cells.get(&p).map(|c| (p, c)))
+        .map(|(p, c)| (p, element("doco:Paragraph", c.text.clone(), None, page)))
+        .collect())
 }
 
 struct Island {
@@ -1503,8 +1660,11 @@ struct Island {
 }
 
 /// Connected components of occupied cells, four-connected: an empty row or
-/// column between two blocks separates them.
-fn islands(occupied: &HashSet<(u32, u32)>) -> Vec<Island> {
+/// column between two blocks separates them. Each island is spent as two
+/// cells of `budget` (its set of cells and its rows, measured at about
+/// 250 bytes for a lone cell): a sheet of cells apart from each other is as
+/// many islands.
+fn islands(occupied: &HashSet<(u32, u32)>, budget: &mut Budget) -> Result<Vec<Island>, TooLarge> {
     let mut seen: HashSet<(u32, u32)> = HashSet::new();
     let mut out = Vec::new();
     let mut seeds: Vec<(u32, u32)> = occupied.iter().copied().collect();
@@ -1513,6 +1673,7 @@ fn islands(occupied: &HashSet<(u32, u32)>) -> Vec<Island> {
         if seen.contains(&seed) {
             continue;
         }
+        budget.spend_cells(2)?;
         let mut members = HashSet::new();
         let mut queue = VecDeque::from([seed]);
         seen.insert(seed);
@@ -1548,7 +1709,7 @@ fn islands(occupied: &HashSet<(u32, u32)>) -> Vec<Island> {
             gaps: Vec::new(),
         });
     }
-    out
+    Ok(out)
 }
 
 /// Fold into a block the pieces of it that only a missing cell set apart.
@@ -1560,32 +1721,69 @@ fn islands(occupied: &HashSet<(u32, u32)>) -> Vec<Island> {
 /// below it become an island of their own, cut from their labels. An
 /// island inside another's columns, on rows where the other has cells, is
 /// part of it.
-fn absorb_fragments(islands: &mut Vec<Island>) {
-    let rows_of = |isl: &Island| -> HashSet<u32> { isl.members.iter().map(|(r, _)| *r).collect() };
-    let mut i = 0;
-    while i < islands.len() {
-        let inner = &islands[i];
-        let host = (0..islands.len()).find(|&j| {
-            let outer = &islands[j];
-            j != i
-                && outer.members.len() > inner.members.len()
-                && inner.range.c0 >= outer.range.c0
-                && inner.range.c1 <= outer.range.c1
-                && rows_of(inner).is_subset(&rows_of(outer))
-        });
-        match host {
-            Some(j) => {
-                let inner = islands.remove(i);
-                let j = if j > i { j - 1 } else { j };
-                let outer = &mut islands[j];
-                outer.members.extend(inner.members);
-                outer.range.r0 = outer.range.r0.min(inner.range.r0);
-                outer.range.r1 = outer.range.r1.max(inner.range.r1);
-                i = 0;
+///
+/// Each island's rows are a set made once and grown with it, and the
+/// islands are passed over in order until a pass mends none, each test of
+/// one island against another spent from `budget` as work: no pass starts
+/// over after a mend, which made a sheet of a thousand fragments under a
+/// thousand pairs minutes of work.
+fn absorb_fragments(islands: &mut Vec<Island>, budget: &mut Budget) -> Result<(), TooLarge> {
+    let n = islands.len();
+    budget.spend_work(islands.iter().map(|isl| isl.members.len() as u64).sum())?;
+    let mut rows: Vec<HashSet<u32>> = islands
+        .iter()
+        .map(|isl| isl.members.iter().map(|(r, _)| *r).collect())
+        .collect();
+    let mut gone = vec![false; n];
+    loop {
+        let mut mended = false;
+        for i in 0..n {
+            if gone[i] {
+                continue;
             }
-            None => i += 1,
+            let mut host = None;
+            for j in 0..n {
+                budget.spend_work(1)?;
+                let (inner, outer) = (&islands[i], &islands[j]);
+                if j == i
+                    || gone[j]
+                    || outer.members.len() <= inner.members.len()
+                    || inner.range.c0 < outer.range.c0
+                    || inner.range.c1 > outer.range.c1
+                    || rows[i].len() > rows[j].len()
+                {
+                    continue;
+                }
+                budget.spend_work(rows[i].len() as u64)?;
+                if rows[i].iter().all(|r| rows[j].contains(r)) {
+                    host = Some(j);
+                    break;
+                }
+            }
+            let Some(j) = host else {
+                continue;
+            };
+            let inner = std::mem::take(&mut islands[i].members);
+            let range = islands[i].range;
+            let outer = &mut islands[j];
+            outer.members.extend(inner);
+            outer.range.r0 = outer.range.r0.min(range.r0);
+            outer.range.r1 = outer.range.r1.max(range.r1);
+            let moved = std::mem::take(&mut rows[i]);
+            rows[j].extend(moved);
+            gone[i] = true;
+            mended = true;
+        }
+        if !mended {
+            break;
         }
     }
+    let mut k = 0;
+    islands.retain(|_| {
+        k += 1;
+        !gone[k - 1]
+    });
+    Ok(())
 }
 
 /// Join a column of labels to the amounts set apart from it on the same
@@ -1607,7 +1805,8 @@ fn join_labels_to_amounts(
     islands: &mut Vec<Island>,
     cells: &BTreeMap<(u32, u32), Cell>,
     modal_size: f32,
-) {
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let rows_of = |isl: &Island| -> Vec<u32> {
         let mut rows: Vec<u32> = isl.members.iter().map(|(r, _)| *r).collect();
         rows.sort_unstable();
@@ -1621,11 +1820,13 @@ fn join_labels_to_amounts(
     };
     let mut i = 0;
     while i < islands.len() {
+        // A pass over the islands, and the left one's cells sorted.
+        budget.spend_work(islands.len() as u64 + islands[i].members.len() as u64)?;
         let left = &islands[i];
         let labels = texts(left);
         let is_labels = left.range.width() == 1
             && !labels.is_empty()
-            && labels.len() == left.range.height() as usize
+            && labels.len() as u64 == left.range.height()
             && labels
                 .iter()
                 .all(|c| !is_amount(&c.text) && c.size < modal_size * DISPLAY_SIZE_RATIO);
@@ -1656,6 +1857,7 @@ fn join_labels_to_amounts(
             i += 1;
             continue;
         };
+        budget.spend_work(islands[j].members.len() as u64)?;
         let other = islands.remove(j);
         let at = if j < i { i - 1 } else { i };
         let left = &mut islands[at];
@@ -1667,6 +1869,7 @@ fn join_labels_to_amounts(
         left.range.c1 = left.range.c1.max(other.range.c1);
         i = at + 1;
     }
+    Ok(())
 }
 
 /// A cell showing an amount: digits dressed as a number format dresses
@@ -1722,7 +1925,8 @@ fn island_elements(
     sheet: &Sheet,
     modal_size: f32,
     page: usize,
-) -> Vec<((u32, u32), Element)> {
+    budget: &mut Budget,
+) -> Result<Vec<Placed>, TooLarge> {
     let mut out = Vec::new();
     let mut top = isl.range.r0;
     let mut bottom = isl.range.r1;
@@ -1743,13 +1947,14 @@ fn island_elements(
                 } else {
                     ("doco:Paragraph", None)
                 };
+                budget.spend_elements(1)?;
                 out.push((
                     (r, isl.range.c0),
                     element(kind, cell.text.clone(), level, page),
                 ));
             }
         }
-        return out;
+        return Ok(out);
     }
 
     // Peel single-cell rows off the top: the first that is set as display
@@ -1767,6 +1972,7 @@ fn island_elements(
                 } else {
                     ("doco:Paragraph", None)
                 };
+                budget.spend_elements(1)?;
                 out.push(((top, *c), element(kind, cell.text.clone(), level, page)));
                 top += 1;
             }
@@ -1781,6 +1987,7 @@ fn island_elements(
         match anchors.as_slice() {
             [] => bottom -= 1,
             [(c, cell)] if isl.range.width() > 1 && bottom - top >= 2 => {
+                budget.spend_elements(1)?;
                 out.push((
                     (bottom, *c),
                     element("doco:Paragraph", cell.text.clone(), None, page),
@@ -1791,7 +1998,7 @@ fn island_elements(
         }
     }
     if top > bottom {
-        return out;
+        return Ok(out);
     }
 
     // The table: trim columns the remaining rows leave empty, then read the
@@ -1805,7 +2012,7 @@ fn island_elements(
         }
     }
     if c1 < c0 {
-        return out;
+        return Ok(out);
     }
     let range = Range {
         r0: top,
@@ -1814,11 +2021,17 @@ fn island_elements(
         c1,
     };
     // The table's columns: the range, less any gap a join left inside it.
+    let gaps: HashSet<u32> = isl.gaps.iter().copied().collect();
     let cols: Vec<u32> = (range.c0..=range.c1)
-        .filter(|c| !isl.gaps.contains(c))
+        .filter(|c| !gaps.contains(c))
         .collect();
     let n_rows = range.height() as usize;
     let width = cols.len();
+    // The grid, its values and flags, and its rows, and the cells that hold
+    // text, each a node of the output: before any is made.
+    budget.spend_cells((n_rows * width) as u64)?;
+    let filled = isl.members.iter().filter(|p| cells.contains_key(p)).count();
+    budget.spend_elements(1 + filled as u64)?;
     let mut grid = vec![String::new(); n_rows * width];
     let mut data: Vec<Option<Datum>> = vec![None; n_rows * width];
     let mut m_left = vec![false; n_rows * width];
@@ -1856,7 +2069,7 @@ fn island_elements(
                 element("doco:Paragraph", text, None, page),
             ));
         }
-        return out;
+        return Ok(out);
     }
 
     let header_rows = header_rows(&range, &rows, &bold, (&m_left, &m_down), sheet);
@@ -1890,7 +2103,7 @@ fn island_elements(
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
     out.push(((range.r0, range.c0), e));
-    out
+    Ok(out)
 }
 
 /// How many leading rows of a table are its header.
@@ -1998,6 +2211,12 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::budget::{CELL_BYTES, ELEMENT_BYTES, TEXT_BYTES};
+
+    /// [`grid_elements`] within the default budget.
+    fn grid(sheets: Vec<GridSheet>, source: &'static str) -> Vec<Element> {
+        grid_elements(sheets, source, &mut Budget::default()).unwrap()
+    }
 
     #[test]
     fn a_grid_cell_past_excels_grid_is_no_cell() {
@@ -2023,7 +2242,7 @@ mod tests {
             merges: vec![(0, 0, 1, u32::MAX), (MAX_ROWS, 0, MAX_ROWS, 1)],
             frozen_rows: 0,
         }];
-        let els = grid_elements(sheets, "xlsb");
+        let els = grid(sheets, "xlsb");
         let all: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         assert!(all.iter().any(|t| t.contains('a')), "{all:?}");
         assert!(
@@ -2061,7 +2280,7 @@ mod tests {
             merges: vec![(4, 0, 4, 1)],
             frozen_rows: 0,
         }];
-        let els = grid_elements(sheets, "xls");
+        let els = grid(sheets, "xls");
         let kinds: Vec<(&str, &str)> = els
             .iter()
             .map(|e| (e.kind.as_str(), e.text.as_str()))
@@ -2081,6 +2300,240 @@ mod tests {
             .iter()
             .all(|e| e.provenance == "xls" && e.evidence == "xls"));
         assert_eq!(els[2].id, "elem-00003");
+    }
+
+    fn text_cell(row: u32, col: u32, text: &str) -> GridCell {
+        GridCell {
+            row,
+            col,
+            text: text.into(),
+            datum: None,
+            bold: false,
+        }
+    }
+
+    #[test]
+    fn a_merge_is_laid_out_only_as_far_as_the_cells_reach() {
+        // A merge cut where the cells end; one past them, dropped.
+        let sheet = Sheet {
+            cells: [((0, 0), "a"), ((3, 2), "b")]
+                .into_iter()
+                .map(|(at, t)| {
+                    (
+                        at,
+                        Cell {
+                            text: t.into(),
+                            datum: None,
+                            bold: false,
+                            size: 11.0,
+                        },
+                    )
+                })
+                .collect(),
+            merges: vec![
+                Range {
+                    r0: 0,
+                    c0: 0,
+                    r1: 1 << 20,
+                    c1: 1 << 14,
+                },
+                Range {
+                    r0: 5,
+                    c0: 0,
+                    r1: 9,
+                    c1: 0,
+                },
+            ],
+            ..Sheet::default()
+        };
+        assert_eq!(
+            bounded_merges(&sheet),
+            [Range {
+                r0: 0,
+                c0: 0,
+                r1: 3,
+                c1: 2
+            }]
+        );
+        // One cell under a merge over the whole grid: four billion cells
+        // to lay out, from a few bytes.
+        let sheets = vec![GridSheet {
+            name: "S".into(),
+            cells: vec![text_cell(0, 0, "Total"), text_cell(1, 0, "7")],
+            merges: vec![(0, 0, u32::MAX, u32::MAX), (5, 5, 9, 9)],
+            frozen_rows: 0,
+        }];
+        let els = grid(sheets, "xls");
+        assert!(els.iter().any(|e| e.text == "Total"), "{els:#?}");
+    }
+
+    #[test]
+    fn merges_past_their_bound_are_read_unmerged() {
+        // Overlapping merges, each the whole of a 1,024-square sheet: the
+        // second passes the bound.
+        let cells = [text_cell(0, 0, "a"), text_cell(1023, 1023, "z")];
+        let sheet = Sheet {
+            cells: cells
+                .iter()
+                .map(|c| {
+                    (
+                        (c.row, c.col),
+                        Cell {
+                            text: c.text.clone(),
+                            datum: None,
+                            bold: false,
+                            size: 11.0,
+                        },
+                    )
+                })
+                .collect(),
+            merges: vec![
+                Range {
+                    r0: 0,
+                    c0: 0,
+                    r1: 1023,
+                    c1: 1023,
+                };
+                3
+            ],
+            ..Sheet::default()
+        };
+        assert_eq!(bounded_merges(&sheet).len(), 1);
+    }
+
+    #[test]
+    fn an_island_too_wide_for_its_cells_is_read_as_paragraphs() {
+        // A staircase: each cell touching the next, 3,000 rows by 3,001
+        // columns of grid for 6,000 cells.
+        let cells: Vec<GridCell> = (0..3_000u32)
+            .flat_map(|i| [text_cell(i, i, "x"), text_cell(i, i + 1, "y")])
+            .collect();
+        let els = grid(
+            vec![GridSheet {
+                name: "S".into(),
+                cells,
+                ..GridSheet::default()
+            }],
+            "xls",
+        );
+        assert_eq!(els.len(), 6_001);
+        assert!(els[1..].iter().all(|e| e.kind == "doco:Paragraph"));
+    }
+
+    #[test]
+    fn a_sheet_of_many_islands_is_laid_out_without_mending_them() {
+        // 10,000 cells alone on their rows over 10,000 pairs, every cell
+        // inside a pair's columns: each is compared with every pair, a set
+        // of rows built for both each time, a hundred million times.
+        let cells: Vec<GridCell> = (0..10_000u32)
+            .flat_map(|i| {
+                [
+                    text_cell(4 * i, 0, "label"),
+                    text_cell(4 * i + 2, 0, "a"),
+                    text_cell(4 * i + 2, 1, "b"),
+                ]
+            })
+            .collect();
+        let els = grid(
+            vec![GridSheet {
+                name: "S".into(),
+                cells,
+                ..GridSheet::default()
+            }],
+            "xls",
+        );
+        assert_eq!(els.len(), 20_001);
+    }
+
+    #[test]
+    fn mending_fragments_takes_work_in_proportion_not_the_square() {
+        // 500 pairs no island hosts, then a block whose rows hold 500 lone
+        // cells, each a fragment it absorbs. Starting the mending over after
+        // each mend tested the pairs again each time: 500 times 750,000
+        // tests.
+        let mut cells = Vec::new();
+        for k in 0..500u32 {
+            cells.extend([text_cell(2 * k, 10, "p"), text_cell(2 * k, 11, "q")]);
+        }
+        let base = 1_010u32;
+        cells.extend((0..=100).map(|c| text_cell(base, c, "bar")));
+        for r in base + 1..=base + 1_000 {
+            cells.extend((0..20).map(|c| text_cell(r, c, "x")));
+        }
+        cells.extend((0..500).map(|k| text_cell(base + 1 + 2 * k, 80, "f")));
+        let sheets = vec![GridSheet {
+            name: "S".into(),
+            cells,
+            ..GridSheet::default()
+        }];
+        let mut budget = Budget::new(fluree_doc_model::budget::MAX_MEMORY, 20_000_000);
+        let els = grid_elements(sheets, "xlsb", &mut budget).unwrap();
+        // The title, the pairs, and the block with its fragments.
+        assert_eq!(els.len(), 502);
+    }
+
+    #[test]
+    fn a_layout_past_its_budget_is_refused() {
+        // Cells apart from each other: an island, then an element, each.
+        let apart: Vec<GridCell> = (0..1_000u32).map(|i| text_cell(2 * i, 0, "x")).collect();
+        let sheets = || {
+            vec![GridSheet {
+                name: "S".into(),
+                cells: apart.clone(),
+                ..GridSheet::default()
+            }]
+        };
+        let small = |n: u64| Budget::new(n * ELEMENT_BYTES, u64::MAX);
+        assert!(grid_elements(sheets(), "xls", &mut small(2_000)).is_ok());
+        let e = grid_elements(sheets(), "xls", &mut small(1_000)).unwrap_err();
+        assert!(e.to_string().contains("past"), "{e}");
+        // A table's grid, spent before it is made: 10,000 cells, after the
+        // sheet's two copies of them.
+        let table: Vec<GridCell> = (0..100u32)
+            .flat_map(|r| (0..100).map(move |c| text_cell(r, c, "x")))
+            .collect();
+        let sheets = || {
+            vec![GridSheet {
+                name: "S".into(),
+                cells: table.clone(),
+                ..GridSheet::default()
+            }]
+        };
+        // The sheet's title, the table and its cells, each a node of the
+        // output, and the title's text, besides.
+        let cells = |n: u64| {
+            Budget::new(
+                10_002 * ELEMENT_BYTES + TEXT_BYTES + n * CELL_BYTES,
+                u64::MAX,
+            )
+        };
+        assert!(grid_elements(sheets(), "xls", &mut cells(30_002)).is_ok());
+        assert!(grid_elements(sheets(), "xls", &mut cells(25_000)).is_err());
+    }
+
+    #[test]
+    fn a_shared_string_counts_for_each_cell_that_names_it() {
+        // 4,000 cells naming one string of 64 Ki characters: 256 MiB of
+        // copies, 3 GiB counted with their output.
+        let big = "y".repeat(64 << 10);
+        let shared = [big];
+        let styles = styles();
+        let ctx = Context {
+            shared: &shared,
+            styles: &styles,
+            date1904: false,
+        };
+        let xml = |n: u32| {
+            let cells: String = (1..=n)
+                .map(|i| format!("<row r=\"{i}\"><c r=\"A{i}\" t=\"s\"><v>0</v></c></row>"))
+                .collect();
+            format!("<worksheet {NS}><sheetData>{cells}</sheetData></worksheet>")
+        };
+        assert!(parse_sheet_xml("S", &xml(10), 0, &ctx).is_ok());
+        assert!(matches!(
+            parse_sheet_xml("S", &xml(4_000), 0, &ctx),
+            Err(XlsxError::TooLarge(_))
+        ));
     }
 
     const NS: &str = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
@@ -2176,7 +2629,7 @@ mod tests {
             format!("<c{r} t=\"inlineStr\"><is><t>{v}</t></is></c>")
         };
         let xml = format!(
-            "<worksheet {NS}><sheetData><row r=\"1\">{}{}{}</row><row r=\"2\">{}{}</row><row r=\"1048577\">{}</row></sheetData><mergeCells><mergeCell ref=\"XFE1:XFF2\"/></mergeCells></worksheet>",
+            "<worksheet {NS}><sheetData><row r=\"1\">{}{}{}</row><row r=\"2\">{}{}</row><row r=\"1048577\">{}</row></sheetData><mergeCells><mergeCell ref=\"C2:ZZZZ9999999\"/><mergeCell ref=\"XFE1:XFF2\"/></mergeCells></worksheet>",
             t("A1", "a"),
             t("MWLQKWU1", "far"),
             t("", "next"),
@@ -2203,7 +2656,8 @@ mod tests {
         // The corners have no neighbour past them.
         let corners: HashSet<(u32, u32)> =
             [(0, 0), (0, u32::MAX), (u32::MAX, 0)].into_iter().collect();
-        assert_eq!(islands(&corners).len(), 3);
+        let islands = islands(&corners, &mut Budget::default()).unwrap();
+        assert_eq!(islands.len(), 3);
     }
 
     #[test]

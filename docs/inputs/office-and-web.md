@@ -306,7 +306,13 @@ flattened out of it. So this reader measures after all, but only shape.
 - **Merges** read as Excel shows them: a merged range displays its top-left
   cell and hides the rest, stale values included. The hidden cells become
   `merged_left` / `merged_down` continuations, and a merged cell across the
-  full width inside a table is a `sub_headers` band.
+  full width inside a table is a `sub_headers` band. A merge is laid out
+  only as far as the sheet's cells reach, and a sheet's merges cover at most
+  about a million cells, those past it read unmerged, so a range declared
+  over the whole grid costs no more than the cells under it. A block whose
+  grid would pass about four million cells in all (cells set down a
+  diagonal, touching each other, span the square of their number) is read
+  as its cells' text, a paragraph each.
 - **Values are the cached ones.** A formula's last computed value is what
   the file holds and what Excel shows; nothing is recalculated.
 - **A cell's text is what Excel shows.** A number is rendered through its

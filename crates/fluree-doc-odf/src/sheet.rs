@@ -83,7 +83,8 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
         g.frozen_rows = header;
         sheets.push(g);
     }
-    Ok(fluree_doc_xlsx::grid_elements(sheets, "odf"))
+    fluree_doc_xlsx::grid_elements(sheets, "odf", &mut budget)
+        .map_err(|e| OdfError::TooLarge(e.to_string()))
 }
 
 /// A row's cells that hold something, at their columns, repeats counted.
@@ -272,5 +273,14 @@ mod tests {
         // The same cell a few times reads.
         let row = row.replace("3000", "3");
         assert!(parse(&sheet(&row)).is_ok());
+    }
+
+    #[test]
+    fn a_cell_spanning_the_grid_is_laid_out_as_far_as_the_cells_reach() {
+        // Spanned over 16,384 columns and rows: 268 million cells laid out
+        // from one.
+        let row = "<table:table-row><table:table-cell table:number-columns-spanned=\"16384\" table:number-rows-spanned=\"16384\"><text:p>x</text:p></table:table-cell></table:table-row>";
+        let els = parse(&sheet(row)).unwrap();
+        assert!(els.iter().any(|e| e.text == "x"), "{els:#?}");
     }
 }

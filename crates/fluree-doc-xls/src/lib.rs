@@ -98,6 +98,10 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Xls
 
 fn read(book: &[u8], scanned: Vec<scan::Sheet>) -> Result<(Vec<Element>, DocumentInfo), XlsError> {
     use calamine::{Reader, Xls};
+    let too_large = |e: fluree_doc_model::budget::TooLarge| XlsError::TooLarge(e.to_string());
+    // What the workbook makes once calamine has read it: each cell, its
+    // text, and what the layout makes of them.
+    let mut budget = fluree_doc_model::budget::Budget::default();
     let mut wb: Xls<_> = calamine::open_workbook_from_rs(std::io::Cursor::new(book))
         .map_err(|e: calamine::XlsError| XlsError::Biff(e.to_string()))?;
     let date1904 = wb.has_1904_epoch();
@@ -116,6 +120,8 @@ fn read(book: &[u8], scanned: Vec<scan::Sheet>) -> Result<(Vec<Element>, Documen
             let Some((text, datum)) = value(v, date1904) else {
                 continue;
             };
+            budget.spend_cells(1).map_err(too_large)?;
+            budget.spend_text(&text).map_err(too_large)?;
             cells.push(GridCell {
                 row,
                 col,
@@ -156,7 +162,8 @@ fn read(book: &[u8], scanned: Vec<scan::Sheet>) -> Result<(Vec<Element>, Documen
                 .and_then(fluree_doc_model::xsd_date_time),
         })
         .unwrap_or_default();
-    Ok((fluree_doc_xlsx::grid_elements(sheets, "xls"), info))
+    let elements = fluree_doc_xlsx::grid_elements(sheets, "xls", &mut budget).map_err(too_large)?;
+    Ok((elements, info))
 }
 
 /// A cell's text as Excel shows it under the General format, a date as an
