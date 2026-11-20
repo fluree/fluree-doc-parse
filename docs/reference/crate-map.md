@@ -15,6 +15,7 @@ fluree-doc-cli          the fdoc binary
       ├── fluree-doc-xlsx      XLSX reader ─┘
       ├── fluree-doc-doc       Word 97-2003 text, through the piece table
       ├── fluree-doc-xls       Excel 97-2003 reader (lays out with the XLSX reader)
+      ├── fluree-doc-odf       OpenDocument text, sheets (with the XLSX layout), slides
       ├── fluree-doc-csv       CSV and TSV reader
       ├── fluree-doc-transcript  WebVTT and SubRip reader
       └── fluree-doc-email     .eml and .msg reader (uses the HTML reader)
@@ -45,6 +46,7 @@ PDF layout.
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `grid_elements`, sheets another workbook format's reader read, laid out as an XLSX sheet; `parse_with_media` the pictures anchored to its cells, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-doc` | `parse(&[u8]) -> Result<Vec<Element>, DocError>`: a `.doc`'s text, tables and notes through its piece table; `is_doc` |
 | `fluree-doc-xls` | `parse(&[u8]) -> Result<Vec<Element>, XlsError>`, BIFF8 through calamine after a bounds check of its own; `parse_with_info`; `is_xls` |
+| `fluree-doc-odf` | `parse_with_info(&[u8]) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError>`: `.odt`, `.ods`, `.odp`; `Format::sniff` by the `mimetype` |
 | `fluree-doc-csv` | `parse(&[u8]) -> Result<Vec<Element>, CsvError>`: one table under its header row, the delimiter sniffed; `parse_with` names it; `decode`, `sniff` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments, `media` (the images its body shows, drawn as figures), `media_bytes` and `media_attachment`; `Format::sniff`; `parse_attachments`, the attachments down through attached messages, within `AttachmentLimits`, read by a reader the caller supplies |

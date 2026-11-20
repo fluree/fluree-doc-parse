@@ -995,6 +995,7 @@ dependencies = [
  "fluree-doc-image",
  "fluree-doc-markdown",
  "fluree-doc-model",
+ "fluree-doc-odf",
  "fluree-doc-pdf",
  "fluree-doc-pptx",
  "fluree-doc-text",
@@ -1095,6 +1096,17 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "fluree-doc-odf"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "fluree-doc-ooxml",
+ "fluree-doc-xlsx",
+ "quick-xml 0.36.2",
+ "zip",
 ]
 
 [[package]]

@@ -196,6 +196,7 @@ let els = fluree_doc_pptx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_xlsx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_doc::parse(&bytes)?;         // &[u8], Word 97-2003
 let els = fluree_doc_xls::parse(&bytes)?;         // &[u8], Excel 97-2003
+let els = fluree_doc_odf::parse(&bytes)?;         // &[u8], .odt, .ods or .odp
 let els = fluree_doc_csv::parse(&bytes)?;         // &[u8], delimiter sniffed
 let els = fluree_doc_transcript::parse(&bytes)?;  // &[u8], WebVTT or SubRip
 let email = fluree_doc_email::parse(&bytes)?;     // &[u8], .eml or .msg

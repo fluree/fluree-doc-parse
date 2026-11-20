@@ -39,7 +39,7 @@ fn compound() -> Vec<u8> {
 #[test]
 fn a_file_with_no_reader_fails_naming_its_format() {
     let dir = scratch("one");
-    let input = dir.join("deck.ppt");
+    let input = dir.join("deck.key");
     std::fs::write(&input, compound()).unwrap();
     let o = fdoc(&dir)
         .args(["convert", "--no-escalate"])
@@ -49,7 +49,7 @@ fn a_file_with_no_reader_fails_naming_its_format() {
     assert!(!o.status.success());
     let err = stderr(&o);
     assert!(
-        err.contains("unsupported format (.ppt, PowerPoint 97-2003 presentation)"),
+        err.contains("unsupported format (.key, Apple Keynote presentation)"),
         "{err}"
     );
     assert!(!err.contains("parse:"), "{err}");
@@ -66,7 +66,7 @@ fn a_batch_counts_them_among_its_failures() {
         "# Notes\n\nAlex Sample wrote this.\n",
     )
     .unwrap();
-    std::fs::write(inputs.join("memo.rtf"), "{\\rtf1 Memo}").unwrap();
+    std::fs::write(inputs.join("memo.wpd"), "WordPerfect bytes").unwrap();
     let out = dir.join("out");
     let o = fdoc(&dir)
         .args(["convert", "--no-escalate", "--out-dir"])
@@ -76,7 +76,7 @@ fn a_batch_counts_them_among_its_failures() {
         .unwrap();
     assert!(!o.status.success());
     let err = stderr(&o);
-    assert!(err.contains("memo.rtf: unsupported format (.rtf"), "{err}");
+    assert!(err.contains("memo.wpd: unsupported format (.wpd"), "{err}");
     assert!(err.contains("converted 1/2 files"), "{err}");
     assert!(out.join("notes.md").is_file());
     let _ = std::fs::remove_dir_all(dir);

@@ -26,6 +26,7 @@
   - [PDF](inputs/pdf.md)
   - [DOCX, PPTX, XLSX, HTML, Markdown, plain text](inputs/office-and-web.md)
   - [CSV and TSV](inputs/csv.md)
+  - [OpenDocument: .odt, .ods, .odp](inputs/opendocument.md)
   - [XPS and OpenXPS](inputs/xps.md)
   - [Transcripts: WebVTT, SubRip](inputs/transcripts.md)
   - [Email: .eml, .msg](inputs/email.md)

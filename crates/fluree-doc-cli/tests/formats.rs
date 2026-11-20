@@ -627,3 +627,92 @@ fn a_word_97_document_reads_in_every_output_whatever_its_name() {
     assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample signed"));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// An OpenDocument package of `kind` whose body is `body`.
+fn odf(kind: &str, body: &str) -> Vec<u8> {
+    use std::io::Write;
+    let ns = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+              xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
+              xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" \
+              xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" \
+              xmlns:presentation=\"urn:oasis:names:tc:opendocument:xmlns:presentation:1.0\"";
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    z.start_file("mimetype", stored).unwrap();
+    write!(z, "application/vnd.oasis.opendocument.{kind}").unwrap();
+    z.start_file("content.xml", zip::write::SimpleFileOptions::default())
+        .unwrap();
+    write!(
+        z,
+        "<office:document-content {ns}><office:body>{body}</office:body></office:document-content>"
+    )
+    .unwrap();
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn opendocument_text_sheets_and_slides_reach_every_output() {
+    let dir = scratch("odf");
+    let cases = [
+        (
+            "memo.odt",
+            odf(
+                "text",
+                "<office:text><text:h text:outline-level=\"1\">Orders</text:h>\
+                 <text:p>Alex Sample signed the orders.</text:p></office:text>",
+            ),
+            "doco:SectionTitle",
+            vec!["Orders", "Alex Sample signed the orders."],
+        ),
+        (
+            "book.ods",
+            odf(
+                "spreadsheet",
+                "<office:spreadsheet><table:table table:name=\"Orders\">\
+                 <table:table-row><table:table-cell><text:p>Customer</text:p></table:table-cell>\
+                 <table:table-cell><text:p>Amount</text:p></table:table-cell></table:table-row>\
+                 <table:table-row><table:table-cell><text:p>Alex Sample</text:p></table:table-cell>\
+                 <table:table-cell office:value-type=\"float\" office:value=\"12.5\"><text:p>12.50</text:p></table:table-cell></table:table-row>\
+                 </table:table></office:spreadsheet>",
+            ),
+            "doco:Table",
+            vec!["Orders", "Alex Sample", "12.50"],
+        ),
+        (
+            "deck.odp",
+            odf(
+                "presentation",
+                "<office:presentation><draw:page><draw:frame presentation:class=\"title\"><draw:text-box>\
+                 <text:p>Quarterly review</text:p></draw:text-box></draw:frame><draw:frame><draw:text-box>\
+                 <text:p>Sam Example presents.</text:p></draw:text-box></draw:frame></draw:page></office:presentation>",
+            ),
+            "doco:SectionTitle",
+            vec!["Quarterly review", "Sam Example presents."],
+        ),
+    ];
+    for (name, bytes, kind, facts) in &cases {
+        let input = dir.join(name);
+        std::fs::write(&input, bytes).unwrap();
+        assert_parity(&every_format(&dir, &input), kind, facts);
+    }
+    // On stdin, by its mimetype.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["convert", "--no-escalate", "-"])
+        .env("HOME", dir.join("home"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        use std::io::Write;
+        child.stdin.take().unwrap().write_all(&cases[1].1).unwrap();
+    }
+    let o = child.wait_with_output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Alex Sample"));
+    let _ = std::fs::remove_dir_all(dir);
+}

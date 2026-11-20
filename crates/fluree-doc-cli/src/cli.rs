@@ -40,10 +40,10 @@ pub enum OcrEngineName {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF and XPS, Markdown, plain text, HTML, DOCX and DOC, PPTX,
-    /// XLSX and XLS, CSV and TSV, WebVTT and SubRip transcripts, email (.eml,
-    /// .msg) and images. PDF and XPS structure is inferred from layout; the
-    /// others declare theirs and carry no geometry.
+    /// Reads PDF and XPS, Markdown, plain text, HTML, DOCX and DOC, PPTX, XLSX and XLS,
+    /// ODT, ODS and ODP, CSV and TSV, WebVTT and SubRip transcripts, email (.eml, .msg) and
+    /// images. PDF and XPS structure is inferred from layout; the others
+    /// declare theirs and carry no geometry.
     ///
     /// Examples:
     ///   fdoc convert report.pdf
@@ -189,8 +189,8 @@ impl From<MdLinks> for fluree_doc_model::MdLinks {
 #[derive(Args, Debug, Clone)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
-    /// transcript, an email, a PNG, JPEG or TIFF image, or a Word or Excel
-    /// 97-2003 file)
+    /// transcript, an email, a PNG, JPEG or TIFF image, a Word or Excel
+    /// 97-2003 file, or an OpenDocument file)
     #[arg(required = true, value_name = "FILE|DIR|-")]
     pub inputs: Vec<PathBuf>,
 
