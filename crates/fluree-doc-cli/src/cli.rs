@@ -306,8 +306,8 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub strict: bool,
 
-    /// Save each email's attachments under DIR/<email stem>/, to convert
-    /// on their own
+    /// Save each email's attachments, and the files each PDF embeds, under
+    /// DIR/<input stem>/, to convert on their own
     ///
     /// An attachment is a document of its own. Without this flag the
     /// output describes the attachments and does not include them.

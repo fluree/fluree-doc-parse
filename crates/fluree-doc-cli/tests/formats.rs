@@ -251,3 +251,104 @@ fn a_word_files_footnotes_and_comments_reach_every_output() {
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A one-page PDF of these objects after its catalog (object 1), page tree
+/// (2) and page (3), whose content (4) sets one line of text.
+fn pdf_with(page_extra: &str, catalog_extra: &str, more: &[Vec<u8>]) -> Vec<u8> {
+    let content = "BT /F1 12 Tf 72 700 Td (Quarterly report) Tj ET";
+    let mut objects = vec![
+        format!("<< /Type /Catalog /Pages 2 0 R {catalog_extra} >>").into_bytes(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 \
+             << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> /Contents 4 0 R {page_extra} >>"
+        )
+        .into_bytes(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+    ];
+    objects.extend(more.iter().cloned());
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+        out.extend(body);
+        out.extend(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").into_bytes());
+    }
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .into_bytes(),
+    );
+    out
+}
+
+#[test]
+fn a_pdfs_notes_and_embedded_files_reach_every_output() {
+    let dir = scratch("pdf-annots");
+    let csv = b"Customer,Amount\nAlex Sample,12.50\n";
+    let pdf = pdf_with(
+        "/Annots [<< /Type /Annot /Subtype /Text /Rect [500 700 520 720] /T (Sam Example) \
+         /Contents (Check this total) >>]",
+        "/Names << /EmbeddedFiles << /Names [(orders) 5 0 R] >> >>",
+        &[
+            b"<< /Type /Filespec /F (orders.csv) /EF << /F 6 0 R >> >>".to_vec(),
+            [
+                format!(
+                    "<< /Type /EmbeddedFile /Subtype /text#2Fcsv /Length {} >>\nstream\n",
+                    csv.len()
+                )
+                .into_bytes(),
+                csv.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        ],
+    );
+    let input = dir.join("report.pdf");
+    std::fs::write(&input, pdf).unwrap();
+    let out = every_format(&dir, &input);
+    assert_parity(
+        &out,
+        "doco:Paragraph",
+        &["Quarterly report", "Sam Example: Check this total"],
+    );
+    assert!(out[1].1.contains("\"annotation\""), "{}", out[1].1);
+    // The embedded file is described on the document node.
+    let doco: serde_json::Value = serde_json::from_str(&out[2].1).unwrap();
+    let mut described = String::new();
+    walk(&doco, &mut |n| {
+        if let Some(a) = n.get("doc:attachments") {
+            described = a.to_string();
+        }
+    });
+    assert!(described.contains("orders.csv"), "{}", out[2].1);
+    assert!(described.contains("text/csv"), "{described}");
+    // Saved under `--attachments`, else named on stderr.
+    let o = convert(&dir, &input, "md", &[]);
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("1 embedded file not converted (orders.csv)"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let att = dir.join("att");
+    let o = convert(
+        &dir,
+        &input,
+        "md",
+        &["--attachments", att.to_str().unwrap()],
+    );
+    assert!(o.status.success());
+    assert_eq!(
+        std::fs::read(att.join("report").join("orders.csv")).unwrap(),
+        csv
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -65,6 +65,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | `forms` | AcroForm fields | ✅ |
 | `outline` | PDF bookmark tree | ✅ |
 | `link` | link annotations and their anchors | ✅ |
+| `annot` | notes left on the pages, embedded files | ✅ |
 | `image` | a raster image as a one-page document | ✅ |
 | `overlay` | a text-projection span → page and rectangles | ✅ |
 | `render` | rasterising a page (feature `render`) | ✅ |
@@ -85,6 +86,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | rsa, sha2, base64 | signing a service-account assertion | MIT OR Apache-2.0 |
 | toml, toml_edit | reading and editing the config | MIT OR Apache-2.0 |
 | png | encoding rendered pages | MIT OR Apache-2.0 |
+| flate2 | inflating a PDF's embedded files against a bound | MIT OR Apache-2.0 |
 | html5ever | spec-compliant HTML parsing | MIT OR Apache-2.0 |
 | pulldown-cmark | Markdown parsing | MIT |
 | quick-xml, zip | OOXML containers | MIT |

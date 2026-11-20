@@ -1100,6 +1100,7 @@ dependencies = [
 name = "fluree-doc-pdf"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "fluree-doc-model",
  "fluree-doc-vision",
  "hayro",

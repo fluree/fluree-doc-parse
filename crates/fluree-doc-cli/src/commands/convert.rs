@@ -490,7 +490,48 @@ fn convert_email(
         cfg,
         quiet,
     );
-    let count = email.attachments.len();
+    // An image the body shows, read into the body where it is shown, is
+    // converted with the message; any other file is a document of its own,
+    // and this output does not hold it. So is an image read with no text in
+    // it: the body holds nothing of it.
+    let read: std::collections::HashSet<usize> = email
+        .media
+        .iter()
+        .filter(|m| (media.read.iter()).any(|(figure, els)| *figure == m.figure && !els.is_empty()))
+        .filter_map(|m| email.media_attachment(m.source.part()?))
+        .collect();
+    let files: Vec<(&fluree_doc_model::Attachment, &[u8])> = email
+        .attachments
+        .iter()
+        .map(|a| (&a.info, a.bytes.as_slice()))
+        .collect();
+    let read: Vec<usize> = read.into_iter().collect();
+    save_attachments(&files, src, args, &read, "attachment", quiet)?;
+    let notes = fluree_doc_model::Notes {
+        unread_images: media.unread,
+        ocr: media.ocr,
+        ..email.notes()
+    };
+    let mut elements = email.elements;
+    fluree_doc_image::place_after_figures(&mut elements, media.read);
+    Ok(render(&elements, src, args, Vec::new(), &notes))
+}
+
+/// Save the files a document carries (an e-mail's attachments, a PDF's
+/// embedded files, `what` names them) under `--attachments DIR`, in the
+/// input's own directory; without it, say on stderr what was left out. The
+/// files at `read` (images read into the body) were converted with it and
+/// are not counted as left out.
+fn save_attachments(
+    files: &[(&fluree_doc_model::Attachment, &[u8])],
+    src: &Source,
+    args: &ConvertArgs,
+    read: &[usize],
+    what: &str,
+    quiet: bool,
+) -> Result<(), String> {
+    let stem = src.stem;
+    let count = files.len();
     let plural = |n: usize| if n == 1 { "" } else { "s" };
     match &args.attachments {
         Some(dir) if count > 0 => {
@@ -500,42 +541,28 @@ fn convert_email(
             std::fs::create_dir_all(&dir)
                 .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
             let mut taken = std::collections::HashSet::new();
-            for (i, a) in email.attachments.iter().enumerate() {
-                let path = dir.join(file_name(a.info.filename.as_deref(), i, &mut taken));
-                std::fs::write(&path, &a.bytes)
+            for (i, (info, bytes)) in files.iter().enumerate() {
+                let path = dir.join(file_name(info.filename.as_deref(), i, &mut taken));
+                std::fs::write(&path, bytes)
                     .map_err(|e| format!("writing {}: {e}", path.display()))?;
             }
             if !quiet {
                 eprintln!(
-                    "note: {stem}: {count} attachment{} saved to {}",
+                    "note: {stem}: {count} {what}{} saved to {}",
                     plural(count),
                     dir.display()
                 );
             }
         }
         None if count > 0 && !quiet => {
-            // An image the body shows, read into the body where it is shown,
-            // is converted with the message; any other file is a document
-            // of its own, and this output does not hold it. So is an image
-            // read with no text in it: the body holds nothing of it.
-            let read: std::collections::HashSet<usize> = email
-                .media
-                .iter()
-                .filter(|m| {
-                    (media.read.iter()).any(|(figure, els)| *figure == m.figure && !els.is_empty())
-                })
-                .filter_map(|m| email.media_attachment(m.source.part()?))
-                .collect();
-            let names: Vec<String> = email
-                .attachments
+            let names: Vec<String> = files
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| !read.contains(i))
-                .map(|(_, a)| {
-                    a.info
-                        .filename
+                .map(|(_, (info, _))| {
+                    info.filename
                         .clone()
-                        .unwrap_or_else(|| a.info.content_type.clone())
+                        .unwrap_or_else(|| info.content_type.clone())
                 })
                 .collect();
             let left = names.len();
@@ -550,7 +577,7 @@ fn convert_email(
             };
             if left > 0 {
                 eprintln!(
-                    "note: {stem}: {left} attachment{} not converted ({}){images}; \
+                    "note: {stem}: {left} {what}{} not converted ({}){images}; \
                      pass --attachments DIR to save them",
                     plural(left),
                     names.join(", ")
@@ -559,14 +586,7 @@ fn convert_email(
         }
         _ => {}
     }
-    let notes = fluree_doc_model::Notes {
-        unread_images: media.unread,
-        ocr: media.ocr,
-        ..email.notes()
-    };
-    let mut elements = email.elements;
-    fluree_doc_image::place_after_figures(&mut elements, media.read);
-    Ok(render(&elements, src, args, Vec::new(), &notes))
+    Ok(())
 }
 
 /// A safe, unique file name for an attachment: its own name with any path
@@ -1891,6 +1911,32 @@ fn convert_bytes(
         &fluree_doc_pdf::link::extract(&raw),
         &doc.pages,
     );
+    // The notes a reader left on the pages, after each page's own text,
+    // within what one document may make.
+    let mut budget = fluree_doc_model::budget::Budget::default();
+    let annotations = fluree_doc_pdf::annot::annotations(&raw, &mut budget)
+        .map_err(|e| format!("PDF too large: its notes, {e}"))?;
+    fluree_doc_pdf::annot::place(
+        &mut a.elements,
+        fluree_doc_pdf::annot::elements(&annotations),
+    );
+    // The files it embeds, described as an e-mail's attachments are, and
+    // saved with them under `--attachments`.
+    let (embedded, skipped) = fluree_doc_pdf::annot::embedded_files(&raw);
+    if !quiet {
+        for s in &skipped {
+            eprintln!(
+                "warning: {stem}: embedded file {} not taken out ({})",
+                s.name.as_deref().unwrap_or("(unnamed)"),
+                s.reason
+            );
+        }
+    }
+    let files: Vec<(&fluree_doc_model::Attachment, &[u8])> = embedded
+        .iter()
+        .map(|f| (&f.info, f.bytes.as_slice()))
+        .collect();
+    save_attachments(&files, src, args, &[], "embedded file", quiet)?;
     if let Some(keep) = pages {
         a.elements.retain(|e: &Element| keep.contains(&e.page));
     }
@@ -1949,6 +1995,7 @@ fn convert_bytes(
             .collect(),
         info: fluree_doc_pdf::info::read(&raw),
         ocr,
+        attachments: embedded.iter().map(|f| f.info.clone()).collect(),
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
