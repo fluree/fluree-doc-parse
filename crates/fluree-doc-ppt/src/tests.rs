@@ -168,20 +168,21 @@ fn slides_read_in_order_through_the_last_edit() {
         got,
         [
             (0, "doco:SectionTitle", "Quarterly review"),
-            (0, "doco:Paragraph", "Orders up"),
-            (0, "doco:Paragraph", "Costs down"),
-            (0, "doco:Paragraph", "by 3%"),
+            // Body text, which the master bullets: list items, a line
+            // break kept as a line.
+            (0, "doc:ListItem", "Orders up"),
+            (0, "doc:ListItem", "Costs down\nby 3%"),
             // The notes, after the slide.
             (0, "doco:Paragraph", "Say the totals slowly."),
             (0, "doco:Paragraph", "Then pause."),
             // The second save's slide holds no text: its list's is read,
             // and the first save's `Stale` is not.
             (1, "doco:SectionTitle", "Detail"),
-            (1, "doco:Paragraph", "Owner: Alex Sample"),
+            (1, "doc:ListItem", "Owner: Alex Sample"),
         ]
     );
-    assert_eq!(els[4].evidence, "notes");
-    assert_eq!(els[3].evidence, "ppt");
+    assert_eq!(els[3].evidence, "notes");
+    assert_eq!(els[2].evidence, "ppt");
     assert!(els
         .iter()
         .all(|e| e.provenance == "ppt" && e.bbox.is_none()));
@@ -306,4 +307,76 @@ fn a_title_placeholder_is_the_title_whatever_its_text_header_says() {
     texts(&slide, &r, 0, &mut 4, false, &mut out);
     let kinds: Vec<(u32, &str)> = out.iter().map(|t| (t.kind, t.text.as_str())).collect();
     assert_eq!(kinds, [(0, "Review"), (4, "Body text")]);
+}
+
+/// The paragraph properties LibreOffice writes for an outline of three
+/// bulleted paragraphs, the second indented one level.
+const OUTLINE_PROPS: &str = "0a0000000000ff710a000f0095f004002d00000000fe5d00ffffffff880001000c0000000100ff750a000f0095f004002d00000000fe5d00ffffffff1001880001000b0000000000ff750a000f0095f004002d00000000fe5d00ffffffff8800000001000a00000000000400000000fe0c00000000000400000000fe0b00000000000400000000fe";
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn bullets_and_indent_levels_make_list_items() {
+    let text = "Orders up\rWest region\rCosts down".to_string();
+    let runs = para_runs(&unhex(OUTLINE_PROPS), text.encode_utf16().count());
+    let shape: Vec<(u32, u16, Option<bool>)> =
+        runs.iter().map(|r| (r.count, r.indent, r.bullet)).collect();
+    assert_eq!(
+        shape,
+        [
+            (10, 0, Some(true)),
+            (12, 1, Some(true)),
+            (11, 0, Some(true))
+        ]
+    );
+    // Text LibreOffice marks `Other` (4): its bullets say it is a list.
+    let t = Text {
+        kind: 4,
+        text,
+        paras: runs,
+    };
+    assert_eq!(
+        paragraphs(&t),
+        [
+            ("Orders up".to_string(), true),
+            ("West region".to_string(), true),
+            ("Costs down".to_string(), true)
+        ]
+    );
+    // A body placeholder's paragraph that says it has no bullet is prose;
+    // an indented one is a list item whatever its bullet; other text that
+    // says nothing is prose.
+    let run = |count, indent, bullet| ParaRun {
+        count,
+        indent,
+        bullet,
+    };
+    let body = Text {
+        kind: 1,
+        text: "Intro\rPoint\rSub".into(),
+        paras: vec![
+            run(6, 0, Some(false)),
+            run(6, 0, None),
+            run(4, 2, Some(false)),
+        ],
+    };
+    assert_eq!(
+        paragraphs(&body),
+        [
+            ("Intro".to_string(), false),
+            ("Point".to_string(), true),
+            ("Sub".to_string(), true)
+        ]
+    );
+    let other = Text {
+        kind: 4,
+        text: "Caption".into(),
+        paras: Vec::new(),
+    };
+    assert_eq!(paragraphs(&other), [("Caption".to_string(), false)]);
 }

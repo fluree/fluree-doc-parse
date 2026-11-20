@@ -12,14 +12,17 @@
 //!
 //! **What is read**: each slide is a page, in the order the slide list
 //! gives; a title placeholder's text is a level-1 heading, every other text
-//! a paragraph per line. Where a slide's shapes hold no text (an older
-//! writer keeps it in the slide list instead) the slide list's text is read.
-//! A slide's **speaker notes**, the notes slide its own atom names, follow
-//! its content as paragraphs whose `evidence` is `notes`, so a consumer that
-//! wants what the audience saw leaves them out.
-//! **What is not**: the masters' placeholder prompts,
-//! bullets and list levels (so no list items), tables (their cells' text is
-//! read as paragraphs), pictures, charts and embedded objects, and the
+//! a paragraph per paragraph mark, a line break kept as a line. A paragraph
+//! its properties (`StyleTextPropAtom`) give a bullet or an indent level past
+//! the first is a list item, as a PPTX's is; where they do not say, a body
+//! placeholder's text, which the master bullets, is. Where a slide's shapes
+//! hold no text (an older writer keeps it in the slide list instead) the
+//! slide list's text is read. A slide's **speaker notes**, the notes slide
+//! its own atom names, follow its content as paragraphs whose `evidence` is
+//! `notes`, so a consumer that wants what the audience saw leaves them out.
+//! **What is not**: the masters' placeholder prompts, the list level itself
+//! (the element model keeps a level on headings only), tables (their cells'
+//! text is read as paragraphs), pictures, charts and embedded objects, and the
 //! summary information. Encrypted files fail as malformed or unsupported.
 //!
 //! **Bounds**: the compound file is opened by the `cfb` crate, which
@@ -54,6 +57,7 @@ const NOTES: u16 = 0x03F0;
 const TEXT_HEADER: u16 = 0x0F9F;
 const TEXT_CHARS: u16 = 0x0FA0;
 const TEXT_BYTES: u16 = 0x0FA8;
+const STYLE_TEXT_PROP: u16 = 0x0FA1;
 const USER_EDIT: u16 = 0x0FF5;
 const PERSIST_DIRECTORY: u16 = 0x1772;
 const CRYPT_SESSION: u16 = 0x2F14;
@@ -227,6 +231,88 @@ struct Text {
     /// `TextHeaderAtom`'s type: 0 title, 6 centred title, others body text.
     kind: u32,
     text: String,
+    /// Its paragraphs' properties (`StyleTextPropAtom`), where they follow
+    /// it: runs of characters, each with its indent level and whether it
+    /// says it is bulleted.
+    paras: Vec<ParaRun>,
+}
+
+/// A run of characters sharing paragraph properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParaRun {
+    /// Characters covered, each paragraph's mark included.
+    count: u32,
+    /// 0 for the outermost level.
+    indent: u16,
+    /// Whether the run says it has a bullet; `None` where it does not say,
+    /// and the master's style decides.
+    bullet: Option<bool>,
+}
+
+/// The paragraph runs a `StyleTextPropAtom` opens with, as many as cover
+/// `chars` characters (its character runs follow and are not read). Each is
+/// a count, an indent level, and the properties its mask says it holds, in
+/// the order the format sets.
+fn para_runs(d: &[u8], chars: usize) -> Vec<ParaRun> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    let mut covered = 0usize;
+    while covered < chars + 1 && out.len() < 100_000 {
+        let (Some(count), Some(indent), Some(mask)) =
+            (u32_at(d, at), u16_at(d, at + 4), u32_at(d, at + 6))
+        else {
+            break;
+        };
+        at += 10;
+        let mut flags = None;
+        // (mask bits, bytes) in order: bullet flags, char, font, size,
+        // colour, alignment, line spacing, space before and after, left
+        // margin, indent, default tab size, tab stops, font alignment, wrap
+        // flags, text direction.
+        let fields: [(u32, usize); 16] = [
+            (0x0000_000F, 2),
+            (0x0000_0080, 2),
+            (0x0000_0010, 2),
+            (0x0000_0040, 2),
+            (0x0000_0020, 4),
+            (0x0000_0800, 2),
+            (0x0000_1000, 2),
+            (0x0000_2000, 2),
+            (0x0000_4000, 2),
+            (0x0000_0100, 2),
+            (0x0000_0400, 2),
+            (0x0000_8000, 2),
+            (0x0010_0000, 0),
+            (0x0001_0000, 2),
+            (0x000E_0000, 2),
+            (0x0020_0000, 2),
+        ];
+        for (bits, size) in fields {
+            if mask & bits == 0 {
+                continue;
+            }
+            if bits == 0x0000_000F {
+                flags = u16_at(d, at);
+            }
+            if bits == 0x0010_0000 {
+                // Tab stops: a count, then four bytes each.
+                let n = usize::from(u16_at(d, at).unwrap_or(0));
+                at += 2 + 4 * n;
+                continue;
+            }
+            at += size;
+        }
+        out.push(ParaRun {
+            count,
+            indent,
+            bullet: (mask & 0x1 != 0).then(|| flags.is_some_and(|f| f & 0x1 != 0)),
+        });
+        covered += count as usize;
+        if count == 0 {
+            break;
+        }
+    }
+    out
 }
 
 /// Whether a shape is a title placeholder: its `OEPlaceholderAtom` names a
@@ -273,7 +359,14 @@ fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &
             TEXT_CHARS | TEXT_BYTES => out.push(Text {
                 kind: if title { 0 } else { *kind },
                 text: atom_text(c.typ, data),
+                paras: Vec::new(),
             }),
+            // The properties of the text just read, beside it.
+            STYLE_TEXT_PROP => {
+                if let Some(t) = out.last_mut().filter(|t| t.paras.is_empty()) {
+                    t.paras = para_runs(data, t.text.encode_utf16().count());
+                }
+            }
             // A shape: a placeholder that is a slide's title makes its text
             // the title, whatever its text header says (LibreOffice writes
             // `Other` for every slide text).
@@ -285,6 +378,46 @@ fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &
             _ => {}
         }
     }
+}
+
+/// A text's paragraphs, split at their marks, a line break kept as a line;
+/// each with whether it is a list item. A paragraph is one where its
+/// properties give it a bullet or an indent level past the first, as a
+/// PPTX paragraph is; where they do not say, a body placeholder's text
+/// (`Body`, `HalfBody`, `QuarterBody`), which the master bullets, is one.
+fn paragraphs(t: &Text) -> Vec<(String, bool)> {
+    let body = matches!(t.kind, 1 | 7 | 8);
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    for p in t.text.split('\r') {
+        // The run covering the paragraph's first character.
+        let mut at = 0usize;
+        let run = t.paras.iter().find(|r| {
+            at += r.count as usize;
+            at > start
+        });
+        start += p.encode_utf16().count() + 1;
+        let text = tidy(p);
+        if text.is_empty() {
+            continue;
+        }
+        let listy = match run {
+            Some(r) => r.bullet.unwrap_or(body) || r.indent > 0,
+            None => body,
+        };
+        out.push((text, listy));
+    }
+    out
+}
+
+/// A paragraph's text: its line breaks as lines, each line's runs of
+/// whitespace one space.
+fn tidy(s: &str) -> String {
+    s.split('\u{b}')
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Parse a `.ppt` file's bytes into elements, a slide a page.
@@ -339,6 +472,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
                         t.push(Text {
                             kind,
                             text: atom_text(c.typ, data),
+                            paras: Vec::new(),
                         });
                     }
                 }
@@ -396,43 +530,35 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
         };
         for t in runs {
             let title = matches!(t.kind, 0 | 6);
-            let lines: Vec<String> = t
-                .text
-                .split(['\r', '\u{b}'])
-                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-                .filter(|l| !l.is_empty())
-                .collect();
             if title {
-                if !lines.is_empty() {
+                let line = tidy(&t.text.replace(['\r', '\u{b}'], " "));
+                if !line.is_empty() {
                     out.push(Element {
                         page,
                         level: Some(1),
-                        ..Element::new("doco:SectionTitle", lines.join(" "), "ppt", "ppt")
+                        ..Element::new("doco:SectionTitle", line, "ppt", "ppt")
                     });
                 }
                 continue;
             }
-            for l in lines {
+            for (text, listy) in paragraphs(&t) {
+                let kind = if listy {
+                    "doc:ListItem"
+                } else {
+                    "doco:Paragraph"
+                };
                 out.push(Element {
                     page,
-                    ..Element::new("doco:Paragraph", l, "ppt", "ppt")
+                    ..Element::new(kind, text, "ppt", "ppt")
                 });
             }
         }
         for t in notes {
-            for l in t.text.split('\r').map(|l| {
-                l.split(['\u{b}'])
-                    .map(|x| x.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .filter(|x| !x.is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }) {
-                if !l.is_empty() {
-                    out.push(Element {
-                        page,
-                        ..Element::new("doco:Paragraph", l, "ppt", "notes")
-                    });
-                }
+            for (l, _) in paragraphs(&t) {
+                out.push(Element {
+                    page,
+                    ..Element::new("doco:Paragraph", l, "ppt", "notes")
+                });
             }
         }
     }
