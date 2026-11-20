@@ -633,22 +633,6 @@ fn convert_image(
         });
         splice_image_reading(&mut elements, stem, page, readings.as_ref(), &[]);
     }
-    if elements.is_empty() && !quiet {
-        eprintln!(
-            "note: {} carries no text layer, so only a model can read it",
-            format.mime()
-        );
-        eprintln!(
-            "      {}",
-            if cfg.tier_results.is_some() {
-                "--tier-results holds no reading of it (`<stem>_p0_full.json`)"
-            } else if cfg.escalate {
-                "the reader returned nothing for it"
-            } else {
-                "run `fdoc config gemini --credentials <key.json>` to enable one"
-            }
-        );
-    }
     // An image nothing read is listed unread, so the output says so too. A
     // reading of the whole image read it, however short.
     let mut unread = if elements.is_empty() {
@@ -661,6 +645,25 @@ fn convert_image(
         unread,
         ..Default::default()
     };
+    // Warned about as a PDF's page nothing read is, with what could read it.
+    if !quiet {
+        if let Some(note) = notes.summary() {
+            eprintln!("warning: {stem}: {note}");
+        }
+        if elements.is_empty() {
+            eprintln!(
+                "note: {stem}: {}",
+                if cfg.tier_results.is_some() {
+                    "--tier-results holds no reading of it (`<stem>_p0_full.json`)"
+                } else if cfg.escalate {
+                    "the configured model returned nothing for it"
+                } else {
+                    "read it with --ocr, --ocr-words, --tier-results or a configured model \
+                     (`fdoc config gemini --credentials <key.json>`)"
+                }
+            );
+        }
+    }
     Ok(render(&elements, src, args, sizes, &notes))
 }
 
@@ -1361,6 +1364,7 @@ fn ocr_image(
                     "warning: --ocr-words: {stem}: both {stem}_p0_full.json and {stem}.json; read the one sized as the image"
                 );
             }
+            // Noise set aside as an engine's reading of the image is.
             let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
             (doc, "--ocr-words", injected)
         }
@@ -1393,8 +1397,18 @@ fn ocr_image(
             folio: None,
         })
         .collect();
-    let unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
-    let read_something = unread.is_empty();
+    // Given on its own, an image is read once OCR took a word in it, however
+    // few: a stamp's `PAID`, a label's one line. The floor a scanned PDF's
+    // page is held to (`OcrSparse`: a page read whole under 40 characters,
+    // an engine that gave two words for a dense scan) judges a page among
+    // pages of text, not an image whose few words may be all it holds.
+    let read_something = injected.iter().any(|r| r.refused.is_none() && r.taken > 0)
+        || a.elements.iter().any(|e| e.evidence == "page-tier");
+    let unread = if read_something {
+        Vec::new()
+    } else {
+        fluree_doc_pdf::unread_pages(&doc, &a.elements)
+    };
     let mut notes = fluree_doc_model::Notes {
         unread,
         ..Default::default()

@@ -542,3 +542,137 @@ fn an_image_ocr_read_nothing_of_is_reported_missing_without_a_model() {
     assert!(err.contains("warning: scan: fluree-doc-parse:"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn an_image_nothing_read_is_warned_about_as_a_pdf_page_is() {
+    // No OCR, no reading and no model: the image is reported missing from
+    // the output, as the same pixels in a PDF are, with what could read it.
+    let dir = scratch("unread");
+    let input = dir.join("scan.jpg");
+    std::fs::write(&input, jpeg(None)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .arg("convert")
+        .arg(&input)
+        .args(["-f", "doco"])
+        .env("FDOC_HOME", dir.join("no-config"))
+        .env_remove("FDOC_TIER_RESULTS")
+        .env_remove("FDOC_OCR_WORDS")
+        .env_remove("FDOC_OCR_MODELS")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("warning: scan: fluree-doc-parse:"), "{err}");
+    assert!(err.contains("This output is missing it"), "{err}");
+    assert!(
+        err.contains("--ocr, --ocr-words, --tier-results or a configured model"),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_bare_images_reading_is_taken_as_a_scans_is() {
+    // An image read as a file is given to be read: what an engine reads in
+    // it is taken, as a scan's lines are, however unsure, where the same
+    // words in a picture a document places would be set aside as noise.
+    let dir = scratch("noise");
+    let input = dir.join("photo.jpg");
+    std::fs::write(&input, jpeg(None)).unwrap();
+    let reading = |texts: &[&str], conf: f64| {
+        let words: Vec<_> = (texts.iter().enumerate())
+            .map(|(i, t)| {
+                let x = 10.0 + 70.0 * i as f64;
+                serde_json::json!({ "text": t, "box": [x, 40.0, x + 50.0, 60.0], "conf": conf })
+            })
+            .collect();
+        serde_json::json!({ "coords": "px", "width": 300, "height": 100, "words": words })
+    };
+    let run = |reading: serde_json::Value| {
+        let w = dir.join("words");
+        let _ = std::fs::remove_dir_all(&w);
+        std::fs::create_dir_all(&w).unwrap();
+        std::fs::write(w.join("photo.json"), reading.to_string()).unwrap();
+        let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(&input)
+            .args(["-f", "doco", "-v", "--ocr-words"])
+            .arg(&w)
+            .env("FDOC_HOME", dir.join("no-config"))
+            .env_remove("FDOC_TIER_RESULTS")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        let graph: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        (graph, err)
+    };
+    for kept in [
+        reading(&["I7", "1", "J", "X"], 0.3),
+        reading(&["I7", "1", "J", "X"], 0.95),
+        reading(&["Invoice", "Total due"], 0.6),
+    ] {
+        let (out, err) = run(kept.clone());
+        let first = kept["words"][0]["text"].as_str().unwrap();
+        assert!(out.to_string().contains(first), "{out}");
+        // Taken, and read, however short: the floor a scanned PDF's page
+        // is held to (`OcrSparse`) does not judge an image given alone.
+        assert!(document(&out).get("doc:unreadPages").is_none(), "{out}");
+        assert!(!err.contains("OcrSparse"), "{err}");
+        assert!(!err.contains("is noise"), "{err}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A model configured in `home`, whose key it cannot sign in with: what is
+/// sent to it fails, and nothing leaves the machine.
+fn unusable_model(home: &Path) {
+    std::fs::create_dir_all(home).unwrap();
+    let key = home.join("key.json");
+    std::fs::write(&key, "{}").unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[escalation]\nprovider = \"gemini\"\n[escalation.gemini]\ncredentials = {:?}\n",
+            key.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_stamp_ocr_read_a_word_in_is_read_and_asks_no_model() {
+    // A stamp's one word, read by OCR: the image is read, however little it
+    // holds, and the configured model is not asked (its key unusable here,
+    // so asking it would fail the conversion).
+    let dir = scratch("stamp");
+    let input = dir.join("stamp.png");
+    let img = image::GrayImage::from_pixel(600, 200, image::Luma([250]));
+    img.save(&input).unwrap();
+    let w = dir.join("words");
+    std::fs::create_dir_all(&w).unwrap();
+    let reading = serde_json::json!({
+        "coords": "px", "width": 600, "height": 200,
+        "words": [{ "text": "PAID", "box": [200, 70, 400, 130], "conf": 0.97 }]
+    });
+    std::fs::write(w.join("stamp.json"), reading.to_string()).unwrap();
+    let home = dir.join("fdoc-home");
+    unusable_model(&home);
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .arg("convert")
+        .arg(&input)
+        .args(["-f", "doco", "--ocr-words"])
+        .arg(&w)
+        .env("FDOC_HOME", &home)
+        .env_remove("FDOC_TIER_RESULTS")
+        .env_remove("FDOC_OCR_MODELS")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("configured model"), "{err}");
+    let doc: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(doc.to_string().contains("PAID"), "{doc}");
+    assert!(document(&doc).get("doc:unreadPages").is_none(), "{doc}");
+    let _ = std::fs::remove_dir_all(dir);
+}

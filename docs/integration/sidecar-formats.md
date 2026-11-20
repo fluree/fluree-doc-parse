@@ -259,8 +259,9 @@ asks a model for nothing — neither its whole page nor its tables: escalating
 past OCR is a decision of its own. Such a page is not reported unread unless
 its text stays under the floor every page is held to (40 characters): then it
 is listed in `doc:unreadPages` as `OcrSparse`, with a warning on stderr, since
-an engine that gave two words for a dense scan has not read it. A reading
-that took no word reads nothing: the page or region stays as it was, routed
+an engine that gave two words for a dense scan has not read it; not an image
+given on its own, read once a word in it was taken. A reading that took no
+word reads nothing: the page or region stays as it was, routed
 and reported unread (in
 [`doc:unreadPages`](../formats/doco.md#pages-nothing-read) or
 [`doc:unreadRegions`](../formats/doco.md#regions-nothing-read)). So does a whole-page reading

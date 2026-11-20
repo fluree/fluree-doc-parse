@@ -370,7 +370,9 @@ pub fn document(image: &Decoded) -> Document {
     fluree_doc_pdf::image::page_of(image.pixels.width, image.pixels.height, image.bitonal)
 }
 
-/// Decode an image and read it with an engine.
+/// Decode an image and read it with an engine, as a scanned page is read:
+/// neither the pixel probe nor the noise rule judges it, an image given on
+/// its own being given to be read.
 pub fn read(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageRead, String> {
     let image = decode(bytes)?;
     let mut doc = document(&image);
@@ -929,6 +931,18 @@ mod tests {
         fn read(&self, _: &Pixels) -> Result<WordReading, String> {
             Ok(reading(&[("M", [40.0, 60.0, 200.0, 220.0])], Some(0.2)))
         }
+    }
+
+    #[test]
+    fn an_image_read_as_a_file_is_not_judged() {
+        // Read as a scan is: an unsure stroke a placed picture would set
+        // aside is taken, and a flat image the probe takes for no text is
+        // read all the same.
+        let read = read(&png(600, 400), &Unsure).unwrap();
+        assert_eq!(read.injected[0].taken, 1);
+        assert!(!read.doc.pages[0].glyphs.is_empty());
+        let read = super::read(&flat_png(600, 400), &Unsure).unwrap();
+        assert_eq!(read.injected[0].taken, 1);
     }
 
     #[test]
