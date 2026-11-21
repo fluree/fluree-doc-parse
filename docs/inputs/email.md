@@ -265,7 +265,12 @@ flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
 (see below), not again; another image only when something is configured to
 read it. At most 200 files, of 64 MiB each and 256 MiB in all, are
 converted; one note on stderr counts what was and says why each other was
-not (`no reader`, its error, `TooLarge`, `TooMany`).
+not (`no reader`, its error, `TooLarge`, `TooMany`). Each output is written
+as soon as it is made, and each file is converted within what the message
+leaves of a document's memory budget, since the message is held while its
+files are read: a file the message leaves too little room for fails as too
+large, and the others still convert (see
+[Limits](../reference/limits.md#files-an-e-mail-carries)).
 
 ```bash
 fdoc convert reply.eml --attachments ./att --parse-attachments -f doco

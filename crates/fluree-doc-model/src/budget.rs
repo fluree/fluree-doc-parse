@@ -39,9 +39,14 @@
 //! A reader that guards a library's allocations it cannot see (what
 //! calamine reserves for a sheet) keeps its own [`Meter`] for them.
 //!
+//! A document read inside another (an e-mail's attachment) is read
+//! [`within`] what the outer one leaves.
+//!
 //! A part a package inflates whole (an Office file's main part, its
 //! slides) is read within what is left of the memory budget and spent from
 //! it, two bytes for each ([`Budget::spend_bytes`]).
+
+use std::cell::Cell;
 
 /// The memory a document's elements, cells and text may take, estimated
 /// at the costs below: 2.5 GiB.
@@ -220,10 +225,36 @@ pub struct Budget {
 
 impl Default for Budget {
     /// [`MAX_MEMORY`] and [`MAX_WORK`], at the costs of the [`output`] the
-    /// document is converted to.
+    /// document is converted to; inside [`within`], no more memory than it
+    /// gives.
     fn default() -> Self {
-        Self::new(MAX_MEMORY, MAX_WORK).for_output(output())
+        Self::new(MAX_MEMORY.min(SHARE.with(Cell::get)), MAX_WORK).for_output(output())
     }
+}
+
+thread_local! {
+    /// The memory a budget made on this thread may hold, set by [`within`].
+    static SHARE: Cell<u64> = const { Cell::new(u64::MAX) };
+}
+
+/// Run `f` with each [`Budget::default`] made on this thread meanwhile
+/// holding at most `memory`, and no more than an enclosing call gives.
+///
+/// A document read while another is held (an e-mail's attachment, read
+/// beside the message) shares what the outer one leaves rather than
+/// taking a budget of its own on top of it, without each reader's entry
+/// point taking a budget to be handed one.
+pub fn within<R>(memory: u64, f: impl FnOnce() -> R) -> R {
+    /// The share before, put back however `f` ends.
+    struct Restore(u64);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SHARE.with(|s| s.set(self.0));
+        }
+    }
+    let outer = SHARE.with(|s| s.replace(s.get().min(memory)));
+    let _restore = Restore(outer);
+    f()
 }
 
 impl Budget {
@@ -482,6 +513,28 @@ mod tests {
             "bytes of parts inflated past the 0 MiB of memory a document may take"
         );
         assert_eq!(b.memory_left(), 0);
+    }
+
+    #[test]
+    fn a_budget_made_within_a_share_holds_no_more_than_it() {
+        let full = Budget::default().memory_left();
+        assert_eq!(full, MAX_MEMORY);
+        let inner = within(1 << 20, || {
+            // An enclosing share bounds a larger one inside it.
+            let nested = within(1 << 30, || Budget::default().memory_left());
+            (Budget::default().memory_left(), nested)
+        });
+        assert_eq!(inner, (1 << 20, 1 << 20));
+        // Put back when it returns, and when it unwinds.
+        assert_eq!(Budget::default().memory_left(), full);
+        let unwound = std::panic::catch_unwind(|| within(0, || panic!("refused")));
+        assert!(unwound.is_err());
+        assert_eq!(Budget::default().memory_left(), full);
+        // Another thread's budgets are its own.
+        within(0, || {
+            let other = std::thread::spawn(|| Budget::default().memory_left());
+            assert_eq!(other.join().unwrap(), full);
+        });
     }
 
     #[test]

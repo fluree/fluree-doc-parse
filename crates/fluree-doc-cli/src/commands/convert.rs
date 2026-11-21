@@ -699,6 +699,11 @@ fn save_attachments(
 /// `DIR/<slot>/<sha256>.<format>` beside the saved files: one output per
 /// file, by its bytes, however often and under whatever names it was sent.
 ///
+/// Each output is written as it is made, so no more than one is held at a
+/// time, and each file is converted within what the message itself leaves
+/// of a document's budget ([`attachments_share`]): the message is held
+/// while its files are read.
+///
 /// A file is converted as `convert` would convert it on its own, by its
 /// content and the extension of its name, but as a document of its own: the
 /// flags naming the e-mail's document (`--doc-iri`, `--base-iri`,
@@ -728,6 +733,10 @@ fn convert_attachments(
     };
     let readable_images =
         cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
+    let share = attachments_share(email);
+    // A conversion that cannot be written stops the run, as the message's
+    // own output would.
+    let mut unwritten: Option<String> = None;
     let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
         let name = f
             .info
@@ -748,17 +757,27 @@ fn convert_attachments(
             sha256: f.info.sha256.clone(),
             carried: true,
         };
-        Some(convert_source(
-            path,
-            f.bytes.clone(),
-            &child,
-            cfg,
-            &child_args,
-            None,
-            quiet,
-        ))
+        if unwritten.is_some() {
+            return Some(Err(
+                "not converted: an earlier output was not written".to_string()
+            ));
+        }
+        let out = fluree_doc_model::budget::within(share, || {
+            convert_source(path, f.bytes.clone(), &child, cfg, &child_args, None, quiet)
+        });
+        Some(out.and_then(|out| {
+            let path = dir.join(format!("{}.{}", f.info.sha256, ext(args.format)));
+            std::fs::write(&path, out).map_err(|e| {
+                let e = format!("writing {}: {e}", path.display());
+                unwritten = Some(e.clone());
+                e
+            })
+        }))
     };
     let children = fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
+    if let Some(e) = unwritten {
+        return Err(e);
+    }
     let mut converted = 0usize;
     let mut left: Vec<String> = Vec::new();
     for c in &children {
@@ -768,12 +787,7 @@ fn convert_attachments(
             .clone()
             .unwrap_or_else(|| c.info.content_type.clone());
         match &c.outcome {
-            Outcome::Read(out) => {
-                let path = dir.join(format!("{}.{}", c.info.sha256, ext(args.format)));
-                std::fs::write(&path, out)
-                    .map_err(|e| format!("writing {}: {e}", path.display()))?;
-                converted += 1;
-            }
+            Outcome::Read(()) => converted += 1,
             Outcome::NoReader => left.push(format!("{name}: no reader")),
             Outcome::Failed(e) => left.push(format!("{name}: {e}")),
             Outcome::Skipped(why) => left.push(format!("{name}: {why}")),
@@ -793,6 +807,27 @@ fn convert_attachments(
         );
     }
     Ok(())
+}
+
+/// The memory each file an e-mail carries may be converted within: a
+/// document's budget less what the message holds while they are read, its
+/// elements and their text at their costs, and its files' bytes, each held
+/// by the message and by the walk over them, at a part's two bytes a byte.
+/// Nothing where the message alone spends the whole budget.
+fn attachments_share(email: &fluree_doc_email::Email) -> u64 {
+    let mut held = fluree_doc_model::budget::Budget::default();
+    let spent = (|| {
+        held.spend_elements(email.elements.len() as u64)?;
+        for e in &email.elements {
+            held.spend_text(&e.text)?;
+        }
+        let files: usize = email.attachments.iter().map(|a| a.bytes.len()).sum();
+        held.spend_bytes(files as u64)
+    })();
+    match spent {
+        Ok(()) => held.memory_left(),
+        Err(_) => 0,
+    }
 }
 
 /// A safe, unique file name for an attachment: its own name with any path
@@ -2667,6 +2702,30 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_emails_files_share_what_the_message_leaves() {
+        use fluree_doc_model::budget::{
+            text_cost, ELEMENT_BYTES, MAX_MEMORY, PART_BYTES, TEXT_BYTES,
+        };
+        let mail = "From: Alex Sample <alex@example.com>\r\nSubject: Orders\r\nMIME-Version: 1.0\r\n\
+                    Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+                    --b\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n\
+                    --b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"orders.csv\"\r\n\r\n\
+                    Customer,Amount\r\nAlex Sample,12.50\r\n--b--\r\n";
+        let email = fluree_doc_email::parse(mail.as_bytes()).unwrap();
+        let files: u64 = email.attachments.iter().map(|a| a.bytes.len() as u64).sum();
+        assert!(files > 0);
+        let text: u64 = email.elements.iter().map(|e| text_cost(&e.text)).sum();
+        let held =
+            email.elements.len() as u64 * ELEMENT_BYTES + text * TEXT_BYTES + files * PART_BYTES;
+        assert_eq!(attachments_share(&email), MAX_MEMORY - held);
+        // A share already given bounds it too.
+        assert_eq!(
+            fluree_doc_model::budget::within(held, || attachments_share(&email)),
+            0
+        );
+    }
 
     #[test]
     fn an_attachment_cannot_take_a_conversions_name() {

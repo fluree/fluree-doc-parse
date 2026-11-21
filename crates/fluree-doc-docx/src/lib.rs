@@ -2158,6 +2158,21 @@ mod tests {
         assert_eq!(read_source(&docx, &media[1].source).unwrap(), [2]);
     }
 
+    #[test]
+    fn a_main_part_past_the_budget_left_is_too_large_not_missing() {
+        use fluree_doc_model::budget::{within, PART_BYTES};
+        let body = format!(
+            "<w:p><w:r><w:t>Kept</w:t></w:r></w:p>{}",
+            " ".repeat(1 << 16)
+        );
+        let bytes = package(&body, &[], &[]);
+        let read = |memory: u64| within(memory, || parse(&bytes));
+        let fits = read(2 * (1 << 16) * PART_BYTES).unwrap();
+        assert_eq!(fits[0].text, "Kept");
+        let err = read((1 << 16) * PART_BYTES).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+    }
+
     /// A package of `body` (inside `w:body`), the image relationships
     /// `rels` (id, target) and the parts `parts`.
     fn package(body: &str, rels: &[(&str, &str)], parts: &[(&str, &[u8])]) -> Vec<u8> {

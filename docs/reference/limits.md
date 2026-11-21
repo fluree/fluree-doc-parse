@@ -123,6 +123,18 @@ read: a 9 KB `.docx` whose three main parts each declared 1.3 GB for 1 MB
 was refused under a 3 GB address space as though it were that large. The parts read beside the document (relationships, core
 properties, settings, notes, comments) have a bound of their own, 64 MiB.
 
+## Files an e-mail carries
+
+`--parse-attachments` converts the files an e-mail carries while the
+message is held, so each is read within what the message leaves of the
+budget (`fluree_doc_model::budget::within`, which bounds every budget a
+reader makes on the thread meanwhile): its elements and their text at the
+costs above, and its files' bytes at a part's two bytes a byte (the
+message's copy and the walk's). Each output is written as soon as it is
+made, so no more than one file's conversion is held at a time. A 31 KB
+e-mail carrying 14 small `.docx`, each making 300 MB of DoCO, aborted
+holding all 14 outputs; it now converts all 14, peaking at 0.9 GB.
+
 ## Coordinates
 
 No cell past Excel's grid, row 1,048,576 or column 16,384, is read, in any
