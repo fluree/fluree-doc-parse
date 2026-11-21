@@ -680,12 +680,17 @@ button writes one, does not count. The [email](email.md) reader splits a
 thread by it.
 
 Every byte sequence parses, as HTML defines it; what a page makes is spent
-from one budget ([limits on what one document may make](../reference/limits.md))
+from one budget ([limits on what one document may make](../reference/limits.md)).
+The parser's tree first, counted from the page's tags before it is built: a
+page of empty tags makes a tree twenty times its size, and one of tags
+nested in each other a parse whose time is the square of their depth. Then,
 as it is made: each element with its text, a table's grid before it is made
 (a `colspan` of a billion asks for a billion cells), the cells each span
 marks, the table's cells and their text, and the copies DoCO writes of them
 (a value spanning rows in each row it covers, each cell's labels). A page
-past it is refused: `parse` and `parse_with_quote_depth` return its
+whose elements nest more than 512 deep, where a browser stops nesting them,
+is refused as well, before the reader walks a tree deeper than its stack
+holds. A page past any of these is refused: `parse` and `parse_with_quote_depth` return its
 `TooLarge` error, and an email whose HTML body is refused fails as too
 large.
 

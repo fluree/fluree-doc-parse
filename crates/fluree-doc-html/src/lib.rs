@@ -22,12 +22,14 @@
 //! There is no geometry: HTML positions nothing until it is laid out, so
 //! `bbox` is `None` rather than a zeroed box.
 //!
-//! What a page makes is spent from one [`Budget`] as it is made: each
+//! What a page makes is spent from one [`Budget`]: the parser's tree,
+//! counted from the page's tags before it is built, then as it is made each
 //! element with its text, a table's grid before it is made (a `colspan` of
 //! a billion asks for a billion cells), the cells its spans mark, and what
-//! DoCO copies of its cells. Past it, the page is refused ([`TooLarge`]).
+//! DoCO copies of its cells. Past it, or nested past [`MAX_DEPTH`], the
+//! page is refused ([`TooLarge`]).
 
-use fluree_doc_model::budget::{Budget, TooLarge};
+use fluree_doc_model::budget::{Budget, Meter, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
@@ -220,9 +222,10 @@ pub fn parse_with_quote_depth(src: &str) -> Result<(Vec<Element>, Vec<usize>), T
 /// The content ids of the images a message's HTML shows from its own parts
 /// (`<img src="cid:…">`), as [`parse_with_quote_depth`] reads them: the
 /// scheme in any case, percent signs decoded, an image the page does not
-/// draw left out. What tells which of a message's files its HTML shows.
+/// draw left out. What tells which of a message's files its HTML shows. A
+/// page too large to read shows none: reading it is refused.
 pub fn cid_ids(src: &str) -> Vec<String> {
-    ids_in(&dom(src))
+    dom(src).map(|(dom, _)| ids_in(&dom)).unwrap_or_default()
 }
 
 /// What [`parse_message`] reads in a message's HTML body: its elements,
@@ -232,8 +235,8 @@ pub type MessageBody = (Vec<Element>, Vec<usize>, Vec<String>);
 /// [`parse_with_quote_depth`] and [`cid_ids`] from one parse of the page:
 /// what a message's HTML body is read for.
 pub fn parse_message(src: &str) -> Result<MessageBody, TooLarge> {
-    let dom = dom(src);
-    let (elements, depths) = read_dom(&dom, true)?;
+    let (dom, budget) = dom(src)?;
+    let (elements, depths) = read_dom(&dom, budget, true)?;
     Ok((elements, depths, ids_in(&dom)))
 }
 
@@ -245,21 +248,40 @@ fn ids_in(dom: &RcDom) -> Vec<String> {
     found.into_iter().map(|(id, _)| id).collect()
 }
 
-fn dom(src: &str) -> RcDom {
-    html5ever::parse_document(RcDom::default(), Default::default())
+/// The page's tree, and the budget what is read of it is spent from.
+fn dom(src: &str) -> Result<(RcDom, Budget), TooLarge> {
+    // The tree html5ever builds, and the scope checks it makes as it builds
+    // it, are spent before it is built: a page of empty tags makes a tree
+    // twenty times its size, and one of nested ones a parse quadratic in
+    // their depth.
+    let mut budget = Budget::default();
+    let m = markup(src);
+    budget.spend_cells(m.slots)?;
+    budget.spend_work(m.nesting)?;
+    let dom = html5ever::parse_document(RcDom::default(), Default::default())
         .from_utf8()
         .read_from(&mut src.as_bytes())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // The walk recurses down the tree, and a thread's stack holds a few
+    // thousand levels of it at most (a batch's workers have 2 MiB).
+    Meter::new(MAX_DEPTH, "levels of nested elements").spend(depth(&dom.document))?;
+    Ok((dom, budget))
 }
 
 /// The walk, with or without a message's own images.
 fn read(src: &str, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
-    read_dom(&dom(src), cid_images)
+    let (dom, budget) = dom(src)?;
+    read_dom(&dom, budget, cid_images)
 }
 
-fn read_dom(dom: &RcDom, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
+fn read_dom(
+    dom: &RcDom,
+    budget: Budget,
+    cid_images: bool,
+) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     let mut out = Out {
         cid_images,
+        budget,
         ..Out::default()
     };
     // A page that marks its main content is read for that alone: what lies
@@ -280,6 +302,196 @@ fn read_dom(dom: &RcDom, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>),
     }
     number(&mut out.elements);
     Ok((out.elements, out.depths))
+}
+
+/// The deepest a page's elements may nest, as the parser builds the tree:
+/// a browser stops nesting at 512 (Chromium sets deeper elements beside
+/// their parent). Each level of the walk takes a few hundred bytes of stack,
+/// and a table four levels (`table`, `tbody`, `tr`, `td`): 1,000 tables
+/// nested, a 30 KB page, overflowed a 2 MiB stack.
+pub const MAX_DEPTH: u64 = 512;
+
+/// How deep the tree under `root` goes, walked without recursion.
+fn depth(root: &Handle) -> u64 {
+    let mut deepest = 0;
+    let mut stack = vec![(root.clone(), 0u64)];
+    while let Some((h, d)) = stack.pop() {
+        deepest = deepest.max(d);
+        stack.extend(h.children.borrow().iter().map(|c| (c.clone(), d + 1)));
+    }
+    deepest
+}
+
+/// What parsing a page costs, counted from its tags before it is parsed.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Markup {
+    /// The tree's nodes, in cell slots: three an element (the node, at
+    /// about 190 bytes, and the text node beside it) and one an attribute
+    /// (about 50).
+    slots: u64,
+    /// The elements open around each start tag, summed: the parser checks
+    /// what is in scope by walking them, so a page of nested elements costs
+    /// the square of their depth.
+    nesting: u64,
+}
+
+/// Elements that are never open: no end tag, so they nest nothing.
+const VOID: &[&str] = &[
+    "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
+    "keygen", "link", "meta", "param", "source", "track", "wbr",
+];
+
+/// Elements a page may leave open, the parser closing them at the next of
+/// their kind: counted as nesting nothing, so a page of unclosed `<p>` or
+/// `<li>` is not taken for a deep one.
+const OPTIONAL_END: &[&str] = &[
+    "body", "caption", "colgroup", "dd", "dt", "head", "html", "li", "optgroup", "option", "p",
+    "rb", "rp", "rt", "rtc", "tbody", "td", "tfoot", "th", "thead", "tr",
+];
+
+/// Elements whose content is text up to their end tag, not markup.
+const RAW_TEXT: &[&str] = &[
+    "iframe", "noembed", "noframes", "noscript", "script", "style", "textarea", "title", "xmp",
+];
+
+/// What html5ever will make of `src` ([`Markup`]), from a scan of its tags:
+/// start tags and their attributes, end tags closing the nearest open
+/// element of their name (among the 64 innermost), comments and the text of
+/// a `<script>` passed over. An estimate, above what the parser makes of
+/// a page and never far below it.
+fn markup(src: &str) -> Markup {
+    let b = src.as_bytes();
+    let find = |from: usize, pat: &[u8]| {
+        b.get(from..)
+            .and_then(|s| s.windows(pat.len()).position(|w| w == pat))
+            .map(|k| from + k)
+    };
+    let name_end = |from: usize| {
+        from + b[from..]
+            .iter()
+            .take_while(|c| !c.is_ascii_whitespace() && !matches!(c, b'/' | b'>'))
+            .count()
+    };
+    let is =
+        |list: &[&str], name: &[u8]| list.iter().any(|t| t.as_bytes().eq_ignore_ascii_case(name));
+    let mut m = Markup::default();
+    // The open elements, by where their names are in `src`, and how many of
+    // them are SVG or MathML, where `/>` closes the element it ends.
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    let mut foreign = 0usize;
+    let is_foreign = |(s, e): (usize, usize)| is(&["svg", "math"], &b[s..e]);
+    let mut i = 0;
+    while let Some(k) = b[i..].iter().position(|&c| c == b'<') {
+        i += k + 1;
+        match b.get(i) {
+            Some(b'!') if b[i..].starts_with(b"!--") => {
+                m.slots += 1;
+                i = find(i + 3, b"-->").map_or(b.len(), |e| e + 3);
+            }
+            Some(b'!' | b'?') => {
+                m.slots += 1;
+                i = find(i, b">").map_or(b.len(), |e| e + 1);
+            }
+            Some(b'/') if b.get(i + 1).is_some_and(u8::is_ascii_alphabetic) => {
+                let end = name_end(i + 1);
+                let name = &b[i + 1..end];
+                if let Some(k) = open
+                    .iter()
+                    .rev()
+                    .take(64)
+                    .position(|&(s, e)| b[s..e].eq_ignore_ascii_case(name))
+                {
+                    for closed in open.drain(open.len() - 1 - k..) {
+                        foreign -= usize::from(is_foreign(closed));
+                    }
+                }
+                i = find(end, b">").map_or(b.len(), |e| e + 1);
+            }
+            Some(c) if c.is_ascii_alphabetic() => {
+                let end = name_end(i);
+                let name = (i, end);
+                m.slots += 3;
+                m.nesting += open.len() as u64;
+                // The attributes, to the tag's end: each name, then its
+                // value, quoted or not.
+                i = end;
+                let mut closed = false;
+                while i < b.len() {
+                    match b[i] {
+                        b'>' => {
+                            i += 1;
+                            break;
+                        }
+                        c if c.is_ascii_whitespace() => i += 1,
+                        b'/' => {
+                            closed = b.get(i + 1) == Some(&b'>');
+                            i += 1;
+                        }
+                        _ => {
+                            m.slots += 1;
+                            i += b[i..]
+                                .iter()
+                                .take_while(|c| {
+                                    !c.is_ascii_whitespace() && !matches!(c, b'=' | b'>' | b'/')
+                                })
+                                .count()
+                                .max(1);
+                            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                                i += 1;
+                            }
+                            if b.get(i) != Some(&b'=') {
+                                continue;
+                            }
+                            i += 1;
+                            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                                i += 1;
+                            }
+                            match b.get(i) {
+                                Some(&q @ (b'"' | b'\'')) => {
+                                    i = b[i + 1..]
+                                        .iter()
+                                        .position(|&c| c == q)
+                                        .map_or(b.len(), |k| i + 1 + k + 1);
+                                }
+                                _ => {
+                                    i += b[i..]
+                                        .iter()
+                                        .take_while(|c| !c.is_ascii_whitespace() && **c != b'>')
+                                        .count();
+                                }
+                            }
+                        }
+                    }
+                }
+                let tag = &b[name.0..name.1];
+                if tag.eq_ignore_ascii_case(b"plaintext") {
+                    break;
+                }
+                if is(RAW_TEXT, tag) {
+                    // Its text runs to the first end tag of its name.
+                    let mut at = i;
+                    i = loop {
+                        let Some(e) = find(at, b"</") else {
+                            break b.len();
+                        };
+                        let close = b.get(e + 2..e + 2 + tag.len());
+                        if close.is_some_and(|c| c.eq_ignore_ascii_case(tag)) {
+                            break e;
+                        }
+                        at = e + 2;
+                    };
+                } else if !(closed && (foreign > 0 || is_foreign(name)))
+                    && !is(VOID, tag)
+                    && !is(OPTIONAL_END, tag)
+                {
+                    foreign += usize::from(is_foreign(name));
+                    open.push(name);
+                }
+            }
+            _ => {}
+        }
+    }
+    m
 }
 
 /// The outermost `<main>` elements, or elements in the `main` role, that the
@@ -534,12 +746,14 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
                 out.push(' ');
             }
             // Recorded around the recursion: an anchor's text is whatever
-            // its subtree contributes, and nesting is legal markup.
-            let start = out.chars().count();
+            // its subtree contributes, and nesting is legal markup. In
+            // bytes, which `squeeze` turns into characters once: counting
+            // the characters here, at each element, is quadratic in a run.
+            let start = out.len();
             collect(node, out, anchors);
             if tag == "a" {
                 if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
-                    anchors.push((start, out.chars().count(), href));
+                    anchors.push((start, out.len(), href));
                 }
             }
         }
@@ -710,11 +924,11 @@ fn own_text(h: &Handle) -> (String, Vec<Link>) {
                     continue;
                 }
                 raw.push(' ');
-                let start = raw.chars().count();
+                let start = raw.len();
                 collect(child, &mut raw, &mut anchors);
                 if tag == "a" {
                     if let Some(href) = attr_of(child, "href").filter(|h| !h.trim().is_empty()) {
-                        anchors.push((start, raw.chars().count(), href));
+                        anchors.push((start, raw.len(), href));
                     }
                 }
             }
@@ -727,18 +941,21 @@ fn own_text(h: &Handle) -> (String, Vec<Link>) {
 /// Collapse whitespace the way the readers always have, carrying the anchor
 /// offsets through the collapse.
 ///
-/// The offsets are taken against the raw concatenation, and normalising it
+/// The offsets are bytes of the raw concatenation, and normalising it
 /// deletes characters — so they cannot simply be copied across. Each raw
-/// character keeps the position it lands on, and an anchor's range becomes the
-/// first and last positions its characters occupy.
+/// byte keeps the position, in characters, its character lands on, and an
+/// anchor's range becomes the first and last positions its characters
+/// occupy.
 fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
     let mut out = String::new();
     let mut at: Vec<Option<usize>> = Vec::with_capacity(raw.len());
     let (mut n, mut pending) = (0usize, false);
-    for c in raw.chars().map(repair_c1) {
+    for raw_c in raw.chars() {
+        let bytes = raw_c.len_utf8();
+        let c = repair_c1(raw_c);
         if c.is_whitespace() {
             pending = n > 0;
-            at.push(None);
+            at.extend(std::iter::repeat_n(None, bytes));
             continue;
         }
         if pending {
@@ -746,7 +963,7 @@ fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>)
             n += 1;
             pending = false;
         }
-        at.push(Some(n));
+        at.extend(std::iter::repeat_n(Some(n), bytes));
         out.push(c);
         n += 1;
     }
@@ -2284,5 +2501,91 @@ mod tests {
         // Each paragraph is a node of the output: 4 KiB of the budget.
         assert!(super::parse(&page).is_err());
         assert!(super::parse(&"<p>word</p>".repeat(1_000)).is_ok());
+    }
+
+    #[test]
+    fn the_tree_and_its_nesting_are_counted_from_the_tags() {
+        // Three slots an element, one an attribute (quoted values hold
+        // what would be markup); comments, a script's text and closed tags
+        // nest nothing.
+        let m = markup(
+            "<!doctype html><div class=\"a>b\" hidden data-x=1><p>one<p>two<br/>\
+             <!-- <div><div> --><script>if (a<b) document.write('<div>')</script>\
+             <svg><path d=\"M0\"/><path/></svg><span>x</span></div><div>",
+        );
+        // Elements: div, p, p, br, script, svg, path, path, span, div = 10;
+        // attributes: class, hidden, data-x, d = 4; the doctype and the
+        // comment one each.
+        assert_eq!(m.slots, 10 * 3 + 4 + 2);
+        // Open around each start tag: div 0; p, p, br, script, svg 1;
+        // the paths 2; span 1 (the svg closed); the last div 0.
+        assert_eq!(m.nesting, 1 + 1 + 1 + 1 + 1 + 2 + 2 + 1);
+        // A `/>` on an HTML element closes nothing: the parser nests them.
+        assert_eq!(markup(&"<div/>".repeat(4)).nesting, 1 + 2 + 3);
+    }
+
+    #[test]
+    fn a_page_whose_tree_is_past_the_budget_is_refused_before_it_is_built() {
+        // Empty tags make a tree twenty times the page: 24 million made
+        // 3.9 GB of it from 168 MB. Eight million are past the budget.
+        let page = "<i></i>".repeat(8_000_000);
+        let err = super::parse(&page).unwrap_err().to_string();
+        assert!(err.starts_with("cells past"), "{err}");
+        // Nested ones cost the parser the square of their depth: 40,000
+        // took 3 s, 200,000 over two minutes.
+        let nested = format!("{}x{}", "<div>".repeat(30_000), "</div>".repeat(30_000));
+        let start = std::time::Instant::now();
+        let err = super::parse(&nested).unwrap_err().to_string();
+        assert!(err.contains("steps"), "{err}");
+        assert!(start.elapsed().as_secs() < 5);
+        // A page of ordinary depth and size is read.
+        let ordinary = format!(
+            "<div>{}</div>",
+            "<section><div><p>Some <b>text</b> and <a href=\"/x\">a link</a>.</p></div></section>"
+                .repeat(20_000)
+        );
+        assert_eq!(super::parse(&ordinary).unwrap().len(), 20_000);
+    }
+
+    #[test]
+    fn a_page_nested_past_the_depth_a_stack_holds_is_refused() {
+        // A test's thread has the 2 MiB stack a batch's worker has: 1,000
+        // tables nested, 33 KB, overflowed it and aborted the batch.
+        let tables = |n: usize| {
+            format!(
+                "{}x{}",
+                "<table><tr><td>".repeat(n),
+                "</td></tr></table>".repeat(n)
+            )
+        };
+        let err = super::parse(&tables(1_000)).unwrap_err().to_string();
+        assert!(err.contains("levels of nested elements"), "{err}");
+        // Within the depth a browser keeps, the innermost cell is read.
+        let els = super::parse(&tables(100)).unwrap();
+        assert!(els.iter().any(|e| e.text.contains('x')));
+    }
+
+    #[test]
+    fn a_long_run_of_inline_elements_is_read_in_linear_time() {
+        // Each element counted the characters of the run before it, for a
+        // link's offsets: a million `<span>` took 12 s.
+        let (n, word) = (100_000, "é".repeat(100));
+        let page = format!(
+            "<div>{}<a href=\"/é\">çà</a> ü</div>",
+            format!("<span>{word}</span>").repeat(n)
+        );
+        let n = n * 100;
+        let start = std::time::Instant::now();
+        let els = super::parse(&page).unwrap();
+        let took = start.elapsed();
+        assert_eq!(els.len(), 1);
+        // The link is where its characters are, past the multi-byte ones.
+        let l = &els[0].links.as_ref().unwrap()[0];
+        assert_eq!(l.span(), Some((n, n + 2)));
+        assert_eq!(
+            els[0].text.chars().skip(n).take(2).collect::<String>(),
+            "çà"
+        );
+        assert!(took.as_secs() < 10, "{took:?}");
     }
 }
