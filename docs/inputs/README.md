@@ -70,14 +70,25 @@ file by the stream that makes it an Outlook message or a Word, Excel or
 PowerPoint 97-2003 file, a zip by the part that makes it an XPS document,
 an OpenDocument file, an Excel binary workbook or an Office package, and
 RTF (`{\rtf`). So a PDF named `.doc` or `.csv` is read as a PDF, a
-screenshot named `.doc` as an image. The extension only decides between
+screenshot named `.doc` as an image. A PDF whose header comes a few bytes
+in, within its first kilobyte (a mail gateway's or a download's prefix
+before it), is read as a PDF whatever its name too, when it holds what a
+PDF does past its header (the line of binary bytes writers put after it,
+or the `%%EOF` marker within its last kilobyte), unless it is named as
+Markdown or HTML, or reads as a web page or a table, any of which may quote
+a header: a one-column list of file signatures named `.csv` is a table.
+Named `.csv` or `.tsv`, the marker counts only in a file that also holds a
+NUL byte, as a PDF's compressed streams do and text does not, so such a
+list is still a table when it names `%%EOF` too. The extension only decides between
 formats the content cannot tell apart, and the CSV reader refuses binary
 content (a NUL in its first 64 KiB of text) rather than read it as a table.
 
 A file named as a Word, Excel or PowerPoint 97-2003 one that is no compound
 file is read as what it holds: a web page or comma-, semicolon- or
 tab-separated text (an export named `.xls`, as many systems write one), or
-an Office package or XPS document renamed. An Office package, an XPS
+an Office package or XPS document renamed. An Excel 2003 XML workbook
+(SpreadsheetML), whose `<Table>` is no web page's, is refused by name:
+`unsupported format (an Excel 2003 XML spreadsheet)`. An Office package, an XPS
 document or a web page is recognised on stdin too. Any other file named as a
 format a reader takes goes to that reader, which says what is wrong with it:
 never to the PDF reader, whose `parse: Invalid` would read as a corrupt

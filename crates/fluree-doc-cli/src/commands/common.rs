@@ -117,6 +117,11 @@ pub(crate) fn unsupported(path: Option<&Path>, data: &[u8]) -> Option<String> {
         Some((e, what)) => Some(format!(
             "unsupported format (.{e}, {what}): no reader for it yet"
         )),
+        None if is_spreadsheet_xml(data) => Some(
+            "unsupported format (an Excel 2003 XML spreadsheet): no reader for it yet; save it \
+             as .xlsx"
+                .into(),
+        ),
         None if data.starts_with(&COMPOUND_MAGIC) => Some(
             "unsupported format (an OLE compound file that is no Word, Excel or PowerPoint 97-2003 \
              document nor Outlook message): no reader for it yet"
@@ -126,12 +131,34 @@ pub(crate) fn unsupported(path: Option<&Path>, data: &[u8]) -> Option<String> {
     }
 }
 
-/// Whether `data` is a PDF by its header, which a reader finds within the
-/// first kilobyte.
-fn is_pdf(data: &[u8]) -> bool {
-    data[..data.len().min(1024)]
+/// Whether `data` is a PDF whose header may come after a prefix: the header
+/// within the first kilobyte, where a reader finds it, and what a PDF holds
+/// that text quoting a header does not, either the comment line of binary
+/// bytes a writer puts after the header (`%âãÏÓ`) or the end-of-file marker
+/// within the last kilobyte. A header alone is no PDF: a list of file
+/// signatures, one a line, holds one.
+///
+/// Where the file is named as a table (`table`), a list of signatures may
+/// hold the marker too, so the marker counts only beside a NUL, which a
+/// PDF's compressed streams hold and text does not: the CSV reader refuses
+/// it.
+fn is_pdf(data: &[u8], table: bool) -> bool {
+    let Some(at) = data[..data.len().min(1024)]
         .windows(5)
-        .any(|w| w == b"%PDF-")
+        .position(|w| w == b"%PDF-")
+    else {
+        return false;
+    };
+    let binary_line = data[at..]
+        .split(|&b| b == b'\n' || b == b'\r')
+        .filter(|l| !l.is_empty())
+        .nth(1)
+        .is_some_and(|l| {
+            let l = &l[..l.len().min(64)];
+            l.starts_with(b"%") && l.iter().filter(|&&b| b >= 0x80).count() >= 4
+        });
+    let tail = &data[data.len().saturating_sub(1024)..];
+    binary_line || (tail.windows(5).any(|w| w == b"%%EOF") && (!table || data.contains(&0)))
 }
 
 /// The reader a file's signature names: the bytes it opens with, which no
@@ -179,6 +206,10 @@ fn by_signature(data: &[u8]) -> Option<SourceKind> {
 /// `delimited` (a file named as an Office 97-2003 one, which spreadsheet
 /// exports are), comma-, semicolon- or tab-separated text.
 fn by_content(data: &[u8], delimited: bool) -> Option<SourceKind> {
+    // Excel 2003's XML workbook holds `<Table>`, which is no web page.
+    if is_spreadsheet_xml(data) {
+        return Some(SourceKind::Unsupported);
+    }
     if data.starts_with(b"PK") {
         if fluree_doc_xps::is_xps(data) {
             return Some(SourceKind::Xps);
@@ -197,6 +228,16 @@ fn by_content(data: &[u8], delimited: bool) -> Option<SourceKind> {
         return Some(SourceKind::Html);
     }
     (delimited && is_delimited(data)).then_some(SourceKind::Csv)
+}
+
+/// Whether `data` is an Excel 2003 XML workbook (SpreadsheetML), by the
+/// processing instruction Excel writes or the namespace of its root, within
+/// its first kilobyte. No reader reads one yet.
+fn is_spreadsheet_xml(data: &[u8]) -> bool {
+    let head = data[..data.len().min(1024)].to_ascii_lowercase();
+    let has = |s: &[u8]| head.windows(s.len()).any(|w| w == s);
+    has(b"progid=\"excel.sheet\"")
+        || (has(b"<workbook") && has(b"urn:schemas-microsoft-com:office:spreadsheet"))
 }
 
 /// Whether `data` opens as a web page: past a byte-order mark and
@@ -250,9 +291,13 @@ fn is_delimited(data: &[u8]) -> bool {
 /// its name is a mistake. Then text formats by their content: a transcript
 /// and an email, since `.vtt` has no registered type on most systems and a
 /// saved message is `.eml`, `.mht`, `.txt` or nothing at all, so either
-/// arrives renamed as often as not; and, for a file named as an Office
-/// 97-2003 one or named as nothing, a web page or (named as an Office
-/// 97-2003 one, which spreadsheet exports are) delimited text. Then the
+/// arrives renamed as often as not; a PDF by a header further in, within
+/// the first kilobyte, with a line of binary bytes after it or an
+/// end-of-file marker (beside a NUL, for a file named as a table), unless
+/// the file is named as text or reads as a web page or a table; and, for a file named as an Office 97-2003 one or named
+/// as nothing, a web page or (named as an Office 97-2003 one, which
+/// spreadsheet exports are) delimited text, an Excel 2003 XML workbook
+/// being neither. Then the
 /// formats an extension names, each to its own reader, which says what is
 /// wrong with a file that is not what its name says: never to the PDF
 /// reader, whose `parse: Invalid` would read as a corrupt PDF. A format no
@@ -271,6 +316,20 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     if fluree_doc_email::Format::sniff(data).is_some() || kind == Some(SourceKind::Email) {
         return SourceKind::Email;
     }
+    // A PDF whose header comes a few bytes in (a mail gateway's or a
+    // download's prefix) has no signature, but the PDF reader finds the
+    // header within the first kilobyte, so it is one whatever its name, when
+    // it holds what a PDF does past its header ([`is_pdf`]): except a text
+    // format's, and text that reads as a table or a page, which may well
+    // quote `%PDF-`; a file named as a table needs more than the end-of-file
+    // marker, since a one-column list of signatures is not delimited.
+    if is_pdf(data, kind == Some(SourceKind::Csv))
+        && !matches!(kind, Some(SourceKind::Markdown | SourceKind::Html))
+        && !is_html(data)
+        && !is_delimited(data)
+    {
+        return SourceKind::Pdf;
+    }
     let office_97 = matches!(
         kind,
         Some(SourceKind::Xls | SourceKind::Doc | SourceKind::Ppt)
@@ -285,7 +344,7 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
         Some(k) => return k,
     }
     match kind {
-        _ if is_pdf(data) => SourceKind::Pdf,
+        _ if is_pdf(data, false) => SourceKind::Pdf,
         Some(SourceKind::Unsupported) => SourceKind::Unsupported,
         _ if data.starts_with(&COMPOUND_MAGIC) => SourceKind::Unsupported,
         _ => SourceKind::Pdf,
@@ -1371,6 +1430,56 @@ mod tests {
         ] {
             assert_eq!(input_kind(Path::new(name), data), kind, "{name}");
         }
+        // A PDF a few bytes in, as a gateway's prefix leaves it, is one
+        // whatever its name, by the binary line after its header or by its
+        // end-of-file marker, but for text that may quote a header.
+        let prefix = &b"\r\n\r\n\0\x01junk"[..];
+        let binary = [
+            prefix,
+            b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n1 0 obj\n<< >>\nendobj\n",
+        ]
+        .concat();
+        let ended = [prefix, &pdf, b"trailer\n<< >>\n%%EOF\n"].concat();
+        for late in [&binary, &ended] {
+            for name in ["scan.doc", "report.csv", "report.xls", "report.docx", "-"] {
+                assert_eq!(input_kind(Path::new(name), late), SourceKind::Pdf, "{name}");
+            }
+        }
+        let quoting = b"Header,Note\nfile 1,starts with %PDF-1.7\nfile 2,ok\n";
+        assert_eq!(input_kind(Path::new("list.csv"), quoting), SourceKind::Csv);
+        // A header alone is no PDF: a list of signatures, one column, one
+        // a line, is the table it is named as.
+        let signatures = b"Signature\n%PDF-1.7\n%PNG\nGIF89a\n";
+        assert_eq!(
+            input_kind(Path::new("magic.csv"), signatures),
+            SourceKind::Csv
+        );
+        // Nor with the end-of-file marker listed too, in one column, or in
+        // two whose quoted commas hide the delimiter: named as a table, the
+        // marker counts only beside a byte no text holds.
+        for (name, list) in [
+            ("one.csv", &b"marker\n%PDF-1.7\n%%EOF\nstartxref\n"[..]),
+            ("magic.tsv", b"Signature\n%PDF-\nPK\nGIF89a\n%%EOF\n"),
+            (
+                "two.csv",
+                b"Signature,Note\n%PDF-,\"opens, a PDF\"\n%%EOF,\"ends, it\"\n",
+            ),
+        ] {
+            assert_eq!(input_kind(Path::new(name), list), SourceKind::Csv, "{name}");
+        }
+        // The same list named as nothing in particular is still taken for
+        // the PDF its marker says.
+        assert_eq!(
+            input_kind(Path::new("-"), b"marker\n%PDF-1.7\n%%EOF\n"),
+            SourceKind::Pdf
+        );
+        let late = ended;
+        let page = b"<html><body><p>A PDF opens with %PDF-1.7.</p></body></html>";
+        assert_eq!(input_kind(Path::new("page.doc"), page), SourceKind::Html);
+        assert_eq!(
+            input_kind(Path::new("notes.md"), &late),
+            SourceKind::Markdown
+        );
         // RTF by its opening, whatever its name.
         assert_eq!(
             input_kind(Path::new("memo.csv"), b"{\\rtf1\\ansi Hello}"),
@@ -1452,6 +1561,33 @@ mod tests {
             input_kind(Path::new("stdin"), b"a\tb\n1\t2\n"),
             SourceKind::Pdf
         );
+    }
+
+    #[test]
+    fn an_excel_2003_xml_workbook_is_refused_by_name_not_read_as_a_page() {
+        // Its `<Table>` read as a web page's table ran its cells together.
+        let xml = b"<?xml version=\"1.0\"?>\n<?mso-application progid=\"Excel.Sheet\"?>\n\
+            <Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\" \
+            xmlns:ss=\"urn:schemas-microsoft-com:office:spreadsheet\">\
+            <Worksheet ss:Name=\"S\"><Table><Row><Cell><Data ss:Type=\"String\">Name</Data></Cell>\
+            </Row></Table></Worksheet></Workbook>";
+        for name in ["export.xls", "export.xml", "-"] {
+            let path = Path::new(name);
+            assert_eq!(input_kind(path, xml), SourceKind::Unsupported, "{name}");
+            let why = unsupported(Some(path), xml).unwrap();
+            assert!(why.contains("Excel 2003 XML"), "{why}");
+        }
+        // Without the instruction, by its root's namespace.
+        let bare =
+            b"<Workbook xmlns=\"urn:schemas-microsoft-com:office:spreadsheet\"><Table/></Workbook>";
+        assert_eq!(
+            input_kind(Path::new("a.xls"), bare),
+            SourceKind::Unsupported
+        );
+        // Excel's HTML export, which names Excel's namespaces too, is a page.
+        let html = b"<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><body>\
+            <table><tr><td>1</td></tr></table></body></html>";
+        assert_eq!(input_kind(Path::new("a.xls"), html), SourceKind::Html);
     }
 
     #[test]
