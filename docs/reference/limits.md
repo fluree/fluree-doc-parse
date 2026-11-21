@@ -5,15 +5,28 @@ that does not bound what it makes of it. A cell repeated across a row, a
 string shared by every cell, a slide listed a thousand times, pieces of a
 Word file that all point at the same text, a table whose first row is
 thousands of cells wide over rows of one, a cell merged down over thousands
-of rows: a file of a few kilobytes can describe gigabytes. So every reader
+of rows: a file of a few kilobytes can describe gigabytes. So the readers
 of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
 `.docx`, `.odt`, `.ppt`, `.pptx`, `.odp`, `.rtf`), of Markdown and of HTML
-(a page, or an email's HTML body) is handed one budget for the document
-(`fluree_doc_model::budget::Budget`) and spends it *before* it allocates.
-Past it, the document is refused with an error that names what ran out
-(`workbook too large: cells past the 2560 MiB of memory a document may
-take`); the process never aborts, and in a batch the other documents still
-convert.
+(a page, or an email's HTML body, the parser's tree included) are each
+handed one budget for the document (`fluree_doc_model::budget::Budget`) and
+spend it *before* they allocate. Past it, the document is refused with an
+error that names what ran out (`workbook too large: cells past the 2560 MiB
+of memory a document may take`) rather than taking the process down with
+it, and in a batch the other documents still convert.
+
+The other readers are not on this budget, and bound what they make by
+bounds of their own, where they have any: XPS its pages and glyphs
+([XPS](../inputs/xps.md#bounds)), an image its pixels
+([Images](../inputs/images.md#size-and-coordinates)). A PDF spends the
+budget on its annotations alone; the transcript readers have no bound
+beyond their input's size.
+
+A budget is one document's. A message's attachments are converted within
+what the message leaves of its budget, one at a time
+([Files an e-mail carries](#files-an-e-mail-carries)); a batch runs no more
+documents at once than free memory holds budgets for
+([Batches](#batches)).
 
 ## Memory
 
