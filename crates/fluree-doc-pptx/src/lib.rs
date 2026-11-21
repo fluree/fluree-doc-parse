@@ -31,6 +31,7 @@ use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local, Package};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum PptxError {
@@ -79,21 +80,33 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
     }
 
     let mut out = Vec::new();
+    // Each chart part read once, by its name, however many slides or
+    // frames name it: `None` where it holds no series.
+    let mut parsed: HashMap<String, Option<ChartData>> = HashMap::new();
     for (idx, name) in slides.iter().enumerate() {
         let Some(xml) = pkg.read_within(name, &mut budget)? else {
             continue;
         };
         // Charts live in their own parts; the slide only names a
         // relationship id, so resolve those before walking it.
-        let mut charts: Vec<(String, String)> = Vec::new();
+        let mut named: Vec<(String, String)> = Vec::new();
         for r in pkg.relationships(name) {
             if !r.is("chart") || r.external {
                 continue;
             }
-            if let Some(cx) = pkg.read_within(&r.target, &mut budget)? {
-                charts.push((r.id, cx));
+            if !parsed.contains_key(&r.target) {
+                let chart = match pkg.read_within(&r.target, &mut budget)? {
+                    Some(cx) => parse_chart(&cx, &mut budget)?,
+                    None => None,
+                };
+                parsed.insert(r.target.clone(), chart);
             }
+            named.push((r.id, r.target));
         }
+        let charts: Vec<(String, &ChartData)> = named
+            .into_iter()
+            .filter_map(|(id, part)| Some((id, parsed.get(&part)?.as_ref()?)))
+            .collect();
         out.extend(parse_slide(&xml, idx, &charts, &mut budget)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
@@ -188,7 +201,7 @@ pub fn info(bytes: &[u8]) -> DocumentInfo {
 /// it is a malformed part, not a chart anyone plotted.
 const MAX_POINTS: usize = 100_000;
 
-/// Read a chart part. Values come from the cached `c:strCache`/`c:numCache`
+/// Read a chart part, within a budget of its own. Values come from the cached `c:strCache`/`c:numCache`
 /// blocks, which hold what the chart actually plots — the `c:f` formula
 /// beside them points into a workbook that may not travel with the deck.
 ///
@@ -198,7 +211,14 @@ const MAX_POINTS: usize = 100_000;
 /// series' gaps stay gaps instead of moving its later values onto earlier
 /// categories. Of a multi-level category axis, the first level is read: the
 /// labels next to the plot, one per point.
-pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
+pub fn parse_chart_xml(xml: &str) -> Result<Option<ChartData>, PptxError> {
+    Ok(parse_chart(xml, &mut Budget::default())?)
+}
+
+/// [`parse_chart_xml`], what it makes spent from the deck's `budget` before
+/// it is made: each point read, and each series' or category list's
+/// values laid out by index, as many as its cache declares.
+fn parse_chart(xml: &str, budget: &mut Budget) -> Result<Option<ChartData>, TooLarge> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut chart = Chart::default();
@@ -275,7 +295,10 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
                                         pending.last().map_or(0, |(i, _)| i + 1)
                                     });
                                     if at < MAX_POINTS {
-                                        pending.push((at, val.trim().to_string()));
+                                        let val = val.trim();
+                                        budget.spend_cells(1)?;
+                                        budget.spend_text(val)?;
+                                        pending.push((at, val.to_string()));
                                     }
                                 }
                                 Slot::Cat | Slot::Val | Slot::None => {}
@@ -287,7 +310,7 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
                 "title" => in_title = false,
                 "pt" => point = None,
                 "cat" | "xVal" => {
-                    let points = by_index(&mut pending, &mut count);
+                    let points = by_index(&mut pending, &mut count, budget)?;
                     if chart.categories.is_empty() {
                         chart.categories = points;
                     }
@@ -295,7 +318,7 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
                     level = 0;
                 }
                 "val" | "yVal" => {
-                    let points = by_index(&mut pending, &mut count);
+                    let points = by_index(&mut pending, &mut count, budget)?;
                     chart
                         .series
                         .push((std::mem::take(&mut series_name), points));
@@ -312,24 +335,31 @@ pub fn parse_chart_xml(xml: &str) -> Option<ChartData> {
         }
         buf.clear();
     }
-    (!chart.series.is_empty()).then_some((chart.title, chart.categories, chart.series))
+    Ok((!chart.series.is_empty()).then_some((chart.title, chart.categories, chart.series)))
 }
 
 /// A cache's values laid out by index: as many as it declares or holds,
-/// blank where it wrote no point. Leaves the cache state empty for the next.
-fn by_index(points: &mut Vec<(usize, String)>, count: &mut usize) -> Vec<String> {
+/// blank where it wrote no point, spent from `budget` before they are made
+/// (a series with none still one slot). Leaves the cache state empty for
+/// the next.
+fn by_index(
+    points: &mut Vec<(usize, String)>,
+    count: &mut usize,
+    budget: &mut Budget,
+) -> Result<Vec<String>, TooLarge> {
     let n = points
         .iter()
         .map(|(i, _)| i + 1)
         .max()
         .unwrap_or(0)
         .max(*count);
+    budget.spend_cells(n.max(1) as u64)?;
     let mut out = vec![String::new(); n];
     for (i, v) in points.drain(..) {
         out[i] = v;
     }
     *count = 0;
-    out
+    Ok(out)
 }
 
 /// A chart as a table: categories down the first column, one column per
@@ -338,11 +368,10 @@ fn by_index(points: &mut Vec<(usize, String)>, count: &mut usize) -> Vec<String>
 ///
 /// Its grid, a row for each category or value of the longest series and a
 /// column for each series, is spent from `budget` before it is made, and
-/// its cells that hold text and their text after.
+/// its cells that hold text and their text after: a chart its frames name
+/// many times is read once and made once for each.
 fn chart_element(
-    title: String,
-    categories: Vec<String>,
-    series: Vec<Series>,
+    (title, categories, series): &ChartData,
     page: usize,
     budget: &mut Budget,
 ) -> Result<Vec<Element>, TooLarge> {
@@ -350,22 +379,23 @@ fn chart_element(
     if !title.is_empty() {
         keep(
             &mut out,
-            element("doco:SectionTitle", title, Some(2), page),
+            element("doco:SectionTitle", title.clone(), Some(2), page),
             budget,
         )?;
-    }
-    let mut header = vec![String::new()];
-    for (name, _) in &series {
-        header.push(name.clone());
     }
     let n = categories
         .len()
         .max(series.iter().map(|(_, v)| v.len()).max().unwrap_or(0));
-    budget.spend_cells((n as u64 + 1).saturating_mul(header.len() as u64))?;
+    let width = 1 + series.len();
+    budget.spend_cells((n as u64 + 1).saturating_mul(width as u64))?;
+    let mut header = vec![String::new()];
+    for (name, _) in series {
+        header.push(name.clone());
+    }
     let mut rows = vec![header];
     for i in 0..n {
         let mut row = vec![categories.get(i).cloned().unwrap_or_default()];
-        for (_, vals) in &series {
+        for (_, vals) in series {
             row.push(vals.get(i).cloned().unwrap_or_default());
         }
         rows.push(row);
@@ -410,7 +440,15 @@ pub fn parse_slide_with_charts(
     page: usize,
     charts: &[(String, String)],
 ) -> Result<Vec<Element>, PptxError> {
-    parse_slide(xml, page, charts, &mut Budget::default())
+    let mut budget = Budget::default();
+    let mut parsed = Vec::new();
+    for (id, cx) in charts {
+        if let Some(chart) = parse_chart(cx, &mut budget)? {
+            parsed.push((id.clone(), chart));
+        }
+    }
+    let charts: Vec<(String, &ChartData)> = parsed.iter().map(|(id, c)| (id.clone(), c)).collect();
+    parse_slide(xml, page, &charts, &mut budget)
 }
 
 /// [`parse_slide_with_charts`], what the slide makes spent from the deck's
@@ -418,7 +456,7 @@ pub fn parse_slide_with_charts(
 fn parse_slide(
     xml: &str,
     page: usize,
-    charts: &[(String, String)],
+    charts: &[(String, &ChartData)],
     budget: &mut Budget,
 ) -> Result<Vec<Element>, PptxError> {
     let mut r = Reader::from_str(xml);
@@ -469,10 +507,8 @@ fn parse_slide(
                 "chart" => {
                     // The frame names its part by relationship id.
                     if let Some(id) = attr(&e, "id") {
-                        if let Some((_, cx)) = charts.iter().find(|(rid, _)| *rid == id) {
-                            if let Some((title, cats, series)) = parse_chart_xml(cx) {
-                                out.extend(chart_element(title, cats, series, page, budget)?);
-                            }
+                        if let Some((_, chart)) = charts.iter().find(|(rid, _)| *rid == id) {
+                            out.extend(chart_element(chart, page, budget)?);
                         }
                     }
                 }
@@ -797,14 +833,15 @@ mod tests {
             &["North America", "EMEA", "Asia Pacific"],
             &["34.5", "28.0", "17.5"],
         ));
-        let (title, cats, series) = parse_chart_xml(&x).expect("series found");
+        let chart = parse_chart_xml(&x).unwrap().expect("series found");
+        let (title, cats, series) = &chart;
         assert_eq!(title, "Employees by region");
-        assert_eq!(cats, ["North America", "EMEA", "Asia Pacific"]);
+        assert_eq!(*cats, ["North America", "EMEA", "Asia Pacific"]);
         assert_eq!(series.len(), 1);
         assert_eq!(series[0].0, "Share");
         assert_eq!(series[0].1, ["34.5", "28.0", "17.5"]);
 
-        let els = chart_element(title, cats, series, 0, &mut Budget::default()).unwrap();
+        let els = chart_element(&chart, 0, &mut Budget::default()).unwrap();
         let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
         let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Share"]);
@@ -819,18 +856,20 @@ mod tests {
             ser("Americas", &["2023", "2024"], &["31.2", "34.5"]),
             ser("EMEA", &["2023", "2024"], &["24.1", "28.0"])
         ));
-        let (_, cats, series) = parse_chart_xml(&x).unwrap();
-        assert_eq!(cats, ["2023", "2024"], "categories are read once");
+        let chart = parse_chart_xml(&x).unwrap().unwrap();
+        let (_, cats, series) = &chart;
+        assert_eq!(cats, &["2023", "2024"], "categories are read once");
         assert_eq!(series.len(), 2);
-        let els = chart_element(String::new(), cats, series, 0, &mut Budget::default()).unwrap();
-        let cells = els[0].cells.as_ref().unwrap();
+        let els = chart_element(&chart, 0, &mut Budget::default()).unwrap();
+        let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+        let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Americas", "EMEA"]);
         assert_eq!(cells[2], vec!["2024", "34.5", "28.0"]);
     }
 
     #[test]
     fn a_part_with_no_series_is_not_a_chart() {
-        assert!(parse_chart_xml("<c:chartSpace/>").is_none());
+        assert!(parse_chart_xml("<c:chartSpace/>").unwrap().is_none());
     }
 
     #[test]
@@ -844,7 +883,7 @@ mod tests {
              <c:val><c:numLit><c:ptCount val=\"3\"/><c:pt idx=\"0\"><c:v>10</c:v></c:pt>\
              <c:pt idx=\"2\"><c:v>30</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
-        let (_, cats, series) = parse_chart_xml(&x).unwrap();
+        let (_, cats, series) = parse_chart_xml(&x).unwrap().unwrap();
         assert_eq!(cats, ["A", "B", "C"]);
         assert_eq!(series[0].1, ["10", "", "30"]);
         // A trailing point left out still has its row.
@@ -853,7 +892,7 @@ mod tests {
              <c:pt idx=\"1\"><c:v>B</c:v></c:pt></c:strLit></c:cat>\
              <c:val><c:numLit><c:ptCount val=\"2\"/><c:pt idx=\"0\"><c:v>5</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
-        assert_eq!(parse_chart_xml(&x).unwrap().2[0].1, ["5", ""]);
+        assert_eq!(parse_chart_xml(&x).unwrap().unwrap().2[0].1, ["5", ""]);
     }
 
     #[test]
@@ -865,7 +904,68 @@ mod tests {
              </c:multiLvlStrCache></c:multiLvlStrRef></c:cat>\
              <c:val><c:numLit><c:pt idx=\"0\"><c:v>1</c:v></c:pt><c:pt idx=\"1\"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser>",
         );
-        assert_eq!(parse_chart_xml(&x).unwrap().1, ["Q1", "Q2"]);
+        assert_eq!(parse_chart_xml(&x).unwrap().unwrap().1, ["Q1", "Q2"]);
+    }
+
+    #[test]
+    fn a_charts_declared_points_are_spent_before_they_are_made() {
+        // One series declaring 100,000 points it does not write: refused
+        // by a budget of 8,192 cells before its values are laid out.
+        let x = chart_xml(
+            "<c:ser><c:val><c:numCache><c:ptCount val=\"100000\"/></c:numCache></c:val></c:ser>",
+        );
+        let mut small = Budget::new(8_192 * fluree_doc_model::budget::CELL_BYTES, 0);
+        assert!(parse_chart(&x, &mut small).is_err());
+        assert!(parse_chart(&x, &mut Budget::default()).unwrap().is_some());
+    }
+
+    /// A stored package of `parts`.
+    fn package(parts: &[(String, String)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in parts {
+            z.start_file(name.as_str(), opts).unwrap();
+            z.write_all(body.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn a_chart_named_by_many_frames_is_read_once() {
+        // A chart part of 1 MiB, named by each of 1,300 slides and twice by
+        // the first: read once, it spends 2 MiB of the budget; read for
+        // each slide, 2.6 GB, past it.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+        let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
+                     <c:chart xmlns:c=\"c\" r:id=\"rId1\"/></a:graphicData></a:graphic></p:graphicFrame>";
+        let padded = format!(
+            "{}{}",
+            ser("Share", &["EMEA"], &["28.0"]),
+            " ".repeat(1 << 20)
+        );
+        let mut parts = vec![("ppt/charts/chart1.xml".to_string(), chart_xml(&padded))];
+        let slides = 1_300;
+        for k in 1..=slides {
+            let frames = if k == 1 { 2 } else { 1 };
+            parts.push((
+                format!("ppt/slides/slide{k}.xml"),
+                slide(&frame.repeat(frames)),
+            ));
+            parts.push((
+                format!("ppt/slides/_rels/slide{k}.xml.rels"),
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}\" \
+                     Target=\"../charts/chart1.xml\"/></Relationships>"
+                ),
+            ));
+        }
+        let els = parse(&package(&parts)).unwrap();
+        let tables = els.iter().filter(|e| e.kind == "doco:Table").count();
+        assert_eq!(tables, slides + 1, "one table for each frame");
     }
 
     #[test]
