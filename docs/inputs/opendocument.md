@@ -27,7 +27,11 @@ Read as a [Word file](office-and-web.md#docx) is:
   list style computes, are not written;
 - tables are tables, their declared header rows (`table-header-rows`) their
   `header_rows`, a cell spanning columns or rows making the cells it covers
-  continuations (`merged_left`, `merged_down`);
+  continuations (`merged_left`, `merged_down`). What DoCO copies of a merge
+  (its value in each row it covers, the texts of the cells it covers joined
+  first) and the labels each cell carries count against the tables' bounds
+  as cells holding that text, so a span over many rows of text fails as too
+  large rather than being written once a row;
 - footnotes and endnotes are read after the body, each opening with its
   citation (`1`, `i`), marked `evidence` `footnote` or `endnote`; comments
   last, each opening with its author, `evidence` `comment`; the page header

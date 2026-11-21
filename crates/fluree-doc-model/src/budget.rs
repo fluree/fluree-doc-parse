@@ -21,7 +21,10 @@
 //!   peak memory one unit was measured to take, from the reader through the
 //!   largest output (`doco`), so a document that spends the whole of
 //!   [`MAX_MEMORY`], however it mixes them, stays within a 4 GB address
-//!   space, with room for its input and a library's own copies.
+//!   space, with room for its input and a library's own copies. The copies
+//!   DoCO writes of a table's cells (a merged value in each cell it covers,
+//!   each cell's labels) are spent at the same costs, as cells that hold
+//!   that text ([`Budget::spend_copies`]).
 //! * **Work**, in steps of a layout pass whose cost the file chooses (two
 //!   islands of cells compared, a glyph checked against those it may
 //!   overprint), at most [`MAX_WORK`]: a few seconds.
@@ -195,6 +198,18 @@ impl Budget {
             .into_iter()
             .fold(0u64, |n, c| n.saturating_add(char_cost(c)));
         self.spend_memory("text", n, TEXT_BYTES)
+    }
+
+    /// Count what the DoCO output copies of the table `e`, once its cells
+    /// are spent ([`table_copies`](crate::doco::table_copies)): each cell a
+    /// merged value fills, a node of its own, and the text copied, a merged
+    /// value into each cell it covers and each cell's labels. A reader calls
+    /// it on every table it makes, before keeping it: a merge or a label the
+    /// file states once is written once per cell.
+    pub fn spend_copies(&mut self, e: &crate::Element) -> Result<(), TooLarge> {
+        let copies = crate::doco::table_copies(e);
+        self.spend_memory("copies of table cells", copies.cells, ELEMENT_BYTES)?;
+        self.spend_memory("copies of table cells", copies.text, TEXT_BYTES)
     }
 
     /// Count `n` steps of a layout pass about to be taken.

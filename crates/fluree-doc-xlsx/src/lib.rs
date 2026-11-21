@@ -2118,6 +2118,8 @@ fn island_elements(
     e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
+    // What DoCO copies of it: a merged value in each cell it covers.
+    budget.spend_copies(&e)?;
     out.push(((range.r0, range.c0), e));
     Ok(out)
 }
@@ -2516,10 +2518,13 @@ mod tests {
             }]
         };
         // The sheet's title, the table and its cells, each a node of the
-        // output, and the title's text, besides.
+        // output, and the title's text, besides; and the labels DoCO copies
+        // onto each cell below the header, its column's (a byte) and, past
+        // the first, its row's (another).
+        let labels = 99 * 100 + 99 * 99;
         let cells = |n: u64| {
             Budget::new(
-                10_002 * ELEMENT_BYTES + TEXT_BYTES + n * CELL_BYTES,
+                10_002 * ELEMENT_BYTES + (1 + labels) * TEXT_BYTES + n * CELL_BYTES,
                 u64::MAX,
             )
         };
@@ -3956,5 +3961,30 @@ mod tests {
             ),
             ("m2", "Failed")
         );
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
+        // A2 merged down to the last row, beside columns of numbers, the
+        // cells it covers written (their text hidden): DoCO writes A2's
+        // value in each row of the merge, and beside it as each row's
+        // label.
+        const LONG: usize = 20_000;
+        let workbook = |rows: u32| {
+            let mut cells = vec![
+                text("A1", 0, "Name"),
+                text("B1", 0, "Q1"),
+                text("C1", 0, "Q2"),
+            ];
+            cells.push(text("A2", 0, &"y".repeat(LONG)));
+            cells.extend((3..=rows).map(|r| text(&format!("A{r}"), 0, "x")));
+            cells.extend((2..=rows).map(|r| num(&format!("B{r}"), 0, "1")));
+            cells.extend((2..=rows).map(|r| num(&format!("C{r}"), 0, "2")));
+            let merge = format!("<mergeCells><mergeCell ref=\"A2:A{rows}\"/></mergeCells>");
+            package(&[("S", &sheet(&cells, &merge))])
+        };
+        assert!(parse(&workbook(4)).is_ok());
+        let err = parse(&workbook(5_000)).unwrap_err();
+        assert!(err.to_string().contains("copies"), "{err}");
     }
 }

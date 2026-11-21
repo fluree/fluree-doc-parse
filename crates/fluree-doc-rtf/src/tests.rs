@@ -234,3 +234,17 @@ impl<'a, I: Iterator<Item = &'a bool>> Positions for I {
             .collect()
     }
 }
+
+#[test]
+fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
+    let doc = |rows: usize| {
+        format!(
+            "{{\\rtf1\\trowd\\clvmgf\\cellx3000\\cellx6000\\pard\\intbl {}\\cell a\\cell\\row {}\\pard After\\par}}",
+            "y".repeat(200_000),
+            "\\trowd\\clvmrg\\cellx3000\\cellx6000\\pard\\intbl\\cell b\\cell\\row ".repeat(rows - 1)
+        )
+    };
+    assert!(parse(doc(3).as_bytes()).is_ok());
+    let err = parse(doc(3_000).as_bytes()).unwrap_err();
+    assert!(matches!(err, RtfError::TooLarge(_)), "{err}");
+}

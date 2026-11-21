@@ -32,7 +32,9 @@ not.
 Each target renders what the reader made through every output (Markdown,
 XHTML, text, DoCO JSON-LD), as `convert` would, and asserts that it stands
 for no more memory than one document may take, at the budget's own costs
-(`src/lib.rs`). `cargo fuzz` builds with `--cfg fuzzing`, under which that
+(`src/lib.rs`), the copies DoCO writes of a table's cells included (a merged
+value in each cell it covers, each cell's labels), so a reader that makes a
+table without spending them fails. `cargo fuzz` builds with `--cfg fuzzing`, under which that
 budget is a sixteenth of the shipped one, so an input that fills it stays
 quick to run.
 

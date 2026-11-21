@@ -10,8 +10,9 @@ attachments), so a fuzzer starts from inputs that reach deep into a reader
 rather than from bytes its first check refuses.
 
 Flat OpenDocument sources are written by hand and converted by LibreOffice
-(`soffice`, or set SOFFICE) to the office formats; XPS, RTF, CSV, e-mail and
-Outlook messages are written here directly; pypdf adds notes and an embedded
+(`soffice`, or set SOFFICE) to the office formats; XPS, RTF, CSV, e-mail,
+Outlook messages, and a Word and an Excel file of merged cells are written
+here directly; pypdf adds notes and an embedded
 file to a PDF. Run from the repository root:
 
     uv run fuzz/make_seeds.py [--extra DIR ...] [--local-extra DIR ...] [--local fuzz/corpus]
@@ -320,6 +321,99 @@ def rtf() -> list[tuple[str, bytes]]:
     return [("seed.rtf", doc.encode("latin-1"))]
 
 
+def docx() -> list[tuple[str, bytes]]:
+    """A Word table merged each way: a cell down two rows (`w:vMerge`), one
+    across two columns (`w:gridSpan`), a band across the table."""
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+    def tc(text: str, pr: str = "") -> str:
+        return f"<w:tc><w:tcPr>{pr}</w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>"
+
+    rows = [
+        tc("Group") + tc("Code") + tc("Note"),
+        tc("Fruit", '<w:vMerge w:val="restart"/>') + tc("F-1") + tc("Fresh"),
+        tc("", "<w:vMerge/>") + tc("F-2") + tc("Dried"),
+        tc("Vegetables", '<w:gridSpan w:val="3"/>'),
+        tc("Leaf") + tc("Spans two", '<w:gridSpan w:val="2"/>'),
+    ]
+    table = "<w:tbl>" + "".join(f"<w:tr>{r}</w:tr>" for r in rows) + "</w:tbl>"
+    document = (
+        f'<w:document xmlns:w="{w}"><w:body><w:p><w:r><w:t>Merged cells</w:t></w:r></w:p>'
+        f"{table}</w:body></w:document>"
+    )
+    types = (
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    parts = [("[Content_Types].xml", types), ("_rels/.rels", rels), ("word/document.xml", document)]
+    return [("seed_merges.docx", zipped([(n, d.encode()) for n, d in parts]))]
+
+
+def xlsx() -> list[tuple[str, bytes]]:
+    """An Excel sheet whose table has a cell merged down over the cells it
+    covers, one merged across, and a band across the table."""
+    main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+    def cell(ref: str, value: str) -> str:
+        if value.lstrip("-").replace(".", "", 1).isdigit():
+            return f'<c r="{ref}"><v>{value}</v></c>'
+        return f'<c r="{ref}" t="inlineStr"><is><t>{value}</t></is></c>'
+
+    grid = [
+        ["Group", "Q1", "Q2"],
+        ["Fruit", "12", "14"],
+        ["", "3", "4"],
+        ["Vegetables", "", ""],
+        ["Leaf", "Both quarters", ""],
+        ["Root", "7", "8"],
+    ]
+    rows = "".join(
+        f'<row r="{r}">'
+        + "".join(cell(f"{'ABC'[c]}{r}", v) for c, v in enumerate(values) if v)
+        + "</row>"
+        for r, values in enumerate(grid, start=1)
+    )
+    merges = '<mergeCells count="3"><mergeCell ref="A2:A3"/><mergeCell ref="A4:C4"/><mergeCell ref="B5:C5"/></mergeCells>'
+    sheet = f'<worksheet xmlns="{main}"><sheetData>{rows}</sheetData>{merges}</worksheet>'
+    workbook = (
+        f'<workbook xmlns="{main}" xmlns:r="{rel}"><sheets>'
+        '<sheet name="Merges" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    )
+    types = (
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        "</Types>"
+    )
+    package_rels = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f'<Relationship Id="rId1" Type="{rel}/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+    )
+    workbook_rels = (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        f'<Relationship Id="rId1" Type="{rel}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+    )
+    parts = [
+        ("[Content_Types].xml", types),
+        ("_rels/.rels", package_rels),
+        ("xl/workbook.xml", workbook),
+        ("xl/_rels/workbook.xml.rels", workbook_rels),
+        ("xl/worksheets/sheet1.xml", sheet),
+    ]
+    return [("seed_merges.xlsx", zipped([(n, d.encode()) for n, d in parts]))]
+
+
 def csv() -> list[tuple[str, bytes]]:
     return [
         ("seed.csv", b'Region,Amount,Note\r\nNorth,1234.5,"quoted, with comma"\r\nSouth,-4,"multi\nline"\r\n'),
@@ -574,7 +668,7 @@ def main() -> None:
         for target, files in office(Path(tmp)).items():
             generated.setdefault(target, []).extend(files)
     for target, files in [("xps", xps()), ("rtf", rtf()), ("csv", csv()), ("email", eml()),
-                          ("email", msg())]:
+                          ("email", msg()), ("docx", docx()), ("xlsx", xlsx())]:
         generated.setdefault(target, []).extend(files)
     # The text's PDF, with notes and an embedded file added.
     for name, data in list(generated.get("pdf", [])):

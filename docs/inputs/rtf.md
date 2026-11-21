@@ -59,6 +59,8 @@ as it opens; a row definition states at most about four million cells.
 What the document makes is counted against the memory one document may
 take before it is made: each paragraph with its text, each row with the
 copy of its definitions it keeps, and each table's cells, a short row's
-padding to its table's width counted too. A file past any of these fails
+padding to its table's width counted too, and the copies DoCO writes of
+them (a value merged down, `\clvmrg`, in each row it covers, and each
+cell's labels). A file past any of these fails
 as too large. `\binN` data is skipped, never past
 the end of the file. In a library, `fluree_doc_rtf::parse_with_info`.

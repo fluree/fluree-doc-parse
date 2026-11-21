@@ -6,6 +6,7 @@
 //! libFuzzer reports those itself (`-timeout`, `-rss_limit_mb`).
 
 use fluree_doc_model::budget::{text_cost, CELL_BYTES, ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES};
+use fluree_doc_model::doco::table_copies;
 use fluree_doc_model::{DocoOptions, Element, Notes};
 
 /// The memory `elements` stand for at the budget's costs
@@ -13,11 +14,17 @@ use fluree_doc_model::{DocoOptions, Element, Notes};
 /// `ELEMENT_BYTES`, each cell slot at `CELL_BYTES`, each byte of text at
 /// `TEXT_BYTES` times what it may take in the worst output. A table's text
 /// is its cells' (the cost of a byte covers the copies made of it), so it
-/// is counted once, through its cells.
+/// is counted once, through its cells, and then the copies DoCO writes of
+/// them (`fluree_doc_model::doco::table_copies`): a merged value in each
+/// cell it covers, each cell's labels.
 pub fn estimated_memory(elements: &[Element]) -> u64 {
     let mut cost = 0u64;
     for e in elements {
-        cost = cost.saturating_add(ELEMENT_BYTES);
+        let copies = table_copies(e);
+        cost = cost
+            .saturating_add(ELEMENT_BYTES)
+            .saturating_add(copies.cells.saturating_mul(ELEMENT_BYTES))
+            .saturating_add(copies.text.saturating_mul(TEXT_BYTES));
         if e.cells.is_none() {
             cost = cost.saturating_add(text_cost(&e.text).saturating_mul(TEXT_BYTES));
         }

@@ -450,6 +450,13 @@ fn table(
     e.header_rows = Some(header_rows);
     e.merged_left = left.iter().any(|x| *x).then_some(left);
     e.merged_down = down.iter().any(|x| *x).then_some(down);
+    // What DoCO copies of it, a merged value in each cell it covers, as
+    // cells holding that text.
+    let copies = fluree_doc_model::doco::table_copies(&e);
+    let size = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
+    if !room.spend(size(copies.cells), size(copies.text)) {
+        return None;
+    }
     Some(e)
 }
 

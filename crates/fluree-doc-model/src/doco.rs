@@ -455,6 +455,212 @@ fn column_headers(
         .collect()
 }
 
+/// What the DoCO output copies of a table's cells, beyond the cells a
+/// reader made: see [`table_copies`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Copies {
+    /// Cells left empty by a merge that a copy fills, each a `doc:TableCell`
+    /// node of its own: the nodes the output makes past the cells that hold
+    /// text of their own.
+    pub cells: u64,
+    /// Text copied, at [`text_cost`](crate::budget::text_cost): a merged
+    /// value repeated into each cell it covers, and the labels each cell
+    /// node carries (`doc:columnHeader`, `doc:rowHeader`,
+    /// `doc:sectionLabel`).
+    pub text: u64,
+}
+
+/// What [`to_doco`] copies of `e`'s cells, sized without making a copy.
+///
+/// A cell DoCO writes must describe itself, so a value merged down is
+/// repeated into each row of its span (the fragments of a merged cell joined
+/// first, `merges::denormalize`), the projection shows it on each row too
+/// ([`projected_cells`]), and every cell node carries its column's header,
+/// its row's first cell and its section's band. A file states none of these
+/// copies: a few kilobytes of merges, or one long label over many rows, make
+/// gigabytes of output. A reader spends them from the document's budget
+/// ([`Budget::spend_copies`](crate::budget::Budget::spend_copies)) before
+/// the table is kept.
+///
+/// This walks the table as the writer does, with each cell's text replaced
+/// by its cost: the vertical runs, the horizontal runs and the full-width
+/// bands of `denormalize`, then the labels of each cell that becomes a node.
+/// A stacked header's path is counted at every label on it, the repeats
+/// the writer drops included, so it is never under the writer's. A table
+/// that carries on another (`continues`, a PDF's page break) takes that
+/// one's header, which is not counted here.
+pub fn table_copies(e: &Element) -> Copies {
+    use crate::budget::text_cost;
+    let Some(raw) = &e.cells else {
+        return Copies::default();
+    };
+    let n = raw.len();
+    let cols = raw.first().map_or(0, Vec::len);
+    if n == 0 || cols == 0 {
+        return Copies::default();
+    }
+    // Each cell's trimmed text by its cost; 0 is an empty cell.
+    let own: Vec<u64> = raw
+        .iter()
+        .flat_map(|row| (0..cols).map(move |c| row.get(c).map_or(0, |t| text_cost(t.trim()))))
+        .collect();
+    // Texts joined by one space, as `denormalize` joins them.
+    let joined = |parts: &mut dyn Iterator<Item = u64>| {
+        let (sum, k) = parts
+            .filter(|&p| p > 0)
+            .fold((0u64, 0u64), |(s, k), p| (s.saturating_add(p), k + 1));
+        sum.saturating_add(k.saturating_sub(1))
+    };
+    let mut text = 0u64;
+    let mut d = own.clone();
+    let subs: Vec<bool> = {
+        let mut s = vec![false; n];
+        for &r in e.sub_headers.iter().flatten().filter(|&&r| r < n) {
+            s[r] = true;
+        }
+        s
+    };
+    if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
+        let flag = |m: &Option<Vec<bool>>, i: usize| {
+            m.as_ref().and_then(|m| m.get(i)).copied().unwrap_or(false)
+        };
+        for c in 0..cols {
+            let mut r = 0;
+            while r < n {
+                let mut end = r + 1;
+                while end < n && flag(&e.merged_down, end * cols + c) {
+                    end += 1;
+                }
+                if end > r + 1 {
+                    let v = joined(&mut (r..end).map(|i| d[i * cols + c]));
+                    for i in r..end {
+                        text = text.saturating_add(v.saturating_sub(own[i * cols + c]));
+                        d[i * cols + c] = v;
+                    }
+                }
+                r = end;
+            }
+        }
+        for r in 0..n {
+            let row = r * cols;
+            let mut c = 0;
+            while c < cols {
+                let mut end = c + 1;
+                while end < cols && flag(&e.merged_left, row + end) {
+                    end += 1;
+                }
+                if end > c + 1 {
+                    // The text moves to the first cell; the spaces it is
+                    // joined by are new.
+                    let v = joined(&mut (c..end).map(|k| d[row + k]));
+                    let parts = d[row + c..row + end].iter().sum::<u64>();
+                    text = text.saturating_add(v.saturating_sub(parts));
+                    d[row + c] = v;
+                    d[row + c + 1..row + end].fill(0);
+                }
+                c = end;
+            }
+            if subs[r] {
+                // The band is the whole row, cells past the first row's
+                // width included.
+                let past = raw[r].iter().skip(cols).map(|t| text_cost(t.trim()));
+                let past = past.collect::<Vec<_>>();
+                let v = joined(&mut d[row..row + cols].iter().chain(&past).copied());
+                let parts = d[row..row + cols].iter().chain(&past).sum::<u64>();
+                text = text.saturating_add(v.saturating_sub(parts));
+                d[row] = v;
+                d[row + 1..row + cols].fill(0);
+            }
+        }
+    }
+    // Each column's name as the writer gives it ([`column_headers`]), and
+    // the record a wrapped table's cell belongs to ([`record_width`]): its
+    // row label is the record's first cell, not the row's.
+    let n_header = e.header_rows.unwrap_or(1).min(n);
+    let names = header_names(e, raw, n_header, &subs);
+    let header: Vec<u64> = names.iter().map(|h| text_cost(h)).collect();
+    let width = record_width(&names).unwrap_or(cols).max(1);
+    // The nodes: each cell below the header, outside a band, that holds
+    // text once the merges are read; each with its labels.
+    let mut nodes = 0u64;
+    let mut section = 0u64;
+    for r in 0..n {
+        if subs[r] {
+            section = d[r * cols];
+            continue;
+        }
+        if r < n_header {
+            continue;
+        }
+        let cost = |c: usize| {
+            if c < cols {
+                d[r * cols + c]
+            } else {
+                raw[r].get(c).map_or(0, |t| text_cost(t.trim()))
+            }
+        };
+        // A row longer than the first keeps its cells past it as they are.
+        for c in 0..raw[r].len() {
+            let value = cost(c);
+            if value == 0 {
+                continue;
+            }
+            nodes += 1;
+            let first = c - c % width;
+            let labels = header
+                .get(c)
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(if c > first { cost(first) } else { 0 })
+                .saturating_add(section);
+            text = text.saturating_add(labels);
+        }
+    }
+    let filled = raw
+        .iter()
+        .flatten()
+        .filter(|t| !t.trim().is_empty())
+        .count() as u64;
+    Copies {
+        cells: nodes.saturating_sub(filled),
+        text,
+    }
+}
+
+/// The column names [`to_doco`] gives a table of its own header: its
+/// header rows, their merges read as the writer reads them (`subs`, each
+/// row's band), named by [`column_headers`]. Only the header rows are
+/// copied, and the rows a value merged down from them runs into.
+fn header_names(e: &Element, raw: &[Vec<String>], n_header: usize, subs: &[bool]) -> Vec<String> {
+    let Some(cols) = raw.first().map(Vec::len).filter(|_| n_header > 0) else {
+        return Vec::new();
+    };
+    let flag = |m: &Option<Vec<bool>>, i: usize| m.as_ref().and_then(|m| m.get(i)) == Some(&true);
+    // Past the header, to the first row no value runs down into: a run
+    // ends above it, so the rows above read as in the whole table.
+    let mut rows = n_header;
+    while rows < raw.len() && (0..cols).any(|c| flag(&e.merged_down, rows * cols + c)) {
+        rows += 1;
+    }
+    let k = rows * cols;
+    let mut head = raw[..rows].to_vec();
+    if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
+        let first = |m: &Option<Vec<bool>>| (0..k).map(|i| flag(m, i)).collect();
+        let m = crate::merges::Merges {
+            continues_above: first(&e.merged_down),
+            continues_left: first(&e.merged_left),
+            full_width_row: subs[..rows].to_vec(),
+        };
+        crate::merges::denormalize(&mut head, &m);
+    }
+    let left = e
+        .merged_left
+        .as_deref()
+        .filter(|m| m.len() == raw.len() * cols)
+        .map(|m| &m[..k]);
+    column_headers(&head, n_header, left)
+}
+
 /// Minimal tag stripper for model-arbitrated tables whose text is HTML.
 fn strip_tags(html: &str) -> String {
     let mut out = String::new();
@@ -2416,5 +2622,195 @@ mod tests {
         let slice: String = projection.chars().skip(b).take(e - b).collect();
         assert_eq!(slice, "--\n\nKai Moreno\n1 Main Street, Springfield");
         assert_eq!(sig["nif:isString"], slice.as_str());
+    }
+
+    /// A one-column table of `rows`, no header, each row continuing the
+    /// one above but the first.
+    fn merged_column(rows: Vec<String>) -> Element {
+        let n = rows.len();
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(rows.into_iter().map(|r| vec![r]).collect());
+        t.header_rows = Some(0);
+        t.merged_down = Some((0..n).map(|r| r > 0).collect());
+        t
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_counted_once_a_row() {
+        let n = 50;
+        let long = "v".repeat(1000);
+        let mut rows = vec![long.clone()];
+        rows.resize(n, String::new());
+        let t = merged_column(rows);
+        let copies = table_copies(&t);
+        // Each covered row is a node of its own, holding the whole value.
+        assert_eq!(
+            copies,
+            Copies {
+                cells: (n - 1) as u64,
+                text: (n as u64 - 1) * 1000
+            }
+        );
+        let g = graph(std::slice::from_ref(&t));
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), n);
+        assert!(cells.iter().all(|c| c["doc:cellValue"] == long.as_str()));
+    }
+
+    #[test]
+    fn fragments_merged_down_are_joined_then_counted_on_each_row() {
+        // A run of n fragments is one value of 2n - 1 characters, on each
+        // of its n rows: the square of the run, not the run.
+        let n = 1000u64;
+        let t = merged_column(vec!["x".into(); n as usize]);
+        let copies = table_copies(&t);
+        assert_eq!(
+            copies,
+            Copies {
+                cells: 0,
+                text: n * (2 * n - 1) - n
+            }
+        );
+        let small = merged_column(vec!["x".into(); 4]);
+        let g = graph(&[small]);
+        assert!(find(&g, "doc:TableCell")
+            .iter()
+            .all(|c| c["doc:cellValue"] == "x x x x"));
+    }
+
+    #[test]
+    fn each_cell_counts_the_labels_it_carries() {
+        let long = "w".repeat(100);
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Name".into(), "Code".into()],
+            vec![long.clone(), "".into()],
+            vec![long.clone(), "".into()],
+            vec!["Alpha".into(), "1".into()],
+            vec!["Beta".into(), "2".into()],
+        ]);
+        t.header_rows = Some(1);
+        // Row 1 is a band; rows 3 and 4 fall under it.
+        t.sub_headers = Some(vec![1]);
+        t.merged_left = Some(vec![
+            false, false, false, true, false, false, false, false, false, false,
+        ]);
+        let copies = table_copies(&t);
+        // Each cell under the band carries its column's header and the
+        // band's text, and each but the first its row's first cell.
+        let row2 = 4 + 100;
+        let row3 = (4 + 100) + (4 + 5 + 100);
+        let row4 = (4 + 100) + (4 + 4 + 100);
+        assert_eq!(
+            copies,
+            Copies {
+                cells: 0,
+                text: row2 + row3 + row4
+            }
+        );
+    }
+
+    /// What the DoCO output writes for a table's cells, at the budget's
+    /// costs: the nodes, and the text of their values and labels.
+    fn written(t: &Element) -> (u64, u64) {
+        let g = graph(std::slice::from_ref(t));
+        let cells = find(&g, "doc:TableCell");
+        let text = cells
+            .iter()
+            .flat_map(|c| {
+                [
+                    "doc:cellValue",
+                    "doc:columnHeader",
+                    "doc:rowHeader",
+                    "doc:sectionLabel",
+                ]
+                .map(|k| c[k].as_str().map_or(0, crate::budget::text_cost))
+            })
+            .sum();
+        (cells.len() as u64, text)
+    }
+
+    #[test]
+    fn a_wrapped_table_is_counted_by_its_records_and_its_spanned_header() {
+        // Two records a row: each cell after a record's first is labelled
+        // by that first cell, which the row's own first does not bound.
+        let long = "a label far longer than the row's own first cell";
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec!["Name".into(), "Value".into(), "Name".into(), "Value".into()],
+            vec!["".into(), "1".into(), long.into(), "2".into()],
+        ]);
+        t.header_rows = Some(1);
+        let raw = 4 + 5 + 4 + 5 + 1 + long.len() as u64 + 1;
+        let (_, text) = written(&t);
+        assert!(text <= raw + table_copies(&t).text, "{text} written");
+        // One header row: an empty cell a label spans is named by it.
+        let mut s = el("doco:Table", "", None);
+        s.cells = Some(vec![
+            vec!["Quarterly revenue by region".into(), "".into(), "".into()],
+            vec!["x".into(), "y".into(), "z".into()],
+        ]);
+        s.header_rows = Some(1);
+        s.merged_left = Some(vec![false, true, true, false, false, false]);
+        let (_, text) = written(&s);
+        assert!(text <= 27 + 3 + table_copies(&s).text, "{text} written");
+    }
+
+    #[test]
+    fn the_copies_counted_are_never_fewer_than_those_written() {
+        // Tables of every shape a small grid takes: merges each way, bands,
+        // stacked headers, texts with spaces and escapes.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let texts = ["", "", "a", "bb", " c d ", "\"&<", "é"];
+        for _ in 0..3000 {
+            let (n, cols) = (1 + next(6) as usize, 1 + next(4) as usize);
+            let mut t = el("doco:Table", "", None);
+            t.cells = Some(
+                (0..n)
+                    .map(|_| {
+                        (0..cols)
+                            .map(|_| texts[next(7) as usize].to_string())
+                            .collect()
+                    })
+                    .collect(),
+            );
+            let flags = |p: u64, next: &mut dyn FnMut(u64) -> u64| {
+                (next(2) == 0).then(|| (0..n * cols).map(|_| next(100) < p).collect())
+            };
+            t.merged_down = flags(40, &mut next);
+            t.merged_left = flags(30, &mut next);
+            t.sub_headers = (next(3) == 0).then(|| (0..n).filter(|_| next(3) == 0).collect());
+            t.header_rows = [None, Some(0), Some(1), Some(2), Some(3)][next(5) as usize];
+            let raw: u64 = t
+                .cells
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|c| crate::budget::text_cost(c.trim()))
+                .sum();
+            let filled = t
+                .cells
+                .iter()
+                .flatten()
+                .flatten()
+                .filter(|c| !c.trim().is_empty())
+                .count();
+            let copies = table_copies(&t);
+            let (nodes, text) = written(&t);
+            assert!(
+                nodes <= filled as u64 + copies.cells,
+                "{t:?}: {nodes} nodes, {copies:?}"
+            );
+            assert!(
+                text <= raw + copies.text,
+                "{t:?}: {text} written, {raw} + {copies:?}"
+            );
+        }
     }
 }

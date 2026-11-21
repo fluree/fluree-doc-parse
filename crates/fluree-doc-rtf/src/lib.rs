@@ -829,6 +829,11 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
     e.cells = Some(rows);
     e.merged_left = left.iter().any(|x| *x).then_some(left);
     e.merged_down = down.iter().any(|x| *x).then_some(down);
+    // What DoCO copies of it: a merged value in each cell it covers.
+    if let Err(err) = budget.spend_copies(&e) {
+        over.get_or_insert(err.to_string());
+        return;
+    }
     f.out.push(e);
 }
 

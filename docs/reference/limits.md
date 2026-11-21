@@ -36,12 +36,39 @@ reader through the largest output (`-f doco`), with the unit alone filling
 | 35 M control characters in a table (`.xlsb`) | 211 MB | 582 MB | 769 MB |
 | 19.8 M cells of padding (`.csv`) | 574 MB | 799 MB | 1,428 MB |
 
-So a document that spends the whole budget, however it mixes them, peaks
-under about 2.7 GB, and converts within a 4 GB address space with room for
-its input and a library's own copies (calamine's, for an `.xls`). The
+So a document that spends the whole budget, however it mixes them, copies
+of its tables' cells included, peaks under about 2.7 GB, and converts
+within a 4 GB address space with room for its input and a library's own
+copies (calamine's, for an `.xls`). The
 output a document is converted to is not known to the reader, so the costs
 are those of the largest: a table of 600,000 numbers converted to Markdown
 would fit, but is refused because its DoCO JSON-LD would not.
+
+## Copies of a table's cells
+
+A table's cells are not all DoCO writes of it. Each `doc:TableCell` must
+describe itself, so a value merged down is written in every row of its span
+(the texts of the cells it covers joined first, by a space), the text
+projection shows it on each of those rows too, and each cell carries its
+column's header, its row's first cell and its section's band
+(`doc:columnHeader`, `doc:rowHeader`, `doc:sectionLabel`). None of these is
+in the file more than once: a 2 KB `.docx` whose two-column table holds a
+value of 200,000 characters merged down its 3,000 rows made 1.8 GB of DoCO
+and peaked at 5.3 GB, the value written twice a row (its cell's, and the
+next cell's row label); and 8,000 cells of one letter each merged into one,
+whose joined value is 16,000 characters on each of their rows, made 260 MB
+from 5 KB.
+
+So a reader spends them too, once a table is made and before it is kept
+(`Budget::spend_copies`, sized by `fluree_doc_model::doco::table_copies`
+walking the table as the writer does, without making a copy): each cell a
+merge fills, a node of its own, at the element's cost, and each byte copied,
+merged value or label, at the text's. A cell's labels are counted on every
+table, merged or not: a long row label over many columns is the same copy.
+The 5.3 GB above is 4.4 B a byte copied, under the 12 the budget counts;
+both files are refused now, before a copy is made.
+The `.odt` and `.odp` readers count them against their tables' own bounds
+(4 million cells, 64 MiB of text), as cells holding that text.
 
 ## Work
 

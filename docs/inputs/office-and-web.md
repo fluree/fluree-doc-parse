@@ -335,8 +335,9 @@ at most 64 deep, at most 4,096 edits are followed (each once, so an edit
 chain that loops ends), each persist directory read once and about four
 million of their entries in all, and 10,000 slides read. A slide or a notes
 slide is read once however many ids the persist directory sends to its
-place in the stream, and every text read, element made and table cell is
-spent from the document's budget ([limits on what one document may make](../reference/limits.md)) first. A
+place in the stream, and every text read, element made and table cell, and
+the copies DoCO writes of a table's cells (a merged value in each cell it
+covers, each cell's labels), is spent from the document's budget ([limits on what one document may make](../reference/limits.md)) first. A
 picture several shapes show is read once by OCR or a model, its text placed
 after each of its figures, as a DOCX's is.
 Provenance and evidence are `ppt`. Returns `PptError`
@@ -383,7 +384,9 @@ flattened out of it. So this reader measures after all, but only shape.
 - **Bounds.** No cell past Excel's grid (row 1,048,576, column 16,384) is
   read, and a merge is cut at its edge. Every cell read, its text (a shared
   string once for each cell naming it), each copy the layout makes, each
-  cell a table's grid holds and each element is spent from the workbook's
+  cell a table's grid holds, each element, and the copies DoCO writes of a
+  table's cells (a merged value in each cell it covers, each cell's labels)
+  are spent from the workbook's
   budget ([limits on what one document may make](../reference/limits.md)) before it is made, and the passes that
   mend islands into blocks spend its work; past either the workbook fails
   as too large. Past 2,048 islands a sheet's islands are not mended. The

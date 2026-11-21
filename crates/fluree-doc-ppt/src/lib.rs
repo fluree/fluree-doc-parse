@@ -1011,7 +1011,11 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                 Item::Text(t) => t,
                 Item::Table(t) => {
                     budget.spend_elements(1)?;
-                    out.push(table_element(t, page));
+                    let e = table_element(t, page);
+                    // What DoCO copies of it: a merged value in each cell
+                    // it covers.
+                    budget.spend_copies(&e)?;
+                    out.push(e);
                     continue;
                 }
                 Item::Picture(pib, alt) => {

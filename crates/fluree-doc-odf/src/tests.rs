@@ -395,3 +395,32 @@ fn a_header_repeated_on_master_pages_is_read_once_and_its_own_lines_kept() {
         ["Ref: QA-7", "Rev 2", "Body"]
     );
 }
+
+#[test]
+fn copies_of_merged_cells_spend_the_tables_room() {
+    // A cell spanning n rows over n covered cells that each hold text of
+    // their own: DoCO joins the n texts and writes them on each row.
+    let table = |n: usize, first: &str| {
+        let row = |cell: String| format!("<table:table-row>{cell}</table:table-row>");
+        format!(
+            "<table:table>{}{}</table:table>",
+            row(format!(
+                "<table:table-cell table:number-rows-spanned=\"{n}\"><text:p>{first}</text:p></table:table-cell>"
+            )),
+            row("<table:covered-table-cell><text:p>x</text:p></table:covered-table-cell>".into())
+                .repeat(n - 1)
+        )
+    };
+    assert!(parse(&text(&table(100, "x"))).is_ok());
+    assert!(matches!(
+        parse(&text(&table(8_000, "x"))),
+        Err(OdfError::TooLarge(_))
+    ));
+    // One long value over many rows, the same.
+    let long = "y".repeat(200_000);
+    assert!(parse(&text(&table(3, &long))).is_ok());
+    assert!(matches!(
+        parse(&text(&table(3_000, &long))),
+        Err(OdfError::TooLarge(_))
+    ));
+}
