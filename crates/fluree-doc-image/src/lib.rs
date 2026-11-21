@@ -56,7 +56,8 @@ pub struct Header {
 /// The most pixels an image may hold to be decoded: 128 million. A file's
 /// header states its size, and a few kilobytes of PNG can state a size that
 /// takes gigabytes to decode; such a file is refused before anything is
-/// allocated.
+/// allocated. A sixteenth built for the fuzz targets, as the budget is
+/// ([`fluree_doc_model::budget::scaled`]).
 ///
 /// What [`decode`] holds at once, under this cap and [`MAX_DECODED_BYTES`]:
 /// the image as stored (at most 512 MiB), its eight-bit copy where it is
@@ -65,12 +66,12 @@ pub struct Header {
 /// turned a quarter: about 1 GB (985 MiB measured). Unturned, or grey, it
 /// is half that or less. An OCR engine reading it adds an RGB copy (384 MB
 /// at the cap) once the turn is done, and its own working memory.
-pub const MAX_PIXELS: u64 = 128_000_000;
+pub const MAX_PIXELS: u64 = fluree_doc_model::budget::scaled(128_000_000);
 
 /// The most bytes the decoder may produce, in the image's own colour type:
 /// an 8-bit image keeps all of [`MAX_PIXELS`], one stored wider gets fewer
-/// pixels (64 Mi for 16-bit RGBA).
-const MAX_DECODED_BYTES: u64 = 512 << 20;
+/// pixels (64 Mi for 16-bit RGBA). Scaled as it is.
+const MAX_DECODED_BYTES: u64 = fluree_doc_model::budget::scaled(512 << 20);
 
 /// The longest side an image may have to be decoded, in pixels: what bounds
 /// one row's buffer, so a one-pixel-high image a hundred million wide is

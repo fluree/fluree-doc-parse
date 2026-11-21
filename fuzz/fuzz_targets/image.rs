@@ -46,15 +46,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let _ = fluree_doc_pdf::image::dimensions(data);
-    let Ok(header) = fluree_doc_image::header(data) else {
-        return;
-    };
-    // An image within the decoder's bound may take a gigabyte decoded, a
-    // bound of its own: under the fuzzer's memory limit, as the budget is,
-    // a sixteenth of it is decoded.
-    if u64::from(header.width) * u64::from(header.height) > fluree_doc_image::MAX_PIXELS / 16 {
-        return;
-    }
+    let _ = fluree_doc_image::header(data);
+    // The decoder's bound on pixels is scaled as the budget is
+    // (`fluree_doc_model::budget::scaled`), so an image within it stays
+    // within the fuzzer's memory limit.
     if let Ok(read) = fluree_doc_image::elements(data, &Bands) {
         fluree_doc_parse_fuzz::check(&read.elements);
     }

@@ -39,8 +39,9 @@ use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_xlsx::{GridCell, GridSheet};
 
 /// The most bytes the workbook stream may hold: 256 MiB. An `.xls` is not
-/// compressed, so this is also about the file's size.
-pub const MAX_STREAM_BYTES: u64 = 256 << 20;
+/// compressed, so this is also about the file's size. A sixteenth built
+/// for the fuzz targets, as [`MAX_CELLS`].
+pub const MAX_STREAM_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 
 /// The most cells a workbook's sheets may hold, and the most their grids may
 /// span, summed over its sheets, each from its first used cell to its last:

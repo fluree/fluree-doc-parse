@@ -22,10 +22,12 @@ use fluree_doc_xlsx::{GridCell, GridSheet};
 use fluree_doc_xlsx::{MAX_COLUMNS, MAX_ROWS};
 use std::io::{Cursor, Read};
 
-/// The most bytes one part inflates to: 64 MiB.
-pub const MAX_PART_BYTES: u64 = 64 << 20;
-/// The most bytes all parts inflate to: 256 MiB.
-pub const MAX_TOTAL_BYTES: u64 = 256 << 20;
+/// The most bytes one part inflates to: 64 MiB (a sixteenth built for the
+/// fuzz targets, as the budget is, [`fluree_doc_model::budget::scaled`]).
+pub const MAX_PART_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
+/// The most bytes all parts inflate to: 256 MiB (scaled as
+/// [`MAX_PART_BYTES`]).
+pub const MAX_TOTAL_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 /// The most entries the archive may hold.
 pub const MAX_ENTRIES: usize = 10_000;
 

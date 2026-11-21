@@ -47,13 +47,15 @@ impl Relationship {
 }
 
 /// The most bytes one image part is read to: 64 MiB, more than any picture
-/// a document pastes in.
-pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+/// a document pastes in. A sixteenth built for the fuzz targets, as the
+/// budget is ([`fluree_doc_model::budget::scaled`]).
+pub const MAX_MEDIA_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
 /// The most bytes an XML part read beside a document's main one (its
 /// relationships, its core properties, its notes, comments and settings)
-/// is inflated to: 64 MiB, far more than any holds.
-pub const MAX_XML_BYTES: u64 = 64 << 20;
+/// is inflated to: 64 MiB, far more than any holds (scaled as
+/// [`MAX_MEDIA_BYTES`]).
+pub const MAX_XML_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
 /// The bytes of an image part of an opened package, at most
 /// [`MAX_MEDIA_BYTES`] of them. The package is opened once for all of a

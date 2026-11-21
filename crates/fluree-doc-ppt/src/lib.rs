@@ -47,8 +47,10 @@ use fluree_doc_model::{Element, Media, MediaSource};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
-/// The most bytes the `PowerPoint Document` stream is read to: 256 MiB.
-pub const MAX_STREAM_BYTES: u64 = 256 << 20;
+/// The most bytes the `PowerPoint Document` stream is read to: 256 MiB (a
+/// sixteenth built for the fuzz targets, as the budget is,
+/// [`fluree_doc_model::budget::scaled`]).
+pub const MAX_STREAM_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 /// The deepest nesting of containers followed.
 pub const MAX_DEPTH: usize = 64;
 /// The most edits followed back from the last.
@@ -713,8 +715,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
     parse_with_media(bytes).map(|(elements, _)| elements)
 }
 
-/// The most bytes one picture is read to: 64 MiB, as a DOCX's.
-pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+/// The most bytes one picture is read to: 64 MiB, as a DOCX's (scaled as
+/// [`MAX_STREAM_BYTES`]).
+pub const MAX_MEDIA_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
 /// Where a picture is kept: in the `Pictures` stream at an offset, or in
 /// the document stream, inside its store entry.

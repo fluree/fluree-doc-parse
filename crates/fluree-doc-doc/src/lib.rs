@@ -41,10 +41,13 @@ use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::Element;
 use std::io::{Cursor, Read};
 
-/// The most bytes the `WordDocument` stream is read to: 256 MiB.
-pub const MAX_STREAM_BYTES: u64 = 256 << 20;
-/// The most bytes the table stream is read to: 64 MiB.
-pub const MAX_TABLE_BYTES: u64 = 64 << 20;
+/// The most bytes the `WordDocument` stream is read to: 256 MiB (a
+/// sixteenth built for the fuzz targets, as the budget is,
+/// [`fluree_doc_model::budget::scaled`]).
+pub const MAX_STREAM_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
+/// The most bytes the table stream is read to: 64 MiB (scaled as
+/// [`MAX_STREAM_BYTES`]).
+pub const MAX_TABLE_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 /// The most pieces read.
 pub const MAX_PIECES: usize = 1 << 20;
 /// The most characters read.

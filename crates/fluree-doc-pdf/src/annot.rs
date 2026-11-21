@@ -251,14 +251,16 @@ pub struct SkippedFile {
 
 /// The most files taken out of one document.
 pub const MAX_FILES: usize = 1_000;
-/// The most bytes one embedded file is decoded to: 64 MiB.
-pub const MAX_FILE_BYTES: u64 = 64 << 20;
+/// The most bytes one embedded file is decoded to: 64 MiB. This and the
+/// two bounds below are a sixteenth built for the fuzz targets, as the
+/// budget is ([`fluree_doc_model::budget::scaled`]).
+pub const MAX_FILE_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 /// The most bytes all of a document's embedded files are decoded to: 256 MiB.
-pub const MAX_TOTAL_BYTES: u64 = 256 << 20;
+pub const MAX_TOTAL_BYTES: u64 = fluree_doc_model::budget::scaled(256 << 20);
 /// The most bytes decoding a document's embedded files may inflate, the
 /// files kept, those refused and those found again alike: 512 MiB. A file
 /// refused past its bound has cost its decoding all the same.
-pub const MAX_DECODED_BYTES: u64 = 512 << 20;
+pub const MAX_DECODED_BYTES: u64 = fluree_doc_model::budget::scaled(512 << 20);
 /// How deep the embedded-files name tree is followed.
 const MAX_TREE_DEPTH: usize = 32;
 

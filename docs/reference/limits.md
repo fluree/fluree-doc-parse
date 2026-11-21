@@ -216,6 +216,16 @@ read: a 9 KB `.docx` whose three main parts each declared 1.3 GB for 1 MB
 was refused under a 3 GB address space as though it were that large. The parts read beside the document (relationships, core
 properties, settings, notes, comments) have a bound of their own, 64 MiB.
 
+An `.xlsb`'s parts are not spent: the package is first inflated to nowhere
+against bounds of its own, 64 MiB a part and 256 MiB in all, and then its
+parts are read one at a time, each sheet's freed before the next is read,
+so it holds at most a sheet part and its shared strings beside the budget,
+within the margin a full budget leaves in a 4 GB address space. Spending
+each sheet's part as it is read would count, for a workbook of many
+sheets, parts that are no longer held. The stream an `.xls`, a `.doc` or a
+`.ppt` is read from is bounded in the same way, 256 MiB: these files are
+not compressed, so it is about the file's own size.
+
 ## Files an e-mail carries
 
 `--parse-attachments` converts the files an e-mail carries while the
@@ -267,12 +277,21 @@ coordinates could otherwise wrap its last column onto its first.
 
 The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
 bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
-then quick to run. A reader's own bounds on memory the budget does not
-count scale with it (`fluree_doc_model::budget::scaled`): the cells and
-text calamine allocates for an `.xls` or `.xlsb` (4 million cells, 250 MB,
-as shipped), and an XPS document's parts and glyphs (64 MiB a part, 250,000
-glyphs a page, 4 million in all); otherwise an input within them would
-take as much under the fuzzer as in production, past its memory limit. Their memory limit (`-rss_limit_mb=320`) is twice that
-budget, near the margin a full budget has in production (2.5 GiB in a 4 GB
-address space), so a reader whose memory runs past its estimate by as much
+then quick to run.
+
+A reader's own bounds on memory the budget does not count scale with it
+(`fluree_doc_model::budget::scaled`): the cells and text calamine
+allocates for an `.xls` or `.xlsb` (4 million cells, 250 MB, as shipped);
+an XPS document's parts and glyphs (64 MiB a part, 250,000 glyphs a page,
+4 million in all); an `.xlsb`'s parts, and the streams of an `.xls`, a
+`.doc` or a `.ppt`; the pictures read from a `.ppt` or an
+Office package and the parts read beside an Office document's main one
+(64 MiB each); the files a PDF embeds (64 MiB each, 256 MiB in all, 512
+MiB decoded); and the pixels an image is decoded to (128 million, 1 GiB).
+Otherwise an input within them would take as much under the fuzzer as in
+production, past its memory limit.
+
+The targets' memory limit (`-rss_limit_mb=320`) is twice that budget, near
+the margin a full budget has in production (2.5 GiB in a 4 GB address
+space), so a reader whose memory runs past its estimate by as much
 as it would need to abort there fails under the fuzzer too.

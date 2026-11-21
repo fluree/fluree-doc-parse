@@ -28,7 +28,7 @@ not.
 | `pdf` | PDF: outline, metadata, notes, embedded files, links; the extraction and analysis of a document of at most four pages | `convert`'s pipeline without OCR or a model |
 | `html` | a web page, and an e-mail's HTML body | `fluree_doc_html::decode`, `parse`, `info`, `parse_with_quote_depth` |
 | `markdown` | Markdown, as UTF-8 | `fluree_doc_markdown::parse` |
-| `image` | PNG, JPEG, TIFF: the header, and the image decoded and read by a stand-in OCR engine (no models), up to a sixteenth of the decoder's pixel bound | `fluree_doc_image::header`, `elements` |
+| `image` | PNG, JPEG, TIFF: the header, and the image decoded and read by a stand-in OCR engine (no models) | `fluree_doc_image::header`, `elements` |
 | `email` | `.eml` and `.msg`, the files they carry, down through attached messages, each converted by the reader `convert` hands it to (no OCR, no model, four pages at most) | `fluree_doc_email::parse`, `parse_attachments`, `fluree_doc_cli::convert_attachment` |
 | `detect` | which reader `convert` sends a file to, by content and name (the first byte picks the name) | `fluree_doc_cli::detect` |
 
@@ -41,7 +41,8 @@ table without spending them fails. `cargo fuzz` builds with `--cfg fuzzing`, und
 budget is a sixteenth of the shipped one, so an input that fills it stays
 quick to run, and so are a reader's own bounds on the memory the budget
 does not count (`fluree_doc_model::budget::scaled`: the cells calamine
-allocates for `xls` and `xlsb`, an XPS document's parts and glyphs), so an
+allocates for `xls` and `xlsb`, an XPS document's parts and glyphs, the
+pixels an image is decoded to; `docs/reference/limits.md` lists them), so an
 input within them stays within the memory limit below.
 
 ## Running
