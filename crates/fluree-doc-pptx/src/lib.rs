@@ -129,7 +129,7 @@ fn slide_ids(xml: &str) -> Vec<String> {
         match ev {
             Event::Eof => break,
             Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == "sldId" => {
-                let rel = e.attributes().flatten().find(|a| {
+                let rel = fluree_doc_ooxml::attributes(&e).find(|a| {
                     let key = a.key.as_ref();
                     key.contains(&b':') && local(key) == "id"
                 });

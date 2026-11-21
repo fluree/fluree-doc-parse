@@ -886,7 +886,7 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
                 // The code is unescaped: a currency in quotes arrives as
                 // `&quot;$&quot;#,##0.00`, and read raw its entity names
                 // are letters that make it no number format.
-                let code = e.attributes().flatten().find_map(|a| {
+                let code = fluree_doc_ooxml::attributes(&e).find_map(|a| {
                     (local(a.key.as_ref()) == "formatCode")
                         .then(|| a.unescape_value().ok().map(|v| v.into_owned()))
                         .flatten()

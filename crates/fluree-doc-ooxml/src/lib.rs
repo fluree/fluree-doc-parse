@@ -12,6 +12,7 @@
 use fluree_doc_model::{
     xsd_date_time, Allowance, DocumentInfo, Media, MediaSource, PictureReader, PictureReads,
 };
+use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 use std::collections::HashMap;
@@ -391,10 +392,25 @@ pub fn local(qname: &[u8]) -> &str {
     s.rsplit(':').next().unwrap_or(s)
 }
 
+/// The most attributes of one element read. An element carries a few; a
+/// part's root, a few dozen namespace declarations.
+pub const MAX_ATTRIBUTES: usize = 1024;
+
+/// An element's attributes, the first [`MAX_ATTRIBUTES`] of them, those that
+/// do not parse left out. Read without quick-xml's check for a name given
+/// twice, which compares each attribute with every one before it: an
+/// element of 300,000 attributes would cost their square before a reader
+/// saw the first. A name given twice is found at its first.
+pub fn attributes<'a>(e: &'a BytesStart<'_>) -> impl Iterator<Item = Attribute<'a>> {
+    let mut all = e.attributes();
+    all.with_checks(false);
+    all.take(MAX_ATTRIBUTES).flatten()
+}
+
 /// An attribute's value by local name, its entities unescaped: a sheet
 /// named `R&D` is written `name="R&amp;D"`, and is `R&D`.
 pub fn attr(e: &BytesStart<'_>, want: &str) -> Option<String> {
-    e.attributes().flatten().find_map(|a| {
+    attributes(e).find_map(|a| {
         (local(a.key.as_ref()) == want).then(|| {
             a.unescape_value()
                 .map(|v| v.into_owned())
@@ -422,6 +438,35 @@ mod tests {
     }
 
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    /// The first element of `xml`, and what `f` makes of it.
+    fn first<T>(xml: &str, f: impl Fn(&BytesStart<'_>) -> T) -> T {
+        let mut r = Reader::from_str(xml);
+        loop {
+            match r.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) => return f(&e),
+                Event::Eof => panic!("no element"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn attributes_are_read_unchecked_and_at_most_max() {
+        // Checked, the name given twice would be an error, and the
+        // attributes after it would cost a comparison with each before.
+        let twice = r#"<a x="1" x="2" y="3"/>"#;
+        assert_eq!(first(twice, |e| attributes(e).count()), 3);
+        assert_eq!(first(twice, |e| attr(e, "x")).as_deref(), Some("1"));
+        let many: String = (0..MAX_ATTRIBUTES + 10)
+            .map(|i| format!(" a{i}=\"{i}\""))
+            .collect();
+        let many = format!("<a{many}/>");
+        assert_eq!(first(&many, |e| attributes(e).count()), MAX_ATTRIBUTES);
+        assert_eq!(first(&many, |e| attr(e, "a0")).as_deref(), Some("0"));
+        let past = format!("a{MAX_ATTRIBUTES}");
+        assert_eq!(first(&many, |e| attr(e, &past)), None);
+    }
 
     #[test]
     fn only_the_head_of_an_image_part_is_read_for_its_format() {
