@@ -31,16 +31,17 @@
 //!
 //! No geometry, no pages, nothing to escalate: `bbox` is `None` and `page`
 //! is 0.
+//!
+//! **Bounds.** The table's cells, its rows padded to the widest, and their
+//! text are counted against the document's [`Budget`] as they are read,
+//! before each is allocated: a file of one very wide row over a million
+//! short ones would otherwise ask for a trillion cells.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::Element;
 
 /// How many records the delimiter is sniffed from.
 pub const SNIFF_LINES: usize = 20;
-
-/// The most cells a table may hold, its rows padded to its widest: 16
-/// million. A file of one very wide row over a million short ones would
-/// otherwise ask for a trillion.
-pub const MAX_CELLS: usize = 16 << 20;
 
 /// How much of a file's text is looked at for a NUL, which says it is no
 /// text: 64 KiB.
@@ -51,8 +52,8 @@ const CANDIDATES: [char; 4] = [',', ';', '\t', '|'];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CsvError {
-    /// The table, padded, would hold more than [`MAX_CELLS`] cells.
-    TooLarge { rows: usize, columns: usize },
+    /// The table, padded, or its text, past the document's budget.
+    TooLarge(TooLarge),
     /// A NUL among the first [`SNIFF_BYTES`] of its text: binary content,
     /// which no delimited file holds, under a delimited file's name.
     NotText,
@@ -61,12 +62,15 @@ pub enum CsvError {
 impl std::fmt::Display for CsvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TooLarge { rows, columns } => write!(
-                f,
-                "a table of {rows} rows by {columns} columns is more than the {MAX_CELLS} cells read"
-            ),
+            Self::TooLarge(e) => write!(f, "table too large: {e}"),
             Self::NotText => write!(f, "not delimited text: binary content"),
         }
+    }
+}
+
+impl From<TooLarge> for CsvError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e)
     }
 }
 
@@ -80,6 +84,15 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, CsvError> {
 /// Parse a delimited file whose fields `delimiter` separates; `None` sniffs
 /// it (see the crate documentation).
 pub fn parse_with(bytes: &[u8], delimiter: Option<char>) -> Result<Vec<Element>, CsvError> {
+    parse_within(bytes, delimiter, &mut Budget::default())
+}
+
+/// [`parse_with`], against `budget`.
+fn parse_within(
+    bytes: &[u8],
+    delimiter: Option<char>,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, CsvError> {
     let text = decode(bytes);
     // Decoded first: UTF-16 text is half NULs as bytes, and none as text.
     let head = text.char_indices().take_while(|(i, _)| *i < SNIFF_BYTES);
@@ -88,11 +101,12 @@ pub fn parse_with(bytes: &[u8], delimiter: Option<char>) -> Result<Vec<Element>,
     }
     let (text, named) = sep_line(&text);
     let delimiter = delimiter.or(named).unwrap_or_else(|| sniff(text));
-    let rows = records(text, delimiter)?;
+    let rows = records(text, delimiter, budget)?;
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
     if rows.is_empty() {
         return Ok(Vec::new());
     }
+    budget.spend_elements(1)?;
     let rows: Vec<Vec<String>> = rows
         .into_iter()
         .map(|mut r| {
@@ -228,12 +242,17 @@ fn records_counting(text: &str, d: char, limit: usize) -> Vec<usize> {
 
 /// The records of `text` that hold something, each its fields on one line
 /// ([`one_line`]), as RFC 4180 reads them; refused as soon as the table they
-/// make, padded to its widest row, would pass [`MAX_CELLS`], before the
-/// cells past it are allocated.
-fn records(text: &str, d: char) -> Result<Vec<Vec<String>>, CsvError> {
+/// make, padded to its widest row, or its text, would pass `budget`, before
+/// the cells past it are allocated.
+fn records(text: &str, d: char, budget: &mut Budget) -> Result<Vec<Vec<String>>, CsvError> {
     let mut out: Vec<Vec<String>> = Vec::new();
     let mut width = 0usize;
-    let mut row = Row::default();
+    let mut row = Row {
+        fields: Vec::new(),
+        empty: 0,
+        spent: 0,
+        budget,
+    };
     let mut field = String::new();
     // Inside a quoted field; and whether the field began with its quote,
     // which is what makes a quote in it special.
@@ -260,14 +279,14 @@ fn records(text: &str, d: char) -> Result<Vec<Vec<String>>, CsvError> {
                 at_start = false;
             }
             c if c == d => {
-                row.push(&mut field, out.len(), width)?;
+                row.push(&mut field)?;
                 at_start = true;
             }
             '\n' | '\r' => {
                 if c == '\r' && chars.peek() == Some(&'\n') {
                     chars.next();
                 }
-                row.push(&mut field, out.len(), width)?;
+                row.push(&mut field)?;
                 row.end(&mut out, &mut width)?;
                 at_start = true;
                 pending = false;
@@ -279,7 +298,7 @@ fn records(text: &str, d: char) -> Result<Vec<Vec<String>>, CsvError> {
         }
     }
     if pending {
-        row.push(&mut field, out.len(), width)?;
+        row.push(&mut field)?;
         row.end(&mut out, &mut width)?;
     }
     Ok(out)
@@ -287,35 +306,29 @@ fn records(text: &str, d: char) -> Result<Vec<Vec<String>>, CsvError> {
 
 /// The record being read: its fields up to its last that holds something,
 /// and how many empty ones follow, counted rather than held, so a record of
-/// nothing but delimiters, which is no row, costs nothing.
-#[derive(Default)]
-struct Row {
+/// nothing but delimiters, which is no row, costs nothing. Every cell the
+/// table will hold is spent from `budget` before it is allocated: `spent`
+/// counts those spent so far, the rows before padded to their width.
+struct Row<'b> {
     fields: Vec<String>,
     empty: usize,
+    spent: u64,
+    budget: &'b mut Budget,
 }
 
-impl Row {
-    /// Refused where a table of `rows` rows, then this one `n` fields wide,
-    /// padded to `width`, would pass [`MAX_CELLS`].
-    fn check(rows: usize, width: usize, n: usize) -> Result<(), CsvError> {
-        let columns = width.max(n);
-        if (rows + 1).saturating_mul(columns) > MAX_CELLS {
-            return Err(CsvError::TooLarge {
-                rows: rows + 1,
-                columns,
-            });
-        }
-        Ok(())
-    }
-
-    /// Take `field` as the record's next.
-    fn push(&mut self, field: &mut String, rows: usize, width: usize) -> Result<(), CsvError> {
+impl Row<'_> {
+    /// Take `field` as the record's next: it and the empty fields before it
+    /// are spent first, and its text.
+    fn push(&mut self, field: &mut String) -> Result<(), CsvError> {
         if field.is_empty() {
             self.empty += 1;
             return Ok(());
         }
-        let n = self.fields.len() + self.empty + 1;
-        Self::check(rows, width, n)?;
+        self.budget.spend_cells(self.empty as u64 + 1)?;
+        // A cell that holds text is a node of the output of its own.
+        self.budget.spend_elements(1)?;
+        self.budget.spend_text(field)?;
+        self.spent += self.empty as u64 + 1;
         self.fields
             .extend(std::iter::repeat_n(String::new(), self.empty));
         self.empty = 0;
@@ -324,14 +337,18 @@ impl Row {
         Ok(())
     }
 
-    /// End the record: a row of `out` if anything in it holds something.
+    /// End the record: a row of `out` if anything in it holds something,
+    /// once the table, every row padded to the widest, is spent.
     fn end(&mut self, out: &mut Vec<Vec<String>>, width: &mut usize) -> Result<(), CsvError> {
         let empty = std::mem::take(&mut self.empty);
         if self.fields.is_empty() {
             return Ok(());
         }
         let n = self.fields.len() + empty;
-        Self::check(out.len(), *width, n)?;
+        let columns = (*width).max(n) as u64;
+        let table = (out.len() as u64 + 1).saturating_mul(columns);
+        self.budget.spend_cells(table.saturating_sub(self.spent))?;
+        self.spent = self.spent.max(table);
         self.fields
             .extend(std::iter::repeat_n(String::new(), empty));
         *width = (*width).max(n);
@@ -348,6 +365,7 @@ fn one_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::budget::{CELL_BYTES, ELEMENT_BYTES, TEXT_BYTES};
 
     fn table(bytes: &[u8]) -> Element {
         let mut v = parse(bytes).unwrap();
@@ -498,46 +516,81 @@ mod tests {
         assert_eq!(cells(&e), [["A", "B"], ["1", "open 2,3"]]);
     }
 
+    /// A budget of `nodes` elements and cells that hold text, `cells` cells
+    /// and `text` bytes of text.
+    fn budget(nodes: u64, cells: u64, text: u64) -> Budget {
+        Budget::new(
+            nodes * ELEMENT_BYTES + cells * CELL_BYTES + text * TEXT_BYTES,
+            0,
+        )
+    }
+
+    fn within(f: &str, nodes: u64, cells: u64, text: u64) -> Result<Vec<Element>, CsvError> {
+        parse_within(f.as_bytes(), None, &mut budget(nodes, cells, text))
+    }
+
     #[test]
     fn a_table_too_large_is_refused_as_it_is_read() {
-        // One record of more fields than the bound, nothing in them but the
-        // last: refused before they are all allocated, as soon as the one
-        // holding something comes.
-        let mut f = ",".repeat(MAX_CELLS);
+        // One record of more fields than the budget, nothing in them but
+        // the last: refused before they are all allocated, as soon as the
+        // one holding something comes.
+        let mut f = ",".repeat(1_000);
         f.push_str("x\n");
         assert!(matches!(
-            parse(f.as_bytes()),
-            Err(CsvError::TooLarge { rows: 1, .. })
+            within(&f, 2, 1_000, 1),
+            Err(CsvError::TooLarge(_))
         ));
+        assert!(within(&f, 2, 1_001, 1).is_ok());
         // Records of nothing but delimiters are no rows, however wide.
         let mut f = "a,b\n".to_string();
-        f.push_str(&",".repeat(MAX_CELLS + 1));
+        f.push_str(&",".repeat(1_000));
         f.push_str("\n1,2\n");
-        let e = table(f.as_bytes());
+        let e = within(&f, 5, 4, 4).unwrap().remove(0);
         assert_eq!(cells(&e), [["a", "b"], ["1", "2"]]);
     }
 
     #[test]
     fn empty_fields_are_counted_not_held_and_a_row_past_the_bound_never_grows() {
-        let mut row = Row::default();
-        for _ in 0..=MAX_CELLS {
-            row.push(&mut String::new(), 0, 0).unwrap();
+        let mut budget = budget(1, 10, 10);
+        let mut row = Row {
+            fields: Vec::new(),
+            empty: 0,
+            spent: 0,
+            budget: &mut budget,
+        };
+        for _ in 0..1_000 {
+            row.push(&mut String::new()).unwrap();
         }
         assert_eq!(row.fields.capacity(), 0);
-        assert!(row.push(&mut "x".to_string(), 0, 0).is_err());
+        assert!(row.push(&mut "x".to_string()).is_err());
         assert_eq!(row.fields.capacity(), 0);
     }
 
     #[test]
     fn a_table_too_large_to_pad_is_refused() {
-        let wide = ",".repeat(5000);
+        // A first row 101 fields wide over short rows: each is padded to
+        // it, 101 cells a row, where it holds one.
+        let wide = ",".repeat(100);
         let mut f = format!("{wide}x\n");
-        for _ in 0..(MAX_CELLS / 5000 + 1) {
+        for _ in 0..99 {
             f.push_str("1\n");
         }
+        assert!(within(&f, 101, 100 * 101, 100).is_ok());
         assert!(matches!(
-            parse(f.as_bytes()),
-            Err(CsvError::TooLarge { columns: 5001, .. })
+            within(&f, 101, 100 * 101 - 1, 100),
+            Err(CsvError::TooLarge(_))
         ));
+        // And a wide row last pads the rows above it.
+        let f = format!("{}{wide}x\n", "1\n".repeat(99));
+        assert!(within(&f, 101, 100 * 101, 100).is_ok());
+        assert!(within(&f, 101, 100 * 101 - 1, 100).is_err());
+    }
+
+    #[test]
+    fn a_tables_text_counts_at_its_worst_output() {
+        // A control character is `\u0001` in JSON: six bytes of text.
+        let f = format!("a\n{}x\n", "\u{1}".repeat(100));
+        assert!(within(&f, 3, 2, 602).is_ok());
+        assert!(within(&f, 3, 2, 601).is_err());
     }
 }

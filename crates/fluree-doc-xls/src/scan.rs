@@ -24,7 +24,7 @@
 //! open.
 
 use crate::{XlsError, MAX_CELLS, MAX_STREAM_BYTES, MAX_TEXT_CHARS};
-use fluree_doc_model::budget::Budget;
+use fluree_doc_model::budget::{Meter, TooLarge};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 
@@ -165,6 +165,10 @@ fn malformed(what: &str) -> XlsError {
     XlsError::Biff(what.to_string())
 }
 
+fn too_large(e: TooLarge) -> XlsError {
+    XlsError::TooLarge(e.to_string())
+}
+
 /// One record as calamine groups them: its type, its data, the data of the
 /// `CONTINUE` records right after it.
 struct Rec<'a> {
@@ -220,7 +224,7 @@ fn emit(out: &mut Vec<u8>, typ: u16, data: &[u8]) {
 /// The length, in characters, of each string of a shared string table, read
 /// as calamine reads it (`parse_sst`, `read_rich_extended_string`,
 /// `read_dbcs`), refused wherever calamine would index past what is there.
-fn sst_lengths(r: &Rec<'_>, budget: &mut Budget) -> Result<Vec<u32>, XlsError> {
+fn sst_lengths(r: &Rec<'_>, budget: &mut Meter) -> Result<Vec<u32>, XlsError> {
     let short = || malformed("the shared string table is cut short");
     let mut data = r.data.get(8..).ok_or_else(short)?;
     let mut conts = r.cont.iter();
@@ -260,7 +264,7 @@ fn sst_lengths(r: &Rec<'_>, budget: &mut Budget) -> Result<Vec<u32>, XlsError> {
                 .map_err(|_| malformed("a shared string's extension has a negative size"))?;
             data = &data[4..];
         }
-        budget.spend(u64::from(cch)).map_err(XlsError::TooLarge)?;
+        budget.spend(u64::from(cch)).map_err(too_large)?;
         // The characters, carried on into continuations, each opening with
         // the flag saying whether its characters are one byte or two.
         let mut left = usize::from(cch);
@@ -331,7 +335,7 @@ struct Globals<'a> {
     sst_records: Vec<u8>,
 }
 
-fn globals<'a>(stream: &'a [u8], budget: &mut Budget) -> Result<Globals<'a>, XlsError> {
+fn globals<'a>(stream: &'a [u8], budget: &mut Meter) -> Result<Globals<'a>, XlsError> {
     let mut g = Globals {
         xf_bold: Vec::new(),
         sst: Vec::new(),
@@ -404,7 +408,7 @@ fn sheet(
     stream: &[u8],
     pos: usize,
     g: &Globals<'_>,
-    budget: &mut Budget,
+    budget: &mut Meter,
 ) -> Result<SheetRead, XlsError> {
     let mut s = SheetRead::default();
     let not_a_sheet = || malformed("a sheet's offset is not where a sheet starts");
@@ -530,7 +534,7 @@ fn sheet(
             _ => {}
         }
         s.chars += chars;
-        budget.spend(chars).map_err(XlsError::TooLarge)?;
+        budget.spend(chars).map_err(too_large)?;
     }
     emit(&mut s.records, EOF, &[]);
     Ok(s)
@@ -538,27 +542,27 @@ fn sheet(
 
 /// Walk a workbook stream's records, and write the stream calamine reads.
 pub(crate) fn walk(stream: &[u8]) -> Result<Scanned, XlsError> {
-    let mut chars = Budget::new(MAX_TEXT_CHARS, "characters of text");
+    let mut chars = Meter::new(MAX_TEXT_CHARS, "characters of text");
     let g = globals(stream, &mut chars)?;
     // Each sheet read once, however many sheet records name it; calamine
     // reads it again for each, and each counts.
     let mut read: HashMap<usize, SheetRead> = HashMap::new();
     let mut order: Vec<usize> = Vec::new();
-    let mut cells = Budget::new(MAX_CELLS, "cells");
-    let mut area = Budget::new(MAX_CELLS, "cells laid out");
-    let mut merges = Budget::new(MAX_CELLS, "merged ranges");
+    let mut cells = Meter::new(MAX_CELLS, "cells");
+    let mut area = Meter::new(MAX_CELLS, "cells laid out");
+    let mut merges = Meter::new(MAX_CELLS, "merged ranges");
     for &(pos, _) in &g.sheets {
         if let Some(s) = read.get(&pos) {
-            chars.spend(s.chars).map_err(XlsError::TooLarge)?;
+            chars.spend(s.chars).map_err(too_large)?;
         } else {
             read.insert(pos, sheet(stream, pos, &g, &mut chars)?);
             order.push(pos);
         }
         let s = &read[&pos];
-        let too_large = |e: String| XlsError::TooLarge(format!("its sheets hold {e}"));
-        cells.spend(s.cells).map_err(too_large)?;
-        area.spend(s.area()).map_err(too_large)?;
-        merges.spend(s.merges).map_err(too_large)?;
+        let hold = |e: TooLarge| XlsError::TooLarge(format!("its sheets hold {e}"));
+        cells.spend(s.cells).map_err(hold)?;
+        area.spend(s.area()).map_err(hold)?;
+        merges.spend(s.merges).map_err(hold)?;
     }
     // The stream: the globals, the sheet records at their new offsets, the
     // shared strings, the end of the globals; then each sheet once.
@@ -692,9 +696,9 @@ mod tests {
         }
         let bytes = rec(SST, &sst);
         let (r, _) = record(&bytes, 0).unwrap().unwrap();
-        let mut budget = Budget::new(11, "characters of text");
+        let mut budget = Meter::new(11, "characters of text");
         assert_eq!(sst_lengths(&r, &mut budget).unwrap(), [6, 5]);
-        let mut budget = Budget::new(10, "characters of text");
+        let mut budget = Meter::new(10, "characters of text");
         assert!(matches!(
             sst_lengths(&r, &mut budget),
             Err(XlsError::TooLarge(ref m)) if m.contains("characters")
