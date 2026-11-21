@@ -241,7 +241,11 @@ pieces and 64 million characters, a piece table whose positions go
 backwards (pieces that overlap, reading the same characters again) failing
 as malformed. Each page of paragraph properties is read once however many
 times the bin table names it, at most about four million runs of them, and
-a paragraph finds its own by a binary search. Returns `DocError`
+a paragraph finds its own by a binary search. The characters are read one
+at a time, never all held; every character kept, element made and table
+cell (a row padded to the widest included) is spent from the document's
+budget ([limits on what one document may make](../reference/limits.md)) first, so pieces that all point at the
+same text cannot make millions of paragraphs of it. Returns `DocError`
 (`fluree_doc_doc::parse`) otherwise.
 
 ## PPTX
@@ -329,9 +333,12 @@ on stdin. The container is opened by the `cfb` crate, which refuses a
 looping sector chain; the stream is read to at most 256 MiB, records nest
 at most 64 deep, at most 4,096 edits are followed (each once, so an edit
 chain that loops ends), each persist directory read once and about four
-million of their entries in all, and 10,000 slides read. A slide listed
-twice, or a notes slide named by two slides, is read once; the text read,
-however many slides name one place in the stream, is at most 256 MiB.
+million of their entries in all, and 10,000 slides read. A slide or a notes
+slide is read once however many ids the persist directory sends to its
+place in the stream, and every text read, element made and table cell is
+spent from the document's budget ([limits on what one document may make](../reference/limits.md)) first. A
+picture several shapes show is read once by OCR or a model, its text placed
+after each of its figures, as a DOCX's is.
 Provenance and evidence are `ppt`. Returns `PptError`
 (`fluree_doc_ppt::parse`) otherwise.
 
@@ -373,6 +380,15 @@ flattened out of it. So this reader measures after all, but only shape.
   grid would pass about four million cells in all (cells set down a
   diagonal, touching each other, span the square of their number) is read
   as its cells' text, a paragraph each.
+- **Bounds.** No cell past Excel's grid (row 1,048,576, column 16,384) is
+  read, and a merge is cut at its edge. Every cell read, its text (a shared
+  string once for each cell naming it), each copy the layout makes, each
+  cell a table's grid holds and each element is spent from the workbook's
+  budget ([limits on what one document may make](../reference/limits.md)) before it is made, and the passes that
+  mend islands into blocks spend its work; past either the workbook fails
+  as too large. Past 2,048 islands a sheet's islands are not mended. The
+  `.xls`, `.xlsb` and `.ods` readers lay their sheets out the same way,
+  within the same budget.
 - **Values are the cached ones.** A formula's last computed value is what
   the file holds and what Excel shows; nothing is recalculated.
 - **A cell's text is what Excel shows.** A number is rendered through its
@@ -450,7 +466,8 @@ chain that loops or runs past the file; its workbook stream at most
 calamine reads checked against what calamine indexes in it. A workbook
 whose cells, sheets' grids or merged ranges pass about four million in all
 (a sheet named twice counting twice), or whose cells would copy more than
-64 million characters of text, fails as too large; one whose records are
+64 million characters of text, fails as too large, as does one whose cells
+pass the document's budget once read ([limits on what one document may make](../reference/limits.md)); one whose records are
 cut short, or whose sheet offsets point at no sheet, fails as malformed.
 calamine then reads a compound file written for it, holding a workbook
 stream of only the records it needs, each sheet once and its formulas
@@ -465,9 +482,11 @@ indexes them unchecked; a sheet's cells are laid out the same way as an
 `.xls`'s, and provenance and evidence are `xlsb`. Numbers read as General,
 dates as ISO dates, as for `.xls`; bold cells, frozen rows and merges are
 not read. Every part is first inflated to nowhere against 64 MiB each and
-256 MiB in all (and at most 10,000 parts); at most about four million cells
-are read, and a shared string's text, copied for each cell that names it,
-is counted each time against 256 MiB. A file is
+256 MiB in all (and at most 10,000 parts), and lists at most 10,000 sheets;
+a sheet part is read once however many times it is listed, at most about
+four million cells are read, a cell past Excel's grid is none, and each
+cell and its text (a shared string for each cell naming it) are spent from
+the document's budget ([limits on what one document may make](../reference/limits.md)) before they are copied. A file is
 recognised by its content, a zip holding `xl/workbook.bin`, whatever its
 name and on stdin. `.ods` is read by its own reader
 ([OpenDocument](opendocument.md)).

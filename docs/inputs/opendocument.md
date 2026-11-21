@@ -55,8 +55,10 @@ A sheet writes its trailing empty rows and columns as one row repeated to
 the end of the grid (`number-rows-repeated="1048573"`). Repeats are
 counted, not copied, while they hold nothing; a repeated cell that holds
 something is a cell each time it repeats, its text copied each time, and a
-workbook of more than about four million such cells, or whose copies of
-text pass 256 MiB, fails as too large. A cell spanning rows and columns is
+workbook of more than about four million such cells, or whose cells and
+copies of text pass the document's budget
+([limits on what one document may make](../reference/limits.md)), fails as
+too large. A cell spanning rows and columns is
 a merge, laid out as far as the sheet's cells reach. So a few hundred bytes
 cannot ask for the sixteen billion cells a repeated row of repeated cells
 describes, nor for the copies of one long cell repeated across them. Rows

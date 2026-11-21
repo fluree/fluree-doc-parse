@@ -74,6 +74,7 @@
   - [Vocabulary](reference/vocabulary.md)
   - [Environment variables](reference/env-vars.md)
   - [Crate map](reference/crate-map.md)
+  - [Limits on what one document may make](reference/limits.md)
 
 - [Contributing](contributing/README.md)
   - [Dev setup](contributing/dev-setup.md)

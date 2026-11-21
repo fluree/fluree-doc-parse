@@ -13,9 +13,11 @@ values), `page` is `0`, and there is no `bbox` and nothing to escalate.
 What the reader has to decide, it decides by short rules:
 
 - **Encoding.** A byte-order mark says which (UTF-8, UTF-16 LE or BE);
-  otherwise bytes that are valid UTF-8 are read as UTF-8, and anything else
-  as Windows-1252, which is what Excel saves a CSV in on most Western
-  systems.
+  otherwise bytes whose every other byte is mostly zero, and the others
+  never, are UTF-16 in the byte order the zeros give (what a program may
+  write as "Unicode text", no mark before it); otherwise bytes that are
+  valid UTF-8 are read as UTF-8, and anything else as Windows-1252, which
+  is what Excel saves a CSV in on most Western systems.
 - **Delimiter.** A `.tsv` is split on tabs. A `.csv` names its delimiter in
   Excel's `sep=;` first line, which is no row, or else it is sniffed: of
   comma, semicolon, tab and pipe, the one found outside quotes the same
@@ -39,9 +41,11 @@ number, and `03/04/2026` a date only in one country's order, so a type would
 be a guess about the file rather than a fact in it. A workbook declares its
 types, and its tables carry them (see [XLSX](office-and-web.md#xlsx)).
 
-A table padded to more than 16 million cells is refused (`CsvError::TooLarge`)
-as it is read, before the cells past that bound are allocated: one very
-wide row over a million short ones would otherwise ask for a trillion. The
+Every cell, the rows padded to the widest, and its text are spent from the
+document's budget ([limits on what one document may make](../reference/limits.md))
+as the table is read, before they are allocated, and past it the file is
+refused (`CsvError::TooLarge`): one very wide row over a million short ones
+would otherwise ask for a trillion cells. The
 empty fields of a record are counted, not held, until one that holds
 something follows them, so a line of nothing but delimiters, which is no
 row, costs nothing however long it is.
