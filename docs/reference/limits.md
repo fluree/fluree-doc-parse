@@ -55,3 +55,11 @@ few seconds.
 No cell past Excel's grid, row 1,048,576 or column 16,384, is read, in any
 workbook format, and a merge is cut at the grid's edge: a sheet in 32-bit
 coordinates could otherwise wrap its last column onto its first.
+
+## Under the fuzz targets
+
+The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
+bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
+then quick to run, and one that makes more than its budget accounts for
+shows under the targets' memory limit (2 GB) rather than within the room a
+full budget needs.

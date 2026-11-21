@@ -31,11 +31,25 @@
 
 /// The memory a document's elements, cells and text may take, estimated
 /// at the costs below: 2.5 GiB.
+#[cfg(not(fuzzing))]
 pub const MAX_MEMORY: u64 = 5 << 29;
+
+/// Built for the fuzz targets (`fuzz/`), a sixteenth of it, 160 MiB: an
+/// input that spends the whole budget then takes a fraction of a second
+/// rather than seconds, and one that makes more than the budget sees stands
+/// out under the targets' memory limit, rather than hiding under the room a
+/// full budget needs.
+#[cfg(fuzzing)]
+pub const MAX_MEMORY: u64 = 5 << 25;
 
 /// The steps of the layout passes whose cost a file chooses, per document:
 /// about 268 million, a few seconds.
+#[cfg(not(fuzzing))]
 pub const MAX_WORK: u64 = 1 << 28;
+
+/// Built for the fuzz targets, a sixteenth of it, as [`MAX_MEMORY`] is.
+#[cfg(fuzzing)]
+pub const MAX_WORK: u64 = 1 << 24;
 
 /// What one element, or one table cell that holds text, costs at most,
 /// from the reader's copy through the largest output (`doco`, where a

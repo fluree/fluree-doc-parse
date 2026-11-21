@@ -8,3 +8,17 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub(crate) mod escalate;
+
+/// The reader `convert` sends a file named `name` holding `data` to
+/// (`"Pdf"`, `"Xlsb"`, `"Unsupported"`, …), and why it refuses it where it
+/// does: the content detection, for the fuzz targets under `fuzz/`. Not part
+/// of the command surface.
+#[doc(hidden)]
+pub fn detect(name: &str, data: &[u8]) -> (String, Option<String>) {
+    let path = std::path::Path::new(name);
+    let kind = commands::common::input_kind(path, data);
+    (
+        format!("{kind:?}"),
+        commands::common::unsupported(Some(path), data),
+    )
+}

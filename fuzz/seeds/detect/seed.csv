@@ -1,0 +1,4 @@
+Region,Amount,Note
+North,1234.5,"quoted, with comma"
+South,-4,"multi
+line"

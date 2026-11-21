@@ -1,0 +1,2 @@
+# Seeds are bytes a reader is fed, line endings and all.
+seeds/** -text

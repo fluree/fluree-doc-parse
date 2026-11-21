@@ -9,3 +9,8 @@ description = "Document element model and DoCO/Markdown/XHTML emitters, independ
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+
+# `cargo fuzz` builds with `--cfg fuzzing`, under which the budget is smaller
+# (`src/budget.rs`).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
