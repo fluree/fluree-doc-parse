@@ -26,6 +26,7 @@ use numbering::Numbering;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 
 #[derive(Debug)]
 pub enum DocxError {
@@ -184,6 +185,11 @@ pub fn parse_with_media(
                           budget: &mut Budget|
      -> Result<Vec<Element>, DocxError> {
         let mut out: Vec<Element> = Vec::new();
+        // The elements kept so far, by the hash of their kind and text, so
+        // a part of many lines is checked against the others in constant
+        // time per line rather than against every line before it.
+        let hashes = std::collections::hash_map::RandomState::new();
+        let mut seen: HashMap<u64, Vec<usize>> = HashMap::new();
         for rid in shown_parts(&xml, kind, even_odd) {
             let Some(part) = rels.iter().find(|r| r.id == rid && !r.external) else {
                 continue;
@@ -215,7 +221,12 @@ pub fn parse_with_media(
                 }
                 e.evidence = evidence;
                 // The first page's header and the rest's often share lines.
-                if !out.iter().any(|o| o.kind == e.kind && o.text == e.text) {
+                let same = seen.entry(hashes.hash_one((&e.kind, &e.text))).or_default();
+                if !same
+                    .iter()
+                    .any(|&i| out[i].kind == e.kind && out[i].text == e.text)
+                {
+                    same.push(out.len());
                     out.push(e);
                 }
             }
@@ -3008,6 +3019,49 @@ mod tests {
             ids,
             ["elem-00001", "elem-00002", "elem-00003", "elem-00004"]
         );
+    }
+
+    #[test]
+    fn a_header_of_many_lines_is_read_in_linear_time() {
+        // Each line was compared with every line kept before it: 80,000
+        // took 38 s. Lines repeated across the two headers are still kept
+        // once.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        let n = 60_000;
+        let lines: String = (0..n).map(|i| para(None, &format!("Line {i}"))).collect();
+        let body = doc(&format!(
+            "{}<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rId1\"/>\
+             <w:headerReference w:type=\"even\" r:id=\"rId2\"/></w:sectPr>",
+            para(None, "Body text")
+        ));
+        let settings = format!("<w:settings {NS}><w:evenAndOddHeaders/></w:settings>");
+        let docx = zipped(&[
+            ("word/document.xml".to_string(), body.into_bytes()),
+            (
+                "word/_rels/document.xml.rels".to_string(),
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}/header\" Target=\"header1.xml\"/>\
+                     <Relationship Id=\"rId2\" Type=\"{rel}/header\" Target=\"header2.xml\"/>\
+                     <Relationship Id=\"rId9\" Type=\"{rel}/settings\" Target=\"settings.xml\"/></Relationships>"
+                )
+                .into_bytes(),
+            ),
+            ("word/settings.xml".to_string(), settings.into_bytes()),
+            (
+                "word/header1.xml".to_string(),
+                format!("<w:hdr {NS}>{lines}</w:hdr>").into_bytes(),
+            ),
+            (
+                "word/header2.xml".to_string(),
+                format!("<w:hdr {NS}>{lines}{}</w:hdr>", para(None, "Even only")).into_bytes(),
+            ),
+        ]);
+        let start = std::time::Instant::now();
+        let els = parse(&docx).unwrap();
+        let took = start.elapsed();
+        let header = els.iter().filter(|e| e.evidence == "header").count();
+        assert_eq!(header, n + 1);
+        assert!(took.as_secs() < 20, "{took:?}");
     }
 
     #[test]
