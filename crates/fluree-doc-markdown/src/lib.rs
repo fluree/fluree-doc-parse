@@ -11,11 +11,11 @@
 //! as a real position to a consumer.
 //!
 //! **Bounds.** Each element, each table cell, a table's rows padded to the
-//! widest, their text, and the copies the output makes of a table's cells
-//! (a cell's column header, row label and section band) are counted
-//! against the document's [`Budget`] before they are made: a band's label a
-//! megabyte long over a hundred columns and forty rows would otherwise be
-//! written four thousand times.
+//! widest, their text, each link, and the copies the output makes of a
+//! table's cells (a cell's column header, row label and section band) are
+//! counted against the document's [`Budget`] before they are made: a band's
+//! label a megabyte long over a hundred columns and forty rows would
+//! otherwise be written four thousand times.
 
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Element, Link};
@@ -38,6 +38,22 @@ fn parse_within(src: &str, budget: Budget) -> Result<Vec<Element>, TooLarge> {
         ..Reader::default()
     }
     .run(Parser::new_ext(src, opts))
+}
+
+/// The character offset of each byte offset in `s`, offsets in ascending
+/// order, counted in one pass. An offset inside a character counts the
+/// characters before it; one past the end, all of them.
+fn char_offsets(s: &str, bytes: impl Iterator<Item = usize>) -> Vec<usize> {
+    let mut chars = s.char_indices().map(|(i, _)| i).peekable();
+    let mut n = 0;
+    bytes
+        .map(|b| {
+            while chars.next_if(|&at| at < b).is_some() {
+                n += 1;
+            }
+            n
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -67,9 +83,13 @@ struct Reader {
     strong: usize,
     cell_strong_text: bool,
     cell_plain_text: bool,
-    /// Links closed so far in the text under construction, and the one still
-    /// open, as `(char offset where its anchor begins, target)`.
-    links: Vec<Link>,
+    /// Links closed so far in the text under construction, as `(byte
+    /// offsets where the anchor begins and ends, link)`, and the one still
+    /// open, as `(byte offset where its anchor begins, target)`: in bytes,
+    /// which [`flush_text`](Reader::flush_text) turns into characters once.
+    /// Counting the characters at each link is quadratic in a paragraph of
+    /// links: 600,000 on one line, 4 MB, took 16 s.
+    links: Vec<(usize, usize, Link)>,
     open_link: Option<(usize, String)>,
 }
 
@@ -93,14 +113,15 @@ impl Reader {
         let mut e = self.element(kind, raw.trim().to_string(), level);
         // `element` holds the trimmed text; the offsets were taken against
         // the untrimmed string, so they shift by whatever the trim removed.
-        let lead = raw.chars().take_while(|c| c.is_whitespace()).count();
-        let len = e.text.chars().count();
+        let lead = raw.len() - raw.trim_start().len();
+        let end = lead + e.text.len();
+        let begins = char_offsets(&raw[lead..end], links.iter().map(|l| l.0.max(lead) - lead));
+        let ends = char_offsets(&raw[lead..end], links.iter().map(|l| l.1.max(lead) - lead));
         let shifted: Vec<Link> = links
             .into_iter()
-            .filter_map(|l| {
-                let (b, end) = l.span()?;
-                (b >= lead && end - lead <= len)
-                    .then(|| Link::uri(l.href()).spanning(b - lead, end - lead))
+            .zip(begins.into_iter().zip(ends))
+            .filter_map(|((b, end_at, link), (from, to))| {
+                (b >= lead && end_at <= end && to > from).then(|| link.spanning(from, to))
             })
             .collect();
         if !shifted.is_empty() {
@@ -117,17 +138,21 @@ impl Reader {
         if dest.is_empty() {
             return;
         }
-        self.open_link = Some((self.text.chars().count(), dest.to_string()));
+        self.open_link = Some((self.text.len(), dest.to_string()));
     }
 
-    fn close_link(&mut self) {
+    /// Close the open link, spent before it is kept.
+    fn close_link(&mut self) -> Result<(), TooLarge> {
         let Some((begin, dest)) = self.open_link.take() else {
-            return;
+            return Ok(());
         };
-        let end = self.text.chars().count();
+        let end = self.text.len();
         if end > begin {
-            self.links.push(Link::uri(dest).spanning(begin, end));
+            let link = Link::uri(dest);
+            self.budget.spend_links(std::slice::from_ref(&link))?;
+            self.links.push((begin, end, link));
         }
+        Ok(())
     }
 
     /// End the text read so far as the block it belongs to: the open list
@@ -296,7 +321,7 @@ impl Reader {
                 }
                 Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None)?,
                 Event::Start(Tag::Link { dest_url, .. }) => self.open_link(&dest_url),
-                Event::End(TagEnd::Link) => self.close_link(),
+                Event::End(TagEnd::Link) => self.close_link()?,
                 Event::Start(Tag::Strong) => self.strong += 1,
                 Event::End(TagEnd::Strong) => self.strong = self.strong.saturating_sub(1),
                 Event::Text(t) | Event::Code(t) => {
@@ -503,6 +528,37 @@ mod tests {
         let (b, end) = links[0].span().unwrap();
         let anchor: String = e[0].text.chars().skip(b).take(end - b).collect();
         assert_eq!(anchor, "the filing");
+    }
+
+    #[test]
+    fn links_on_one_line_are_located_in_linear_time() {
+        // Each link counted the characters of the paragraph before it:
+        // 600,000 on one line, 4 MB, took 16 s.
+        let n = 1_000_000;
+        let src = format!("é {}[ç](u) ü", "[a](b) ".repeat(n));
+        // As Markdown: as DoCO, a million links are past the budget.
+        let start = std::time::Instant::now();
+        let e = converting_to(Output::Flat, || parse(&src));
+        let took = start.elapsed();
+        let links = e[0].links.as_ref().unwrap();
+        assert_eq!(links.len(), n + 1);
+        // Spans in characters, past the multi-byte ones.
+        assert_eq!(links[1].span(), Some((4, 5)));
+        assert_eq!(links[n].span(), Some((2 + 2 * n, 3 + 2 * n)));
+        assert_eq!(links[n].href(), "u");
+        assert!(took.as_secs() < 10, "{took:?}");
+    }
+
+    #[test]
+    fn each_link_is_spent_before_it_is_kept() {
+        // DoCO writes each as a node: two million on one line aborted.
+        let src = "[a](bc) ".repeat(100);
+        let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
+        let text = 2 * 100 - 1;
+        let need =
+            ELEMENT_BYTES + text * TEXT_BYTES + 100 * (ELEMENT_BYTES + CELL_BYTES + 2 * TEXT_BYTES);
+        assert_eq!(within(need).unwrap()[0].links.as_ref().unwrap().len(), 100);
+        assert!(within(need - 1).is_err());
     }
 
     #[test]

@@ -468,7 +468,12 @@ def markdown() -> list[tuple[str, bytes]]:
     label = "w" * 2000
     wide = "| H |" + " c |" * 60 + "\n|---|" + "---|" * 60 + "\n" + (
         f"| {label} |" + " 1 |" * 60 + "\n") * 3
-    return [("seed.md", doc.encode()), ("seed_wide.md", wide.encode())]
+    links = "[a](b) " * 20000 + "\n"
+    return [
+        ("seed.md", doc.encode()),
+        ("seed_wide.md", wide.encode()),
+        ("seed_links.md", links.encode()),
+    ]
 
 
 def image() -> list[tuple[str, bytes]]:

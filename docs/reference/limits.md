@@ -37,6 +37,7 @@ Three kinds of spending share one estimate of memory, 2.5 GiB a document:
 | element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own |
 | cell | 128 B | a cell slot allocated: read, each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
 | byte of text | 12 B | each byte the text may take in the worst output: a control character counts six (`\u0001` in JSON), `"` and `&` six, `<` and `>` four, a character Markdown escapes two |
+| link | an element and a cell (4.1 KiB) for `-f doco`, four cells (512 B) for the others, with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own |
 
 Each cost is above the peak memory one unit was measured to take, from the
 reader through the largest output (`-f doco`), with the unit alone filling

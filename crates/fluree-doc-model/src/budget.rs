@@ -355,6 +355,27 @@ impl Budget {
         self.spend_memory(WHAT, copies.text, TEXT_BYTES)
     }
 
+    /// Count the links about to be kept on an element, and each target's
+    /// text. DoCO writes each as a node of its own, listed on its element:
+    /// 600,000 on one line of Markdown peaked at 2.5 GB, 4.2 KB a link,
+    /// and two million aborted at 4 GB. The others write it in the text,
+    /// at four cell slots a link: the reader's copies as it locates the
+    /// anchor, and the markup (two million, 400 B a link, as Markdown).
+    pub fn spend_links(&mut self, links: &[crate::Link]) -> Result<(), TooLarge> {
+        const WHAT: &str = "links";
+        let n = links.len() as u64;
+        match self.output {
+            Output::Doco => self.spend_memory(WHAT, n, ELEMENT_BYTES + CELL_BYTES)?,
+            Output::Text | Output::Flat => self.spend_memory(WHAT, n, 4 * CELL_BYTES)?,
+        }
+        for l in links {
+            if let crate::Target::Uri { uri } = &l.target {
+                self.spend_memory(WHAT, text_cost(uri), TEXT_BYTES)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Count `n` steps of a layout pass about to be taken.
     pub fn spend_work(&mut self, n: u64) -> Result<(), TooLarge> {
         self.work.spend(n)
@@ -429,6 +450,24 @@ mod tests {
         // Spent, it stays spent.
         assert!(b.spend_cells(0).is_err());
         assert!(Budget::default().spend_elements(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn a_link_is_a_node_in_doco_and_a_few_slots_in_the_others() {
+        let links = [crate::Link::uri("ab"), crate::Link::page(3)];
+        let spend = |output: Output, memory: u64| {
+            Budget::new(memory, 0)
+                .for_output(output)
+                .spend_links(&links)
+        };
+        let doco = 2 * (ELEMENT_BYTES + CELL_BYTES) + 2 * TEXT_BYTES;
+        assert!(spend(Output::Doco, doco).is_ok());
+        assert!(spend(Output::Doco, doco - 1).is_err());
+        let flat = 2 * 4 * CELL_BYTES + 2 * TEXT_BYTES;
+        for output in [Output::Flat, Output::Text] {
+            assert!(spend(output, flat).is_ok());
+            assert!(spend(output, flat - 1).is_err());
+        }
     }
 
     #[test]

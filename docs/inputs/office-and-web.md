@@ -706,9 +706,9 @@ a table states where its header ends. Where the PDF engine reports a
 reports a *fact*.
 
 Every element, table cell (a row padded to the widest included) and its
-text, and the copies DoCO writes of a table's cells (each cell's column
-header, row label and section band: a bold first cell over empty ones), is
-spent from the document's budget
+text, link (a node of its own in DoCO), and the copies DoCO writes of a
+table's cells (each cell's column header, row label and section band: a
+bold first cell over empty ones), is spent from the document's budget
 ([limits on what one document may make](../reference/limits.md)) first; a
 document past it fails as too large (`fluree_doc_markdown::parse` returns
 `TooLarge`).

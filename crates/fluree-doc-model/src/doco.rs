@@ -1012,6 +1012,16 @@ impl<'a> Emitter<'a> {
         // The projection trims the element's text, so offsets into it have
         // to trim with it.
         let lead = e.text.chars().take_while(|c| c.is_whitespace()).count();
+        // Where each character starts, and the text's end: an anchor is cut
+        // by its offsets in one step, where skipping to each anchor is
+        // quadratic in an element of many links (600,000 on one line).
+        let starts: Vec<usize> = e
+            .text
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(e.text.len()))
+            .collect();
+        let at = |c: usize| starts[c.min(starts.len() - 1)];
         let mut iris = Vec::new();
         for l in &links {
             let node = self.node("link", "doc:Link", None);
@@ -1032,7 +1042,7 @@ impl<'a> Emitter<'a> {
             if let (Some(start), Some((b, end))) = (text_start, l.span()) {
                 if b >= lead {
                     self.set_offsets(node, start + b - lead, start + end - lead);
-                    let anchor: String = e.text.chars().skip(b).take(end - b).collect();
+                    let anchor = e.text[at(b)..at(end.max(b))].to_string();
                     self.nodes[node].insert("nif:isString".into(), Value::String(anchor));
                 }
             }
@@ -2543,6 +2553,18 @@ mod tests {
         assert_eq!(p["doc:endMs"], json!(279_000));
         assert!(p.get("doc:bbox").is_none());
         assert_eq!(to_text(&[e]), "Ada Park: Renewal is at risk.\n");
+    }
+
+    #[test]
+    fn anchors_are_cut_by_characters_past_multi_byte_ones() {
+        let mut e = el("doco:Paragraph", "é ç ü €", None);
+        let uri = crate::element::Link::uri;
+        // The last one runs past the text, and is cut at its end.
+        e.links = Some(vec![uri("a").spanning(2, 3), uri("b").spanning(6, 9)]);
+        let g = graph(&[e]);
+        let link = find(&g, "doc:Link");
+        assert_eq!(link[0]["nif:isString"], "ç");
+        assert_eq!(link[1]["nif:isString"], "€");
     }
 
     #[test]
