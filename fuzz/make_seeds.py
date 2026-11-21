@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pypdf>=5"]
+# dependencies = ["pypdf>=5", "pillow>=10"]
 # ///
 """Write the seed corpora of the fuzz targets under fuzz/seeds/<target>/.
 
@@ -11,9 +11,9 @@ rather than from bytes its first check refuses.
 
 Flat OpenDocument sources are written by hand and converted by LibreOffice
 (`soffice`, or set SOFFICE) to the office formats; XPS, RTF, CSV, e-mail,
-Outlook messages, and a Word and an Excel file of merged cells are written
-here directly; pypdf adds notes and an embedded
-file to a PDF. Run from the repository root:
+Outlook messages, web pages, Markdown, and a Word and an Excel file of
+merged cells are written here directly; Pillow writes the images; pypdf
+adds notes and an embedded file to a PDF. Run from the repository root:
 
     uv run fuzz/make_seeds.py [--extra DIR ...] [--local-extra DIR ...] [--local fuzz/corpus]
 
@@ -58,7 +58,8 @@ TARGET_OF = {
     ".csv": "csv", ".tsv": "csv", ".xls": "xls", ".xlsb": "xlsb", ".doc": "doc", ".ppt": "ppt",
     ".odt": "odf", ".ods": "odf", ".odp": "odf", ".rtf": "rtf", ".xps": "xps", ".oxps": "xps",
     ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx", ".pdf": "pdf", ".eml": "email",
-    ".msg": "email",
+    ".msg": "email", ".html": "html", ".htm": "html", ".md": "markdown", ".png": "image",
+    ".jpg": "image", ".jpeg": "image", ".tif": "image", ".tiff": "image",
 }
 
 
@@ -423,6 +424,77 @@ def csv() -> list[tuple[str, bytes]]:
     ]
 
 
+def html() -> list[tuple[str, bytes]]:
+    """Web pages: the roles the reader keeps and drops, a table of spans and
+    a band, links, a quotation, and the shapes that cost the most: a long
+    label over many cells, spans, and nesting."""
+    page = (
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Seed page</title>'
+        '<meta name="author" content="Ada Park"></head><body>'
+        "<nav><a href=\"/\">Home</a></nav><main><h1>Report</h1>"
+        '<p>See <a href="https://example.org/q">the quote</a> &amp; more.</p>'
+        "<ul><li>One<ul><li>Nested</li></ul></li><li>Two</li></ul>"
+        '<table><caption>Prices, in EUR</caption><thead><tr><th colspan="2">Price</th>'
+        "<th>Item</th></tr><tr><th>Unit</th><th>Line</th><th></th></tr></thead>"
+        '<tbody><tr><td colspan="3">Food</td></tr><tr><td rowspan="2">3</td><td>6</td>'
+        "<td>Bread</td></tr><tr><td>9</td><td>Milk</td></tr></tbody></table>"
+        '<blockquote type="cite"><div>Quoted <b>text</b></div></blockquote>'
+        '<img src="cid:logo@x" alt="Logo"><p hidden>Not drawn</p>'
+        '<span class="sr-only">Screen reader</span></main></body></html>'
+    )
+    label = "w" * 2000
+    wide = "<table><tr><th>H</th>" + "<th>c</th>" * 60 + "</tr>" + (
+        f"<tr><td>{label}</td>" + "<td>1</td>" * 60 + "</tr>") * 3 + "</table>"
+    spans = '<table><tr><td colspan="1000000000" rowspan="1000000000">x</td></tr></table>'
+    nested = "<div>" * 600 + "deep" + "</div>" * 600
+    return [
+        ("seed.html", page.encode()),
+        ("seed_latin1.html", '<html><head><meta charset="iso-8859-1"></head><body><p>Caf\xe9 l\x92art</p></body></html>'.encode("latin-1")),
+        ("seed_wide.html", wide.encode()),
+        ("seed_spans.html", spans.encode()),
+        ("seed_nested.html", nested.encode()),
+    ]
+
+
+def markdown() -> list[tuple[str, bytes]]:
+    """Markdown: headings, lists, a table with a band and a long row label,
+    which DoCO copies into each cell of its row."""
+    doc = (
+        "# Title\n\nSome *text* with a [link](https://example.org).\n\n"
+        "- one\n  - nested\n- two\n\n1. first\n2. second\n\n"
+        "| Item | Cost | Note |\n|---|---:|---|\n| **Food** | | |\n| Bread | 3 | fresh |\n"
+        "| Milk | 2 | |\n\n> quoted\n\n```\ncode\n```\n"
+    )
+    label = "w" * 2000
+    wide = "| H |" + " c |" * 60 + "\n|---|" + "---|" * 60 + "\n" + (
+        f"| {label} |" + " 1 |" * 60 + "\n") * 3
+    return [("seed.md", doc.encode()), ("seed_wide.md", wide.encode())]
+
+
+def image() -> list[tuple[str, bytes]]:
+    """Images: a PNG, a one-bit PNG, a JPEG turned by its EXIF orientation,
+    and a TIFF of two pages."""
+    from PIL import Image
+
+    def saved(img: "Image.Image", fmt: str, **kw) -> bytes:
+        out = io.BytesIO()
+        img.save(out, fmt, **kw)
+        return out.getvalue()
+
+    rgb = Image.new("RGB", (48, 32), (200, 200, 200))
+    for x in range(8, 40):
+        rgb.putpixel((x, 12), (0, 0, 0))
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    pages = [Image.new("L", (16, 16), 255), Image.new("L", (16, 16), 0)]
+    return [
+        ("seed.png", png(8, 6)),
+        ("seed_1bit.png", saved(rgb.convert("1"), "PNG")),
+        ("seed_rotated.jpg", saved(rgb, "JPEG", quality=50, exif=exif)),
+        ("seed_pages.tif", saved(pages[0], "TIFF", save_all=True, append_images=pages[1:])),
+    ]
+
+
 def eml() -> list[tuple[str, bytes]]:
     inner = email.message.EmailMessage(policy=email.policy.SMTP)
     inner["From"] = "Kai Moreno <kai@example.com>"
@@ -668,7 +740,8 @@ def main() -> None:
         for target, files in office(Path(tmp)).items():
             generated.setdefault(target, []).extend(files)
     for target, files in [("xps", xps()), ("rtf", rtf()), ("csv", csv()), ("email", eml()),
-                          ("email", msg()), ("docx", docx()), ("xlsx", xlsx())]:
+                          ("email", msg()), ("docx", docx()), ("xlsx", xlsx()),
+                          ("html", html()), ("markdown", markdown()), ("image", image())]:
         generated.setdefault(target, []).extend(files)
     # The text's PDF, with notes and an embedded file added.
     for name, data in list(generated.get("pdf", [])):

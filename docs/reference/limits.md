@@ -187,6 +187,7 @@ coordinates could otherwise wrap its last column onto its first.
 
 The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
 bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
-then quick to run, and one that makes more than its budget accounts for
-shows under the targets' memory limit (2 GB) rather than within the room a
-full budget needs.
+then quick to run. Their memory limit (`-rss_limit_mb=320`) is twice that
+budget, near the margin a full budget has in production (2.5 GiB in a 4 GB
+address space), so a reader whose memory runs past its estimate by as much
+as it would need to abort there fails under the fuzzer too.

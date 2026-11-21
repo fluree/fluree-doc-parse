@@ -2,7 +2,7 @@
 
 Every reader that takes a file's bytes has a [cargo-fuzz] target here, fed
 arbitrary bytes, so a file nobody thought of is tried before a user sends
-it. A reader may refuse any input with an error; a target fails when one
+it: all but the transcript reader's. A reader may refuse any input with an error; a target fails when one
 panics, aborts, hangs, runs out of memory, or returns more than one
 document's budget allows (`docs/reference/limits.md`).
 
@@ -26,7 +26,10 @@ not.
 | `xlsx` | Excel, and its pictures | `fluree_doc_xlsx::parse_with_media`, `read_media` |
 | `pptx` | PowerPoint | `fluree_doc_pptx::parse_with_info` |
 | `pdf` | PDF: outline, metadata, notes, embedded files, links; the extraction and analysis of a document of at most four pages | `convert`'s pipeline without OCR or a model |
-| `email` | `.eml` and `.msg`, the files they carry, down through attached messages | `fluree_doc_email::parse`, `parse_attachments` |
+| `html` | a web page, and an e-mail's HTML body | `fluree_doc_html::decode`, `parse`, `info`, `parse_with_quote_depth` |
+| `markdown` | Markdown, as UTF-8 | `fluree_doc_markdown::parse` |
+| `image` | PNG, JPEG, TIFF: the header, and the image decoded and read by a stand-in OCR engine (no models), up to a sixteenth of the decoder's pixel bound | `fluree_doc_image::header`, `elements` |
+| `email` | `.eml` and `.msg`, the files they carry, down through attached messages, each converted by the reader `convert` hands it to (no OCR, no model, four pages at most) | `fluree_doc_email::parse`, `parse_attachments`, `fluree_doc_cli::convert_attachment` |
 | `detect` | which reader `convert` sends a file to, by content and name (the first byte picks the name) | `fluree_doc_cli::detect` |
 
 Each target renders what the reader made through every output (Markdown,
@@ -47,7 +50,7 @@ cargo install cargo-fuzz
 cd fuzz
 cargo +nightly fuzz build -O -a -s none
 cargo +nightly fuzz run xls corpus/xls seeds/xls -O -a -s none -- \
-    -rss_limit_mb=2048 -timeout=10 -max_len=262144 -max_total_time=600
+    -rss_limit_mb=320 -timeout=10 -max_len=262144 -max_total_time=600
 ```
 
 * `-s none` builds without AddressSanitizer: the readers are safe Rust, a
@@ -56,10 +59,13 @@ cargo +nightly fuzz run xls corpus/xls seeds/xls -O -a -s none -- \
   in a dependency's `unsafe` code.
 * `-a` keeps debug assertions, so an arithmetic overflow panics rather than
   wrapping silently.
-* `-rss_limit_mb=2048`: built for fuzzing (`--cfg fuzzing`), the budget
-  is a sixteenth of the shipped one (`docs/reference/limits.md`), so an
-  input that spends all of it peaks under about 200 MB, and one past 2 GB
-  made something the budget does not see.
+* `-rss_limit_mb=320`: built for fuzzing (`--cfg fuzzing`), the budget
+  is a sixteenth of the shipped one (`docs/reference/limits.md`), 160 MiB.
+  A target's process takes 30 to 90 MB before its input, so 320 MB leaves
+  the input about 1.6 times its budget, the margin the shipped budget has
+  in a 4 GB address space (2.5 GiB): a reader whose memory runs past its
+  estimate by enough to abort there fails here too. A larger limit hides
+  it: at 2048 MB, a reader could take twelve times what it accounts for.
 * `corpus/<target>` is where libFuzzer keeps the inputs it finds (not
   committed); `seeds/<target>` is read only.
 * Add `-fork=N -ignore_crashes=1 -ignore_ooms=1 -ignore_timeouts=1` to run
@@ -67,11 +73,24 @@ cargo +nightly fuzz run xls corpus/xls seeds/xls -O -a -s none -- \
   where each failing input is written (`cargo fuzz run` uses
   `artifacts/<target>/`).
 
+## What the fuzzer hardly reaches
+
+libFuzzer mutates bytes, and almost never writes a valid deflate stream:
+the zipped formats (`.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`,
+`.xps`, `.xlsb`) are fuzzed through what their seeds' deflated parts hold
+and through parts stored uncompressed, which `-max_len` bounds. An input of
+256 KiB stored holds about 15,000 paragraphs, under the fuzzing budget, so
+the amplification a few kilobytes of deflate carry (a part that inflates a
+thousandfold) is out of its reach. That is for the unit tests of each
+reader, which build such parts in code, and for seeds that amplify within
+the bound (a long label over many cells, wide spans, deep nesting), as
+`seeds/html` and `seeds/markdown` hold.
+
 ## Seeds
 
 `seeds/<target>/` holds small valid files of each format, written by
 `make_seeds.py` (LibreOffice converts flat OpenDocument sources to the
-office formats; the rest it writes itself), and small hostile files from
+office formats, Pillow writes the images; the rest it writes itself), and small hostile files from
 earlier reviews. To write them again, from the repository root:
 
 ```sh

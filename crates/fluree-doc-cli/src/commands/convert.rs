@@ -898,40 +898,19 @@ fn convert_attachments(
         parse_attachments: false,
         ..args.clone()
     };
-    let readable_images =
-        cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
     let share = attachments_share(email);
     // A conversion that cannot be written stops the run, as the message's
     // own output would.
     let mut unwritten: Option<String> = None;
     let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
-        let name = f
-            .info
-            .filename
-            .clone()
-            .unwrap_or_else(|| f.info.sha256.clone());
-        let path = Path::new(&name);
-        match common::input_kind(path, &f.bytes) {
-            common::SourceKind::Unsupported => return None,
-            common::SourceKind::Image if f.info.inline || !readable_images => return None,
-            _ => {}
-        }
-        let child = Source {
-            stem: common::stem_of(path),
-            slot: f.info.sha256.clone(),
-            named: true,
-            name: Some(name.clone()),
-            sha256: f.info.sha256.clone(),
-            carried: true,
-        };
         if unwritten.is_some() {
             return Some(Err(
                 "not converted: an earlier output was not written".to_string()
             ));
         }
         let out = fluree_doc_model::budget::within(share, || {
-            convert_source(path, f.bytes.clone(), &child, cfg, &child_args, None, quiet)
-        });
+            convert_carried(f, cfg, &child_args, None, quiet)
+        })?;
         Some(out.and_then(|out| {
             let path = dir.join(format!("{}.{}", f.info.sha256, ext(args.format)));
             std::fs::write(&path, out).map_err(|e| {
@@ -995,6 +974,49 @@ fn attachments_share(email: &fluree_doc_email::Email) -> u64 {
         Ok(()) => held.memory_left(),
         Err(_) => 0,
     }
+}
+
+/// Convert a file an e-mail carries, as `--parse-attachments` does, with
+/// `args` for a child (no attachments of its own saved), its pages `pages`;
+/// `None` where no reader takes it: a format with none, or an image no
+/// tier is configured to read (a signature's logo, drawn in the body, never).
+pub(crate) fn convert_carried(
+    f: &fluree_doc_email::AttachedFile,
+    cfg: &TierConfig,
+    args: &ConvertArgs,
+    pages: Option<&[usize]>,
+    quiet: bool,
+) -> Option<Result<String, String>> {
+    let readable_images =
+        cfg.ocr.is_some() || cfg.ocr_words.is_some() || cfg.tier_results.is_some() || cfg.escalate;
+    let name = f
+        .info
+        .filename
+        .clone()
+        .unwrap_or_else(|| f.info.sha256.clone());
+    let path = Path::new(&name);
+    match common::input_kind(path, &f.bytes) {
+        common::SourceKind::Unsupported => return None,
+        common::SourceKind::Image if f.info.inline || !readable_images => return None,
+        _ => {}
+    }
+    let child = Source {
+        stem: common::stem_of(path),
+        slot: f.info.sha256.clone(),
+        named: true,
+        name: Some(name.clone()),
+        sha256: f.info.sha256.clone(),
+        carried: true,
+    };
+    Some(convert_source(
+        path,
+        f.bytes.clone(),
+        &child,
+        cfg,
+        args,
+        pages,
+        quiet,
+    ))
 }
 
 /// A safe, unique file name for an attachment: its own name with any path
