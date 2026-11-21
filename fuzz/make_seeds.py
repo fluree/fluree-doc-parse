@@ -427,7 +427,8 @@ def csv() -> list[tuple[str, bytes]]:
 def html() -> list[tuple[str, bytes]]:
     """Web pages: the roles the reader keeps and drops, a table of spans and
     a band, links, a quotation, and the shapes that cost the most: a long
-    label over many cells, spans, and nesting."""
+    label over many cells, spans, nesting, formatting elements the parser
+    makes again at each paragraph, and a tag of many attributes."""
     page = (
         '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Seed page</title>'
         '<meta name="author" content="Ada Park"></head><body>'
@@ -447,12 +448,16 @@ def html() -> list[tuple[str, bytes]]:
         f"<tr><td>{label}</td>" + "<td>1</td>" * 60 + "</tr>") * 3 + "</table>"
     spans = '<table><tr><td colspan="1000000000" rowspan="1000000000">x</td></tr></table>'
     nested = "<div>" * 600 + "deep" + "</div>" * 600
+    remade = "<p>" + "".join(f"<b id=b{i}>" for i in range(200)) + "<p>x" * 2000
+    attrs = "<p " + " ".join(f"a{i}=1" for i in range(5000)) + ">x</p>"
     return [
         ("seed.html", page.encode()),
         ("seed_latin1.html", '<html><head><meta charset="iso-8859-1"></head><body><p>Caf\xe9 l\x92art</p></body></html>'.encode("latin-1")),
         ("seed_wide.html", wide.encode()),
         ("seed_spans.html", spans.encode()),
         ("seed_nested.html", nested.encode()),
+        ("seed_remade.html", remade.encode()),
+        ("seed_attrs.html", attrs.encode()),
     ]
 
 

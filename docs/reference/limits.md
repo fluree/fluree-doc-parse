@@ -8,9 +8,9 @@ thousands of cells wide over rows of one, a cell merged down over thousands
 of rows: a file of a few kilobytes can describe gigabytes. So the readers
 of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
 `.docx`, `.odt`, `.ppt`, `.pptx`, `.odp`, `.rtf`), of Markdown and of HTML
-(a page, or an email's HTML body, the parser's tree included) are each
-handed one budget for the document (`fluree_doc_model::budget::Budget`) and
-spend it *before* they allocate. Past it, the document is refused with an
+(a page, or an email's HTML body, the parser's tree included, as the
+parser builds it) are each handed one budget for the document
+(`fluree_doc_model::budget::Budget`) and spend it *before* they allocate. Past it, the document is refused with an
 error that names what ran out (`workbook too large: cells past the 2560 MiB
 of memory a document may take`) rather than taking the process down with
 it, and in a batch the other documents still convert.
@@ -121,6 +121,59 @@ Layout passes whose cost the file chooses (islands of cells compared
 pairwise to mend a block a missing cell split, a table's rows read across
 its range) spend a count of steps of their own, at most 2^28 a document: a
 few seconds.
+
+## A web page's tree
+
+An HTML page, or an e-mail's HTML body, is parsed by html5ever into a tree
+held while its elements are made. The tree is spent as the parser makes
+it, not from the page's tags: the parser makes elements the page does not
+write. A formatting element left open (`<b>`) is made again at each
+paragraph after it, so a 124 KB page of 400 of them over 30,000
+paragraphs made 12 million elements and peaked at 2.8 GB, and a 91 KB one
+aborted at 4 GB. Each node, an element's, a text's or a comment's, costs
+two cell slots (a node takes 144 bytes, with its place among its parent's
+children), and one more for each 128 bytes of its text; an attribute,
+one, and one for each 128 bytes of its value. 4.5 million `<i>x</i>`, 2.3
+GB counted, peak at 1.7 GB.
+
+The parser's own time is spent as steps of work, where it can be counted.
+Before it starts, for each tag, the square of its attributes, halved,
+counted from the tags, since its tokenizer looks for each among those
+before it (two million on one tag ran past five minutes); the scan passes
+over a comment, or the text of a `<script>` or a `<title>`, no further
+than the tokenizer does, so as never to count less. As it parses, where
+it asks the reader:
+
+- a step for each open element it looks at and each pair of nodes it
+  compares, which is how it walks the elements open to know what is in
+  scope or what an end tag closes (40,000 nested `<div>` took 3 s, 200,000
+  over two minutes; 20,000 `<span>` then 200,000 `</zz>` ran past a
+  minute);
+- a step for each 32 siblings among which it finds a node, to set a
+  table's misplaced content before it or take a node out (500,000 nodes
+  set before a table, among 200,000, took 105 s), and one for each child it
+  moves to another parent.
+
+On each formatting element's tag (`<a>`, `<b>`, `<font>`, `<i>` and the
+like), which it handles in loops that do not ask the reader, a step for
+each element it holds, open or among those it would make again, and for a
+start tag the comparison of its attributes with those of each element of
+its name, copied and sorted (5,000 `<b>` of 100 attributes each, 2 MB,
+ran past two minutes). An element of its name it holds open is counted
+although the parser would not compare it, which only counts more. Once its
+budget is spent, the parser is given nothing more, is stopped within 256
+bytes of the page, and the page is refused.
+
+What the parser does inside its own loops between two calls to the reader
+is bounded only by what those calls and the formatting tags count, and its
+memory beyond the tree is not counted. There is no deadline on a page: work
+inside a library's loop cannot be stopped from the thread running it, only
+a process can be (issue #23).
+
+What nests more than 512 deep, where a browser stops nesting, is set
+beside its ancestor at that depth, as a browser sets it, and read: the
+walk that reads the tree recurses down it, and 1,000 tables nested, a 30
+KB page, overflowed a 2 MiB stack.
 
 ## Parts inflated
 

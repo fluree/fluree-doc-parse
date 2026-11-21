@@ -22,17 +22,32 @@
 //! There is no geometry: HTML positions nothing until it is laid out, so
 //! `bbox` is `None` rather than a zeroed box.
 //!
-//! What a page makes is spent from one [`Budget`]: the parser's tree,
-//! counted from the page's tags before it is built, then as it is made each
-//! element with its text, a table's grid before it is made (a `colspan` of
-//! a billion asks for a billion cells), the cells its spans mark, and what
-//! DoCO copies of its cells. Past it, or nested past [`MAX_DEPTH`], the
-//! page is refused ([`TooLarge`]).
+//! What a page makes is spent from one [`Budget`]: the parser's tree, its
+//! nodes as the parser makes them; the parser's work where it can be
+//! counted, the attributes its tokenizer compares on each tag, counted from
+//! the tags before it starts, the elements it walks and the siblings it
+//! looks among, and what it does on each formatting element's tag; then as
+//! it is made each element with its text and
+//! links, a table's grid before it is made (a `colspan` of a billion asks
+//! for a billion cells), the cells its spans mark, and what DoCO copies of
+//! its cells. Past it, the page is refused ([`TooLarge`]). What nests past
+//! [`MAX_DEPTH`] is read beside its ancestor at that depth.
 
-use fluree_doc_model::budget::{Budget, Meter, TooLarge};
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::rc::Rc;
+
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
-use html5ever::tendril::TendrilSink;
-use markup5ever_rcdom::{Handle, NodeData, RcDom};
+use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
+use html5ever::tendril::StrTendril;
+use html5ever::tokenizer::{
+    BufferQueue, Tag, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
+};
+use html5ever::tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts};
+use html5ever::{Attribute, ExpandedName, LocalName, QualName, TokenizerResult};
+use markup5ever_rcdom::{Handle, Node, NodeData, RcDom};
 
 /// Subtrees that never carry document content. A `<form>` is not one of
 /// them: older pages, and every ASP.NET page, wrap the whole body in one, so
@@ -248,29 +263,24 @@ fn ids_in(dom: &RcDom) -> Vec<String> {
     found.into_iter().map(|(id, _)| id).collect()
 }
 
-/// The page's tree, and the budget what is read of it is spent from.
+/// The page's tree, and the budget what is read of it is spent from
+/// ([`build`]).
 fn dom(src: &str) -> Result<(RcDom, Budget), TooLarge> {
-    // The tree html5ever builds, and the scope checks it makes as it builds
-    // it, are spent before it is built: a page of empty tags makes a tree
-    // twenty times its size, and one of nested ones a parse quadratic in
-    // their depth.
-    let mut budget = Budget::default();
-    let m = markup(src);
-    budget.spend_cells(m.slots)?;
-    budget.spend_work(m.nesting)?;
-    let dom = html5ever::parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut src.as_bytes())
-        .unwrap_or_default();
-    // The walk recurses down the tree, and a thread's stack holds a few
-    // thousand levels of it at most (a batch's workers have 2 MiB).
-    Meter::new(MAX_DEPTH, "levels of nested elements").spend(depth(&dom.document))?;
-    Ok((dom, budget))
+    build(src, Budget::default())
 }
 
 /// The walk, with or without a message's own images.
 fn read(src: &str, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
-    let (dom, budget) = dom(src)?;
+    read_within(src, cid_images, Budget::default())
+}
+
+/// [`read`], against `budget`.
+fn read_within(
+    src: &str,
+    cid_images: bool,
+    budget: Budget,
+) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
+    let (dom, budget) = build(src, budget)?;
     read_dom(&dom, budget, cid_images)
 }
 
@@ -304,62 +314,447 @@ fn read_dom(
     Ok((out.elements, out.depths))
 }
 
-/// The deepest a page's elements may nest, as the parser builds the tree:
-/// a browser stops nesting at 512 (Chromium sets deeper elements beside
-/// their parent). Each level of the walk takes a few hundred bytes of stack,
-/// and a table four levels (`table`, `tbody`, `tr`, `td`): 1,000 tables
-/// nested, a 30 KB page, overflowed a 2 MiB stack.
-pub const MAX_DEPTH: u64 = 512;
-
-/// How deep the tree under `root` goes, walked without recursion.
-fn depth(root: &Handle) -> u64 {
-    let mut deepest = 0;
-    let mut stack = vec![(root.clone(), 0u64)];
-    while let Some((h, d)) = stack.pop() {
-        deepest = deepest.max(d);
-        stack.extend(h.children.borrow().iter().map(|c| (c.clone(), d + 1)));
+/// Parse `src` into a tree, spending `budget` on what the parser does: its
+/// tokenizer's work the tree does not show, counted before it starts
+/// ([`attribute_steps`]); the tree builder's, as it does it, on each
+/// formatting element's tag ([`Tokens`]) and through the sink ([`Sink`]);
+/// and the tree as the parser makes it ([`Sink`]). Then set what nests past
+/// [`MAX_DEPTH`] beside its ancestor at that depth. The budget comes back
+/// with what is left of it.
+fn build(src: &str, mut budget: Budget) -> Result<(RcDom, Budget), TooLarge> {
+    budget.spend_work(attribute_steps(src))?;
+    let sink = Sink {
+        dom: RcDom::default(),
+        budget: RefCell::new(budget),
+        over: RefCell::new(None),
+    };
+    // What `html5ever::parse_document` puts together, with the tree builder
+    // behind [`Tokens`].
+    let builder = TreeBuilder::new(sink, TreeBuilderOpts::default());
+    let tokenizer = Tokenizer::new(Tokens { builder }, TokenizerOpts::default());
+    let input = BufferQueue::default();
+    // Fed a little at a time, so that a page past its budget stops being
+    // parsed close to where it passed it: the tokenizer goes on to the end
+    // of what it was given, and a run of short blocks under many formatting
+    // elements re-makes them all at each block.
+    let mut rest = src;
+    while !rest.is_empty() && tokenizer.sink.builder.sink.live() {
+        let mut at = rest.len().min(FEED_BYTES);
+        while !rest.is_char_boundary(at) {
+            at += 1;
+        }
+        input.push_back(StrTendril::from_slice(&rest[..at]));
+        while let TokenizerResult::Script(_) = tokenizer.feed(&input) {}
+        rest = &rest[at..];
     }
-    deepest
+    tokenizer.end();
+    let sink = tokenizer.sink.builder.sink;
+    if let Some(e) = sink.over.into_inner() {
+        return Err(e);
+    }
+    flatten(&sink.dom.document);
+    Ok((sink.dom, sink.budget.into_inner()))
 }
 
-/// What parsing a page costs, counted from its tags before it is parsed.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Markup {
-    /// The tree's nodes, in cell slots: three an element (the node, at
-    /// about 190 bytes, and the text node beside it) and one an attribute
-    /// (about 50).
-    slots: u64,
-    /// The elements open around each start tag, summed: the parser checks
-    /// what is in scope by walking them, so a page of nested elements costs
-    /// the square of their depth.
-    nesting: u64,
+/// How much of a page the parser is given at once: the most it does past
+/// the page's budget, before it is stopped.
+const FEED_BYTES: usize = 256;
+
+/// The deepest a page's elements nest as it is read: a browser stops
+/// nesting at 512 (Chromium sets deeper elements beside their parent), and
+/// so does the reader, once the page is parsed. The walk recurses down the
+/// tree, each level a few hundred bytes of stack, and a table four levels
+/// (`table`, `tbody`, `tr`, `td`): 1,000 tables nested, a 30 KB page,
+/// overflowed a 2 MiB stack.
+pub const MAX_DEPTH: usize = 512;
+
+/// Set each node nested past [`MAX_DEPTH`] beside its ancestor at that
+/// depth, in the order the page has them, as a browser does: what is
+/// inside them is read, only no longer inside them.
+fn flatten(root: &Handle) {
+    let mut stack = vec![(root.clone(), 0usize)];
+    while let Some((h, d)) = stack.pop() {
+        if d + 1 < MAX_DEPTH {
+            stack.extend(h.children.borrow().iter().map(|c| (c.clone(), d + 1)));
+            continue;
+        }
+        // Its children are at the deepest a page nests: their descendants
+        // become their siblings, each after the node it was inside.
+        let children = std::mem::take(&mut *h.children.borrow_mut());
+        let mut flat = Vec::with_capacity(children.len());
+        let mut pending: Vec<Handle> = children.into_iter().rev().collect();
+        while let Some(n) = pending.pop() {
+            let below = std::mem::take(&mut *n.children.borrow_mut());
+            pending.extend(below.into_iter().rev());
+            n.parent.set(Some(Rc::downgrade(&h)));
+            flat.push(n);
+        }
+        *h.children.borrow_mut() = flat;
+    }
 }
 
-/// Elements that are never open: no end tag, so they nest nothing.
-const VOID: &[&str] = &[
-    "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input",
-    "keygen", "link", "meta", "param", "source", "track", "wbr",
+/// What the parser makes of a page, spent from the page's budget as it is
+/// made: each node at two cell slots (a node is 144 bytes, an element's,
+/// a text's or a comment's, and its place among its parent's children),
+/// and one for each 128 bytes of its text; an element's attributes at one
+/// slot each and one for each 128 bytes of its value. Counted here rather
+/// than from the page's tags, because the parser makes elements the page
+/// does not write: a formatting element left open (`<b>`) is made again at
+/// each block after it, so 400 of them over N short paragraphs are 400 × N
+/// elements, a 91 KB page that aborted the process at 4 GB.
+///
+/// The tree builder's own work is spent here too, as steps, where it asks
+/// the sink: the name of each open element it looks at and each pair of
+/// nodes it compares, one step each. That is how it walks the elements
+/// open around a node, to know what is in scope (40,000 nested `<div>`
+/// took 3 s, 200,000 over two minutes), to find what an end tag closes
+/// (20,000 `<span>` left open, then 200,000 `</zz>`, ran past a minute),
+/// or to find a formatting element among those open; and finding a node
+/// among its siblings, to set a node before another (a table's misplaced
+/// content, set before it) or to take one out, costs a step for each of
+/// them. What the tree builder does on a formatting element's tag without
+/// asking the sink is spent by [`Tokens`].
+///
+/// Once the budget is spent, the sink keeps nothing more: it makes what the
+/// parser asks for bare, attaches nothing, and changes nothing in the tree,
+/// so that the parser runs on to where it is stopped ([`build`]) and the
+/// page is refused.
+struct Sink {
+    dom: RcDom,
+    budget: RefCell<Budget>,
+    /// Why the page is refused, once its budget is spent.
+    over: RefCell<Option<TooLarge>>,
+}
+
+/// What finding `h` among its parent's children takes: a step for each
+/// [`SIBLINGS_A_STEP`] of them.
+fn sibling_steps(h: &Handle) -> u64 {
+    let parent = h.parent.take();
+    h.parent.set(parent.clone());
+    let siblings = parent
+        .and_then(|w| w.upgrade())
+        .map_or(0, |p| p.children.borrow().len() as u64);
+    siblings.div_ceil(SIBLINGS_A_STEP)
+}
+
+/// Siblings looked at for a step: each is a pointer compared, half a
+/// nanosecond, where a step of the parser's is several. 500,000 nodes set
+/// before a table, among 200,000 siblings and those set before, took 105
+/// s; an old layout page sets a few hundred, among a few thousand.
+const SIBLINGS_A_STEP: u64 = 32;
+
+/// Cell slots a node of the tree takes with `bytes` of its own text.
+fn node_slots(bytes: usize) -> u64 {
+    2 + bytes as u64 / 128
+}
+
+/// Cell slots an attribute takes with a value of `bytes`.
+fn attribute_slots(bytes: usize) -> u64 {
+    1 + bytes as u64 / 128
+}
+
+impl Sink {
+    /// Spend from the budget; `false`, and the page refused, where it is
+    /// spent.
+    fn spend(&self, f: impl FnOnce(&mut Budget) -> Result<(), TooLarge>) -> bool {
+        let mut over = self.over.borrow_mut();
+        if over.is_some() {
+            return false;
+        }
+        match f(&mut self.budget.borrow_mut()) {
+            Ok(()) => true,
+            Err(e) => {
+                *over = Some(e);
+                false
+            }
+        }
+    }
+
+    fn live(&self) -> bool {
+        self.over.borrow().is_none()
+    }
+
+    /// Spend a step of the tree builder's.
+    fn step(&self) {
+        self.spend(|b| b.spend_work(1));
+    }
+
+    /// Spend what setting `child` in the tree costs: `steps`, and a text
+    /// node, where it is text.
+    fn spend_child(&self, steps: u64, child: &NodeOrText<Handle>) -> bool {
+        if !self.spend(|b| b.spend_work(steps)) {
+            return false;
+        }
+        match child {
+            NodeOrText::AppendText(t) => self.spend(|b| b.spend_cells(node_slots(t.len()))),
+            NodeOrText::AppendNode(_) => true,
+        }
+    }
+
+    fn spend_attrs(&self, attrs: &[Attribute]) -> bool {
+        let slots = attrs.iter().fold(0u64, |n, a| {
+            n.saturating_add(attribute_slots(a.value.len()))
+        });
+        self.spend(|b| b.spend_cells(slots))
+    }
+}
+
+impl TreeSink for Sink {
+    type Handle = Handle;
+    type Output = Self;
+    type ElemName<'a> = ExpandedName<'a>;
+
+    fn finish(self) -> Self {
+        self
+    }
+
+    // A page's errors are not reported, and a page can make one at each
+    // byte.
+    fn parse_error(&self, _: Cow<'static, str>) {}
+
+    fn get_document(&self) -> Handle {
+        self.dom.get_document()
+    }
+
+    fn elem_name<'a>(&'a self, target: &'a Handle) -> ExpandedName<'a> {
+        self.step();
+        self.dom.elem_name(target)
+    }
+
+    fn create_element(&self, name: QualName, attrs: Vec<Attribute>, flags: ElementFlags) -> Handle {
+        if self.spend(|b| b.spend_cells(node_slots(0))) && self.spend_attrs(&attrs) {
+            self.dom.create_element(name, attrs, flags)
+        } else {
+            self.dom.create_element(name, Vec::new(), flags)
+        }
+    }
+
+    fn create_comment(&self, text: StrTendril) -> Handle {
+        if self.spend(|b| b.spend_cells(node_slots(text.len()))) {
+            self.dom.create_comment(text)
+        } else {
+            self.dom.create_comment(StrTendril::new())
+        }
+    }
+
+    fn create_pi(&self, target: StrTendril, data: StrTendril) -> Handle {
+        if self.spend(|b| b.spend_cells(node_slots(target.len() + data.len()))) {
+            self.dom.create_pi(target, data)
+        } else {
+            self.dom.create_pi(StrTendril::new(), StrTendril::new())
+        }
+    }
+
+    fn append(&self, parent: &Handle, child: NodeOrText<Handle>) {
+        if self.spend_child(1, &child) {
+            self.dom.append(parent, child);
+        }
+    }
+
+    fn append_based_on_parent_node(
+        &self,
+        element: &Handle,
+        prev_element: &Handle,
+        child: NodeOrText<Handle>,
+    ) {
+        // Set before `element` where it has a parent, found among its
+        // children.
+        if self.spend_child(sibling_steps(element).saturating_add(1), &child) {
+            self.dom
+                .append_based_on_parent_node(element, prev_element, child);
+        }
+    }
+
+    fn append_doctype_to_document(
+        &self,
+        name: StrTendril,
+        public_id: StrTendril,
+        system_id: StrTendril,
+    ) {
+        let bytes = name.len() + public_id.len() + system_id.len();
+        if self.spend(|b| b.spend_cells(node_slots(bytes))) {
+            self.dom
+                .append_doctype_to_document(name, public_id, system_id);
+        }
+    }
+
+    fn get_template_contents(&self, target: &Handle) -> Handle {
+        self.dom.get_template_contents(target)
+    }
+
+    fn same_node(&self, x: &Handle, y: &Handle) -> bool {
+        self.step();
+        self.dom.same_node(x, y)
+    }
+
+    fn set_quirks_mode(&self, mode: QuirksMode) {
+        self.dom.set_quirks_mode(mode);
+    }
+
+    fn append_before_sibling(&self, sibling: &Handle, new_node: NodeOrText<Handle>) {
+        if self.spend_child(sibling_steps(sibling).saturating_add(1), &new_node) {
+            self.dom.append_before_sibling(sibling, new_node);
+        }
+    }
+
+    fn add_attrs_if_missing(&self, target: &Handle, attrs: Vec<Attribute>) {
+        // Each is looked for among the element's own: a page that repeats
+        // `<html>` or `<body>`, each time with an attribute of its own,
+        // costs the square of their number.
+        let NodeData::Element { attrs: own, .. } = &target.data else {
+            return;
+        };
+        let held = own.borrow().len() as u64;
+        let n = attrs.len() as u64;
+        if self.spend(|b| b.spend_work(held.saturating_add(n))) && self.spend_attrs(&attrs) {
+            self.dom.add_attrs_if_missing(target, attrs);
+        }
+    }
+
+    fn remove_from_parent(&self, target: &Handle) {
+        if self.spend(|b| b.spend_work(sibling_steps(target))) {
+            self.dom.remove_from_parent(target);
+        }
+    }
+
+    fn reparent_children(&self, node: &Handle, new_parent: &Handle) {
+        let moved = node.children.borrow().len() as u64;
+        if self.spend(|b| b.spend_work(moved)) {
+            self.dom.reparent_children(node, new_parent);
+        }
+    }
+
+    fn is_mathml_annotation_xml_integration_point(&self, handle: &Handle) -> bool {
+        self.dom.is_mathml_annotation_xml_integration_point(handle)
+    }
+
+    // A `<select>` is never read, and copying its chosen option into it
+    // would make a copy the budget does not see.
+    fn maybe_clone_an_option_into_selectedcontent(&self, _: &Handle) {}
+}
+
+/// Formatting elements: those the tree builder keeps in its list of active
+/// formatting elements, to make again where they are left open.
+const FORMATTING: &[&str] = &[
+    "a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u",
 ];
 
-/// Elements a page may leave open, the parser closing them at the next of
-/// their kind: counted as nesting nothing, so a page of unclosed `<p>` or
-/// `<li>` is not taken for a deep one.
-const OPTIONAL_END: &[&str] = &[
-    "body", "caption", "colgroup", "dd", "dt", "head", "html", "li", "optgroup", "option", "p",
-    "rb", "rp", "rt", "rtc", "tbody", "td", "tfoot", "th", "thead", "tr",
-];
+/// The tree builder, given the page's tokens through this, which spends
+/// what it does on a formatting element's tag without asking the sink,
+/// before it does it. A start tag is compared with each formatting element
+/// of its name in the list, attributes and all: each comparison copies and
+/// sorts the attributes of both (5,000 `<b>` of 100 attributes each, 2 MB,
+/// ran past two minutes; without attributes, 0.1 s). An end tag looks for
+/// its formatting element down the list by name alone, which may hold many
+/// no longer open: 20,000 `<i>` closed by a `</p>`, then a million `</b>`,
+/// took 55 s. The list is not in reach, so all the tree builder holds is
+/// counted, its open elements with it: a step each, and for a start tag the
+/// comparison with each of its name. Once the page is refused the tree
+/// builder is given nothing more.
+struct Tokens {
+    builder: TreeBuilder<Handle, Sink>,
+}
+
+/// Steps to copy and sort `n` attributes.
+fn sorting(n: u64) -> u64 {
+    n.saturating_mul(1 + u64::from(u64::BITS - n.leading_zeros()))
+}
+
+/// What a tag of a formatting element costs, from what the tree builder
+/// holds: a step each, and for a start tag, comparing its attributes with
+/// those of each element of its name, once each (one both open and in the
+/// list is held twice).
+struct Held<'a> {
+    name: &'a LocalName,
+    /// The start tag's attributes, sorted at each comparison; `None` for
+    /// an end tag, which compares none.
+    attrs: Option<u64>,
+    compared: RefCell<HashSet<*const Node>>,
+    steps: Cell<u64>,
+}
+
+impl Tracer for Held<'_> {
+    type Handle = Handle;
+
+    fn trace_handle(&self, h: &Handle) {
+        let mut n = 1u64;
+        if let (Some(k), NodeData::Element { name, attrs, .. }) = (self.attrs, &h.data) {
+            let compare = sorting(k).saturating_add(sorting(attrs.borrow().len() as u64));
+            if compare > 0
+                && name.local == *self.name
+                && self.compared.borrow_mut().insert(Rc::as_ptr(h))
+            {
+                n = n.saturating_add(compare);
+            }
+        }
+        self.steps.set(self.steps.get().saturating_add(n));
+    }
+}
+
+impl Tokens {
+    fn spend_formatting(&self, tag: &Tag) {
+        if !FORMATTING.contains(&&*tag.name) {
+            return;
+        }
+        let held = Held {
+            name: &tag.name,
+            attrs: (tag.kind == html5ever::tokenizer::StartTag).then_some(tag.attrs.len() as u64),
+            compared: RefCell::default(),
+            steps: Cell::new(0),
+        };
+        self.builder.trace_handles(&held);
+        let steps = held.steps.get();
+        self.builder.sink.spend(|b| b.spend_work(steps));
+    }
+}
+
+impl TokenSink for Tokens {
+    type Handle = Handle;
+
+    fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<Handle> {
+        if let Token::TagToken(tag) = &token {
+            self.spend_formatting(tag);
+        }
+        if !self.builder.sink.live() {
+            return TokenSinkResult::Continue;
+        }
+        self.builder.process_token(token, line)
+    }
+
+    fn end(&self) {
+        self.builder.end();
+    }
+
+    fn adjusted_current_node_present_but_not_in_html_namespace(&self) -> bool {
+        self.builder
+            .adjusted_current_node_present_but_not_in_html_namespace()
+    }
+}
 
 /// Elements whose content is text up to their end tag, not markup.
 const RAW_TEXT: &[&str] = &[
     "iframe", "noembed", "noframes", "noscript", "script", "style", "textarea", "title", "xmp",
 ];
 
-/// What html5ever will make of `src` ([`Markup`]), from a scan of its tags:
-/// start tags and their attributes, end tags closing the nearest open
-/// element of their name (among the 64 innermost), comments and the text of
-/// a `<script>` passed over. An estimate, above what the parser makes of
-/// a page and never far below it.
-fn markup(src: &str) -> Markup {
+/// What the parser's tokenizer costs that the tree does not show, in steps,
+/// counted before the page is parsed: for each tag, the square of its
+/// attributes, halved, since each is looked for among those before it (two
+/// million on one tag ran past five minutes; an end tag's are looked for
+/// too, then dropped). Read from a scan of the tags, comments and the text
+/// of a `<script>` passed over.
+///
+/// The scan passes over no more than the tokenizer does, so as never to
+/// count less: a comment ends at the first place it may (`-->`, `--!>`, or
+/// at once, `<!-->` and `<!--->`), and an element's text up to its end tag
+/// (`<script>`, `<title>`) is passed over only until the page opens an
+/// `<svg>`, a `<math>` or a `<frameset>`, where such a tag may open no
+/// such text. Passing over too little counts tags that are not, which only
+/// counts more: 100,000 attributes behind `<!-->` or `<svg><title>` took
+/// 15 to 19 s.
+///
+/// The rest of what parsing costs is counted as the tree is built
+/// ([`Sink`], [`Tokens`]), where the parser makes it.
+fn attribute_steps(src: &str) -> u64 {
     let b = src.as_bytes();
     let find = |from: usize, pat: &[u8]| {
         b.get(from..)
@@ -372,102 +767,98 @@ fn markup(src: &str) -> Markup {
             .take_while(|c| !c.is_ascii_whitespace() && !matches!(c, b'/' | b'>'))
             .count()
     };
-    let is =
-        |list: &[&str], name: &[u8]| list.iter().any(|t| t.as_bytes().eq_ignore_ascii_case(name));
-    let mut m = Markup::default();
-    // The open elements, by where their names are in `src`, and how many of
-    // them are SVG or MathML, where `/>` closes the element it ends.
-    let mut open: Vec<(usize, usize)> = Vec::new();
-    let mut foreign = 0usize;
-    let is_foreign = |(s, e): (usize, usize)| is(&["svg", "math"], &b[s..e]);
+    // A tag's attributes from `i`, its name's end, to the tag's end: each
+    // name, then its value, quoted or not. Where the tag ends, and how many
+    // attributes it has.
+    let attributes = |mut i: usize| {
+        let mut attrs = 0u64;
+        while i < b.len() {
+            match b[i] {
+                b'>' => return (i + 1, attrs),
+                c if c.is_ascii_whitespace() || c == b'/' => i += 1,
+                _ => {
+                    attrs += 1;
+                    i += b[i..]
+                        .iter()
+                        .take_while(|c| {
+                            !c.is_ascii_whitespace() && !matches!(c, b'=' | b'>' | b'/')
+                        })
+                        .count()
+                        .max(1);
+                    while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                        i += 1;
+                    }
+                    if b.get(i) != Some(&b'=') {
+                        continue;
+                    }
+                    i += 1;
+                    while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                        i += 1;
+                    }
+                    match b.get(i) {
+                        Some(&q @ (b'"' | b'\'')) => {
+                            i = b[i + 1..]
+                                .iter()
+                                .position(|&c| c == q)
+                                .map_or(b.len(), |k| i + 1 + k + 1);
+                        }
+                        _ => {
+                            i += b[i..]
+                                .iter()
+                                .take_while(|c| !c.is_ascii_whitespace() && **c != b'>')
+                                .count();
+                        }
+                    }
+                }
+            }
+        }
+        (b.len(), attrs)
+    };
+    let pairs = |n: u64| n.saturating_mul(n.saturating_sub(1)) / 2;
+    let mut steps = 0u64;
+    // Whether a tag of an element of text may no longer open its text: in
+    // SVG or MathML it is markup, and a frameset ignores the tag.
+    let mut foreign = false;
     let mut i = 0;
     while let Some(k) = b[i..].iter().position(|&c| c == b'<') {
         i += k + 1;
         match b.get(i) {
             Some(b'!') if b[i..].starts_with(b"!--") => {
-                m.slots += 1;
-                i = find(i + 3, b"-->").map_or(b.len(), |e| e + 3);
+                // From the opening's own dashes, which `<!-->` and `<!--->`
+                // end on.
+                let end = [&b"-->"[..], b"--!>"]
+                    .iter()
+                    .filter_map(|pat| find(i + 1, pat).map(|e| e + pat.len()))
+                    .min();
+                i = end.unwrap_or(b.len());
             }
             Some(b'!' | b'?') => {
-                m.slots += 1;
                 i = find(i, b">").map_or(b.len(), |e| e + 1);
             }
             Some(b'/') if b.get(i + 1).is_some_and(u8::is_ascii_alphabetic) => {
-                let end = name_end(i + 1);
-                let name = &b[i + 1..end];
-                if let Some(k) = open
-                    .iter()
-                    .rev()
-                    .take(64)
-                    .position(|&(s, e)| b[s..e].eq_ignore_ascii_case(name))
-                {
-                    for closed in open.drain(open.len() - 1 - k..) {
-                        foreign -= usize::from(is_foreign(closed));
-                    }
-                }
-                i = find(end, b">").map_or(b.len(), |e| e + 1);
+                let (to, attrs) = attributes(name_end(i + 1));
+                steps = steps.saturating_add(pairs(attrs));
+                i = to;
             }
             Some(c) if c.is_ascii_alphabetic() => {
                 let end = name_end(i);
-                let name = (i, end);
-                m.slots += 3;
-                m.nesting += open.len() as u64;
-                // The attributes, to the tag's end: each name, then its
-                // value, quoted or not.
-                i = end;
-                let mut closed = false;
-                while i < b.len() {
-                    match b[i] {
-                        b'>' => {
-                            i += 1;
-                            break;
-                        }
-                        c if c.is_ascii_whitespace() => i += 1,
-                        b'/' => {
-                            closed = b.get(i + 1) == Some(&b'>');
-                            i += 1;
-                        }
-                        _ => {
-                            m.slots += 1;
-                            i += b[i..]
-                                .iter()
-                                .take_while(|c| {
-                                    !c.is_ascii_whitespace() && !matches!(c, b'=' | b'>' | b'/')
-                                })
-                                .count()
-                                .max(1);
-                            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-                                i += 1;
-                            }
-                            if b.get(i) != Some(&b'=') {
-                                continue;
-                            }
-                            i += 1;
-                            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-                                i += 1;
-                            }
-                            match b.get(i) {
-                                Some(&q @ (b'"' | b'\'')) => {
-                                    i = b[i + 1..]
-                                        .iter()
-                                        .position(|&c| c == q)
-                                        .map_or(b.len(), |k| i + 1 + k + 1);
-                                }
-                                _ => {
-                                    i += b[i..]
-                                        .iter()
-                                        .take_while(|c| !c.is_ascii_whitespace() && **c != b'>')
-                                        .count();
-                                }
-                            }
-                        }
-                    }
+                let tag = &b[i..end];
+                let (to, attrs) = attributes(end);
+                steps = steps.saturating_add(pairs(attrs));
+                i = to;
+                foreign |= [&b"svg"[..], b"math", b"frameset"]
+                    .iter()
+                    .any(|t| t.eq_ignore_ascii_case(tag));
+                if foreign {
+                    continue;
                 }
-                let tag = &b[name.0..name.1];
                 if tag.eq_ignore_ascii_case(b"plaintext") {
                     break;
                 }
-                if is(RAW_TEXT, tag) {
+                if RAW_TEXT
+                    .iter()
+                    .any(|t| t.as_bytes().eq_ignore_ascii_case(tag))
+                {
                     // Its text runs to the first end tag of its name.
                     let mut at = i;
                     i = loop {
@@ -480,18 +871,12 @@ fn markup(src: &str) -> Markup {
                         }
                         at = e + 2;
                     };
-                } else if !(closed && (foreign > 0 || is_foreign(name)))
-                    && !is(VOID, tag)
-                    && !is(OPTIONAL_END, tag)
-                {
-                    foreign += usize::from(is_foreign(name));
-                    open.push(name);
                 }
             }
             _ => {}
         }
     }
-    m
+    steps
 }
 
 /// The outermost `<main>` elements, or elements in the `main` role, that the
@@ -526,9 +911,14 @@ struct Out {
 }
 
 impl Out {
-    /// Keep `e`, it and its text spent first.
+    /// Keep `e`, it, its text and its links spent first.
     fn push(&mut self, e: Element) {
-        if self.spend(|b| b.spend_elements(1).and_then(|()| b.spend_text(&e.text))) {
+        let links = e.links.as_deref().unwrap_or_default();
+        if self.spend(|b| {
+            b.spend_elements(1)?;
+            b.spend_text(&e.text)?;
+            b.spend_links(links)
+        }) {
             self.keep(e);
         }
     }
@@ -649,13 +1039,13 @@ fn is_citation(h: &Handle) -> bool {
 /// An element node's lowercase tag name, or `None` for text and the rest.
 /// What a page declares about itself in its `<head>`: its `<title>` and a
 /// `<meta name="author">`. Read from the head alone, because a `<title>`
-/// in the body is an SVG drawing's.
+/// in the body is an SVG drawing's. A page too large to read declares
+/// nothing.
 pub fn info(src: &str) -> DocumentInfo {
-    let dom = html5ever::parse_document(RcDom::default(), Default::default())
-        .from_utf8()
-        .read_from(&mut src.as_bytes())
-        .unwrap_or_default();
     let mut info = DocumentInfo::default();
+    let Ok((dom, _)) = build(src, Budget::default()) else {
+        return info;
+    };
     let html = children_of(&dom.document)
         .into_iter()
         .find(|h| tag_of(h).as_deref() == Some("html"));
@@ -1151,6 +1541,16 @@ fn walk(h: &Handle, out: &mut Out) {
     }
 }
 
+/// Keep an element of `kind` for a block's text, where it has any. Made
+/// here, not in [`walk_node`]: each element made there took a slot of its
+/// frame, which each level of a page's nesting takes, and 512 nested
+/// tables overflowed a 2 MiB stack.
+fn paragraph(out: &mut Out, kind: &str, level: Option<usize>, (text, links): (String, Vec<Link>)) {
+    if !text.is_empty() {
+        out.push(linked(kind, text, level, links));
+    }
+}
+
 fn walk_node(h: &Handle, out: &mut Out) {
     if let Some(tag) = tag_of(h) {
         let t = tag.as_str();
@@ -1165,10 +1565,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 // (`Price list, prices in EUR`); it reads before the table.
                 for c in children_of(h) {
                     if tag_of(&c).as_deref() == Some("caption") {
-                        let (text, links) = text_of(&c);
-                        if !text.is_empty() {
-                            out.push(linked("doco:Paragraph", text, None, links));
-                        }
+                        paragraph(out, "doco:Paragraph", None, text_of(&c));
                     }
                 }
                 emit_table(h, out); // innermost wins: cells own their text
@@ -1177,10 +1574,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             return;
         }
         if let Some(level) = heading_level(t) {
-            let (text, links) = text_of(h);
-            if !text.is_empty() {
-                out.push(linked("doco:SectionTitle", text, Some(level), links));
-            }
+            paragraph(out, "doco:SectionTitle", Some(level), text_of(h));
             out.figures([h]);
             return;
         }
@@ -1188,10 +1582,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             "li" => {
                 // A nested list inside an item is walked separately; the
                 // item's own text stops at it.
-                let (own, links) = own_text(h);
-                if !own.is_empty() {
-                    out.push(linked("doc:ListItem", own, None, links));
-                }
+                paragraph(out, "doc:ListItem", None, own_text(h));
                 let children = children_of(h);
                 out.figures(
                     children
@@ -1211,17 +1602,11 @@ fn walk_node(h: &Handle, out: &mut Out) {
             // One paragraph, its lines and spacing kept, as a Markdown code
             // block is read.
             "pre" => {
-                let (text, links) = pre_text(h);
-                if !text.is_empty() {
-                    out.push(linked("doco:Paragraph", text, None, links));
-                }
+                paragraph(out, "doco:Paragraph", None, pre_text(h));
                 return;
             }
             "p" | "blockquote" | "figcaption" | "dd" | "dt" => {
-                let (text, links) = text_of(h);
-                if !text.is_empty() {
-                    out.push(linked("doco:Paragraph", text, None, links));
-                }
+                paragraph(out, "doco:Paragraph", None, text_of(h));
                 out.figures([h]);
                 return;
             }
@@ -1691,6 +2076,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::budget::{converting_to, output, Output, MAX_MEMORY, MAX_WORK};
 
     fn parse(src: &str) -> Vec<Element> {
         super::parse(src).unwrap()
@@ -2504,40 +2890,145 @@ mod tests {
     }
 
     #[test]
-    fn the_tree_and_its_nesting_are_counted_from_the_tags() {
-        // Three slots an element, one an attribute (quoted values hold
-        // what would be markup); comments, a script's text and closed tags
-        // nest nothing.
-        let m = markup(
-            "<!doctype html><div class=\"a>b\" hidden data-x=1><p>one<p>two<br/>\
-             <!-- <div><div> --><script>if (a<b) document.write('<div>')</script>\
-             <svg><path d=\"M0\"/><path/></svg><span>x</span></div><div>",
+    fn the_attributes_of_each_tag_are_counted_from_the_tags() {
+        // Each attribute is looked for among those before it on its tag,
+        // an end tag's too; quoted values hold what would be markup, and
+        // comments and a script's text hold no tags.
+        let steps = attribute_steps(
+            "<!doctype html><div class=\"a>b\" hidden data-x=1><p a b>one</p c d e>\
+             <!-- <p a b c> --><script>if (a<b c d) x('<p a b c>')</script>",
         );
-        // Elements: div, p, p, br, script, svg, path, path, span, div = 10;
-        // attributes: class, hidden, data-x, d = 4; the doctype and the
-        // comment one each.
-        assert_eq!(m.slots, 10 * 3 + 4 + 2);
-        // Open around each start tag: div 0; p, p, br, script, svg 1;
-        // the paths 2; span 1 (the svg closed); the last div 0.
-        assert_eq!(m.nesting, 1 + 1 + 1 + 1 + 1 + 2 + 2 + 1);
-        // A `/>` on an HTML element closes nothing: the parser nests them.
-        assert_eq!(markup(&"<div/>".repeat(4)).nesting, 1 + 2 + 3);
+        assert_eq!(steps, 3 + 1 + 3);
+        assert_eq!(attribute_steps("<p>x</p>"), 0);
     }
 
     #[test]
-    fn a_page_whose_tree_is_past_the_budget_is_refused_before_it_is_built() {
+    fn the_scan_passes_over_no_text_the_tokenizer_reads_as_tags() {
+        // A comment ends at the first place it may, and an element's text
+        // up to its end tag is markup in SVG and MathML, and in a frameset,
+        // which ignores the tag. Passed over, 100,000 attributes behind
+        // `<!-->` or `<svg><title>` took 15 to 19 s.
+        let tag = "<p a b c>";
+        for before in [
+            "<!-->",
+            "<!--->",
+            "<!-- x --!>",
+            "<svg><title>",
+            "<svg><plaintext>",
+            "<math><style>",
+            "<frameset><script>",
+            "<SVG><Script>",
+        ] {
+            assert_eq!(attribute_steps(&format!("{before}{tag}")), 3, "{before}");
+        }
+        // Before any of them, a script's text is passed over.
+        assert_eq!(attribute_steps(&format!("<script>{tag}</script><svg>")), 0);
+    }
+
+    #[test]
+    fn a_tag_of_many_thousand_attributes_is_refused_before_it_is_parsed() {
+        // The parser looks for each among those before it: two million on
+        // one tag ran past five minutes.
+        let tag = |n: usize| {
+            let attrs: Vec<String> = (0..n).map(|i| format!("a{i}=1")).collect();
+            format!("<p {}>x</p>", attrs.join(" "))
+        };
+        // 200,000 took 37 s, and as long behind what the scan of the tags
+        // passed over and the tokenizer did not.
+        for before in ["", "<!-->", "<svg><title>"] {
+            let start = std::time::Instant::now();
+            let err = super::parse(&format!("{before}{}", tag(200_000)))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("steps"), "{err}");
+            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+        }
+        assert_eq!(super::parse(&tag(1_000)).unwrap().len(), 1);
+    }
+
+    /// [`read_within`] a budget of `memory`, its work unbounded, at the
+    /// costs of the output converted to.
+    fn within(src: &str, memory: u64) -> Result<Vec<Element>, TooLarge> {
+        let budget = Budget::new(memory, u64::MAX).for_output(output());
+        read_within(src, false, budget).map(|(e, _)| e)
+    }
+
+    #[test]
+    fn the_tree_is_spent_as_the_parser_builds_it() {
         // Empty tags make a tree twenty times the page: 24 million made
-        // 3.9 GB of it from 168 MB. Eight million are past the budget.
-        let page = "<i></i>".repeat(8_000_000);
-        let err = super::parse(&page).unwrap_err().to_string();
+        // 3.9 GB of it from 168 MB.
+        let page = "<i></i>".repeat(10_000);
+        // Two slots an element, `<html>`, `<head>` and `<body>` among them.
+        let need = (10_000 + 3) * 2 * 128;
+        assert!(within(&page, need).is_ok());
+        let err = within(&page, need - 1).unwrap_err().to_string();
         assert!(err.starts_with("cells past"), "{err}");
-        // Nested ones cost the parser the square of their depth: 40,000
-        // took 3 s, 200,000 over two minutes.
-        let nested = format!("{}x{}", "<div>".repeat(30_000), "</div>".repeat(30_000));
-        let start = std::time::Instant::now();
-        let err = super::parse(&nested).unwrap_err().to_string();
-        assert!(err.contains("steps"), "{err}");
-        assert!(start.elapsed().as_secs() < 5);
+    }
+
+    #[test]
+    fn a_text_node_spends_its_node_as_the_parser_makes_it() {
+        // Each `x` between two `<br>` is a node of the tree, as an element
+        // is, spent as the parser makes it.
+        let n = 10_000;
+        let memory_to_read = |page: &str| {
+            let (mut refused, mut read) = (0, MAX_MEMORY);
+            while refused + 1 < read {
+                let mid = refused + (read - refused) / 2;
+                match within(page, mid) {
+                    Ok(_) => read = mid,
+                    Err(_) => refused = mid,
+                }
+            }
+            read
+        };
+        let more = memory_to_read(&"<br>x".repeat(n)) - memory_to_read(&"<br>".repeat(n));
+        let nodes = (n as u64) * node_slots(1) * fluree_doc_model::budget::CELL_BYTES;
+        assert!(more >= nodes, "{more} < {nodes}");
+    }
+
+    #[test]
+    fn formatting_elements_the_parser_makes_again_are_spent() {
+        // Each `<p>` closes the `<b>` left open, and the text after it
+        // makes them all again: 400 of them over 30,000 paragraphs, a
+        // 124 KB page, made 12 million elements and 2.8 GB, and 1,000 over
+        // 20,000 aborted the process.
+        let page = |n: usize| {
+            let open: String = (0..200).map(|i| format!("<b id=b{i}>")).collect();
+            format!("<p>{open}{}", "<p>x".repeat(n))
+        };
+        // Two slots a node: 200 elements made again a paragraph.
+        let memory = 2_000 * 200 * 2 * 128;
+        assert!(within(&page(100), memory).is_ok());
+        let err = within(&page(2_000), memory).unwrap_err().to_string();
+        assert!(err.starts_with("cells past"), "{err}");
+    }
+
+    #[test]
+    fn nesting_the_parser_walks_is_spent_as_steps() {
+        // The parser checks what is in scope by walking the elements open
+        // around each one, so nested ones cost the square of their depth:
+        // 40,000 took 3 s, 200,000 over two minutes. So do formatting
+        // elements it re-makes inside each other, the page closing each
+        // one around another left open (`<b><i></b>`), which nest none in
+        // the page.
+        // Within a sixty-fourth of the steps, as a test is built
+        // unoptimized: 5,000 deep is past them, as 23,000 are past all.
+        let steps = |page: &str| {
+            let budget = Budget::new(MAX_MEMORY, MAX_WORK >> 6);
+            read_within(page, false, budget).map(|(e, _)| e)
+        };
+        let nested = format!("{}x{}", "<div>".repeat(5_000), "</div>".repeat(5_000));
+        let misnested: String = (0..5_000)
+            .map(|k| format!("<b id={k}><i id={k}></b>"))
+            .collect();
+        // A repeated `<html>` gives the first its attributes, each looked
+        // for among those it has.
+        let repeated: String = (0..5_000).map(|k| format!("<html a{k}=1>")).collect();
+        for page in [nested, misnested, repeated] {
+            let err = steps(&page).unwrap_err().to_string();
+            assert!(err.contains("steps"), "{err}");
+        }
+        assert!(steps(&format!("{}x", "<div>".repeat(1_000))).is_ok());
         // A page of ordinary depth and size is read.
         let ordinary = format!(
             "<div>{}</div>",
@@ -2547,10 +3038,112 @@ mod tests {
         assert_eq!(super::parse(&ordinary).unwrap().len(), 20_000);
     }
 
+    /// [`read_within`] `work` steps, as [`nesting_the_parser_walks_is_spent_as_steps`].
+    fn within_steps(page: &str, work: u64) -> Result<Vec<Element>, TooLarge> {
+        read_within(page, false, Budget::new(MAX_MEMORY, work)).map(|(e, _)| e)
+    }
+
+    /// The fewest steps `page` is read within.
+    fn steps_to_read(page: &str) -> u64 {
+        let (mut refused, mut read) = (0, MAX_WORK);
+        assert!(within_steps(page, read).is_ok());
+        while refused + 1 < read {
+            let mid = refused + (read - refused) / 2;
+            match within_steps(page, mid) {
+                Ok(_) => read = mid,
+                Err(_) => refused = mid,
+            }
+        }
+        read
+    }
+
     #[test]
-    fn a_page_nested_past_the_depth_a_stack_holds_is_refused() {
-        // A test's thread has the 2 MiB stack a batch's worker has: 1,000
-        // tables nested, 33 KB, overflowed it and aborted the batch.
+    fn end_tags_that_close_nothing_are_spent_as_steps() {
+        // Each looks for an open element of its name down all those open:
+        // 20,000 `<span>`, then 200,000 `</zz>`, ran past a minute.
+        let page = |close: &str| format!("{}{}", "<span>".repeat(2_000), close.repeat(5_000));
+        let start = std::time::Instant::now();
+        let err = within_steps(&page("</zz>"), MAX_WORK >> 6)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("steps"), "{err}");
+        assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+        // Closing the innermost each time is read.
+        assert!(within_steps(&page("</span>"), MAX_WORK >> 6).is_ok());
+    }
+
+    #[test]
+    fn formatting_elements_made_again_are_each_looked_for_among_those_open() {
+        // Before making again the formatting elements a paragraph closed,
+        // the parser looks for each among the elements open, a comparison
+        // of two nodes each.
+        let page = |depth: usize| {
+            let held: String = (0..50).map(|i| format!("<i id={i}>")).collect();
+            format!("{}<p>{held}x{}", "<span>".repeat(depth), "<p>x".repeat(100))
+        };
+        let err = within_steps(&page(2_000), MAX_WORK >> 6)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("steps"), "{err}");
+        assert!(within_steps(&page(20), MAX_WORK >> 6).is_ok());
+    }
+
+    #[test]
+    fn a_node_set_before_its_sibling_spends_the_siblings_looked_at() {
+        // What a table holds out of place is set before it, found among
+        // its siblings: 500,000 among 200,000 took 105 s.
+        let (before, inputs) = (6_400, 1_000);
+        let paragraphs = "<p>x</p>".repeat(before);
+        let set_before = format!("{paragraphs}<table>{}", "<input>".repeat(inputs));
+        let after = format!("{paragraphs}<table></table>{}", "<input>".repeat(inputs));
+        let looked_at = (before / SIBLINGS_A_STEP as usize * inputs) as u64;
+        let more = steps_to_read(&set_before) - steps_to_read(&after);
+        assert!(more >= looked_at, "{more} < {looked_at}");
+    }
+
+    #[test]
+    fn the_children_a_formatting_element_takes_are_spent() {
+        // Closing the `<b>` around a block gives the block's children to a
+        // new `<b>` inside it, each moved.
+        let moved = 10_000;
+        let page = |close: &str| format!("<b><div>{}{close}", "<br>".repeat(moved));
+        let more = steps_to_read(&page("</b>")) - steps_to_read(&page("</i>"));
+        assert!(more >= moved as u64, "{more} < {moved}");
+    }
+
+    #[test]
+    fn formatting_elements_compared_by_their_attributes_are_spent() {
+        // Each start tag is compared with each formatting element of its
+        // name the parser holds, attributes copied and sorted: 5,000 `<b>`
+        // of 100 attributes took over two minutes, as did a million end
+        // tags looking past 20,000 `<i>` the parser holds, closed.
+        let attrs: String = (0..40).map(|k| format!(" a{k}")).collect();
+        let compared: String = (0..1_000).map(|i| format!("<b id={i}{attrs}>")).collect();
+        let held: String = (0..500).map(|i| format!("<i id={i}>")).collect();
+        let looked_past = |n: usize| format!("<p>{held}</p>{}", "</b>".repeat(n));
+        for page in [compared, looked_past(10_000)] {
+            let start = std::time::Instant::now();
+            let err = within_steps(&page, MAX_WORK >> 6).unwrap_err().to_string();
+            assert!(err.contains("steps"), "{err}");
+            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+        }
+        assert!(within_steps(&looked_past(1_000), MAX_WORK >> 6).is_ok());
+        // Formatting elements closed, or left open around a mail's
+        // paragraphs, are read.
+        let closed = "<p><font face=Arial size=2 color=#1F497D><b class=x>a</b> b</font></p>";
+        let open: String = (0..50)
+            .map(|i| format!("<font face=Arial size=2 color=#{i:06x}><p>a"))
+            .collect();
+        let ordinary = format!("{}{open}{}", closed.repeat(5_000), "<p>b".repeat(5_000));
+        assert!(within_steps(&ordinary, MAX_WORK >> 6).is_ok());
+    }
+
+    #[test]
+    fn a_page_nested_past_the_depth_a_browser_keeps_is_read_flat() {
+        // A batch's worker has a 2 MiB stack: 1,000 tables nested, 33 KB,
+        // overflowed it and aborted the batch. Past 512 levels the page's
+        // elements are set beside their ancestor, as a browser sets them,
+        // and the walk goes no deeper.
         let tables = |n: usize| {
             format!(
                 "{}x{}",
@@ -2558,11 +3151,48 @@ mod tests {
                 "</td></tr></table>".repeat(n)
             )
         };
-        let err = super::parse(&tables(1_000)).unwrap_err().to_string();
-        assert!(err.contains("levels of nested elements"), "{err}");
-        // Within the depth a browser keeps, the innermost cell is read.
-        let els = super::parse(&tables(100)).unwrap();
-        assert!(els.iter().any(|e| e.text.contains('x')));
+        let divs = |n: usize| format!("{}deep{}", "<div>".repeat(n), "</div>".repeat(n));
+        let read = std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let (dom, _) = build(&tables(1_000), Budget::default()).unwrap();
+                let deepest = {
+                    let mut stack = vec![(dom.document.clone(), 0)];
+                    let mut deepest = 0;
+                    while let Some((h, d)) = stack.pop() {
+                        deepest = deepest.max(d);
+                        stack.extend(h.children.borrow().iter().map(|c| (c.clone(), d + 1)));
+                    }
+                    deepest
+                };
+                (
+                    deepest,
+                    super::parse(&tables(1_000)).unwrap(),
+                    super::parse(&divs(520)).unwrap(),
+                    super::parse(&tables(100)).unwrap(),
+                )
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let (deepest, tables, divs, shallow) = read;
+        assert_eq!(deepest, MAX_DEPTH);
+        assert!(tables.iter().any(|e| e.text.contains('x')));
+        assert_eq!(texts(&divs), ["deep"]);
+        assert!(shallow.iter().any(|e| e.text.contains('x')));
+    }
+
+    #[test]
+    fn each_link_is_spent_before_it_is_kept() {
+        // DoCO writes each as a node of its own: 4.2 KB a link.
+        let page = format!("<p>{}</p>", "<a href=b>a</a> ".repeat(1_000));
+        let read = |output| converting_to(output, || within(&page, 3 << 20));
+        assert_eq!(
+            read(Output::Flat).unwrap()[0].links.as_ref().unwrap().len(),
+            1_000
+        );
+        let err = read(Output::Doco).unwrap_err().to_string();
+        assert!(err.starts_with("links past"), "{err}");
     }
 
     #[test]
