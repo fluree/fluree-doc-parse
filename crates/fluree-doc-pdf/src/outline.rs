@@ -81,7 +81,10 @@ fn destination(
     let Some(array) = array else {
         return (None, None);
     };
-    let Some(reference) = array.raw_iter().next().and_then(|o| o.as_obj_ref()) else {
+    let Some(reference) = crate::array_entries(&array)
+        .next()
+        .and_then(|o| o.as_obj_ref())
+    else {
         return (None, None);
     };
     let Some(&(index, height)) = geometry.get(&(reference.obj_number, reference.gen_number)) else {
@@ -89,7 +92,7 @@ fn destination(
     };
     // `/XYZ left top zoom` is the common form and the only one that states a
     // position; `/Fit` and friends name the page alone.
-    let mut rest = array.raw_iter().skip(1);
+    let mut rest = crate::array_entries(&array).skip(1);
     let kind = rest.next().and_then(|o| match o {
         hayro_syntax::object::MaybeRef::NotRef(v) => v.clone().into_name(),
         hayro_syntax::object::MaybeRef::Ref(_) => None,

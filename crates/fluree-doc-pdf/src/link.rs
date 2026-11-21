@@ -131,7 +131,7 @@ fn target_of(annot: &Dict<'_>, index_of: &HashMap<(i32, i32), usize>) -> Option<
 /// object; everything after it is the view to scroll to, which has no meaning
 /// for an element stream.
 fn dest_page(dest: &Array<'_>, index_of: &HashMap<(i32, i32), usize>) -> Option<usize> {
-    let r = dest.raw_iter().next()?.as_obj_ref()?;
+    let r = crate::array_entries(dest).next()?.as_obj_ref()?;
     index_of.get(&(r.obj_number, r.gen_number)).copied()
 }
 

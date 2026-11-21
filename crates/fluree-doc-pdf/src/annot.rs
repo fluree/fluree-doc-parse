@@ -77,7 +77,7 @@ pub fn annotations(pdf: &Pdf, budget: &mut Budget) -> Result<Vec<Annotation>, To
             continue;
         };
         let (_, height) = p.render_dimensions();
-        for entry in annots.raw_iter() {
+        for entry in crate::array_entries(&annots) {
             entries += 1;
             if out.len() >= MAX_ANNOTATIONS || entries > MAX_ANNOTATION_ENTRIES {
                 return Ok(out);
@@ -514,6 +514,31 @@ mod tests {
             stream("/Type /EmbeddedFile /Filter /FlateDecode", bomb),
             stream("/Type /EmbeddedFile /Filter /LZWDecode", b"\x80\x0b\x60\x50\x22\x0c\x0c\x85\x01"),
         ])
+    }
+
+    #[test]
+    fn an_annotation_list_that_does_not_read_is_read_up_to_where_it_stops() {
+        // A lone sign skips as a number but does not read as one: the
+        // array's own iterator panicked on it. The note before it is read.
+        let pdf = objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [4 0 R + ] >>".to_vec(),
+            b"<< /Type /Annot /Subtype /Text /Rect [10 10 50 50] /Contents (Kept) >>".to_vec(),
+        ]);
+        let pdf = Pdf::new(std::sync::Arc::new(pdf)).unwrap();
+        let notes = annotations(&pdf, &mut Budget::default()).unwrap();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].contents, "Kept");
+        let pdf = Pdf::new(std::sync::Arc::new(objects_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [+ ] >>".to_vec(),
+        ])))
+        .unwrap();
+        assert!(annotations(&pdf, &mut Budget::default())
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

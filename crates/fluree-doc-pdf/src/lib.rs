@@ -237,6 +237,34 @@ pub fn unread_regions(
     out
 }
 
+/// The entries of a PDF array as written, each a reference or an object,
+/// up to the first that does not read.
+///
+/// hayro-syntax's `Array::raw_iter` unwraps each entry, trusting that an
+/// array its parser could skip over reads back entry by entry; one that
+/// does not (`[+ ]`: a lone sign skips as a number but does not read as one)
+/// panics. So each entry is read here first, without the document's
+/// context, which reads whatever it reads (a reference is not followed, a
+/// string is decrypted or not but read either way), and the array's own
+/// iterator is taken no further than those that read.
+pub(crate) fn array_entries<'a>(
+    array: &hayro_syntax::object::Array<'a>,
+) -> impl Iterator<Item = hayro_syntax::object::MaybeRef<hayro_syntax::object::Object<'a>>> {
+    use hayro_syntax::object::{MaybeRef, Object};
+    use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+    let ctx = ReaderContext::dummy();
+    let mut r = Reader::new(array.data());
+    let mut readable = 0;
+    loop {
+        r.skip_white_spaces_and_comments();
+        if r.at_end() || r.read_with_context::<MaybeRef<Object<'_>>>(&ctx).is_none() {
+            break;
+        }
+        readable += 1;
+    }
+    array.raw_iter().take(readable)
+}
+
 /// What the PDF interpreter reported on each page ([`Page::warnings`]),
 /// once per page and kind, with how many times, in page order.
 pub fn parse_warnings(doc: &Document) -> Vec<fluree_doc_model::ParseWarning> {
@@ -294,6 +322,26 @@ pub use text::PageText;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_array_is_read_up_to_the_first_entry_that_does_not_read() {
+        use hayro_syntax::object::{Array, MaybeRef};
+        use hayro_syntax::reader::{Reader, ReaderContext, ReaderExt};
+        // `+` alone skips as a number but does not read as one, and the
+        // array's own iterator panicked on it: as a link's or an outline
+        // item's destination, or in a page's list of annotations.
+        let ctx = ReaderContext::dummy();
+        let read = |src: &'static [u8]| {
+            Reader::new(src)
+                .read_with_context::<Array<'_>>(&ctx)
+                .expect("the array skips")
+        };
+        let entries: Vec<_> = array_entries(&read(b"[3 0 R /XYZ + 1]")).collect();
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0], MaybeRef::Ref(_)));
+        assert_eq!(array_entries(&read(b"[+ ]")).count(), 0);
+        assert_eq!(array_entries(&read(b"[1 2 (x)]")).count(), 3);
+    }
     use crate::extract::{ImagePlacement, OcrRead};
     use fluree_doc_model::Element;
 
