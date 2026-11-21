@@ -38,7 +38,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use fluree_doc_model::budget::{Budget, TooLarge};
+use fluree_doc_model::budget::{output, Budget, Output, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::StrTendril;
@@ -2008,9 +2008,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
     // Rows that are one cell across the whole width, as laid out.
     let mut full_width = vec![false; n];
 
-    for (r, cells) in rows.iter().enumerate() {
+    // Each cell's text is moved into the grid, then into its row: a copy
+    // of a table's text is as large as its tree.
+    for (r, cells) in rows.iter_mut().enumerate() {
+        let lone = cells.len() == 1;
         let mut c = 0usize;
-        for (text, colspan, rowspan) in cells {
+        for (text, colspan, rowspan) in cells.iter_mut() {
             while c < width && taken[r * width + c] {
                 c += 1;
             }
@@ -2023,8 +2026,8 @@ fn emit_table(table: &Handle, out: &mut Out) {
             if !out.spend(|b| b.spend_work((cs as u64).saturating_mul(rs as u64))) {
                 return;
             }
-            full_width[r] = cells.len() == 1 && c == 0 && cs == width && width > 1;
-            grid[r * width + c] = text.clone();
+            full_width[r] = lone && c == 0 && cs == width && width > 1;
+            grid[r * width + c] = std::mem::take(text);
             for dr in 0..rs {
                 for dc in 0..cs {
                     taken[(r + dr) * width + c + dc] = true;
@@ -2039,8 +2042,10 @@ fn emit_table(table: &Handle, out: &mut Out) {
             c += cs;
         }
     }
+    drop(rows);
+    let mut grid = grid.into_iter();
     let cells: Vec<Vec<String>> = (0..n)
-        .map(|r| grid[r * width..(r + 1) * width].to_vec())
+        .map(|_| grid.by_ref().take(width).collect())
         .collect();
     let text = cells
         .iter()
@@ -2060,23 +2065,36 @@ fn emit_table(table: &Handle, out: &mut Out) {
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
-    // The table, its cells that hold text and their text, and what DoCO
-    // copies of them.
-    let spent = out.spend(|b| {
-        let cells = || e.cells.iter().flatten().flatten();
-        b.spend_elements(1 + cells().filter(|t| !t.is_empty()).count() as u64)?;
-        b.spend_chars(cells().flat_map(|t| t.chars()))?;
-        b.spend_copies(&e)
-    });
+    let spent = out.spend(|b| spend_table(b, &e));
     if spent {
         out.keep(e);
     }
 }
 
+/// Spend the table `e`, its cells that hold text and their text, and what
+/// DoCO copies of them. DoCO makes a node of each cell that holds text; the
+/// other outputs write it once, so it costs a cell slot more than the
+/// grid's, with its text: about 510 bytes a cell were measured from the
+/// parser's tree to the Markdown written.
+fn spend_table(b: &mut Budget, e: &Element) -> Result<(), TooLarge> {
+    let cells = || e.cells.iter().flatten().flatten();
+    let held = cells().filter(|t| !t.is_empty()).count() as u64;
+    b.spend_elements(1)?;
+    if output() == Output::Doco {
+        b.spend_elements(held)?;
+    } else {
+        b.spend_cells(held)?;
+    }
+    b.spend_chars(cells().flat_map(|t| t.chars()))?;
+    b.spend_copies(e)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluree_doc_model::budget::{converting_to, output, Output, MAX_MEMORY, MAX_WORK};
+    use fluree_doc_model::budget::{
+        converting_to, CELL_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, MAX_WORK, TEXT_BYTES,
+    };
 
     fn parse(src: &str) -> Vec<Element> {
         super::parse(src).unwrap()
@@ -3193,6 +3211,28 @@ mod tests {
         );
         let err = read(Output::Doco).unwrap_err().to_string();
         assert!(err.starts_with("links past"), "{err}");
+    }
+
+    #[test]
+    fn a_table_written_once_spends_its_cells_not_an_element_each() {
+        // DoCO makes a node of each cell that holds text; Markdown writes
+        // it once. 50,000 rows of 30 cells, 1.5 million, were refused as
+        // Markdown, which takes about 510 bytes a cell.
+        let row = format!("<tr>{}</tr>", "<td>12.50</td>".repeat(10));
+        let page = format!("<table>{}</table>", row.repeat(2_000));
+        let read = |output| converting_to(output, || within(&page, 32 << 20));
+        assert_eq!(read(Output::Flat).unwrap().len(), 1);
+        assert!(read(Output::Doco).is_err());
+        // Written once, a cell that holds text is a slot beside the grid's.
+        let mut e = element("doco:Table", String::new(), None);
+        e.cells = Some(vec![vec!["a".into(), String::new()]]);
+        let need = FLAT_ELEMENT_BYTES + CELL_BYTES + TEXT_BYTES;
+        let spend = |memory| {
+            let mut b = Budget::new(memory, 0).for_output(Output::Flat);
+            converting_to(Output::Flat, || spend_table(&mut b, &e))
+        };
+        assert!(spend(need).is_ok());
+        assert!(spend(need - 1).is_err());
     }
 
     #[test]

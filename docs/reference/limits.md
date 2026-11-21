@@ -78,7 +78,7 @@ peaks at:
 | `.csv` (4.4 MB) | 73 MB | 75 MB | 84 MB | 160 MB | 2,229 MB |
 | `.xlsx` (5.3 MB) | 541 MB | 541 MB | 541 MB | 552 MB | 3,034 MB |
 | `.docx` (2.1 MB) | 218 MB | 218 MB | 217 MB | 223 MB | 2,247 MB |
-| `.html` (13 MB) | 454 MB | 454 MB | 454 MB | 458 MB | 2,249 MB |
+| `.html` (13 MB) | 403 MB | 403 MB | 409 MB | 416 MB | 2,249 MB |
 
 It converts to every output but DoCO, whose 3 GB from the `.xlsx` is past
 what the budget allows; as DoCO it is refused before anything is written.
@@ -87,6 +87,13 @@ cells that hold text; the most such a document was measured to take is
 1.5 GB (1.2 million paragraphs of an `.odt`), against 0.25 GB for 1.2
 million cells of a `.csv` or a `.doc`, and 1.2 GB for as many paragraphs
 of a `.docx`.
+
+An HTML table's cell that holds text costs a cell more than its slot in
+the grid, with its text, rather than an element, for the outputs that
+write it once: the page's tree, the most of what it takes, is counted on
+its own ([A web page's tree](#a-web-pages-tree)). 50,000 rows of 30 cells
+(1.5 million), refused as Markdown before, take 775 MB, and 50,000 of 60
+take 1.5 GB, about 510 B a cell, against about 880 B counted.
 
 ## Copies of a table's cells
 
