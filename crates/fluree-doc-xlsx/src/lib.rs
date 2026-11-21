@@ -949,7 +949,12 @@ struct Cell {
     size: f32,
 }
 
-/// A rectangle of cells, inclusive, 0-based.
+/// The rows of Excel's grid: no cell past the last is read.
+pub const MAX_ROWS: u32 = 1 << 20;
+/// The columns of Excel's grid: no cell past the last is read.
+pub const MAX_COLUMNS: u32 = 1 << 14;
+
+/// A rectangle of cells, inclusive, 0-based, within the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Range {
     r0: u32,
@@ -959,11 +964,11 @@ struct Range {
 }
 
 impl Range {
-    fn width(&self) -> u32 {
-        self.c1 - self.c0 + 1
+    fn width(&self) -> u64 {
+        u64::from(self.c1) - u64::from(self.c0) + 1
     }
-    fn height(&self) -> u32 {
-        self.r1 - self.r0 + 1
+    fn height(&self) -> u64 {
+        u64::from(self.r1) - u64::from(self.r0) + 1
     }
 }
 
@@ -991,17 +996,20 @@ fn cell_ref(r: &str) -> Option<(u32, u32)> {
     Some((row, col))
 }
 
-/// `A1:C4` → the rectangle; a bare `A1` is a one-cell range.
+/// `A1:C4` → the rectangle; a bare `A1` is a one-cell range. A range is cut
+/// at the grid's last row and column ([`MAX_ROWS`], [`MAX_COLUMNS`]), and
+/// one that starts past them is none.
 fn parse_range(s: &str) -> Option<Range> {
     let (a, b) = s.split_once(':').unwrap_or((s, s));
     let (r0, c0) = cell_ref(a)?;
     let (r1, c1) = cell_ref(b)?;
-    Some(Range {
+    let range = Range {
         r0: r0.min(r1),
         c0: c0.min(c1),
-        r1: r0.max(r1),
-        c1: c0.max(c1),
-    })
+        r1: r0.max(r1).min(MAX_ROWS - 1),
+        c1: c0.max(c1).min(MAX_COLUMNS - 1),
+    };
+    (range.r0 < MAX_ROWS && range.c0 < MAX_COLUMNS).then_some(range)
 }
 
 /// A number as Excel's General format shows it: an integer when it is one,
@@ -1228,7 +1236,12 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
                     "is" => in_is = false,
                     "t" => in_is_t = false,
                     "c" => {
-                        if let Some((pos, kind, style)) = cur.take() {
+                        // A cell past the grid, which Excel would not
+                        // open, is no cell.
+                        if let Some((pos, kind, style)) = cur
+                            .take()
+                            .filter(|(p, ..)| p.0 < MAX_ROWS && p.1 < MAX_COLUMNS)
+                        {
                             let st = ctx.styles.get(style);
                             let text = cell_text(&kind, &value, &st, ctx);
                             if !text.is_empty() {
@@ -1262,14 +1275,14 @@ fn read_sheet(xml: &str, ctx: &Context<'_>) -> Result<Sheet, XlsxError> {
                     .and_then(|v| v.parse::<u32>().ok())
                     .and_then(|v| v.checked_sub(1))
                     .unwrap_or(next_row);
-                next_row = row + 1;
+                next_row = row.saturating_add(1);
                 col = 0;
             }
             "c" => {
                 let pos = attr(&e, "r")
                     .and_then(|v| cell_ref(&v))
                     .unwrap_or((row, col));
-                col = pos.1 + 1;
+                col = pos.1.saturating_add(1);
                 // `<c r="B1" s="19"/>` is a styled empty cell: no
                 // End event will follow, and it holds nothing.
                 if !empty {
@@ -1433,13 +1446,15 @@ fn islands(occupied: &HashSet<(u32, u32)>) -> Vec<Island> {
             range.r1 = range.r1.max(r);
             range.c0 = range.c0.min(c);
             range.c1 = range.c1.max(c);
+            // Checked: the first row and column have no neighbour before
+            // them, nor the last one after.
             let neighbours = [
-                (r.wrapping_sub(1), c),
-                (r + 1, c),
-                (r, c.wrapping_sub(1)),
-                (r, c + 1),
+                r.checked_sub(1).map(|r| (r, c)),
+                r.checked_add(1).map(|r| (r, c)),
+                c.checked_sub(1).map(|c| (r, c)),
+                c.checked_add(1).map(|c| (r, c)),
             ];
-            for n in neighbours {
+            for n in neighbours.into_iter().flatten() {
                 if occupied.contains(&n) && seen.insert(n) {
                     queue.push_back(n);
                 }
@@ -1979,6 +1994,50 @@ mod tests {
                 None => e.kind.clone(),
             })
             .collect()
+    }
+
+    #[test]
+    fn a_cell_past_the_grid_is_no_cell() {
+        // `MWLQKWU` is column 4,294,967,294: the cell after it, which names
+        // none, is the last column a u32 holds, whose neighbour past it was
+        // column 0, one island over four billion columns.
+        let t = |r: &str, v: &str| {
+            let r = if r.is_empty() {
+                String::new()
+            } else {
+                format!(" r=\"{r}\"")
+            };
+            format!("<c{r} t=\"inlineStr\"><is><t>{v}</t></is></c>")
+        };
+        let xml = format!(
+            "<worksheet {NS}><sheetData><row r=\"1\">{}{}{}</row><row r=\"2\">{}{}</row><row r=\"1048577\">{}</row></sheetData><mergeCells><mergeCell ref=\"XFE1:XFF2\"/></mergeCells></worksheet>",
+            t("A1", "a"),
+            t("MWLQKWU1", "far"),
+            t("", "next"),
+            t("A2", "b"),
+            t("B2", "c"),
+            t("A1048577", "below")
+        );
+        let els = parse_sheet(&xml);
+        let all: String = els.iter().map(|e| e.text.as_str()).collect();
+        assert!(all.contains('a') && all.contains('c'), "{els:#?}");
+        for gone in ["far", "next", "below"] {
+            assert!(!all.contains(gone), "{els:#?}");
+        }
+        assert_eq!(
+            parse_range("C2:ZZZZ9999999"),
+            Some(Range {
+                r0: 1,
+                c0: 2,
+                r1: MAX_ROWS - 1,
+                c1: MAX_COLUMNS - 1
+            })
+        );
+        assert_eq!(parse_range("XFE1:XFF2"), None);
+        // The corners have no neighbour past them.
+        let corners: HashSet<(u32, u32)> =
+            [(0, 0), (0, u32::MAX), (u32::MAX, 0)].into_iter().collect();
+        assert_eq!(islands(&corners).len(), 3);
     }
 
     #[test]
