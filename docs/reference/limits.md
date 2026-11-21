@@ -7,8 +7,8 @@ Word file that all point at the same text, a table whose first row is
 thousands of cells wide over rows of one, a cell merged down over thousands
 of rows: a file of a few kilobytes can describe gigabytes. So every reader
 of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
-`.docx`, `.ppt`, `.pptx`, `.rtf`) and of HTML (a page, or an email's HTML
-body) is handed one budget for the document
+`.docx`, `.ppt`, `.pptx`, `.rtf`), of Markdown and of HTML (a page, or an
+email's HTML body) is handed one budget for the document
 (`fluree_doc_model::budget::Budget`) and spends it *before* it allocates.
 Past it, the document is refused with an error that names what ran out
 (`workbook too large: cells past the 2560 MiB of memory a document may

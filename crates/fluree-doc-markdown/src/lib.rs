@@ -9,21 +9,40 @@
 //! What is missing is geometry. Markdown has no pages and no coordinates, so
 //! every element's `bbox` is `None` rather than a zeroed box that would read
 //! as a real position to a consumer.
+//!
+//! **Bounds.** Each element, each table cell, a table's rows padded to the
+//! widest, their text, and the copies the output makes of a table's cells
+//! (a cell's column header, row label and section band) are counted
+//! against the document's [`Budget`] before they are made: a band's label a
+//! megabyte long over a hundred columns and forty rows would otherwise be
+//! written four thousand times.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Element, Link};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-/// Parse Markdown into document elements in reading order.
-pub fn parse(src: &str) -> Vec<Element> {
+/// Parse Markdown into document elements in reading order; refused past
+/// the document's budget.
+pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
+    parse_within(src, Budget::default())
+}
+
+/// [`parse`], against `budget`.
+fn parse_within(src: &str, budget: Budget) -> Result<Vec<Element>, TooLarge> {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_FOOTNOTES);
-    Reader::default().run(Parser::new_ext(src, opts))
+    Reader {
+        budget,
+        ..Reader::default()
+    }
+    .run(Parser::new_ext(src, opts))
 }
 
 #[derive(Default)]
 struct Reader {
+    budget: Budget,
     out: Vec<Element>,
     text: String,
     /// Heading level being collected, if any.
@@ -34,6 +53,8 @@ struct Reader {
     in_code: bool,
     /// Table under construction: rows, and whether the header row is open.
     rows: Vec<Vec<String>>,
+    /// The cells spent for `rows` and `row`.
+    cells: u64,
     row: Vec<String>,
     in_table: bool,
     in_table_head: bool,
@@ -60,15 +81,16 @@ impl Reader {
         }
     }
 
-    fn flush_text(&mut self, kind: &str, level: Option<usize>) {
+    fn flush_text(&mut self, kind: &str, level: Option<usize>) -> Result<(), TooLarge> {
         let raw = std::mem::take(&mut self.text);
         let links = std::mem::take(&mut self.links);
         self.open_link = None;
-        let t = raw.trim().to_string();
-        if t.is_empty() {
-            return;
+        if raw.trim().is_empty() {
+            return Ok(());
         }
-        let mut e = self.element(kind, t, level);
+        self.budget.spend_elements(1)?;
+        self.budget.spend_text(raw.trim())?;
+        let mut e = self.element(kind, raw.trim().to_string(), level);
         // `element` holds the trimmed text; the offsets were taken against
         // the untrimmed string, so they shift by whatever the trim removed.
         let lead = raw.chars().take_while(|c| c.is_whitespace()).count();
@@ -85,6 +107,7 @@ impl Reader {
             e.links = Some(shifted);
         }
         self.out.push(e);
+        Ok(())
     }
 
     /// Mark where a link's anchor starts. Its extent is known only when the
@@ -109,20 +132,68 @@ impl Reader {
 
     /// End the text read so far as the block it belongs to: the open list
     /// item's, or a paragraph of its own.
-    fn flush_block(&mut self) {
+    fn flush_block(&mut self) -> Result<(), TooLarge> {
         let kind = if self.items > 0 {
             "doc:ListItem"
         } else {
             "doco:Paragraph"
         };
-        self.flush_text(kind, None);
+        self.flush_text(kind, None)
     }
 
-    fn run(mut self, parser: Parser<'_>) -> Vec<Element> {
+    /// A table's cells as read, each row padded to the widest: spent before
+    /// the padding is made, then what the output copies of them.
+    fn table(&mut self) -> Result<Option<Element>, TooLarge> {
+        let rows = std::mem::take(&mut self.rows);
+        let read = std::mem::take(&mut self.cells);
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let grid = (rows.len() as u64).saturating_mul(width as u64);
+        // pulldown-cmark gives every row the header's cells, each spent as
+        // read, so nothing is padded here; the padding is spent all the same,
+        // should a row ever come short.
+        self.budget.spend_cells(grid.saturating_sub(read))?;
+        self.budget.spend_elements(1)?;
+        let rows: Vec<Vec<String>> = rows
+            .into_iter()
+            .map(|mut r| {
+                r.resize(width, String::new());
+                r
+            })
+            .collect();
+        let text = rows
+            .iter()
+            .map(|r| r.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Markdown has no merged cells, so a section band is
+        // written as a body row holding only a bold first cell
+        // (`| **Food** | | |`). Bold is the author's mark: a row
+        // whose other cells are merely empty is an item with
+        // values missing. The last row has nothing to label.
+        let sub_headers: Vec<usize> = (self.header_rows..rows.len().saturating_sub(1))
+            .filter(|&r| {
+                width > 1
+                    && self.first_bold.get(r).copied().unwrap_or(false)
+                    && !rows[r][0].is_empty()
+                    && rows[r][1..].iter().all(|c| c.is_empty())
+            })
+            .collect();
+        let mut e = self.element("doco:Table", text, None);
+        e.header_rows = Some(self.header_rows);
+        e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
+        e.cells = Some(rows);
+        self.budget.spend_copies(&e)?;
+        Ok(Some(e))
+    }
+
+    fn run(mut self, parser: Parser<'_>) -> Result<Vec<Element>, TooLarge> {
         for ev in parser {
             match ev {
                 Event::Start(Tag::Heading { level, .. }) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.heading = Some(match level {
                         HeadingLevel::H1 => 1,
                         HeadingLevel::H2 => 2,
@@ -134,21 +205,21 @@ impl Reader {
                 }
                 Event::End(TagEnd::Heading(_)) => {
                     let level = self.heading.take();
-                    self.flush_text("doco:SectionTitle", level);
+                    self.flush_text("doco:SectionTitle", level)?;
                 }
                 // A nested list ends its parent item's own text, which is
                 // that item's, before the nested items begin.
-                Event::Start(Tag::List(_)) => self.flush_block(),
+                Event::Start(Tag::List(_)) => self.flush_block()?,
                 Event::Start(Tag::Item) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.items += 1;
                 }
                 Event::End(TagEnd::Item) => {
-                    self.flush_text("doc:ListItem", None);
+                    self.flush_text("doc:ListItem", None)?;
                     self.items = self.items.saturating_sub(1);
                 }
                 Event::Start(Tag::CodeBlock(_)) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.in_code = true;
                 }
                 Event::End(TagEnd::CodeBlock) => {
@@ -157,14 +228,17 @@ impl Reader {
                     // folding it into a paragraph's single flow.
                     let t = std::mem::take(&mut self.text);
                     if !t.trim().is_empty() {
+                        self.budget.spend_elements(1)?;
+                        self.budget.spend_text(t.trim_end())?;
                         let e = self.element("doco:Paragraph", t.trim_end().to_string(), None);
                         self.out.push(e);
                     }
                 }
                 Event::Start(Tag::Table(_)) => {
-                    self.flush_block();
+                    self.flush_block()?;
                     self.in_table = true;
                     self.rows.clear();
+                    self.cells = 0;
                     self.first_bold.clear();
                     self.cell_strong_text = false;
                     self.cell_plain_text = false;
@@ -182,7 +256,16 @@ impl Reader {
                     self.rows.push(std::mem::take(&mut self.row));
                 }
                 Event::End(TagEnd::TableCell) => {
-                    let c = self.text.trim().to_string();
+                    self.budget.spend_cells(1)?;
+                    self.cells += 1;
+                    let c = self.text.trim();
+                    // A cell that holds text is a node of the output of its
+                    // own.
+                    if !c.is_empty() {
+                        self.budget.spend_elements(1)?;
+                        self.budget.spend_text(c)?;
+                    }
+                    let c = c.to_string();
                     self.text.clear();
                     if self.row.is_empty() {
                         self.first_bold
@@ -199,41 +282,9 @@ impl Reader {
                 }
                 Event::End(TagEnd::Table) => {
                     self.in_table = false;
-                    let rows = std::mem::take(&mut self.rows);
-                    if rows.is_empty() {
-                        continue;
+                    if let Some(e) = self.table()? {
+                        self.out.push(e);
                     }
-                    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-                    let rows: Vec<Vec<String>> = rows
-                        .into_iter()
-                        .map(|mut r| {
-                            r.resize(width, String::new());
-                            r
-                        })
-                        .collect();
-                    let text = rows
-                        .iter()
-                        .map(|r| r.join(" | "))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    // Markdown has no merged cells, so a section band is
-                    // written as a body row holding only a bold first cell
-                    // (`| **Food** | | |`). Bold is the author's mark: a row
-                    // whose other cells are merely empty is an item with
-                    // values missing. The last row has nothing to label.
-                    let sub_headers: Vec<usize> = (self.header_rows..rows.len().saturating_sub(1))
-                        .filter(|&r| {
-                            width > 1
-                                && self.first_bold.get(r).copied().unwrap_or(false)
-                                && !rows[r][0].is_empty()
-                                && rows[r][1..].iter().all(|c| c.is_empty())
-                        })
-                        .collect();
-                    let mut e = self.element("doco:Table", text, None);
-                    e.header_rows = Some(self.header_rows);
-                    e.sub_headers = (!sub_headers.is_empty()).then_some(sub_headers);
-                    e.cells = Some(rows);
-                    self.out.push(e);
                 }
                 // A blank line between list items makes each item's text a
                 // paragraph inside it, and an item can hold several. They
@@ -243,7 +294,7 @@ impl Reader {
                         self.text.push(' ');
                     }
                 }
-                Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None),
+                Event::End(TagEnd::Paragraph) => self.flush_text("doco:Paragraph", None)?,
                 Event::Start(Tag::Link { dest_url, .. }) => self.open_link(&dest_url),
                 Event::End(TagEnd::Link) => self.close_link(),
                 Event::Start(Tag::Strong) => self.strong += 1,
@@ -266,21 +317,68 @@ impl Reader {
                         self.text.push(' ');
                     }
                 }
-                Event::Rule => self.flush_block(),
+                Event::Rule => self.flush_block()?,
                 _ => {}
             }
         }
-        self.flush_text("doco:Paragraph", None);
+        self.flush_text("doco:Paragraph", None)?;
         for (i, e) in self.out.iter_mut().enumerate() {
             e.id = format!("elem-{:05}", i + 1);
         }
-        self.out
+        Ok(self.out)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use fluree_doc_model::budget::{
+        converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+    };
+
+    fn parse(src: &str) -> Vec<Element> {
+        super::parse(src).unwrap()
+    }
+
+    #[test]
+    fn paragraphs_and_cells_past_the_budget_are_refused() {
+        let src = "w\n\n".repeat(1000);
+        let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
+        let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES);
+        assert_eq!(within(need).unwrap().len(), 1000);
+        assert!(within(need - 1).is_err());
+        // A header of 3 cells over a row of 1, which the parser gives the
+        // header's cells: 6 cells, 4 that hold text and the table, for
+        // Markdown.
+        let src = "| a | b | c |\n|---|---|---|\n| 1 |\n";
+        let need = 6 * CELL_BYTES + 5 * FLAT_ELEMENT_BYTES + 4 * TEXT_BYTES;
+        let within =
+            |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
+        assert_eq!(within(need).unwrap()[0].cells.as_ref().unwrap()[1].len(), 3);
+        assert!(within(need - 1).is_err());
+    }
+
+    #[test]
+    fn a_bands_label_the_output_copies_into_each_cell_is_spent() {
+        // A band of 1 MB over 100 columns and 40 rows: DoCO writes it as the
+        // section label of each of their 4,000 cells, 4 GB of copies.
+        let band = format!("| **{}** |{}\n", "B".repeat(1 << 20), " |".repeat(99));
+        let row = format!("|{}\n", " 1 |".repeat(100));
+        let src = format!(
+            "|{}\n|{}\n{band}{}",
+            " h |".repeat(100),
+            "---|".repeat(100),
+            row.repeat(40)
+        );
+        let refused = super::parse(&src).unwrap_err();
+        assert!(refused.to_string().contains("copies"), "{refused}");
+        // Markdown and the text write it once.
+        for output in [Output::Flat, Output::Text] {
+            let e = converting_to(output, || super::parse(&src)).unwrap();
+            assert_eq!(e[0].sub_headers, Some(vec![1]));
+        }
+    }
 
     fn kinds(els: &[Element]) -> Vec<&str> {
         els.iter().map(|e| e.kind.as_str()).collect()

@@ -353,7 +353,8 @@ fn read_source(
         SourceKind::Markdown => {
             let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
             (
-                fluree_doc_markdown::parse(&text),
+                fluree_doc_markdown::parse(&text)
+                    .map_err(|e| format!("Markdown document too large: {e}"))?,
                 fluree_doc_model::Notes::default(),
             )
         }
@@ -364,6 +365,7 @@ fn read_source(
             let text = fluree_doc_text::decode(&data);
             let elements = if fluree_doc_text::is_markdown(&text) {
                 fluree_doc_markdown::parse(&text)
+                    .map_err(|e| format!("Markdown document too large: {e}"))?
             } else {
                 fluree_doc_text::parse(&text)
             };

@@ -43,9 +43,10 @@ types, and its tables carry them (see [XLSX](office-and-web.md#xlsx)).
 
 Every cell, the rows padded to the widest, and its text are spent from the
 document's budget ([limits on what one document may make](../reference/limits.md))
-as the table is read, before they are allocated, and past it the file is
-refused (`CsvError::TooLarge`): one very wide row over a million short ones
-would otherwise ask for a trillion cells. The
+as the table is read, before they are allocated, and so are the copies DoCO
+writes of them (each cell's column header and row label); past it the file
+is refused (`CsvError::TooLarge`): one very wide row over a million short
+ones would otherwise ask for a trillion cells. The
 empty fields of a record are counted, not held, until one that holds
 something follows them, so a line of nothing but delimiters, which is no
 row, costs nothing however long it is.

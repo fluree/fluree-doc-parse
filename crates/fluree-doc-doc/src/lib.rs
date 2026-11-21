@@ -554,6 +554,8 @@ impl<'o> Layout<'o> {
             .join("\n");
         let mut e = self.element("doco:Table", text);
         e.cells = Some(std::mem::take(&mut self.rows));
+        // Each cell's column header and row label, copied by the output.
+        budget.spend_copies(&e)?;
         self.out.push(e);
         (self.spent, self.width) = (0, 0);
         Ok(())

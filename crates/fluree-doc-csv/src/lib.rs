@@ -35,7 +35,9 @@
 //! **Bounds.** The table's cells, its rows padded to the widest, and their
 //! text are counted against the document's [`Budget`] as they are read,
 //! before each is allocated: a file of one very wide row over a million
-//! short ones would otherwise ask for a trillion cells.
+//! short ones would otherwise ask for a trillion cells. So are the copies
+//! the output makes of them, a cell's column header and row label written
+//! with each cell ([`Budget::spend_copies`]).
 
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::Element;
@@ -123,6 +125,8 @@ fn parse_within(
     e.id = "elem-00001".into();
     e.header_rows = Some(usize::from(rows.len() > 1));
     e.cells = Some(rows);
+    // Each cell's column header and row label, copied by the output.
+    budget.spend_copies(&e)?;
     Ok(vec![e])
 }
 
@@ -365,7 +369,9 @@ fn one_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluree_doc_model::budget::{CELL_BYTES, ELEMENT_BYTES, TEXT_BYTES};
+    use fluree_doc_model::budget::{
+        converting_to, Output, CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+    };
 
     fn table(bytes: &[u8]) -> Element {
         let mut v = parse(bytes).unwrap();
@@ -517,12 +523,14 @@ mod tests {
     }
 
     /// A budget of `nodes` elements and cells that hold text, `cells` cells
-    /// and `text` bytes of text.
+    /// and `text` bytes of text, for an output that copies none of them
+    /// (Markdown): what the reader makes, alone.
     fn budget(nodes: u64, cells: u64, text: u64) -> Budget {
         Budget::new(
-            nodes * ELEMENT_BYTES + cells * CELL_BYTES + text * TEXT_BYTES,
+            nodes * FLAT_ELEMENT_BYTES + cells * CELL_BYTES + text * TEXT_BYTES,
             0,
         )
+        .for_output(Output::Flat)
     }
 
     fn within(f: &str, nodes: u64, cells: u64, text: u64) -> Result<Vec<Element>, CsvError> {
@@ -584,6 +592,26 @@ mod tests {
         let f = format!("{}{wide}x\n", "1\n".repeat(99));
         assert!(within(&f, 101, 100 * 101, 100).is_ok());
         assert!(within(&f, 101, 100 * 101 - 1, 100).is_err());
+    }
+
+    #[test]
+    fn the_labels_the_output_copies_are_spent() {
+        // A first column of 20,000 bytes over 2,000 others, on 60 rows: a
+        // 1.4 MB file whose DoCO writes each long value again as the label
+        // of each of its row's 2,000 cells, 2.4 GB of copies.
+        let mut f = format!("{}\n", vec!["h"; 2_001].join(","));
+        let row = format!("{},{}\n", "y".repeat(20_000), vec!["1"; 2_000].join(","));
+        f.push_str(&row.repeat(60));
+        let refused = parse(f.as_bytes()).unwrap_err();
+        assert!(
+            refused.to_string().contains("copies of table cells"),
+            "{refused}"
+        );
+        // Markdown and the text write each cell once.
+        for output in [Output::Flat, Output::Text] {
+            let e = converting_to(output, || parse(f.as_bytes())).unwrap();
+            assert_eq!(e[0].cells.as_ref().unwrap().len(), 61);
+        }
     }
 
     #[test]

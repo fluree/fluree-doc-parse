@@ -253,7 +253,8 @@ as malformed. Each page of paragraph properties is read once however many
 times the bin table names it, at most about four million runs of them, and
 a paragraph finds its own by a binary search. The characters are read one
 at a time, never all held; every character kept, element made and table
-cell (a row padded to the widest included) is spent from the document's
+cell (a row padded to the widest included), and the copies DoCO writes of
+a table's cells (each cell's labels), is spent from the document's
 budget ([limits on what one document may make](../reference/limits.md)) first, so pieces that all point at the
 same text cannot make millions of paragraphs of it. Returns `DocError`
 (`fluree_doc_doc::parse`) otherwise.
@@ -699,7 +700,13 @@ a table states where its header ends. Where the PDF engine reports a
 *measurement* — `header_rows` inferred from shading and value types — this
 reports a *fact*.
 
-Infallible, for the same reason as HTML.
+Every element, table cell (a row padded to the widest included) and its
+text, and the copies DoCO writes of a table's cells (each cell's column
+header, row label and section band: a bold first cell over empty ones), is
+spent from the document's budget
+([limits on what one document may make](../reference/limits.md)) first; a
+document past it fails as too large (`fluree_doc_markdown::parse` returns
+`TooLarge`).
 
 ## Plain text
 

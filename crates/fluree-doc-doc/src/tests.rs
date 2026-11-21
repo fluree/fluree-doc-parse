@@ -2,7 +2,9 @@
 //! the reader makes of them.
 
 use super::*;
-use fluree_doc_model::budget::{CELL_BYTES, ELEMENT_BYTES, TEXT_BYTES};
+use fluree_doc_model::budget::{
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+};
 use std::io::Write;
 
 /// How a paragraph's mark is set: plain, a cell's, or a row's end.
@@ -409,14 +411,59 @@ fn a_tables_padding_is_spent_before_it_is_made() {
     );
     let table = parse(&bytes).unwrap().remove(0);
     assert_eq!(table.cells.as_ref().unwrap().len(), 8);
-    // The table and its 13 cells that hold text, each a node of the output.
-    let budget =
-        |cells: u64| Budget::new(cells * CELL_BYTES + 14 * ELEMENT_BYTES + 13 * TEXT_BYTES, 0);
+    // The table and its 13 cells that hold text, each a node of the output,
+    // for an output that copies none of them (Markdown).
+    let budget = |cells: u64| {
+        Budget::new(
+            cells * CELL_BYTES + 14 * FLAT_ELEMENT_BYTES + 13 * TEXT_BYTES,
+            0,
+        )
+        .for_output(Output::Flat)
+    };
     assert!(parse_within(&bytes, &mut budget(48)).is_ok());
     assert!(matches!(
         parse_within(&bytes, &mut budget(47)),
         Err(DocError::TooLarge(_))
     ));
+}
+
+#[test]
+fn the_labels_the_output_copies_of_a_table_are_spent() {
+    // A header row, then 4 rows whose first cell, 10,000 bytes, DoCO
+    // writes again as the row label of each of the 2 cells beside it:
+    // 80,000 bytes of copies, a 1 MiB budget's worth at their cost.
+    let long = "y".repeat(10_000);
+    let mut main = vec![("h", Mark::Cell); 3];
+    main.push(("", Mark::Row));
+    for _ in 0..4 {
+        main.extend([
+            (long.as_str(), Mark::Cell),
+            ("1", Mark::Cell),
+            ("1", Mark::Cell),
+            ("", Mark::Row),
+        ]);
+    }
+    let bytes = doc_with(
+        &Stories {
+            main,
+            footnotes: vec![],
+            comments: vec![],
+            endnotes: vec![],
+        },
+        0x00C1,
+        0x0200,
+    );
+    let within = |memory: u64| parse_within(&bytes, &mut Budget::new(memory, 0));
+    assert!(within(4 << 20).is_ok());
+    assert!(matches!(
+        within(1 << 20),
+        Err(DocError::TooLarge(ref m)) if m.contains("copies")
+    ));
+    // Markdown and the text write each cell once, within the same budget.
+    for output in [Output::Flat, Output::Text] {
+        let budget = &mut Budget::new(1 << 20, 0).for_output(output);
+        assert!(converting_to(output, || parse_within(&bytes, budget)).is_ok());
+    }
 }
 
 #[test]
