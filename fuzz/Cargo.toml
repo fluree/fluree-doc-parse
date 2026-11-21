@@ -31,6 +31,7 @@ fluree-doc-vision = { path = "../crates/fluree-doc-vision" }
 # message's attachments, need none of it.
 fluree-doc-cli = { path = "../crates/fluree-doc-cli", default-features = false }
 hayro-syntax = "0.7"
+serde_json = "1"
 
 # Its own workspace, so the main build never compiles it (it needs nightly
 # and libFuzzer) and `cargo fuzz` never builds the main workspace's members.

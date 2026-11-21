@@ -23,51 +23,105 @@ pub fn detect(name: &str, data: &[u8]) -> (String, Option<String>) {
     )
 }
 
-/// What `convert --parse-attachments -f doco` makes of a file an e-mail
-/// carries, with no OCR and no model, its first four pages at most; `None`
-/// where it is not read. For the fuzz targets under `fuzz/`: the e-mail
-/// target reads a message's attachments through it, so a file that a
-/// message carries meets the reader `convert` hands it to. Not part of the
-/// command surface.
+/// What `convert --parse-attachments` makes of each file `email` carries,
+/// down through attached messages, handed to `each` as it is made: each
+/// converted to the output the caller reads for
+/// (`fluree_doc_model::budget::converting_to`; DoCO outside it), within
+/// what the message leaves of the budget, as `convert` converts it, with no
+/// OCR and no model, its first four pages at most. A file no reader takes
+/// is not handed. For the fuzz targets under `fuzz/`: the e-mail target
+/// reads a message's files through it, so a file a message carries meets
+/// the reader `convert` hands it to, on the budget `convert` gives it. Not
+/// part of the command surface.
 #[doc(hidden)]
-pub fn convert_attachment(f: &fluree_doc_email::AttachedFile) -> Option<Result<String, String>> {
+pub fn convert_attachments(
+    email: &fluree_doc_email::Email,
+    mut each: impl FnMut(Result<String, String>),
+) {
     use clap::Parser;
-    let cli = cli::Cli::try_parse_from(["fdoc", "convert", "attachment", "-f", "doco"]).ok()?;
+    use fluree_doc_model::budget::{output, Output};
+    let format = match output() {
+        Output::Doco => "doco",
+        Output::Text => "text",
+        Output::Flat => "md",
+    };
+    let Ok(cli) = cli::Cli::try_parse_from(["fdoc", "convert", "attachment", "-f", format]) else {
+        return;
+    };
     let cli::Commands::Convert(args) = cli.command else {
-        return None;
+        return;
     };
     let cfg = commands::common::TierConfig::default();
-    commands::convert::convert_carried(f, &cfg, &args, Some(&[1, 2, 3, 4]), true)
+    let convert =
+        commands::convert::carried_converter(email, &cfg, &args, Some(&[1, 2, 3, 4]), true);
+    let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
+        let out = convert(f)?;
+        let kept = out.as_ref().map(|_| ()).map_err(Clone::clone);
+        each(out);
+        Some(kept)
+    };
+    fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
 }
 
 #[cfg(test)]
 mod tests {
-    use fluree_doc_email::AttachedFile;
+    use fluree_doc_model::budget::{converting_to, within, Output};
 
     #[test]
     fn an_attachment_is_converted_by_the_reader_convert_hands_it_to() {
-        let csv = AttachedFile::new(
-            Some("data.csv".into()),
-            "text/csv".into(),
-            false,
-            b"Region,Amount\nNorth,12\n".to_vec(),
+        // A long body, so that what the message holds is more than the
+        // CSV needs.
+        let body = "See the orders attached. ".repeat(1000);
+        let mail = format!(
+            "From: Alex Sample <alex@example.com>\r\nSubject: Orders\r\n\
+                    MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+                    --b\r\nContent-Type: text/plain\r\n\r\n{body}\r\n\
+                    --b\r\nContent-Type: text/csv\r\n\
+                    Content-Disposition: attachment; filename=\"data.csv\"\r\n\r\n\
+                    Region,Amount\r\nNorth,12\r\n\
+                    --b\r\nContent-Type: application/octet-stream\r\n\
+                    Content-Disposition: attachment; filename=\"deck.key\"\r\n\r\n\
+                    PK\x03\x04\r\n--b--\r\n"
         );
-        let out = super::convert_attachment(&csv).unwrap().unwrap();
-        assert!(out.contains("\"doc:cellValue\": \"North\""), "{out}");
-        // An image is not read without OCR, nor a format with no reader.
-        let png = AttachedFile::new(
-            Some("logo.png".into()),
-            "image/png".into(),
-            false,
-            b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec(),
+        let email = fluree_doc_email::parse(mail.as_bytes()).unwrap();
+        let converted = |output| {
+            let mut out = Vec::new();
+            converting_to(output, || {
+                super::convert_attachments(&email, |r| out.push(r.unwrap()))
+            });
+            out
+        };
+        // A format with no reader is not handed; the CSV is, converted to
+        // the output read for.
+        let doco = converted(Output::Doco);
+        assert_eq!(doco.len(), 1);
+        assert!(
+            doco[0].contains("\"doc:cellValue\": \"North\""),
+            "{}",
+            doco[0]
         );
-        assert!(super::convert_attachment(&png).is_none());
-        let key = AttachedFile::new(
-            Some("deck.key".into()),
-            "application/octet-stream".into(),
-            false,
-            b"PK\x03\x04".to_vec(),
-        );
-        assert!(super::convert_attachment(&key).is_none());
+        let md = converted(Output::Flat);
+        assert!(md[0].contains("|North|12|"), "{}", md[0]);
+        // Within what the message leaves: none, and the file is refused.
+        let mut refused = Vec::new();
+        within(held(&email), || {
+            super::convert_attachments(&email, |r| refused.push(r))
+        });
+        assert_eq!(refused.len(), 1);
+        let e = refused[0].as_ref().unwrap_err();
+        assert!(e.contains("memory a document may take"), "{e}");
+    }
+
+    /// What `email` holds while its files are converted, at the budget's
+    /// costs.
+    fn held(email: &fluree_doc_email::Email) -> u64 {
+        let mut b = fluree_doc_model::budget::Budget::default();
+        b.spend_elements(email.elements.len() as u64).unwrap();
+        for e in &email.elements {
+            b.spend_text(&e.text).unwrap();
+        }
+        let files: usize = email.attachments.iter().map(|a| a.bytes.len()).sum();
+        b.spend_bytes(files as u64).unwrap();
+        fluree_doc_model::budget::MAX_MEMORY - b.memory_left()
     }
 }

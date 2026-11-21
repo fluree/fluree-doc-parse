@@ -898,7 +898,7 @@ fn convert_attachments(
         parse_attachments: false,
         ..args.clone()
     };
-    let share = attachments_share(email);
+    let convert = carried_converter(email, cfg, &child_args, None, quiet);
     // A conversion that cannot be written stops the run, as the message's
     // own output would.
     let mut unwritten: Option<String> = None;
@@ -908,9 +908,7 @@ fn convert_attachments(
                 "not converted: an earlier output was not written".to_string()
             ));
         }
-        let out = fluree_doc_model::budget::within(share, || {
-            convert_carried(f, cfg, &child_args, None, quiet)
-        })?;
+        let out = convert(f)?;
         Some(out.and_then(|out| {
             let path = dir.join(format!("{}.{}", f.info.sha256, ext(args.format)));
             std::fs::write(&path, out).map_err(|e| {
@@ -955,6 +953,21 @@ fn convert_attachments(
     Ok(())
 }
 
+/// What converts each file `email` carries, as `--parse-attachments` does:
+/// [`convert_carried`], within what the message leaves of the budget
+/// ([`attachments_share`]), so a file is not read on a budget of its own
+/// beside the message it came in.
+pub(crate) fn carried_converter<'a>(
+    email: &fluree_doc_email::Email,
+    cfg: &'a TierConfig,
+    args: &'a ConvertArgs,
+    pages: Option<&'a [usize]>,
+    quiet: bool,
+) -> impl Fn(&fluree_doc_email::AttachedFile) -> Option<Result<String, String>> + 'a {
+    let share = attachments_share(email);
+    move |f| fluree_doc_model::budget::within(share, || convert_carried(f, cfg, args, pages, quiet))
+}
+
 /// The memory each file an e-mail carries may be converted within: a
 /// document's budget less what the message holds while they are read, its
 /// elements and their text at their costs, and its files' bytes, each held
@@ -980,7 +993,7 @@ fn attachments_share(email: &fluree_doc_email::Email) -> u64 {
 /// `args` for a child (no attachments of its own saved), its pages `pages`;
 /// `None` where no reader takes it: a format with none, or an image no
 /// tier is configured to read (a signature's logo, drawn in the body, never).
-pub(crate) fn convert_carried(
+fn convert_carried(
     f: &fluree_doc_email::AttachedFile,
     cfg: &TierConfig,
     args: &ConvertArgs,

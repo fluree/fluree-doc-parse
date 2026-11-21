@@ -719,6 +719,7 @@ dependencies = [
  "fluree-doc-xps",
  "hayro-syntax",
  "libfuzzer-sys",
+ "serde_json",
 ]
 
 [[package]]

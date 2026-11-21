@@ -5,26 +5,58 @@
 //! that panics, aborts, hangs or runs out of memory is a defect, and
 //! libFuzzer reports those itself (`-timeout`, `-rss_limit_mb`).
 
-use fluree_doc_model::budget::{text_cost, CELL_BYTES, ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES};
+use fluree_doc_model::budget::{
+    converting_to, output, text_cost, Output, CELL_BYTES, ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
+};
 use fluree_doc_model::doco::table_copies;
 use fluree_doc_model::{DocoOptions, Element, Notes};
 
-/// The memory `elements` stand for at the budget's costs
+/// The output `data` is read for, as `fdoc convert -f` names it: DoCO, the
+/// text, or Markdown, XHTML and JSON (`Output::Flat`), picked by the XOR of
+/// its bytes. A seed is read as it is written, and a mutation of any byte
+/// picks another output about two times in three, so over a campaign each input
+/// is tried at each output's costs: the flat outputs admit the most
+/// elements (2 KiB each, no copies of a table's cells), DoCO the most
+/// copies.
+pub fn output_of(data: &[u8]) -> Output {
+    match data.iter().fold(0u8, |x, b| x ^ b) % 3 {
+        0 => Output::Doco,
+        1 => Output::Flat,
+        _ => Output::Text,
+    }
+}
+
+/// Run `read` as `fdoc convert` reads `data` for the output its bytes pick
+/// ([`output_of`]): each budget a reader makes meanwhile counts at that
+/// output's costs (`fluree_doc_model::budget::converting_to`), and
+/// [`check`] estimates and renders at it.
+pub fn reading<R>(data: &[u8], read: impl FnOnce() -> R) -> R {
+    converting_to(output_of(data), read)
+}
+
+/// The memory `elements` stand for at the budget's costs for `output`
 /// (`fluree_doc_model::budget`): an element, or a cell holding text, at
-/// `ELEMENT_BYTES`, each cell slot at `CELL_BYTES`, each byte of text at
-/// `TEXT_BYTES` times what it may take in the worst output. A table's text
-/// is its cells' (the cost of a byte covers the copies made of it), so it
-/// is counted once, through its cells, and then the copies DoCO writes of
-/// them (`fluree_doc_model::doco::table_copies`): a merged value in each
-/// cell it covers, each cell's labels.
-pub fn estimated_memory(elements: &[Element]) -> u64 {
+/// the output's element cost, each cell slot at `CELL_BYTES`, each byte of
+/// text at `TEXT_BYTES` times what it may take in the worst output. A
+/// table's text is its cells' (the cost of a byte covers the copies made
+/// of it), so it is counted once, through its cells, and then the copies
+/// the output writes of them (`fluree_doc_model::doco::table_copies`):
+/// for DoCO, a merged value in each cell it covers, each cell's labels;
+/// for the text, a value merged down on each row; for the others, none.
+pub fn estimated_memory(elements: &[Element], output: Output) -> u64 {
+    let element = output.element_bytes();
     let mut cost = 0u64;
     for e in elements {
         let copies = table_copies(e);
-        cost = cost
-            .saturating_add(ELEMENT_BYTES)
-            .saturating_add(copies.cells.saturating_mul(ELEMENT_BYTES))
-            .saturating_add(copies.text.saturating_mul(TEXT_BYTES));
+        let copied = match output {
+            Output::Doco => copies
+                .cells
+                .saturating_mul(ELEMENT_BYTES)
+                .saturating_add(copies.text.saturating_mul(TEXT_BYTES)),
+            Output::Text => copies.merged.saturating_mul(TEXT_BYTES),
+            Output::Flat => 0,
+        };
+        cost = cost.saturating_add(element).saturating_add(copied);
         if e.cells.is_none() {
             cost = cost.saturating_add(text_cost(&e.text).saturating_mul(TEXT_BYTES));
         }
@@ -33,7 +65,7 @@ pub fn estimated_memory(elements: &[Element]) -> u64 {
                 cost = cost.saturating_add(CELL_BYTES);
                 if !cell.is_empty() {
                     cost = cost
-                        .saturating_add(ELEMENT_BYTES)
+                        .saturating_add(element)
                         .saturating_add(text_cost(cell).saturating_mul(TEXT_BYTES));
                 }
             }
@@ -42,24 +74,34 @@ pub fn estimated_memory(elements: &[Element]) -> u64 {
     cost
 }
 
-/// Assert `elements` fit one document's budget, then render them through
-/// every output, as `convert` would.
+/// Assert `elements` fit one document's budget, at the costs of the output
+/// they are read for ([`reading`]; DoCO's outside it), then render them
+/// through that output, as `convert` would: through every output for DoCO,
+/// whose costs are above every other's.
 pub fn check(elements: &[Element]) {
     check_with(elements, &Notes::default());
 }
 
 /// [`check`], with the notes a reader left beside its elements.
 pub fn check_with(elements: &[Element], notes: &Notes) {
-    let cost = estimated_memory(elements);
+    let output = output();
+    let cost = estimated_memory(elements, output);
     assert!(
         cost <= MAX_MEMORY,
-        "{} elements stand for {cost} bytes, past the {MAX_MEMORY} a document may take",
+        "{} elements stand for {cost} bytes as {output:?}, past the {MAX_MEMORY} a document may take",
         elements.len()
     );
-    let _ = fluree_doc_model::to_markdown_with(elements, notes);
-    let _ = fluree_doc_model::to_xhtml_with(elements, notes);
-    let _ = fluree_doc_model::to_text(elements);
-    let _ = fluree_doc_model::to_doco(elements, &DocoOptions::default());
+    if output != Output::Text {
+        let _ = fluree_doc_model::to_markdown_with(elements, notes);
+        let _ = fluree_doc_model::to_xhtml_with(elements, notes);
+        let _ = serde_json::to_string_pretty(elements);
+    }
+    if output != Output::Flat {
+        let _ = fluree_doc_model::to_text(elements);
+    }
+    if output == Output::Doco {
+        let _ = fluree_doc_model::to_doco(elements, &DocoOptions::default());
+    }
 }
 
 /// Each picture a reader listed, read through `read` as `convert` reads it:

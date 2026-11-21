@@ -277,7 +277,10 @@ coordinates could otherwise wrap its last column onto its first.
 
 The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
 bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
-then quick to run.
+then quick to run. Each input is read for one output, DoCO, the text, or
+the flat outputs, which its bytes pick, and checked at that output's costs,
+so the costs of each are fuzzed; an e-mail's files are converted within
+what the message leaves, as `--parse-attachments` converts them.
 
 A reader's own bounds on memory the budget does not count scale with it
 (`fluree_doc_model::budget::scaled`): the cells and text calamine

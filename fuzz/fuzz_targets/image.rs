@@ -50,7 +50,9 @@ fuzz_target!(|data: &[u8]| {
     // The decoder's bound on pixels is scaled as the budget is
     // (`fluree_doc_model::budget::scaled`), so an image within it stays
     // within the fuzzer's memory limit.
-    if let Ok(read) = fluree_doc_image::elements(data, &Bands) {
-        fluree_doc_parse_fuzz::check(&read.elements);
-    }
+    fluree_doc_parse_fuzz::reading(data, || {
+        if let Ok(read) = fluree_doc_image::elements(data, &Bands) {
+            fluree_doc_parse_fuzz::check(&read.elements);
+        }
+    });
 });

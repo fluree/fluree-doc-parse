@@ -11,27 +11,29 @@ use std::sync::Arc;
 const MAX_PAGES: usize = 4;
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(raw) = hayro_syntax::Pdf::new(Arc::new(data.to_vec())) else {
-        return;
-    };
-    let outline = fluree_doc_pdf::outline::extract(&raw);
-    let _ = fluree_doc_pdf::info::read(&raw);
-    let mut budget = fluree_doc_model::budget::Budget::default();
-    if let Ok(notes) = fluree_doc_pdf::annot::annotations(&raw, &mut budget) {
-        let _ = fluree_doc_pdf::annot::elements(&notes);
-    }
-    let _ = fluree_doc_pdf::annot::embedded_files(&raw);
-    let links = fluree_doc_pdf::link::extract(&raw);
-    if raw.pages().len() > MAX_PAGES {
-        return;
-    }
-    let Ok(mut doc) = fluree_doc_pdf::extract_bytes(data.to_vec()) else {
-        return;
-    };
-    let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &outline);
-    fluree_doc_pdf::link::attach(&mut analysis.elements, &links, &doc.pages);
-    let _ = fluree_doc_pdf::unread_pages(&doc, &analysis.elements);
-    let _ = fluree_doc_pdf::unread_regions(&doc, &analysis.elements);
-    let _ = fluree_doc_pdf::parse_warnings(&doc);
-    fluree_doc_parse_fuzz::check(&analysis.elements);
+    fluree_doc_parse_fuzz::reading(data, || {
+        let Ok(raw) = hayro_syntax::Pdf::new(Arc::new(data.to_vec())) else {
+            return;
+        };
+        let outline = fluree_doc_pdf::outline::extract(&raw);
+        let _ = fluree_doc_pdf::info::read(&raw);
+        let mut budget = fluree_doc_model::budget::Budget::default();
+        if let Ok(notes) = fluree_doc_pdf::annot::annotations(&raw, &mut budget) {
+            let _ = fluree_doc_pdf::annot::elements(&notes);
+        }
+        let _ = fluree_doc_pdf::annot::embedded_files(&raw);
+        let links = fluree_doc_pdf::link::extract(&raw);
+        if raw.pages().len() > MAX_PAGES {
+            return;
+        }
+        let Ok(mut doc) = fluree_doc_pdf::extract_bytes(data.to_vec()) else {
+            return;
+        };
+        let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &outline);
+        fluree_doc_pdf::link::attach(&mut analysis.elements, &links, &doc.pages);
+        let _ = fluree_doc_pdf::unread_pages(&doc, &analysis.elements);
+        let _ = fluree_doc_pdf::unread_regions(&doc, &analysis.elements);
+        let _ = fluree_doc_pdf::parse_warnings(&doc);
+        fluree_doc_parse_fuzz::check(&analysis.elements);
+    });
 });

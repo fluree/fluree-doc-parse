@@ -29,21 +29,27 @@ not.
 | `html` | a web page, and an e-mail's HTML body | `fluree_doc_html::decode`, `parse`, `info`, `parse_with_quote_depth` |
 | `markdown` | Markdown, as UTF-8 | `fluree_doc_markdown::parse` |
 | `image` | PNG, JPEG, TIFF: the header, and the image decoded and read by a stand-in OCR engine (no models) | `fluree_doc_image::header`, `elements` |
-| `email` | `.eml` and `.msg`, the files they carry, down through attached messages, each converted by the reader `convert` hands it to (no OCR, no model, four pages at most) | `fluree_doc_email::parse`, `parse_attachments`, `fluree_doc_cli::convert_attachment` |
+| `email` | `.eml` and `.msg`, the files they carry, down through attached messages, each converted by the reader `convert` hands it to, within what the message leaves of the budget (no OCR, no model, four pages at most) | `fluree_doc_email::parse`, `fluree_doc_cli::convert_attachments` |
 | `detect` | which reader `convert` sends a file to, by content and name (the first byte picks the name) | `fluree_doc_cli::detect` |
 
-Each target renders what the reader made through every output (Markdown,
-XHTML, text, DoCO JSON-LD), as `convert` would, and asserts that it stands
-for no more memory than one document may take, at the budget's own costs
-(`src/lib.rs`), the copies DoCO writes of a table's cells included (a merged
-value in each cell it covers, each cell's labels), so a reader that makes a
-table without spending them fails. `cargo fuzz` builds with `--cfg fuzzing`, under which that
-budget is a sixteenth of the shipped one, so an input that fills it stays
-quick to run, and so are a reader's own bounds on the memory the budget
-does not count (`fluree_doc_model::budget::scaled`: the cells calamine
-allocates for `xls` and `xlsb`, an XPS document's parts and glyphs, the
-pixels an image is decoded to; `docs/reference/limits.md` lists them), so an
-input within them stays within the memory limit below.
+Each target reads its input for one output, as `fdoc convert -f` does,
+picked by the XOR of the input's bytes (`src/lib.rs`, `output_of`): DoCO
+JSON-LD, the text, or Markdown, XHTML and JSON, which admit the most
+elements. A seed is read as written, and a mutation of any byte picks
+another output about two times in three, so over a campaign each input is tried
+at each output's costs. The reader's budget counts at that output's costs
+(`fluree_doc_model::budget::converting_to`), and the target renders what it
+made through that output (through every output for DoCO, whose costs are
+the largest) and asserts that it stands for no more memory than one
+document may take, at the same costs, the copies the output writes of a
+table's cells included (for DoCO, a merged value in each cell it covers,
+each cell's labels), so a reader that makes a table without spending them
+fails. `cargo fuzz` builds with `--cfg fuzzing`, under which that budget is
+a sixteenth of the shipped one, so an input that fills it stays quick to
+run, and so are a reader's own bounds on the memory the budget does not
+count (`fluree_doc_model::budget::scaled`; `docs/reference/limits.md`
+lists them), so an input within them stays within the memory limit
+below.
 
 ## Running
 

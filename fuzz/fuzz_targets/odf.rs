@@ -4,8 +4,10 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = fluree_doc_odf::Format::sniff(data);
-    if let Ok((elements, _info, _format)) = fluree_doc_odf::parse_with_info(data) {
-        fluree_doc_parse_fuzz::check(&elements);
-    }
+    fluree_doc_parse_fuzz::reading(data, || {
+        let _ = fluree_doc_odf::Format::sniff(data);
+        if let Ok((elements, _info, _format)) = fluree_doc_odf::parse_with_info(data) {
+            fluree_doc_parse_fuzz::check(&elements);
+        }
+    });
 });
