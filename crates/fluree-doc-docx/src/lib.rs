@@ -19,7 +19,7 @@
 
 mod numbering;
 
-use fluree_doc_model::budget::Budget;
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{symbols, DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local};
 use numbering::Numbering;
@@ -48,6 +48,12 @@ impl std::fmt::Display for DocxError {
 }
 
 impl std::error::Error for DocxError {}
+
+impl From<TooLarge> for DocxError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e.to_string())
+    }
+}
 
 /// Parse a `.docx` file's bytes into document elements in reading order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, DocxError> {
@@ -148,7 +154,11 @@ pub fn parse_with_media(
     // part the document numbers nothing.
     let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
     let numbering = Numbering::new(pkg.read(&numbering).as_deref(), styles.as_deref());
-    let (body, figure_rids) = parse_body(&xml, &header_styles, &title_styles, numbering)?;
+    // What the document makes, its body, header, footer and notes, is spent
+    // from one budget as it is made.
+    let mut budget = Budget::default();
+    let (body, figure_rids) =
+        parse_body(&xml, &header_styles, &title_styles, numbering, &mut budget)?;
     // The page header and footer: where a controlled document keeps its
     // number, revision and title, which its body never repeats. Each is
     // read once, the header before the body and the footer after it, and
@@ -165,7 +175,10 @@ pub fn parse_with_media(
         .as_deref()
         .is_some_and(|x| toggled_on(x, "evenAndOddHeaders"));
     let rels = pkg.relationships(&main);
-    let mut read_parts = |kind: &str, evidence: &'static str| -> Vec<Element> {
+    let mut read_parts = |kind: &str,
+                          evidence: &'static str,
+                          budget: &mut Budget|
+     -> Result<Vec<Element>, DocxError> {
         let mut out: Vec<Element> = Vec::new();
         for rid in shown_parts(&xml, kind, even_odd) {
             let Some(part) = rels.iter().find(|r| r.id == rid && !r.external) else {
@@ -174,13 +187,16 @@ pub fn parse_with_media(
             let Some(part_xml) = pkg.read(&part.target) else {
                 continue;
             };
-            let Ok(found) = parse_with_styles(
+            let found = match parse_part(
                 &part_xml,
                 &header_styles,
                 &title_styles,
                 Numbering::default(),
-            ) else {
-                continue;
+                budget,
+            ) {
+                Ok(found) => found,
+                Err(e @ DocxError::TooLarge(_)) => return Err(e),
+                Err(_) => continue,
             };
             for mut e in found {
                 // A header's picture is its logo.
@@ -200,16 +216,15 @@ pub fn parse_with_media(
                 }
             }
         }
-        out
+        Ok(out)
     };
-    let header = read_parts("header", "header");
-    let footer = read_parts("footer", "footer");
+    let header = read_parts("header", "header", &mut budget)?;
+    let footer = read_parts("footer", "footer", &mut budget)?;
     // Footnotes and endnotes, after the body, each labelled with the
     // number Word shows it by; then the footer; then the comments, which
     // Word does not print. Each marked as what it is, so a consumer that
     // wants the body alone leaves them out.
     let mut notes = Vec::new();
-    let mut budget = Budget::default();
     for kind in [&FOOTNOTES, &ENDNOTES, &COMMENTS] {
         let part = pkg.related(&main, kind.rel, kind.fallback);
         let Some(part_xml) = aside(&mut pkg, &part)? else {
@@ -412,8 +427,9 @@ fn note_format(settings: Option<&str>, document_xml: &str, item: &str) -> String
 /// body does not cite is not shown, and not read; a comment the body does not
 /// anchor (one on a header, say) follows those it does, in the part's order.
 ///
-/// Each element a note makes is spent from `budget`, with its text, before
-/// it is kept: a part of a few megabytes can hold a million notes.
+/// Each element a note makes is spent from `budget`, with its text, as it is
+/// read, and its label too: a part of a few megabytes can hold a million
+/// notes.
 fn read_notes(
     kind: &NoteKind,
     part_xml: &str,
@@ -452,9 +468,16 @@ fn read_notes(
             ("comment", _) => String::new(),
             _ => numbering::format_number(n, &format),
         };
-        let Ok(found) = parse_with_styles(xml, header_styles, title_styles, Numbering::default())
-        else {
-            continue;
+        let found = match parse_part(
+            xml,
+            header_styles,
+            title_styles,
+            Numbering::default(),
+            budget,
+        ) {
+            Ok(found) => found,
+            Err(e @ DocxError::TooLarge(_)) => return Err(e),
+            Err(_) => continue,
         };
         let mut first = true;
         for mut e in found {
@@ -466,15 +489,13 @@ fn read_notes(
                 e.kind = "doco:Paragraph".into();
                 e.level = None;
                 if first && !label.is_empty() {
+                    // The label and the space after it.
+                    budget.spend_chars(label.chars().chain([' ']))?;
                     e.text = format!("{label} {}", e.text.trim_start());
                 }
             }
             first = false;
             e.evidence = kind.evidence;
-            budget
-                .spend_elements(1)
-                .and_then(|()| budget.spend_text(&e.text))
-                .map_err(|e| DocxError::TooLarge(e.to_string()))?;
             out.push(e);
         }
     }
@@ -800,7 +821,20 @@ fn parse_with_styles(
     title_styles: &HashSet<String>,
     numbering: Numbering,
 ) -> Result<Vec<Element>, DocxError> {
-    parse_body(xml, header_styles, title_styles, numbering).map(|(elements, _)| elements)
+    let mut budget = Budget::default();
+    parse_part(xml, header_styles, title_styles, numbering, &mut budget)
+}
+
+/// [`parse_with_styles`], a part of a document, what it makes spent from
+/// the document's `budget`.
+fn parse_part(
+    xml: &str,
+    header_styles: &HashSet<String>,
+    title_styles: &HashSet<String>,
+    numbering: Numbering,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, DocxError> {
+    parse_body(xml, header_styles, title_styles, numbering, budget).map(|(elements, _)| elements)
 }
 
 /// A figure's id (`Element::figure`) and the relationship id naming its
@@ -808,12 +842,14 @@ fn parse_with_styles(
 type FigureImage = (String, String, usize);
 
 /// [`parse_with_styles`], with each figure's image relationship, in reading
-/// order.
+/// order. Each element is spent from `budget` as it is made, a table's
+/// cells before its grid is.
 fn parse_body(
     xml: &str,
     header_styles: &HashSet<String>,
     title_styles: &HashSet<String>,
     mut numbering: Numbering,
+    budget: &mut Budget,
 ) -> Result<(Vec<Element>, Vec<FigureImage>), DocxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
@@ -1133,6 +1169,7 @@ fn parse_body(
                         if pic_depth == 0 && (pic.image || pic.object) {
                             figure_count += 1;
                             let mut f = element("doco:Figure", pic.text(), None);
+                            spend(budget, &f)?;
                             let id = format!("figure-0-{figure_count}");
                             for (k, rid) in std::mem::take(&mut pic.embed).into_iter().enumerate() {
                                 media.push((id.clone(), rid, k));
@@ -1178,7 +1215,7 @@ fn parse_body(
                             let at = out.len();
                             let (level, label) = (para.level, para.label.clone());
                             let list = para.list.clone().unwrap_or_default();
-                            flush_para(&mut out, &mut para, title_styles);
+                            flush_para(&mut out, &mut para, title_styles, budget)?;
                             // Whether it reads as a title is a question about
                             // the element it became: a paragraph's lines after
                             // a blank one are paragraphs of their own.
@@ -1221,7 +1258,7 @@ fn parse_body(
                                     .style
                                     .as_ref()
                                     .is_some_and(|s| header_styles.contains(s));
-                            emit_table(&mut out, std::mem::take(&mut rows), styled);
+                            emit_table(&mut out, std::mem::take(&mut rows), styled, budget)?;
                             // A picture in a cell has no place in a grid of
                             // text; it follows the table.
                             out.append(&mut figures);
@@ -1234,7 +1271,7 @@ fn parse_body(
         }
         buf.clear();
     }
-    flush_para(&mut out, &mut para, title_styles);
+    flush_para(&mut out, &mut para, title_styles, budget)?;
     out.append(&mut figures);
     promote_numbered_titles(&mut out, &outline);
     for (i, e) in out.iter_mut().enumerate() {
@@ -1249,6 +1286,19 @@ fn push(para: &mut Para, cell: &mut Cell, in_cell: bool, s: &str) {
     } else {
         para.text.push_str(s);
     }
+}
+
+/// An element about to be kept, and its text, spent from `budget`.
+fn spend(budget: &mut Budget, e: &Element) -> Result<(), TooLarge> {
+    budget.spend_elements(1)?;
+    budget.spend_text(&e.text)
+}
+
+/// `e` kept, spent from `budget` first.
+fn keep(out: &mut Vec<Element>, e: Element, budget: &mut Budget) -> Result<(), TooLarge> {
+    spend(budget, &e)?;
+    out.push(e);
+    Ok(())
 }
 
 fn element(kind: &str, text: String, level: Option<usize>) -> Element {
@@ -1386,7 +1436,12 @@ struct Numbered {
     capitals: bool,
 }
 
-fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<String>) {
+fn flush_para(
+    out: &mut Vec<Element>,
+    para: &mut Para,
+    title_styles: &HashSet<String>,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let p = std::mem::take(para);
     // The number Word shows at the head of a numbered paragraph is part of
     // what it says: `9.1.5. Record the reading` is how it is cited.
@@ -1409,7 +1464,7 @@ fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<St
     }
     parts.retain(|p| !p.is_empty());
     let Some((first, rest)) = parts.split_first() else {
-        return;
+        return Ok(());
     };
     // `numId` 0 is a paragraph taken out of its list.
     let numbered = p.numbered && p.num_id.as_deref() != Some("0");
@@ -1418,18 +1473,24 @@ fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<St
     let lines = first.join("\n");
     // The title Word's Title style declares: the document's own, which
     // DoCO holds as the document's header rather than as a section's.
-    if p.style == "Title" || title_styles.contains(&p.style) {
-        out.push(element("doco:Title", title, None));
+    let e = if p.style == "Title" || title_styles.contains(&p.style) {
+        element("doco:Title", title, None)
     } else if let Some(level) = heading_level(&p.style) {
-        out.push(element("doco:SectionTitle", title, Some(level)));
+        element("doco:SectionTitle", title, Some(level))
     } else if numbered || is_list_style(&p.style) {
-        out.push(element("doc:ListItem", lines, None));
+        element("doc:ListItem", lines, None)
     } else {
-        out.push(element("doco:Paragraph", lines, None));
-    }
+        element("doco:Paragraph", lines, None)
+    };
+    keep(out, e, budget)?;
     for part in rest {
-        out.push(element("doco:Paragraph", part.join("\n"), None));
+        keep(
+            out,
+            element("doco:Paragraph", part.join("\n"), None),
+            budget,
+        )?;
     }
+    Ok(())
 }
 
 /// Turn Word's row/cell tree into the flat grid the model uses, carrying the
@@ -1441,20 +1502,32 @@ fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<St
 /// `val="restart"` continues the cell above.
 ///
 /// `styled` says the table's style draws its first row as a header.
-fn emit_table(out: &mut Vec<Element>, rows: Vec<Row>, styled: bool) {
+fn emit_table(
+    out: &mut Vec<Element>,
+    rows: Vec<Row>,
+    styled: bool,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let rows: Vec<Row> = rows.into_iter().filter(|r| !r.cells.is_empty()).collect();
     if rows.is_empty() {
-        return;
+        return Ok(());
     }
     let width = rows
         .iter()
-        .map(|r| r.cells.iter().map(|c| c.span.max(1)).sum::<usize>())
+        .map(|r| {
+            r.cells
+                .iter()
+                .fold(0usize, |w, c| w.saturating_add(c.span.max(1)))
+        })
         .max()
         .unwrap_or(0);
     if width == 0 {
-        return;
+        return Ok(());
     }
     let n_rows = rows.len();
+    // The grid, as wide as the widest row's spans make it, before it is
+    // made: one cell spanning a billion columns asks for a billion.
+    budget.spend_cells((n_rows as u64).saturating_mul(width as u64))?;
     let mut grid = vec![String::new(); n_rows * width];
     let mut m_left = vec![false; n_rows * width];
     let mut m_down = vec![false; n_rows * width];
@@ -1521,22 +1594,36 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Row>, styled: bool) {
                     }
                 }
             }
-            push_table(out, part, left, down, vec![false; keep.len()], header_rows);
+            push_table(
+                out,
+                part,
+                (left, down, vec![false; keep.len()]),
+                header_rows,
+                budget,
+            )?;
         }
-        return;
+        return Ok(());
     }
-    push_table(out, cells, m_left, m_down, full_width, header_rows);
+    push_table(
+        out,
+        cells,
+        (m_left, m_down, full_width),
+        header_rows,
+        budget,
+    )
 }
 
-/// One table element from its grid.
+/// One table element from its grid and its merges (`merged_left`,
+/// `merged_down`, and the rows that are one cell across), kept once the
+/// element, its cells that hold text, their text, and what DoCO copies of
+/// them are spent from `budget`.
 fn push_table(
     out: &mut Vec<Element>,
     cells: Vec<Vec<String>>,
-    m_left: Vec<bool>,
-    m_down: Vec<bool>,
-    full_width: Vec<bool>,
+    (m_left, m_down, full_width): (Vec<bool>, Vec<bool>, Vec<bool>),
     header_rows: usize,
-) {
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let n_rows = cells.len();
     let width = cells.first().map_or(0, Vec::len);
     // A body row that is one cell across the whole table labels the rows
@@ -1555,7 +1642,12 @@ fn push_table(
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
+    let filled = e.cells.iter().flatten().flatten().filter(|t| !t.is_empty());
+    budget.spend_elements(1 + filled.count() as u64)?;
+    budget.spend_chars(e.cells.iter().flatten().flatten().flat_map(|t| t.chars()))?;
+    budget.spend_copies(&e)?;
     out.push(e);
+    Ok(())
 }
 
 /// The column ranges of a table that sets one list side by side with
@@ -3599,5 +3691,82 @@ mod tests {
     fn a_missing_document_part_is_an_error_not_a_panic() {
         let empty: &[u8] = b"not a zip";
         assert!(parse(empty).is_err());
+    }
+
+    /// A table of one column: `first`, then `rows - 1` cells continuing
+    /// it (`w:vMerge`), each holding `rest`.
+    fn merged_down(first: &str, rest: &str, rows: usize) -> String {
+        let cell = |merge: &str, text: &str| {
+            format!(
+                "<w:tr><w:tc><w:tcPr><w:vMerge{merge}/></w:tcPr><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc></w:tr>"
+            )
+        };
+        let body = cell(" w:val=\"restart\"", first) + &cell("", rest).repeat(rows - 1);
+        doc(&format!("<w:tbl>{body}</w:tbl>"))
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
+        // 200,000 characters over 3,000 rows: 600 million in DoCO, from a
+        // file of a few kilobytes zipped.
+        let long = "y".repeat(200_000);
+        assert!(parse_document_xml(&merged_down(&long, "", 3)).is_ok());
+        let err = parse_document_xml(&merged_down(&long, "", 3_000)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+        assert!(err.to_string().contains("copies"), "{err}");
+    }
+
+    #[test]
+    fn fragments_merged_down_are_counted_joined_on_each_row() {
+        // Each of n rows holds `x` and continues the one above: DoCO joins
+        // the n fragments and writes them on each row, n squared.
+        assert!(parse_document_xml(&merged_down("x", "x", 2_000)).is_ok());
+        let err = parse_document_xml(&merged_down("x", "x", 12_000)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_span_of_a_billion_columns_is_refused_before_its_grid_is_made() {
+        let row = |span: &str| {
+            format!(
+                "<w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"{span}\"/></w:tcPr><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr>\
+                 <w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr>"
+            )
+        };
+        let table = |span: &str| doc(&format!("<w:tbl>{}</w:tbl>", row(span).repeat(50)));
+        assert!(parse_document_xml(&table("3")).is_ok());
+        let err = parse_document_xml(&table("1000000000")).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+        // Spans past what a number holds add up without wrapping: the
+        // greatest and two more are not one column.
+        let cell = |span: &str| {
+            format!("<w:tc><w:tcPr><w:gridSpan w:val=\"{span}\"/></w:tcPr><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc>")
+        };
+        let wrapped = format!(
+            "<w:tbl><w:tr>{}{}</w:tr></w:tbl>",
+            cell(&usize::MAX.to_string()),
+            cell("2")
+        );
+        let err = parse_document_xml(&doc(&wrapped)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn each_element_of_the_body_spends_the_documents_budget() {
+        use fluree_doc_model::budget::{ELEMENT_BYTES, TEXT_BYTES};
+        let xml = doc(&para(None, "word").repeat(100));
+        let read = |memory: u64| {
+            let mut budget = Budget::new(memory, 0);
+            parse_part(
+                &xml,
+                &HashSet::new(),
+                &HashSet::new(),
+                Numbering::default(),
+                &mut budget,
+            )
+        };
+        let need = 100 * (ELEMENT_BYTES + 4 * TEXT_BYTES);
+        assert_eq!(read(need).unwrap().len(), 100);
+        assert!(matches!(read(need - 1), Err(DocxError::TooLarge(_))));
     }
 }

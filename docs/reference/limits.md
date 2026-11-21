@@ -4,14 +4,16 @@ A reader bounds its input (bytes read, parts inflated, records nested), but
 that does not bound what it makes of it. A cell repeated across a row, a
 string shared by every cell, a slide listed a thousand times, pieces of a
 Word file that all point at the same text, a table whose first row is
-thousands of cells wide over rows of one: a file of a few kilobytes can
-describe gigabytes. So every reader of the office formats (`.csv`, `.xls`,
-`.xlsb`, `.xlsx`, `.ods`, `.doc`, `.ppt`) is handed one budget for the
-document (`fluree_doc_model::budget::Budget`) and spends it *before* it
-allocates. Past it, the document is refused with an error that names what
-ran out (`workbook too large: cells past the 2560 MiB of memory a document
-may take`); the process never aborts, and in a batch the other documents
-still convert.
+thousands of cells wide over rows of one, a cell merged down over thousands
+of rows: a file of a few kilobytes can describe gigabytes. So every reader
+of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
+`.docx`, `.ppt`, `.pptx`, `.rtf`) and of HTML (a page, or an email's HTML
+body) is handed one budget for the document
+(`fluree_doc_model::budget::Budget`) and spends it *before* it allocates.
+Past it, the document is refused with an error that names what ran out
+(`workbook too large: cells past the 2560 MiB of memory a document may
+take`); the process never aborts, and in a batch the other documents still
+convert.
 
 ## Memory
 

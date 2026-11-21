@@ -21,7 +21,10 @@ pub fn unrendered(plain: &str, html: &str) -> bool {
     if marks.is_empty() {
         return false;
     }
+    // A page too large to read shows nothing; reading the message refuses
+    // it then.
     let shown = fluree_doc_html::parse(html)
+        .unwrap_or_default()
         .into_iter()
         .map(|e| e.text)
         .collect::<Vec<_>>()

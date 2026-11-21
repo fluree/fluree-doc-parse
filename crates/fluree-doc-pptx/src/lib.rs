@@ -26,6 +26,7 @@
 //! table — categories down, one column per series — so its numbers are
 //! queryable like any other table's.
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local, Package};
 use quick_xml::events::Event;
@@ -36,6 +37,8 @@ pub enum PptxError {
     Zip(String),
     Xml(String),
     NoSlides,
+    /// Past what one document may make ([`Budget`]), naming it.
+    TooLarge(String),
 }
 
 impl std::fmt::Display for PptxError {
@@ -44,11 +47,18 @@ impl std::fmt::Display for PptxError {
             Self::Zip(e) => write!(f, "not a readable .pptx: {e}"),
             Self::Xml(e) => write!(f, "malformed slide XML: {e}"),
             Self::NoSlides => write!(f, "package has no slides"),
+            Self::TooLarge(e) => write!(f, "PPTX deck too large: {e}"),
         }
     }
 }
 
 impl std::error::Error for PptxError {}
+
+impl From<TooLarge> for PptxError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e.to_string())
+    }
+}
 
 /// Parse a `.pptx` file's bytes into elements, in slide order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
@@ -64,6 +74,9 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
         return Err(PptxError::NoSlides);
     }
 
+    // What the deck makes, slide by slide, is spent from one budget as it
+    // is made: a slide listed a thousand times is read a thousand times.
+    let mut budget = Budget::default();
     let mut out = Vec::new();
     for (idx, name) in slides.iter().enumerate() {
         let Some(xml) = pkg.read(name) else {
@@ -77,7 +90,7 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
             .filter(|r| r.is("chart") && !r.external)
             .filter_map(|r| Some((r.id, pkg.read(&r.target)?)))
             .collect();
-        out.extend(parse_slide_with_charts(&xml, idx, &charts)?);
+        out.extend(parse_slide(&xml, idx, &charts, &mut budget)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
@@ -318,15 +331,24 @@ fn by_index(points: &mut Vec<(usize, String)>, count: &mut usize) -> Vec<String>
 /// A chart as a table: categories down the first column, one column per
 /// series. The numbers become cells, so a consumer can ask what EMEA's share
 /// was without looking at a picture.
+///
+/// Its grid, a row for each category or value of the longest series and a
+/// column for each series, is spent from `budget` before it is made, and
+/// its cells that hold text and their text after.
 fn chart_element(
     title: String,
     categories: Vec<String>,
     series: Vec<Series>,
     page: usize,
-) -> Vec<Element> {
+    budget: &mut Budget,
+) -> Result<Vec<Element>, TooLarge> {
     let mut out = Vec::new();
     if !title.is_empty() {
-        out.push(element("doco:SectionTitle", title, Some(2), page));
+        keep(
+            &mut out,
+            element("doco:SectionTitle", title, Some(2), page),
+            budget,
+        )?;
     }
     let mut header = vec![String::new()];
     for (name, _) in &series {
@@ -335,6 +357,7 @@ fn chart_element(
     let n = categories
         .len()
         .max(series.iter().map(|(_, v)| v.len()).max().unwrap_or(0));
+    budget.spend_cells((n as u64 + 1).saturating_mul(header.len() as u64))?;
     let mut rows = vec![header];
     for i in 0..n {
         let mut row = vec![categories.get(i).cloned().unwrap_or_default()];
@@ -352,8 +375,9 @@ fn chart_element(
     e.header_rows = Some(1);
     e.cells = Some(rows);
     e.evidence = "pptx-chart";
+    spend_table(&e, budget)?;
     out.push(e);
-    out
+    Ok(out)
 }
 
 /// `ppt/slides/slide12.xml` → 12. Notes and layouts are not slides.
@@ -381,6 +405,17 @@ pub fn parse_slide_with_charts(
     xml: &str,
     page: usize,
     charts: &[(String, String)],
+) -> Result<Vec<Element>, PptxError> {
+    parse_slide(xml, page, charts, &mut Budget::default())
+}
+
+/// [`parse_slide_with_charts`], what the slide makes spent from the deck's
+/// `budget` as it is made.
+fn parse_slide(
+    xml: &str,
+    page: usize,
+    charts: &[(String, String)],
+    budget: &mut Budget,
 ) -> Result<Vec<Element>, PptxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
@@ -432,7 +467,7 @@ pub fn parse_slide_with_charts(
                     if let Some(id) = attr(&e, "id") {
                         if let Some((_, cx)) = charts.iter().find(|(rid, _)| *rid == id) {
                             if let Some((title, cats, series)) = parse_chart_xml(cx) {
-                                out.extend(chart_element(title, cats, series, page));
+                                out.extend(chart_element(title, cats, series, page, budget)?);
                             }
                         }
                     }
@@ -467,10 +502,9 @@ pub fn parse_slide_with_charts(
                         flush(
                             &mut out,
                             &mut text,
-                            page,
-                            shape,
-                            para_bullet || para_level > 0,
-                        );
+                            (page, shape, para_bullet || para_level > 0),
+                            budget,
+                        )?;
                         para_bullet = false;
                         para_level = 0;
                     }
@@ -483,12 +517,12 @@ pub fn parse_slide_with_charts(
                 "tbl" => {
                     in_table = in_table.saturating_sub(1);
                     if in_table == 0 {
-                        emit_table(&mut out, std::mem::take(&mut rows), page);
+                        emit_table(&mut out, std::mem::take(&mut rows), page, budget)?;
                     }
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, page, shape, false);
+                    flush(&mut out, &mut text, (page, shape, false), budget)?;
                     shape = Shape::Body;
                 }
                 _ => {}
@@ -497,7 +531,7 @@ pub fn parse_slide_with_charts(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, page, Shape::Body, false);
+    flush(&mut out, &mut text, (page, Shape::Body, false), budget)?;
     Ok(out)
 }
 
@@ -527,35 +561,69 @@ enum Shape {
     DeckTitle,
 }
 
-fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, listy: bool) {
+/// `e` kept, it and its text spent from `budget` first.
+fn keep(out: &mut Vec<Element>, e: Element, budget: &mut Budget) -> Result<(), TooLarge> {
+    budget.spend_elements(1)?;
+    budget.spend_text(&e.text)?;
+    out.push(e);
+    Ok(())
+}
+
+/// A table's element, its cells that hold text and their text spent from
+/// `budget` (its grid was, before it was made), and what DoCO copies of
+/// its cells.
+fn spend_table(e: &Element, budget: &mut Budget) -> Result<(), TooLarge> {
+    let filled = e.cells.iter().flatten().flatten().filter(|t| !t.is_empty());
+    budget.spend_elements(1 + filled.count() as u64)?;
+    budget.spend_chars(e.cells.iter().flatten().flatten().flat_map(|t| t.chars()))?;
+    budget.spend_copies(e)
+}
+
+/// The text gathered in `buf` as an element of the slide `page`, by the
+/// shape it is in and whether it reads as a list item.
+fn flush(
+    out: &mut Vec<Element>,
+    buf: &mut String,
+    (page, shape, listy): (usize, Shape, bool),
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let t = std::mem::take(buf)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     if t.is_empty() {
-        return;
+        return Ok(());
     }
-    if shape == Shape::DeckTitle {
-        out.push(element("doco:Title", t, None, page));
+    let e = if shape == Shape::DeckTitle {
+        element("doco:Title", t, None, page)
     } else if shape == Shape::SlideTitle {
-        out.push(element("doco:SectionTitle", t, Some(1), page));
+        element("doco:SectionTitle", t, Some(1), page)
     } else if listy {
-        out.push(element("doc:ListItem", t, None, page));
+        element("doc:ListItem", t, None, page)
     } else {
-        out.push(element("doco:Paragraph", t, None, page));
-    }
+        element("doco:Paragraph", t, None, page)
+    };
+    keep(out, e, budget)
 }
 
-fn emit_table(out: &mut Vec<Element>, rows: Vec<Vec<Cell>>, page: usize) {
+/// A table's rows as a `doco:Table`, its grid (its rows padded to its
+/// widest) spent from `budget` before it is made.
+fn emit_table(
+    out: &mut Vec<Element>,
+    rows: Vec<Vec<Cell>>,
+    page: usize,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let rows: Vec<Vec<Cell>> = rows.into_iter().filter(|r| !r.is_empty()).collect();
     if rows.is_empty() {
-        return;
+        return Ok(());
     }
     let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
     if width == 0 {
-        return;
+        return Ok(());
     }
     let n = rows.len();
+    budget.spend_cells((n as u64).saturating_mul(width as u64))?;
     let mut grid = vec![String::new(); n * width];
     let mut m_left = vec![false; n * width];
     let mut m_down = vec![false; n * width];
@@ -570,10 +638,9 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Vec<Cell>>, page: usize) {
             if cell.v_continue && r > 0 {
                 m_down[r * width + c] = true;
             }
-            for k in 1..cell.span.max(1) {
-                if c + k < width {
-                    m_left[r * width + c + k] = true;
-                }
+            // A span is cut at the grid's edge.
+            for k in 1..cell.span.max(1).min(width - c) {
+                m_left[r * width + c + k] = true;
             }
         }
     }
@@ -590,7 +657,9 @@ fn emit_table(out: &mut Vec<Element>, rows: Vec<Vec<Cell>>, page: usize) {
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
+    spend_table(&e, budget)?;
     out.push(e);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -731,7 +800,7 @@ mod tests {
         assert_eq!(series[0].0, "Share");
         assert_eq!(series[0].1, ["34.5", "28.0", "17.5"]);
 
-        let els = chart_element(title, cats, series, 0);
+        let els = chart_element(title, cats, series, 0, &mut Budget::default()).unwrap();
         let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
         let cells = t.cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Share"]);
@@ -749,7 +818,7 @@ mod tests {
         let (_, cats, series) = parse_chart_xml(&x).unwrap();
         assert_eq!(cats, ["2023", "2024"], "categories are read once");
         assert_eq!(series.len(), 2);
-        let els = chart_element(String::new(), cats, series, 0);
+        let els = chart_element(String::new(), cats, series, 0, &mut Budget::default()).unwrap();
         let cells = els[0].cells.as_ref().unwrap();
         assert_eq!(cells[0], vec!["", "Americas", "EMEA"]);
         assert_eq!(cells[2], vec!["2024", "34.5", "28.0"]);
@@ -841,5 +910,59 @@ mod tests {
     #[test]
     fn a_non_archive_is_an_error_not_a_panic() {
         assert!(parse(b"not a zip").is_err());
+    }
+
+    /// A slide with a table of one column: `first`, then `rows - 1` cells
+    /// continuing it (`vMerge`).
+    fn merged_down(first: &str, rows: usize) -> String {
+        let row = |attr: &str, text: &str| {
+            format!(
+                "<a:tr><a:tc{attr}><a:txBody>{}</a:txBody></a:tc></a:tr>",
+                para(text)
+            )
+        };
+        slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{}{}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>",
+            row("", first),
+            row(" vMerge=\"1\"", "").repeat(rows - 1)
+        ))
+    }
+
+    #[test]
+    fn a_long_value_merged_down_is_refused_rather_than_copied_into_each_row() {
+        let long = "y".repeat(200_000);
+        assert!(parse_slide_xml(&merged_down(&long, 3), 0).is_ok());
+        let err = parse_slide_xml(&merged_down(&long, 3_000), 0).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
+    }
+
+    #[test]
+    fn a_span_past_the_grid_is_cut_at_its_edge() {
+        // A span of 2^63 columns over a table two wide marks one.
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>\
+               <a:tr><a:tc gridSpan=\"9223372036854775807\"><a:txBody>{}</a:txBody></a:tc>\
+                     <a:tc hMerge=\"1\"><a:txBody>{}</a:txBody></a:tc></a:tr>\
+             </a:tbl></a:graphicData></a:graphic></p:graphicFrame>",
+            para("Banner"),
+            para("")
+        ));
+        let els = parse_slide_xml(&x, 0).unwrap();
+        let t = els.iter().find(|e| e.kind == "doco:Table").unwrap();
+        assert_eq!(*t.merged_left.as_ref().unwrap(), [false, true]);
+    }
+
+    #[test]
+    fn a_tables_grid_is_spent_before_it_is_made() {
+        // One row of 4,000 cells over 4,000 rows of one: sixteen million
+        // cells of padding.
+        let wide = format!("<a:tr>{}</a:tr>", "<a:tc></a:tc>".repeat(4_000));
+        let tall = "<a:tr><a:tc></a:tc></a:tr>".repeat(4_000);
+        let x = slide(&format!(
+            "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{wide}{tall}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
+        ));
+        let mut small = Budget::new(1 << 30, 0);
+        let err = parse_slide(&x, 0, &[], &mut small).unwrap_err();
+        assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
     }
 }

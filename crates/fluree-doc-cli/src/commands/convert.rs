@@ -346,7 +346,8 @@ fn convert_source(
         SourceKind::Html => {
             let text = fluree_doc_html::decode(&data);
             (
-                fluree_doc_html::parse(&text),
+                fluree_doc_html::parse(&text)
+                    .map_err(|e| format!("HTML document too large: {e}"))?,
                 declared(fluree_doc_html::info(&text)),
             )
         }

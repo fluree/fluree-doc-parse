@@ -184,6 +184,8 @@ pub enum EmailError {
     /// A compound file that is not an Outlook message, or one that could
     /// not be read.
     Msg(String),
+    /// A body that makes more than one document may.
+    TooLarge(String),
 }
 
 impl std::fmt::Display for EmailError {
@@ -191,6 +193,7 @@ impl std::fmt::Display for EmailError {
         match self {
             Self::NotAnEmail => write!(f, "not an email: no message headers"),
             Self::Msg(e) => write!(f, "not a readable Outlook message: {e}"),
+            Self::TooLarge(e) => write!(f, "email too large: its HTML body, {e}"),
         }
     }
 }
@@ -208,12 +211,12 @@ pub fn parse(bytes: &[u8]) -> Result<Email, EmailError> {
 
 /// Parse an RFC 5322 message: an `.eml` file, or one saved from any client.
 pub fn parse_eml(bytes: &[u8]) -> Result<Email, EmailError> {
-    Ok(assemble(eml::read(bytes)?))
+    assemble(eml::read(bytes)?)
 }
 
 /// Parse an Outlook `.msg` file.
 pub fn parse_msg(bytes: &[u8]) -> Result<Email, EmailError> {
-    Ok(assemble(msg::read(bytes)?))
+    assemble(msg::read(bytes)?)
 }
 
 /// A message as a reader found it, before it becomes elements.
@@ -235,7 +238,7 @@ pub(crate) enum Body {
     None,
 }
 
-fn assemble(mut read: Read) -> Email {
+fn assemble(mut read: Read) -> Result<Email, EmailError> {
     let prov = read.provenance;
     let mut elements = Vec::new();
     // A message with no header at all opens with nothing rather than with
@@ -288,7 +291,8 @@ fn assemble(mut read: Read) -> Email {
             }
         }
         Body::Html(html) => {
-            let (els, depths, ids) = fluree_doc_html::parse_message(&html);
+            let (els, depths, ids) = fluree_doc_html::parse_message(&html)
+                .map_err(|e| EmailError::TooLarge(e.to_string()))?;
             read.shown.extend(ids);
             // A paragraph holding nothing but a zero-width character, as
             // Apple Mail and Outlook leave, is not text.
@@ -373,7 +377,7 @@ fn assemble(mut read: Read) -> Email {
         elements[at].resumes = Some(elements[opener].id.clone());
     }
     let own = &read.own;
-    Email {
+    Ok(Email {
         elements,
         info: DocumentInfo {
             title: own.subject.clone(),
@@ -384,7 +388,7 @@ fn assemble(mut read: Read) -> Email {
         attachments: read.attachments,
         media,
         media_at,
-    }
+    })
 }
 
 /// Is this file an image: declared as one, or declared as no type in

@@ -202,7 +202,17 @@ labels) is read as one table per group, one after the other.
 `page` is `0` throughout — a `.docx` stores a flow, not a layout, and page
 boundaries exist only once something lays it out.
 
-Returns `DocxError` for a malformed or non-archive file.
+What the document makes, its body, page header and footer, notes and
+comments, is spent from one budget
+([limits on what one document may make](../reference/limits.md)) as it is
+made: each paragraph with its text, a table's grid before it is made (a
+`w:gridSpan` of a billion asks for a billion cells), its cells and their
+text, and the copies DoCO writes of them: a value merged down (`w:vMerge`)
+in each row it covers, the fragments of a merged cell joined first, and each
+cell's labels. A document past it fails as too large.
+
+Returns `DocxError` for a malformed or non-archive file, and
+`DocxError::TooLarge` for one past its budget.
 
 ### Word 97-2003 (`.doc`)
 
@@ -277,7 +287,16 @@ point with no value, and a gap stays a blank cell rather than moving the
 values after it onto earlier categories. Of a multi-level category axis, the
 level next to the plot is read.
 
-Returns `PptxError` for a malformed or non-archive file.
+What the deck makes is spent from one budget
+([limits on what one document may make](../reference/limits.md)) as it is
+made, slide by slide: each paragraph with its text, a table's or a chart's
+grid before it is made, its cells and their text, and the copies DoCO
+writes of them (a value merged down in each row it covers, each cell's
+labels). A span past the table's edge is cut there. A deck past its budget
+fails as too large.
+
+Returns `PptxError` for a malformed or non-archive file, and
+`PptxError::TooLarge` for one past its budget.
 
 ### PowerPoint 97-2003 (`.ppt`)
 
@@ -659,7 +678,15 @@ Yahoo and Proton put around a quote. A plain `<blockquote>`, as an indent
 button writes one, does not count. The [email](email.md) reader splits a
 thread by it.
 
-Infallible: HTML is defined so that every byte sequence parses.
+Every byte sequence parses, as HTML defines it; what a page makes is spent
+from one budget ([limits on what one document may make](../reference/limits.md))
+as it is made: each element with its text, a table's grid before it is made
+(a `colspan` of a billion asks for a billion cells), the cells each span
+marks, the table's cells and their text, and the copies DoCO writes of them
+(a value spanning rows in each row it covers, each cell's labels). A page
+past it is refused: `parse` and `parse_with_quote_depth` return its
+`TooLarge` error, and an email whose HTML body is refused fails as too
+large.
 
 ## Markdown
 

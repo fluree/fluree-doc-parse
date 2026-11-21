@@ -21,7 +21,13 @@
 //!
 //! There is no geometry: HTML positions nothing until it is laid out, so
 //! `bbox` is `None` rather than a zeroed box.
+//!
+//! What a page makes is spent from one [`Budget`] as it is made: each
+//! element with its text, a table's grid before it is made (a `colspan` of
+//! a billion asks for a billion cells), the cells its spans mark, and what
+//! DoCO copies of its cells. Past it, the page is refused ([`TooLarge`]).
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
@@ -115,18 +121,19 @@ fn skipped(h: &Handle) -> bool {
     tag_of(h).is_some_and(|t| SKIP.contains(&t.as_str())) || undrawn(h) || is_chrome(h)
 }
 
-/// Parse an HTML document into elements in reading order.
+/// Parse an HTML document into elements in reading order, or say why it
+/// makes more than one document may.
 ///
 /// A page that declares no headings but shows them by keyword and number,
 /// as a statute or a contract does (`CHAPTER IV`, `Article 30`), has them
 /// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
 /// read through [`parse_with_quote_depth`], is not.
-pub fn parse(src: &str) -> Vec<Element> {
-    let mut elements = read(src, false).0;
+pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
+    let mut elements = read(src, false)?.0;
     if fluree_doc_model::outline::infer_headings(&mut elements) {
         number(&mut elements);
     }
-    elements
+    Ok(elements)
 }
 
 fn number(elements: &mut [Element]) {
@@ -206,7 +213,7 @@ fn repair_c1(c: char) -> char {
 /// alternative text and its `figure` the `cid:` URL as the message writes
 /// it, for the e-mail reader to resolve to the part. An image on the web is
 /// not in the message, and is left out as [`parse`] leaves every image out.
-pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
+pub fn parse_with_quote_depth(src: &str) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     read(src, true)
 }
 
@@ -218,12 +225,16 @@ pub fn cid_ids(src: &str) -> Vec<String> {
     ids_in(&dom(src))
 }
 
+/// What [`parse_message`] reads in a message's HTML body: its elements,
+/// how many quotations enclose each, and the content ids it shows.
+pub type MessageBody = (Vec<Element>, Vec<usize>, Vec<String>);
+
 /// [`parse_with_quote_depth`] and [`cid_ids`] from one parse of the page:
 /// what a message's HTML body is read for.
-pub fn parse_message(src: &str) -> (Vec<Element>, Vec<usize>, Vec<String>) {
+pub fn parse_message(src: &str) -> Result<MessageBody, TooLarge> {
     let dom = dom(src);
-    let (elements, depths) = read_dom(&dom, true);
-    (elements, depths, ids_in(&dom))
+    let (elements, depths) = read_dom(&dom, true)?;
+    Ok((elements, depths, ids_in(&dom)))
 }
 
 fn ids_in(dom: &RcDom) -> Vec<String> {
@@ -242,11 +253,11 @@ fn dom(src: &str) -> RcDom {
 }
 
 /// The walk, with or without a message's own images.
-fn read(src: &str, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
+fn read(src: &str, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     read_dom(&dom(src), cid_images)
 }
 
-fn read_dom(dom: &RcDom, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
+fn read_dom(dom: &RcDom, cid_images: bool) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
     let mut out = Out {
         cid_images,
         ..Out::default()
@@ -264,8 +275,11 @@ fn read_dom(dom: &RcDom, cid_images: bool) -> (Vec<Element>, Vec<usize>) {
             walk(m, &mut out);
         }
     }
+    if let Some(e) = out.over {
+        return Err(e);
+    }
     number(&mut out.elements);
-    (out.elements, out.depths)
+    Ok((out.elements, out.depths))
 }
 
 /// The outermost `<main>` elements, or elements in the `main` role, that the
@@ -292,12 +306,39 @@ struct Out {
     depth: usize,
     /// Read a message's own images (`<img src="cid:…">`) as figures.
     cid_images: bool,
+    /// What the page may still make.
+    budget: Budget,
+    /// Why the page is refused, once its budget is spent: nothing more is
+    /// kept.
+    over: Option<TooLarge>,
 }
 
 impl Out {
+    /// Keep `e`, it and its text spent first.
     fn push(&mut self, e: Element) {
+        if self.spend(|b| b.spend_elements(1).and_then(|()| b.spend_text(&e.text))) {
+            self.keep(e);
+        }
+    }
+
+    fn keep(&mut self, e: Element) {
         self.elements.push(e);
         self.depths.push(self.depth);
+    }
+
+    /// Spend from the page's budget; `false`, and the page refused, where
+    /// it is spent.
+    fn spend(&mut self, f: impl FnOnce(&mut Budget) -> Result<(), TooLarge>) -> bool {
+        if self.over.is_some() {
+            return false;
+        }
+        match f(&mut self.budget) {
+            Ok(()) => true,
+            Err(e) => {
+                self.over = Some(e);
+                false
+            }
+        }
     }
 
     /// A figure for each of a message's own images drawn under `nodes`
@@ -1015,7 +1056,7 @@ fn is_layout(table: &Handle) -> bool {
                 .iter()
                 .filter(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
                 .map(|c| num_attr(c, "colspan"))
-                .sum::<usize>()
+                .fold(0usize, usize::saturating_add)
         })
         .filter(|w| *w > 0)
         .collect();
@@ -1282,6 +1323,9 @@ fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
 /// flags — the same convention DOCX's gridSpan/vMerge map to and the PDF
 /// engine derives from ruling.
 fn emit_table(table: &Handle, out: &mut Out) {
+    if out.over.is_some() {
+        return;
+    }
     let mut trs = Vec::new();
     rows_under(table, &mut trs);
 
@@ -1343,11 +1387,16 @@ fn emit_table(table: &Handle, out: &mut Out) {
     let header_rows = header_rows(&kinds, thead);
     let width = rows
         .iter()
-        .map(|r| r.iter().map(|c| c.1).sum::<usize>())
+        .map(|r| r.iter().fold(0usize, |w, c| w.saturating_add(c.1)))
         .max()
         .unwrap_or(0)
         .max(1);
     let n = rows.len();
+    // The grid, as wide as the widest row's spans make it, before it is
+    // made.
+    if !out.spend(|b| b.spend_cells((n as u64).saturating_mul(width as u64))) {
+        return;
+    }
     let mut grid = vec![String::new(); n * width];
     let mut m_left = vec![false; n * width];
     let mut m_down = vec![false; n * width];
@@ -1368,6 +1417,10 @@ fn emit_table(table: &Handle, out: &mut Out) {
             }
             let cs = (*colspan).min(width - c);
             let rs = (*rowspan).min(n - r);
+            // Each cell the span marks, overlapping spans each time.
+            if !out.spend(|b| b.spend_work((cs as u64).saturating_mul(rs as u64))) {
+                return;
+            }
             full_width[r] = cells.len() == 1 && c == 0 && cs == width && width > 1;
             grid[r * width + c] = text.clone();
             for dr in 0..rs {
@@ -1405,12 +1458,30 @@ fn emit_table(table: &Handle, out: &mut Out) {
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
-    out.push(e);
+    // The table, its cells that hold text and their text, and what DoCO
+    // copies of them.
+    let spent = out.spend(|b| {
+        let cells = || e.cells.iter().flatten().flatten();
+        b.spend_elements(1 + cells().filter(|t| !t.is_empty()).count() as u64)?;
+        b.spend_chars(cells().flat_map(|t| t.chars()))?;
+        b.spend_copies(&e)
+    });
+    if spent {
+        out.keep(e);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse(src: &str) -> Vec<Element> {
+        super::parse(src).unwrap()
+    }
+
+    fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
+        super::parse_with_quote_depth(src).unwrap()
+    }
 
     fn kinds(e: &[Element]) -> Vec<&str> {
         e.iter().map(|x| x.kind.as_str()).collect()
@@ -1462,7 +1533,7 @@ mod tests {
         assert_eq!(els[1].text, "Record screen");
         assert_eq!(els[8].text, "Loose text");
         // One parse for both, as a message's body is read.
-        let (body, _, ids) = parse_message(src);
+        let (body, _, ids) = parse_message(src).unwrap();
         assert_eq!(body.len(), els.len());
         assert_eq!(ids, ["shot1@example.org", "logo@x", "i@x", "j@x", "k@x"]);
         assert_eq!(ids, cid_ids(src));
@@ -2169,5 +2240,49 @@ mod tests {
         assert_eq!(decode(b"\xef\xbb\xbf<p>x</p>"), "<p>x</p>");
         // No declaration and not UTF-8: Windows-1252.
         assert_eq!(decode(b"<p>\x93q\x94</p>"), "<p>\u{201c}q\u{201d}</p>");
+    }
+
+    #[test]
+    fn a_long_value_spanning_rows_is_refused_rather_than_copied_into_each() {
+        let table = |rows: usize| {
+            format!(
+                "<table><tr><td rowspan=\"{rows}\">{}</td><td>a</td></tr>{}</table>",
+                "y".repeat(200_000),
+                "<tr><td>b</td></tr>".repeat(rows - 1)
+            )
+        };
+        assert!(super::parse(&table(3)).is_ok());
+        let err = super::parse(&table(3_000)).unwrap_err();
+        assert!(err.to_string().contains("copies"), "{err}");
+    }
+
+    #[test]
+    fn a_span_of_a_billion_columns_is_refused_before_its_grid_is_made() {
+        let table = |span: &str| {
+            format!(
+                "<table>{}</table>",
+                format!("<tr><td colspan=\"{span}\">x</td></tr><tr><td>a</td></tr>").repeat(50)
+            )
+        };
+        assert!(super::parse(&table("3")).is_ok());
+        assert!(super::parse(&table("1000000000")).is_err());
+        assert!(super::parse(&table(&usize::MAX.to_string())).is_err());
+        // Spans past what a number holds add up without wrapping: the
+        // greatest and two more are not one column.
+        let wrapped = format!(
+            "<table><tr><td colspan=\"{}\">x</td><td colspan=\"2\">y</td></tr><tr><td>a</td></tr></table>",
+            usize::MAX
+        );
+        assert!(super::parse(&wrapped).is_err());
+        // Read as a message's body, the same.
+        assert!(super::parse_with_quote_depth(&table("1000000000")).is_err());
+    }
+
+    #[test]
+    fn each_element_spends_the_pages_budget() {
+        let page = "<p>word</p>".repeat(10_000_000 / 11);
+        // Each paragraph is a node of the output: 4 KiB of the budget.
+        assert!(super::parse(&page).is_err());
+        assert!(super::parse(&"<p>word</p>".repeat(1_000)).is_ok());
     }
 }

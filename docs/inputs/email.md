@@ -401,5 +401,7 @@ need only one message header to be read. The same content check applies to
 
 A file with no message headers is not an email: `EmailError::NotAnEmail`.
 A compound file that is not an Outlook message, or cannot be read, is
-`EmailError::Msg`. A message with no body is not an error; its header and
-attachments are still read.
+`EmailError::Msg`. An HTML body that makes more than one document may
+([limits on what one document may make](../reference/limits.md)) is
+`EmailError::TooLarge`. A message with no body is not an error; its header
+and attachments are still read.
