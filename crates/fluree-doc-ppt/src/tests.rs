@@ -892,3 +892,23 @@ fn a_group_that_is_no_table_is_read_once_however_deep() {
     .unwrap();
     assert!(out.iter().any(|i| matches!(i, Item::Table(_))));
 }
+
+#[test]
+fn what_doco_copies_of_a_table_is_spent_before_it_is_kept() {
+    // A long first cell labels each other cell of its row as its row
+    // header: a hundred copies of it that the file states once.
+    let long = "w".repeat(100_000);
+    let mut cells: Vec<Vec<u8>> = (0..101)
+        .map(|c| cell(c * 10, 0, c * 10 + 10, 10, "H"))
+        .collect();
+    cells.push(cell(0, 10, 10, 20, &long));
+    cells.extend((1..101).map(|c| cell(c * 10, 10, c * 10 + 10, 20, "1")));
+    let slide = rec(true, 0, 0x040C, &table_group(&cells));
+    let bytes = deck_of(&[], &slide, None);
+    // Room for the table and its text, which a budget of 20 MiB is many
+    // times over, but not for 10 MB of copies at 12 bytes a byte.
+    let err = parse_within(&bytes, &mut Budget::new(20 << 20, 1 << 20)).unwrap_err();
+    assert!(err.to_string().contains("copies"), "{err}");
+    let (els, _) = parse_within(&bytes, &mut Budget::default()).unwrap();
+    assert!(els.iter().any(|e| e.kind == "doco:Table"));
+}
