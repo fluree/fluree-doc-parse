@@ -17,13 +17,12 @@ use std::collections::HashSet;
 const MAX_ROWS: u64 = 1 << 20;
 const MAX_COLUMNS: u64 = 1 << 14;
 
-pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
+pub(crate) fn elements(content: &Tree, budget: &mut Budget) -> Result<Vec<Element>, OdfError> {
     let bold = bold_styles(content);
     let mut sheets = Vec::new();
     let mut total = 0usize;
     // A repeated cell is its text again each time: spent before each copy,
     // as the cell is.
-    let mut budget = Budget::default();
     let Some(book) = content.find(0, "spreadsheet") else {
         return Ok(Vec::new());
     };
@@ -44,7 +43,7 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
                 break;
             }
             let repeat = count(content.attr(r, "number-rows-repeated"));
-            let cells = cells_of(content, r, &bold, &mut budget)?;
+            let cells = cells_of(content, r, &bold, budget)?;
             if is_header && row == u64::from(header) {
                 header += repeat.min(16) as u32;
             }
@@ -63,7 +62,7 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
                             "its sheets hold more than {MAX_CELLS} cells"
                         )));
                     }
-                    spend(&mut budget, &c.cell.text)?;
+                    spend(budget, &c.cell.text)?;
                     g.cells.push(GridCell {
                         row: row as u32,
                         ..c.cell.clone()
@@ -83,7 +82,7 @@ pub(crate) fn elements(content: &Tree) -> Result<Vec<Element>, OdfError> {
         g.frozen_rows = header;
         sheets.push(g);
     }
-    fluree_doc_xlsx::grid_elements(sheets, "odf", &mut budget)
+    fluree_doc_xlsx::grid_elements(sheets, "odf", budget)
         .map_err(|e| OdfError::TooLarge(e.to_string()))
 }
 

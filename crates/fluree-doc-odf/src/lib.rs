@@ -24,17 +24,18 @@
 //!
 //! **Bounds**, as for any archive: each part at most [`MAX_PART_BYTES`]
 //! inflated, checked as it inflates, and its XML at most
-//! [`tree::MAX_NODES`] nodes nested [`tree::MAX_DEPTH`] deep. The tables of
-//! a text or a presentation hold at most [`MAX_TEXT_CELLS`] cells in all,
-//! a repeated cell counted each time and a short row padded to the
-//! table's width counted too, and at most [`MAX_TEXT_CELL_BYTES`] bytes of
-//! cell text, a repeated cell's text counted each time it is copied; both
-//! are counted before the cells are made, and a document past either is
-//! refused.
+//! [`tree::MAX_NODES`] nodes nested [`tree::MAX_DEPTH`] deep. What a
+//! document makes of it is spent from the document's [`Budget`] before it
+//! is made: each paragraph and its text; each table cell, a repeated cell
+//! each time it is copied, its text too, and a short row's padding to the
+//! table's width; and the copies the output makes of a table's cells (a
+//! merged value in each cell it covers, each cell's labels). A document
+//! past it is refused.
 
 mod sheet;
 mod tree;
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::Package;
 use tree::{Role, Tree};
@@ -44,65 +45,6 @@ pub const MAX_PART_BYTES: u64 = 64 << 20;
 
 /// The most cells a spreadsheet's sheets may hold, repeats counted.
 pub const MAX_CELLS: usize = 1 << 22;
-
-/// The most cells the tables of a text or a presentation hold in all,
-/// repeats and padding counted.
-pub const MAX_TEXT_CELLS: usize = 1 << 22;
-
-/// The most bytes of text the cells of a text's or a presentation's tables
-/// hold in all, a repeated cell's counted each time.
-pub const MAX_TEXT_CELL_BYTES: usize = 64 << 20;
-
-/// What the tables of a document may still make: cells, and bytes of their
-/// text. Spent before anything is made; past it, the document is refused
-/// ([`Room::over`]), and nothing more is made.
-struct Room {
-    cells: usize,
-    bytes: usize,
-    over: Option<String>,
-}
-
-impl Room {
-    fn new() -> Self {
-        Room {
-            cells: MAX_TEXT_CELLS,
-            bytes: MAX_TEXT_CELL_BYTES,
-            over: None,
-        }
-    }
-
-    /// Spend `cells` cells holding `bytes` bytes of text; `false`, and the
-    /// document refused, where they are not left.
-    fn spend(&mut self, cells: usize, bytes: usize) -> bool {
-        if self.over.is_some() {
-            return false;
-        }
-        match (self.cells.checked_sub(cells), self.bytes.checked_sub(bytes)) {
-            (Some(c), Some(b)) => {
-                (self.cells, self.bytes) = (c, b);
-                true
-            }
-            (None, _) => {
-                self.over = Some(format!("its tables hold more than {MAX_TEXT_CELLS} cells"));
-                false
-            }
-            (_, None) => {
-                self.over = Some(format!(
-                    "its tables hold more than {MAX_TEXT_CELL_BYTES} bytes of text"
-                ));
-                false
-            }
-        }
-    }
-
-    /// The document, or why it is refused.
-    fn check<T>(self, read: T) -> Result<T, OdfError> {
-        match self.over {
-            Some(why) => Err(OdfError::TooLarge(why)),
-            None => Ok(read),
-        }
-    }
-}
 
 /// The three kinds of OpenDocument this crate reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,9 +109,23 @@ impl std::fmt::Display for OdfError {
 
 impl std::error::Error for OdfError {}
 
+impl From<TooLarge> for OdfError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e.to_string())
+    }
+}
+
 /// Parse an OpenDocument file, whichever of the three kinds it is, with what
 /// it declares about itself in `meta.xml`.
 pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError> {
+    parse_within(bytes, &mut Budget::default())
+}
+
+/// [`parse_with_info`], against `budget`.
+fn parse_within(
+    bytes: &[u8],
+    budget: &mut Budget,
+) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError> {
     let format = Format::sniff(bytes).ok_or(OdfError::NotOdf)?;
     let mut pkg = Package::open(bytes).map_err(OdfError::Zip)?;
     let content = part(&mut pkg, "content.xml")?.ok_or(OdfError::NoContent)?;
@@ -181,16 +137,10 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo, Form
                 .transpose()?;
             let mut content = content;
             content.roles = style_roles(&content, styles.as_ref());
-            let mut room = Room::new();
-            let read = text_elements(&content, styles.as_ref(), &mut room);
-            room.check(read)?
+            text_elements(&content, styles.as_ref(), budget)?
         }
-        Format::Spreadsheet => sheet::elements(&content)?,
-        Format::Presentation => {
-            let mut room = Room::new();
-            let read = slide_elements(&content, &mut room);
-            room.check(read)?
-        }
+        Format::Spreadsheet => sheet::elements(&content, budget)?,
+        Format::Presentation => slide_elements(&content, budget)?,
     };
     let source = format.source();
     for (i, e) in out.iter_mut().enumerate() {
@@ -352,8 +302,8 @@ fn table(
     id: usize,
     page: usize,
     asides: &mut Vec<Aside>,
-    room: &mut Room,
-) -> Option<Element> {
+    budget: &mut Budget,
+) -> Result<Option<Element>, TooLarge> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut spans: Vec<(usize, usize, usize, usize)> = Vec::new();
     let mut header_rows = 0usize;
@@ -386,10 +336,15 @@ fn table(
             if name == "table-cell" && (cs > 1 || rs > 1) {
                 spans.push((rows.len(), row.len(), cs, rs));
             }
-            // Each copy is a cell and its text: counted before any is made.
+            // Each copy is a cell, and one that holds text a node of the
+            // output of its own with that text: counted before any is made.
             cells += repeat;
-            if !room.spend(repeat, text.len().saturating_mul(repeat)) {
-                return None;
+            budget.spend_cells(repeat as u64)?;
+            if !text.is_empty() {
+                budget.spend_elements(repeat as u64)?;
+                for _ in 0..repeat {
+                    budget.spend_text(&text)?;
+                }
             }
             row.extend(std::iter::repeat_n(text, repeat));
         }
@@ -400,15 +355,13 @@ fn table(
     }
     let width = rows.iter().map(Vec::len).max().unwrap_or(0);
     if width == 0 {
-        return None;
+        return Ok(None);
     }
     // The grid a short row is padded to: rows without cells and one long
     // row would otherwise make a grid of their product.
     let n = rows.len();
     let grid = n.saturating_mul(width);
-    if !room.spend(grid - cells, 0) {
-        return None;
-    }
+    budget.spend_cells((grid - cells) as u64)?;
     for r in &mut rows {
         r.resize(width, String::new());
     }
@@ -440,6 +393,7 @@ fn table(
             }
         }
     }
+    budget.spend_elements(1)?;
     let text = rows
         .iter()
         .map(|r| r.join(" | "))
@@ -450,14 +404,10 @@ fn table(
     e.header_rows = Some(header_rows);
     e.merged_left = left.iter().any(|x| *x).then_some(left);
     e.merged_down = down.iter().any(|x| *x).then_some(down);
-    // What DoCO copies of it, a merged value in each cell it covers, as
-    // cells holding that text.
-    let copies = fluree_doc_model::doco::table_copies(&e);
-    let size = |n: u64| usize::try_from(n).unwrap_or(usize::MAX);
-    if !room.spend(size(copies.cells), size(copies.text)) {
-        return None;
-    }
-    Some(e)
+    // What the output copies of it: a merged value in each cell it covers,
+    // each cell's labels.
+    budget.spend_copies(&e)?;
+    Ok(Some(e))
 }
 
 /// A table's rows in document order, through header rows and row groups,
@@ -478,6 +428,19 @@ fn rows_in_order(t: &Tree, id: usize) -> Vec<(usize, bool)> {
     out
 }
 
+/// A paragraph's element, its text spent before it is kept.
+fn paragraph(
+    kind: &str,
+    text: String,
+    level: Option<usize>,
+    page: usize,
+    budget: &mut Budget,
+) -> Result<Element, TooLarge> {
+    budget.spend_elements(1)?;
+    budget.spend_text(&text)?;
+    Ok(element(kind, text, level, page))
+}
+
 /// The flow of a text body, a text box or a note: headings, paragraphs,
 /// lists, tables, sections.
 fn flow(
@@ -487,17 +450,21 @@ fn flow(
     list: bool,
     out: &mut Vec<Element>,
     asides: &mut Vec<Aside>,
-    room: &mut Room,
-) {
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     // A paragraph's frames, read after it: a text box anchored to it.
-    let frames_after =
-        |c: usize, out: &mut Vec<Element>, asides: &mut Vec<Aside>, room: &mut Room| {
-            let mut frames = Vec::new();
-            frames_in(t, c, &mut frames);
-            for f in frames {
-                flow(t, f, page, false, out, asides, room);
-            }
-        };
+    let frames_after = |c: usize,
+                        out: &mut Vec<Element>,
+                        asides: &mut Vec<Aside>,
+                        budget: &mut Budget|
+     -> Result<(), TooLarge> {
+        let mut frames = Vec::new();
+        frames_in(t, c, &mut frames);
+        for f in frames {
+            flow(t, f, page, false, out, asides, budget)?;
+        }
+        Ok(())
+    };
     for c in t.elements(id) {
         match t.node(c).name.as_str() {
             "h" => {
@@ -508,14 +475,20 @@ fn flow(
                     .clamp(1, 6);
                 let text = tidy(&para_text(t, c, asides));
                 if !text.is_empty() {
-                    out.push(element("doco:SectionTitle", text, Some(level), page));
+                    out.push(paragraph(
+                        "doco:SectionTitle",
+                        text,
+                        Some(level),
+                        page,
+                        budget,
+                    )?);
                 }
-                frames_after(c, out, asides, room);
+                frames_after(c, out, asides, budget)?;
             }
             "p" => {
                 let text = tidy(&para_text(t, c, asides));
                 if text.is_empty() {
-                    frames_after(c, out, asides, room);
+                    frames_after(c, out, asides, budget)?;
                     continue;
                 }
                 let style = t.attr(c, "style-name");
@@ -529,38 +502,46 @@ fn flow(
                     Some(Role::Heading(l)) => ("doco:SectionTitle", Some(*l)),
                     None => ("doco:Paragraph", None),
                 };
-                out.push(element(kind, text, level, page));
-                frames_after(c, out, asides, room);
+                out.push(paragraph(kind, text, level, page, budget)?);
+                frames_after(c, out, asides, budget)?;
             }
-            "list" | "list-item" | "list-header" => flow(t, c, page, true, out, asides, room),
+            "list" | "list-item" | "list-header" => flow(t, c, page, true, out, asides, budget)?,
             "table" => {
-                if let Some(e) = table(t, c, page, asides, room) {
+                if let Some(e) = table(t, c, page, asides, budget)? {
                     out.push(e);
                 }
             }
             "section" | "index-body" | "table-of-content" | "alphabetical-index"
             | "illustration-index" | "table-index" | "bibliography" | "text-box" | "frame" => {
-                flow(t, c, page, list, out, asides, room)
+                flow(t, c, page, list, out, asides, budget)?
             }
             _ => {}
         }
     }
+    Ok(())
 }
 
 /// Notes and comments, after what cited them: each a run of paragraphs
 /// marked by its `evidence`, its first opening with its label.
-fn read_asides(t: &Tree, asides: Vec<Aside>, page: usize, out: &mut Vec<Element>, room: &mut Room) {
+fn read_asides(
+    t: &Tree,
+    asides: Vec<Aside>,
+    page: usize,
+    out: &mut Vec<Element>,
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     let mut notes = Vec::new();
     let mut comments = Vec::new();
     for a in asides {
         let mut els = Vec::new();
         let mut nested = Vec::new();
-        flow(t, a.body, page, false, &mut els, &mut nested, room);
+        flow(t, a.body, page, false, &mut els, &mut nested, budget)?;
         for (i, e) in els.iter_mut().enumerate() {
             if e.kind != "doco:Table" {
                 e.kind = "doco:Paragraph".into();
                 e.level = None;
                 if i == 0 && !a.label.is_empty() {
+                    budget.spend_text(&a.label)?;
                     e.text = format!("{} {}", a.label, e.text);
                 }
             }
@@ -574,34 +555,39 @@ fn read_asides(t: &Tree, asides: Vec<Aside>, page: usize, out: &mut Vec<Element>
     }
     out.extend(notes);
     out.extend(comments);
+    Ok(())
 }
 
 /// A text document: the header, the body, its notes, the footer, then its
 /// comments.
-fn text_elements(content: &Tree, styles: Option<&Tree>, room: &mut Room) -> Vec<Element> {
+fn text_elements(
+    content: &Tree,
+    styles: Option<&Tree>,
+    budget: &mut Budget,
+) -> Result<Vec<Element>, TooLarge> {
     let mut body = Vec::new();
     let mut asides = Vec::new();
     if let Some(text) = content.find(0, "text") {
-        flow(content, text, 0, false, &mut body, &mut asides, room);
+        flow(content, text, 0, false, &mut body, &mut asides, budget)?;
     }
     let (notes, comments): (Vec<Aside>, Vec<Aside>) =
         asides.into_iter().partition(|a| a.evidence != "comment");
     let mut after = Vec::new();
-    read_asides(content, notes, 0, &mut after, room);
-    let mut furniture = |name: &str, evidence: &'static str| -> Vec<Element> {
+    read_asides(content, notes, 0, &mut after, budget)?;
+    let mut furniture = |name: &str, evidence: &'static str| -> Result<Vec<Element>, TooLarge> {
         let mut out: Vec<Element> = Vec::new();
         // What a master page's header says that another's said already.
         let mut seen = std::collections::HashSet::new();
         let Some(styles) = styles else {
-            return out;
+            return Ok(out);
         };
         let Some(masters) = styles.find(0, "master-styles") else {
-            return out;
+            return Ok(out);
         };
         for m in styles.elements(masters) {
             for h in styles.elements(m).filter(|&h| styles.node(h).name == name) {
                 let mut els = Vec::new();
-                flow(styles, h, 0, false, &mut els, &mut Vec::new(), room);
+                flow(styles, h, 0, false, &mut els, &mut Vec::new(), budget)?;
                 for mut e in els {
                     if e.kind != "doco:Table" {
                         e.kind = "doco:Paragraph".into();
@@ -614,15 +600,15 @@ fn text_elements(content: &Tree, styles: Option<&Tree>, room: &mut Room) -> Vec<
                 }
             }
         }
-        out
+        Ok(out)
     };
-    let mut out = furniture("header", "header");
-    let footer = furniture("footer", "footer");
+    let mut out = furniture("header", "header")?;
+    let footer = furniture("footer", "footer")?;
     out.extend(body);
     out.extend(after);
     out.extend(footer);
-    read_asides(content, comments, 0, &mut out, room);
-    out
+    read_asides(content, comments, 0, &mut out, budget)?;
+    Ok(out)
 }
 
 /// What each paragraph style makes a paragraph set in it, through the styles
@@ -691,10 +677,10 @@ fn style_roles(content: &Tree, styles: Option<&Tree>) -> std::collections::HashM
 /// A presentation: each slide a page; its title frame a level-1 heading,
 /// the rest of its frames' text, lists and tables in order. Speaker notes
 /// are not read.
-fn slide_elements(content: &Tree, room: &mut Room) -> Vec<Element> {
+fn slide_elements(content: &Tree, budget: &mut Budget) -> Result<Vec<Element>, TooLarge> {
     let mut out = Vec::new();
     let Some(pres) = content.find(0, "presentation") else {
-        return out;
+        return Ok(out);
     };
     let pages: Vec<usize> = content
         .elements(pres)
@@ -702,10 +688,10 @@ fn slide_elements(content: &Tree, room: &mut Room) -> Vec<Element> {
         .collect();
     for (page, p) in pages.into_iter().enumerate() {
         let mut asides = Vec::new();
-        slide_shapes(content, p, page, &mut out, &mut asides, room);
-        read_asides(content, asides, page, &mut out, room);
+        slide_shapes(content, p, page, &mut out, &mut asides, budget)?;
+        read_asides(content, asides, page, &mut out, budget)?;
     }
-    out
+    Ok(out)
 }
 
 fn slide_shapes(
@@ -714,21 +700,23 @@ fn slide_shapes(
     page: usize,
     out: &mut Vec<Element>,
     asides: &mut Vec<Aside>,
-    room: &mut Room,
-) {
+    budget: &mut Budget,
+) -> Result<(), TooLarge> {
     for c in t.elements(id) {
         match t.node(c).name.as_str() {
             "notes" => {}
             "frame" | "custom-shape" | "rect" | "ellipse" | "text-box" => {
                 let class = t.attr(c, "class").unwrap_or("");
                 if class == "title" {
+                    // Its paragraphs, each spent as it is read, joined.
+                    let mut parts = Vec::new();
+                    for b in t.elements(c) {
+                        flow(t, b, page, false, &mut parts, asides, budget)?;
+                    }
                     let text = tidy(
-                        &t.elements(c)
-                            .flat_map(|b| {
-                                let mut v = Vec::new();
-                                flow(t, b, page, false, &mut v, asides, room);
-                                v.into_iter().map(|e| e.text)
-                            })
+                        &parts
+                            .into_iter()
+                            .map(|e| e.text)
                             .collect::<Vec<_>>()
                             .join(" "),
                     );
@@ -740,7 +728,7 @@ fn slide_shapes(
                 let before = out.len();
                 // A shape's own paragraphs (a custom shape holds them), or
                 // the text box or table inside a frame.
-                flow(t, c, page, false, out, asides, room);
+                flow(t, c, page, false, out, asides, budget)?;
                 // A bulleted text box: its paragraphs are list items when
                 // the frame is an outline.
                 if class == "outline" {
@@ -751,10 +739,11 @@ fn slide_shapes(
                     }
                 }
             }
-            "g" => slide_shapes(t, c, page, out, asides, room),
+            "g" => slide_shapes(t, c, page, out, asides, budget)?,
             _ => {}
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -80,12 +80,14 @@ read.
 ## Bounds
 
 Each part at most 64 MiB inflated, checked as it inflates, and its XML at
-most four million nodes nested 256 deep. The tables of a text or a
-presentation hold at most about four million cells in all, a repeated cell
-counted each time and a short row's padding to the table's width counted
-too, and at most 64 MiB of cell text, a repeated cell's text counted each
-time it is copied: a cell of a few kilobytes repeated a thousand times asks
-for gigabytes. Both are counted before the cells are made, and a document
-past either fails as too large. In a library,
+most four million nodes nested 256 deep. What a text or a presentation
+makes of it is spent from the document's budget
+([limits on what one document may make](../reference/limits.md)) before it
+is made: each paragraph and its text; each table cell, a repeated cell
+each time it is copied, its text too, and a short row's padding to the
+table's width; and the copies DoCO writes of a table's cells (a merged
+value in each cell it covers, each cell's labels): a cell of a few
+kilobytes repeated a thousand times asks for gigabytes. A document past it
+fails as too large. In a library,
 `fluree_doc_odf::parse_with_info` returns the elements, the declared info
 and the kind; `Format::sniff` tells the kind from the bytes.

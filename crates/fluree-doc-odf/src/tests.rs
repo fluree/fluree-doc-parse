@@ -1,6 +1,9 @@
 //! Synthetic OpenDocument packages and what the readers make of them.
 
 use super::*;
+use fluree_doc_model::budget::{
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+};
 use std::io::Write;
 
 const NS: &str = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
@@ -294,33 +297,84 @@ fn texts(els: &[Element]) -> Vec<&str> {
 
 #[test]
 fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
-    // 70 KiB of text in a cell repeated 1024 times: 70 MiB of text asked
-    // for in a few kilobytes, past the bytes the tables may hold.
-    let word = "word ".repeat(14 << 10);
+    // 7 KiB of text in a cell repeated 1024 times: 7 MiB of text asked for
+    // in a few hundred bytes, each copy spent before it is made.
+    let word = "word ".repeat(1400);
     let cell = |repeat: usize| {
-        format!(
+        text(&format!(
             "<table:table><table:table-row><table:table-cell table:number-columns-repeated=\"{repeat}\">\
-             <text:p>{word}</text:p></table:table-cell></table:table-row></table:table>"
+             <text:p>{}</text:p></table:table-cell></table:table-row></table:table>",
+            word.trim()
+        ))
+    };
+    // For Markdown, which copies nothing: the table, and each copy a cell
+    // that holds the text.
+    let need = |n: u64| {
+        (1 + n) * FLAT_ELEMENT_BYTES + n * CELL_BYTES + n * (word.trim().len() as u64) * TEXT_BYTES
+    };
+    let within = |repeat: usize, memory: u64| {
+        parse_within(
+            &cell(repeat),
+            &mut Budget::new(memory, 0).for_output(Output::Flat),
         )
     };
-    let refused = parse(&text(&cell(1024))).unwrap_err();
+    let els = within(1024, need(1024)).unwrap().0;
+    assert_eq!(els[0].cells.as_ref().unwrap()[0].len(), 1024);
+    let refused = within(1024, need(1024) - 1).unwrap_err();
     assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
-    // Within them, the copies are cells.
-    let els = parse(&text(&cell(4))).unwrap();
-    assert_eq!(els[0].cells.as_ref().unwrap()[0].len(), 4);
+}
+
+#[test]
+fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
+    // A paragraph of one letter is six bytes of XML, and a node of the
+    // output: 1.5 million of them, 66 KB zipped, are 6 GB of DoCO.
+    let body = "<text:p>w</text:p>".repeat(1000);
+    let within = |memory: u64, output: Output| {
+        parse_within(&text(&body), &mut Budget::new(memory, 0).for_output(output))
+    };
+    let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES);
+    assert_eq!(within(need, Output::Doco).unwrap().0.len(), 1000);
+    let refused = within(need - 1, Output::Doco).unwrap_err();
+    assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
+    // Markdown writes a paragraph as a line: it costs less.
+    let flat = 1000 * (FLAT_ELEMENT_BYTES + TEXT_BYTES);
+    assert!(within(flat, Output::Flat).is_ok());
+    assert!(within(flat - 1, Output::Flat).is_err());
+    // A presentation's, the same.
+    let slides = package(
+        "presentation",
+        &format!(
+            "<office:presentation><draw:page><draw:frame><draw:text-box>{body}</draw:text-box></draw:frame></draw:page></office:presentation>"
+        ),
+        &[],
+    );
+    assert!(parse_within(&slides, &mut Budget::new(need, 0)).is_ok());
+    assert!(parse_within(&slides, &mut Budget::new(need - 1, 0)).is_err());
 }
 
 #[test]
 fn a_table_padded_to_its_widest_row_counts_the_padding() {
-    // One row of 4096 empty cells, then 1100 rows of none: a grid of 4.5
-    // million cells, the padding past the cells the tables may hold.
+    // One row of 4096 cells, one holding text, then 1100 rows of none: a
+    // grid of 4.5 million cells, every one spent.
     let rows = "<table:table-row/>".repeat(1100);
     let body = format!(
         "<table:table><table:table-row><table:table-cell table:number-columns-repeated=\"1024\"/>\
          <table:table-cell table:number-columns-repeated=\"1024\"/><table:table-cell table:number-columns-repeated=\"1024\"/>\
          <table:table-cell table:number-columns-repeated=\"1024\"><text:p>x</text:p></table:table-cell></table:table-row>{rows}</table:table>"
     );
-    assert!(matches!(parse(&text(&body)), Err(OdfError::TooLarge(_))));
+    // The table, and the 1024 cells that hold `x`, at Markdown's costs.
+    let need = 1101 * 4096 * CELL_BYTES + 1025 * FLAT_ELEMENT_BYTES + 1024 * TEXT_BYTES;
+    let within = |memory: u64| {
+        parse_within(
+            &text(&body),
+            &mut Budget::new(memory, 0).for_output(Output::Flat),
+        )
+    };
+    assert_eq!(
+        within(need).unwrap().0[0].cells.as_ref().unwrap().len(),
+        1101
+    );
+    assert!(matches!(within(need - 1), Err(OdfError::TooLarge(_))));
 }
 
 #[test]
@@ -397,7 +451,7 @@ fn a_header_repeated_on_master_pages_is_read_once_and_its_own_lines_kept() {
 }
 
 #[test]
-fn copies_of_merged_cells_spend_the_tables_room() {
+fn copies_of_merged_cells_are_spent() {
     // A cell spanning n rows over n covered cells that each hold text of
     // their own: DoCO joins the n texts and writes them on each row.
     let table = |n: usize, first: &str| {
@@ -411,16 +465,27 @@ fn copies_of_merged_cells_spend_the_tables_room() {
                 .repeat(n - 1)
         )
     };
-    assert!(parse(&text(&table(100, "x"))).is_ok());
-    assert!(matches!(
-        parse(&text(&table(8_000, "x"))),
-        Err(OdfError::TooLarge(_))
-    ));
-    // One long value over many rows, the same.
+    // 3,000 rows: 3,000 nodes read, 18 million bytes of copies, past 64 MiB
+    // only with the copies counted.
+    let within = |n: usize, first: &str, output: Output| {
+        parse_within(
+            &text(&table(n, first)),
+            &mut Budget::new(64 << 20, 0).for_output(output),
+        )
+    };
+    assert!(within(1_000, "x", Output::Doco).is_ok());
+    let refused = within(3_000, "x", Output::Doco).unwrap_err();
+    assert!(refused.to_string().contains("copies"), "{refused}");
+    // The text shows the joined value on each row too; Markdown, once.
+    assert!(within(3_000, "x", Output::Text).is_err());
+    assert!(within(3_000, "x", Output::Flat).is_ok());
+    // One long value over many rows, the same, within the whole budget: a
+    // file of a few kilobytes whose copies are 7 GB.
     let long = "y".repeat(200_000);
     assert!(parse(&text(&table(3, &long))).is_ok());
     assert!(matches!(
         parse(&text(&table(3_000, &long))),
         Err(OdfError::TooLarge(_))
     ));
+    assert!(converting_to(Output::Flat, || parse(&text(&table(3_000, &long)))).is_ok());
 }

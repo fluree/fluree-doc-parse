@@ -7,8 +7,8 @@ Word file that all point at the same text, a table whose first row is
 thousands of cells wide over rows of one, a cell merged down over thousands
 of rows: a file of a few kilobytes can describe gigabytes. So every reader
 of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
-`.docx`, `.ppt`, `.pptx`, `.rtf`), of Markdown and of HTML (a page, or an
-email's HTML body) is handed one budget for the document
+`.docx`, `.odt`, `.ppt`, `.pptx`, `.odp`, `.rtf`), of Markdown and of HTML
+(a page, or an email's HTML body) is handed one budget for the document
 (`fluree_doc_model::budget::Budget`) and spends it *before* it allocates.
 Past it, the document is refused with an error that names what ran out
 (`workbook too large: cells past the 2560 MiB of memory a document may
@@ -100,8 +100,6 @@ both files are refused as DoCO now, before a copy is made. Only DoCO makes
 these copies: converted to text, a value merged down is counted once a row,
 as the projection shows it, and converted to Markdown, XHTML or JSON,
 nothing is copied, so both files convert.
-The `.odt` and `.odp` readers count them against their tables' own bounds
-(4 million cells, 64 MiB of text), as cells holding that text.
 
 ## Work
 
