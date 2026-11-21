@@ -82,6 +82,49 @@ fn a_csv_and_a_tsv_are_tables_in_every_output() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_large_table_is_counted_at_the_output_asked_for() {
+    // An export of 50,000 rows by 15 columns, every cell filled: 750,000
+    // cells, about 80 MB as Markdown, past 2 GB as DoCO, whose graph
+    // writes each cell as a node with its labels.
+    let dir = scratch("large-table");
+    let csv = dir.join("export.csv");
+    let mut text = (0..15)
+        .map(|c| format!("col{c}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for r in 0..50_000 {
+        text.push('\n');
+        text.push_str(
+            &(0..15)
+                .map(|c| format!("v{r}.{c}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    std::fs::write(&csv, text).unwrap();
+    for format in ["md", "xhtml", "json", "text"] {
+        let o = convert(&dir, &csv, format, &[]);
+        assert!(
+            o.status.success(),
+            "{format}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        let out = String::from_utf8_lossy(&o.stdout);
+        assert!(
+            out.contains("v49999.14"),
+            "{format}: the last cell is missing"
+        );
+    }
+    // As DoCO it is refused, cleanly and before a node is made.
+    let o = convert(&dir, &csv, "doco", &[]);
+    assert_eq!(o.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("table too large"), "{err}");
+    assert!(o.stdout.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// The graph has a cell node whose value is `text`.
 fn doc_has_cell(doco: &str, text: &str) -> bool {
     let v: serde_json::Value = serde_json::from_str(doco).unwrap();

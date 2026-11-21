@@ -468,6 +468,10 @@ pub struct Copies {
     /// node carries (`doc:columnHeader`, `doc:rowHeader`,
     /// `doc:sectionLabel`).
     pub text: u64,
+    /// The part of `text` the merges copy, the labels left out: what the
+    /// text projection copies too, a value merged down shown on each row
+    /// ([`projected_cells`]), where DoCO copies the labels as well.
+    pub merged: u64,
 }
 
 /// What [`to_doco`] copies of `e`'s cells, sized without making a copy.
@@ -573,6 +577,7 @@ pub fn table_copies(e: &Element) -> Copies {
             }
         }
     }
+    let merged = text;
     // Each column's name as the writer gives it ([`column_headers`]), and
     // the record a wrapped table's cell belongs to ([`record_width`]): its
     // row label is the record's first cell, not the row's.
@@ -624,6 +629,7 @@ pub fn table_copies(e: &Element) -> Copies {
     Copies {
         cells: nodes.saturating_sub(filled),
         text,
+        merged,
     }
 }
 
@@ -2648,7 +2654,8 @@ mod tests {
             copies,
             Copies {
                 cells: (n - 1) as u64,
-                text: (n as u64 - 1) * 1000
+                text: (n as u64 - 1) * 1000,
+                merged: (n as u64 - 1) * 1000
             }
         );
         let g = graph(std::slice::from_ref(&t));
@@ -2668,7 +2675,8 @@ mod tests {
             copies,
             Copies {
                 cells: 0,
-                text: n * (2 * n - 1) - n
+                text: n * (2 * n - 1) - n,
+                merged: n * (2 * n - 1) - n
             }
         );
         let small = merged_column(vec!["x".into(); 4]);
@@ -2705,7 +2713,9 @@ mod tests {
             copies,
             Copies {
                 cells: 0,
-                text: row2 + row3 + row4
+                text: row2 + row3 + row4,
+                // The band is one cell's text already: nothing is joined.
+                merged: 0
             }
         );
     }
@@ -2811,6 +2821,18 @@ mod tests {
                 text <= raw + copies.text,
                 "{t:?}: {text} written, {raw} + {copies:?}"
             );
+            // The text projection copies the merges' text, not the labels.
+            let shown: u64 = projected_cells(&t)
+                .unwrap()
+                .iter()
+                .flatten()
+                .map(|c| crate::budget::text_cost(c.trim()))
+                .sum();
+            assert!(
+                shown <= raw + copies.merged,
+                "{t:?}: {shown} shown, {raw} + {copies:?}"
+            );
+            assert!(copies.merged <= copies.text, "{copies:?}");
         }
     }
 }

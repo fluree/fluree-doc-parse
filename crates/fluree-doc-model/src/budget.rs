@@ -25,6 +25,13 @@
 //!   DoCO writes of a table's cells (a merged value in each cell it covers,
 //!   each cell's labels) are spent at the same costs, as cells that hold
 //!   that text ([`Budget::spend_copies`]).
+//!
+//! What an element costs, and which copies are made, depend on the output
+//! the document is converted to ([`Output`]): DoCO writes each element and
+//! each cell that holds text as a node of its own, with its labels, where
+//! Markdown, XHTML and JSON write each once. A converter that knows its
+//! output says so around the reading ([`converting_to`]); a reader that is
+//! not told counts at DoCO's costs, the largest.
 //! * **Work**, in steps of a layout pass whose cost the file chooses (two
 //!   islands of cells compared, a glyph checked against those it may
 //!   overprint), at most [`MAX_WORK`]: a few seconds.
@@ -59,6 +66,63 @@ pub const MAX_WORK: u64 = 1 << 24;
 /// table's numeric cell, its typed value beside it, was measured at about
 /// 4 KiB less its slots), with no text of its own.
 pub const ELEMENT_BYTES: u64 = 4 << 10;
+
+/// What one element, or one table cell that holds text, costs at most when
+/// the output writes it once (Markdown, XHTML, JSON, the text): the
+/// reader's copy, which is most of it (an `.xlsx` cell was measured at
+/// about 750 B, an `.odt` paragraph, its XML tree, 1.25 KB), then the
+/// output's.
+pub const FLAT_ELEMENT_BYTES: u64 = 2 << 10;
+
+/// What a document is converted to, which sets what its elements cost and
+/// which copies of its tables' cells are made ([`Budget::spend_copies`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Output {
+    /// The DoCO JSON-LD graph: each element and each cell that holds text a
+    /// node, a merged value copied into each cell it covers, each cell its
+    /// labels. The largest, and what a reader not told counts.
+    #[default]
+    Doco,
+    /// The text projection: a value merged down shown on each row.
+    Text,
+    /// Markdown, XHTML or flat JSON: each cell written once.
+    Flat,
+}
+
+impl Output {
+    /// What one element, or one table cell that holds text, costs.
+    pub fn element_bytes(self) -> u64 {
+        match self {
+            Output::Doco => ELEMENT_BYTES,
+            Output::Text | Output::Flat => FLAT_ELEMENT_BYTES,
+        }
+    }
+}
+
+thread_local! {
+    static OUTPUT: std::cell::Cell<Output> = const { std::cell::Cell::new(Output::Doco) };
+}
+
+/// Run `read` with each [`Budget::default`] made in it, on this thread,
+/// counting at `output`'s costs: a converter wraps the reading of a document
+/// in it once, and every reader's budget follows, without each taking the
+/// output as an argument.
+pub fn converting_to<R>(output: Output, read: impl FnOnce() -> R) -> R {
+    struct Restore(Output);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OUTPUT.with(|o| o.set(self.0));
+        }
+    }
+    let _restore = Restore(OUTPUT.with(|o| o.replace(output)));
+    read()
+}
+
+/// The output the budgets made on this thread count at: [`Output::Doco`]
+/// outside [`converting_to`].
+pub fn output() -> Output {
+    OUTPUT.with(std::cell::Cell::get)
+}
 
 /// What one cell slot costs at most: a table's cell, empty or not, its
 /// typed value, its merge flags, the copies of a cell a layout keeps (each
@@ -141,24 +205,33 @@ pub struct Budget {
     memory: u64,
     max_memory: u64,
     work: Meter,
+    output: Output,
 }
 
 impl Default for Budget {
-    /// [`MAX_MEMORY`] and [`MAX_WORK`].
+    /// [`MAX_MEMORY`] and [`MAX_WORK`], at the costs of the [`output`] the
+    /// document is converted to.
     fn default() -> Self {
-        Self::new(MAX_MEMORY, MAX_WORK)
+        Self::new(MAX_MEMORY, MAX_WORK).for_output(output())
     }
 }
 
 impl Budget {
-    /// A budget of `memory` estimated bytes and `work` steps; a test's
-    /// smaller one shows a bound without allocating up to it.
+    /// A budget of `memory` estimated bytes and `work` steps, at DoCO's
+    /// costs; a test's smaller one shows a bound without allocating up to
+    /// it.
     pub fn new(memory: u64, work: u64) -> Self {
         Self {
             memory: 0,
             max_memory: memory,
             work: Meter::new(work, "steps of layout"),
+            output: Output::Doco,
         }
+    }
+
+    /// This budget, counting at `output`'s costs.
+    pub fn for_output(self, output: Output) -> Self {
+        Self { output, ..self }
     }
 
     fn spend_memory(&mut self, what: &'static str, n: u64, each: u64) -> Result<(), TooLarge> {
@@ -176,7 +249,7 @@ impl Budget {
     /// Count `n` elements about to be made, or table cells that hold text,
     /// each a node of its own in the DoCO output.
     pub fn spend_elements(&mut self, n: u64) -> Result<(), TooLarge> {
-        self.spend_memory("elements", n, ELEMENT_BYTES)
+        self.spend_memory("elements", n, self.output.element_bytes())
     }
 
     /// Count `n` cell slots about to be allocated: cells read, each copy of
@@ -200,16 +273,25 @@ impl Budget {
         self.spend_memory("text", n, TEXT_BYTES)
     }
 
-    /// Count what the DoCO output copies of the table `e`, once its cells
-    /// are spent ([`table_copies`](crate::doco::table_copies)): each cell a
-    /// merged value fills, a node of its own, and the text copied, a merged
-    /// value into each cell it covers and each cell's labels. A reader calls
-    /// it on every table it makes, before keeping it: a merge or a label the
-    /// file states once is written once per cell.
+    /// Count what the output copies of the table `e`, once its cells are
+    /// spent ([`table_copies`](crate::doco::table_copies)): for DoCO, each
+    /// cell a merged value fills, a node of its own, and the text copied, a
+    /// merged value into each cell it covers and each cell's labels; for
+    /// the text projection, a value merged down on each row; for the
+    /// others, nothing. A reader calls it on every table it makes, before
+    /// keeping it: a merge or a label the file states once is written once
+    /// per cell.
     pub fn spend_copies(&mut self, e: &crate::Element) -> Result<(), TooLarge> {
+        const WHAT: &str = "copies of table cells";
+        if self.output == Output::Flat {
+            return Ok(());
+        }
         let copies = crate::doco::table_copies(e);
-        self.spend_memory("copies of table cells", copies.cells, ELEMENT_BYTES)?;
-        self.spend_memory("copies of table cells", copies.text, TEXT_BYTES)
+        if self.output == Output::Text {
+            return self.spend_memory(WHAT, copies.merged, TEXT_BYTES);
+        }
+        self.spend_memory(WHAT, copies.cells, ELEMENT_BYTES)?;
+        self.spend_memory(WHAT, copies.text, TEXT_BYTES)
     }
 
     /// Count `n` steps of a layout pass about to be taken.
@@ -290,6 +372,79 @@ mod tests {
         let mut b = Budget::new(6 * TEXT_BYTES, 0);
         b.spend_chars("yyyyyy".chars()).unwrap();
         assert!(b.spend_chars(['y']).is_err());
+    }
+
+    /// A two-column table whose first row's value, `len` bytes, is merged
+    /// down its `rows` rows, each row's second cell holding a letter.
+    fn merged_down(len: usize, rows: usize) -> crate::Element {
+        let mut t = crate::Element::new("doco:Table", String::new(), "test", "test");
+        let mut cells = vec![vec!["y".repeat(len), "a".into()]];
+        cells.resize(rows, vec![String::new(), "a".into()]);
+        t.cells = Some(cells);
+        t.header_rows = Some(0);
+        t.merged_down = Some((0..rows * 2).map(|i| i >= 2 && i % 2 == 0).collect());
+        t
+    }
+
+    #[test]
+    fn what_an_element_and_a_copy_cost_follows_the_output() {
+        let at = |output| Budget::new(ELEMENT_BYTES, 0).for_output(output);
+        // DoCO writes an element as a node: one fills the budget.
+        assert!(at(Output::Doco).spend_elements(2).is_err());
+        assert!(at(Output::Flat).spend_elements(2).is_ok());
+        assert!(at(Output::Text).spend_elements(2).is_ok());
+        assert!(at(Output::Flat).spend_elements(3).is_err());
+        // A value merged down: DoCO copies it into each row's cell and
+        // labels the next cell with it, the text shows it on each row,
+        // Markdown, XHTML and JSON write it once.
+        let t = merged_down(1000, 10);
+        let copies = crate::doco::table_copies(&t);
+        assert_eq!(copies.merged, 9 * 1000);
+        assert_eq!(copies.text, 9 * 1000 + 10 * 1000);
+        let spend = |output, memory| {
+            Budget::new(memory, 0)
+                .for_output(output)
+                .spend_copies(&t)
+                .is_ok()
+        };
+        let doco = copies.cells * ELEMENT_BYTES + copies.text * TEXT_BYTES;
+        assert!(spend(Output::Doco, doco));
+        assert!(!spend(Output::Doco, doco - 1));
+        assert!(spend(Output::Text, copies.merged * TEXT_BYTES));
+        assert!(!spend(Output::Text, copies.merged * TEXT_BYTES - 1));
+        assert!(spend(Output::Flat, 0));
+    }
+
+    #[test]
+    fn a_budget_counts_at_the_output_it_is_converted_to() {
+        let element = |b: &mut Budget| {
+            let before = b.memory;
+            b.spend_elements(1).unwrap();
+            b.memory - before
+        };
+        // Not told, at DoCO's costs.
+        assert_eq!(output(), Output::Doco);
+        assert_eq!(element(&mut Budget::default()), ELEMENT_BYTES);
+        let inner = converting_to(Output::Flat, || {
+            let flat = element(&mut Budget::default());
+            // Nested, the inner one wins and gives way again.
+            let text = converting_to(Output::Text, output);
+            (flat, text, output())
+        });
+        assert_eq!(inner, (FLAT_ELEMENT_BYTES, Output::Text, Output::Flat));
+        assert_eq!(output(), Output::Doco);
+        // Restored even when the reading panics.
+        let panicked = std::panic::catch_unwind(|| converting_to(Output::Flat, || panic!()));
+        assert!(panicked.is_err());
+        assert_eq!(output(), Output::Doco);
+        // On this thread only: another converts to its own.
+        converting_to(Output::Flat, || {
+            assert_eq!(std::thread::spawn(output).join().unwrap(), Output::Doco);
+        });
+        // A test's budget is DoCO's, whatever it is read in.
+        converting_to(Output::Flat, || {
+            assert_eq!(element(&mut Budget::new(MAX_MEMORY, 0)), ELEMENT_BYTES)
+        });
     }
 
     #[test]
