@@ -2,6 +2,7 @@
 
 use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
+use fluree_doc_model::budget::MAX_MEMORY;
 use fluree_doc_pdf::document::Element;
 use fluree_doc_pdf::{extract_bytes, outline};
 use std::collections::HashMap;
@@ -211,13 +212,15 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         eprintln!("error: cannot create {}: {e}", out_dir.display());
         return 1;
     }
-    let jobs = match args.jobs {
-        0 => std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1),
-        n => n,
+    let cores = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1);
+    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory());
+    // Lowered to no fewer than the files there are, it changes nothing.
+    if let Some(why) = lowered.filter(|_| !quiet && jobs < files.len()) {
+        eprintln!("note: {why}");
     }
-    .min(files.len());
+    let jobs = jobs.min(files.len());
     // `report.pdf` and `report.docx` share a stem, so naming outputs by stem
     // alone makes one silently overwrite the other. Disambiguate only where
     // a stem actually repeats, so the ordinary single-format batch keeps
@@ -263,6 +266,170 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     } else {
         0
     }
+}
+
+/// What one document of a batch may take at once: its whole budget
+/// (`MAX_MEMORY`), and half as much again for its input and a library's own
+/// copies, 3.75 GiB, the 4 GB a document at its budget was measured to fit in.
+const DOCUMENT_MEMORY: u64 = MAX_MEMORY + MAX_MEMORY / 2;
+
+/// How many documents a batch converts at once, and why, where it is fewer
+/// than `requested` (`0`, one per core of `cores`).
+///
+/// Each document may take its whole budget and what goes with it
+/// ([`DOCUMENT_MEMORY`]) at once, so no more run together than `memory`, the
+/// memory free to the process, holds, and at least one; where that is not
+/// known, no more than one per core. A document past its budget fails on its
+/// own, but documents within theirs that together pass what the machine has
+/// would abort the whole batch, or have it killed.
+fn batch_jobs(requested: usize, cores: usize, memory: Option<u64>) -> (usize, Option<String>) {
+    let asked = if requested == 0 { cores } else { requested };
+    let (bound, why) = match memory {
+        Some(free) => (
+            usize::try_from(free / DOCUMENT_MEMORY)
+                .unwrap_or(usize::MAX)
+                .max(1),
+            format!(
+                "{} MiB of memory free, {} MiB a document",
+                free >> 20,
+                DOCUMENT_MEMORY >> 20
+            ),
+        ),
+        None => (
+            cores,
+            "the free memory is not known; one per core".to_string(),
+        ),
+    };
+    if asked <= bound {
+        return (asked, None);
+    }
+    let jobs_flag = if requested == 0 {
+        "-j 0 (one per core)".to_string()
+    } else {
+        format!("-j {requested}")
+    };
+    (
+        bound,
+        Some(format!("{jobs_flag} lowered to {bound}: {why}")),
+    )
+}
+
+/// The memory free to this process, the least of: what the system has
+/// available (`MemAvailable`), what its control groups leave it (a
+/// container's limit), and what its address space may grow to; `None` where
+/// none is known (outside Linux).
+fn free_memory() -> Option<u64> {
+    free_memory_in(|path| std::fs::read_to_string(path).ok())
+}
+
+/// [`free_memory`], its files read by `read`.
+fn free_memory_in(read: impl Fn(&str) -> Option<String>) -> Option<u64> {
+    [
+        read("/proc/meminfo").and_then(|m| mem_available(&m)),
+        read("/proc/self/cgroup").and_then(|c| cgroup_headroom(&c, &read)),
+        read("/proc/self/limits").and_then(|l| address_space(&l)),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+/// `MemAvailable` of `/proc/meminfo`, in bytes.
+fn mem_available(meminfo: &str) -> Option<u64> {
+    let kb = meminfo
+        .lines()
+        .find_map(|l| l.strip_prefix("MemAvailable:"))?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    Some(kb.saturating_mul(1024))
+}
+
+/// What the memory control groups of this process, as `/proc/self/cgroup`
+/// names them, leave it: the least, over its group and each above it, of
+/// its limit less what the group uses, a group without a limit not
+/// counting. What it uses is its working set, as docker and the kubelet
+/// count it: its use less the file cache the kernel reclaims first under
+/// the limit (`inactive_file` in its `memory.stat`), which a group that has
+/// read or written much keeps near its limit. `read` reads a file under
+/// `/sys/fs/cgroup`. cgroup v2 names one group (`0::/path`), whose
+/// `memory.max`, `memory.current` and `memory.stat` are read; v1 a group
+/// per controller, the memory one's `memory.limit_in_bytes`,
+/// `memory.usage_in_bytes` and `memory.stat` (`total_inactive_file`, its
+/// subgroups' included, as its use) read under `/sys/fs/cgroup/memory`. A container
+/// sees its own group at the root of the mount and its path from the host,
+/// so each group from the path's to the mount's root is read where it is
+/// there. `None` where no group has a limit.
+fn cgroup_headroom(cgroup: &str, read: impl Fn(&str) -> Option<String>) -> Option<u64> {
+    let number = |path: String| read(&path)?.trim().parse::<u64>().ok();
+    let mut least: Option<u64> = None;
+    for line in cgroup.lines() {
+        let mut fields = line.splitn(3, ':');
+        let (Some(id), Some(controllers), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (root, limit, usage, cache) = if id == "0" && controllers.is_empty() {
+            (
+                "/sys/fs/cgroup",
+                "memory.max",
+                "memory.current",
+                "inactive_file",
+            )
+        } else if controllers.split(',').any(|c| c == "memory") {
+            (
+                "/sys/fs/cgroup/memory",
+                "memory.limit_in_bytes",
+                "memory.usage_in_bytes",
+                "total_inactive_file",
+            )
+        } else {
+            continue;
+        };
+        // The group, then each above it, to the mount's root.
+        let mut dir = path.trim_end_matches('/');
+        loop {
+            // `max` (v2) is no limit, and does not parse; v1 writes a huge
+            // number, which counts for nothing beside the others.
+            if let (Some(max), Some(used)) = (
+                number(format!("{root}{dir}/{limit}")),
+                number(format!("{root}{dir}/{usage}")),
+            ) {
+                let reclaimable = read(&format!("{root}{dir}/memory.stat"))
+                    .and_then(|stat| stat_field(&stat, cache))
+                    .unwrap_or(0);
+                let left = max.saturating_sub(used.saturating_sub(reclaimable));
+                least = Some(least.map_or(left, |l| l.min(left)));
+            }
+            match dir.rfind('/') {
+                Some(i) => dir = &dir[..i],
+                None => break,
+            }
+        }
+    }
+    least
+}
+
+/// The value of `key` in a cgroup's `memory.stat` (`key value` lines).
+fn stat_field(stat: &str, key: &str) -> Option<u64> {
+    stat.lines().find_map(|l| {
+        let (k, v) = l.split_once(' ')?;
+        (k == key).then(|| v.trim().parse().ok())?
+    })
+}
+
+/// The soft limit on the address space in `/proc/self/limits`, in bytes;
+/// `None` where it is `unlimited`.
+fn address_space(limits: &str) -> Option<u64> {
+    limits
+        .lines()
+        .find_map(|l| l.strip_prefix("Max address space"))?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// The first flag given that names a single document.
@@ -2702,6 +2869,193 @@ fn parse_page(s: &str) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_batch_runs_no_more_documents_at_once_than_memory_holds() {
+        // Room for three documents: -j 8 and one per core of 12 lowered.
+        let three = Some(3 * DOCUMENT_MEMORY + (DOCUMENT_MEMORY >> 1));
+        let (jobs, why) = batch_jobs(8, 12, three);
+        assert_eq!(jobs, 3);
+        assert!(why.unwrap().starts_with("-j 8 lowered to 3: "));
+        let (jobs, why) = batch_jobs(0, 12, three);
+        assert_eq!(jobs, 3);
+        assert!(why.unwrap().starts_with("-j 0 (one per core) lowered to 3"));
+        // Within it: as asked, unsaid.
+        assert_eq!(batch_jobs(2, 12, three), (2, None));
+        assert_eq!(batch_jobs(0, 2, three), (2, None));
+        // A budget each is not room enough: what goes with it counts.
+        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY)).0, 2);
+        // Less than one document's room: still one.
+        assert_eq!(batch_jobs(4, 12, Some(1 << 30)).0, 1);
+        assert_eq!(batch_jobs(1, 12, Some(0)), (1, None));
+        // Not known: one per core at most.
+        assert_eq!(batch_jobs(0, 6, None), (6, None));
+        assert_eq!(batch_jobs(16, 6, None).0, 6);
+    }
+
+    #[test]
+    fn free_memory_is_read_from_proc() {
+        let meminfo =
+            "MemTotal:       65536000 kB\nMemFree:  1000 kB\nMemAvailable:   48000000 kB\n";
+        assert_eq!(mem_available(meminfo), Some(48_000_000 * 1024));
+        assert_eq!(mem_available("MemTotal: 1 kB\n"), None);
+        let limits = "Limit                     Soft Limit           Hard Limit           Units\n\
+                      Max stack size            8388608              unlimited            bytes\n\
+                      Max address space         4096000000           unlimited            bytes\n";
+        assert_eq!(address_space(limits), Some(4_096_000_000));
+        let unlimited =
+            "Max address space         unlimited            unlimited            bytes\n";
+        assert_eq!(address_space(unlimited), None);
+    }
+
+    #[test]
+    fn a_control_groups_limit_bounds_the_memory_free() {
+        use std::collections::HashMap;
+        let fs = |files: &[(&str, &str)]| {
+            let files: HashMap<String, String> = files
+                .iter()
+                .map(|(p, c)| (p.to_string(), c.to_string()))
+                .collect();
+            move |p: &str| files.get(p).cloned()
+        };
+        // cgroup v2: the group's limit less its use, and a group above with
+        // less left wins; the root has no limit, a group may say `max`.
+        let v2 = "0::/user.slice/batch.scope\n";
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.max",
+                "3221225472\n",
+            ),
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.current",
+                "221225472\n",
+            ),
+            ("/sys/fs/cgroup/user.slice/memory.max", "max\n"),
+            ("/sys/fs/cgroup/user.slice/memory.current", "9000000000\n"),
+        ]);
+        assert_eq!(cgroup_headroom(v2, &read), Some(3_000_000_000));
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.max",
+                "3221225472\n",
+            ),
+            (
+                "/sys/fs/cgroup/user.slice/batch.scope/memory.current",
+                "221225472\n",
+            ),
+            ("/sys/fs/cgroup/user.slice/memory.max", "2000000000\n"),
+            ("/sys/fs/cgroup/user.slice/memory.current", "1500000000\n"),
+        ]);
+        assert_eq!(cgroup_headroom(v2, &read), Some(500_000_000));
+        // A container: its group at the mount's root, its path the host's.
+        let container = "0::/system.slice/docker-1234.scope\n";
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "3000000000\n"),
+            ("/sys/fs/cgroup/memory.current", "1000000000\n"),
+        ]);
+        assert_eq!(cgroup_headroom(container, &read), Some(2_000_000_000));
+        // Over its limit (pages it may reclaim): nothing left, not a wrap.
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "1000\n"),
+            ("/sys/fs/cgroup/memory.current", "2000\n"),
+        ]);
+        assert_eq!(cgroup_headroom("0::/\n", &read), Some(0));
+        // Its file cache the kernel reclaims first is not counted as used:
+        // 3.3 GB of a group's 3.4 GB is cache written and let go.
+        let stat_v2 = "anon 90000000\nfile 3310000000\nkernel 4000000\n\
+                       active_anon 80000000\ninactive_anon 0\n\
+                       active_file 10000000\ninactive_file 3300000000\n\
+                       shmem 0\n";
+        let read = fs(&[
+            ("/sys/fs/cgroup/batch.scope/memory.max", "9000000000\n"),
+            ("/sys/fs/cgroup/batch.scope/memory.current", "3400000000\n"),
+            ("/sys/fs/cgroup/batch.scope/memory.stat", stat_v2),
+        ]);
+        assert_eq!(
+            cgroup_headroom("0::/batch.scope\n", &read),
+            Some(8_900_000_000)
+        );
+        // More cache than use, as the counters are read apart: all of it
+        // free, not a wrap.
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "1000\n"),
+            ("/sys/fs/cgroup/memory.current", "200\n"),
+            ("/sys/fs/cgroup/memory.stat", "inactive_file 300\n"),
+        ]);
+        assert_eq!(cgroup_headroom("0::/\n", &read), Some(1000));
+        // cgroup v1: the memory controller's line, its huge "no limit"
+        // beside a real one.
+        let v1 = "12:pids:/docker/abc\n4:cpu,cpuacct:/docker/abc\n\
+                  9:memory:/docker/abc\n1:name=systemd:/docker/abc\n";
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes",
+                "3000000000\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.usage_in_bytes",
+                "500000000\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+                "9223372036854771712\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+                "8000000000\n",
+            ),
+        ]);
+        assert_eq!(cgroup_headroom(v1, &read), Some(2_500_000_000));
+        // v1's cache is its hierarchy's, `total_inactive_file`; the group's
+        // own `inactive_file` beside it is not what its use counts.
+        let stat_v1 = "cache 2100000000\nrss 400000000\ninactive_file 5\n\
+                       total_cache 2100000000\ntotal_rss 400000000\n\
+                       total_inactive_file 2000000000\n";
+        let read = fs(&[
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes",
+                "3000000000\n",
+            ),
+            (
+                "/sys/fs/cgroup/memory/docker/abc/memory.usage_in_bytes",
+                "2500000000\n",
+            ),
+            ("/sys/fs/cgroup/memory/docker/abc/memory.stat", stat_v1),
+        ]);
+        assert_eq!(cgroup_headroom(v1, &read), Some(2_500_000_000));
+        // No limit anywhere, or no group: not known.
+        let read = fs(&[
+            ("/sys/fs/cgroup/memory.max", "max\n"),
+            ("/sys/fs/cgroup/memory.current", "1000\n"),
+        ]);
+        assert_eq!(cgroup_headroom("0::/\n", &read), None);
+        assert_eq!(cgroup_headroom("", &read), None);
+        // A container of 3 GB on a host with 23 GB available: the
+        // container's, and no more jobs than it leaves room for.
+        let read = fs(&[
+            ("/proc/meminfo", "MemAvailable:   23000000 kB\n"),
+            ("/proc/self/cgroup", container),
+            ("/sys/fs/cgroup/memory.max", "3000000000\n"),
+            ("/sys/fs/cgroup/memory.current", "1000000\n"),
+        ]);
+        let free = free_memory_in(&read);
+        assert_eq!(free, Some(2_999_000_000));
+        let (jobs, why) = batch_jobs(4, 12, free);
+        assert_eq!(jobs, 1);
+        assert!(why.unwrap().contains("2860 MiB of memory free"));
+        // Under an address space smaller still, that.
+        let read = fs(&[
+            ("/proc/meminfo", "MemAvailable:   23000000 kB\n"),
+            ("/proc/self/cgroup", container),
+            ("/sys/fs/cgroup/memory.max", "3000000000\n"),
+            ("/sys/fs/cgroup/memory.current", "1000000\n"),
+            (
+                "/proc/self/limits",
+                "Max address space         2000000000           unlimited            bytes\n",
+            ),
+        ]);
+        assert_eq!(free_memory_in(&read), Some(2_000_000_000));
+    }
 
     #[test]
     fn an_emails_files_share_what_the_message_leaves() {

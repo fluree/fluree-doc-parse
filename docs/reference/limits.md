@@ -135,6 +135,35 @@ made, so no more than one file's conversion is held at a time. A 31 KB
 e-mail carrying 14 small `.docx`, each making 300 MB of DoCO, aborted
 holding all 14 outputs; it now converts all 14, peaking at 0.9 GB.
 
+## Batches
+
+The budget is a document's, and a batch (`fdoc convert DIR --out-dir OUT
+-j N`) converts N documents at once in one process, so N documents each
+within their budget could together pass what the machine has, and one
+allocation refused would abort the whole batch, or the kernel kill it. So
+no more documents run at once than the memory free to the process holds at
+3.75 GiB each, a whole budget and half as much again for the document's
+input and a library's own copies (the 4 GB a document at its budget was
+measured to fit in), and at least one. The memory free is the least of
+what the system has available (`MemAvailable` in `/proc/meminfo`), what
+the process's control groups leave it (a container's limit: cgroup v2's
+`memory.max` less `memory.current`, v1's `memory.limit_in_bytes` less
+`memory.usage_in_bytes`, for its group and each above it, from the path
+`/proc/self/cgroup` names under `/sys/fs/cgroup`; what a group uses is
+counted less the file cache the kernel reclaims first, `inactive_file` in
+its `memory.stat`, `total_inactive_file` in v1, as docker and the kubelet
+count a working set), and what its address
+space may grow to (`ulimit -v`). Where none is known (outside Linux), no
+more than one per core. A lowered `-j` is said on stderr, where the batch
+has more files than it runs at once (`note: -j 4 lowered to 1: 2860 MiB of
+memory free, 3840 MiB a document`). Six `.docx` that each make 300 MB of
+DoCO, converted with `-j 6` under a 4 GB address space, aborted the batch;
+they now convert one at a time. Three HTML tables that each peak at 1.5 GB,
+converted with `-j 3` in a group limited to 3 GB on a host with 23 GB
+available, had the batch killed, silently; they now convert one at a time.
+And a group limited to 9 GB, after 4 GB written to a file had left 3.1 GB
+of cache counted in its use, no longer lowers `-j 2` to one.
+
 ## Coordinates
 
 No cell past Excel's grid, row 1,048,576 or column 16,384, is read, in any
