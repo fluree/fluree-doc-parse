@@ -1158,14 +1158,26 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// The serial of 9999-12-31, the last day Excel shows a date for, in the
+/// 1900 system and in the 1904 one, which counts 1,462 days fewer to it.
+const LAST_SERIAL: i64 = 2_958_465;
+const LAST_SERIAL_1904: i64 = LAST_SERIAL - 1_462;
+
 /// A serial date as the civil date it counts to and how far into that day
 /// it is, in `per_day` parts, rounded. Excel counts days from 1899-12-30 in
 /// the 1900 system — the day before 1900-01-01, so that serial 1 is New
 /// Year's Day — and keeps a day that never happened, 1900-02-29, at serial
 /// 60; a serial below 61 is one day off from that. The 1904 system counts
-/// from 1904-01-01. `None` for a serial before the epoch.
+/// from 1904-01-01. `None` for a serial before the epoch, or past the
+/// system's [`LAST_SERIAL`]: Excel shows no date past 9999-12-31, and a
+/// serial near `i64::MAX` days would overflow the count.
 fn civil_from_serial(v: f64, per_day: i64, date1904: bool) -> Option<((i64, u32, u32), i64)> {
-    if v < 0.0 || !v.is_finite() {
+    let last = if date1904 {
+        LAST_SERIAL_1904
+    } else {
+        LAST_SERIAL
+    };
+    if v < 0.0 || !v.is_finite() || v >= (last + 1) as f64 {
         return None;
     }
     let days = v.floor() as i64;
@@ -1175,6 +1187,10 @@ fn civil_from_serial(v: f64, per_day: i64, date1904: bool) -> Option<((i64, u32,
     } else {
         (days, part)
     };
+    // Rounded up into the day after the last.
+    if days > last {
+        return None;
+    }
     // Days between 1970-01-01 and each epoch.
     let epoch = if date1904 {
         -24_107
@@ -2706,6 +2722,27 @@ mod tests {
         assert_eq!(format_serial(61.0, NumFmt::Date, false), "1900-03-01");
         assert_eq!(format_serial(0.0, NumFmt::Date, true), "1904-01-01");
         assert_eq!(format_serial(-1.0, NumFmt::Date, false), "-1");
+        // Excel's last day, and past it a number: a serial of 1e300 days
+        // overflowed the count.
+        assert_eq!(
+            format_serial(2_958_465.0, NumFmt::Date, false),
+            "9999-12-31"
+        );
+        assert_eq!(format_serial(2_958_466.0, NumFmt::Date, false), "2958466");
+        // The 1904 system reaches it 1,462 days sooner.
+        assert_eq!(format_serial(2_957_003.0, NumFmt::Date, true), "9999-12-31");
+        assert_eq!(format_serial(2_957_004.0, NumFmt::Date, true), "2957004");
+        assert_eq!(serial_datum(2_957_004.0, &NumFmt::Date, true), None);
+        // A time that rounds into the day after the last is no date either.
+        assert_eq!(
+            format_serial(2_958_465.999_999_9, NumFmt::DateTime, false),
+            format_general(2_958_465.999_999_9)
+        );
+        assert_eq!(
+            format_serial(1e300, NumFmt::Date, true),
+            format_general(1e300)
+        );
+        assert_eq!(serial_datum(1e300, &NumFmt::Date, false), None);
     }
 
     #[test]
