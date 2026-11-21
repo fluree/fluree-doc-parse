@@ -108,6 +108,21 @@ pairwise to mend a block a missing cell split, a table's rows read across
 its range) spend a count of steps of their own, at most 2^28 a document: a
 few seconds.
 
+## Parts inflated
+
+A part of a `.docx`, `.pptx` or `.xlsx` package that is read whole (the
+main part, its styles and numbering, each slide, sheet, chart, header and
+footer) is read within what is left of the document's budget, and spent
+from it at two bytes a byte: the part, and the copy a reader makes of a run
+of text as long as it. A 2 MB `.docx` whose main part inflates to 1.9 GB of
+spaces peaked at 4.0 GB; it is refused now from the size its archive
+declares, before inflating, and a part whose declared size lies is cut as
+it inflates. The declared size is reserved only where memory is found for
+it, and what it claims past what the part holds is let go once the part is
+read: a 9 KB `.docx` whose three main parts each declared 1.3 GB for 1 MB
+was refused under a 3 GB address space as though it were that large. The parts read beside the document (relationships, core
+properties, settings, notes, comments) have a bound of their own, 64 MiB.
+
 ## Coordinates
 
 No cell past Excel's grid, row 1,048,576 or column 16,384, is read, in any

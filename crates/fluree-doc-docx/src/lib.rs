@@ -140,12 +140,18 @@ pub fn parse_with_media(
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), DocxError> {
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
     let main = pkg.main_part("word/document.xml");
-    let xml = pkg.read(&main).ok_or(DocxError::NoDocument)?;
+    // What the document makes, its body, header, footer and notes, is spent
+    // from one budget as it is made, and the parts it is read from, each
+    // inflated whole, before.
+    let mut budget = Budget::default();
+    let xml = pkg
+        .read_within(&main, &mut budget)?
+        .ok_or(DocxError::NoDocument)?;
     // Styles refine what a table's first row is and which paragraphs are
     // the title; a package without them, or with ones that do not parse,
     // still reads.
     let styles = pkg.related(&main, "styles", "word/styles.xml");
-    let styles = pkg.read(&styles);
+    let styles = pkg.read_within(&styles, &mut budget)?;
     let (header_styles, title_styles) = match &styles {
         Some(styles) => (header_row_styles(styles), title_styles(styles)),
         None => (HashSet::new(), HashSet::new()),
@@ -153,10 +159,8 @@ pub fn parse_with_media(
     // List numbering, which Word computes rather than stores; without the
     // part the document numbers nothing.
     let numbering = pkg.related(&main, "numbering", "word/numbering.xml");
-    let numbering = Numbering::new(pkg.read(&numbering).as_deref(), styles.as_deref());
-    // What the document makes, its body, header, footer and notes, is spent
-    // from one budget as it is made.
-    let mut budget = Budget::default();
+    let numbering = pkg.read_within(&numbering, &mut budget)?;
+    let numbering = Numbering::new(numbering.as_deref(), styles.as_deref());
     let (body, figure_rids) =
         parse_body(&xml, &header_styles, &title_styles, numbering, &mut budget)?;
     // The page header and footer: where a controlled document keeps its
@@ -184,7 +188,7 @@ pub fn parse_with_media(
             let Some(part) = rels.iter().find(|r| r.id == rid && !r.external) else {
                 continue;
             };
-            let Some(part_xml) = pkg.read(&part.target) else {
+            let Some(part_xml) = pkg.read_within(&part.target, budget)? else {
                 continue;
             };
             let found = match parse_part(

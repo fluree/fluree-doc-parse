@@ -69,27 +69,31 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptxError> {
 /// properties, read from the one opening of the package.
 pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), PptxError> {
     let mut pkg = Package::open(bytes).map_err(PptxError::Zip)?;
-    let slides = slide_parts(&mut pkg);
+    // What the deck makes, slide by slide, is spent from one budget as it
+    // is made, and each part it is read from, inflated whole, before: a
+    // slide listed a thousand times is read a thousand times.
+    let mut budget = Budget::default();
+    let slides = slide_parts(&mut pkg, &mut budget)?;
     if slides.is_empty() {
         return Err(PptxError::NoSlides);
     }
 
-    // What the deck makes, slide by slide, is spent from one budget as it
-    // is made: a slide listed a thousand times is read a thousand times.
-    let mut budget = Budget::default();
     let mut out = Vec::new();
     for (idx, name) in slides.iter().enumerate() {
-        let Some(xml) = pkg.read(name) else {
+        let Some(xml) = pkg.read_within(name, &mut budget)? else {
             continue;
         };
         // Charts live in their own parts; the slide only names a
         // relationship id, so resolve those before walking it.
-        let charts: Vec<(String, String)> = pkg
-            .relationships(name)
-            .into_iter()
-            .filter(|r| r.is("chart") && !r.external)
-            .filter_map(|r| Some((r.id, pkg.read(&r.target)?)))
-            .collect();
+        let mut charts: Vec<(String, String)> = Vec::new();
+        for r in pkg.relationships(name) {
+            if !r.is("chart") || r.external {
+                continue;
+            }
+            if let Some(cx) = pkg.read_within(&r.target, &mut budget)? {
+                charts.push((r.id, cx));
+            }
+        }
         out.extend(parse_slide(&xml, idx, &charts, &mut budget)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
@@ -105,12 +109,12 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
 /// A package without that list, or whose list names no part it holds, is
 /// read in the numeric order of its slide parts' names, where `slide10`
 /// comes after `slide2`.
-fn slide_parts(pkg: &mut Package<'_>) -> Vec<String> {
+fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>, TooLarge> {
     let presentation = pkg.main_part("ppt/presentation.xml");
     let rels = pkg.relationships(&presentation);
     let names = pkg.part_names();
     let listed: Vec<String> = pkg
-        .read(&presentation)
+        .read_within(&presentation, budget)?
         .map(|xml| slide_ids(&xml))
         .unwrap_or_default()
         .into_iter()
@@ -119,14 +123,14 @@ fn slide_parts(pkg: &mut Package<'_>) -> Vec<String> {
         .filter(|p| names.contains(p))
         .collect();
     if !listed.is_empty() {
-        return listed;
+        return Ok(listed);
     }
     let mut numbered: Vec<(usize, String)> = names
         .into_iter()
         .filter_map(|n| slide_number(&n).map(|k| (k, n)))
         .collect();
     numbered.sort();
-    numbered.into_iter().map(|(_, n)| n).collect()
+    Ok(numbered.into_iter().map(|(_, n)| n).collect())
 }
 
 /// The relationship ids of `presentation.xml`'s slide list, in order.

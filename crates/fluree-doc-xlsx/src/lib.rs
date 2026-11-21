@@ -168,7 +168,12 @@ pub fn parse_with_media(
 ) -> Result<(Vec<Element>, DocumentInfo, Vec<Media>), XlsxError> {
     let mut pkg = Package::open(bytes).map_err(XlsxError::Zip)?;
     let main = pkg.main_part("xl/workbook.xml");
-    let workbook = pkg.read(&main).ok_or(XlsxError::NoWorkbook)?;
+    // The parts the workbook is read from, each inflated whole, are spent
+    // from its budget before what it makes.
+    let mut budget = Budget::default();
+    let workbook = pkg
+        .read_within(&main, &mut budget)?
+        .ok_or(XlsxError::NoWorkbook)?;
     let rels = pkg.relationships(&main);
     let part = |name: &str, fallback: &str| {
         rels.iter()
@@ -180,18 +185,17 @@ pub fn parse_with_media(
         part("styles", "xl/styles.xml"),
     );
     let shared = pkg
-        .read(&shared)
+        .read_within(&shared, &mut budget)?
         .map(|x| parse_shared_strings(&x))
         .transpose()?
         .unwrap_or_default();
     let styles = pkg
-        .read(&styles)
+        .read_within(&styles, &mut budget)?
         .map(|x| parse_styles(&x))
         .transpose()?
         .unwrap_or_default();
     let (sheets, date1904) = parse_workbook_xml(&workbook)?;
     let names = PartNames::new(&pkg);
-    let mut budget = Budget::default();
 
     let mut out = Vec::new();
     let mut media = Vec::new();
@@ -200,7 +204,7 @@ pub fn parse_with_media(
         let Some(target) = rels.iter().find(|r| r.id == sheet_ref.rid && !r.external) else {
             continue;
         };
-        let Some(xml) = pkg.read(&target.target) else {
+        let Some(xml) = pkg.read_within(&target.target, &mut budget)? else {
             continue;
         };
         let ctx = Context {
@@ -218,7 +222,11 @@ pub fn parse_with_media(
                 .into_iter()
                 .find(|r| r.id == *rid && !r.external)
                 .map(|r| r.target);
-            if let Some((xml, part)) = drawing.and_then(|d| Some((pkg.read(&d)?, d))) {
+            let xml = match &drawing {
+                Some(d) => pkg.read_within(d, &mut budget)?,
+                None => None,
+            };
+            if let Some((xml, part)) = xml.zip(drawing) {
                 let drawing_rels = pkg.relationships(&part);
                 let by_id = fluree_doc_ooxml::by_id(&drawing_rels);
                 for pic in pictures(&xml) {

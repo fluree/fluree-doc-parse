@@ -9,6 +9,7 @@
 //! where most writers put them. So the readers ask the package, and fall back
 //! to the convention where a package does not say.
 
+use fluree_doc_model::budget::{Budget, TooLarge, PART_BYTES};
 use fluree_doc_model::{
     xsd_date_time, Allowance, DocumentInfo, Media, MediaSource, PictureReader, PictureReads,
 };
@@ -168,18 +169,34 @@ impl<'a> Package<'a> {
             .map_err(|e| e.to_string())
     }
 
-    /// A part's text, or `None` where the package has no such part or it is
-    /// not UTF-8.
-    pub fn read(&mut self, part: &str) -> Option<String> {
-        let mut s = String::new();
-        self.zip.by_name(part).ok()?.read_to_string(&mut s).ok()?;
-        Some(s)
+    /// A part's text, read whole within what is left of the document's
+    /// `budget` and spent from it ([`Budget::spend_bytes`], at
+    /// [`PART_BYTES`] a byte): `Ok(None)`
+    /// where the package has no such part or it does not read, and refused
+    /// as too large where it holds more than the budget has left. A main
+    /// part has no bound of its own, and a few kilobytes of archive can
+    /// inflate to gigabytes.
+    pub fn read_within(
+        &mut self,
+        part: &str,
+        budget: &mut Budget,
+    ) -> Result<Option<String>, TooLarge> {
+        let max = budget.memory_left() / PART_BYTES;
+        match self.read_capped(part, max) {
+            Ok(text) => {
+                let len = text.as_ref().map_or(0, String::len);
+                budget.spend_bytes(len as u64)?;
+                Ok(text)
+            }
+            // Past what is left: spending it refuses, naming the budget.
+            Err(_) => budget.spend_bytes(max + 1).map(|()| None),
+        }
     }
 
     /// A part's text, at most `max` bytes of it, checked as it inflates:
     /// `Ok(None)` where the package has no such part, or it does not read
     /// (a broken entry, text that is not UTF-8), and refused, naming the
-    /// part, where it holds more.
+    /// part, where it holds more, or more than memory can be found for.
     pub fn read_capped(&mut self, part: &str, max: u64) -> Result<Option<String>, String> {
         let Ok(entry) = self.zip.by_name(part) else {
             return Ok(None);
@@ -188,14 +205,12 @@ impl<'a> Package<'a> {
         if entry.size() > max {
             return Err(too_large());
         }
-        let mut v = Vec::new();
-        if entry.take(max + 1).read_to_end(&mut v).is_err() {
-            return Ok(None);
+        let declared = entry.size();
+        match read_declared(entry, declared, max) {
+            Ok(v) => Ok(String::from_utf8(v).ok()),
+            Err(Unread::TooLarge) => Err(too_large()),
+            Err(Unread::Broken) => Ok(None),
         }
-        if v.len() as u64 > max {
-            return Err(too_large());
-        }
-        Ok(String::from_utf8(v).ok())
     }
 
     /// A part's bytes, for a binary part such as an image, at most `max` of
@@ -286,6 +301,38 @@ impl<'a> Package<'a> {
             .map(|xml| core_properties(&xml))
             .unwrap_or_default()
     }
+}
+
+/// Why a part was not read.
+#[derive(Debug, PartialEq, Eq)]
+enum Unread {
+    /// More than the bound, or more than memory can be found for.
+    TooLarge,
+    /// A broken entry.
+    Broken,
+}
+
+/// What `entry` holds, at most `max` bytes, checked as it inflates. The size
+/// the archive declares, `declared`, is reserved first where memory is found
+/// for it, so a large part does not double its buffer on the way; but it is
+/// not believed: where the reservation is refused the buffer grows as the
+/// part is read instead, and what a part declares past what it holds is let
+/// go once it is read. A growth refused is a part too large, not an abort.
+fn read_declared(entry: impl Read, declared: u64, max: u64) -> Result<Vec<u8>, Unread> {
+    let mut v = Vec::new();
+    let declared = usize::try_from(declared.min(max)).unwrap_or(usize::MAX);
+    // Refused, it may well be a lie: grown as read.
+    let _ = v.try_reserve_exact(declared);
+    match entry.take(max.saturating_add(1)).read_to_end(&mut v) {
+        Err(e) if e.kind() == std::io::ErrorKind::OutOfMemory => return Err(Unread::TooLarge),
+        Err(_) => return Err(Unread::Broken),
+        Ok(_) => {}
+    }
+    if v.len() as u64 > max {
+        return Err(Unread::TooLarge);
+    }
+    v.shrink_to_fit();
+    Ok(v)
 }
 
 /// The core properties of a package's bytes; empty where they are not a
@@ -662,6 +709,53 @@ mod tests {
         let mut p = Package::open(&bytes).unwrap();
         let read = p.read_capped("big.xml", 1 << 20);
         assert!(read.is_err() || read.unwrap().is_none_or(|s| s.len() <= 16));
+    }
+
+    #[test]
+    fn a_parts_declared_size_is_reserved_but_not_believed() {
+        let text = b"<w:document/>";
+        // Declared as a gigabyte: read, and holding no more than it is.
+        let v = read_declared(&text[..], 1 << 30, 2 << 30).unwrap();
+        assert_eq!(v, text);
+        assert!(v.capacity() < 1 << 20, "{}", v.capacity());
+        // Declared as more than memory can be found for: read all the same.
+        let v = read_declared(&text[..], 1 << 62, 1 << 63).unwrap();
+        assert_eq!(v, text);
+        // More than the bound, whatever it declares: refused.
+        assert_eq!(read_declared(&text[..], 4, 4), Err(Unread::TooLarge));
+    }
+
+    #[test]
+    fn a_part_read_whole_is_read_within_the_budget_left_and_spent_from_it() {
+        let body = "<w:document/>";
+        let len = body.len() as u64;
+        let bytes = deflated(&[("word/document.xml", &past(body, 4 * len))]);
+        let mut p = Package::open(&bytes).unwrap();
+        // Room for it: read, and spent.
+        let mut b = Budget::new((4 * len + 1) * PART_BYTES + 7, 0);
+        let read = p.read_within("word/document.xml", &mut b).unwrap();
+        assert_eq!(read.map(|s| s.len() as u64), Some(4 * len + 1));
+        assert_eq!(b.memory_left(), 7);
+        // No room for it: refused as too large, not read as no part, and
+        // the budget stays spent.
+        let mut b = Budget::new((4 * len + 1) * PART_BYTES - 1, 0);
+        let e = p.read_within("word/document.xml", &mut b).unwrap_err();
+        assert!(e.to_string().starts_with("bytes of parts inflated"), "{e}");
+        assert_eq!(b.memory_left(), 0);
+        // A part the package does not hold costs nothing.
+        let mut b = Budget::new(10, 0);
+        assert_eq!(p.read_within("word/none.xml", &mut b), Ok(None));
+        assert_eq!(b.memory_left(), 10);
+        // Its size declared as a few bytes is not believed.
+        let mut bytes = bytes;
+        for (sig, at) in [(b"PK\x03\x04", 22), (b"PK\x01\x02", 24)] {
+            let h = bytes.windows(4).position(|w| w == sig).unwrap();
+            bytes[h + at..h + at + 4].copy_from_slice(&4u32.to_le_bytes());
+        }
+        let mut p = Package::open(&bytes).unwrap();
+        let mut b = Budget::new(2 * len * PART_BYTES, 0);
+        let read = p.read_within("word/document.xml", &mut b);
+        assert!(read.is_err() || read.unwrap().is_none_or(|s| s.len() <= 4));
     }
 
     #[test]

@@ -38,6 +38,10 @@
 //!
 //! A reader that guards a library's allocations it cannot see (what
 //! calamine reserves for a sheet) keeps its own [`Meter`] for them.
+//!
+//! A part a package inflates whole (an Office file's main part, its
+//! slides) is read within what is left of the memory budget and spent from
+//! it, two bytes for each ([`Budget::spend_bytes`]).
 
 /// The memory a document's elements, cells and text may take, estimated
 /// at the costs below: 2.5 GiB.
@@ -133,6 +137,12 @@ pub const CELL_BYTES: u64 = 128;
 /// copies a reader and a layout make (a cell's text, a table's text, its
 /// rows), then the output.
 pub const TEXT_BYTES: u64 = 12;
+
+/// What one byte of a part inflated whole costs: the part's own, and the
+/// copy a reader's event buffer makes of an event as long as the part (a
+/// run of text between two tags). A `.docx` whose main part is 1.9 GB of
+/// spaces peaked at 4.0 GB.
+pub const PART_BYTES: u64 = 2;
 
 /// A budget spent: what was being counted, and the bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,6 +308,19 @@ impl Budget {
     pub fn spend_work(&mut self, n: u64) -> Result<(), TooLarge> {
         self.work.spend(n)
     }
+
+    /// The estimated memory not spent yet.
+    pub fn memory_left(&self) -> u64 {
+        self.max_memory.saturating_sub(self.memory)
+    }
+
+    /// Count `n` bytes of a part inflated whole, at [`PART_BYTES`] each:
+    /// what an archive holds in a few kilobytes can be gigabytes once
+    /// inflated, and a document's main part has no smaller bound of its
+    /// own.
+    pub fn spend_bytes(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("bytes of parts inflated", n, PART_BYTES)
+    }
 }
 
 /// The most bytes `c` takes in any output: a control character is six
@@ -445,6 +468,20 @@ mod tests {
         converting_to(Output::Flat, || {
             assert_eq!(element(&mut Budget::new(MAX_MEMORY, 0)), ELEMENT_BYTES)
         });
+    }
+
+    #[test]
+    fn bytes_inflated_share_the_memory_budget() {
+        let mut b = Budget::new(ELEMENT_BYTES + 10 * PART_BYTES, 0);
+        b.spend_elements(1).unwrap();
+        assert_eq!(b.memory_left(), 10 * PART_BYTES);
+        b.spend_bytes(10).unwrap();
+        assert_eq!(b.memory_left(), 0);
+        assert_eq!(
+            b.spend_bytes(1).unwrap_err().to_string(),
+            "bytes of parts inflated past the 0 MiB of memory a document may take"
+        );
+        assert_eq!(b.memory_left(), 0);
     }
 
     #[test]
