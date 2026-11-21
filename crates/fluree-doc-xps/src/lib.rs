@@ -56,7 +56,8 @@ pub const MAX_PAGES: usize = 10_000;
 /// pages, four million glyphs were measured to peak at 1.5 GB (about 370
 /// bytes a glyph); piled on few pages, at about 530 bytes a glyph, 2.1 GB:
 /// within a 4 GB address space either way. A dense printed page holds a
-/// few thousand.
+/// few thousand, so a document of more than about 1,600 such pages is
+/// refused whole.
 pub const MAX_GLYPHS: usize = 4_000_000;
 /// The most glyphs, and pictures, read from one page: 250,000, fifty times
 /// a dense page. The pipeline's passes over a page cost more than its
