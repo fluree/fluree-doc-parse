@@ -125,9 +125,16 @@ few seconds.
 
 A part of a `.docx`, `.pptx` or `.xlsx` package that is read whole (the
 main part, its styles and numbering, each slide, sheet, chart, header and
-footer) is read within what is left of the document's budget, and spent
+footer), or of an `.odt`, `.ods` or `.odp` (its content, styles and
+metadata), is read within what is left of the document's budget, and spent
 from it at two bytes a byte: the part, and the copy a reader makes of a run
-of text as long as it. A 2 MB `.docx` whose main part inflates to 1.9 GB of
+of text as long as it. An OpenDocument part's XML tree, held while the
+elements are made from it, is spent too as it is built, two cell slots a
+node and two an attribute: a 202 KB `.ods` whose content inflates to 65 MB,
+two million cells, made a tree of about 600 MB the budget did not see, and
+peaked at 1.7 GB before its cells were refused, at 800 MB under the fuzz
+targets' budget of 160 MiB; with its tree spent, it peaks at 1.4 GB, and at
+115 MB under the fuzz targets. A 2 MB `.docx` whose main part inflates to 1.9 GB of
 spaces peaked at 4.0 GB; it is refused now from the size its archive
 declares, before inflating, and a part whose declared size lies is cut as
 it inflates. The declared size is reserved only where memory is found for

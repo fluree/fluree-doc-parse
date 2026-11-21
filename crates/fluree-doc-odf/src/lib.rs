@@ -24,7 +24,12 @@
 //!
 //! **Bounds**, as for any archive: each part at most [`MAX_PART_BYTES`]
 //! inflated, checked as it inflates, and its XML at most
-//! [`tree::MAX_NODES`] nodes nested [`tree::MAX_DEPTH`] deep. What a
+//! [`tree::MAX_NODES`] nodes nested [`tree::MAX_DEPTH`] deep. A part read
+//! whole (the content, the styles, the metadata) is read within what is
+//! left of the document's [`Budget`] and spent from it, at two bytes a byte
+//! as an Office part is, and so is its tree as it is built
+//! ([`Tree::parse`]): four bytes of XML (`<a/>`) are a node of about 140
+//! bytes. What a
 //! document makes of it is spent from the document's [`Budget`] before it
 //! is made: each paragraph and its text; each table cell, a repeated cell
 //! each time it is copied, its text too, and a short row's padding to the
@@ -35,7 +40,7 @@
 mod sheet;
 mod tree;
 
-use fluree_doc_model::budget::{Budget, TooLarge};
+use fluree_doc_model::budget::{Budget, TooLarge, PART_BYTES};
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::Package;
 use tree::{Role, Tree};
@@ -128,13 +133,10 @@ fn parse_within(
 ) -> Result<(Vec<Element>, DocumentInfo, Format), OdfError> {
     let format = Format::sniff(bytes).ok_or(OdfError::NotOdf)?;
     let mut pkg = Package::open(bytes).map_err(OdfError::Zip)?;
-    let content = part(&mut pkg, "content.xml")?.ok_or(OdfError::NoContent)?;
-    let content = Tree::parse(&content).map_err(OdfError::TooLarge)?;
+    let content = tree(&mut pkg, "content.xml", budget)?.ok_or(OdfError::NoContent)?;
     let mut out = match format {
         Format::Text => {
-            let styles = part(&mut pkg, "styles.xml")?
-                .map(|s| Tree::parse(&s).map_err(OdfError::TooLarge))
-                .transpose()?;
+            let styles = tree(&mut pkg, "styles.xml", budget)?;
             let mut content = content;
             content.roles = style_roles(&content, styles.as_ref());
             text_elements(&content, styles.as_ref(), budget)?
@@ -150,8 +152,10 @@ fn parse_within(
             e.evidence = source;
         }
     }
-    let info = part(&mut pkg, "meta.xml")?
-        .and_then(|m| Tree::parse(&m).ok())
+    // What the package says of itself is not worth refusing it over.
+    let info = tree(&mut pkg, "meta.xml", budget)
+        .ok()
+        .flatten()
         .map(|m| info(&m))
         .unwrap_or_default();
     Ok((out, info, format))
@@ -162,14 +166,32 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, OdfError> {
     parse_with_info(bytes).map(|(e, _, _)| e)
 }
 
-/// A part's text, at most [`MAX_PART_BYTES`]; `None` where the package has
-/// no such part.
-fn part(pkg: &mut Package<'_>, name: &str) -> Result<Option<String>, OdfError> {
+/// A part's XML as a tree, its text read at most [`MAX_PART_BYTES`] and
+/// within what is left of `budget`, and spent from it as an Office part is
+/// ([`Budget::spend_bytes`]), then its tree ([`Tree::parse`]); `None` where
+/// the package has no such part. The text is let go once the tree holds
+/// it.
+fn tree(pkg: &mut Package<'_>, name: &str, budget: &mut Budget) -> Result<Option<Tree>, OdfError> {
     if !pkg.part_names().iter().any(|n| n == name) {
         return Ok(None);
     }
-    pkg.read_bytes(name, MAX_PART_BYTES)
-        .map(|b| Some(String::from_utf8_lossy(&b).into_owned()))
+    let left = budget.memory_left() / PART_BYTES;
+    let cap = MAX_PART_BYTES.min(left);
+    let bytes = match pkg.read_bytes(name, cap) {
+        Ok(b) => b,
+        // Past what the budget has left rather than the part's own bound:
+        // spending it refuses, naming the budget.
+        Err(e) if cap < MAX_PART_BYTES && e.contains("more than") => {
+            let refused = budget.spend_bytes(left + 1).err();
+            return Err(refused.map_or(OdfError::TooLarge(e), OdfError::from));
+        }
+        Err(e) => return Err(OdfError::TooLarge(e)),
+    };
+    budget.spend_bytes(bytes.len() as u64)?;
+    let xml = String::from_utf8(bytes)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    Tree::parse(&xml, budget)
+        .map(Some)
         .map_err(OdfError::TooLarge)
 }
 

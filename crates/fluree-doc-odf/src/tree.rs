@@ -4,9 +4,26 @@
 //! item, a table inside a frame), which a tree states plainly. Elements and
 //! attributes are kept by local name: OpenDocument's prefixes are a
 //! convention, not a contract.
+//!
+//! The tree is held while the document's elements are made from it, so it
+//! is spent from the document's [`Budget`] as it is built, in cell slots
+//! ([`Budget::spend_cells`]): [`NODE_CELLS`] a node, [`ATTR_CELLS`] an
+//! attribute, and one for each [`CELL_BYTES`] of text and values a node
+//! holds. Four bytes of XML (`<a/>`) are a node, and 9 MB of `<a b=""/>`
+//! took 376 MB as a tree.
 
+use fluree_doc_model::budget::{Budget, CELL_BYTES};
 use quick_xml::events::Event;
 use quick_xml::Reader;
+
+/// What a node costs, in cell slots: about 140 bytes were measured a node
+/// (its record, its name, its place in its parent's children), 160 for a
+/// node of text.
+pub const NODE_CELLS: u64 = 2;
+/// What an attribute costs, in cell slots: about 240 bytes were measured
+/// for an attribute with an empty value (its pair of strings, their
+/// allocations), its value's text counted apart.
+pub const ATTR_CELLS: u64 = 2;
 
 /// The most nodes a part's tree holds.
 pub const MAX_NODES: usize = 4 << 20;
@@ -43,10 +60,20 @@ fn local(q: &[u8]) -> String {
     s.rsplit(':').next().unwrap_or(&s).to_string()
 }
 
+/// Spend what `node` costs from `budget`, before it is kept.
+fn spend(budget: &mut Budget, node: &Node) -> Result<(), String> {
+    let attrs = node.attrs.len() as u64;
+    let bytes = node.text.len() + node.attrs.iter().map(|(_, v)| v.len()).sum::<usize>();
+    budget
+        .spend_cells(NODE_CELLS + attrs * ATTR_CELLS + (bytes as u64).div_ceil(CELL_BYTES))
+        .map_err(|e| e.to_string())
+}
+
 impl Tree {
-    /// Parse `xml`; `Err` past a bound, naming it. A part that stops
-    /// parsing keeps what was read before it.
-    pub fn parse(xml: &str) -> Result<Tree, String> {
+    /// Parse `xml`, each node spent from `budget` before it is kept; `Err`
+    /// past a bound, naming it. A part that stops parsing keeps what was
+    /// read before it.
+    pub fn parse(xml: &str, budget: &mut Budget) -> Result<Tree, String> {
         let mut t = Tree {
             nodes: vec![Node::default()],
             ..Tree::default()
@@ -74,12 +101,14 @@ impl Tree {
                             (local(a.key.as_ref()), v)
                         })
                         .collect();
-                    let id = t.nodes.len();
-                    t.nodes.push(Node {
+                    let node = Node {
                         name: local(e.name().as_ref()),
                         attrs,
                         ..Node::default()
-                    });
+                    };
+                    spend(budget, &node)?;
+                    let id = t.nodes.len();
+                    t.nodes.push(node);
                     t.nodes[parent].children.push(id);
                     if !empty {
                         if stack.len() > MAX_DEPTH {
@@ -96,20 +125,24 @@ impl Tree {
                 Ok(Event::Text(x)) => {
                     let s = x.unescape().map(|s| s.into_owned()).unwrap_or_default();
                     if !s.is_empty() {
-                        let id = t.nodes.len();
-                        t.nodes.push(Node {
+                        let node = Node {
                             text: s,
                             ..Node::default()
-                        });
+                        };
+                        spend(budget, &node)?;
+                        let id = t.nodes.len();
+                        t.nodes.push(node);
                         t.nodes[parent].children.push(id);
                     }
                 }
                 Ok(Event::CData(x)) => {
-                    let id = t.nodes.len();
-                    t.nodes.push(Node {
+                    let node = Node {
                         text: String::from_utf8_lossy(&x).into_owned(),
                         ..Node::default()
-                    });
+                    };
+                    spend(budget, &node)?;
+                    let id = t.nodes.len();
+                    t.nodes.push(node);
                     t.nodes[parent].children.push(id);
                 }
                 _ => {}

@@ -80,9 +80,14 @@ read.
 ## Bounds
 
 Each part at most 64 MiB inflated, checked as it inflates, and its XML at
-most four million nodes nested 256 deep. What a text or a presentation
-makes of it is spent from the document's budget
-([limits on what one document may make](../reference/limits.md)) before it
+most four million nodes nested 256 deep. Each part is read within what is
+left of the document's budget
+([limits on what one document may make](../reference/limits.md)), at two
+bytes a byte, and its XML tree is spent from it as it is built: two cell
+slots a node, two an attribute, one for each 128 bytes of text, since four
+bytes of XML (`<a/>`) make a node of about 140 bytes and 9 MB of
+`<a b=""/>` a tree of 376 MB. What a text or a presentation
+makes of it is spent from the document's budget too before it
 is made: each paragraph and its text; each table cell, a repeated cell
 each time it is copied, its text too, and a short row's padding to the
 table's width; and the copies DoCO writes of a table's cells (a merged

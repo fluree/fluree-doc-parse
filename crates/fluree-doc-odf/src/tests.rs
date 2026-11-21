@@ -2,7 +2,7 @@
 
 use super::*;
 use fluree_doc_model::budget::{
-    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
 };
 use std::io::Write;
 
@@ -295,6 +295,17 @@ fn texts(els: &[Element]) -> Vec<&str> {
     els.iter().map(|e| e.text.as_str()).collect()
 }
 
+/// What reading `pkg`'s content and styles spends, their text and their
+/// trees, before any element is made from them.
+fn reading(pkg: &[u8]) -> u64 {
+    let mut b = Budget::new(MAX_MEMORY, 0);
+    let mut p = Package::open(pkg).unwrap();
+    for name in ["content.xml", "styles.xml"] {
+        tree(&mut p, name, &mut b).unwrap();
+    }
+    MAX_MEMORY - b.memory_left()
+}
+
 #[test]
 fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
     // 7 KiB of text in a cell repeated 1024 times: 7 MiB of text asked for
@@ -312,6 +323,7 @@ fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
     let need = |n: u64| {
         (1 + n) * FLAT_ELEMENT_BYTES + n * CELL_BYTES + n * (word.trim().len() as u64) * TEXT_BYTES
     };
+    let need = |n: u64| need(n) + reading(&cell(n as usize));
     let within = |repeat: usize, memory: u64| {
         parse_within(
             &cell(repeat),
@@ -332,12 +344,12 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     let within = |memory: u64, output: Output| {
         parse_within(&text(&body), &mut Budget::new(memory, 0).for_output(output))
     };
-    let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES);
+    let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
     assert_eq!(within(need, Output::Doco).unwrap().0.len(), 1000);
     let refused = within(need - 1, Output::Doco).unwrap_err();
     assert!(matches!(refused, OdfError::TooLarge(_)), "{refused}");
     // Markdown writes a paragraph as a line: it costs less.
-    let flat = 1000 * (FLAT_ELEMENT_BYTES + TEXT_BYTES);
+    let flat = 1000 * (FLAT_ELEMENT_BYTES + TEXT_BYTES) + reading(&text(&body));
     assert!(within(flat, Output::Flat).is_ok());
     assert!(within(flat - 1, Output::Flat).is_err());
     // A presentation's, the same.
@@ -348,6 +360,7 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
         ),
         &[],
     );
+    let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + reading(&slides);
     assert!(parse_within(&slides, &mut Budget::new(need, 0)).is_ok());
     assert!(parse_within(&slides, &mut Budget::new(need - 1, 0)).is_err());
 }
@@ -363,7 +376,10 @@ fn a_table_padded_to_its_widest_row_counts_the_padding() {
          <table:table-cell table:number-columns-repeated=\"1024\"><text:p>x</text:p></table:table-cell></table:table-row>{rows}</table:table>"
     );
     // The table, and the 1024 cells that hold `x`, at Markdown's costs.
-    let need = 1101 * 4096 * CELL_BYTES + 1025 * FLAT_ELEMENT_BYTES + 1024 * TEXT_BYTES;
+    let need = 1101 * 4096 * CELL_BYTES
+        + 1025 * FLAT_ELEMENT_BYTES
+        + 1024 * TEXT_BYTES
+        + reading(&text(&body));
     let within = |memory: u64| {
         parse_within(
             &text(&body),
@@ -488,4 +504,41 @@ fn copies_of_merged_cells_are_spent() {
         Err(OdfError::TooLarge(_))
     ));
     assert!(converting_to(Output::Flat, || parse(&text(&table(3_000, &long)))).is_ok());
+}
+
+#[test]
+fn a_parts_tree_is_spent_before_its_elements_are_made() {
+    // 200,000 empty elements, 4 bytes of XML each, the most a part packs
+    // into nodes: a tree no element is made of, 136 bytes a node measured,
+    // refused by a budget that holds the part and 10,000 nodes.
+    let pkg = text(&format!("<text:p>w</text:p>{}", "<a/>".repeat(200_000)));
+    let part = 800_000 * PART_BYTES;
+    let refused = parse_within(&pkg, &mut Budget::new(part + 10_000 * CELL_BYTES, 0)).unwrap_err();
+    assert!(refused.to_string().contains("cells past the"), "{refused}");
+    // Each node, each attribute and the text they hold.
+    let mut b = Budget::new(MAX_MEMORY, 0);
+    let t = Tree::parse("<a b=\"\" c=\"v\">x</a>", &mut b).unwrap();
+    assert_eq!(t.nodes.len(), 3);
+    let node = tree::NODE_CELLS * CELL_BYTES;
+    let attr = tree::ATTR_CELLS * CELL_BYTES;
+    assert_eq!(
+        MAX_MEMORY - b.memory_left(),
+        2 * node + 2 * attr + 2 * CELL_BYTES
+    );
+    // Within what the reading costs, read; a byte less, refused.
+    let need = reading(&pkg) + ELEMENT_BYTES + TEXT_BYTES;
+    assert!(parse_within(&pkg, &mut Budget::new(need, 0)).is_ok());
+    assert!(parse_within(&pkg, &mut Budget::new(need - 1, 0)).is_err());
+}
+
+#[test]
+fn a_part_past_what_the_budget_has_left_is_refused_before_it_is_read() {
+    // A content part of 3 MiB of spaces, under its own bound, past a budget
+    // of 4 MiB at two bytes a byte.
+    let pkg = text(&" ".repeat(3 << 20));
+    let refused = parse_within(&pkg, &mut Budget::new(4 << 20, 0)).unwrap_err();
+    assert_eq!(
+        refused.to_string(),
+        "OpenDocument file too large: bytes of parts inflated past the 4 MiB of memory a document may take"
+    );
 }
