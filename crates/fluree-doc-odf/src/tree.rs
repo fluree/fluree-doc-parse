@@ -6,11 +6,12 @@
 //! convention, not a contract.
 //!
 //! The tree is held while the document's elements are made from it, so it
-//! is spent from the document's [`Budget`] as it is built, in cell slots
-//! ([`Budget::spend_cells`]): [`NODE_CELLS`] a node, [`ATTR_CELLS`] an
-//! attribute, and one for each [`CELL_BYTES`] of text and values a node
-//! holds. Four bytes of XML (`<a/>`) are a node, and 9 MB of `<a b=""/>`
-//! took 376 MB as a tree.
+//! is spent from the document's [`Budget`] as it is built, each node before
+//! it is copied out of the part, in cell slots ([`Budget::spend_cells`]):
+//! [`NODE_CELLS`] a node, [`ATTR_CELLS`] an attribute, and one for each
+//! [`CELL_BYTES`] of the XML it is made from (a tag's name and attributes,
+//! a text), which is no shorter than what it holds. Four bytes of XML
+//! (`<a/>`) are a node, and 9 MB of `<a b=""/>` took 376 MB as a tree.
 
 use fluree_doc_model::budget::{Budget, CELL_BYTES};
 use quick_xml::events::Event;
@@ -60,19 +61,21 @@ fn local(q: &[u8]) -> String {
     s.rsplit(':').next().unwrap_or(&s).to_string()
 }
 
-/// Spend what `node` costs from `budget`, before it is kept.
-fn spend(budget: &mut Budget, node: &Node) -> Result<(), String> {
-    let attrs = node.attrs.len() as u64;
-    let bytes = node.text.len() + node.attrs.iter().map(|(_, v)| v.len()).sum::<usize>();
+/// Spend what a node of `attrs` attributes costs from `budget`, `bytes` the
+/// XML it is made from (a tag's name and attributes, a text's escaped
+/// text), which is no shorter than what it holds: before any of it is
+/// copied out of the part.
+fn spend(budget: &mut Budget, attrs: u64, bytes: usize) -> Result<(), String> {
     budget
         .spend_cells(NODE_CELLS + attrs * ATTR_CELLS + (bytes as u64).div_ceil(CELL_BYTES))
         .map_err(|e| e.to_string())
 }
 
 impl Tree {
-    /// Parse `xml`, each node spent from `budget` before it is kept; `Err`
-    /// past a bound, naming it. A part that stops parsing keeps what was
-    /// read before it.
+    /// Parse `xml`, each node spent from `budget` before it is copied out
+    /// of it; `Err` past a bound, naming it. A part that stops parsing
+    /// keeps what was read before it. Its events are read in place, not
+    /// copied: a run of text can be as long as the part.
     pub fn parse(xml: &str, budget: &mut Budget) -> Result<Tree, String> {
         let mut t = Tree {
             nodes: vec![Node::default()],
@@ -81,9 +84,8 @@ impl Tree {
         let mut stack: Vec<usize> = vec![0];
         let mut r = Reader::from_str(xml);
         r.config_mut().trim_text(false);
-        let mut buf = Vec::new();
         loop {
-            let ev = r.read_event_into(&mut buf);
+            let ev = r.read_event();
             if t.nodes.len() > MAX_NODES {
                 return Err(format!("more than {MAX_NODES} XML nodes"));
             }
@@ -92,6 +94,8 @@ impl Tree {
                 Err(_) | Ok(Event::Eof) => break,
                 Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                     let empty = matches!(ev, Ok(Event::Empty(_)));
+                    let n = fluree_doc_ooxml::attributes(e).count() as u64;
+                    spend(budget, n, e.len())?;
                     let attrs = fluree_doc_ooxml::attributes(e)
                         .map(|a| {
                             let v = a
@@ -106,7 +110,6 @@ impl Tree {
                         attrs,
                         ..Node::default()
                     };
-                    spend(budget, &node)?;
                     let id = t.nodes.len();
                     t.nodes.push(node);
                     t.nodes[parent].children.push(id);
@@ -123,31 +126,33 @@ impl Tree {
                     }
                 }
                 Ok(Event::Text(x)) => {
+                    if x.is_empty() {
+                        continue;
+                    }
+                    spend(budget, 0, x.len())?;
                     let s = x.unescape().map(|s| s.into_owned()).unwrap_or_default();
                     if !s.is_empty() {
                         let node = Node {
                             text: s,
                             ..Node::default()
                         };
-                        spend(budget, &node)?;
                         let id = t.nodes.len();
                         t.nodes.push(node);
                         t.nodes[parent].children.push(id);
                     }
                 }
                 Ok(Event::CData(x)) => {
+                    spend(budget, 0, x.len())?;
                     let node = Node {
                         text: String::from_utf8_lossy(&x).into_owned(),
                         ..Node::default()
                     };
-                    spend(budget, &node)?;
                     let id = t.nodes.len();
                     t.nodes.push(node);
                     t.nodes[parent].children.push(id);
                 }
                 _ => {}
             }
-            buf.clear();
         }
         Ok(t)
     }
@@ -183,6 +188,17 @@ impl Tree {
             stack.extend(self.nodes[n].children.iter().rev().copied());
         }
         None
+    }
+
+    /// The characters of the text under `id`, as is, read in place.
+    pub fn text_chars(&self, id: usize) -> impl Iterator<Item = char> + '_ {
+        let mut stack = vec![id];
+        std::iter::from_fn(move || {
+            let n = stack.pop()?;
+            stack.extend(self.nodes[n].children.iter().rev().copied());
+            Some(self.nodes[n].text.chars())
+        })
+        .flatten()
     }
 
     /// All the text under `id`, as is.

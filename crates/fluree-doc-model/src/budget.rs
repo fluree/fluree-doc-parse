@@ -100,8 +100,18 @@ pub const ELEMENT_BYTES: u64 = 4 << 10;
 /// the output writes it once (Markdown, XHTML, JSON, the text): the
 /// reader's copy, which is most of it (an `.xlsx` cell was measured at
 /// about 750 B, an `.odt` paragraph, its XML tree, 1.25 KB), then the
-/// output's.
+/// output's. A reader that counts a table cell's slots apart counts the
+/// cell at [`FLAT_CELL_BYTES`] instead ([`Budget::spend_text_cells`]).
 pub const FLAT_ELEMENT_BYTES: u64 = 2 << 10;
+
+/// What one table cell that holds text costs when the output writes it once,
+/// in its row (Markdown, XHTML, JSON, the text), beyond its slots
+/// ([`CELL_BYTES`]) and its text, which are counted apart
+/// ([`Budget::spend_text_cells`]); DoCO writes it as a node of its own, at
+/// [`ELEMENT_BYTES`]. A one-digit cell of an `.xlsx` sheet was measured at
+/// about 750 B in all, from the reader through Markdown, of which its slots
+/// and text count about 460 B: with this, 980 B.
+pub const FLAT_CELL_BYTES: u64 = 512;
 
 /// What a document is converted to, which sets what its elements cost and
 /// which copies of its tables' cells are made ([`Budget::spend_copies`]).
@@ -124,6 +134,14 @@ impl Output {
         match self {
             Output::Doco => ELEMENT_BYTES,
             Output::Text | Output::Flat => FLAT_ELEMENT_BYTES,
+        }
+    }
+
+    /// What one table cell that holds text costs.
+    pub fn text_cell_bytes(self) -> u64 {
+        match self {
+            Output::Doco => ELEMENT_BYTES,
+            Output::Text | Output::Flat => FLAT_CELL_BYTES,
         }
     }
 }
@@ -311,6 +329,14 @@ impl Budget {
     /// each a node of its own in the DoCO output.
     pub fn spend_elements(&mut self, n: u64) -> Result<(), TooLarge> {
         self.spend_memory("elements", n, self.output.element_bytes())
+    }
+
+    /// Count `n` table cells that hold text about to be made: DoCO writes
+    /// each as a node of its own, at an element's cost; the others write it
+    /// once in its row, at [`FLAT_CELL_BYTES`]. Their slots and their text
+    /// are counted apart.
+    pub fn spend_text_cells(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("elements", n, self.output.text_cell_bytes())
     }
 
     /// Count `n` cell slots about to be allocated: cells read, each copy of
@@ -507,6 +533,16 @@ mod tests {
         assert!(at(Output::Flat).spend_elements(2).is_ok());
         assert!(at(Output::Text).spend_elements(2).is_ok());
         assert!(at(Output::Flat).spend_elements(3).is_err());
+        // A table cell that holds text: a node for DoCO, a cell of a row,
+        // its slots and text counted apart, for the others.
+        let cells = |output| {
+            let mut b = Budget::new(MAX_MEMORY, 0).for_output(output);
+            b.spend_text_cells(3).unwrap();
+            b.memory / 3
+        };
+        assert_eq!(cells(Output::Doco), ELEMENT_BYTES);
+        assert_eq!(cells(Output::Flat), FLAT_CELL_BYTES);
+        assert_eq!(cells(Output::Text), FLAT_CELL_BYTES);
         // A value merged down: DoCO copies it into each row's cell and
         // labels the next cell with it, the text shows it on each row,
         // Markdown, XHTML and JSON write it once.

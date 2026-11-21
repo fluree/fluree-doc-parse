@@ -79,18 +79,21 @@ read.
 
 ## Bounds
 
-Each part at most 64 MiB inflated, checked as it inflates, and its XML at
-most four million nodes nested 256 deep. Each part is read within what is
-left of the document's budget
-([limits on what one document may make](../reference/limits.md)), at two
-bytes a byte, and its XML tree is spent from it as it is built: two cell
-slots a node, two an attribute, one for each 128 bytes of text, since four
-bytes of XML (`<a/>`) make a node of about 140 bytes and 9 MB of
-`<a b=""/>` a tree of 376 MB. What a text or a presentation
-makes of it is spent from the document's budget too before it
-is made: each paragraph and its text; each table cell, a repeated cell
-each time it is copied, its text too, and a short row's padding to the
-table's width; and the copies DoCO writes of a table's cells (a merged
+Each part is read within what is left of the document's budget
+([limits on what one document may make](../reference/limits.md)), checked
+as it inflates, at two bytes a byte, with no smaller bound of its own: a
+LibreOffice spreadsheet of 50,000 rows by 12 columns holds 77 MB of
+content. Its XML is at most four million nodes nested 256 deep, and its
+tree is spent from the budget as it is built, each node before it is
+copied out of the part: two cell slots a node, two an attribute, one for
+each 128 bytes of its XML, since four bytes of XML (`<a/>`) make a node of
+about 140 bytes and 9 MB of `<a b=""/>` a tree of 376 MB. What a document
+makes of it is spent from the document's budget too before it is made,
+and a paragraph or a cell whose text the budget has no room left for is
+refused before its text is copied out of the tree: each paragraph and its
+text; each table cell, a
+repeated cell each time it is copied, once, its text too, and a short
+row's padding to the table's width; and the copies DoCO writes of a table's cells (a merged
 value in each cell it covers, each cell's labels): a cell of a few
 kilobytes repeated a thousand times asks for gigabytes. A document past it
 fails as too large. In a library,

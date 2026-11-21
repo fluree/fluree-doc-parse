@@ -2,7 +2,8 @@
 
 use super::*;
 use fluree_doc_model::budget::{
-    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+    MAX_MEMORY, TEXT_BYTES,
 };
 use std::io::Write;
 
@@ -223,7 +224,9 @@ fn the_kind_is_the_mimetype_and_parts_are_bounded() {
         Err(OdfError::NotOdf)
     ));
     assert_eq!(Format::sniff(b"PK\x03\x04"), None);
-    // A content part that inflates past its bound.
+    // A content part past 64 MiB, a bound of its own it no longer has:
+    // read, within the budget, which bounds it
+    // ([`a_part_past_what_the_budget_has_left_is_refused_before_it_is_read`]).
     let mut buf = std::io::Cursor::new(Vec::new());
     let mut z = zip::ZipWriter::new(&mut buf);
     let deflate = zip::write::SimpleFileOptions::default()
@@ -233,14 +236,11 @@ fn the_kind_is_the_mimetype_and_parts_are_bounded() {
         .unwrap();
     z.start_file("content.xml", deflate).unwrap();
     let chunk = vec![b' '; 1 << 20];
-    for _ in 0..(MAX_PART_BYTES >> 20) + 1 {
+    for _ in 0..65 {
         z.write_all(&chunk).unwrap();
     }
     z.finish().unwrap();
-    assert!(matches!(
-        parse(&buf.into_inner()),
-        Err(OdfError::TooLarge(_))
-    ));
+    assert!(parse(&buf.into_inner()).unwrap().is_empty());
     // Nesting past the tree's bound.
     let deep = format!(
         "<office:text>{}{}</office:text>",
@@ -319,9 +319,11 @@ fn a_repeated_cell_of_text_is_bounded_by_its_bytes() {
         ))
     };
     // For Markdown, which copies nothing: the table, and each copy a cell
-    // that holds the text.
+    // that holds the text, written once in its row.
     let need = |n: u64| {
-        (1 + n) * FLAT_ELEMENT_BYTES + n * CELL_BYTES + n * (word.trim().len() as u64) * TEXT_BYTES
+        FLAT_ELEMENT_BYTES
+            + n * (FLAT_CELL_BYTES + CELL_BYTES)
+            + n * (word.trim().len() as u64) * TEXT_BYTES
     };
     let need = |n: u64| need(n) + reading(&cell(n as usize));
     let within = |repeat: usize, memory: u64| {
@@ -377,8 +379,8 @@ fn a_table_padded_to_its_widest_row_counts_the_padding() {
     );
     // The table, and the 1024 cells that hold `x`, at Markdown's costs.
     let need = 1101 * 4096 * CELL_BYTES
-        + 1025 * FLAT_ELEMENT_BYTES
-        + 1024 * TEXT_BYTES
+        + FLAT_ELEMENT_BYTES
+        + 1024 * (FLAT_CELL_BYTES + TEXT_BYTES)
         + reading(&text(&body));
     let within = |memory: u64| {
         parse_within(
@@ -533,8 +535,8 @@ fn a_parts_tree_is_spent_before_its_elements_are_made() {
 
 #[test]
 fn a_part_past_what_the_budget_has_left_is_refused_before_it_is_read() {
-    // A content part of 3 MiB of spaces, under its own bound, past a budget
-    // of 4 MiB at two bytes a byte.
+    // A content part of 3 MiB of spaces, past a budget of 4 MiB at two
+    // bytes a byte.
     let pkg = text(&" ".repeat(3 << 20));
     let refused = parse_within(&pkg, &mut Budget::new(4 << 20, 0)).unwrap_err();
     assert_eq!(

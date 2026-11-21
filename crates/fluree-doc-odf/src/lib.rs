@@ -22,20 +22,18 @@
 //! * **Presentations** (`.odp`, `.otp`) read as a deck does: each slide a
 //!   page, its title frame a level-1 heading, its text, lists and tables.
 //!
-//! **Bounds**, as for any archive: each part at most [`MAX_PART_BYTES`]
-//! inflated, checked as it inflates, and its XML at most
-//! [`tree::MAX_NODES`] nodes nested [`tree::MAX_DEPTH`] deep. A part read
-//! whole (the content, the styles, the metadata) is read within what is
-//! left of the document's [`Budget`] and spent from it, at two bytes a byte
-//! as an Office part is, and so is its tree as it is built
+//! **Bounds**, as for any archive: a part read whole (the content, the
+//! styles, the metadata) is read within what is left of the document's
+//! [`Budget`], checked as it inflates, and spent from it, at two bytes a
+//! byte as an Office part is, and so is its tree as it is built
 //! ([`Tree::parse`]): four bytes of XML (`<a/>`) are a node of about 140
-//! bytes. What a
-//! document makes of it is spent from the document's [`Budget`] before it
-//! is made: each paragraph and its text; each table cell, a repeated cell
-//! each time it is copied, its text too, and a short row's padding to the
-//! table's width; and the copies the output makes of a table's cells (a
-//! merged value in each cell it covers, each cell's labels). A document
-//! past it is refused.
+//! bytes. Its XML is at most [`tree::MAX_NODES`] nodes nested
+//! [`tree::MAX_DEPTH`] deep. What a document makes of it is spent from the
+//! document's [`Budget`] before it is made: each paragraph and its text;
+//! each table cell, a repeated cell each time it is copied, its text too,
+//! and a short row's padding to the table's width; and the copies the
+//! output makes of a table's cells (a merged value in each cell it covers,
+//! each cell's labels). A document past it is refused.
 
 mod sheet;
 mod tree;
@@ -44,9 +42,6 @@ use fluree_doc_model::budget::{Budget, TooLarge, PART_BYTES};
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_ooxml::Package;
 use tree::{Role, Tree};
-
-/// The most bytes one part is inflated to: 64 MiB.
-pub const MAX_PART_BYTES: u64 = 64 << 20;
 
 /// The most cells a spreadsheet's sheets may hold, repeats counted.
 pub const MAX_CELLS: usize = 1 << 22;
@@ -166,22 +161,20 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, OdfError> {
     parse_with_info(bytes).map(|(e, _, _)| e)
 }
 
-/// A part's XML as a tree, its text read at most [`MAX_PART_BYTES`] and
-/// within what is left of `budget`, and spent from it as an Office part is
-/// ([`Budget::spend_bytes`]), then its tree ([`Tree::parse`]); `None` where
-/// the package has no such part. The text is let go once the tree holds
-/// it.
+/// A part's XML as a tree, its text read within what is left of `budget`
+/// and spent from it as an Office part is ([`Budget::spend_bytes`]), then
+/// its tree ([`Tree::parse`]); `None` where the package has no such part.
+/// The text is let go once the tree holds it.
 fn tree(pkg: &mut Package<'_>, name: &str, budget: &mut Budget) -> Result<Option<Tree>, OdfError> {
     if !pkg.part_names().iter().any(|n| n == name) {
         return Ok(None);
     }
     let left = budget.memory_left() / PART_BYTES;
-    let cap = MAX_PART_BYTES.min(left);
-    let bytes = match pkg.read_bytes(name, cap) {
+    let bytes = match pkg.read_bytes(name, left) {
         Ok(b) => b,
-        // Past what the budget has left rather than the part's own bound:
-        // spending it refuses, naming the budget.
-        Err(e) if cap < MAX_PART_BYTES && e.contains("more than") => {
+        // Past what the budget has left: spending it refuses, naming the
+        // budget.
+        Err(e) if e.contains("more than") => {
             let refused = budget.spend_bytes(left + 1).err();
             return Err(refused.map_or(OdfError::TooLarge(e), OdfError::from));
         }
@@ -307,12 +300,33 @@ fn frames_in(t: &Tree, id: usize, out: &mut Vec<usize>) {
 }
 
 /// A paragraph's text tidied: each line's runs of whitespace one space.
+/// Written as it is read: a list of a line's words is many times the line.
 fn tidy(s: &str) -> String {
-    s.lines()
-        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::new();
+    for line in s.lines() {
+        let mut words = line.split_whitespace();
+        let Some(first) = words.next() else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(first);
+        for w in words {
+            out.push(' ');
+            out.push_str(w);
+        }
+    }
+    out
+}
+
+/// Refuse the block `id` where what is left of `budget` could not hold its
+/// text, before the copies it is made through (its runs joined, then
+/// tidied) are made: each as long as the text under it, which one run of a
+/// part can make a gigabyte. Checked, not spent: the text is spent once
+/// made, tidied, and no longer than this.
+fn room_for_text(t: &Tree, id: usize, budget: &Budget) -> Result<(), TooLarge> {
+    budget.clone().spend_chars(t.text_chars(id))
 }
 
 /// A table as a `doco:Table`: its rows, inside header rows or not, each
@@ -343,6 +357,7 @@ fn table(
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1)
                 .clamp(1, 1024);
+            room_for_text(t, c, budget)?;
             let text = t
                 .elements(c)
                 .map(|p| tidy(&para_text(t, p, asides)))
@@ -358,12 +373,12 @@ fn table(
             if name == "table-cell" && (cs > 1 || rs > 1) {
                 spans.push((rows.len(), row.len(), cs, rs));
             }
-            // Each copy is a cell, and one that holds text a node of the
-            // output of its own with that text: counted before any is made.
+            // Each copy is a cell, and one that holds text a cell of the
+            // output with that text: counted before any is made.
             cells += repeat;
             budget.spend_cells(repeat as u64)?;
             if !text.is_empty() {
-                budget.spend_elements(repeat as u64)?;
+                budget.spend_text_cells(repeat as u64)?;
                 for _ in 0..repeat {
                     budget.spend_text(&text)?;
                 }
@@ -495,6 +510,7 @@ fn flow(
                     .and_then(|v| v.parse::<usize>().ok())
                     .unwrap_or(1)
                     .clamp(1, 6);
+                room_for_text(t, c, budget)?;
                 let text = tidy(&para_text(t, c, asides));
                 if !text.is_empty() {
                     out.push(paragraph(
@@ -508,6 +524,7 @@ fn flow(
                 frames_after(c, out, asides, budget)?;
             }
             "p" => {
+                room_for_text(t, c, budget)?;
                 let text = tidy(&para_text(t, c, asides));
                 if text.is_empty() {
                     frames_after(c, out, asides, budget)?;

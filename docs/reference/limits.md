@@ -34,7 +34,7 @@ Three kinds of spending share one estimate of memory, 2.5 GiB a document:
 
 | Unit | Cost | What it is |
 | --- | --- | --- |
-| element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own |
+| element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own; a workbook's or an OpenDocument table's cell that holds text costs 512 B for the others, its slots and text counted apart |
 | cell | 128 B | a cell slot allocated: read, each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
 | byte of text | 12 B | each byte the text may take in the worst output: a control character counts six (`\u0001` in JSON), `"` and `&` six, `<` and `>` four, a character Markdown escapes two |
 | link | an element and a cell (4.1 KiB) for `-f doco`, four cells (512 B) for the others, with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own |
@@ -68,7 +68,16 @@ reads (`fluree_doc_model::budget::converting_to`), and a reader that is not
 told, a library caller's, counts at DoCO's costs, the largest. An element
 costs 2 KiB for Markdown, XHTML, JSON and the text: the reader's own copy is
 most of it, and the most measured is 1.25 KB a paragraph (`.odt`, its XML
-tree) and 750 B a cell (`.xlsx`).
+tree) and 750 B a cell (`.xlsx`). A cell that holds text of a sheet (`.xls`,
+`.xlsb`, `.xlsx`, `.ods`) or of an OpenDocument table, whose slots, each
+copy the reader and the layout keep, and text are spent apart, costs 512 B
+more for these outputs (`fluree_doc_model::budget::FLAT_CELL_BYTES`), not
+2 KiB: a one-digit cell of an `.xlsx`, 750 B in all, counts 980 B. Counted
+at 2 KiB on top of its slots, each of an `.ods` sheet's cells spent twice,
+and its content bound to 64 MiB, a LibreOffice `.ods` of 50,000 rows by 12
+columns (2.2 MB, its content 77 MB) was refused as Markdown; it now
+converts, counted at 1.8 GB (its XML tree, at about 1.4 KB a cell, is most
+of it), and peaks at 0.9 GB.
 
 A table of 50,000 rows by 15 columns, every cell filled (750,000 cells),
 peaks at:
@@ -83,8 +92,8 @@ peaks at:
 It converts to every output but DoCO, whose 3 GB from the `.xlsx` is past
 what the budget allows; as DoCO it is refused before anything is written.
 At the other outputs' costs a budget holds about 1.2 million elements or
-cells that hold text; the most such a document was measured to take is
-1.5 GB (1.2 million paragraphs of an `.odt`), against 0.25 GB for 1.2
+cells that hold text, or about 2.7 million cells of a sheet; the most such
+a document was measured to take is 1.5 GB (1.2 million paragraphs of an `.odt`), against 0.25 GB for 1.2
 million cells of a `.csv` or a `.doc`, and 1.2 GB for as many paragraphs
 of a `.docx`.
 
@@ -187,11 +196,14 @@ KB page, overflowed a 2 MiB stack.
 A part of a `.docx`, `.pptx` or `.xlsx` package that is read whole (the
 main part, its styles and numbering, each slide, sheet, chart, header and
 footer), or of an `.odt`, `.ods` or `.odp` (its content, styles and
-metadata), is read within what is left of the document's budget, and spent
+metadata, with no smaller bound of their own), is read within what is left
+of the document's budget, and spent
 from it at two bytes a byte: the part, and the copy a reader makes of a run
 of text as long as it. An OpenDocument part's XML tree, held while the
 elements are made from it, is spent too as it is built, two cell slots a
-node and two an attribute: a 202 KB `.ods` whose content inflates to 65 MB,
+node and two an attribute, each node before it is copied out of the part,
+whose runs of text are read in place: a 1.2 MB `.odt` whose one paragraph
+is 1.2 GB of text is refused at 1.25 GB, the part alone. And a 202 KB `.ods` whose content inflates to 65 MB,
 two million cells, made a tree of about 600 MB the budget did not see, and
 peaked at 1.7 GB before its cells were refused, at 800 MB under the fuzz
 targets' budget of 160 MiB; with its tree spent, it peaks at 1.4 GB, and at

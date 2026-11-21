@@ -2051,11 +2051,12 @@ fn island_elements(
         .collect();
     let n_rows = range.height() as usize;
     let width = cols.len();
-    // The grid, its values and flags, and its rows, and the cells that hold
-    // text, each a node of the output: before any is made.
+    // The grid, its values and flags, and its rows, the table, and the
+    // cells that hold text, each a cell of the output: before any is made.
     budget.spend_cells((n_rows * width) as u64)?;
     let filled = isl.members.iter().filter(|p| cells.contains_key(p)).count();
-    budget.spend_elements(1 + filled as u64)?;
+    budget.spend_elements(1)?;
+    budget.spend_text_cells(filled as u64)?;
     let mut grid = vec![String::new(); n_rows * width];
     let mut data: Vec<Option<Datum>> = vec![None; n_rows * width];
     let mut m_left = vec![false; n_rows * width];
@@ -2237,7 +2238,9 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluree_doc_model::budget::{CELL_BYTES, ELEMENT_BYTES, TEXT_BYTES};
+    use fluree_doc_model::budget::{
+        Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+    };
 
     /// [`grid_elements`] within the default budget.
     fn grid(sheets: Vec<GridSheet>, source: &'static str) -> Vec<Element> {
@@ -2538,6 +2541,17 @@ mod tests {
         };
         assert!(grid_elements(sheets(), "xls", &mut cells(30_002)).is_ok());
         assert!(grid_elements(sheets(), "xls", &mut cells(25_000)).is_err());
+        // Markdown writes each of the table's cells once, in its row, and
+        // copies no label: the title and the table, each an element.
+        let flat = |n: u64| {
+            Budget::new(
+                2 * FLAT_ELEMENT_BYTES + 10_000 * FLAT_CELL_BYTES + TEXT_BYTES + n * CELL_BYTES,
+                u64::MAX,
+            )
+            .for_output(Output::Flat)
+        };
+        assert!(grid_elements(sheets(), "xls", &mut flat(30_002)).is_ok());
+        assert!(grid_elements(sheets(), "xls", &mut flat(30_001)).is_err());
     }
 
     #[test]
