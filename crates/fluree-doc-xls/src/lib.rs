@@ -56,6 +56,9 @@ pub const MAX_TEXT_CHARS: u64 = 64 << 20;
 pub enum XlsError {
     /// Not a compound file, or one whose structure is broken.
     Container(String),
+    /// Not a zip, or one whose structure is broken: an `.xlsb` that is not
+    /// one.
+    Package(String),
     /// A compound file with no workbook stream: a Word or PowerPoint file.
     NoWorkbook,
     /// Past one of the bounds above.
@@ -68,6 +71,7 @@ impl std::fmt::Display for XlsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Container(e) => write!(f, "not a readable .xls: {e}"),
+            Self::Package(e) => write!(f, "not a readable .xlsb: {e}"),
             Self::NoWorkbook => write!(
                 f,
                 "not a workbook: the compound file has no Workbook stream"

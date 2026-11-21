@@ -40,7 +40,7 @@ pub fn is_xlsb(bytes: &[u8]) -> bool {
 /// Inflate every entry against the bounds, reading nothing out.
 fn check(bytes: &[u8]) -> Result<(), XlsError> {
     let mut zip =
-        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| XlsError::Container(e.to_string()))?;
+        zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| XlsError::Package(e.to_string()))?;
     if zip.len() > MAX_ENTRIES {
         return Err(XlsError::TooLarge(format!("more than {MAX_ENTRIES} parts")));
     }
@@ -48,13 +48,13 @@ fn check(bytes: &[u8]) -> Result<(), XlsError> {
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)
-            .map_err(|e| XlsError::Container(e.to_string()))?;
+            .map_err(|e| XlsError::Package(e.to_string()))?;
         let name = entry.name().map(|n| n.into_owned()).unwrap_or_default();
         let n = std::io::copy(
             &mut (&mut entry).take(MAX_PART_BYTES + 1),
             &mut std::io::sink(),
         )
-        .map_err(|e| XlsError::Container(format!("{name}: {e}")))?;
+        .map_err(|e| XlsError::Package(format!("{name}: {e}")))?;
         if n > MAX_PART_BYTES {
             return Err(XlsError::TooLarge(format!(
                 "{name} inflates past {MAX_PART_BYTES} bytes"
@@ -334,10 +334,10 @@ fn cell_value(
 }
 
 fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
-    let mut pkg = fluree_doc_ooxml::Package::open(bytes).map_err(XlsError::Container)?;
+    let mut pkg = fluree_doc_ooxml::Package::open(bytes).map_err(XlsError::Package)?;
     let part = |pkg: &mut fluree_doc_ooxml::Package<'_>, name: &str| {
         pkg.read_bytes(name, MAX_PART_BYTES)
-            .map_err(XlsError::Container)
+            .map_err(XlsError::Package)
     };
     let book = "xl/workbook.bin";
     let (date1904, listed) = workbook(&part(&mut pkg, book)?)?;
@@ -748,10 +748,11 @@ pub(crate) mod tests {
         let bytes = book(&[("xl/media/huge.bin", big)]);
         assert!(matches!(parse_xlsb(&bytes), Err(XlsError::TooLarge(_))));
         assert!(!is_xlsb(b"PK\x03\x04"));
-        assert!(matches!(
-            parse_xlsb(b"not a zip"),
-            Err(XlsError::Container(_))
-        ));
+        // Named `.xlsb`, a file that is no zip says so, not that it is no
+        // `.xls`.
+        let err = parse_xlsb(b"a\tb\n1\t2\n").unwrap_err();
+        assert!(matches!(err, XlsError::Package(_)));
+        assert!(err.to_string().starts_with("not a readable .xlsb"), "{err}");
     }
 
     #[test]
