@@ -39,7 +39,10 @@ for no more memory than one document may take, at the budget's own costs
 value in each cell it covers, each cell's labels), so a reader that makes a
 table without spending them fails. `cargo fuzz` builds with `--cfg fuzzing`, under which that
 budget is a sixteenth of the shipped one, so an input that fills it stays
-quick to run.
+quick to run, and so are a reader's own bounds on the memory the budget
+does not count (`fluree_doc_model::budget::scaled`: the cells calamine
+allocates for `xls` and `xlsb`, an XPS document's parts and glyphs), so an
+input within them stays within the memory limit below.
 
 ## Running
 

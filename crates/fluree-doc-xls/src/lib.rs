@@ -44,13 +44,17 @@ pub const MAX_STREAM_BYTES: u64 = 256 << 20;
 
 /// The most cells a workbook's sheets may hold, and the most their grids may
 /// span, summed over its sheets, each from its first used cell to its last:
-/// about four million. calamine holds a value and a formula for each.
-pub const MAX_CELLS: u64 = 1 << 22;
+/// about four million. calamine holds a value and a formula for each, about
+/// 60 bytes a cell of its grid, before the document's budget sees one:
+/// 4 million take 250 MB. Built for the fuzz targets, a sixteenth, as the
+/// budget is ([`budget::scaled`](fluree_doc_model::budget::scaled)).
+pub const MAX_CELLS: u64 = fluree_doc_model::budget::scaled(1 << 22);
 
 /// The most characters of text calamine is let allocate for a workbook's
 /// shared strings and cells, a shared string counted again for each cell
-/// that names it: 64 million, at most 192 MiB of UTF-8.
-pub const MAX_TEXT_CHARS: u64 = 64 << 20;
+/// that names it: 64 million, at most 192 MiB of UTF-8 (a sixteenth built
+/// for the fuzz targets, as [`MAX_CELLS`]).
+pub const MAX_TEXT_CHARS: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
 #[derive(Debug)]
 pub enum XlsError {

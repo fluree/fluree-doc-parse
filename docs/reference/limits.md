@@ -187,7 +187,12 @@ coordinates could otherwise wrap its last column onto its first.
 
 The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
 bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
-then quick to run. Their memory limit (`-rss_limit_mb=320`) is twice that
+then quick to run. A reader's own bounds on memory the budget does not
+count scale with it (`fluree_doc_model::budget::scaled`): the cells and
+text calamine allocates for an `.xls` or `.xlsb` (4 million cells, 250 MB,
+as shipped), and an XPS document's parts and glyphs (64 MiB a part, 250,000
+glyphs a page, 4 million in all); otherwise an input within them would
+take as much under the fuzzer as in production, past its memory limit. Their memory limit (`-rss_limit_mb=320`) is twice that
 budget, near the margin a full budget has in production (2.5 GiB in a 4 GB
 address space), so a reader whose memory runs past its estimate by as much
 as it would need to abort there fails under the fuzzer too.

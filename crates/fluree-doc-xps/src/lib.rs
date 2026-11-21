@@ -37,6 +37,7 @@
 //! its page, so no coordinate reaching the layout pipeline is beyond a
 //! page's reach.
 
+use fluree_doc_model::budget::scaled;
 use fluree_doc_model::DocumentInfo;
 use fluree_doc_ooxml::{attr, local, Package};
 use fluree_doc_pdf::geom::BBox;
@@ -45,9 +46,14 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 /// The most bytes one part is inflated to: 64 MiB.
-pub const MAX_PART_BYTES: u64 = 64 << 20;
+///
+/// This bound, [`MAX_TOTAL_BYTES`], [`MAX_GLYPHS`] and [`MAX_PAGE_GLYPHS`]
+/// are the memory an XPS document may take, which the document's budget
+/// does not count; built for the fuzz targets, each is a sixteenth, as the
+/// budget is ([`scaled`]).
+pub const MAX_PART_BYTES: u64 = scaled(64 << 20);
 /// The most bytes all the parts read are inflated to: 512 MiB.
-pub const MAX_TOTAL_BYTES: u64 = 512 << 20;
+pub const MAX_TOTAL_BYTES: u64 = scaled(512 << 20);
 /// The most pages read.
 pub const MAX_PAGES: usize = 10_000;
 /// The most glyphs, and pictures, read from one document: four million.
@@ -58,12 +64,12 @@ pub const MAX_PAGES: usize = 10_000;
 /// within a 4 GB address space either way. A dense printed page holds a
 /// few thousand, so a document of more than about 1,600 such pages is
 /// refused whole.
-pub const MAX_GLYPHS: usize = 4_000_000;
+pub const MAX_GLYPHS: usize = scaled(4_000_000) as usize;
 /// The most glyphs, and pictures, read from one page: 250,000, fifty times
 /// a dense page. The pipeline's passes over a page cost more than its
 /// glyphs' number, a little: a page of 250,000 glyphs was measured to take
 /// 0.3 s, one of two million 4.4 s.
-pub const MAX_PAGE_GLYPHS: usize = 250_000;
+pub const MAX_PAGE_GLYPHS: usize = scaled(250_000) as usize;
 /// The deepest nesting of a page's elements followed.
 pub const MAX_DEPTH: usize = 256;
 /// The most parts a package may hold.

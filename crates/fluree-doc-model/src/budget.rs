@@ -48,10 +48,13 @@
 
 use std::cell::Cell;
 
+/// The memory budget as shipped, 2.5 GiB, whatever this build's is.
+const SHIPPED_MEMORY: u64 = 5 << 29;
+
 /// The memory a document's elements, cells and text may take, estimated
 /// at the costs below: 2.5 GiB.
 #[cfg(not(fuzzing))]
-pub const MAX_MEMORY: u64 = 5 << 29;
+pub const MAX_MEMORY: u64 = SHIPPED_MEMORY;
 
 /// Built for the fuzz targets (`fuzz/`), a sixteenth of it, 160 MiB: an
 /// input that spends the whole budget then takes a fraction of a second
@@ -59,7 +62,24 @@ pub const MAX_MEMORY: u64 = 5 << 29;
 /// out under the targets' memory limit, rather than hiding under the room a
 /// full budget needs.
 #[cfg(fuzzing)]
-pub const MAX_MEMORY: u64 = 5 << 25;
+pub const MAX_MEMORY: u64 = SHIPPED_MEMORY >> 4;
+
+/// A reader's own bound on memory the budget does not count (what calamine
+/// allocates for a workbook, the glyphs of an XPS page), `n` as sized for
+/// the shipped budget, scaled as this build's [`MAX_MEMORY`] is: `n` as
+/// shipped, a sixteenth of it for the fuzz targets. A bound that did not
+/// scale would let one input take as much under the fuzzer as in
+/// production, past the targets' memory limit, where the budget is a
+/// sixteenth.
+pub const fn scaled(n: u64) -> u64 {
+    scaled_to(n, MAX_MEMORY)
+}
+
+/// `n`, sized for the shipped budget, for a budget of `memory`: divided as
+/// many times as `memory` goes into the shipped one.
+const fn scaled_to(n: u64, memory: u64) -> u64 {
+    n / (SHIPPED_MEMORY / memory)
+}
 
 /// The steps of the layout passes whose cost a file chooses, per document:
 /// about 268 million, a few seconds.
@@ -535,6 +555,17 @@ mod tests {
             let other = std::thread::spawn(|| Budget::default().memory_left());
             assert_eq!(other.join().unwrap(), full);
         });
+    }
+
+    #[test]
+    fn a_bound_of_a_readers_own_scales_as_the_budget_does() {
+        // As shipped, itself; for the fuzz targets' budget, a sixteenth.
+        assert_eq!(scaled_to(1 << 22, SHIPPED_MEMORY), 1 << 22);
+        assert_eq!(scaled_to(1 << 22, SHIPPED_MEMORY >> 4), 1 << 18);
+        assert_eq!(scaled_to(250_000, SHIPPED_MEMORY >> 4), 15_625);
+        // This build's bounds follow this build's budget.
+        assert_eq!(scaled(SHIPPED_MEMORY), MAX_MEMORY);
+        assert_eq!(scaled(1 << 22), scaled_to(1 << 22, MAX_MEMORY));
     }
 
     #[test]
