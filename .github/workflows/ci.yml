@@ -11,3 +11,21 @@ jobs:
       - run: cargo fmt --check
       - run: cargo build --release --workspace
       - run: cargo test --workspace
+  # The built-in OCR engine end to end: the tests `cargo test` skips because
+  # they need the asset pack, which is not in the repository. build.py makes
+  # the pack from its publishers' files at pinned versions, checking every
+  # hash; its download cache is kept between runs, keyed by build.py, so a
+  # run downloads only when the pins change.
+  ocr-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/fdoc-ocr-assets
+          key: fdoc-ocr-assets-${{ hashFiles('tools/ocr-assets/build.py') }}
+      - run: python3 -I tools/ocr-assets/build.py "$RUNNER_TEMP/ocr-assets" --platforms linux-x64
+      - run: cargo test -p fluree-doc-cli --test ocr_engine -- --ignored
+        env:
+          FDOC_OCR_MODELS: ${{ runner.temp }}/ocr-assets
