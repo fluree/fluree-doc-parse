@@ -89,6 +89,15 @@ between two, is ignored, and the word reads whole. A space drawn in
 sequence, where the pen stopped after the word before it, is always kept,
 however tightly the next word follows.
 
+**Note marks.** A note's mark is drawn as a smaller glyph raised above the
+baseline, right against the word it marks, and the text layer joins the two:
+`Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
+apart from it, `Acrylonitrile a`, by the same rule as an HTML `<sup>`: a
+letter or symbol after a word, or a number after a word too long to be a
+unit. Raised text that belongs to its word stays in it: a unit's power
+(`cm3`), an exponent (`10⁶`, `2ᵖ`), an ordinal's ending (`1st`) and a
+formula's index (`ρwLv²`, `Vol(∂Ω)ⁿ`).
+
 **NFKC normalization.** Ligatures arrive as single codepoints; searching
 un-normalized output for `profile` finds one occurrence in six. Normalization
 can change string length, so the engine keeps a bijective map between raw

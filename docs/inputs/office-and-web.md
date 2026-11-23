@@ -325,8 +325,10 @@ its currency sign is under the period above both.
 A raised note mark is kept apart from the word it marks: `April 2026<sup>r</sup>`
 reads `April 2026 r`, and `Expenses<sup>1</sup>` reads `Expenses 1`. Raised
 text that belongs to the word stays in it: a unit's power
-(`m<sup>2</sup>` reads `m2`), an exponent (`10<sup>6</sup>`, `106`) and an
-ordinal's ending (`1<sup>st</sup>`, `1st`).
+(`m<sup>2</sup>` reads `m2`), an exponent (`10<sup>6</sup>`, `106`), an
+ordinal's ending (`1<sup>st</sup>`, `1st`) and a formula's index or power
+(`2<sup>p</sup>`, a raised letter after a single letter, a term of a formula
+set after `=`). PDFs follow the same rule for the raised glyphs they draw.
 
 In Rust, `fluree_doc_html::parse_with_quote_depth` returns beside the
 elements how many cited quotations enclose each one: a `<blockquote>` with

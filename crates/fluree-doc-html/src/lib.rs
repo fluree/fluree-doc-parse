@@ -355,41 +355,6 @@ fn collect(h: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String
     }
 }
 
-/// Endings an ordinal sets raised after its number: `1st`, `2e`, `1er`, `3º`.
-const ORDINALS: &[&str] = &[
-    "st", "nd", "rd", "th", "e", "er", "re", "ère", "eme", "ème", "o", "a", "º", "ª",
-];
-
-/// Is a `<sup>` holding `mark`, set after the character `before`, a note's
-/// mark rather than part of the word?
-///
-/// Read into the word, a note's mark changes it: `April 2026` revised
-/// becomes `April 2026r`, and a footnoted `Acrylonitrile` becomes
-/// `Acrylonitrilea`. Raised text that belongs to the word stays in it: an
-/// exponent or a unit's power (`10⁶`, `m²`) and an ordinal's ending (`1st`,
-/// `1er`). So a mark is a symbol (`*`, `†`), letters after a word or after a
-/// number they are not the ordinal of, or a number after a word too long to
-/// be a unit (`Revenue¹`, not `km²`).
-fn footnote_mark(text_before: &str, mark: &str) -> bool {
-    let mark = mark.trim();
-    let Some(before) = text_before.chars().last().filter(|c| !c.is_whitespace()) else {
-        return false;
-    };
-    if mark.is_empty() || mark.chars().count() > 4 {
-        return false;
-    }
-    if mark.chars().all(|c| "*†‡§¶#".contains(c)) {
-        return true;
-    }
-    if mark.chars().all(char::is_alphabetic) {
-        return !(before.is_ascii_digit() && ORDINALS.contains(&mark.to_lowercase().as_str()));
-    }
-    let word = text_before.rsplit(char::is_whitespace).next().unwrap_or("");
-    mark.chars().all(|c| c.is_ascii_digit() || c == ',')
-        && word.chars().all(char::is_alphabetic)
-        && word.chars().count() >= 4
-}
-
 /// One node's contribution to the text [`collect`] gathers.
 fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
     match &node.data {
@@ -402,7 +367,7 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
             if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
                 out.push(' ');
             }
-            if tag == "sup" && footnote_mark(out, &text_of(node).0) {
+            if tag == "sup" && fluree_doc_model::marks::note_mark(out, &text_of(node).0) {
                 out.push(' ');
             }
             // Recorded around the recursion: an anchor's text is whatever
