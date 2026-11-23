@@ -1136,6 +1136,13 @@ const SYNTH_DESCENT: f64 = 0.22;
 /// isolated one.
 const SYNTH_WIDTH: f64 = 0.60;
 
+/// Widest a glyph's advance is taken to be, in sizes, when measured to the
+/// next glyph: a CJK character, `ﬃ` or `W` runs about one. Further on, the
+/// pen crossed a word space no space glyph was drawn for (a deck's
+/// `assume` and the `1b` set after it in another font), and the fallback
+/// width leaves that space to be read.
+const MAX_SYNTH_ADVANCE: f64 = 1.25;
+
 /// Give outline-less TEXT glyphs a geometric extent.
 ///
 /// Type3 fonts are drawing programs whose glyph procedures we do not
@@ -1150,6 +1157,13 @@ const SYNTH_WIDTH: f64 = 0.60;
 /// baseline states this glyph's advance exactly (Type3 or not, the pen
 /// moved). Synthesize `bbox`/`advance` from those, with a font-size
 /// fallback for line-final glyphs.
+///
+/// The next glyph is the next of any font. A browser prints a ligature or
+/// a run of CJK it has no embeddable font for in Type3, among text set in
+/// another font: measured to the next Type3 glyph only, the `ﬃ` of
+/// `oﬃce` and the last character before a full stop took the fallback
+/// width, and the rest of their advance read as a word space (`offi ce`,
+/// `有限公司 .`).
 ///
 /// Whitespace keeps `bbox: None` deliberately — the span-merge and
 /// explicit-space rules key on boxless spaces, and giving a space ink
@@ -1167,26 +1181,26 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
     if candidates.is_empty() {
         return;
     }
-    // Sort by (baseline y, x); successive same-baseline deltas give widths.
-    let mut order = candidates;
-    order.sort_by(|&a, &b| {
-        let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
-        oa.1.partial_cmp(&ob.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(oa.0.partial_cmp(&ob.0).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    for w in 0..order.len() {
-        let i = order[w];
+    // Every upright glyph, by baseline: the neighbours a width is measured
+    // to, of whatever font, explicit spaces among them.
+    let mut by_y: Vec<usize> = (0..glyphs.len())
+        .filter(|&i| glyphs[i].rotation_bucket().rem_euclid(180) == 0)
+        .collect();
+    by_y.sort_by(|&a, &b| glyphs[a].origin.1.total_cmp(&glyphs[b].origin.1));
+    for i in candidates {
         let (x, y) = glyphs[i].origin;
         let font = glyphs[i].font_size.max(1.0) as f64;
-        // Right neighbour on the same baseline (within the same tolerance
-        // assembly uses), measured through explicit spaces: the pen delta
-        // is the advance whether or not something is drawn between.
-        let width = order
-            .get(w + 1)
-            .map(|&j| glyphs[j].origin)
-            .filter(|(nx, ny)| (ny - y).abs() < font * 0.25 && *nx > x && (nx - x) < font * 2.5)
-            .map(|(nx, _)| nx - x)
+        // The nearest pen position to the right on the same baseline
+        // (within the tolerance assembly uses): the pen delta is the
+        // advance, whatever is drawn there.
+        let tol = font * 0.25;
+        let from = by_y.partition_point(|&j| glyphs[j].origin.1 < y - tol);
+        let width = by_y[from..]
+            .iter()
+            .take_while(|&&j| glyphs[j].origin.1 <= y + tol)
+            .map(|&j| glyphs[j].origin.0 - x)
+            .filter(|&d| d > 0.01 && d < font * MAX_SYNTH_ADVANCE)
+            .min_by(f64::total_cmp)
             .unwrap_or(font * SYNTH_WIDTH);
         glyphs[i].bbox = Some(BBox {
             x0: x,
@@ -1208,6 +1222,37 @@ pub fn extract_file(path: &std::path::Path) -> Result<Document, ExtractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_type3_glyph_is_as_wide_as_the_pen_moves_to_any_next_glyph() {
+        // `oﬃce`: the ﬃ is Type3 (no box), the letters around it are not.
+        let glyph = |text: &str, x: f64, boxed: bool| Glyph {
+            text: text.into(),
+            bbox: boxed.then_some(BBox {
+                x0: x,
+                y0: 44.0,
+                x1: x + 6.0,
+                y1: 52.5,
+            }),
+            page: 0,
+            origin: (x, 52.5),
+            rotation_deg: 0.0,
+            font_size: 12.0,
+            weight: None,
+            advance: boxed.then_some(6.67),
+            draw_index: 0,
+        };
+        let mut g = vec![
+            glyph("o", 57.76, true),
+            glyph("\u{FB03}", 64.44, false),
+            glyph("c", 76.22, true),
+            glyph("青", 216.95, false),
+        ];
+        synthesize_missing_boxes(&mut g);
+        assert!((g[1].advance.unwrap() - 11.78).abs() < 0.01);
+        // Nothing follows on the line: the fallback.
+        assert!((g[3].advance.unwrap() - 12.0 * SYNTH_WIDTH).abs() < 0.01);
+    }
 
     fn page(n: usize) -> Page {
         let glyphs = (0..n)

@@ -55,6 +55,14 @@ fn is_spaceless_script(c: char) -> bool {
         '\u{AC00}'..='\u{D7AF}') // hangul
 }
 
+/// A script that sets no spaces between its words and so wraps a line
+/// between any two of its characters: Chinese and Japanese, with their
+/// punctuation and full-width forms. Not Korean, which spaces its words and
+/// wraps at the spaces.
+pub(crate) fn wraps_anywhere(c: char) -> bool {
+    is_spaceless_script(c) && !('\u{AC00}'..='\u{D7AF}').contains(&c)
+}
+
 /// Baseline separation above which two glyphs are on different lines, as a
 /// fraction of font size. Anchoring on the baseline rather than the bbox top
 /// is essential: cap-height, x-height and descender glyphs on one visual line
