@@ -1117,6 +1117,15 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
     let (mut n_pages, mut n_crops) = (0usize, 0usize);
     let tiers = crate::commands::common::TierConfig::from_env();
     let layout = tiers.layout_boxes.as_deref();
+    // The limit `convert --ocr` reads under, from the same config.
+    let max_ocr_crops = match ocr_regions.then(crate::config::load) {
+        None => 0,
+        Some(Ok(l)) => l.config.ocr.max_crops(),
+        Some(Err(e)) => {
+            eprintln!("warning: {e}");
+            crate::config::DEFAULT_OCR_MAX_CROPS
+        }
+    };
 
     for f in &files {
         let doc = match extract_file(f) {
@@ -1142,21 +1151,30 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
             &tiers.options_for(stem),
             &hints,
         );
-        // The regions a model call would not pay for, numbered after the
-        // routed ones as `route::ocr_regions` numbers them, on the pages
-        // whose text is not pixels. A page read whole on a doubt about its
-        // structure, which an OCR engine skips, gets its regions as crops of
-        // their own too: the crops `convert --ocr` reads on it.
+        // The crops `convert --ocr` reads, from the same `ocr::ocr_jobs`
+        // and under the same limit, so the three-step path reads what it
+        // reads: the regions a model call would not pay for are added, and a
+        // page read whole on a doubt about its structure, which an OCR
+        // engine skips, gets its regions as crops of their own too.
         let small = if ocr_regions {
-            let pages = doc.pages.iter().filter_map(|p| {
-                let routed = match fluree_doc_pdf::route::decide(p).0 {
-                    fluree_doc_pdf::route::Route::Vlm(_) => return None,
-                    fluree_doc_pdf::route::Route::VlmRegions(r) => r.len(),
-                    fluree_doc_pdf::route::Route::Deterministic => 0,
-                };
-                Some((p.index, routed, fluree_doc_pdf::route::ocr_regions(p)))
-            });
-            add_ocr_regions(&mut jobs, pages)
+            let (ocr, capped) = fluree_doc_pdf::ocr::ocr_jobs(&doc, None, max_ocr_crops);
+            if capped > 0 {
+                eprintln!(
+                    "{}",
+                    crate::commands::convert::ocr_cap_note(stem, max_ocr_crops, capped)
+                );
+            }
+            let routed: std::collections::HashMap<usize, usize> = doc
+                .pages
+                .iter()
+                .map(|p| match fluree_doc_pdf::route::decide(p).0 {
+                    fluree_doc_pdf::route::Route::VlmRegions(r) => (p.index, r.len()),
+                    _ => (p.index, 0),
+                })
+                .collect();
+            add_ocr_jobs(&mut jobs, ocr, |page| {
+                routed.get(&page).copied().unwrap_or(0)
+            })
         } else {
             Default::default()
         };
@@ -1322,36 +1340,46 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
     );
 }
 
-/// Add to a document's crop jobs the regions an OCR engine reads: each page's
-/// `(index, routed, regions)`, its regions numbered as `route::ocr_regions`
-/// numbers them, the first `routed` being the ones the router sends a model.
-/// A routed page gets its small regions added to its crops; a page with
-/// none gets a job of its small regions; a page read whole on a doubt gets
-/// all its regions as crops of their own, besides its whole page, since an
-/// OCR engine reads those and skips the page. Returns the small regions, by
-/// `(page, tag)`.
-pub(crate) fn add_ocr_regions(
+/// Add to a document's crop jobs the crops an OCR engine reads
+/// ([`fluree_doc_pdf::ocr::ocr_jobs`]), whose regions are numbered as the
+/// model's are, the first `routed(page)` of a page being the ones the router
+/// sends a model. A region crop the jobs do not hold yet is added to its
+/// page's; a page with no job gets one of its regions; a page read whole on
+/// a doubt gets all its regions as crops of their own, besides its whole
+/// page, since an OCR engine reads those and skips the page. A page the
+/// engine reads whole the model reads whole too. Returns the regions too
+/// small for a model, by `(page, tag)`.
+pub(crate) fn add_ocr_jobs(
     jobs: &mut fluree_doc_pdf::escalate::CropJobs,
-    pages: impl Iterator<Item = (usize, usize, Vec<fluree_doc_pdf::geom::BBox>)>,
+    ocr: fluree_doc_pdf::ocr::OcrJobs,
+    routed: impl Fn(usize) -> usize,
 ) -> std::collections::HashSet<(usize, String)> {
     let mut small = std::collections::HashSet::new();
     let mut doubted = Vec::new();
-    for (page, routed, regions) in pages {
-        let all: Vec<(String, fluree_doc_pdf::geom::BBox)> = regions
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| (format!("r{i}"), b))
-            .collect();
-        if all.is_empty() {
-            continue;
-        }
-        let extra = all[routed.min(all.len())..].to_vec();
-        small.extend(extra.iter().map(|(t, _)| (page, t.clone())));
+    for (page, crops) in ocr {
+        // A page whose text is pixels: the router's verdict, which the
+        // model's plan reads whole too.
+        let Some(crops) = crops else { continue };
+        small.extend(
+            crops
+                .iter()
+                .filter(|(t, _)| {
+                    t.strip_prefix('r')
+                        .and_then(|i| i.parse::<usize>().ok())
+                        .is_some_and(|i| i >= routed(page))
+                })
+                .map(|(t, _)| (page, t.clone())),
+        );
         match jobs.iter_mut().find(|(pi, _)| *pi == page) {
-            Some((_, None)) => doubted.push((page, Some(all))),
-            Some((_, Some(list))) => list.extend(extra),
-            None if !extra.is_empty() => jobs.push((page, Some(extra))),
-            None => {}
+            Some((_, None)) => doubted.push((page, Some(crops))),
+            Some((_, Some(list))) => {
+                for c in crops {
+                    if !list.iter().any(|(t, _)| *t == c.0) {
+                        list.push(c);
+                    }
+                }
+            }
+            None => jobs.push((page, Some(crops))),
         }
     }
     jobs.extend(doubted);
@@ -1616,19 +1644,26 @@ mod tests {
     fn ocr_regions_join_each_kind_of_page_job() {
         // Page 0 routed with one region, plus a small one; page 1 read whole
         // on a doubt, with a routed region and a small one; page 2 with a
-        // small region only; page 3 with none.
-        let mut jobs: fluree_doc_pdf::escalate::CropJobs =
-            vec![(0, Some(vec![("r0".to_string(), b(0.0))])), (1, None)];
-        let small = add_ocr_regions(
-            &mut jobs,
-            vec![
-                (0, 1, vec![b(0.0), b(50.0)]),
-                (1, 1, vec![b(0.0), b(50.0)]),
-                (2, 0, vec![b(80.0)]),
-                (3, 0, vec![]),
-            ]
-            .into_iter(),
-        );
+        // small region only; page 3 read whole for its pixels; page 4 routed
+        // with two regions, the engine's limit leaving it the first.
+        let tagged = |l: &[(&str, f64)]| -> Option<Vec<(String, BBox)>> {
+            Some(l.iter().map(|(t, y)| (t.to_string(), b(*y))).collect())
+        };
+        let mut jobs: fluree_doc_pdf::escalate::CropJobs = vec![
+            (0, tagged(&[("r0", 0.0)])),
+            (1, None),
+            (3, None),
+            (4, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+        ];
+        let ocr: fluree_doc_pdf::ocr::OcrJobs = vec![
+            (0, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+            (1, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+            (2, tagged(&[("r0", 80.0)])),
+            (3, None),
+            (4, tagged(&[("r0", 0.0)])),
+        ];
+        let routed = |page: usize| [1, 1, 0, 0, 2][page];
+        let small = add_ocr_jobs(&mut jobs, ocr, routed);
         let tags = |page: usize| -> Vec<Option<Vec<String>>> {
             jobs.iter()
                 .filter(|(p, _)| *p == page)
@@ -1645,7 +1680,12 @@ mod tests {
             "the doubted page keeps its whole crop and gets its regions"
         );
         assert_eq!(tags(2), [Some(vec!["r0".to_string()])]);
-        assert!(tags(3).is_empty());
+        assert_eq!(tags(3), [None], "read whole once");
+        assert_eq!(
+            tags(4),
+            [Some(vec!["r0".to_string(), "r1".to_string()])],
+            "the model's crops stay whatever the engine's limit"
+        );
         let mut small: Vec<(usize, String)> = small.into_iter().collect();
         small.sort();
         assert_eq!(

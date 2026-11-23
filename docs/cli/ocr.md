@@ -30,7 +30,10 @@ from 8 × 8 masks and rules stretched from a 1 × 1 mask are not read, and an
 image drawn twice in one place is read once. A document's crops are capped
 by [`ocr.max_crops`](config.md#ocr) (default 1000): past it, pages read whole
 come first, then routed regions, then small ones, and a note on stderr says
-how many were left.
+how many were left. `render-routed --ocr-regions` adds the crops `convert
+--ocr` reads, from the same selection and under the same cap; the model's own
+crops (pages, routed regions) are written whatever the cap, so past it the
+three-step path also reads those.
 
 Given a crops directory, `fdoc ocr` reads its `manifest.jsonl` and only the crops
 whose words a page takes, by their `reason`: `scanned`, `near_blank`,

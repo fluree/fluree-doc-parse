@@ -184,6 +184,65 @@ fn an_ocr_flag_beats_the_words_the_environment_names() {
 }
 
 #[test]
+fn render_routed_crops_for_ocr_under_the_documents_limit() {
+    // A text page with three small captures, and a limit of two: the crops
+    // `convert --ocr` would read, and a note for the one left.
+    let dir = scratch("limit");
+    std::fs::write(dir.join("config.toml"), "[ocr]\nmax_crops = 2\n").unwrap();
+    let text: String = (0..12)
+        .map(|i| {
+            format!(
+                "BT /F1 9 Tf 40 {} Td (Every account opened this year.) Tj ET\n",
+                380 - 12 * i
+            )
+        })
+        .collect();
+    let shots: String = [40, 90, 140]
+        .map(|y| format!("q 100 0 0 15 40 {y} cm /Im0 Do Q\n"))
+        .concat();
+    let mask = [
+        b"<< /Type /XObject /Subtype /Image /Width 200 /Height 30 /ImageMask true \
+           /BitsPerComponent 1 /Length 750 >>\nstream\n"
+            .to_vec(),
+        vec![0; 750],
+        b"\nendstream".to_vec(),
+    ]
+    .concat();
+    let input = dir.join("form.pdf");
+    std::fs::write(
+        &input,
+        pdf(
+            &format!("{text}{shots}"),
+            "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> \
+             /XObject << /Im0 5 0 R >>",
+            Some(mask),
+        ),
+    )
+    .unwrap();
+    let crops = dir.join("crops");
+    let out = fdoc(&dir)
+        .current_dir(&dir)
+        .args(["dev", "render-routed", "--ocr-regions"])
+        .arg(&input)
+        .arg(&crops)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("leaving 1 unread") && err.contains("ocr.max_crops"),
+        "{err}"
+    );
+    let manifest = std::fs::read_to_string(crops.join("manifest.jsonl")).unwrap();
+    assert_eq!(
+        manifest.matches("\"small_region\"").count(),
+        2,
+        "{manifest}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn fdoc_ocr_refuses_before_it_writes() {
     let dir = scratch("refuses");
     let png = dir.join("a.png");
