@@ -127,7 +127,7 @@ page does, and every character keeps a position for
 
 | field | required | use |
 |---|---|---|
-| `coords` | no | `px` (default): pixels of the image read. `pdf`: PDF units of the page as displayed, y down |
+| `coords` | no | `px` (default): pixels of the image read. `page`: units of the page as displayed (after `/Rotate`), y down — not PDF user space, whose y runs up |
 | `width`, `height` | with `px` | size of the image read, which shows the crop |
 | `engine` | no | recorded for whoever compares two engines |
 | `words[].text` | yes | a word, or a whole line: a space inside it is a space |
@@ -144,7 +144,7 @@ part of the page, and a region crop includes its margin.
 
 On a page turned to read upright (`/Rotate`, or text drawn sideways),
 `render-routed` does not yet crop regions where this mapping expects them;
-read whole pages there, or give the boxes in `pdf` units.
+read whole pages there, or give the boxes in `page` units.
 
 **What the page takes.** Only what the router sends a reader:
 

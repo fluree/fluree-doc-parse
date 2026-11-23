@@ -486,7 +486,7 @@ fn place(
 ) -> Result<Vec<Option<Placed>>, &'static str> {
     use unicode_normalization::UnicodeNormalization;
     let rect = crop_rect(p, shown);
-    // Pixels of the image read → display frame. A reading in PDF units is
+    // Pixels of the image read → display frame. A reading in page units is
     // already there.
     let (sx, sy, ox, oy) = match (reading.coords, reading.width, reading.height) {
         (Coords::Px, Some(w), Some(h)) if w > 0.0 && h > 0.0 => {
@@ -496,7 +496,7 @@ fn place(
             (rect.width() / w, rect.height() / h, rect.x0, rect.y0)
         }
         (Coords::Px, _, _) => return Err("pixel coordinates without a size"),
-        (Coords::Pdf, _, _) => (1.0, 1.0, 0.0, 0.0),
+        (Coords::Page, _, _) => (1.0, 1.0, 0.0, 0.0),
     };
     let placed = reading
         .words
@@ -1877,7 +1877,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.words[0].conf, Some(0.5));
-        assert!(WordReading::from_json(r#"{"coords":"pdf","words":[]}"#).is_ok());
+        assert!(WordReading::from_json(r#"{"coords":"page","words":[]}"#).is_ok());
     }
 
     #[test]
@@ -1952,9 +1952,9 @@ mod tests {
         assert!(crate::unread_pages(&doc, &a.elements).is_empty());
     }
 
-    fn pdf_units(words: Vec<OcrWord>) -> WordReading {
+    fn page_units(words: Vec<OcrWord>) -> WordReading {
         WordReading {
-            coords: Coords::Pdf,
+            coords: Coords::Page,
             width: None,
             height: None,
             engine: None,
@@ -1995,7 +1995,7 @@ mod tests {
                 };
                 let r = inject(
                     &mut doc,
-                    &[(0, Crop::Page, pdf_units(skewed_line(deg, stated)))],
+                    &[(0, Crop::Page, page_units(skewed_line(deg, stated)))],
                 );
                 assert!(
                     (r[0].skew_deg - deg).abs() < 0.2,
@@ -2054,7 +2054,7 @@ mod tests {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
         };
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let els = analysed(&mut doc, &r);
         let kinds: Vec<(&str, &str)> = els
             .iter()
@@ -2098,7 +2098,7 @@ mod tests {
                 word("Revenue", [x, 450.0, x + 60.0, 463.0])
             })
             .collect();
-        let r = inject(&mut doc, &[(0, Crop::Region(0), pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Region(0), page_units(words))]);
         assert_eq!(r[0].taken, 5);
         assert!(matches!(route::decide(&doc.pages[0]).0, Route::VlmRegions(ref v) if v.len() == 2));
         let a = crate::document::analyze_with(
@@ -2136,7 +2136,7 @@ mod tests {
         };
         let mut w = word("CONFIDENTIAL", [100.0, 185.0, 300.0, 215.0]);
         w.angle = Some(45.0);
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![w]))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(vec![w]))]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 0));
     }
 
@@ -2176,7 +2176,7 @@ mod tests {
             word("ok", [100.0, 190.0, 120.0, 203.0]),
             word("ok", [100.0, 220.0, 120.0, 233.0]),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!((r[0].taken, r[0].dropped), (5, 4));
         assert_eq!(text_of(&doc.pages[0]), "okokokokok");
     }
@@ -2192,7 +2192,7 @@ mod tests {
             word("42", [125.0, 100.0, 140.0, 113.0]),
         ];
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(text_of(&doc.pages[0]).matches('|').count(), 2);
     }
 
@@ -2210,7 +2210,7 @@ mod tests {
             x += len + 3.0;
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(
             texts(&mut doc, &r),
             ["Certified true copy — 02/01/2026 — P. Vantongeren"]
@@ -2228,7 +2228,7 @@ mod tests {
             })
             .collect();
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(texts(&mut doc, &r), ["東京都庁の案内"]);
     }
 
@@ -2236,7 +2236,7 @@ mod tests {
     fn a_page_ocr_read_whole_is_not_reported_unread() {
         let mut doc = blank_scan();
         let short = vec![word("KYC screen", [72.0, 72.0, 140.0, 85.0])];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(short))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
         let els = analysed(&mut doc, &r);
         assert!(crate::unread_pages(&doc, &els).is_empty());
     }
@@ -2269,7 +2269,7 @@ mod tests {
                     5.0,
                 ));
                 w.extend(run_words(&format!("{m}"), 300.0, 760.0, 10.0, 5.0));
-                (m - 1, Crop::Page, pdf_units(w))
+                (m - 1, Crop::Page, page_units(w))
             })
             .collect();
         let r = inject(&mut doc, &readings);
@@ -2307,7 +2307,7 @@ mod tests {
             at("914-35-7075", 60.0, 118.0, 36.0),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         for t in ["Party Name", "Ann Nancy Mitchell", "SSN/TIN", "914-35-7075"] {
             assert!(all.contains(t), "{t} in {all}");
@@ -2329,7 +2329,7 @@ mod tests {
             word("citizen or other U.S. person.", [56.0, 299.0, 160.0, 309.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("shown on this form"), "{all}");
     }
@@ -2344,7 +2344,7 @@ mod tests {
             word("11/06/202513:54", [115.0, 3.0, 202.0, 12.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("555-0181 11/06/2025"), "{all}");
     }
@@ -2361,7 +2361,7 @@ mod tests {
             word("Completed", [201.0, 89.5, 219.0, 95.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         for t in ["Reference", "MSG757644818", "Status", "Completed"] {
             assert!(all.contains(t), "{t} in {all}");
@@ -2387,7 +2387,7 @@ mod tests {
             w
         })
         .collect();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("HART"), "{all}");
     }
@@ -2400,7 +2400,7 @@ mod tests {
             word("OWNER ROLE", [320.0, 110.0, 334.0, 180.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("Account Holder"), "{all}");
         assert!(all.contains("OWNER ROLE"), "{all}");
@@ -2425,7 +2425,7 @@ mod tests {
                     w.push(word(b, [300.0, y, 312.0, y + 10.0]));
                 }
                 w.push(word(&(i + 1).to_string(), [300.0, 760.0, 306.0, 770.0]));
-                (i, Crop::Page, pdf_units(w))
+                (i, Crop::Page, page_units(w))
             })
             .collect();
         let r = inject(&mut doc, &readings);
@@ -2440,7 +2440,7 @@ mod tests {
             let mut w = word("RECEIVED 12 MAR 2026", [200.0, 300.0, 320.0, 316.0]);
             w.angle = Some(angle);
             let mut doc = blank_scan();
-            let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![w]))]);
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(vec![w]))]);
             assert_eq!(texts(&mut doc, &r), ["RECEIVED 12 MAR 2026"], "{angle}");
         }
     }
@@ -2456,7 +2456,7 @@ mod tests {
         }
         words.push(word("|", [97.0, 98.0, 103.0, 152.0]));
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         for t in ["North", "East", "South", "West", "Upper", "Lower"] {
             assert!(all.contains(t), "{t} in {all}");
@@ -2472,7 +2472,7 @@ mod tests {
             words.push(word("far", [x, 5000.0, x + 30.0, 5010.0]));
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert!(r[0].refused.is_some());
         assert!(doc.pages[0].glyphs.is_empty() && doc.pages[0].ocr.is_none());
         assert_eq!(crate::unread_pages(&doc, &[]).len(), 1);
@@ -2489,7 +2489,7 @@ mod tests {
             })
             .collect();
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert!(doc.pages[0].glyphs.iter().all(|g| g.rotation_deg == 0.0));
     }
 
@@ -2521,7 +2521,7 @@ mod tests {
             words.push(word("a", [x, 100.0, x + 1.0, 100.0 + 1e-9]));
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(r[0].taken + r[0].dropped, 202);
         assert!(text_of(&doc.pages[0]).contains("tall"));
         assert!(!text_of(&doc.pages[0]).contains("huge"));
@@ -2540,7 +2540,7 @@ mod tests {
         for words in [alone, beside] {
             let n = words.len();
             let mut doc = blank_scan();
-            let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             assert_eq!(r[0].taken + r[0].dropped, n, "{r:?}");
         }
     }
@@ -2552,7 +2552,7 @@ mod tests {
         };
         let mut w = word("Cafe\u{301}", [60.0, 100.0, 100.0, 113.0]);
         w.angle = Some(359.4);
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![w]))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(vec![w]))]);
         assert_eq!(text_of(&doc.pages[0]), "Café");
         assert!(doc.pages[0].glyphs.iter().all(|g| g.rotation_deg == 0.0));
     }
@@ -2564,7 +2564,7 @@ mod tests {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
         };
         let short = vec![word("Page", [72.0, 72.0, 110.0, 85.0])];
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(short))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
         let a = crate::document::analyze_with(
             &mut doc.clone(),
             &[],
@@ -2585,7 +2585,7 @@ mod tests {
             word("of returned information", [86.0, 500.0, 184.0, 507.0]),
             word("against that of SS Pack", [184.0, 500.0, 276.0, 507.0]),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let texts: Vec<String> = analysed(&mut doc, &r)
             .iter()
             .map(|e| e.text.clone())
@@ -2625,7 +2625,7 @@ mod tests {
                 [64.0, 640.0, 300.0, 653.0],
             ),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 2));
         assert_eq!(doc.pages[0].glyphs.len() - before, 36);
         assert_eq!(doc.pages[0].ocr.as_ref().unwrap().regions, [0]);
@@ -2684,7 +2684,7 @@ mod tests {
             }
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(r[0].taken, 22);
         // Each character is still marked where the image shows it.
         let first = words_box_of("The", &r[0].chars);
@@ -2733,7 +2733,7 @@ mod tests {
         };
         let r = inject(
             &mut doc,
-            &[(0, Crop::Page, pdf_units(upside_down_words(0)))],
+            &[(0, Crop::Page, page_units(upside_down_words(0)))],
         );
         assert_eq!(
             r[0].refused,
@@ -2753,7 +2753,7 @@ mod tests {
         let before = doc.pages[0].images[0].bbox;
         let r = inject(
             &mut doc,
-            &[(0, Crop::Page, pdf_units(upside_down_words(15)))],
+            &[(0, Crop::Page, page_units(upside_down_words(15)))],
         );
         assert_eq!(
             r[0].refused,
@@ -2781,9 +2781,9 @@ mod tests {
                 (
                     0,
                     Crop::Page,
-                    pdf_units(vec![word("Statement", [72.0, 480.0, 126.0, 493.0])]),
+                    page_units(vec![word("Statement", [72.0, 480.0, 126.0, 493.0])]),
                 ),
-                (0, Crop::Region(0), pdf_units(region_words)),
+                (0, Crop::Region(0), page_units(region_words)),
             ],
         );
         assert_eq!(r[0].taken, 1);
@@ -2809,7 +2809,7 @@ mod tests {
             }
             words.push(word("PAID", [250.0, 204.0 + dy, 450.0, 269.0 + dy]));
             let mut doc = blank_scan();
-            let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             let text = texts(&mut doc, &r).join("\n");
             let body = text
                 .matches("The quick brown fox jumps over the dog")
@@ -2856,7 +2856,7 @@ mod tests {
                 let void = paid - gap - 32.5 + 0.22 * 65.0;
                 words.push(word("VOID", [280.0, void, 380.0, void + 32.5]));
                 let mut doc = blank_scan();
-                let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+                let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
                 let text = texts(&mut doc, &r).join("\n");
                 let body = text
                     .matches("The quick brown fox jumps over the dog")
@@ -2928,7 +2928,7 @@ mod tests {
         }
         words.push(word("PAID", [250.0, 204.0, 450.0, 269.0]));
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let body: Vec<f32> = doc.pages[0]
             .glyphs
             .iter()
@@ -2980,12 +2980,12 @@ mod tests {
                 (
                     0,
                     Crop::Page,
-                    pdf_units(vec![word("Elsewhere", [100.0, 100.0, 160.0, 113.0])]),
+                    page_units(vec![word("Elsewhere", [100.0, 100.0, 160.0, 113.0])]),
                 ),
                 (
                     0,
                     Crop::Region(0),
-                    pdf_units(vec![word("Inside", [100.0, 500.0, 150.0, 513.0])]),
+                    page_units(vec![word("Inside", [100.0, 500.0, 150.0, 513.0])]),
                 ),
             ],
         );
@@ -3033,22 +3033,22 @@ mod tests {
                 (
                     0,
                     Crop::Page,
-                    pdf_units(vec![word("Above", [100.0, 150.0, 140.0, 163.0])]),
+                    page_units(vec![word("Above", [100.0, 150.0, 140.0, 163.0])]),
                 ),
                 (
                     0,
                     Crop::Region(0),
-                    pdf_units(vec![word("Again", [100.0, 150.0, 140.0, 163.0])]),
+                    page_units(vec![word("Again", [100.0, 150.0, 140.0, 163.0])]),
                 ),
                 (
                     0,
                     Crop::Region(1),
-                    pdf_units(vec![word("Below", [100.0, 500.0, 140.0, 513.0])]),
+                    page_units(vec![word("Below", [100.0, 500.0, 140.0, 513.0])]),
                 ),
                 (
                     0,
                     Crop::Region(9),
-                    pdf_units(vec![word("Nowhere", [100.0, 500.0, 140.0, 513.0])]),
+                    page_units(vec![word("Nowhere", [100.0, 500.0, 140.0, 513.0])]),
                 ),
             ],
         );
@@ -3096,10 +3096,10 @@ mod tests {
                 .unwrap()
                 .font_size
         };
-        let alone = size(&[(0, Crop::Page, pdf_units(whole.clone()))]);
+        let alone = size(&[(0, Crop::Page, page_units(whole.clone()))]);
         let both = size(&[
-            (0, Crop::Page, pdf_units(whole)),
-            (0, Crop::Region(0), pdf_units(ink)),
+            (0, Crop::Page, page_units(whole)),
+            (0, Crop::Region(0), page_units(ink)),
         ]);
         assert_eq!(alone, both);
     }
@@ -3158,12 +3158,12 @@ mod tests {
                 (
                     0,
                     Crop::Region(0),
-                    pdf_units(vec![word("Overlap", [100.0, 540.0, 160.0, 553.0])]),
+                    page_units(vec![word("Overlap", [100.0, 540.0, 160.0, 553.0])]),
                 ),
                 (
                     0,
                     Crop::Region(1),
-                    pdf_units(vec![word("Overlap", [100.5, 540.4, 160.5, 553.4])]),
+                    page_units(vec![word("Overlap", [100.5, 540.4, 160.5, 553.4])]),
                 ),
             ],
         );
@@ -3187,7 +3187,7 @@ mod tests {
             &[(
                 0,
                 Crop::Page,
-                pdf_units(vec![
+                page_units(vec![
                     word("Account", [60.0, 300.0, 120.0, 313.0]),
                     word("4417-0093-21", [300.0, 301.5, 400.0, 314.5]),
                 ]),
@@ -3257,7 +3257,7 @@ mod tests {
             }
             let mut doc = blank_scan();
             let t = std::time::Instant::now();
-            inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             t.elapsed().as_secs_f64()
         };
         let (small, large) = (time(2_000, false), time(8_000, false));
@@ -3286,7 +3286,7 @@ mod tests {
                 .collect();
             let mut doc = blank_scan();
             let t = std::time::Instant::now();
-            inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             t.elapsed().as_secs_f64()
         };
         let (small, large) = (time(5_000), time(20_000));
@@ -3318,8 +3318,8 @@ mod tests {
             let r = inject(
                 &mut doc,
                 &[
-                    (0, Crop::Page, pdf_units(grid(n, 0.0))),
-                    (0, Crop::Page, pdf_units(grid(n, 0.4))),
+                    (0, Crop::Page, page_units(grid(n, 0.0))),
+                    (0, Crop::Page, page_units(grid(n, 0.4))),
                 ],
             );
             let took = t.elapsed().as_secs_f64();
@@ -3365,7 +3365,7 @@ mod tests {
             ));
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(
             all.contains("Revenue rose in the quarter as customers renewed"),
@@ -3380,7 +3380,7 @@ mod tests {
         words.extend(run_words("alpha beta gamma delta", 320.0, 100.0, 10.0, 5.0));
         words.extend(run_words("one two three four", 320.0, 113.0, 10.0, 5.0));
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let size_of = |c: &str| {
             doc.pages[0]
                 .glyphs
@@ -3411,7 +3411,7 @@ mod tests {
         words.push(word("CONFIDENTIAL", [20.0, 95.0, 32.0, 170.0]));
         words.push(word("Total 42", [300.0, 98.0, 360.0, 126.0]));
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert_eq!(all.matches("the line of body text").count(), 5, "{all}");
         assert!(
@@ -3440,7 +3440,7 @@ mod tests {
             words.push(ink_box(w, 60.0, 300.0 + i as f64 * 13.0, 10.0));
         }
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         for g in doc.pages[0].glyphs.iter().filter(|g| g.bbox.is_some()) {
             assert!(
                 (g.font_size - 10.0).abs() < 1.0,
@@ -3455,7 +3455,7 @@ mod tests {
     fn a_reading_that_takes_nothing_leaves_the_page_as_it_was() {
         // An empty reading of a scan: still unread, still routed.
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![]))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(vec![]))]);
         assert_eq!(r[0].taken, 0);
         assert!(doc.pages[0].ocr.is_none());
         // A BrokenText page whose reading lands nowhere keeps its glyphs.
@@ -3466,7 +3466,7 @@ mod tests {
         let mut doc = Document {
             pages: vec![page(glyphs, Vec::new())],
         };
-        let far = pdf_units(vec![word("far", [5000.0, 5000.0, 5050.0, 5013.0])]);
+        let far = page_units(vec![word("far", [5000.0, 5000.0, 5050.0, 5013.0])]);
         inject(&mut doc, &[(0, Crop::Page, far)]);
         assert_eq!(doc.pages[0].glyphs.len(), 150);
         assert!(doc.pages[0].ocr.is_none());
@@ -3494,7 +3494,7 @@ mod tests {
             )],
         };
         let w = || {
-            pdf_units(vec![word(
+            page_units(vec![word(
                 "Evaluated against tests",
                 [64.0, 640.0, 300.0, 653.0],
             )])
@@ -3522,7 +3522,7 @@ mod tests {
             }
             let mut doc = blank_scan();
             let t = std::time::Instant::now();
-            inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             t.elapsed().as_secs_f64()
         };
         let (small, large) = (time(10_000), time(40_000));
@@ -3583,7 +3583,7 @@ mod tests {
                 ],
             )
         };
-        let reading = pdf_units(vec![
+        let reading = page_units(vec![
             line(
                 "Balance on 15-0CT-1997 was 1,25O.00 in the account named",
                 188.0,
