@@ -188,6 +188,19 @@ pub fn detect_with_folios(
             if per_page.values().any(|&n| n > 1) {
                 continue;
             }
+            // Repetition is not enough away from the edges: templated pages
+            // repeat real text there (a spec table's labels, a box's
+            // heading, the close of a standard sentence). A watermark also
+            // shows itself as one: turned, laid on other text, or standing
+            // beside all of it in a margin.
+            let shown = occ
+                .iter()
+                .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
+                .filter(|o| watermark_shown(&pages[o.0].0, o.1))
+                .count();
+            if shown < needed {
+                continue;
+            }
         }
         for (pi, li, rel, _) in &occ {
             if (rel - median).abs() < POSITION_TOLERANCE {
@@ -272,6 +285,31 @@ fn folio_run(occ: &[(usize, &str)]) -> Option<(usize, Vec<(usize, String)>)> {
         .map(|((pi, _), r)| (*pi, r[j].clone()))
         .collect();
     Some((distinct, values))
+}
+
+/// Line `li` of a page shows itself as a watermark rather than as text
+/// that repeats: it is turned, it lies on another line, or it stands
+/// beside every other line, sharing none of their width, as a margin note
+/// does.
+fn watermark_shown(lines: &[Line], li: usize) -> bool {
+    let l = &lines[li];
+    if l.rotation_bucket != 0 {
+        return true;
+    }
+    let others = lines.iter().enumerate().filter(|(j, _)| *j != li);
+    let mut beside = true;
+    for (_, o) in others {
+        let w = l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0);
+        if w > 0.0 {
+            beside = false;
+            let h = l.bbox.y1.min(o.bbox.y1) - l.bbox.y0.max(o.bbox.y0);
+            let smaller = (l.bbox.width() * l.bbox.height()).min(o.bbox.width() * o.bbox.height());
+            if h > 0.0 && smaller > 0.0 && w * h / smaller > 0.3 {
+                return true;
+            }
+        }
+    }
+    beside
 }
 
 fn classify(rel_y: f64, digits_vary: bool) -> Furniture {
@@ -538,13 +576,33 @@ mod tests {
     }
 
     #[test]
-    fn identical_body_line_at_a_fixed_position_is_indistinguishable() {
-        // Documented limitation: repetition at a stable position is the only
-        // evidence we have, so a genuinely identical body line in the same spot
-        // on every page will be stripped. Accepted - the alternative is missing
-        // real furniture.
-        let pages = doc(10, |_| vec![line("Identical body line", 400.0)]);
-        assert_eq!(detect(&pages)[0].get(&0), Some(&Furniture::Watermark));
+    fn a_templated_body_line_is_kept_where_a_watermark_is_not() {
+        // A template repeats real text at one place on every page, between
+        // the page's other lines: a box's heading, a spec table's label.
+        let pages = doc(10, |i| {
+            vec![
+                line(&format!("Model {i} has a unique description here"), 380.0),
+                line("Technical data", 400.0),
+                line(&format!("Rated {i}0 W at the nominal supply"), 420.0),
+            ]
+        });
+        assert!(detect(&pages).iter().all(|m| m.get(&1).is_none()));
+        // The same line laid on the text, or out in a margin, is one.
+        let pages = doc(10, |i| {
+            let mut stamp = line("Uncontrolled copy", 402.0);
+            stamp.bbox.x0 = 60.0;
+            let mut note = line("For internal use only", 600.0);
+            note.bbox.x0 = 520.0;
+            note.bbox.x1 = 590.0;
+            vec![
+                line(&format!("Model {i} has a unique description here"), 400.0),
+                stamp,
+                note,
+            ]
+        });
+        let r = detect(&pages);
+        assert_eq!(r[0].get(&1), Some(&Furniture::Watermark));
+        assert_eq!(r[0].get(&2), Some(&Furniture::Watermark));
     }
 
     #[test]
