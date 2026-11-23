@@ -795,7 +795,9 @@ pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, f: impl FnMut(RawCrop)) {
 /// As [`for_each_crop`], each crop at the scale `scale_of(page, region)`
 /// gives it (see [`crop_scale`]). A page is rendered once per scale its
 /// crops ask for, at most [`MAX_RENDERS_PER_PAGE`] times, one render at a
-/// time; a page's crops are held until the last of its renders is cut.
+/// time, and each crop is handed over as soon as it is cut: a page's crops come in the order of its
+/// renders, coarsest first, and in the jobs' order within each.
+/// [`crop_order`] gives the jobs' order back.
 ///
 /// A region is cut where it shows on the page as rendered: on a page read
 /// in a turned frame (`/Rotate`, or text drawn sideways), pass
@@ -828,6 +830,24 @@ pub fn for_each_crop_of(
         |pi, b| page(pi).map_or(*b, |p| p.to_display(*b)),
         f,
     )
+}
+
+/// Each crop's place in `jobs`, by its name (`p{page}_{tag}`, `p{page}_full`
+/// for a whole page): the order a caller of [`for_each_crop_scaled`] or
+/// [`for_each_crop_of`] sorts by to have the crops of a page rendered at
+/// several scales back in the order it asked for them.
+pub fn crop_order(jobs: &CropJobs) -> HashMap<String, usize> {
+    jobs.iter()
+        .flat_map(|(page, regions)| match regions {
+            None => vec![format!("p{page}_full")],
+            Some(list) => list
+                .iter()
+                .map(|(tag, _)| format!("p{page}_{tag}"))
+                .collect(),
+        })
+        .enumerate()
+        .map(|(i, name)| (name, i))
+        .collect()
 }
 
 /// Render each job's pages and cut its crops, each region where `shown`
@@ -868,8 +888,8 @@ fn cut_crops(
             }
             Some(regions) => {
                 // One render per scale the page's crops ask for, each dropped
-                // once its crops are cut: never more than one render held.
-                // The crops are handed over in the jobs' order.
+                // once its crops are cut: never more than one render held,
+                // and each crop handed over as cut, never held past it.
                 // A crop shares a finer render only within its long-edge cap.
                 let most: Vec<f32> = regions
                     .iter()
@@ -888,7 +908,6 @@ fn cut_crops(
                 let mut distinct = scales.clone();
                 distinct.sort_by(f32::total_cmp);
                 distinct.dedup();
-                let mut cut: Vec<Option<RawCrop>> = regions.iter().map(|_| None).collect();
                 for scale in distinct {
                     let render = draw(page, scale);
                     let (w, h, rgba) = (render.width, render.height, render.rgba());
@@ -910,22 +929,22 @@ fn cut_crops(
                             let s = (row * w + x0) * 4;
                             buf.extend_from_slice(&rgba[s..s + (x1 - x0) * 4]);
                         }
-                        cut[k] = fluree_doc_vision::Pixels::new(
+                        if let Some(pixels) = fluree_doc_vision::Pixels::new(
                             (x1 - x0) as u32,
                             (y1 - y0) as u32,
                             Layout::Rgba8,
                             buf,
-                        )
-                        .map(|pixels| RawCrop {
-                            name: format!("p{page_idx}_{tag}"),
-                            page: *page_idx,
-                            bbox: Some(*b),
-                            scale,
-                            pixels,
-                        });
+                        ) {
+                            f(RawCrop {
+                                name: format!("p{page_idx}_{tag}"),
+                                page: *page_idx,
+                                bbox: Some(*b),
+                                scale,
+                                pixels,
+                            });
+                        }
                     }
                 }
-                cut.into_iter().flatten().for_each(&mut f);
             }
         }
     }

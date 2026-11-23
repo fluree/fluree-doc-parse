@@ -1193,7 +1193,13 @@ pub(crate) fn render_routed(
         } else {
             fluree_doc_pdf::escalate::CropScale::Model
         };
+        // Each crop is written as it is cut; its manifest line waits so the
+        // document's lines come in the jobs' order, which a page rendered at
+        // several scales hands its crops over out of.
+        let order = fluree_doc_pdf::escalate::crop_order(&jobs);
+        let mut lines: Vec<(usize, serde_json::Value)> = Vec::new();
         fluree_doc_pdf::escalate::for_each_crop_of(&pdf, &doc, &jobs, mode, |crop| {
+            let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
             let page_idx = crop.page;
             let name = format!("{stem}_{}.png", crop.name);
             let file = std::fs::File::create(outdir.join(&name)).expect("create png");
@@ -1302,8 +1308,12 @@ pub(crate) fn render_routed(
             if !ls.is_empty() {
                 rec["links"] = serde_json::Value::Array(ls);
             }
-            writeln!(manifest, "{rec}").unwrap();
+            lines.push((at, rec));
         });
+        lines.sort_by_key(|(at, _)| *at);
+        for (_, rec) in lines {
+            writeln!(manifest, "{rec}").unwrap();
+        }
     }
     println!(
         "{n_pages} full pages, {n_crops} region crops -> {}",

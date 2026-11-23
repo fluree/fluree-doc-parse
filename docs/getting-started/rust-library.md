@@ -133,8 +133,8 @@ ocr::mark_provenance(&mut analysis.elements, &pass.injected);
 `read_pages` reads the same crops `--ocr-words` expects (`ocr::ocr_jobs`):
 pages whose text is pixels, whole, and the unread raster regions of the
 others, small ones included. It renders one page at a time, at most four
-times for its crops, so a long scan holds one page's pixels and its crops,
-and a crop the engine cannot read is reported in `pass.failed` while the
+times for its crops, and reads each crop as it is cut, so a long scan holds
+one render of one page and one crop at a time, and a crop the engine cannot read is reported in `pass.failed` while the
 rest is read. The engine is `Send + Sync`: share one
 across threads. Any other engine plugs in by implementing
 `fluree_doc_vision::OcrEngine`.

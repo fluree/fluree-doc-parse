@@ -1617,18 +1617,27 @@ pub fn read_pages(
     max_crops: usize,
 ) -> OcrPass {
     let (jobs, capped) = ocr_jobs(doc, only, max_crops);
+    // Each crop is read as it is cut, its pixels dropped after; the
+    // readings are put back in the jobs' order, which a page rendered at
+    // several scales hands its crops over out of.
+    let order = crate::escalate::crop_order(&jobs);
     let mut readings = Vec::new();
     let mut failed = Vec::new();
     crate::escalate::for_each_crop_of(pdf, doc, &jobs, scale, |crop| {
+        let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
         let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
         let Some(which) = Crop::from_tag(tag) else {
             return;
         };
         match engine.read(&crop.pixels) {
-            Ok(reading) => readings.push((crop.page, which, reading)),
-            Err(e) => failed.push((crop.name, e)),
+            Ok(reading) => readings.push((at, (crop.page, which, reading))),
+            Err(e) => failed.push((at, (crop.name, e))),
         }
     });
+    readings.sort_by_key(|(at, _)| *at);
+    failed.sort_by_key(|(at, _)| *at);
+    let readings: Vec<_> = readings.into_iter().map(|(_, r)| r).collect();
+    let failed = failed.into_iter().map(|(_, f)| f).collect();
     OcrPass {
         injected: inject(doc, &readings),
         failed,
@@ -2059,7 +2068,7 @@ mod tests {
 
     #[cfg(feature = "render")]
     #[test]
-    fn crops_rendered_at_several_scales_come_in_the_jobs_order() {
+    fn crops_rendered_at_several_scales_are_handed_over_as_cut() {
         let bytes = image_pdf(
             b"/Width 600 /Height 300 /BitsPerComponent 8",
             &vec![0x80; 600 * 300],
@@ -2075,15 +2084,76 @@ mod tests {
             .map(|i| (format!("r{i}"), b(10.0 + 30.0 * i as f64)))
             .collect();
         let scales = [3.0f32, 2.0, 4.0, 2.0, 3.5];
+        let jobs = vec![(0, Some(regions))];
         let mut names = Vec::new();
         crate::escalate::for_each_crop_scaled(
             &pdf,
-            &vec![(0, Some(regions))],
+            &jobs,
             |_, r| scales[((r.unwrap().x0 - 10.0) / 30.0) as usize],
             |c| names.push((c.name, c.scale)),
         );
-        let want: Vec<(String, f32)> = (0..5).map(|i| (format!("p0_r{i}"), scales[i])).collect();
-        assert_eq!(names, want);
+        // Each render's crops as it is cut, coarsest first, in the jobs'
+        // order within one.
+        let named = |i: &[usize]| -> Vec<(String, f32)> {
+            i.iter().map(|&i| (format!("p0_r{i}"), scales[i])).collect()
+        };
+        assert_eq!(names, named(&[1, 3, 0, 4, 2]));
+        // The jobs' order, given back.
+        let order = crate::escalate::crop_order(&jobs);
+        names.sort_by_key(|(n, _)| order[n]);
+        assert_eq!(names, named(&[0, 1, 2, 3, 4]));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_page_read_at_several_scales_is_injected_in_the_jobs_order() {
+        // A text page with two small captures, the first at 288 ppi and the
+        // second at 150: the second is rendered, cut and read first.
+        let shot = |y0: f64, ppi: f64| ImagePlacement {
+            bbox: BBox {
+                x0: 100.0,
+                y0,
+                x1: 300.0,
+                y1: y0 + 30.0,
+            },
+            texty: true,
+            ppi: Some(ppi),
+            bitonal: false,
+            grid: (1000, 1000),
+        };
+        let mut doc = Document {
+            pages: vec![page(
+                (0..1500)
+                    .flat_map(|i| {
+                        native("a", 20.0 + (i % 50) as f64 * 10.0, 600.0 + (i / 50) as f64)
+                    })
+                    .collect(),
+                vec![shot(100.0, 288.0), shot(200.0, 150.0)],
+            )],
+        };
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(pdf_with(
+            b"/MediaBox [0 0 612 792]",
+            b"",
+            b"q 200 0 0 30 100 100 cm /Im0 Do Q",
+            b"/Width 2 /Height 2 /BitsPerComponent 8",
+            &[0x20, 0xe0, 0xe0, 0x20],
+        )))
+        .unwrap();
+        let (jobs, _) = ocr_jobs(&doc, None, 0);
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        let engine = OneWord(Default::default());
+        let pass = read_pages(
+            &mut doc,
+            &pdf,
+            &engine,
+            None,
+            crate::escalate::CropScale::Stored,
+            0,
+        );
+        let heights: Vec<u32> = engine.0.lock().unwrap().iter().map(|r| r.1).collect();
+        assert!(heights[0] < heights[1], "read coarsest first: {heights:?}");
+        let crops: Vec<Crop> = pass.injected.iter().map(|r| r.crop).collect();
+        assert_eq!(crops, [Crop::Region(0), Crop::Region(1)]);
     }
 
     /// A one-page PDF of `page` entries, resources beside its image, one
