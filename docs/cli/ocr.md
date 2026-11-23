@@ -41,6 +41,12 @@ whose words a page takes, by their `reason`: `scanned`, `near_blank`,
 structure already has its text, and a table crop asks about structure; both are
 left for a model. Given image files (PNG, JPEG, TIFF, …), it reads them all.
 
+An image taller than the detector takes at full size (2,000 px, or less for
+an image under 736 px wide, which it scales up) is read in strips that overlap
+by a fifth, each line kept once, rather than shrunk: a 1,200 × 9,000 capture
+of 220 rows 13 px high read none of them shrunk, and all of them in strips. A
+wide image is still shrunk, since a cut across it would cut its lines.
+
 ## Options
 
 | Option | Description |

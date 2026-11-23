@@ -9,7 +9,9 @@
 //! The detector's settings are the ones the corpus benchmark measured
 //! (detection sized on the image's short side at 736 px, at most 2,000 px on
 //! the long one): each word box this engine gives is a detected line, turned
-//! upright about its center, with the line's angle.
+//! upright about its center, with the line's angle. An image taller than the
+//! detector takes without shrinking it is read in overlapping strips
+//! ([`strips`]), and its lines kept once.
 
 use crate::assets::{Assets, Runtime};
 use crate::{Coords, Layout, OcrEngine, OcrWord, Pixels, WordReading};
@@ -212,9 +214,9 @@ impl OarEngine {
             box_threshold: 0.45,
             unclip_ratio: 1.4,
             max_candidates: 3000,
-            limit_side_len: Some(736),
+            limit_side_len: Some(DET_SHORT_SIDE),
             limit_type: Some(LimitType::Min),
-            max_side_len: Some(2000),
+            max_side_len: Some(DET_LONG_SIDE),
         };
         // The models as the bytes that were checked, not read again by path.
         OAROCRBuilder::new(self.det.clone(), self.rec.clone(), PathBuf::new())
@@ -244,35 +246,20 @@ impl OcrEngine for OarEngine {
         // a crop's transparent pixels are composited over white paper.
         let img = image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
             .ok_or("the image's buffer does not match its size")?;
+        let bands = strips(image.width, image.height);
         let lease = self.pipes.take(|| self.pipeline())?;
-        let result = lease.predict(vec![img]);
-        drop(lease);
-        let result = result
-            .map_err(|e| format!("OCR: {e}"))?
-            .pop()
-            .ok_or("OCR returned no result")?;
-        let mut words = Vec::new();
-        for r in &result.text_regions {
-            let Some(text) = r.text.as_ref() else {
-                continue;
-            };
-            let p = &r.bounding_box.points;
-            if p.len() != 4 || text.trim().is_empty() {
-                continue;
+        let words = if bands.is_empty() {
+            read_one(&lease, img, 0)?
+        } else {
+            let mut read = Vec::new();
+            for &(top, bottom) in &bands {
+                let strip =
+                    image::imageops::crop_imm(&img, 0, top, image.width, bottom - top).to_image();
+                read.push((top, bottom, read_one(&lease, strip, top)?));
             }
-            let (bbox, angle) = quad_box([
-                (p[0].x as f64, p[0].y as f64),
-                (p[1].x as f64, p[1].y as f64),
-                (p[2].x as f64, p[2].y as f64),
-                (p[3].x as f64, p[3].y as f64),
-            ]);
-            words.push(OcrWord {
-                text: text.to_string(),
-                bbox,
-                angle: Some((angle * 100.0).round() / 100.0),
-                conf: r.confidence.map(f64::from),
-            });
-        }
+            merge_strips(read, image.height)
+        };
+        drop(lease);
         Ok(WordReading {
             coords: Coords::Px,
             width: Some(image.width as f64),
@@ -281,6 +268,143 @@ impl OcrEngine for OarEngine {
             words,
         })
     }
+}
+
+/// The detector's sizing (see [`OarEngine::pipeline`]): an image whose short
+/// side is under [`DET_SHORT_SIDE`] is scaled up to it, then one whose long
+/// side is over [`DET_LONG_SIDE`] is scaled down to that.
+const DET_SHORT_SIDE: u32 = 736;
+const DET_LONG_SIDE: u32 = 2000;
+
+/// Shortest strip worth reading on its own, in pixels: a narrower image is
+/// read whole.
+const MIN_STRIP: u32 = 200;
+
+/// The rows a tall image is read in, `(top, bottom)` each, when read whole
+/// the detector would shrink it; empty to read it whole.
+///
+/// Read whole, a capture 1,200 pixels wide and 9,000 tall is shrunk to 267 ×
+/// 2,000 for detection, and its short rows go unseen. Cut across its height,
+/// each strip as long as the detector takes without shrinking it at the
+/// image's width, it is detected at full size. The strips overlap by a fifth
+/// of their length, so a line cut by one strip's edge is whole in the next;
+/// a wide image is not cut, as its lines would be.
+fn strips(width: u32, height: u32) -> Vec<(u32, u32)> {
+    let len = if width >= DET_LONG_SIDE {
+        width
+    } else if width >= DET_SHORT_SIDE {
+        DET_LONG_SIDE
+    } else {
+        (DET_LONG_SIDE as u64 * width as u64 / DET_SHORT_SIDE as u64) as u32
+    };
+    if height <= len || len < MIN_STRIP {
+        return Vec::new();
+    }
+    let step = len - len / 5;
+    let mut out = Vec::new();
+    let mut top = 0;
+    while top + len < height {
+        out.push((top, top + len));
+        top += step;
+    }
+    out.push((height - len, height));
+    out
+}
+
+/// Read one image, its rows starting at `dy` in the image the words are
+/// given for.
+fn read_one(ocr: &OAROCR, img: image::RgbImage, dy: u32) -> Result<Vec<OcrWord>, String> {
+    let result = ocr
+        .predict(vec![img])
+        .map_err(|e| format!("OCR: {e}"))?
+        .pop()
+        .ok_or("OCR returned no result")?;
+    let dy = dy as f64;
+    let mut words = Vec::new();
+    for r in &result.text_regions {
+        let Some(text) = r.text.as_ref() else {
+            continue;
+        };
+        let p = &r.bounding_box.points;
+        if p.len() != 4 || text.trim().is_empty() {
+            continue;
+        }
+        let (bbox, angle) = quad_box([
+            (p[0].x as f64, p[0].y as f64 + dy),
+            (p[1].x as f64, p[1].y as f64 + dy),
+            (p[2].x as f64, p[2].y as f64 + dy),
+            (p[3].x as f64, p[3].y as f64 + dy),
+        ]);
+        words.push(OcrWord {
+            text: text.to_string(),
+            bbox,
+            angle: Some((angle * 100.0).round() / 100.0),
+            conf: r.confidence.map(f64::from),
+        });
+    }
+    Ok(words)
+}
+
+/// How near a strip's cut edge, in pixels, a word's box may reach before it
+/// is taken for one the cut went through.
+const CUT_EDGE: f64 = 2.0;
+
+/// The words of an image read in strips, `(top, bottom, words)` each in
+/// the image's rows, as one reading.
+///
+/// A word reaching a strip's cut edge is cut, and dropped: the strips
+/// overlap by more than a line, so the next one holds it whole. A line in
+/// an overlap is read by both strips, its boxes a pixel or two apart: of two
+/// boxes from different strips covering each other at least half, the one
+/// further inside its strip is kept. A rule by the overlap's middle would
+/// lose a line read astride it, its center on the far side in both strips.
+fn merge_strips(read: Vec<(u32, u32, Vec<OcrWord>)>, height: u32) -> Vec<OcrWord> {
+    // Each word kept so far: its strip, how far inside it it lies, and its
+    // place in reading order.
+    let mut cands: Vec<(usize, f64, usize, OcrWord)> = Vec::new();
+    for (si, (top, bottom, words)) in read.into_iter().enumerate() {
+        let (top, bottom) = (top as f64, bottom as f64);
+        let cut_top = top > 0.0;
+        let cut_bottom = bottom < height as f64;
+        for w in words {
+            if (cut_top && w.bbox[1] <= top + CUT_EDGE)
+                || (cut_bottom && w.bbox[3] >= bottom - CUT_EDGE)
+            {
+                continue;
+            }
+            let cy = (w.bbox[1] + w.bbox[3]) / 2.0;
+            let inside = match (cut_top, cut_bottom) {
+                (true, true) => (cy - top).min(bottom - cy),
+                (true, false) => cy - top,
+                (false, true) => bottom - cy,
+                (false, false) => f64::INFINITY,
+            };
+            let at = cands.len();
+            cands.push((si, inside, at, w));
+        }
+    }
+    let mut order: Vec<usize> = (0..cands.len()).collect();
+    order.sort_by(|&a, &b| cands[b].1.total_cmp(&cands[a].1).then(a.cmp(&b)));
+    let mut kept: Vec<usize> = Vec::new();
+    for i in order {
+        let twice = kept
+            .iter()
+            .any(|&k| cands[k].0 != cands[i].0 && covers_half(&cands[k].3.bbox, &cands[i].3.bbox));
+        if !twice {
+            kept.push(i);
+        }
+    }
+    kept.sort_unstable();
+    let mut out: Vec<Option<OcrWord>> = cands.into_iter().map(|c| Some(c.3)).collect();
+    kept.into_iter().filter_map(|i| out[i].take()).collect()
+}
+
+/// Whether two boxes share at least half of the smaller one.
+fn covers_half(a: &[f64; 4], b: &[f64; 4]) -> bool {
+    let w = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let h = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+    w * h >= 0.5 * area(a).min(area(b))
 }
 
 /// A detected line's box and baseline angle, from the detector's quad,
@@ -577,6 +701,73 @@ mod tests {
             Some(1033)
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_tall_image_is_read_in_overlapping_strips() {
+        // Within what the detector takes whole: no strips.
+        assert!(strips(1224, 1584).is_empty());
+        assert!(strips(9000, 1200).is_empty(), "a wide image is not cut");
+        // 1,200 × 9,000: strips of 2,000, a fifth overlapping, the last
+        // flush with the bottom.
+        let s = strips(1200, 9000);
+        assert_eq!(s[0], (0, 2000));
+        assert_eq!(s[1], (1600, 3600));
+        assert_eq!(*s.last().unwrap(), (7000, 9000));
+        assert!(
+            s.windows(2).all(|w| w[1].0 < w[0].1),
+            "each overlaps the next"
+        );
+        // A narrow receipt is scaled up to 736 across: shorter strips.
+        assert_eq!(strips(368, 6000)[0], (0, 1000));
+        // Too narrow to be worth strips.
+        assert!(strips(40, 9000).is_empty());
+    }
+
+    fn w(text: &str, y0: f64, y1: f64) -> OcrWord {
+        OcrWord {
+            text: text.into(),
+            bbox: [60.0, y0, 400.0, y1],
+            angle: Some(0.0),
+            conf: None,
+        }
+    }
+
+    #[test]
+    fn a_line_read_by_two_strips_is_kept_once() {
+        let texts =
+            |words: Vec<OcrWord>| -> Vec<String> { words.into_iter().map(|w| w.text).collect() };
+        // Strips 0-2000 and 1600-3600 of a 3,600-row image. "astride" sits
+        // on the overlap's middle (1800), read a pixel lower by the second
+        // strip: kept once. "cut" reaches the first strip's bottom edge and
+        // is whole in the second. "first" and "second" each lie in one.
+        let read = vec![
+            (
+                0,
+                2000,
+                vec![
+                    w("first", 100.0, 120.0),
+                    w("astride", 1791.0, 1810.0),
+                    w("cut", 1985.0, 2000.0),
+                ],
+            ),
+            (
+                1600,
+                3600,
+                vec![
+                    w("astride", 1792.0, 1811.0),
+                    w("cut", 1985.0, 2005.0),
+                    w("second", 3000.0, 3020.0),
+                ],
+            ),
+        ];
+        assert_eq!(
+            texts(merge_strips(read, 3600)),
+            ["first", "astride", "cut", "second"]
+        );
+        // Two lines one above the other in one strip are both kept.
+        let read = vec![(0, 2000, vec![w("a", 100.0, 120.0), w("b", 110.0, 130.0)])];
+        assert_eq!(texts(merge_strips(read, 2000)), ["a", "b"]);
     }
 
     #[test]

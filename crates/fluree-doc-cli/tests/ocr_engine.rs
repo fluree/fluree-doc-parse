@@ -57,12 +57,23 @@ fn scan_of(lines: &[&str]) -> Vec<u8> {
 /// A 400 × 400 pt page with one content stream, its resources, and an
 /// optional fifth object.
 fn pdf(content: &str, resources: &str, fifth: Option<Vec<u8>>) -> Vec<u8> {
+    pdf_sized(400, 400, content, resources, fifth)
+}
+
+/// As [`pdf`], on a page `width` × `height` pt.
+fn pdf_sized(
+    width: u32,
+    height: u32,
+    content: &str,
+    resources: &str,
+    fifth: Option<Vec<u8>>,
+) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << {resources} >> \
-             /Contents 4 0 R >>"
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+             /Resources << {resources} >> /Contents 4 0 R >>"
         )
         .into_bytes(),
         format!(
@@ -370,4 +381,59 @@ fn images_read_at_once_share_a_bounded_set_of_pipelines() {
         }
     });
     assert_eq!(engine.pipelines(), 2, "no more than asked for");
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_tall_capture_is_read_row_by_row() {
+    // 800 × 9,000 pixels of 220 short rows, 13 px high: read whole, the
+    // detector would shrink it to 178 × 2,000 and see none of them.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let rows: String = (0..220)
+        .map(|i| {
+            format!(
+                "BT /F1 6.5 Tf 30 {} Td (Row {i:03} account {}) Tj ET\n",
+                4480 - 20 * i,
+                4417 + 7 * i
+            )
+        })
+        .collect();
+    let bytes = pdf_sized(
+        400,
+        4500,
+        &rows,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        None,
+    );
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let mut image = None;
+    fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+    let image = image.unwrap();
+    assert_eq!((image.width, image.height), (800, 9000));
+    let reading = engine.read(&image).unwrap();
+    let mut seen = vec![0; 220];
+    for w in &reading.words {
+        let t: String = w.text.split_whitespace().collect();
+        if let Some(n) = t
+            .strip_prefix("Row")
+            .and_then(|r| r.get(..3)?.parse::<usize>().ok())
+        {
+            if n < 220 {
+                seen[n] += 1;
+            }
+        }
+        assert!(w.bbox[3] <= 9000.0, "boxes are in the whole image's rows");
+    }
+    let once = seen.iter().filter(|&&n| n == 1).count();
+    assert_eq!(
+        once,
+        220,
+        "rows read other than once: {:?}",
+        seen.iter()
+            .enumerate()
+            .filter(|(_, n)| **n != 1)
+            .collect::<Vec<_>>()
+    );
 }
