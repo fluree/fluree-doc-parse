@@ -50,20 +50,32 @@ pub fn note_mark(text_before: &str, mark: &str) -> bool {
     if mark.chars().all(|c| "*†‡§¶#".contains(c)) {
         return letters != 1 || closed;
     }
-    if mark.chars().all(char::is_alphabetic) {
-        let ordinal = ORDINALS.contains(&mark.to_lowercase().as_str());
+    // A note's letters: one, or a list of them (`a`, `e,f`).
+    let lettered = mark
+        .split(',')
+        .all(|p| !p.is_empty() && p.chars().all(char::is_alphabetic));
+    if lettered {
+        let ending = mark.to_lowercase();
+        let ordinal = !mark.contains(',') && ORDINALS.contains(&ending.as_str());
         if before.is_ascii_digit() {
             // After a small whole number a raised letter is its power (`2ᵖ`,
-            // `10ⁿ`); after a value, a note (`2026ʳ`, `1,234ᵃ`).
+            // `10ⁿ`); after a value, a note (`2026ʳ`, `1,234ᵃ`, `110ᵉ`).
             let number: String = word
                 .chars()
                 .rev()
                 .take_while(|c| c.is_ascii_digit() || matches!(c, ',' | '.'))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
                 .collect();
             let digits = number.chars().filter(char::is_ascii_digit).count();
             let parted = number.contains([',', '.']);
-            // Only a whole number takes an ordinal's ending.
-            return (digits >= 3 || parted) && !(ordinal && !parted);
+            // Only a whole number takes an ordinal's ending, and one it
+            // agrees with.
+            let ordinal = ordinal && !parted && ordinal_of(&number, &ending);
+            // A list of notes is no power, after any number (`66ᵉ,ʰ`).
+            let list = mark.contains(',');
+            return (digits >= 3 || parted || list) && !ordinal;
         }
         let roman = word.chars().count() >= 2 && word.chars().all(|c| "IVXLC".contains(c));
         return !(ordinal && roman) && (letters >= 2 || closed);
@@ -71,6 +83,30 @@ pub fn note_mark(text_before: &str, mark: &str) -> bool {
     mark.chars().all(|c| c.is_ascii_digit() || c == ',')
         && word.chars().all(char::is_alphabetic)
         && word.chars().count() >= 4
+}
+
+/// Whether `ending` is the ordinal ending of the whole number `number`.
+/// English endings agree with the number they follow (`1st`, `22nd`,
+/// `113th`, `118th`); the other languages' follow a number of one or two
+/// digits (`2e`, `21e`, `3º`), so a value's raised note (`110ᵉ`) is no
+/// ordinal.
+fn ordinal_of(number: &str, ending: &str) -> bool {
+    let Ok(n) = number.parse::<u64>() else {
+        return false;
+    };
+    match ending {
+        "st" | "nd" | "rd" | "th" => {
+            let agrees = match (n % 100, n % 10) {
+                (11..=13, _) => "th",
+                (_, 1) => "st",
+                (_, 2) => "nd",
+                (_, 3) => "rd",
+                _ => "th",
+            };
+            ending == agrees
+        }
+        _ => number.len() <= 2,
+    }
 }
 
 #[cfg(test)]
@@ -87,6 +123,10 @@ mod tests {
         assert!(note_mark("Lee", "†"));
         assert!(note_mark("1,234", "a"));
         assert!(note_mark("4.1", "b"));
+        assert!(note_mark("110", "e"));
+        assert!(note_mark("610", "e,f"));
+        assert!(note_mark("66", "e,h"));
+        assert!(note_mark("Benzene", "a,b"));
     }
 
     #[test]
@@ -96,6 +136,8 @@ mod tests {
         assert!(!note_mark("1", "st"));
         assert!(!note_mark("le 1", "er"));
         assert!(!note_mark("le XIX", "e"));
+        assert!(!note_mark("the 118", "th"));
+        assert!(!note_mark("le 21", "e"));
         assert!(!note_mark("", "a"));
         assert!(!note_mark("word ", "a"));
         assert!(!note_mark("e", "x"));

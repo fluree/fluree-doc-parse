@@ -113,8 +113,16 @@ baseline, right against the word it marks, and the text layer joins the two:
 apart from it, `Acrylonitrile a`, by the same rule as an HTML `<sup>`: a
 letter or symbol after a word, or a number after a word too long to be a
 unit. Raised text that belongs to its word stays in it: a unit's power
-(`cm3`), an exponent (`10⁶`, `2ᵖ`), an ordinal's ending (`1st`) and a
-formula's index (`ρwLv²`, `Vol(∂Ω)ⁿ`).
+(`cm3`), an ordinal's ending (`1st`) and a formula's index (`ρwLv²`,
+`Vol(∂Ω)ⁿ`).
+
+After a number, the same marks matter more, because the text layer turns
+them into another number. A note's letters stand apart from the value:
+`110ᵉ` reads `110 e`, and `610ᵉ,ᶠ` reads `610 e,f`. Raised digits and signs
+after a number keep their place as Unicode superscripts, whether a power
+or a note's number: `kg/10⁶ dscm`, not `kg/106 dscm`; `4.0x10⁻³`, not
+`4.0x10-3`; `2024³`, not `20243`. An ordinal's ending stays with the number
+it agrees with (`22nd`, `118th`, `21e`).
 
 **Text the producer states.** Where a PDF wraps what it draws in marked
 content with `/ActualText`, that text stands for the glyphs inside: a browser

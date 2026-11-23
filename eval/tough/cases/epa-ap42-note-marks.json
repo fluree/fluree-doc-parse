@@ -6,14 +6,19 @@
     "about": "US EPA AP-42, Chapter 2.4, municipal solid waste landfills (2024, public domain). Its tables mark row labels with note letters (a to f), set as smaller raised glyphs right against the word."
   },
   "notes": [
-    "A plain read of the text layer joins the letter to the word, Acrylonitrilea. A raised mark after a word is a note's; raised text that belongs to the word (a unit's power, an ordinal, a formula's index) stays in it."
+    "A plain read of the text layer joins the letter to the word, Acrylonitrilea. A raised mark after a word is a note's; raised text that belongs to the word (a unit's power, an ordinal, a formula's index) stays in it.",
+    "Raised marks after values (#67): a note's letters stand apart from the value, a power stays raised as Unicode superscripts."
   ],
   "checks": [
     {
       "id": "row-label-mark-apart",
       "found": "2026-11-23",
       "issue": "Acrylonitrile's note letter was read into the word: Acrylonitrilea.",
-      "cell": {"value": "53.06", "column": "Molecular Weight", "row": "Acrylonitrile a"}
+      "cell": {
+        "value": "53.06",
+        "column": "Molecular Weight",
+        "row": "Acrylonitrile a"
+      }
     },
     {
       "id": "control-device-mark-apart",
@@ -32,6 +37,30 @@
       "found": "2026-11-23",
       "issue": "A rating's note letter was read into the rating: Minimally Representativef.",
       "no_text": "Representativef"
+    },
+    {
+      "id": "unit-power-kept",
+      "found": "2026-11-23",
+      "issue": "The raised 6 of the header's unit was read flat, kg/106 dscm, a hundredfold off for anyone reading the unit.",
+      "text": "kg/10⁶ dscm"
+    },
+    {
+      "id": "value-exponent-kept",
+      "found": "2026-11-23",
+      "issue": "A value's raised exponent was read into its base: 4.0x10-3.",
+      "text": "4.0x10⁻³"
+    },
+    {
+      "id": "value-note-letter-apart",
+      "found": "2026-11-23",
+      "issue": "A value's raised note letter was read into it as an ordinal ending: 110e.",
+      "text": "110 e"
+    },
+    {
+      "id": "value-note-list-apart",
+      "found": "2026-11-23",
+      "issue": "As above, for a list of notes: 610e,f.",
+      "no_text": "610e,f"
     }
   ]
 }

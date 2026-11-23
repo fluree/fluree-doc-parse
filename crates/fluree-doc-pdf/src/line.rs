@@ -927,6 +927,23 @@ fn raised_mark(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Opti
     Some(mark)
 }
 
+/// Signs a power may carry beside its digits.
+const POWER_SIGNS: &[char] = &['-', '+', '\u{2212}', '\u{2013}'];
+
+/// A power's character as Unicode sets it raised.
+fn superscript(c: char) -> char {
+    match c {
+        '0' => '\u{2070}',
+        '1' => '\u{00B9}',
+        '2' => '\u{00B2}',
+        '3' => '\u{00B3}',
+        '4'..='9' => char::from_u32(0x2070 + (c as u32 - '0' as u32)).unwrap_or(c),
+        '+' => '\u{207A}',
+        '-' | '\u{2212}' | '\u{2013}' => '\u{207B}',
+        _ => c,
+    }
+}
+
 /// Least rise, as a share of the word's size, of a superscript's baseline.
 const MARK_RAISE: f64 = 0.15;
 
@@ -1052,6 +1069,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
     let mut sizes: Vec<f32> = Vec::new();
+    // A power being read: its size and baseline.
+    let mut exponent: Option<(f32, f64)> = None;
 
     for (k, &i) in idxs.iter().enumerate() {
         let g = &glyphs[i];
@@ -1089,11 +1108,34 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 }
                 // A note's mark raised after a word parts from it:
                 // `Acrylonitrile` and its `a`, not `Acrylonitrilea`.
-                if !text.ends_with(' ')
-                    && raised_mark(glyphs, idxs, k, adv)
-                        .is_some_and(|m| fluree_doc_model::marks::note_mark(&text, &m))
+                let raised = if text.ends_with(' ') {
+                    None
+                } else {
+                    raised_mark(glyphs, idxs, k, adv)
+                };
+                if raised
+                    .as_deref()
+                    .is_some_and(|m| fluree_doc_model::marks::note_mark(&text, m))
                 {
                     text.push(' ');
+                }
+                // A power raised after a number keeps its place: `10⁶` and
+                // `10⁻³` as superscripts, never flattened into the number as
+                // `106` and `10-3`.
+                let continues = exponent.is_some_and(|(size, y): (f32, f64)| {
+                    (g.font_size - size).abs() <= size * 0.1
+                        && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
+                });
+                if !continues {
+                    exponent = raised
+                        .as_deref()
+                        .filter(|m| {
+                            text.ends_with(|c: char| c.is_ascii_digit())
+                                && m.chars().any(|c| c.is_ascii_digit())
+                                && m.chars()
+                                    .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c))
+                        })
+                        .map(|_| (g.font_size, g.origin.1));
                 }
                 // End of the previous glyph in *pen* space, not ink space.
                 // A right overhang (`f`, `y`, `r`) makes the ink box extend
@@ -1109,7 +1151,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(acc) => acc.union(&b),
                     None => b,
                 });
-                text.push_str(&g.text);
+                if exponent.is_some() {
+                    text.extend(g.text.chars().map(superscript));
+                } else {
+                    text.push_str(&g.text);
+                }
             }
             None => {
                 // Outline-less but text-bearing: an explicit space. Emit it and
@@ -1643,10 +1689,27 @@ mod tests {
     #[test]
     fn raised_text_of_the_word_stays_in_it() {
         // A unit's power, an exponent, an ordinal's ending.
-        for (base, raised) in [("cm", "3"), ("10", "6"), ("1", "st"), ("e", "x")] {
+        for (base, raised) in [("cm", "3"), ("1", "st"), ("e", "x")] {
             let mut v = word(base, 0.0, false);
             v.extend(word(raised, 5.0 * base.len() as f64, true));
             assert_eq!(assemble(&v)[0].text, format!("{base}{raised}"));
+        }
+    }
+
+    #[test]
+    fn a_power_raised_after_a_number_keeps_its_place() {
+        // `kg/10⁶ dscm`, `4.0x10⁻³`: read flat, the unit is a hundredfold
+        // off and the value a different number.
+        for (base, raised, want) in [("kg/10", "6", "kg/10⁶"), ("4.0x10", "-3", "4.0x10⁻³")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+        // A note's letters after a value stand apart, a list after any.
+        for (base, raised, want) in [("110", "e", "110 e"), ("66", "e,h", "66 e,h")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
         }
     }
 
