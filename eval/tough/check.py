@@ -116,6 +116,9 @@ class Reading:
             (title(s), s.get("doc:sectionLevel"), title(held_by[s["@id"]]) if s["@id"] in held_by else None)
             for s in sections
         ]
+        # Each page's printed number, by its place in the file from 1.
+        pages = next((n["doc:pages"]["@value"] for n in graph if "doc:pages" in n), [])
+        self.folios = {p["pageIndex"] + 1: p.get("folio") for p in pages}
 
     def offsets(self):
         """Elements whose string is not what their offsets cut."""
@@ -200,6 +203,13 @@ def run_check(check, reading):
             return True, None
         near = [s for s in reading.sections if s[0] == want["title"]]
         return False, f"as (title, level, within): {near[:2]}" if near else "no section has this title"
+    if "folio" in check:
+        # The page, by its place in the file from 1, carries this printed
+        # number, or none where `value` is null: what a reader reassembling
+        # the pages goes by.
+        want = check["folio"]
+        got = reading.folios.get(want["page"])
+        return got == want["value"], None if got == want["value"] else f"folio {got!r}"
     if "no_section" in check:
         # No section headed by a title that begins with this: a line that
         # must stay text, wherever and however often it occurs.

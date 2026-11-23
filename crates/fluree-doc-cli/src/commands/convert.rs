@@ -664,7 +664,7 @@ fn convert_bytes(
         running_text: a
             .furniture
             .iter()
-            .filter(|(text, _)| fluree_doc_pdf::furniture::names_something(text))
+            .filter(|(text, vary)| fluree_doc_pdf::furniture::says_something(text, *vary))
             .map(|(text, _)| text.clone())
             .collect(),
         info: fluree_doc_pdf::info::read(&raw),
