@@ -212,7 +212,9 @@ impl Reader {
             return Ok(());
         };
         let end = self.text.len();
-        if end > begin {
+        // A link in a table cell has no element to be kept on (the cell's
+        // text leaves as the table's), so it is not spent either.
+        if end > begin && !self.in_table {
             let link = Link::uri(dest);
             self.budget.spend_links(std::slice::from_ref(&link))?;
             self.links.push((begin, end, link));
@@ -624,6 +626,25 @@ mod tests {
             + text * TEXT_BYTES
             + 100 * (ELEMENT_BYTES + 4 * CELL_BYTES + 2 * TEXT_BYTES);
         assert_eq!(within(need).unwrap()[0].links.as_ref().unwrap().len(), 100);
+        assert!(within(need - 1).is_err());
+    }
+
+    #[test]
+    fn a_link_in_a_table_cell_is_not_spent() {
+        // Its anchor's text is the cell's, and the link is not kept: the
+        // table costs what its cells and the parser's tree do, 2 cells
+        // that hold text of a byte, and 11 marks (6 pipes, 3 line ends, the
+        // link's brackets) at a slot and a half (16).
+        let src = "| [a](bc) |\n|---|\n| x |\n";
+        let need = (2 + 16) * CELL_BYTES + FLAT_ELEMENT_BYTES + 2 * (FLAT_CELL_BYTES + TEXT_BYTES);
+        let within =
+            |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
+        let table = within(need).unwrap();
+        assert_eq!(
+            table[0].cells,
+            Some(vec![vec!["a".to_string()], vec!["x".to_string()]])
+        );
+        assert!(table[0].links.is_none());
         assert!(within(need - 1).is_err());
     }
 
