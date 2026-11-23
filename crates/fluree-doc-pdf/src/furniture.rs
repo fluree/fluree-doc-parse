@@ -683,6 +683,28 @@ fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: boo
     scrub_with(cell, furniture, bare_number_is_furniture, false)
 }
 
+/// Longest furniture string, in characters other than spaces, that is
+/// removed from a cell only as the whole cell.
+const SHORT_FURNITURE: usize = 3;
+
+/// `out[i..j]` stands as whole words: no letter or digit runs on into it
+/// at either end, nor a number through a decimal or grouping mark (`3` in
+/// `3,3`).
+fn whole(out: &str, i: usize, j: usize) -> bool {
+    let before: Vec<char> = out[..i].chars().rev().take(2).collect();
+    let after: Vec<char> = out[j..].chars().take(2).collect();
+    let first = out[i..j].chars().next();
+    let last = out[i..j].chars().last();
+    let joins = |near: &[char], edge: Option<char>| match near {
+        [c, ..] if c.is_alphanumeric() => true,
+        [c, d, ..] => {
+            matches!(c, '.' | ',') && d.is_ascii_digit() && edge.is_some_and(|e| e.is_ascii_digit())
+        }
+        _ => false,
+    };
+    !joins(&before, first) && !joins(&after, last)
+}
+
 /// `ends_only`: remove a match only where nothing but whitespace stands
 /// before it or after it.
 fn scrub_with(
@@ -700,10 +722,23 @@ fn scrub_with(
             continue;
         }
         if !*digits_vary {
+            // A figure's callout (`1`), a short mark (`FCC`) or a run of
+            // numbers (`4, 5`) is furniture in a cell only as the whole of
+            // it: cut from inside the cell's text, `3` took the digit out of
+            // `30 po-lb` and `3,3 Nm`.
+            let p = pat.trim();
+            let short = p.chars().filter(|c| !c.is_whitespace()).count() <= SHORT_FURNITURE
+                || !p.chars().any(char::is_alphabetic);
+            if short {
+                if out.trim() == p {
+                    out.clear();
+                }
+                continue;
+            }
             let mut from = 0;
             while let Some(k) = out[from..].find(pat.as_str()) {
                 let i = from + k;
-                if at_end(&out, i, i + pat.len()) {
+                if at_end(&out, i, i + pat.len()) && whole(&out, i, i + pat.len()) {
                     out.replace_range(i..i + pat.len(), " ");
                     from = 0;
                 } else {
@@ -781,7 +816,7 @@ fn scrub_with(
                 }
                 pos = digit_end + seg.len();
             }
-            if at_end(&out, start, pos) {
+            if at_end(&out, start, pos) && whole(&out, start, pos) {
                 out.replace_range(start..pos, " ");
                 from = 0;
             } else if segs[0].is_empty() {
@@ -805,6 +840,35 @@ fn scrub_with(
 #[cfg(test)]
 mod scrub_tests {
     use super::{scrub_block, scrub_cell};
+
+    #[test]
+    fn a_short_furniture_string_is_cut_only_as_the_whole_cell() {
+        // A figure's callouts taken for furniture: they must not take the
+        // digits out of a torque, a step's number or a figure reference.
+        let f: Vec<(String, bool)> = ["3", "1", "FCC", "4, 5"]
+            .iter()
+            .map(|p| (p.to_string(), false))
+            .collect();
+        assert_eq!(
+            scrub_cell("Serrer les vis à 30 po-lb (3,3 Nm).", &f),
+            "Serrer les vis à 30 po-lb (3,3 Nm)."
+        );
+        assert_eq!(scrub_cell("STEP 1:", &f), "STEP 1:");
+        assert_eq!(scrub_cell("See Figure 1.", &f), "See Figure 1.");
+        assert_eq!(scrub_cell("FCC Part 15", &f), "FCC Part 15");
+        assert_eq!(scrub_cell("3", &f), "");
+        assert_eq!(scrub_cell(" 4, 5 ", &f), "");
+    }
+
+    #[test]
+    fn a_furniture_string_is_cut_from_a_cell_only_as_whole_words() {
+        let f = vec![("www.example.com".to_string(), false)];
+        assert_eq!(scrub_cell("Total 12 www.example.com", &f), "Total 12");
+        assert_eq!(
+            scrub_cell("see www.example.community", &f),
+            "see www.example.community"
+        );
+    }
 
     #[test]
     fn a_header_phrase_inside_a_sentence_stays() {
