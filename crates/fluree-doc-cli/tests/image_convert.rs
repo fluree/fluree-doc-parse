@@ -188,9 +188,12 @@ fn words_named_after_the_image_are_read() {
     std::fs::write(&input, jpeg(None)).unwrap();
     let w = dir.join("words");
     std::fs::create_dir_all(&w).unwrap();
-    std::fs::write(w.join("photo.json"), words(300.0, 100.0, "Invoice")).unwrap();
+    // A line long enough not to leave the page nearly empty, which would be
+    // reported as read but sparse (`OcrSparse`).
+    let line = "Invoice 2026-0418, services rendered in October";
+    std::fs::write(w.join("photo.json"), words(300.0, 100.0, line)).unwrap();
     let out = convert(&input, &["--ocr-words", w.to_str().unwrap()]);
-    assert!(out.to_string().contains("Invoice"), "{out}");
+    assert!(out.to_string().contains(line), "{out}");
     assert!(document(&out).get("doc:unreadPages").is_none(), "{out}");
     let _ = std::fs::remove_dir_all(dir);
 }

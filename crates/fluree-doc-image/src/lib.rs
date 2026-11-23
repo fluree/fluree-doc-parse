@@ -21,7 +21,7 @@
 
 use fluree_doc_pdf::ocr::{self, Crop, Injected};
 use fluree_doc_pdf::Document;
-use fluree_doc_vision::{OcrEngine, Pixels};
+use fluree_doc_vision::{Layout, OcrEngine, Pixels};
 use image::{DynamicImage, ExtendedColorType, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
@@ -137,7 +137,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         other => other.to_rgba8(),
     };
     let (w, h) = rgba.dimensions();
-    let pixels = Pixels::new(w, h, rgba.into_raw()).ok_or("the image is empty")?;
+    let pixels = Pixels::new(w, h, Layout::Rgba8, rgba.into_raw()).ok_or("the image is empty")?;
     let more_pages = format == Some(image::ImageFormat::Tiff) && tiff_pages(bytes) > 1;
     let truncated = format == Some(image::ImageFormat::Jpeg) && !jpeg_is_whole(bytes);
     Ok(Decoded {

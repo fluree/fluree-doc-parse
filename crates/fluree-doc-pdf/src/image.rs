@@ -204,6 +204,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
 /// [`as_document`] builds it, for a caller that has decoded the image (and
 /// turned it upright) itself. `bitonal` says the image is one bit deep.
 pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
+    let grid = (width, height);
     let (width, height) = (f64::from(width), f64::from(height));
     let bbox = BBox {
         x0: 0.0,
@@ -221,6 +222,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
                 // One pixel per unit: 72 per inch of the page's units.
                 ppi: Some(72.0),
                 bitonal,
+                grid,
             }],
             rules: Vec::new(),
             fills: Vec::new(),

@@ -43,7 +43,8 @@ fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
         |c| {
             w = c.pixels.width;
             h = c.pixels.height;
-            gray = c.pixels.rgba.chunks_exact(4).map(|p| p[0]).collect();
+            assert_eq!(c.pixels.layout, fluree_doc_vision::Layout::Rgba8);
+            gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
         },
     );
     let image = [
@@ -67,12 +68,23 @@ fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
 /// A 400 × 400 pt page with one content stream, its resources, and an
 /// optional fifth object.
 fn pdf(content: &str, resources: &str, fifth: Option<Vec<u8>>) -> Vec<u8> {
+    pdf_sized(400, 400, content, resources, fifth)
+}
+
+/// As [`pdf`], on a page `width` × `height` pt.
+fn pdf_sized(
+    width: u32,
+    height: u32,
+    content: &str,
+    resources: &str,
+    fifth: Option<Vec<u8>>,
+) -> Vec<u8> {
     let mut objects: Vec<Vec<u8>> = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
         format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Resources << {resources} >> \
-             /Contents 4 0 R >>"
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] \
+             /Resources << {resources} >> /Contents 4 0 R >>"
         )
         .into_bytes(),
         format!(
@@ -120,6 +132,7 @@ fn a_scanned_page_reads_as_text() {
         &engine,
         None,
         fluree_doc_pdf::escalate::CropScale::Stored,
+        0,
     );
     assert!(pass.failed.is_empty(), "{:?}", pass.failed);
     let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
@@ -161,7 +174,7 @@ fn an_ocr_flag_beats_the_words_the_environment_names() {
     std::fs::create_dir_all(&words).unwrap();
     std::fs::write(
         words.join("scan_p0_full.json"),
-        r#"{"coords":"pdf","words":[{"text":"From the sidecar","box":[40,40,200,60]}]}"#,
+        r#"{"coords":"page","words":[{"text":"From the sidecar","box":[40,40,200,60]}]}"#,
     )
     .unwrap();
     let input = dir.join("scan.pdf");
@@ -196,6 +209,65 @@ fn an_ocr_flag_beats_the_words_the_environment_names() {
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn render_routed_crops_for_ocr_under_the_documents_limit() {
+    // A text page with three small captures, and a limit of two: the crops
+    // `convert --ocr` would read, and a note for the one left.
+    let dir = scratch("limit");
+    std::fs::write(dir.join("config.toml"), "[ocr]\nmax_crops = 2\n").unwrap();
+    let text: String = (0..12)
+        .map(|i| {
+            format!(
+                "BT /F1 9 Tf 40 {} Td (Every account opened this year.) Tj ET\n",
+                380 - 12 * i
+            )
+        })
+        .collect();
+    let shots: String = [40, 90, 140]
+        .map(|y| format!("q 100 0 0 15 40 {y} cm /Im0 Do Q\n"))
+        .concat();
+    let mask = [
+        b"<< /Type /XObject /Subtype /Image /Width 200 /Height 30 /ImageMask true \
+           /BitsPerComponent 1 /Length 750 >>\nstream\n"
+            .to_vec(),
+        vec![0; 750],
+        b"\nendstream".to_vec(),
+    ]
+    .concat();
+    let input = dir.join("form.pdf");
+    std::fs::write(
+        &input,
+        pdf(
+            &format!("{text}{shots}"),
+            "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> \
+             /XObject << /Im0 5 0 R >>",
+            Some(mask),
+        ),
+    )
+    .unwrap();
+    let crops = dir.join("crops");
+    let out = fdoc(&dir)
+        .current_dir(&dir)
+        .args(["dev", "render-routed", "--ocr-regions"])
+        .arg(&input)
+        .arg(&crops)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("leaving 1 unread") && err.contains("ocr.max_crops"),
+        "{err}"
+    );
+    let manifest = std::fs::read_to_string(crops.join("manifest.jsonl")).unwrap();
+    assert_eq!(
+        manifest.matches("\"small_region\"").count(),
+        2,
+        "{manifest}"
     );
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -326,11 +398,72 @@ fn images_read_at_once_share_a_bounded_set_of_pipelines() {
     };
     let engine = OarEngine::open(&dir, &opts).unwrap();
     assert_eq!(engine.pipelines(), 1, "one built when it opens");
-    let image = fluree_doc_vision::Pixels::new(400, 120, vec![255; 400 * 120 * 4]).unwrap();
+    let image = fluree_doc_vision::Pixels::new(
+        400,
+        120,
+        fluree_doc_vision::Layout::Luma8,
+        vec![255; 400 * 120],
+    )
+    .unwrap();
     std::thread::scope(|s| {
         for _ in 0..6 {
             s.spawn(|| engine.read(&image).unwrap());
         }
     });
     assert_eq!(engine.pipelines(), 2, "no more than asked for");
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_tall_capture_is_read_row_by_row() {
+    // 800 × 9,000 pixels of 220 short rows, 13 px high: read whole, the
+    // detector would shrink it to 178 × 2,000 and see none of them.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let rows: String = (0..220)
+        .map(|i| {
+            format!(
+                "BT /F1 6.5 Tf 30 {} Td (Row {i:03} account {}) Tj ET\n",
+                4480 - 20 * i,
+                4417 + 7 * i
+            )
+        })
+        .collect();
+    let bytes = pdf_sized(
+        400,
+        4500,
+        &rows,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        None,
+    );
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let mut image = None;
+    fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+    let image = image.unwrap();
+    assert_eq!((image.width, image.height), (800, 9000));
+    let reading = engine.read(&image).unwrap();
+    let mut seen = vec![0; 220];
+    for w in &reading.words {
+        let t: String = w.text.split_whitespace().collect();
+        if let Some(n) = t
+            .strip_prefix("Row")
+            .and_then(|r| r.get(..3)?.parse::<usize>().ok())
+        {
+            if n < 220 {
+                seen[n] += 1;
+            }
+        }
+        assert!(w.bbox[3] <= 9000.0, "boxes are in the whole image's rows");
+    }
+    let once = seen.iter().filter(|&&n| n == 1).count();
+    assert_eq!(
+        once,
+        220,
+        "rows read other than once: {:?}",
+        seen.iter()
+            .enumerate()
+            .filter(|(_, n)| **n != 1)
+            .collect::<Vec<_>>()
+    );
 }

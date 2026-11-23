@@ -221,6 +221,27 @@ fn hex(digest: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn each_pin_is_the_hash_build_py_writes_for_its_file() {
+        // The pack's builder holds the same eight hashes, in `RUNTIMES` (an
+        // output path, then its hash) and `MODELS` (`path: hash`): a pin
+        // changed in one place and not the other is a build that refuses
+        // every pack it can be given.
+        let build = include_str!("../../../tools/ocr-assets/build.py");
+        for (path, hash) in PINNED {
+            let quoted = format!("\"{path}\"");
+            let at = build
+                .find(&quoted)
+                .unwrap_or_else(|| panic!("build.py does not write {path}"));
+            let after = build[at + quoted.len()..]
+                .trim_start_matches(|c: char| c == ',' || c == ':' || c.is_whitespace());
+            assert!(
+                after.starts_with(&format!("\"{hash}\"")),
+                "build.py pins {path} to another hash than {hash}"
+            );
+        }
+    }
+
     /// A directory holding the four files for this platform, each holding
     /// its own path, and the pins they match.
     fn fixture(test: &str, tamper: Option<&str>) -> (PathBuf, Vec<(String, String)>) {

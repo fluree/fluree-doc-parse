@@ -92,6 +92,7 @@ threads = 1
 | `engine` | the built-in engine `convert` reads pixels with; `oar-ocr` is the one this build has |
 | `models` | the OCR assets directory (models and ONNX Runtime) |
 | `threads` | ONNX Runtime threads per crop read (default 1: a batch runs one per worker) |
+| `max_crops` | most crops the engine reads in one document; past it pages read whole come first, then routed regions, then small ones, and a note names how many were left (default 1000, `0` for no limit). Separate from `escalation.max_crops`: a scanned page is one crop, and a model's 200 would leave page 201 of a long scan unread |
 
 `--ocr` and `--models` override these per run, and `FDOC_OCR` and
 `FDOC_OCR_MODELS` override the file. Unlike the model reader, OCR runs on the

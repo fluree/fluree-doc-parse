@@ -23,12 +23,30 @@ about its structure, `render-routed --ocr-regions` gives the page its doubt's
 reason and crops its raster regions apart, so `fdoc ocr` reads the regions,
 as `convert --ocr` does, and not the page.
 
+An image is read only if its own pixels can hold a line of text: 10 px on its
+short side, whatever size it is drawn at (measured: the engine reads a line
+exactly from 10 px tall, and misreads it below). A form's checkboxes drawn
+from 8 × 8 masks and rules stretched from a 1 × 1 mask are not read, and an
+image drawn twice in one place is read once. A document's crops are capped
+by [`ocr.max_crops`](config.md#ocr) (default 1000): past it, pages read whole
+come first, then routed regions, then small ones, and a note on stderr says
+how many were left. `render-routed --ocr-regions` adds the crops `convert
+--ocr` reads, from the same selection and under the same cap; the model's own
+crops (pages, routed regions) are written whatever the cap, so past it the
+three-step path also reads those.
+
 Given a crops directory, `fdoc ocr` reads its `manifest.jsonl` and only the crops
 whose words a page takes, by their `reason`: `scanned`, `near_blank`,
 `broken_text`, `region` and `small_region`. A page asked for on a doubt about its
 structure already has its text, and a table crop asks about structure; both are
 left for a model. Given image files (PNG, JPEG, TIFF), it reads them all,
 decoded upright by their EXIF orientation; of a multi-page TIFF, the first page.
+
+An image taller than the detector takes at full size (2,000 px, or less for
+an image under 736 px wide, which it scales up) is read in strips that overlap
+by a fifth, each line kept once, rather than shrunk: a 1,200 × 9,000 capture
+of 220 rows 13 px high read none of them shrunk, and all of them in strips. A
+wide image is still shrunk, since a cut across it would cut its lines.
 
 ## Options
 
@@ -70,13 +88,38 @@ directory no more writable than the `fdoc` binary. A relative `--models` is
 taken from the working directory. If ONNX Runtime fails to load, nothing is
 loaded in its place: the library given is the only one tried.
 
+### Updates
+
+`fdoc` loads exactly ONNX Runtime 1.28.0 and these PP-OCRv6 small files, by
+the hashes compiled into it, and does not redistribute them. So a security fix
+in ONNX Runtime reaches users through a new `fdoc` release, not through a new
+library dropped into the assets directory (which this build would refuse): the
+release updates the pins in `crates/fluree-doc-vision/src/assets.rs` and the
+versions and hashes in `tools/ocr-assets/build.py` together (a unit test checks
+they agree, and CI builds the pack and reads with it), and a deployment then
+rebuilds its assets directory with that release's `build.py`.
+
+### Building
+
+The engine is built into the `fdoc` binary by default (the `ocr` feature of
+`fluree-doc-cli`); it runs only when asked for, with `--ocr` and an assets
+directory. The libraries (`fluree-doc-pdf`, `fluree-doc-vision`, …) build no
+engine unless their own feature asks for it (`fluree-doc-vision/oar`), so a
+crate that only parses pulls in no OCR dependency.
+
 ONNX Runtime is loaded into the process at run time rather than linked, so
-`fdoc` carries the engine's code (about 6 MB, 5 MB stripped) and no native
-library. A build that is fully static (musl) cannot load it and has no built-in
-engine; it still reads `--ocr-words`. Building the engine needs a C compiler:
-oar-ocr depends on a tokenizer library that compiles C (Oniguruma), though
-none of it ends up in `fdoc`. `cargo build --no-default-features` leaves the
-engine out.
+`fdoc` carries the engine's code and no native library: 5.8 MB more in a
+release build (21.8 MB against 16.0 MB without the engine). Building the engine
+needs a C compiler: oar-ocr depends on a tokenizer library that compiles C
+(Oniguruma), though none of it ends up in `fdoc`. `cargo build
+--no-default-features` leaves the engine out, and needs no C compiler.
+
+The engine runs where ONNX Runtime 1.28.0 is published: Linux x64 and arm64
+(glibc), macOS on Apple silicon, Windows x64 and arm64. There is none for
+Intel macOS (`osx-x64`, which the package no longer ships), and a fully static
+build (musl) cannot load a library at all: there, `--ocr oar-ocr` stops with
+an error (no ONNX Runtime for the platform, or the library failing to load),
+and `--ocr-words` still reads words an outside engine wrote.
 
 ## Exit codes
 

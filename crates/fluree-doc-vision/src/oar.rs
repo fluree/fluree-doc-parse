@@ -3,16 +3,18 @@
 //! oar-ocr runs its models on ONNX Runtime, a native library. It is not
 //! linked into this crate: [`OarEngine::open`] loads it from the assets
 //! directory ([`crate::assets`]), after checking its hash, so a build carries
-//! the engine's code (about 6 MB in `fdoc`, 5 MB stripped) and a deployment
+//! the engine's code (5.8 MB in a release build of `fdoc`) and a deployment
 //! ships the library and the models for its platform beside the binary.
 //!
 //! The detector's settings are the ones the corpus benchmark measured
 //! (detection sized on the image's short side at 736 px, at most 2,000 px on
 //! the long one): each word box this engine gives is a detected line, turned
-//! upright about its center, with the line's angle.
+//! upright about its center, with the line's angle. An image taller than the
+//! detector takes without shrinking it is read in overlapping strips
+//! ([`strips`]), and its lines kept once.
 
 use crate::assets::{Assets, Runtime};
-use crate::{Coords, OcrEngine, OcrWord, Pixels, WordReading};
+use crate::{Coords, Layout, OcrEngine, OcrWord, Pixels, WordReading};
 use oar_ocr::core::config::OrtSessionConfig;
 use oar_ocr::domain::tasks::TextDetectionConfig;
 use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
@@ -212,9 +214,9 @@ impl OarEngine {
             box_threshold: 0.45,
             unclip_ratio: 1.4,
             max_candidates: 3000,
-            limit_side_len: Some(736),
+            limit_side_len: Some(DET_SHORT_SIDE),
             limit_type: Some(LimitType::Min),
-            max_side_len: Some(2000),
+            max_side_len: Some(DET_LONG_SIDE),
         };
         // The models as the bytes that were checked, not read again by path.
         OAROCRBuilder::new(self.det.clone(), self.rec.clone(), PathBuf::new())
@@ -240,47 +242,24 @@ impl OcrEngine for OarEngine {
     }
 
     fn read(&self, image: &Pixels) -> Result<WordReading, String> {
-        // Composited over white: a crop's transparent pixels are paper.
-        let rgb: Vec<u8> = image
-            .rgba
-            .chunks_exact(4)
-            .flat_map(|p| {
-                let a = p[3] as u16;
-                let over = |c: u8| ((c as u16 * a + 255 * (255 - a)) / 255) as u8;
-                [over(p[0]), over(p[1]), over(p[2])]
-            })
-            .collect();
-        let img = image::RgbImage::from_raw(image.width, image.height, rgb)
+        // oar-ocr reads RGB: a grey image is spread to three channels, and
+        // a crop's transparent pixels are composited over white paper.
+        let img = image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
             .ok_or("the image's buffer does not match its size")?;
+        let bands = strips(image.width, image.height);
         let lease = self.pipes.take(|| self.pipeline())?;
-        let result = lease.predict(vec![img]);
-        drop(lease);
-        let result = result
-            .map_err(|e| format!("OCR: {e}"))?
-            .pop()
-            .ok_or("OCR returned no result")?;
-        let mut words = Vec::new();
-        for r in &result.text_regions {
-            let Some(text) = r.text.as_ref() else {
-                continue;
-            };
-            let p = &r.bounding_box.points;
-            if p.len() != 4 || text.trim().is_empty() {
-                continue;
+        let words = if bands.is_empty() {
+            read_one(&lease, img, 0)?
+        } else {
+            let mut read = Vec::new();
+            for &(top, bottom) in &bands {
+                let strip =
+                    image::imageops::crop_imm(&img, 0, top, image.width, bottom - top).to_image();
+                read.push((top, bottom, read_one(&lease, strip, top)?));
             }
-            let (bbox, angle) = quad_box([
-                (p[0].x as f64, p[0].y as f64),
-                (p[1].x as f64, p[1].y as f64),
-                (p[2].x as f64, p[2].y as f64),
-                (p[3].x as f64, p[3].y as f64),
-            ]);
-            words.push(OcrWord {
-                text: text.to_string(),
-                bbox,
-                angle: Some((angle * 100.0).round() / 100.0),
-                conf: r.confidence.map(f64::from),
-            });
-        }
+            merge_strips(read, image.height)
+        };
+        drop(lease);
         Ok(WordReading {
             coords: Coords::Px,
             width: Some(image.width as f64),
@@ -289,6 +268,143 @@ impl OcrEngine for OarEngine {
             words,
         })
     }
+}
+
+/// The detector's sizing (see [`OarEngine::pipeline`]): an image whose short
+/// side is under [`DET_SHORT_SIDE`] is scaled up to it, then one whose long
+/// side is over [`DET_LONG_SIDE`] is scaled down to that.
+const DET_SHORT_SIDE: u32 = 736;
+const DET_LONG_SIDE: u32 = 2000;
+
+/// Shortest strip worth reading on its own, in pixels: a narrower image is
+/// read whole.
+const MIN_STRIP: u32 = 200;
+
+/// The rows a tall image is read in, `(top, bottom)` each, when read whole
+/// the detector would shrink it; empty to read it whole.
+///
+/// Read whole, a capture 1,200 pixels wide and 9,000 tall is shrunk to 267 ×
+/// 2,000 for detection, and its short rows go unseen. Cut across its height,
+/// each strip as long as the detector takes without shrinking it at the
+/// image's width, it is detected at full size. The strips overlap by a fifth
+/// of their length, so a line cut by one strip's edge is whole in the next;
+/// a wide image is not cut, as its lines would be.
+fn strips(width: u32, height: u32) -> Vec<(u32, u32)> {
+    let len = if width >= DET_LONG_SIDE {
+        width
+    } else if width >= DET_SHORT_SIDE {
+        DET_LONG_SIDE
+    } else {
+        (DET_LONG_SIDE as u64 * width as u64 / DET_SHORT_SIDE as u64) as u32
+    };
+    if height <= len || len < MIN_STRIP {
+        return Vec::new();
+    }
+    let step = len - len / 5;
+    let mut out = Vec::new();
+    let mut top = 0;
+    while top + len < height {
+        out.push((top, top + len));
+        top += step;
+    }
+    out.push((height - len, height));
+    out
+}
+
+/// Read one image, its rows starting at `dy` in the image the words are
+/// given for.
+fn read_one(ocr: &OAROCR, img: image::RgbImage, dy: u32) -> Result<Vec<OcrWord>, String> {
+    let result = ocr
+        .predict(vec![img])
+        .map_err(|e| format!("OCR: {e}"))?
+        .pop()
+        .ok_or("OCR returned no result")?;
+    let dy = dy as f64;
+    let mut words = Vec::new();
+    for r in &result.text_regions {
+        let Some(text) = r.text.as_ref() else {
+            continue;
+        };
+        let p = &r.bounding_box.points;
+        if p.len() != 4 || text.trim().is_empty() {
+            continue;
+        }
+        let (bbox, angle) = quad_box([
+            (p[0].x as f64, p[0].y as f64 + dy),
+            (p[1].x as f64, p[1].y as f64 + dy),
+            (p[2].x as f64, p[2].y as f64 + dy),
+            (p[3].x as f64, p[3].y as f64 + dy),
+        ]);
+        words.push(OcrWord {
+            text: text.to_string(),
+            bbox,
+            angle: Some((angle * 100.0).round() / 100.0),
+            conf: r.confidence.map(f64::from),
+        });
+    }
+    Ok(words)
+}
+
+/// How near a strip's cut edge, in pixels, a word's box may reach before it
+/// is taken for one the cut went through.
+const CUT_EDGE: f64 = 2.0;
+
+/// The words of an image read in strips, `(top, bottom, words)` each in
+/// the image's rows, as one reading.
+///
+/// A word reaching a strip's cut edge is cut, and dropped: the strips
+/// overlap by more than a line, so the next one holds it whole. A line in
+/// an overlap is read by both strips, its boxes a pixel or two apart: of two
+/// boxes from different strips covering each other at least half, the one
+/// further inside its strip is kept. A rule by the overlap's middle would
+/// lose a line read astride it, its center on the far side in both strips.
+fn merge_strips(read: Vec<(u32, u32, Vec<OcrWord>)>, height: u32) -> Vec<OcrWord> {
+    // Each word kept so far: its strip, how far inside it it lies, and its
+    // place in reading order.
+    let mut cands: Vec<(usize, f64, usize, OcrWord)> = Vec::new();
+    for (si, (top, bottom, words)) in read.into_iter().enumerate() {
+        let (top, bottom) = (top as f64, bottom as f64);
+        let cut_top = top > 0.0;
+        let cut_bottom = bottom < height as f64;
+        for w in words {
+            if (cut_top && w.bbox[1] <= top + CUT_EDGE)
+                || (cut_bottom && w.bbox[3] >= bottom - CUT_EDGE)
+            {
+                continue;
+            }
+            let cy = (w.bbox[1] + w.bbox[3]) / 2.0;
+            let inside = match (cut_top, cut_bottom) {
+                (true, true) => (cy - top).min(bottom - cy),
+                (true, false) => cy - top,
+                (false, true) => bottom - cy,
+                (false, false) => f64::INFINITY,
+            };
+            let at = cands.len();
+            cands.push((si, inside, at, w));
+        }
+    }
+    let mut order: Vec<usize> = (0..cands.len()).collect();
+    order.sort_by(|&a, &b| cands[b].1.total_cmp(&cands[a].1).then(a.cmp(&b)));
+    let mut kept: Vec<usize> = Vec::new();
+    for i in order {
+        let twice = kept
+            .iter()
+            .any(|&k| cands[k].0 != cands[i].0 && covers_half(&cands[k].3.bbox, &cands[i].3.bbox));
+        if !twice {
+            kept.push(i);
+        }
+    }
+    kept.sort_unstable();
+    let mut out: Vec<Option<OcrWord>> = cands.into_iter().map(|c| Some(c.3)).collect();
+    kept.into_iter().filter_map(|i| out[i].take()).collect()
+}
+
+/// Whether two boxes share at least half of the smaller one.
+fn covers_half(a: &[f64; 4], b: &[f64; 4]) -> bool {
+    let w = (a[2].min(b[2]) - a[0].max(b[0])).max(0.0);
+    let h = (a[3].min(b[3]) - a[1].max(b[1])).max(0.0);
+    let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
+    w * h >= 0.5 * area(a).min(area(b))
 }
 
 /// A detected line's box and baseline angle, from the detector's quad,
@@ -326,6 +442,95 @@ fn quad_box(p: [(f64, f64); 4]) -> ([f64; 4], f64) {
 /// PaddleOCR's).
 const TALL_LINE: f64 = 1.5;
 
+/// Most pixels an image file may hold to be read: 128 Mi, 512 MiB as RGBA.
+pub const MAX_PIXELS: u64 = 128 << 20;
+
+/// Longest side an image file may have, in pixels: what bounds one row's
+/// buffer, so a 1-pixel-high image a hundred million wide is refused too.
+pub const MAX_SIDE: u32 = 65_535;
+
+/// What a PNG decoder may allocate besides the image: a colour profile or
+/// a text chunk, inflated. A profile runs to kilobytes; a file of a few
+/// hundred kilobytes can inflate one to a gigabyte, held by the header read
+/// alone under the image crate's default (512 MiB). Past it, the decoder
+/// drops the profile and reads on.
+const PNG_CHUNK_BUDGET: u64 = 16 << 20;
+
+/// Decoding limits: at most [`MAX_SIDE`] a side, `alloc` bytes.
+fn limits(alloc: u64) -> image::Limits {
+    let mut l = image::Limits::default();
+    l.max_image_width = Some(MAX_SIDE);
+    l.max_image_height = Some(MAX_SIDE);
+    l.max_alloc = Some(alloc);
+    l
+}
+
+/// Decode an image file (PNG, JPEG, TIFF, …) into [`Pixels`], in the
+/// layout it holds: grey stays one byte a pixel, colour three, and only an
+/// image with transparency takes four.
+///
+/// Under explicit limits: an image over [`MAX_PIXELS`] or [`MAX_SIDE`] is
+/// refused from its header, before its pixels are allocated, and a PNG's
+/// chunks get [`PNG_CHUNK_BUDGET`].
+pub fn load_pixels(path: &Path) -> Result<Pixels, String> {
+    use image::ImageDecoder;
+    let at = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let file = || -> Result<_, String> {
+        Ok(std::io::BufReader::new(
+            std::fs::File::open(path).map_err(|e| at(&e))?,
+        ))
+    };
+    // 16-bit RGBA, the widest layout a decoder gives, at the pixel cap.
+    let image_budget = MAX_PIXELS * 8;
+    let reader = image::ImageReader::new(file()?)
+        .with_guessed_format()
+        .map_err(|e| at(&e))?;
+    let img = if reader.format() == Some(image::ImageFormat::Png) {
+        // The image crate gives a PNG decoder one budget for its chunks and
+        // the image both; this one is built with the chunks' own.
+        let mut dec = png_decoder(file()?).map_err(|e| at(&e))?;
+        within_cap(dec.dimensions()).map_err(|e| at(&e))?;
+        dec.set_limits(limits(image_budget)).map_err(|e| at(&e))?;
+        image::DynamicImage::from_decoder(dec).map_err(|e| at(&e))?
+    } else {
+        let mut reader = reader;
+        reader.limits(limits(image_budget));
+        let dec = reader.into_decoder().map_err(|e| at(&e))?;
+        within_cap(dec.dimensions()).map_err(|e| at(&e))?;
+        image::DynamicImage::from_decoder(dec).map_err(|e| at(&e))?
+    };
+    let (w, h) = (img.width(), img.height());
+    let color = img.color();
+    let (layout, data) = match img {
+        image::DynamicImage::ImageLuma8(b) => (Layout::Luma8, b.into_raw()),
+        image::DynamicImage::ImageRgb8(b) => (Layout::Rgb8, b.into_raw()),
+        image::DynamicImage::ImageRgba8(b) => (Layout::Rgba8, b.into_raw()),
+        other if color.has_alpha() => (Layout::Rgba8, other.into_rgba8().into_raw()),
+        other if color.has_color() => (Layout::Rgb8, other.into_rgb8().into_raw()),
+        other => (Layout::Luma8, other.into_luma8().into_raw()),
+    };
+    Pixels::new(w, h, layout, data).ok_or_else(|| format!("{}: empty image", path.display()))
+}
+
+/// A PNG decoder that has read the file's header under
+/// [`PNG_CHUNK_BUDGET`].
+fn png_decoder<R: std::io::BufRead + std::io::Seek>(
+    r: R,
+) -> image::ImageResult<image::codecs::png::PngDecoder<R>> {
+    image::codecs::png::PngDecoder::with_limits(r, limits(PNG_CHUNK_BUDGET))
+}
+
+/// An image of `(width, height)` within [`MAX_PIXELS`].
+fn within_cap((w, h): (u32, u32)) -> Result<(), String> {
+    let n = w as u64 * h as u64;
+    if n > MAX_PIXELS {
+        return Err(format!(
+            "{w} × {h} pixels: more than the {MAX_PIXELS} an image may hold to be read"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,6 +566,208 @@ mod tests {
         drop(pipes.take(|| Ok(1)).unwrap());
         assert_eq!(*pipes.take(|| Ok(2)).unwrap(), 1);
         assert_eq!(pipes.built(), 1);
+    }
+
+    #[test]
+    fn an_image_file_keeps_its_layout() {
+        let dir = std::env::temp_dir().join(format!("fdoc-load-pixels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let grey = dir.join("grey.png");
+        image::GrayImage::from_pixel(30, 10, image::Luma([200]))
+            .save(&grey)
+            .unwrap();
+        let colour = dir.join("colour.png");
+        image::RgbImage::from_pixel(30, 10, image::Rgb([1, 2, 3]))
+            .save(&colour)
+            .unwrap();
+        let clear = dir.join("clear.png");
+        image::GrayAlphaImage::from_pixel(30, 10, image::LumaA([0, 0]))
+            .save(&clear)
+            .unwrap();
+        let g = load_pixels(&grey).unwrap();
+        assert_eq!((g.layout, g.data.len()), (Layout::Luma8, 300));
+        assert_eq!(load_pixels(&colour).unwrap().layout, Layout::Rgb8);
+        let c = load_pixels(&clear).unwrap();
+        assert_eq!(c.layout, Layout::Rgba8, "transparency is kept");
+        assert_eq!(c.to_rgb()[..3], [255, 255, 255], "and reads as paper");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A PNG of one grey pixel claiming `(width, height)`, and with an
+    /// `iCCP` chunk holding `profile` zero bytes when given.
+    fn png_claiming(width: u32, height: u32, profile: Option<usize>) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut c = 0xffff_ffffu32;
+            for &b in bytes {
+                c ^= b as u32;
+                for _ in 0..8 {
+                    c = if c & 1 == 1 {
+                        0xedb8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            out.extend((data.len() as u32).to_be_bytes());
+            let body = [kind, data].concat();
+            out.extend(&body);
+            out.extend(crc(&body).to_be_bytes());
+        }
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let ihdr = [width.to_be_bytes(), height.to_be_bytes()].concat();
+        chunk(&mut out, b"IHDR", &[&ihdr[..], &[8, 0, 0, 0, 0]].concat());
+        if let Some(n) = profile {
+            chunk(
+                &mut out,
+                b"iCCP",
+                &[b"p\0\0".as_slice(), &zlib_zeros(n)].concat(),
+            );
+        }
+        // One row: filter byte 0, one grey pixel, as a stored zlib block.
+        chunk(
+            &mut out,
+            b"IDAT",
+            &[0x78, 0x01, 1, 2, 0, 0xfd, 0xff, 0, 128, 0, 0x81, 0, 0x81],
+        );
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    /// A zlib stream of `n` zero bytes, `n - 1` a multiple of 258: one
+    /// literal zero, then matches of 258 a distance of 1 back, in a block
+    /// of the fixed codes, a few bytes per 64 KiB.
+    fn zlib_zeros(n: usize) -> Vec<u8> {
+        assert_eq!((n - 1) % 258, 0);
+        let mut bits: Vec<bool> = Vec::new();
+        let mut put = |code: u32, len: u32, msb_first: bool| {
+            for i in 0..len {
+                let bit = if msb_first { len - 1 - i } else { i };
+                bits.push(code >> bit & 1 == 1);
+            }
+        };
+        put(1, 1, false); // final block
+        put(1, 2, false); // fixed codes
+        put(0x30, 8, true); // literal 0
+        for _ in 0..(n - 1) / 258 {
+            put(0b1100_0101, 8, true); // length 258
+            put(0, 5, true); // distance 1
+        }
+        put(0, 7, true); // end of block
+        let mut out = vec![0x78, 0x01];
+        for byte in bits.chunks(8) {
+            out.push(byte.iter().enumerate().map(|(i, &b)| (b as u8) << i).sum());
+        }
+        let b = (n % 65521) as u32;
+        out.extend(((b << 16) | 1).to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn an_image_file_is_read_under_explicit_limits() {
+        let dir = std::env::temp_dir().join(format!("fdoc-limits-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, bytes: Vec<u8>| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        // The fixture is a real PNG: one pixel reads.
+        let one = load_pixels(&file("one.png", png_claiming(1, 1, None))).unwrap();
+        assert_eq!((one.width, one.height, one.layout), (1, 1, Layout::Luma8));
+        // A header claiming 20,000 × 20,000 is refused before any pixel is
+        // allocated, and so is a side past the longest.
+        let e = load_pixels(&file("big.png", png_claiming(20_000, 20_000, None))).unwrap_err();
+        assert!(e.contains("more than"), "{e}");
+        assert!(load_pixels(&file("wide.png", png_claiming(100_000, 1, None))).is_err());
+        // A colour profile that inflates past the chunk budget is dropped
+        // as it is read, the image read on; a small one is kept.
+        let open = |p: &Path| {
+            png_decoder(std::io::BufReader::new(std::fs::File::open(p).unwrap())).unwrap()
+        };
+        use image::ImageDecoder;
+        let bomb = file("bomb.png", png_claiming(1, 1, Some(258 * 130_000 + 1)));
+        assert!(
+            std::fs::metadata(&bomb).unwrap().len() < 250_000,
+            "33 MB from a small file"
+        );
+        assert_eq!(open(&bomb).icc_profile().unwrap(), None);
+        assert!(load_pixels(&bomb).is_ok());
+        let small = file("icc.png", png_claiming(1, 1, Some(258 * 4 + 1)));
+        assert_eq!(
+            open(&small).icc_profile().unwrap().map(|p| p.len()),
+            Some(1033)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_tall_image_is_read_in_overlapping_strips() {
+        // Within what the detector takes whole: no strips.
+        assert!(strips(1224, 1584).is_empty());
+        assert!(strips(9000, 1200).is_empty(), "a wide image is not cut");
+        // 1,200 × 9,000: strips of 2,000, a fifth overlapping, the last
+        // flush with the bottom.
+        let s = strips(1200, 9000);
+        assert_eq!(s[0], (0, 2000));
+        assert_eq!(s[1], (1600, 3600));
+        assert_eq!(*s.last().unwrap(), (7000, 9000));
+        assert!(
+            s.windows(2).all(|w| w[1].0 < w[0].1),
+            "each overlaps the next"
+        );
+        // A narrow receipt is scaled up to 736 across: shorter strips.
+        assert_eq!(strips(368, 6000)[0], (0, 1000));
+        // Too narrow to be worth strips.
+        assert!(strips(40, 9000).is_empty());
+    }
+
+    fn w(text: &str, y0: f64, y1: f64) -> OcrWord {
+        OcrWord {
+            text: text.into(),
+            bbox: [60.0, y0, 400.0, y1],
+            angle: Some(0.0),
+            conf: None,
+        }
+    }
+
+    #[test]
+    fn a_line_read_by_two_strips_is_kept_once() {
+        let texts =
+            |words: Vec<OcrWord>| -> Vec<String> { words.into_iter().map(|w| w.text).collect() };
+        // Strips 0-2000 and 1600-3600 of a 3,600-row image. "astride" sits
+        // on the overlap's middle (1800), read a pixel lower by the second
+        // strip: kept once. "cut" reaches the first strip's bottom edge and
+        // is whole in the second. "first" and "second" each lie in one.
+        let read = vec![
+            (
+                0,
+                2000,
+                vec![
+                    w("first", 100.0, 120.0),
+                    w("astride", 1791.0, 1810.0),
+                    w("cut", 1985.0, 2000.0),
+                ],
+            ),
+            (
+                1600,
+                3600,
+                vec![
+                    w("astride", 1792.0, 1811.0),
+                    w("cut", 1985.0, 2005.0),
+                    w("second", 3000.0, 3020.0),
+                ],
+            ),
+        ];
+        assert_eq!(
+            texts(merge_strips(read, 3600)),
+            ["first", "astride", "cut", "second"]
+        );
+        // Two lines one above the other in one strip are both kept.
+        let read = vec![(0, 2000, vec![w("a", 100.0, 120.0), w("b", 110.0, 130.0)])];
+        assert_eq!(texts(merge_strips(read, 2000)), ["a", "b"]);
     }
 
     #[test]

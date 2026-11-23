@@ -354,8 +354,9 @@ pub struct UnreadPage {
     #[serde(rename = "pageIndex")]
     pub index: usize,
     /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`; or
-    /// `LaterPage`, a page after the first of a multi-page image file, which
-    /// is not read.
+    /// `OcrSparse`, a page an OCR reading read whole that still holds next
+    /// to no text; or `LaterPage`, a page after the first of a multi-page
+    /// image file, which is not read.
     pub reason: String,
 }
 
