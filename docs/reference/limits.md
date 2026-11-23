@@ -476,6 +476,38 @@ available, had the batch killed, silently; they now convert one at a time.
 And a group limited to 9 GB, after 4 GB written to a file had left 3.1 GB
 of cache counted in its use, no longer lowers `-j 2` to one.
 
+## Renders
+
+A page is rendered whole, for `fdoc render` and for the crops a model or
+an OCR engine reads, which are cut from a render of their page: at the
+model's 2x, a 3,000 x 3,000 pt page is 36 million pixels, a 6,000 pt one
+144 million (576 MB of RGBA). And the renderer sizes its canvas in 16 bits
+and pads it: a page 32,764 points wide and three high, 393,000 pixels at
+2x, asked for 16 GiB and aborted the process; a canvas 65,528 pixels wide
+aborted, 65,527 drew. So no page is drawn with more than 64 million pixels
+(256 MB), nor with a side longer than 32,767 pixels: one the scale asked
+for would draw larger is drawn at the scale that fits
+(`fluree_doc_pdf::render::fitted_scale`, which counts the pixels as the
+renderer sizes its canvas, in `f32`, each side rounded down), never cut,
+and the render, and each crop cut from it, records the scale it was drawn
+at (`Raster::scale`, `RawCrop::scale`), which is what turns its boxes into
+pixels. A page within both is drawn at the scale asked for, as before: the
+same call, the same pixels. The largest page the format allows, 14,400
+points a side, is drawn whole at 2x. The 32,764-point page is drawn
+32,767 pixels wide, in 12 MB. `fdoc render` says which bound drew a page
+smaller (`drawn at 0.33x (1000x1000 px), the most 1000000 pixels allow
+(--max-render-pixels)`, or `..., the longest side a render may take, 32767
+pixels`, which no flag raises), and a page whose short side comes to less
+than a pixel at that scale (a billion points by three) is not drawn, and
+said to be.
+
+Rendered by `fdoc render` at 2x, a 3,000 pt page, 36 million pixels, is
+within it and peaks at 300 MB, as before; under `--max-render-pixels
+16000000` it is drawn at 1.33x, 4,000 pixels a side, and peaks at 140 MB.
+A 6,000 pt page peaked at 1.17 GB; drawn at 1.33x, 64 million pixels, it
+peaks at 530 MB. What a page's content costs to draw, beyond its pixels,
+is not bounded here ([A PDF's content](#a-pdfs-content)).
+
 ## Coordinates
 
 No cell past Excel's grid, row 1,048,576 or column 16,384, is read, in any

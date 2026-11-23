@@ -42,9 +42,48 @@ pub(crate) fn run(path: &Path, outdir: &Path, scale: f32, pages: Option<&str>) -
             if keep.as_ref().is_some_and(|k| !k.contains(&index)) {
                 continue;
             }
-            let Some(png) =
-                fluree_doc_pdf::render::page(&pdf, index, scale).and_then(|r| r.to_png())
-            else {
+            let raster = fluree_doc_pdf::render::page(&pdf, index, scale);
+            // A page past the pixels a render may take, or past its
+            // longest side, is drawn smaller: its bboxes then take its own
+            // scale to become pixels.
+            if let Some(r) = raster.as_ref().filter(|r| r.scale != scale) {
+                let held = match pdf
+                    .pages()
+                    .get(index)
+                    .and_then(|p| fluree_doc_pdf::render::page_shrunk_by(p, scale))
+                {
+                    Some(fluree_doc_pdf::render::Shrunk::Side) => format!(
+                        "the longest side a render may take, {} pixels",
+                        fluree_doc_pdf::render::MAX_RENDER_SIDE
+                    ),
+                    _ => format!(
+                        "the most {} pixels allow (--max-render-pixels)",
+                        fluree_doc_model::budget::limits().render_pixels
+                    ),
+                };
+                eprintln!(
+                    "note: {}: page {} drawn at {}x ({}x{} px), {held}",
+                    f.display(),
+                    index + 1,
+                    r.scale,
+                    r.width,
+                    r.height,
+                );
+            }
+            // A page so long and thin that its short side is under a pixel
+            // at that scale draws nothing.
+            if let Some(r) = raster.as_ref().filter(|r| r.width == 0 || r.height == 0) {
+                eprintln!(
+                    "error: {}: page {} is less than a pixel {} at {}x, not drawn",
+                    f.display(),
+                    index + 1,
+                    if r.height == 0 { "high" } else { "wide" },
+                    r.scale
+                );
+                failed += 1;
+                continue;
+            }
+            let Some(png) = raster.and_then(|r| r.to_png()) else {
                 eprintln!(
                     "error: {}: page {} would not render",
                     f.display(),

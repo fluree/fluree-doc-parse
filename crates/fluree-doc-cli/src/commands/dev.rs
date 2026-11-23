@@ -1812,14 +1812,16 @@ pub(crate) fn render_pages(path: &Path, outdir: &Path) {
         let pages = pdf.pages();
         let cache = RenderCache::new();
         let white: AlphaColor<Srgb> = AlphaColor::new([1.0, 1.0, 1.0, 1.0]);
-        let settings = RenderSettings {
-            x_scale: VLM_RENDER_SCALE,
-            y_scale: VLM_RENDER_SCALE,
-            bg_color: white,
-            ..Default::default()
-        };
         let stem = f.file_stem().and_then(|x| x.to_str()).unwrap_or("doc");
         for (pi, page) in pages.iter().enumerate() {
+            // Within the pixels and the side a render may take.
+            let scale = fluree_doc_pdf::render::page_scale(page, VLM_RENDER_SCALE);
+            let settings = RenderSettings {
+                x_scale: scale,
+                y_scale: scale,
+                bg_color: white,
+                ..Default::default()
+            };
             let pix = render(
                 page,
                 &cache,

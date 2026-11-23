@@ -161,8 +161,9 @@ What is bounded, for an engine:
   4,000 px on the long edge once read a tall capture with a tenth of its lines
   lost.
 - A crop is cut from a render of its whole page, and that render is bounded
-  outright: at most 64 million pixels (256 MB of RGBA) and 65,535 on a side,
-  for every crop of the page, the 2× ones included. A page past what 2× draws
+  outright: at most 64 million pixels (256 MB of RGBA, held once) and 32,767
+  on a side (the renderer aborted on a canvas 65,528 wide), for every crop of
+  the page, the 2× ones included. A page past what 2× draws
   within those (about 4,000 points square) is drawn below 2×, as large as
   they allow.
 - A page is rendered at most four times for its crops: past four scales, a

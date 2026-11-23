@@ -187,3 +187,68 @@ fn a_limit_that_does_not_read_stops_before_any_document() {
     let o = fdoc(&dir, &["completions", "bash"], &[("FDOC_MAX_MEMORY", "")]);
     assert!(o.status.success(), "{}", stderr(&o));
 }
+
+/// A one-page PDF `side` points square, with nothing on it.
+fn square_page(side: u32) -> Vec<u8> {
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {side} {side}] >>"),
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = out.len();
+    out.extend(b"xref\n0 4\n0000000000 65535 f \n");
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    out.extend(format!("trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").bytes());
+    out
+}
+
+/// The width and height a PNG declares.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    let be = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    (be(16), be(20))
+}
+
+#[test]
+fn a_page_past_the_render_pixels_is_drawn_smaller_and_said() {
+    let dir = scratch("render");
+    let pdf = dir.join("poster.pdf");
+    std::fs::write(&pdf, square_page(3000)).unwrap();
+    let (pdf, out) = (pdf.to_str().unwrap(), dir.join("out"));
+    let out = out.to_str().unwrap();
+    let o = fdoc(
+        &dir,
+        &["render", pdf, out, "--max-render-pixels", "1000000"],
+        &[],
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let e = stderr(&o);
+    assert!(e.contains("page 1 drawn at 0.33"), "{e}");
+    assert!(e.contains("(--max-render-pixels)"), "{e}");
+    let (w, h) = png_size(&std::fs::read(dir.join("out/poster_p0.png")).unwrap());
+    assert!(w * h <= 1_000_000 && w >= 999, "{w}x{h}");
+    // A page within it is drawn as asked, without a word.
+    let small = dir.join("letter.pdf");
+    std::fs::write(&small, square_page(300)).unwrap();
+    let o = fdoc(
+        &dir,
+        &[
+            "render",
+            small.to_str().unwrap(),
+            out,
+            "--max-render-pixels",
+            "1000000",
+        ],
+        &[],
+    );
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    let png = std::fs::read(dir.join("out/letter_p0.png")).unwrap();
+    assert_eq!(png_size(&png), (600, 600));
+}

@@ -86,9 +86,10 @@ pub const MAX_STORED_PPI: f64 = 300.0;
 /// page's size.
 pub const MAX_PAGE_PIXELS: f64 = 64.0e6;
 
-/// The longest side, in pixels, the renderer can draw: it sizes its canvas
-/// in 16 bits, and a page drawn wider loses what lies past the edge.
-pub const MAX_RENDER_SIDE: f64 = 65_535.0;
+/// The longest side, in pixels, a page is drawn with
+/// ([`crate::render::MAX_RENDER_SIDE`]): the renderer sizes its canvas in
+/// 16 bits, and aborted the process on a side of 65,528.
+pub const MAX_RENDER_SIDE: f64 = crate::render::MAX_RENDER_SIDE as f64;
 
 /// The most renders of one page its crops are cut from. Crops at their
 /// stored resolution each ask for their own scale, and a page of hundreds of
@@ -870,6 +871,14 @@ fn cut_crops(
     let pages = pdf.pages();
     let cache = RenderCache::new();
     let draw = |page, scale| render_page(page, &cache, scale);
+    // A page past the pixels a render may take is drawn at the scale that
+    // fits, and its crops are cut, and say they were, at that scale.
+    let scale_of = |pi: usize, r: Option<&BBox>| {
+        let asked = scale_of(pi, r);
+        pages
+            .get(pi)
+            .map_or(asked, |p| crate::render::page_scale(p, asked))
+    };
     for (page_idx, regions) in jobs {
         let Some(page) = pages.get(*page_idx) else {
             continue;
