@@ -93,17 +93,35 @@ impl Block {
     /// see a spurious boundary mid-sentence.
     pub fn text(&self) -> String {
         let mut out = String::new();
+        let mut prev: Option<&Line> = None;
         for l in &self.lines {
             if !out.is_empty() {
                 // A hyphen at a line end is usually a soft break introduced by
                 // wrapping; joining without it restores the original word.
+                // A script that sets no spaces between its words wraps between
+                // any two characters, and a line it wrapped joins the next
+                // without one: `有限公` and `司` are one name. A line that
+                // stops short of the block's edge was ended by hand, and the
+                // next is another item (an office over a company's name).
+                let wrapped = prev
+                    .is_some_and(|p| p.bbox.x1 >= self.bbox.x1 - p.font_size.max(1.0) as f64 * 1.5);
+                let cjk = wrapped
+                    && out
+                        .chars()
+                        .next_back()
+                        .is_some_and(crate::line::wraps_anywhere)
+                    && l.text
+                        .chars()
+                        .next()
+                        .is_some_and(crate::line::wraps_anywhere);
                 if out.ends_with('-') {
                     out.pop();
-                } else {
+                } else if !cjk {
                     out.push(' ');
                 }
             }
             out.push_str(&l.text);
+            prev = Some(l);
         }
         out
     }
@@ -705,6 +723,41 @@ mod tests {
             bold: false,
             opens_with_script: false,
         }
+    }
+
+    #[test]
+    fn a_line_of_chinese_wrapped_mid_word_joins_without_a_space() {
+        let block = |a: &str, b: &str| Block {
+            lines: vec![l(a, 50.0, 100.0, 11.0), l(b, 50.0, 114.0, 11.0)],
+            bbox: BBox {
+                x0: 50.0,
+                y0: 100.0,
+                x1: 350.0,
+                y1: 125.0,
+            },
+            page: 0,
+            font_size: 11.0,
+            bold: false,
+            gap_above: None,
+            marker: None,
+        };
+        assert_eq!(
+            block("deliver it to 青松纸业有限公", "司.").text(),
+            "deliver it to 青松纸业有限公司."
+        );
+        // A line ended short of the edge is another item.
+        let mut b = block("放送課", "株式会社");
+        b.lines[0].bbox.x1 = 90.0;
+        assert_eq!(b.text(), "放送課 株式会社");
+        // Korean spaces its words and wraps at the spaces; Latin too.
+        assert_eq!(
+            block("한국어 문장이", "이어집니다").text(),
+            "한국어 문장이 이어집니다"
+        );
+        assert_eq!(
+            block("the order", "was confirmed").text(),
+            "the order was confirmed"
+        );
     }
 
     #[test]

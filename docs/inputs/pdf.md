@@ -99,6 +99,14 @@ between two, is ignored, and the word reads whole. A space drawn in
 sequence, where the pen stopped after the word before it, is always kept,
 however tightly the next word follows.
 
+**Lines wrapped inside a word.** Chinese and Japanese set no spaces
+between words, so a line may wrap between any two characters. A line that
+runs to its paragraph's edge and ends on such a character joins the next
+without a space: `青` at a line's end and `松纸业有限公司` on the next read
+as one name. A line that stops short was ended by hand, and the next is
+another item, so a space keeps them apart. Korean spaces its words and
+wraps at the spaces, and joins with one.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
