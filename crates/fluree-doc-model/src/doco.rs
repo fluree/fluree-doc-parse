@@ -353,6 +353,41 @@ pub fn table_projection(
 /// horizontal span's text sits at its first column and a vertical span is
 /// repeated into each row — and appears once however many rows or columns
 /// it covers (`Item`, not `Item / Item`).
+/// The width of one record in a table wrapped into side-by-side copies of
+/// its columns, or `None` for a table whose rows are records.
+///
+/// A cross-reference list fills the page by wrapping: `F.P. DIESEL | MAHLE
+/// CLEVITE` four times across, each pair a record of its own, so a value in
+/// the fourth pair belongs to the key beside it, not to the row's first
+/// cell. The header says so: the copies' value columns are named alike, and
+/// each copy opens with a key column named apart from them. The key's name
+/// may change from copy to copy as the list moves from one competitor's
+/// numbers to the next, so only the value columns are matched.
+///
+/// Every label of a copy names a column: letters, and no figures. A table
+/// with grouped columns repeats its names too, under a banner each: `2025 |
+/// 2026` under `Median` and again under `Range`. Its column names are the
+/// paths through the banners and differ, and where the banners were not
+/// read its labels are years. A spec table whose first row of values was
+/// taken for its header (`267MB/s | 275MB/s` across models) repeats values,
+/// not names, and one value repeated across models names no key at all.
+fn record_width(header: &[String]) -> Option<usize> {
+    let n = header.len();
+    let label = |c: usize| header[c].trim();
+    let name =
+        |t: &str| t.chars().any(char::is_alphabetic) && !t.chars().any(|c| c.is_ascii_digit());
+    (2..=n / 2).filter(|&k| n.is_multiple_of(k)).find(|&k| {
+        (0..n / k).all(|j| {
+            let key = label(j * k);
+            name(key)
+                && (1..k).all(|i| {
+                    let value = label(j * k + i);
+                    name(value) && value == label(i) && value != key
+                })
+        })
+    })
+}
+
 fn column_headers(
     rows: &[Vec<String>],
     n_header: usize,
@@ -1098,6 +1133,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         ),
                     };
                     let subs = e.sub_headers.clone().unwrap_or_default();
+                    // A table wrapped into side-by-side copies of its columns
+                    // holds one record per copy on each row.
+                    let width = record_width(&header).unwrap_or(ncols).max(1);
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
@@ -1113,8 +1151,9 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             .and_then(|s| rows[*s].first())
                             .map(|t| t.trim())
                             .filter(|t| !t.is_empty());
-                        let row_header = row.first().map(|c| c.trim()).unwrap_or("");
                         for (c, cell) in row.iter().enumerate() {
+                            let first = c - c % width;
+                            let row_header = row.get(first).map(|t| t.trim()).unwrap_or("");
                             let value = cell.trim();
                             if value.is_empty() {
                                 continue;
@@ -1131,7 +1170,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 em.nodes[cell_idx]
                                     .insert("doc:sectionLabel".into(), Value::String(s.into()));
                             }
-                            if c > 0 && !row_header.is_empty() {
+                            if c > first && !row_header.is_empty() {
                                 em.nodes[cell_idx].insert(
                                     "doc:rowHeader".into(),
                                     Value::String(row_header.into()),
@@ -1469,6 +1508,113 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("Revenue\t10"));
+    }
+
+    /// Cells of a one-header-row table, keyed by value.
+    fn cells_of(rows: &[&[&str]]) -> Vec<Value> {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            rows.iter()
+                .map(|r| r.iter().map(|c| c.to_string()).collect())
+                .collect(),
+        );
+        t.header_rows = Some(1);
+        find(&graph(&[t]), "doc:TableCell")
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    fn row_header_of<'a>(cells: &'a [Value], value: &str) -> &'a Value {
+        &cells.iter().find(|c| c["doc:cellValue"] == value).unwrap()["doc:rowHeader"]
+    }
+
+    #[test]
+    fn a_table_wrapped_into_copies_of_its_columns_holds_a_record_per_copy() {
+        // An interchange list wrapped four times across the page.
+        let cells = cells_of(&[
+            &[
+                "F.P. DIESEL",
+                "MAHLE CLEVITE",
+                "F.P. DIESEL",
+                "MAHLE CLEVITE",
+                "FEL-PRO INC.",
+                "MAHLE CLEVITE",
+                "FEL-PRO INC.",
+                "MAHLE CLEVITE",
+            ],
+            &[
+                "FP-1804353",
+                "213-1725",
+                "FP3802711",
+                "225-3523",
+                "11853",
+                "P18562",
+                "55350",
+                "J17829",
+            ],
+        ]);
+        assert_eq!(row_header_of(&cells, "J17829"), "55350");
+        assert_eq!(row_header_of(&cells, "225-3523"), "FP3802711");
+        assert_eq!(row_header_of(&cells, "213-1725"), "FP-1804353");
+        // A key opens its own record and has no row header.
+        assert_eq!(row_header_of(&cells, "55350"), &Value::Null);
+        // Three columns to a record.
+        let cells = cells_of(&[
+            &[
+                "COMP NO.",
+                "COMPETITOR",
+                "MAHLE CLEVITE",
+                "COMP NO.",
+                "COMPETITOR",
+                "MAHLE CLEVITE",
+            ],
+            &[
+                "14079426",
+                "GMC",
+                "601-8027",
+                "1811191-C3",
+                "IHC",
+                "211-2562",
+            ],
+        ]);
+        assert_eq!(row_header_of(&cells, "IHC"), "1811191-C3");
+        assert_eq!(row_header_of(&cells, "211-2562"), "1811191-C3");
+    }
+
+    #[test]
+    fn columns_named_again_are_not_always_copies_of_a_record() {
+        // Years repeated under banners that were not read: the row is one
+        // record, labelled by its first cell.
+        let cells = cells_of(&[
+            &["2025", "2026", "Longer run", "2025", "2026", "Longer run"],
+            &["1.6", "1.8", "1.8", "1.4–1.7", "1.7–2.1", "1.7–2.0"],
+        ]);
+        assert_eq!(row_header_of(&cells, "1.7–2.1"), "1.6");
+        // One value repeated across models names no key.
+        let cells = cells_of(&[
+            &[
+                "Non-operating temperature",
+                "-40 to 70",
+                "-40 to 70",
+                "-40 to 70",
+            ],
+            &["Shock", "300G", "300G", "300G"],
+        ]);
+        assert_eq!(row_header_of(&cells, "300G"), "Shock");
+        // A first row of values taken for a header, repeating across models.
+        let cells = cells_of(&[
+            &[
+                "Data transfer rate",
+                "267MB/s",
+                "275MB/s",
+                "267MB/s",
+                "275MB/s",
+                "267MB/s",
+            ],
+            &["Cache", "256MB", "512MB", "256MB", "512MB", "256MB"],
+        ]);
+        assert_eq!(row_header_of(&cells, "512MB"), "Cache");
     }
 
     #[test]

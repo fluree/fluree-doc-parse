@@ -269,6 +269,14 @@ A table with no header row has no `doc:columnHeader` on its cells, and
 value` is one: each value's `doc:rowHeader` is its label. See [a list of
 fields](../design/tables.md#a-list-of-fields-has-no-header-row).
 
+A list wrapped to fill the page sets its columns again side by side:
+`Competitor | Part no. | Competitor | Part no.`, each copy a record of its
+own. Where the copies' value columns are named alike and each copy opens
+with a key column named apart from them, a cell's `doc:rowHeader` is the
+key of its own copy, not the row's first cell. `doc:rowIndex` and
+`doc:columnIndex` stay the position on the page, so the cells sharing a
+`doc:rowIndex` there are several records, one per copy.
+
 A cell's offsets slice the projection to its `doc:cellValue`, which is its
 text, so it carries no `nif:isString` repeating it. A value copied into a cell
 by a merge has no place in the projection and no offsets.
