@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "insee-IR269_IPI_Sept26.pdf",
+    "url": "https://www.insee.fr/fr/statistiques/fichier/version-html/9119425/IR269_IPI_Sept26.pdf",
+    "sha256": "9f05ec47109a7609e2545aa632799c4d325c759c058b02f1edd3ffe38aba65b2",
+    "about": "INSEE Informations rapides no. 269, industrial production index for September 2026 (Licence Ouverte), printed from a browser. The space at each place a line wraps is drawn after the line's last word, at a position inside an earlier word of it."
+  },
+  "notes": [
+    "pdftotext reads the words whole. The stray spaces are drawn out of turn and set on a letter's ink, which a space between two words never is."
+  ],
+  "checks": [
+    {
+      "id": "row-label-whole",
+      "found": "2026-11-23",
+      "issue": "Produits read Pro duits in a row label.",
+      "text": "[CI] Fab. Produits informatiques, électroniques et optiques"
+    },
+    {
+      "id": "header-whole",
+      "found": "2026-11-23",
+      "issue": "Août and Septembre read A oût and Septembr e in the column headers.",
+      "cell": {"value": "-0,1", "column": "Septembre 2026 / Août 2026", "row": "(F43) Travaux de construction spécialisés"}
+    },
+    {
+      "id": "no-split-words",
+      "found": "2026-11-23",
+      "issue": "As above, for papier.",
+      "no_text": "papi er"
+    },
+    {
+      "id": "no-split-vapeur",
+      "found": "2026-11-23",
+      "issue": "As above, for vapeur.",
+      "no_text": "vapeu r"
+    }
+  ]
+}

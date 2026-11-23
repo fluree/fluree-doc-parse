@@ -78,6 +78,17 @@ from their shape instead:
   leaders between a table's labels and its figures, a decimal point, the
   stops in `U.S.`.
 
+**Spaces drawn out of place.** A space a PDF encodes is taken as a word
+boundary, since it is better evidence than the width of a gap. Some
+producers, though, draw a space somewhere other than where it belongs. A
+page printed from a browser can carry the space from each line wrap at a
+position inside an earlier word of that line, and read in place it splits
+the word: `Pro duits`, `Septembr e 2026`. A space drawn out of sequence
+with the letters on either side of it, and set on a letter rather than
+between two, is ignored, and the word reads whole. A space drawn in
+sequence, where the pen stopped after the word before it, is always kept,
+however tightly the next word follows.
+
 **NFKC normalization.** Ligatures arrive as single codepoints; searching
 un-normalized output for `profile` finds one occurrence in six. Normalization
 can change string length, so the engine keeps a bijective map between raw

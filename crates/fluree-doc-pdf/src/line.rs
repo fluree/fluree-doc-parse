@@ -873,6 +873,75 @@ fn adaptive_space_ratio(glyphs: &[Glyph], groups: &[(Vec<usize>, i32, bool)]) ->
 /// Word gaps in letter-spaced text sit this far above the letter gaps.
 const TRACKING_WORD_FACTOR: f64 = 1.5;
 
+/// The explicit space at `idxs[k]` is a stray: drawn out of turn, and set
+/// on a mark's ink rather than between two marks.
+///
+/// A space stands where the pen stops after one word and before the next.
+/// A browser printing a page draws the space at each place it wrapped a
+/// line, and one producer draws that space after the line's last word but
+/// at a position inside an earlier word of it: `Produits` read `Pro
+/// duits`, `papier` read `papi er`, because the space sorted in between the
+/// letters it was set on. Such a space parts nothing, and the word reads
+/// whole.
+///
+/// Both tests are needed. A space drawn in turn, between the marks it sits
+/// between on the line, is where the pen stopped, however close the next
+/// mark begins: a justified line closes its word gaps up, and a run set in
+/// another size starts where the space does. And a space drawn out of turn
+/// in a gap is still a gap: some producers draw a line's words and then
+/// its spaces. On ink means inside the advance of the mark ahead of it,
+/// well short of where that mark's pen stops, or where the mark after it
+/// begins. Not behind the mark ahead: a line that runs on into the next row
+/// jumps back to its start, and the space there parts the two rows.
+fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool {
+    let space = &glyphs[idxs[k]];
+    let at = adv.at(space.origin);
+    let drawn = |i: &&usize| glyphs[**i].bbox.is_some();
+    let before = idxs[..k].iter().rev().find(drawn).map(|&i| &glyphs[i]);
+    let after = idxs[k + 1..].iter().find(drawn).map(|&i| &glyphs[i]);
+    let width = |g: &Glyph| match (g.advance, g.bbox) {
+        (Some(a), _) => a,
+        (None, Some(b)) => adv.end(&b) - adv.at(g.origin),
+        (None, None) => 0.0,
+    };
+    let em = space.font_size.max(1.0) as f64;
+    // In turn: drawn between its neighbours on the line, in whichever
+    // direction the line was drawn; or drawn just after a mark, where that
+    // mark's pen stopped. A chart sets its labels' marks among each other's
+    // on one line, and a label's own space is still where its pen stopped.
+    let between = match (before, after) {
+        (Some(b), Some(a)) => {
+            let (lo, hi) = if b.draw_index <= a.draw_index {
+                (b.draw_index, a.draw_index)
+            } else {
+                (a.draw_index, b.draw_index)
+            };
+            lo < space.draw_index && space.draw_index < hi
+        }
+        _ => true,
+    };
+    let follows = idxs.iter().map(|&i| &glyphs[i]).any(|p| {
+        p.bbox.is_some()
+            && p.draw_index + 1 == space.draw_index
+            && (adv.at(p.origin) + width(p) - at).abs() <= SPACE_INSIDE * em
+    });
+    if between || follows {
+        return false;
+    }
+    let same = SPACE_SAME_PLACE * em;
+    before.is_some_and(|b| {
+        let start = adv.at(b.origin);
+        at >= start - same && at < start + width(b) - SPACE_INSIDE * em
+    }) || after.is_some_and(|a| (adv.at(a.origin) - at).abs() < same)
+}
+
+/// How far, in ems, a space must sit short of the pen's stop after the mark
+/// ahead of it to be inside that mark: further than a kern moves a space.
+const SPACE_INSIDE: f64 = 0.15;
+
+/// Marks this close, in ems, begin at the same place.
+const SPACE_SAME_PLACE: f64 = 0.02;
+
 fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -> Option<Line> {
     if idxs.is_empty() {
         return None;
@@ -924,7 +993,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut prev_end: Option<f64> = None;
     let mut sizes: Vec<f32> = Vec::new();
 
-    for &i in idxs {
+    for (k, &i) in idxs.iter().enumerate() {
         let g = &glyphs[i];
         sizes.push(g.font_size);
         match g.bbox {
@@ -980,7 +1049,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 // the last *visible* mark, not from a zero-width position.
                 // On a tracked line the explicit spaces ARE the tracking, so
                 // the geometric decision above takes over instead.
-                if !tracked && !text.is_empty() && !text.ends_with(' ') {
+                if !tracked
+                    && !text.is_empty()
+                    && !text.ends_with(' ')
+                    && !stray_space(glyphs, idxs, k, adv)
+                {
                     text.push(' ');
                 }
             }
@@ -1402,6 +1475,71 @@ mod tests {
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].text, "a b");
+    }
+
+    /// `text` set letter by letter from `x`, pen to pen, 5pt a letter,
+    /// drawn in order from `first`.
+    fn run(text: &str, x: f64, first: usize) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut l = g(&c.to_string(), x + 5.0 * i as f64, 0.0, 4.5, 0.0);
+                l.advance = Some(5.0);
+                l.draw_index = first + i;
+                l
+            })
+            .collect()
+    }
+
+    /// An explicit space at `x`, drawn `nth`.
+    fn space(x: f64, nth: usize) -> Glyph {
+        let mut sp = g(" ", x, 0.0, 0.0, 0.0);
+        sp.bbox = None;
+        sp.advance = Some(2.0);
+        sp.draw_index = nth;
+        sp
+    }
+
+    #[test]
+    fn a_space_drawn_out_of_turn_on_a_letter_parts_nothing() {
+        // `Produits`, and a space drawn after the line's last word at the
+        // `o`'s own position: where a browser put the space of a line it
+        // wrapped.
+        let mut v = run("Produits", 100.0, 0);
+        v.push(space(110.0, 20));
+        assert_eq!(assemble(&v)[0].text, "Produits");
+        // Drawn first, sorting ahead of the letter it sits on.
+        let mut v = vec![space(110.0, 20)];
+        v.extend(run("Produits", 100.0, 0));
+        assert_eq!(assemble(&v)[0].text, "Produits");
+        // Or inside a letter's advance.
+        let mut v = run("Produits", 100.0, 0);
+        v.push(space(111.5, 20));
+        assert_eq!(assemble(&v)[0].text, "Produits");
+    }
+
+    #[test]
+    fn a_space_drawn_in_turn_is_kept_however_close_the_next_word() {
+        // Pen to pen: the space glyph is the only sign of the boundary.
+        let mut v = run("of", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("the", 12.0, 3));
+        assert_eq!(assemble(&v)[0].text, "of the");
+        // `the` begins just past where the space does: a justified line
+        // closed up, or a run in another size set where the space is.
+        let mut v = run("of", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("the", 10.1, 3));
+        assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    #[test]
+    fn a_space_drawn_out_of_turn_in_a_gap_is_kept() {
+        // A line's words drawn first and its spaces after them.
+        let mut v = run("of", 0.0, 0);
+        v.extend(run("the", 12.0, 2));
+        v.push(space(10.0, 9));
+        assert_eq!(assemble(&v)[0].text, "of the");
     }
 
     #[test]
