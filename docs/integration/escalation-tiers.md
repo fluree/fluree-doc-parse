@@ -102,7 +102,10 @@ A model's crops are drawn at 2× whatever the page's size.
 
 On a synthetic corpus of 500 attachments this lifted the facts an OCR engine
 found only in pixels, counted as whole words, from 0.861 to 0.871;
-screenshots pasted into PDFs gained most. One limit comes from the built-in
+screenshots pasted into PDFs gained most. The finer crops cost time and
+memory in proportion to their pixels: on a page carrying a 288-ppi capture
+drawn 20 times, `convert --ocr` took 28.75 s, against 12.27 s at 2×, and a
+corpus of screenshots costs about that much more to read. One limit comes from the built-in
 engine's recogniser, not from the rendering: it decides a line brought to
 48 px high in steps of about 8 px, and the word space of a narrow UI font,
 between groups of digits, spans about a step and a half. There the space and
