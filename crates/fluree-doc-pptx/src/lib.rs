@@ -28,10 +28,10 @@
 
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element};
-use fluree_doc_ooxml::{attr, local, Package};
+use fluree_doc_ooxml::{attr, local, Package, Relations};
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub enum PptxError {
@@ -126,14 +126,19 @@ fn slide_parts(pkg: &mut Package<'_>, budget: &mut Budget) -> Result<Vec<String>
     let presentation = pkg.main_part("ppt/presentation.xml");
     let rels = pkg.relationships(&presentation);
     let names = pkg.part_names();
+    // Each slide listed found in one lookup among the relationships, and
+    // its part in one among the package's: a scan of each for every
+    // listing made the listing's cost their product.
+    let relations = Relations::new(&rels);
+    let held: HashSet<&str> = names.iter().map(String::as_str).collect();
     let listed: Vec<String> = pkg
         .read_within(&presentation, budget)?
         .map(|xml| slide_ids(&xml))
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|id| rels.iter().find(|r| r.id == id && !r.external))
-        .map(|r| r.target.clone())
-        .filter(|p| names.contains(p))
+        .filter_map(|id| relations.part(&id))
+        .filter(|p| held.contains(p))
+        .map(str::to_string)
         .collect();
     if !listed.is_empty() {
         return Ok(listed);
@@ -459,6 +464,13 @@ fn parse_slide(
     charts: &[(String, &ChartData)],
     budget: &mut Budget,
 ) -> Result<Vec<Element>, PptxError> {
+    // Each frame's chart found in one lookup, the first of an id as a scan
+    // found it: a scan of the slide's charts for each frame made the
+    // slide's cost their product.
+    let mut by_id: HashMap<&str, &ChartData> = HashMap::new();
+    for (id, chart) in charts {
+        by_id.entry(id.as_str()).or_insert(chart);
+    }
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -507,7 +519,7 @@ fn parse_slide(
                 "chart" => {
                     // The frame names its part by relationship id.
                     if let Some(id) = attr(&e, "id") {
-                        if let Some((_, chart)) = charts.iter().find(|(rid, _)| *rid == id) {
+                        if let Some(chart) = by_id.get(id.as_str()) {
                             out.extend(chart_element(chart, page, budget)?);
                         }
                     }
@@ -950,6 +962,119 @@ mod tests {
         }
         z.finish().unwrap();
         buf.into_inner()
+    }
+
+    #[test]
+    fn a_slide_listed_is_found_among_the_relationships_in_one_lookup() {
+        // 20,000 slides listed by an id none of 200,000 relationships has,
+        // then one that is: a scan of them all for each listing took 24 s
+        // in a release build.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        let listed: String = (0..20_000)
+            .map(|i| format!("<p:sldId id=\"{}\" r:id=\"rIdXXXXXXX\"/>", 256 + i))
+            .collect();
+        let others: String = (0..200_000)
+            .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
+            .collect();
+        let parts = vec![
+            (
+                "ppt/presentation.xml".to_string(),
+                format!(
+                    "<p:presentation {NS}><p:sldIdLst>{listed}\
+                     <p:sldId id=\"1\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+                ),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels".to_string(),
+                format!(
+                    "<Relationships>{others}<Relationship Id=\"rId1\" Type=\"{rel}\" \
+                     Target=\"slides/slide1.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "ppt/slides/slide1.xml".to_string(),
+                slide(&shape(None, &para("listed"))),
+            ),
+        ];
+        let bytes = package(&parts);
+        let start = std::time::Instant::now();
+        let els = parse(&bytes).unwrap();
+        let took = start.elapsed();
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["listed"]);
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn a_slides_part_is_found_among_the_packages_in_one_lookup() {
+        // 200,000 slides listed by a relationship to a part the package
+        // does not hold, among 30,000 parts: a scan of the parts for each
+        // listing took 4.7 s in a release build. A deck that lists no part it
+        // holds is read in its parts' order.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        let listed = "<p:sldId id=\"256\" r:id=\"rId1\"/>".repeat(200_000);
+        let mut parts = vec![
+            (
+                "ppt/presentation.xml".to_string(),
+                format!("<p:presentation {NS}><p:sldIdLst>{listed}</p:sldIdLst></p:presentation>"),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels".to_string(),
+                format!(
+                    "<Relationships><Relationship Id=\"rId1\" Type=\"{rel}\" \
+                     Target=\"slides/gone.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "ppt/slides/slide1.xml".to_string(),
+                slide(&shape(None, &para("unlisted"))),
+            ),
+        ];
+        parts.extend((0..30_000).map(|i| (format!("ppt/other/p{i}.xml"), String::new())));
+        let bytes = package(&parts);
+        let start = std::time::Instant::now();
+        let els = parse(&bytes).unwrap();
+        let took = start.elapsed();
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, ["unlisted"]);
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn a_frames_chart_is_found_among_the_slides_in_one_lookup() {
+        // 20,000 frames naming an id none of the slide's 200,000 chart
+        // relationships has: a scan of them all for each frame took 24 s in
+        // a release build.
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+        let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
+                     <c:chart xmlns:c=\"c\" r:id=\"rIdXXXXXXX\"/></a:graphicData></a:graphic></p:graphicFrame>";
+        let charts: String = (0..200_000)
+            .map(|i| {
+                format!(
+                    "<Relationship Id=\"rId{i:07}\" Type=\"{rel}\" Target=\"../charts/chart1.xml\"/>"
+                )
+            })
+            .collect();
+        let parts = vec![
+            (
+                "ppt/charts/chart1.xml".to_string(),
+                chart_xml(&ser("Share", &["EMEA"], &["28.0"])),
+            ),
+            (
+                "ppt/slides/slide1.xml".to_string(),
+                slide(&frame.repeat(20_000)),
+            ),
+            (
+                "ppt/slides/_rels/slide1.xml.rels".to_string(),
+                format!("<Relationships>{charts}</Relationships>"),
+            ),
+        ];
+        let bytes = package(&parts);
+        let start = std::time::Instant::now();
+        let els = parse(&bytes).unwrap();
+        let took = start.elapsed();
+        assert!(els.iter().all(|e| e.kind != "doco:Table"));
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]

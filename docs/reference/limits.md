@@ -155,11 +155,14 @@ few seconds.
 
 A package's parts name each other by relationship id (a `.docx`'s
 headers, footers and images, an `.xlsx`'s sheets and the pictures of its
-drawings), and each id is found among the part's relationships in one
+drawings, a `.pptx`'s slides and charts), and each id is found among the part's relationships in one
 lookup, not a scan of them all: a scan for each id costs the product of
 the two, and an id no relationship has costs the whole scan and spends
 nothing. A 338 KB `.docx` of 100,000 header references and 10,000
 pictures naming no relationship among 30,000 took 17 s; it takes 0.27 s.
+A 554 KB `.pptx` listing 20,000 slides by an id none of 200,000
+relationships has took 24 s, and one whose slide frames 20,000 charts
+that way 24 s; each takes about 0.1 s.
 
 ## A web page's tree
 
