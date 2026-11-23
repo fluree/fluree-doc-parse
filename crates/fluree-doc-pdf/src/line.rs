@@ -427,20 +427,27 @@ fn rejoin_spanning_lines(
         });
         // An explicit space at either end of a fragment: line assembly trims
         // it, and a monospaced face draws it with no gap of its own to
-        // measure (`Screenshot|of what`).
-        let spaced = |at: Option<&usize>| {
-            at.and_then(|&g| glyphs.get(g))
+        // measure (`Screenshot|of what`). Only one drawn at the join counts:
+        // a space with no box is filed by its origin, and the line's first
+        // glyph can be an indent drawn at the far margin (`recommenda|tions`
+        // read as two words).
+        let spaced = |at: Option<&usize>, from: f64, to: f64| {
+            at.and_then(|&g| glyphs.get(g)).is_some_and(|g| {
                 // A glyph with no text resolved is no space.
-                .is_some_and(|g| !g.text.is_empty() && g.text.chars().all(char::is_whitespace))
+                !g.text.is_empty()
+                    && g.text.chars().all(char::is_whitespace)
+                    && (from..=to).contains(&g.origin.0)
+            })
         };
         for (at, m) in moved {
             let l = &mut per_col[i][at];
             // Fragments of one word must not gain a space: rejoin exactly
             // unless the geometry shows a real gap.
             let fs = l.font_size.max(1.0) as f64;
+            let (from, to) = (l.bbox.x1 - fs, m.bbox.x0 + fs);
             let space = m.bbox.x0 - l.bbox.x1 > fs * SPACE_GAP_RATIO
-                || spaced(l.glyphs.last())
-                || spaced(m.glyphs.first());
+                || spaced(l.glyphs.last(), from, to)
+                || spaced(m.glyphs.first(), from, to);
             if space && !l.text.ends_with(' ') {
                 l.text.push(' ');
             }
@@ -1696,8 +1703,18 @@ mod tests {
         // A glyph whose text never resolved is no space.
         let mut unresolved = glyphs.clone();
         unresolved[1].text = String::new();
-        let mut v = vec![vec![left], vec![right]];
+        let mut v = vec![vec![left.clone()], vec![right.clone()]];
         rejoin_spanning_lines(&mut v, &unresolved, &cols);
+        assert_eq!(v[0][0].text, "Screenshotof");
+        // A space drawn far from the join — an indent at the margin, filed
+        // with the right fragment for want of a box — is no space at the cut.
+        let mut indented = glyphs.clone();
+        indented[1].origin.0 = 57.0;
+        let mut right = right;
+        right.glyphs = vec![1, 2, 3];
+        left.glyphs = vec![0];
+        let mut v = vec![vec![left], vec![right]];
+        rejoin_spanning_lines(&mut v, &indented, &cols);
         assert_eq!(v[0][0].text, "Screenshotof");
     }
 

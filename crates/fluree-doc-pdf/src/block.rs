@@ -250,7 +250,9 @@ fn marker_shaped(text: &str) -> bool {
 /// each reads as the other's bullet. Both vanished from every chart in an
 /// annual report, leaving four figures with no years attached — the text was in
 /// the glyph layer, and in the assembled lines, and disappeared here.
-fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
+///
+/// `before` and `after` are the lines either side of it in the column.
+fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f64) -> bool {
     let n = l.text.chars().filter(|c| !c.is_whitespace()).count();
     if n == 0 || n > MAX_MARKER_CHARS {
         return false;
@@ -258,10 +260,33 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     if !marker_shaped(&l.text) {
         return false;
     }
-    let Some(nb) = neighbour else { return false };
-    if l.text.chars().any(char::is_alphanumeric)
-        && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0)
-    {
+    // Four digits are a year or an amount, never a list's ordinal: a chart's
+    // `2027` before its `Longer run` label.
+    let digits = l.text.trim();
+    if digits.len() >= 4 && digits.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let Some(nb) = after.or(before) else {
+        return false;
+    };
+    let worded = l.text.chars().any(char::is_alphanumeric);
+    if worded && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
+        return false;
+    }
+    // A number next to a number is a row of tick labels or figures, not a
+    // list number and its item: `2023` before `2024` on a chart's axis,
+    // `0.51` over `0.38` on a drawing, the `4.7` under a histogram bin's
+    // `4.6−`. Being at the left edge does not prove it, because a column
+    // may hold nothing else.
+    let number = |n: &Line| marker_shaped(&n.text) && n.text.chars().any(|c| c.is_ascii_digit());
+    if worded && [before, after].into_iter().flatten().any(number) {
+        return false;
+    }
+    // A list number sits on its item's first line. One a line or more above
+    // the text it would introduce is a label of its own: a drawing's pin `8`
+    // over the `SYMM` mark below it.
+    let fs = (l.font_size.max(nb.font_size) as f64).max(1.0);
+    if worded && (l.bbox.y1.min(nb.bbox.y1) - l.bbox.y0.max(nb.bbox.y0)) < -fs * 0.5 {
         return false;
     }
     let smaller = (l.font_size as f64) < nb.font_size as f64 * 0.92;
@@ -368,10 +393,8 @@ pub fn assemble_with_marks(
     let mut content: Vec<Line> = Vec::new();
     let mut markers: Vec<Line> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
-        let neighbour = lines
-            .get(i + 1)
-            .or_else(|| i.checked_sub(1).and_then(|j| lines.get(j)));
-        if is_marker(l, neighbour, left_edge) {
+        let before = i.checked_sub(1).and_then(|j| lines.get(j));
+        if is_marker(l, before, lines.get(i + 1), left_edge) {
             markers.push(l.clone());
         } else {
             content.push(l.clone());
@@ -1182,6 +1205,79 @@ mod tests {
             "must attach to the containing paragraph"
         );
         assert_eq!(b[1].marker, None);
+    }
+
+    /// A short line `text` from `x0` to `x1` at `y`, `fs` points.
+    fn label(text: &str, x0: f64, x1: f64, y: f64, fs: f32) -> Line {
+        let mut line = l(text, x0, y, fs);
+        line.bbox.x1 = x1;
+        line
+    }
+
+    /// Whether `text` reached the output as a block's text, not consumed as
+    /// a marker.
+    fn kept(blocks: &[Block], text: &str) -> bool {
+        blocks
+            .iter()
+            .any(|b| b.text().split_whitespace().any(|w| w == text))
+    }
+
+    #[test]
+    fn tick_labels_alone_in_a_column_are_not_markers() {
+        // A chart's axis years, the column holding nothing else: each sits
+        // at the column's left edge, outdented from the next.
+        let lines = vec![
+            label("2023", 277.0, 292.0, 235.0, 8.0),
+            label("2024", 314.0, 330.0, 235.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "2023"), "{b:?}");
+        // A drawing's two dimensions, one set just under the other's row.
+        let lines = vec![
+            label("0.38", 380.0, 393.0, 328.0, 7.9),
+            label("0.51", 362.7, 376.2, 332.0, 7.9),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "0.51"), "{b:?}");
+        // A histogram bin's two halves over a smaller label.
+        let lines = vec![
+            label("4.6\u{2212}", 452.0, 462.0, 213.0, 6.2),
+            label("4.7", 454.0, 462.0, 220.0, 6.2),
+            label("Number of participants", 470.0, 540.0, 242.0, 5.3),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "4.7"), "{b:?}");
+    }
+
+    #[test]
+    fn a_year_is_not_a_list_number() {
+        // A chart's last year before its `Longer run` label, on one row.
+        let lines = vec![
+            label("2027", 426.0, 441.0, 235.0, 8.0),
+            label("Longer", 459.0, 483.0, 234.0, 8.0),
+            label("run", 464.0, 478.0, 241.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "2027"), "{b:?}");
+    }
+
+    #[test]
+    fn a_number_a_line_above_the_text_is_not_its_marker() {
+        // A drawing's pin number over the symmetry mark well below it.
+        let lines = vec![
+            label("8", 390.0, 394.0, 188.0, 8.0),
+            label("SYMM", 405.0, 428.0, 221.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "8"), "{b:?}");
+        // On its item's row, it still numbers it.
+        let lines = vec![
+            label("8", 390.0, 394.0, 221.0, 8.0),
+            label("SYMM", 405.0, 428.0, 221.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].marker.as_deref(), Some("8"));
     }
 
     #[test]
