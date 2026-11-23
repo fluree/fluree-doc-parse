@@ -483,9 +483,19 @@ struct Pic {
     /// `v:imagedata r:id`), in order: one for a picture, several for a group
     /// of them.
     embed: Vec<String>,
+    /// The same ids, to name each once in one lookup: a picture may name
+    /// tens of thousands.
+    named: HashSet<String>,
 }
 
 impl Pic {
+    /// Name an image of it, once however often it is named.
+    fn name_image(&mut self, rid: String) {
+        if self.named.insert(rid.clone()) {
+            self.embed.push(rid);
+        }
+    }
+
     /// What the figure says in words: its alternative text, or its title,
     /// without the notice Word appends to text it wrote itself.
     fn text(&self) -> String {
@@ -730,17 +740,13 @@ fn parse_body(
                         // names it by `r:link`: listed, so it is counted
                         // among those not read.
                         if let Some(rid) = attr(&e, "embed").or_else(|| attr(&e, "link")) {
-                            if !pic.embed.contains(&rid) {
-                                pic.embed.push(rid);
-                            }
+                            pic.name_image(rid);
                         }
                     }
                     "imagedata" if pic_depth > 0 && deleted == 0 => {
                         pic.image = true;
                         if let Some(rid) = attr(&e, "id") {
-                            if !pic.embed.contains(&rid) {
-                                pic.embed.push(rid);
-                            }
+                            pic.name_image(rid);
                         }
                         if pic.title.is_empty() {
                             pic.title = attr(&e, "title").unwrap_or_default();
