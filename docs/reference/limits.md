@@ -715,8 +715,10 @@ coordinates could otherwise wrap its last column onto its first.
 ## Under the fuzz targets
 
 The fuzz targets (`fuzz/`) build the readers with a sixteenth of both
-bounds, 160 MiB and 2^24 steps: an input that spends the whole budget is
-then quick to run. Each input is read for one output, DoCO, the text, or
+bounds, 160 MiB and 2^24 steps, which `Limits::default()` then holds (the
+page limit and the render pixels are the shipped ones): an input that
+spends the whole budget is then quick to run. CI runs each target for 15
+seconds over its seeds (`fuzz/README.md`). Each input is read for one output, DoCO, the text, or
 the flat outputs, which its bytes pick, and checked at that output's costs,
 so the costs of each are fuzzed; an e-mail's files are converted within
 what the message leaves, as `--parse-attachments` converts them.

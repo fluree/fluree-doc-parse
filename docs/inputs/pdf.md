@@ -256,6 +256,13 @@ Two failure modes, both detected rather than guessed:
 A panic on real input is treated as a release blocker rather than a bug
 report, so malformed files fail as errors you can catch.
 
+A PDF is read within [limits](../reference/limits.md): its pages to the
+10,000th (those past it listed unread, `PastPageLimit`), what they draw
+within the document's memory and work budget, its page tree at most 256
+deep and 250,000 pages, and a page rendered for a crop with at most 64
+million pixels and 32,767 a side. Past the budget or the tree's bounds,
+`extract_bytes` returns `ExtractError::TooLarge`, which says which limit.
+
 ## Performance
 
 ~8 ms per document for the deterministic tier, ~2.4 ms per page for parsing
