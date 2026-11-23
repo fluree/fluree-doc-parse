@@ -2233,10 +2233,22 @@ mod tests {
     }
 
     #[test]
-    fn a_page_ocr_read_whole_is_not_reported_unread() {
+    fn a_page_ocr_read_whole_is_reported_unread_only_when_nearly_empty() {
+        // Two words for a scan: read, but next to nothing came of it.
         let mut doc = blank_scan();
         let short = vec![word("KYC screen", [72.0, 72.0, 140.0, 85.0])];
         let r = inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
+        let els = analysed(&mut doc, &r);
+        let unread = crate::unread_pages(&doc, &els);
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert_eq!(unread[0].reason, crate::OCR_SPARSE);
+        // A line of real text clears it.
+        let mut doc = blank_scan();
+        let line = vec![word(
+            "Account holder: Jane Doe, opened on 2026-01-05 at the branch",
+            [72.0, 72.0, 432.0, 85.0],
+        )];
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(line))]);
         let els = analysed(&mut doc, &r);
         assert!(crate::unread_pages(&doc, &els).is_empty());
     }

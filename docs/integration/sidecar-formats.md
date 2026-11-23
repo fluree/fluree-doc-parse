@@ -213,8 +213,11 @@ few for line boxes.
 its number among the page's regions, so a model reading of another region
 still lands where it belongs, and is not sent to a model. A page read whole
 asks a model for nothing — neither its whole page nor its tables: escalating
-past OCR is a decision of its own, and such a page is not reported unread,
-however little it held. A reading that took no word reads nothing: the page
+past OCR is a decision of its own. Such a page is not reported unread unless
+its text stays under the floor every page is held to (40 characters): then it
+is listed in `doc:unreadPages` as `OcrSparse`, with a warning on stderr, since
+an engine that gave two words for a dense scan has not read it. A reading
+that took no word reads nothing: the page
 stays as it was, routed and reported unread. So does a whole-page reading
 most of whose words land nowhere: it is refused. When a page has both a
 `full` reading and `r{i}` readings, the whole-page one is taken first, and a
