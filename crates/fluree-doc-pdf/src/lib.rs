@@ -28,7 +28,7 @@
 //! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
 //! - [`route::decide`] and [`route::signals`] — escalation verdicts
 //! - [`unread_pages`] and [`unread_regions`] — what the router sent a reader
-//!   to and nothing read
+//!   to and nothing read, and [`past_limit`], the pages past the page limit
 //! - [`parse_warnings`] — what the PDF interpreter reported, per page
 //! - [`forms::fields`] — AcroForm values
 //! - [`outline::extract`] — the PDF bookmark tree
@@ -138,7 +138,19 @@ pub fn unread_pages(
             });
         }
     }
+    out.extend(past_limit(doc));
     out
+}
+
+/// The pages after the last one read, past the page limit
+/// ([`Document::pages_past_limit`]): listed `PastPageLimit`, so a document
+/// cut short is never taken for a whole one.
+pub fn past_limit(doc: &Document) -> impl Iterator<Item = fluree_doc_model::UnreadPage> {
+    let first = doc.pages.last().map_or(0, |p| p.index + 1);
+    (first..first + doc.pages_past_limit).map(|index| fluree_doc_model::UnreadPage {
+        index,
+        reason: fluree_doc_model::PAST_PAGE_LIMIT.into(),
+    })
 }
 
 /// Raster regions nothing read: those the router sends a reader to, then
@@ -414,6 +426,7 @@ mod tests {
     #[test]
     fn a_routed_region_nothing_read_is_unread_with_its_box() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER])],
         };
         let got = unread_regions(&doc, &[]);
@@ -428,6 +441,7 @@ mod tests {
     #[test]
     fn a_region_a_model_read_is_not_unread() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER])],
         };
         for evidence in ["region-splice", "region-chart"] {
@@ -453,6 +467,7 @@ mod tests {
     #[test]
     fn an_image_drawn_twice_in_one_place_is_one_unread_region() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER, BIG])],
         };
         let got: Vec<BBox> = unread_regions(&doc, &[]).iter().map(|u| u.bbox).collect();
@@ -461,6 +476,7 @@ mod tests {
         let mut next = page(&[BIG]);
         next.index = 1;
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[BIG]), next],
         };
         assert_eq!(unread_regions(&doc, &[]).len(), 2);
@@ -469,6 +485,7 @@ mod tests {
     #[test]
     fn a_whole_page_reading_reads_every_region() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER])],
         };
         let whole = Element::new("doco:Paragraph", "the page", "vlm", "page-tier");
@@ -484,6 +501,7 @@ mod tests {
             regions: vec![1],
         });
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![p.clone()],
         };
         let got = unread_regions(&doc, &[]);
@@ -491,7 +509,10 @@ mod tests {
         assert_eq!(got[0].bbox, BIG);
         // A whole-page OCR reading read them all.
         p.ocr.as_mut().unwrap().whole = true;
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         assert!(unread_regions(&doc, &[]).is_empty());
     }
 
@@ -509,6 +530,7 @@ mod tests {
         // Listed, for a caller to judge, after the routed regions.
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[small, BIG])],
         };
         assert_eq!(route::ocr_regions(&doc.pages[0]), vec![BIG, small]);
@@ -523,11 +545,15 @@ mod tests {
             whole: false,
             regions: vec![1],
         });
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         assert_eq!(reasons(&doc), [("Region".to_string(), BIG)]);
         // Alone on a page of prose, it is listed too: the page routes
         // nothing, and the region is still the router's to decline.
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[small])],
         };
         assert_eq!(reasons(&doc), [("Small".to_string(), small)]);
@@ -542,6 +568,7 @@ mod tests {
             i.texty = false;
         }
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![p.clone()],
         };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
@@ -555,7 +582,10 @@ mod tests {
             whole: false,
             regions: vec![0],
         });
-        let doc = Document { pages: vec![read] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![read],
+        };
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
         // Under text the page's own glyphs cover, it is not listed: the text
         // layer reads it (a background behind real text).
@@ -572,11 +602,13 @@ mod tests {
             draw_index: 1500 + i,
         }));
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![covered],
         };
         assert!(reasons(&doc).is_empty());
         // A model's reading of the whole page reads it too.
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[BIG])],
         };
         let mut photo = doc.clone();
@@ -589,6 +621,7 @@ mod tests {
     fn a_declined_image_drawn_twice_in_one_place_is_listed_once() {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(&[small, BIG, small])],
         };
         assert_eq!(
@@ -599,7 +632,10 @@ mod tests {
         for i in &mut p.images {
             i.texty = false;
         }
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
     }
 
@@ -625,7 +661,10 @@ mod tests {
             regions: Vec::new(),
         });
         assert_eq!(route::decide(&p).0, route::Route::Deterministic);
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         assert!(unread_regions(&doc, &[]).is_empty());
         // Handed no element, the reading left the page under the floor: it
         // is listed as one OCR read sparsely, not as an unread scan.
@@ -642,7 +681,10 @@ mod tests {
         p.rotation = 90;
         let shown = p.to_display(BIG);
         assert_ne!(shown, BIG);
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].bbox, shown);
@@ -662,6 +704,7 @@ mod tests {
         b.index = 1;
         b.warnings = vec!["ImageDecodeFailure"];
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![a, page(&[]), b],
         };
         let got = parse_warnings(&doc);
@@ -684,7 +727,10 @@ mod tests {
         // A scan is an unread page, not a page of unread regions.
         let mut p = page(&[b(0.0, 0.0, 600.0, 800.0)]);
         p.glyphs.clear();
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         assert!(unread_regions(&doc, &[]).is_empty());
         assert_eq!(unread_pages(&doc, &[]).len(), 1);
         // A model's reading of the page read it, however short.

@@ -49,7 +49,10 @@ pub struct Header {
     pub height: u32,
     /// One bit per pixel as stored.
     pub bitonal: bool,
-    /// Pages stored: more than one only for a multi-page TIFF.
+    /// Pages stored: more than one only for a multi-page TIFF, whose pages
+    /// are counted up to one past the page limit
+    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)): more
+    /// than it says the file goes on past it.
     pub pages: usize,
 }
 
@@ -297,7 +300,8 @@ fn png_is_one_bit(b: &[u8]) -> bool {
 
 /// How many image directories (pages) a TIFF chains, classic or BigTIFF; 0
 /// for a file that is not one. A chain that loops, or runs past the file or
-/// past [`MAX_TIFF_PAGES`], is counted as far as it goes.
+/// one past the page limit ([`max_tiff_pages`]), is counted as far as it
+/// goes.
 fn tiff_pages(b: &[u8]) -> usize {
     let le = b.starts_with(b"II");
     let at = |o: u64, n: usize| -> Option<u64> {
@@ -321,7 +325,7 @@ fn tiff_pages(b: &[u8]) -> usize {
     let mut seen = std::collections::HashSet::new();
     let mut next = first;
     while let Some(ifd) = next.filter(|&o| o != 0) {
-        if seen.len() >= MAX_TIFF_PAGES || !seen.insert(ifd) {
+        if seen.len() >= max_tiff_pages() || !seen.insert(ifd) {
             break;
         }
         next = at(ifd, count).and_then(|n| {
@@ -336,7 +340,11 @@ fn tiff_pages(b: &[u8]) -> usize {
 
 /// The most pages of a TIFF counted: each one after the first is listed
 /// unread in the output, and a few kilobytes can chain a hundred thousand.
-const MAX_TIFF_PAGES: usize = 10_000;
+/// One past the page limit, so that a file going on past it is told from
+/// one that stops at it.
+fn max_tiff_pages() -> usize {
+    fluree_doc_model::budget::limits().pages.saturating_add(1)
+}
 
 /// Whether a decoded image looks like text as the PDF router judges a raster
 /// region: its pixels to the probe ([`fluree_doc_vision::texty`]) — a
@@ -1450,7 +1458,7 @@ mod tests {
     #[test]
     fn a_long_tiff_chain_is_counted_up_to_its_cap() {
         // Empty directories chained one after the other, past the cap.
-        let n = MAX_TIFF_PAGES + 50;
+        let n = max_tiff_pages() + 50;
         let mut t = b"II*\0".to_vec();
         t.extend(8u32.to_le_bytes());
         for k in 0..n {
@@ -1458,7 +1466,14 @@ mod tests {
             t.extend(0u16.to_le_bytes());
             t.extend(next.to_le_bytes());
         }
-        assert_eq!(tiff_pages(&t), MAX_TIFF_PAGES);
+        assert_eq!(tiff_pages(&t), fluree_doc_model::budget::MAX_PAGES + 1);
+        // Under a lower page limit, to one past it.
+        let mut l = fluree_doc_model::budget::Limits::default();
+        l.pages = 7;
+        assert_eq!(
+            fluree_doc_model::budget::limited_to(l, || tiff_pages(&t)),
+            8
+        );
     }
 
     #[test]

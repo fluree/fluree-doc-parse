@@ -202,10 +202,15 @@ file, 0-based like every other, and by design it has **no entry in
 nothing was measured to put there. A consumer joining `doc:unreadPages` to
 `doc:pages` on `pageIndex` finds no match for it, and should not expect
 one. A TIFF of many pages lists each; the warning `fdoc` prints gives them
-as a range (`pages 2–10050`).
+as a range (`pages 2–10000`).
 
-A consumer that validates `reason` against a fixed set should accept all
-six.
+Or it is `PastPageLimit`: a page of a PDF or an XPS document past the most a
+document is read to (10,000, `--max-pages`), listed one entry a page, with
+no entry in `doc:pages` either; of a TIFF, the first page past it, after
+which its pages are not counted ([Limits](../reference/limits.md#pages)).
+
+A consumer that validates `reason` against a fixed set should accept every
+one above.
 
 Deliberately not an element. A marker element would have to carry text to be
 visible, and inventing text puts characters into the projection that every

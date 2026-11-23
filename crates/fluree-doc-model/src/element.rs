@@ -367,9 +367,16 @@ pub struct UnreadPage {
     /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`; or
     /// `OcrSparse`, a page an OCR reading read whole that still holds next
     /// to no text; or `LaterPage`, a page after the first of a multi-page
-    /// image file, which is not read.
+    /// image file, which is not read; or `PastPageLimit`, a page past the
+    /// most a document is read to (`budget::Limits::pages`): of a multi-page
+    /// image file, the first page past it, after which its pages are not
+    /// counted.
     pub reason: String,
 }
+
+/// The reason a page past the page limit is listed unread
+/// ([`UnreadPage::reason`]).
+pub const PAST_PAGE_LIMIT: &str = "PastPageLimit";
 
 /// A raster region of a page whose content nothing read.
 ///
@@ -675,11 +682,17 @@ impl Notes {
     /// nobody understands is not a warning.
     pub fn summary(&self) -> Option<String> {
         let mut said: Vec<String> = Vec::new();
-        if !self.unread.is_empty() {
-            let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
+        // The pages past the page limit were never looked at: said apart,
+        // as one run, however many there are.
+        let (past, unread): (Vec<&UnreadPage>, Vec<&UnreadPage>) = self
+            .unread
+            .iter()
+            .partition(|u| u.reason == PAST_PAGE_LIMIT);
+        if !unread.is_empty() {
+            let mut pages: Vec<usize> = unread.iter().map(|u| u.index + 1).collect();
             pages.sort_unstable();
             pages.dedup();
-            let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
+            let mut reasons: Vec<&str> = unread.iter().map(|u| u.reason.as_str()).collect();
             reasons.sort_unstable();
             reasons.dedup();
             said.push(format!(
@@ -689,6 +702,18 @@ impl Notes {
                 if pages.len() == 1 { "ies" } else { "y" },
                 reasons.join(", ")
             ));
+        }
+        if let (Some(first), Some(last)) = (
+            past.iter().map(|u| u.index + 1).min(),
+            past.iter().map(|u| u.index + 1).max(),
+        ) {
+            said.push(match first == last {
+                true => format!("page {first} is past the page limit, not read"),
+                false => format!(
+                    "pages {first}-{last} are past the page limit, not read ({} pages)",
+                    past.len()
+                ),
+            });
         }
         // Only the regions the router sent a reader to: one it declined is a
         // logo or a photograph as often as content, listed in

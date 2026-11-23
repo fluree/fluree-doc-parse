@@ -210,6 +210,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
         y1: height,
     };
     Document {
+        pages_past_limit: 0,
         pages: vec![Page {
             index: 0,
             glyphs: Vec::new(),

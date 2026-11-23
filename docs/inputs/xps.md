@@ -68,15 +68,18 @@ what `convert --ocr` reads, to the character.
 
 As for any archive: each part at most 64 MiB uncompressed and all parts
 read 512 MiB, checked as they inflate (the package's relationships and
-core properties at most 64 MiB each); at most 100,000 parts, 10,000 pages,
-250,000 glyphs and pictures on a page and 4 million in all, counted before
+core properties at most 64 MiB each); at most 100,000 parts, 250,000 glyphs and pictures on a page and 4 million in all, counted before
 a run is laid out, and elements nested 256 deep on a page. The pages are
 laid out by the PDF pipeline, all held at once, at 370 to 530 bytes a
 glyph: 4 million glyphs keep a document within about 2 GB, and a page of
 250,000 takes a third of a second. A page side is at most 200 inches.
 Past any, the file fails as too large. Four million glyphs are about 1,600
 dense printed pages of 2,500 characters: a longer document is refused
-whole, though each of its pages is within bounds.
+whole, though each of its pages is within bounds. Pages past the page
+limit (10,000, `--max-pages`) are not read, and listed unread,
+`PastPageLimit` ([Limits](../reference/limits.md#pages)); a document
+listing more than 250,000 pages, read or not, as a PDF's page tree may, is
+refused.
 
 In a library, `fluree_doc_xps::parse` returns the pages as the PDF engine's
 `Document`, for `fluree_doc_pdf::document::analyze_with`, with the pictures

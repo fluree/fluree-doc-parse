@@ -2050,7 +2050,10 @@ mod tests {
         page.images = vec![capture(a), capture(b)];
         let drawn = crate::route::decide(&page).0;
         assert_eq!(drawn, crate::route::Route::VlmRegions(vec![b]));
-        let mut raw = RawDoc { pages: vec![page] };
+        let mut raw = RawDoc {
+            pages_past_limit: 0,
+            pages: vec![page],
+        };
         let opts = AnalyzeOptions {
             emit_anchors: true,
             ..Default::default()
@@ -2113,7 +2116,10 @@ mod tests {
             crate::route::decide(&page).0,
             crate::route::Route::Deterministic
         );
-        let mut raw = RawDoc { pages: vec![page] };
+        let mut raw = RawDoc {
+            pages_past_limit: 0,
+            pages: vec![page],
+        };
         let analysis = analyze(&mut raw, &[]);
         assert!(
             matches!(

@@ -1965,6 +1965,7 @@ fn render_image_ocr(read: ImageOcr, src: &Source, args: &ConvertArgs, quiet: boo
     warn_listed_scores(read.scores, &read.notes.ocr, quiet);
     if let (Some(note), false) = (read.notes.summary(), quiet) {
         eprintln!("warning: {}: {note}", src.stem);
+        past_page_limit(src.stem, &read.notes);
     }
     render(&read.elements, src, args, read.sizes, &read.notes)
 }
@@ -2144,12 +2145,29 @@ fn ocr_image(
     })
 }
 
+/// Where a document was read only to the page limit, the flag that raises
+/// it, on stderr.
+fn past_page_limit(stem: &str, notes: &fluree_doc_model::Notes) {
+    let past = |u: &&fluree_doc_model::UnreadPage| u.reason == fluree_doc_model::PAST_PAGE_LIMIT;
+    if let Some(first) = notes.unread.iter().filter(past).map(|u| u.index).min() {
+        eprintln!("note: {stem}: read to page {first} (raise it with --max-pages)");
+    }
+}
+
 /// The pages after the first of a file of `pages` (a multi-page TIFF): never
-/// read, so listed unread, for the output to say so.
+/// read, so listed unread, for the output to say so. Counted to one past
+/// the page limit (`fluree_doc_image::Header::pages`), that one is listed
+/// `PastPageLimit`: the file goes on, uncounted, from there.
 fn later_pages(pages: usize) -> impl Iterator<Item = fluree_doc_model::UnreadPage> {
-    (1..pages).map(|index| fluree_doc_model::UnreadPage {
+    let limit = fluree_doc_model::budget::limits().pages;
+    (1..pages).map(move |index| fluree_doc_model::UnreadPage {
         index,
-        reason: "LaterPage".into(),
+        reason: if index < limit {
+            "LaterPage"
+        } else {
+            fluree_doc_model::PAST_PAGE_LIMIT
+        }
+        .into(),
     })
 }
 
@@ -2508,6 +2526,7 @@ fn convert_bytes(
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
+        past_page_limit(src.stem, &notes);
     }
     if !quiet {
         for line in parse_warning_lines(&notes.warnings) {
@@ -2759,6 +2778,7 @@ fn convert_xps(
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
         eprintln!("warning: {stem}: {note}");
+        past_page_limit(src.stem, &notes);
     }
     let asked_pages = doc.pages.iter().filter(|p| asked(p.index)).count();
     if let Some(why) = read_nothing(doc.pages.len(), asked_pages, &a.elements, &notes) {

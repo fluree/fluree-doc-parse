@@ -1311,6 +1311,7 @@ mod tests {
     #[test]
     fn a_page_read_whole_says_why() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[1]);
@@ -1363,6 +1364,7 @@ mod tests {
             y1: 450.0,
         };
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![
                 page(0, 0, true),
                 page(1, 50, true),
@@ -1383,6 +1385,7 @@ mod tests {
         // read for its text: the doubt must not relabel it as a page an OCR
         // engine may skip.
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(0, 50, true), broken_page(1, 300)],
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0, 1]);
@@ -1394,6 +1397,7 @@ mod tests {
     #[test]
     fn a_heading_doubt_comes_before_a_figure_doubt() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(0, 500, false), page(1, 500, false)],
         };
         let mut copy = doc.clone();
@@ -1464,7 +1468,10 @@ mod tests {
                 }
             }
         }
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
             emit_anchors: true,
@@ -1506,7 +1513,10 @@ mod tests {
             crate::route::decide(&p).0,
             crate::route::Route::VlmRegions(_)
         ));
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(jobs, vec![(0, None)], "the doubt reads the page whole");
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
@@ -1711,7 +1721,10 @@ mod tests {
             grid: (1000, 1000),
             key: None,
         }];
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
         assert_eq!(jobs.len(), 1);
         let mut read = doc.clone();
@@ -1740,7 +1753,10 @@ mod tests {
             grid: (1000, 1000),
             key: None,
         }];
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages_past_limit: 0,
+            pages: vec![p],
+        };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
             emit_anchors: true,
@@ -1782,6 +1798,7 @@ mod tests {
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
+            pages_past_limit: 0,
         };
         let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
@@ -1805,6 +1822,7 @@ mod tests {
     #[test]
     fn the_budget_keeps_what_would_otherwise_be_lost() {
         let doc = Document {
+            pages_past_limit: 0,
             pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
         };
         // A scanned page, a page escalated on heading doubt, and a page

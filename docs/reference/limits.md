@@ -16,7 +16,8 @@ of memory a document may take`) rather than taking the process down with
 it, and in a batch the other documents still convert.
 
 The other readers are not on this budget, and bound what they make by
-bounds of their own, where they have any: XPS its pages and glyphs
+bounds of their own, where they have any: XPS the pages it lists (250,000,
+read or past the page limit) and the glyphs it reads
 ([XPS](../inputs/xps.md#bounds)), an image its pixels
 ([Images](../inputs/images.md#size-and-coordinates)). A PDF spends the
 budget on its annotations alone; the transcript readers have no bound
@@ -475,6 +476,35 @@ converted with `-j 3` in a group limited to 3 GB on a host with 23 GB
 available, had the batch killed, silently; they now convert one at a time.
 And a group limited to 9 GB, after 4 GB written to a file had left 3.1 GB
 of cache counted in its use, no longer lowers `-j 2` to one.
+
+## Pages
+
+A PDF or an XPS document is read to its 10,000th page, the page limit
+(`Limits::pages`, `--max-pages`), and no further: the pages past it are
+neither interpreted nor laid out. Never silently: each is listed in
+`doc:unreadPages` with the reason `PastPageLimit`
+(`fluree_doc_pdf::unread_pages`, from `Document::pages_past_limit`), and
+`fdoc` warns, once, with the run (`pages 10001-12000 are past the page
+limit, not read (2000 pages)`, then `read to page 10000 (raise it with
+--max-pages)`). An XPS document past 10,000 pages was refused whole; it is
+now read to its limit, like a PDF, and, like a PDF's page tree, refused
+when it lists more than 250,000 pages (`XPS document too large: it lists
+more than 250000 pages`), since each page past the limit is listed: a 163
+KB package naming one fixed document of 2.1 million pages eight times
+listed 16.7 million, took 1.2 GB as JSON and aborted as DoCO; it is
+refused in 0.1 s. The pages past the limit are listed one by one, not as
+a range, so that `doc:unreadPages` keeps one shape whatever the reason. A multi-page TIFF, of which only the
+first page is read, counts its pages to one past the limit: the pages
+after the first are listed `LaterPage`, and one past the limit
+`PastPageLimit`, after which the file is not followed.
+
+The page limit bounds the pages read, not what each page holds: a page's
+glyphs, paths and pictures are [A PDF's content](#a-pdfs-content). The
+page tree itself is read whole before any page (hayro's), so a PDF's pages
+past the limit still cost their entry in it. Slides (`.pptx`, `.ppt`,
+`.odp`) and sheets are not cut at the page limit: each slide's part, and
+each element made of it, is spent from the memory budget, which bounds
+them already, and a deck has no page a reader routes.
 
 ## Renders
 

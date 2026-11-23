@@ -218,6 +218,10 @@ impl Page {
 #[derive(Clone)]
 pub struct Document {
     pub pages: Vec<Page>,
+    /// Pages the file holds after the last one read, past the page limit
+    /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)): not
+    /// read, and listed unread, `PastPageLimit`, by [`crate::unread_pages`].
+    pub pages_past_limit: usize,
 }
 
 impl Document {
@@ -1334,7 +1338,10 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let mut letters = crate::ligature::Letters::default();
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
 
-    for (index, page) in pdf.pages().iter().enumerate() {
+    // Past the page limit, the pages are not read, and said to be.
+    let all = pdf.pages();
+    let read = all.len().min(fluree_doc_model::budget::limits().pages);
+    for (index, page) in all.iter().take(read).enumerate() {
         let (w, h) = page.render_dimensions();
         let mut dev = Collector {
             page: index,
@@ -1424,7 +1431,10 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         }
     }
 
-    Ok(Document { pages })
+    Ok(Document {
+        pages,
+        pages_past_limit: all.len() - read,
+    })
 }
 
 /// The name a warning is reported by, as the interpreter names it.

@@ -252,3 +252,90 @@ fn a_page_past_the_render_pixels_is_drawn_smaller_and_said() {
     let png = std::fs::read(dir.join("out/letter_p0.png")).unwrap();
     assert_eq!(png_size(&png), (600, 600));
 }
+
+/// A PDF of `n` pages, each saying its number.
+fn pages_pdf(n: usize) -> Vec<u8> {
+    let font = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {n} >>",
+            (0..n)
+                .map(|i| format!("{} 0 R", 4 + 2 * i))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        font.to_string(),
+    ];
+    for i in 0..n {
+        let text = format!("BT /F1 12 Tf 72 700 Td (Page number {}) Tj ET", i + 1);
+        objs.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] \
+             /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
+            5 + 2 * i
+        ));
+        objs.push(format!(
+            "<< /Length {} >>\nstream\n{text}\nendstream",
+            text.len()
+        ));
+    }
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = out.len();
+    out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
+    for o in offsets {
+        out.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    out.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objs.len() + 1
+        )
+        .bytes(),
+    );
+    out
+}
+
+#[test]
+fn a_pdf_past_the_page_limit_is_read_to_it_and_says_so() {
+    let dir = scratch("pages");
+    let pdf = dir.join("long.pdf");
+    std::fs::write(&pdf, pages_pdf(5)).unwrap();
+    let pdf = pdf.to_str().unwrap();
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "--no-escalate", "--max-pages", "2"],
+        &[],
+    );
+    assert!(o.status.success(), "{}", stderr(&o));
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        out.contains("Page number 2") && !out.contains("Page number 3"),
+        "{out}"
+    );
+    let e = stderr(&o);
+    assert!(
+        e.contains("pages 3-5 are past the page limit, not read (3 pages)"),
+        "{e}"
+    );
+    assert!(
+        e.contains("read to page 2 (raise it with --max-pages)"),
+        "{e}"
+    );
+    // In the graph, each page past it, by its reason.
+    let o = fdoc(
+        &dir,
+        &["convert", pdf, "-f", "doco", "--no-escalate", "-q"],
+        &[("FDOC_MAX_PAGES", "4")],
+    );
+    let graph = String::from_utf8_lossy(&o.stdout);
+    assert_eq!(graph.matches("PastPageLimit").count(), 1, "{graph}");
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+    // Within the limit: nothing said.
+    let o = fdoc(&dir, &["convert", pdf, "--no-escalate"], &[]);
+    assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+}
