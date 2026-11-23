@@ -1771,6 +1771,12 @@ mod tests {
             t("<p>10 m<sup>2</sup>, 10<sup>6</sup>, the 1<sup>st</sup> and 2<sup>e</sup></p>"),
             "10 m2, 106, the 1st and 2e"
         );
+        // After a quantity or a bracket of words, a number is a note's; a
+        // unit of length takes a power whatever its name's length.
+        assert_eq!(
+            t("<p>up to 26TB<sup>1</sup>, 11 lbf (49 N)<sup>5</sup>, 1000 PIES<sup>2</sup></p>"),
+            "up to 26TB 1, 11 lbf (49 N) 5, 1000 PIES2"
+        );
     }
 
     #[test]

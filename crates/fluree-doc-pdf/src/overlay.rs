@@ -262,7 +262,28 @@ fn squeeze(chars: impl IntoIterator<Item = char>) -> String {
 
 /// Where `needle` occurs in `hay`, as character positions, overlapping
 /// occurrences included.
-fn occurrences<'s>(hay: &'s str, needle: &'s str) -> impl Iterator<Item = usize> + 's {
+///
+/// A degree sign in the needle also meets the raised `o` or `0` a page
+/// draws for one, which line assembly reads as a degree (`~ 145°`, `5°C`;
+/// see `fluree_doc_model::marks::degree`): the glyphs keep the character
+/// they were drawn as.
+fn occurrences<'s>(hay: &'s str, needle: &'s str) -> Box<dyn Iterator<Item = usize> + 's> {
+    if !needle.contains('\u{00B0}') {
+        return Box::new(exact_occurrences(hay, needle));
+    }
+    let hay: Vec<char> = hay.chars().collect();
+    let needle: Vec<char> = needle.chars().collect();
+    let meets = |h: char, n: char| h == n || (n == '\u{00B0}' && matches!(h, 'o' | '0'));
+    let last = hay.len().checked_sub(needle.len());
+    let found: Vec<usize> = last
+        .map_or(0..0, |l| 0..l + 1)
+        .filter(|&p| needle.iter().zip(&hay[p..]).all(|(&n, &h)| meets(h, n)))
+        .collect();
+    Box::new(found.into_iter())
+}
+
+/// [`occurrences`] of a needle compared character for character.
+fn exact_occurrences<'s>(hay: &'s str, needle: &'s str) -> impl Iterator<Item = usize> + 's {
     let mut from = 0usize;
     let mut chars_before = 0usize;
     std::iter::from_fn(move || {
@@ -387,6 +408,15 @@ pub fn rects_for_glyph_range(glyphs: &[Glyph], start: usize, end_inclusive: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_degree_meets_the_raised_letter_drawn_for_it() {
+        // Line text reads `~ 145°` and `5°C` where the glyphs are `o` and `0`.
+        assert_eq!(occurrences("angle~145o", "~145°").collect::<Vec<_>>(), [5]);
+        assert_eq!(occurrences("5°C,50C", "5°C").collect::<Vec<_>>(), [0, 4]);
+        assert_eq!(occurrences("45", "145°").count(), 0);
+        assert_eq!(occurrences("aµbµ", "µ").collect::<Vec<_>>(), [1, 3]);
+    }
 
     fn g(x: f64, y: f64) -> Glyph {
         Glyph {
@@ -631,6 +661,27 @@ mod tests {
                 "edge span {s}..{e} resolved differently"
             );
         }
+    }
+
+    #[test]
+    fn a_degree_read_from_a_raised_letter_resolves_to_its_glyphs() {
+        let bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 200.0,
+            y1: 10.0,
+        };
+        // The page draws `145o`; line assembly reads the raised `o` as `°`.
+        let elements = vec![para("Angle ~ 145° wide", bbox)];
+        let pages = vec![page_of(&[
+            ("Angle", 0.0, 0.0),
+            ("~", 30.0, 0.0),
+            ("145o", 40.0, 0.0),
+            ("wide", 70.0, 0.0),
+        ])];
+        let found = |b: usize, e: usize| highlight(&elements, &pages, b, e).map(|h| h.text);
+        assert_eq!(found(8, 12), Some("145°".into()));
+        assert_eq!(found(13, 17), Some("wide".into()));
     }
 
     #[test]

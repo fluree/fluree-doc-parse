@@ -138,9 +138,11 @@ baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
 apart from it, `Acrylonitrile a`, by the same rule as an HTML `<sup>`: a
 letter or symbol after a word, or a number after a word too long to be a
-unit. Raised text that belongs to its word stays in it: a unit's power
-(`cm3`), an ordinal's ending (`1st`) and a formula's index (`ρwLv²`,
-`Vol(∂Ω)ⁿ`).
+unit, after a quantity (`26TB 1`, not `26TB1`), or after a bracket that
+holds words (`(49 N) 5`, not `(49 N)5`). Raised text that belongs to its
+word stays in it: a unit's power, kept raised (`cm³`, `m/s²`, and the
+Spanish square foot `PIES²`), an ordinal's ending (`1st`) and a formula's
+index or power (`ρwLv²`, `Vol(∂Ω)ⁿ`, `(a+b)²`).
 
 After a number, the same marks matter more, because the text layer turns
 them into another number. A note's letters stand apart from the value:
@@ -149,6 +151,12 @@ after a number keep their place as Unicode superscripts, whether a power
 or a note's number: `kg/10⁶ dscm`, not `kg/106 dscm`; `4.0x10⁻³`, not
 `4.0x10-3`; `2024³`, not `20243`. An ordinal's ending stays with the number
 it agrees with (`22nd`, `118th`, `21e`).
+
+A degree sign set as a raised `o` or `0` reads as `°` wherever it cannot be
+an ordinal's ending or a power: before a temperature's unit (`25°C`, not
+`25oC`), after three figures or more (`~ 145°`, not `~ 145 o`), after a
+decimal, or after a signed number. `1º` and `2º` stay ordinals and `10⁰` a
+power.
 
 **Mixed numbers.** A spec sheet sets `22 3/8"` with no space before the
 fraction. The fraction is set small, in a smaller size or in the font's own

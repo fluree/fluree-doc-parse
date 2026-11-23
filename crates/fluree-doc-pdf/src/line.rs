@@ -16,6 +16,7 @@
 
 use crate::geom::BBox;
 use crate::glyph::Glyph;
+use fluree_doc_model::marks;
 
 /// Gap, as a fraction of font size, above which we insert a synthetic space —
 /// the *fallback* when a document's own gap distribution is not clearly
@@ -884,8 +885,14 @@ fn adaptive_space_ratio(glyphs: &[Glyph], groups: &[(Vec<usize>, i32, bool)]) ->
 
 /// The run of raised, smaller glyphs that `idxs[k]` begins, as text, where
 /// it follows a glyph of the line's own size: a superscript, which may be a
-/// note's mark. `None` mid-run, and on a vertical line.
-fn raised_mark(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Option<String> {
+/// note's mark. With it, the first character after the run that is not
+/// whitespace. `None` mid-run, and on a vertical line.
+fn raised_mark(
+    glyphs: &[Glyph],
+    idxs: &[usize],
+    k: usize,
+    adv: Advance,
+) -> Option<(String, Option<char>)> {
     if adv.vertical() {
         return None;
     }
@@ -918,17 +925,23 @@ fn raised_mark(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Opti
         return None;
     }
     let mut mark = String::new();
-    for &i in &idxs[k..] {
+    let mut end = idxs.len();
+    for (j, &i) in idxs.iter().enumerate().skip(k) {
         let m = &glyphs[i];
         let same = m.bbox.is_some()
             && (m.font_size - g.font_size).abs() <= g.font_size * 0.1
             && (m.origin.1 - g.origin.1).abs() < g.font_size.max(1.0) as f64 * 0.2;
         if !same {
+            end = j;
             break;
         }
         mark.push_str(&m.text);
     }
-    Some(mark)
+    let next = idxs[end..]
+        .iter()
+        .flat_map(|&i| glyphs[i].text.chars())
+        .find(|c| !c.is_whitespace());
+    Some((mark, next))
 }
 
 /// The fraction `idxs[k]` begins, set against the whole number before it:
@@ -1241,15 +1254,20 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 } else {
                     raised_mark(glyphs, idxs, k, adv)
                 };
+                // A degree set as a raised `o` or `0` reads as one: `145°`.
+                let degree = raised
+                    .as_ref()
+                    .is_some_and(|(m, next)| marks::degree(&text, m, *next));
+                let raised = raised.filter(|_| !degree).map(|(m, _)| m);
                 if raised
                     .as_deref()
-                    .is_some_and(|m| fluree_doc_model::marks::note_mark(&text, m))
+                    .is_some_and(|m| marks::note_mark(&text, m))
                 {
                     text.push(' ');
                 }
                 // A power raised after a number keeps its place: `10⁶` and
                 // `10⁻³` as superscripts, never flattened into the number as
-                // `106` and `10-3`.
+                // `106` and `10-3`. So does a unit's: `m²`, `PIES²`.
                 let continues = exponent.is_some_and(|(size, y): (f32, f64)| {
                     (g.font_size - size).abs() <= size * 0.1
                         && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
@@ -1260,10 +1278,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     exponent = raised
                         .as_deref()
                         .filter(|m| {
-                            text.ends_with(|c: char| c.is_ascii_digit())
+                            let power = text.ends_with(|c: char| c.is_ascii_digit())
                                 && m.chars().any(|c| c.is_ascii_digit())
                                 && m.chars()
-                                    .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c))
+                                    .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c));
+                            power || marks::unit_power(&text, m)
                         })
                         .map(|_| (g.font_size, g.origin.1));
                 }
@@ -1292,7 +1311,9 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 if let Some(w) = words.last_mut() {
                     w.add(g);
                 }
-                if exponent.is_some() {
+                if degree {
+                    text.push('\u{00B0}');
+                } else if exponent.is_some() {
                     text.extend(g.text.chars().map(superscript));
                 } else {
                     text.push_str(&g.text);
@@ -1574,7 +1595,7 @@ mod tests {
             1,
             "the exponent must stay on its line: {lines:?}"
         );
-        assert_eq!(lines[0].text, "cm3/s");
+        assert_eq!(lines[0].text, "cm³/s");
         assert_eq!(
             lines[0].font_size, 10.0,
             "one small glyph does not move the median"
@@ -1957,11 +1978,41 @@ mod tests {
 
     #[test]
     fn raised_text_of_the_word_stays_in_it() {
-        // A unit's power, an exponent, an ordinal's ending.
-        for (base, raised) in [("cm", "3"), ("1", "st"), ("e", "x")] {
+        // An exponent, an ordinal's ending.
+        for (base, raised) in [("1", "st"), ("e", "x")] {
             let mut v = word(base, 0.0, false);
             v.extend(word(raised, 5.0 * base.len() as f64, true));
             assert_eq!(assemble(&v)[0].text, format!("{base}{raised}"));
+        }
+        // A unit's power, raised: `PIES²` is the Spanish square foot.
+        for (base, raised, want) in [("cm", "3", "cm³"), ("1000 PIES", "2", "1000 PIES²")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+    }
+
+    #[test]
+    fn a_degree_set_as_a_raised_o_reads_as_one() {
+        for (base, raised, after, want) in [
+            ("~ 145", "o", "", "~ 145°"),
+            ("25", "o", "C", "25°C"),
+            ("5", "0", "C", "5°C"),
+            ("1", "o", "", "1o"),
+        ] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            v.extend(word(after, 5.0 * base.len() as f64 + 3.0, false));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+    }
+
+    #[test]
+    fn a_note_number_after_a_bracket_or_a_quantity_parts_from_it() {
+        for (base, raised, want) in [("(49 N)", "5", "(49 N) 5"), ("26TB", "1", "26TB 1")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
         }
     }
 
