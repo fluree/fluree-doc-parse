@@ -311,11 +311,19 @@ A data table's **header** is the rows at its top that label the columns:
   (`thousands of units`, `% change`) under the periods. A single `<th>`
   across the table there is a band over the rows beneath it.
 - A filer's table, as an SEC filing sets it, writes its header in `<td>`
-  cells, bold or ruled beneath (`font-weight: bold`, `border-bottom`), and
-  nothing else so. Leading rows of two such cells or more are the header
-  when rows of plain values follow. A single bold label in the first column
-  (`Revenues`) is a band, not a header row, and bold or a rule on every row
-  is emphasis or a grid.
+  cells, bold or ruled beneath (`font-weight: bold`, `border-bottom` of
+  any width above zero, `0.5pt` included), and nothing else so. Leading
+  rows of two such cells or more are the header when rows of plain values
+  follow. The units caption in the label column, `(in millions)`, may stand
+  in plain text beside the heads.
+- One such head over the value columns is a header row too, with the label
+  cell blank or holding the units: `Annual Output` over a pair of columns,
+  a contents page's `Page`. It needs figures under it, and the row after it
+  must not be a styled row with a label of its own: a signature over a
+  name, or a contents page's first bold entry, is not a header. A lone
+  figure ruled beneath is the line before a subtotal, not a head.
+- A single bold label in the first column (`Revenues`) is a band, not a
+  header row, and bold or a rule on every row is emphasis or a grid.
 
 Under a header of several rows, a column's `doc:columnHeader` is its labels
 from the top down, joined with ` / ` (`Three months ended September 30, /

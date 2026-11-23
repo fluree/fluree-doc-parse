@@ -28,11 +28,15 @@ break) changed no benchmark output at all. Here they are checked by name.
 | `cases/<id>.json` | a public document and its checks | yes |
 | `docs/` | the public documents, fetched by `--fetch` | no |
 | `private/<id>.json` | a document that cannot be published, by local path | no |
+| `fixtures/` | documents made for a case, from invented text, with their source | yes |
 
 Public documents are fetched from their publisher, never redistributed, and
 checked against the SHA-256 their checks were written on. A different copy is
 reported, not failed: the publisher may have revised it, and the checks may
 then need revising too.
+
+A case on a fixture names it by `"path"` relative to the case file, and its
+notes say how to make it again.
 
 Private cases follow the same format with `"path"` (absolute, `~`, or relative
 to the case file) in place of `"url"`. Their documents and their checks quote
