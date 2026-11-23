@@ -232,20 +232,39 @@ the right — same line, comparable height, no wider apart than a word space —
 and each chain is one run of words, separated by spaces (none between
 characters of a script written without them, CJK or Thai). A run never crosses
 a column gutter or the gap between two table cells, so columns and cells
-still read apart. The run's size comes from its boxes: a detector box (PP-OCR)
-is taken as 1.3 em tall whatever its letters; a box around the ink
-(Tesseract, hOCR, ALTO) as tall as its letters reach, so `our` and
-`Payments` read at one size. Which kind a document's readings hold is
-decided once, over all of them: neighbouring ink boxes differ in height as
-their letters do. A detector box is still a little taller over a line with
-descenders: a run within 12% of the median size of its page's boxes, each
-box weighed by the letters it holds, is set at that size, so it does not
-read as a heading set larger. A page of fewer than eight lines is sized by
-the median of all the document's boxes instead. A heading on a scan is one
-by its size when it is set more than that larger (a 12 pt heading over
-10 pt text may not be), and when its box shows it: one with no descenders
-boxes no taller than a line of body text that has them, so a 14 pt `Terms
-and conditions` over 11 pt text can read as body text. Punctuation alone in a box takes the size of its run. The sheet's
+still read apart. The run's size comes from its boxes and the letters they
+hold. A detector box (PP-OCR) is the ink and a margin, and grows with the
+ink by about half as much: the built-in engine boxes a line of prose with
+capitals and descenders about 1.09 em tall, one with no descenders about
+0.98, one of x-height letters only about 0.87, the dots over `i` and `j`
+counting as tall letters. A box less than five times as long as it is
+thick, over a word or two, is a little taller for its type than one over a
+line (about 0.15 em at twice as long as thick), so `Total` or `Reçu` alone
+on a line reads at the size of the paragraph around it. That margin was
+measured in paragraphs set 1.3 em apart: with more room above and below, a
+word alone on its line boxes taller still (about 0.24 em at double
+spacing), and at body size can read as a heading. A box around the
+ink (Tesseract, hOCR, ALTO) is as tall as its letters reach, so `our` and
+`Payments` read at one size. Either way the marks around the letters
+count: an accent over a small letter reaches a capital's height and one
+over a capital about 0.9 em (on a detector's box over a line, where it
+stands over one letter of many, half as far above the capitals), a cedilla
+or an ogonek a descender's depth;
+brackets and `|` reach from a capital's height to a descender's depth, a
+comma, a semicolon and `$` a little below the baseline, quotes and `/` a
+capital's height. This was measured on Latin script; other scripts are
+sized by their letters' case alone. Which kind a
+document's readings hold is decided once, over all of them: neighbouring
+ink boxes differ in height as their letters do. What still sets one line's
+detector box apart from another's is noise, a pixel or two and the font: a
+run within 10% of the median size of its page's boxes, each box weighed by
+the letters it holds, is set at that size, so it does not read as a
+heading set larger. A page of fewer than eight lines is sized by the
+median of all the document's boxes instead. A heading on a scan is one by
+its size when it is set more than 15% larger than the body (a 12 pt heading
+over 10 pt text, 20% larger, can come out under that), with or without
+descenders: a 14 pt `Exclusions` over 11.5 pt text reads as a heading.
+Punctuation alone in a box takes the size of its run. The sheet's
 skew, stated by `angle` or measured between neighbouring words, is taken out
 first, and the runs of one visual line share one baseline. Lines are set
 level, so on a skewed sheet text sits off where it is drawn by its distance

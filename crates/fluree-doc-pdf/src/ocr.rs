@@ -37,21 +37,79 @@ use crate::geom::BBox;
 use crate::glyph::Glyph;
 use crate::route::{self, Route, CROP_MARGIN};
 
-/// Height of a detector box, in ems of the text it holds.
+/// Height of a detector box, in ems of the text it holds, is
+/// `BOX_BASE_EM + BOX_INK_SHARE * (up + down)`, `up` and `down` being how far
+/// its letters reach, and taller for a box shorter than `SHORT_BOX_ASPECT`
+/// times its thickness ([`box_height_em`]).
 ///
-/// Detection boxes are the text line's extent plus a dilation (DB-style
-/// detectors unclip their shrunk masks by 1.4-1.6), so a box runs from above
-/// the ascenders to below the descenders and some, whatever its letters.
-const BOX_HEIGHT_EM: f64 = 1.3;
+/// Detection boxes are the text line's ink plus a dilation (DB-style
+/// detectors unclip their shrunk masks), so a box runs from just above its
+/// tallest letters to just below its lowest, and grows with the ink by about
+/// half as much. Measured on the built-in engine (PP-OCRv6) over synthetic
+/// pages of known size — DejaVu Sans and Serif, Liberation Sans, Serif and
+/// Mono from 8 to 18 pt, rendered at 100 to 300 dpi, 800 lines — a line with
+/// capitals and descenders boxes 1.09 em in the median, one with no
+/// descenders 0.96 to 1.0, one of x-height letters only 0.87. The body of
+/// the generated scanned letters boxes 1.05 em. Taken as 1.3 em whatever its
+/// letters, OCR text read a fifth small, and the lines of a paragraph or an
+/// address, spaced as such, read as separate blocks; taken as one height
+/// whatever its letters, a line with descenders read a tenth larger than the
+/// lines around it and a heading without them a tenth smaller than its type.
+///
+/// Those were lines of prose. A box over a word or two is taller for its
+/// type than one over a line: `Total`, `Reçu` or `Bill to:` alone on a line
+/// of a letter in 10 to 12 pt boxes up to 0.2 em taller than the
+/// paragraph's lines, and sized as they are read a fifth larger, as a
+/// heading set larger does. A box under `SHORT_BOX_ASPECT` times as long as
+/// it is thick is taken as `BOX_SHORT_EM` times the difference of their
+/// inverses taller, 0.15 em at an aspect of 2; a longer one, a heading
+/// of two words or a line, is sized as before. Measured on paragraphs set as
+/// a letter sets them (the five fonts, 10 to 12 pt, 150 to 300 dpi, lines
+/// 1.3 em apart, with short lines and headings set a fifth larger among
+/// them), of the short lines at body size 39 in 594 read more than 15% over
+/// their prose, against 318 sized as lines (443 with no mark counted
+/// either), and of the headings 215 in 313, against 243. A term over every
+/// box's aspect, longer ones included, set down the headings of two or three
+/// words with the short lines (181 of 313 for 79 short lines, at the share
+/// that fits the short lines best).
+///
+/// That margin is a paragraph's, its lines 1.3 em apart. With more room
+/// above and below, the engine boxes a word alone on its line taller still,
+/// 0.09 em over its letters at 1.3 em, 0.17 at 1.6, 0.24 at double spacing
+/// (11 pt, four fonts, 150 to 300 dpi), and at double spacing such a word
+/// at body size can read 15% over its prose, as a heading. The room around
+/// a box does not say how much it grew: in the same room a word set larger
+/// than the text around it grows far less (0.10 em for 14 pt among 11 at
+/// double spacing). Sized by its room as well, the short headings of
+/// double-spaced pages were set down with the words (285 of 336 headings
+/// read, from 299, taking half the growth the words fit; 227 taking all of
+/// it), and a word alone on a double-spaced line, set down, was read into
+/// the paragraph above it.
+const BOX_BASE_EM: f64 = 0.62;
+const BOX_INK_SHARE: f64 = 0.5;
+const BOX_SHORT_EM: f64 = 0.5;
+const SHORT_BOX_ASPECT: f64 = 5.0;
 
 /// Where a letter's ink reaches, in ems from the baseline: capitals, digits
 /// and ascenders up to about 0.72, the x-height 0.5, descenders down 0.22.
 /// An engine that boxes words by their ink (Tesseract, hOCR, ALTO) gives a
 /// box exactly that tall, so `our` is half the height of `Payments`, and only
 /// the letters inside say what size the text is.
+///
+/// A mark over a small letter (`é`, `ü`, `ñ`) reaches about a capital's
+/// height, as the dot over `i` does; one over a capital (`É`, `Ü`) about
+/// `ACCENTED_CAP_EM` (on a detector's box over a line, half as far above
+/// the capitals: [`box_height_em`]); a cedilla or an ogonek (`ç`, `ą`) as
+/// deep as a descender. Brackets and `|` reach from a capital's height to a
+/// descender's depth, a comma, a semicolon and the stroke of `$` hang
+/// `TAIL_EM` below the baseline, and quotes and `/` rise to a capital's
+/// height. Calibrated on Latin script: other scripts are sized as the
+/// letters' case and these marks say.
 const CAP_HEIGHT_EM: f64 = 0.72;
 const X_HEIGHT_EM: f64 = 0.5;
 const DESCENDER_EM: f64 = 0.22;
+const ACCENTED_CAP_EM: f64 = 0.9;
+const TAIL_EM: f64 = 0.13;
 /// A CJK character fills most of its em square.
 const CJK_HEIGHT_EM: f64 = 0.88;
 
@@ -346,7 +404,7 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 .filter(|w| ink_extent(&w.text).is_some())
                 .map(|w| {
                     let letters = w.text.chars().filter(|c| c.is_alphanumeric()).count();
-                    let size = dist(w.quad[0], w.quad[3]) / BOX_HEIGHT_EM;
+                    let size = dist(w.quad[0], w.quad[3]) / box_height_em(&w.text, aspect(&w.quad));
                     (pi, size, letters as f64)
                 })
                 .collect();
@@ -1011,7 +1069,7 @@ fn add_words(
         .into_iter()
         .partition(|w| normalise_deg(w.angle - sheet).abs() < LEVEL_BELOW_DEG);
     for w in &turned {
-        let font = (dist(w.quad[0], w.quad[3]) / BOX_HEIGHT_EM) as f32;
+        let font = (dist(w.quad[0], w.quad[3]) / box_height_em(&w.text, aspect(&w.quad))) as f32;
         // Line assembly reads runs along right angles only. A stamp at any
         // other angle is set level about its center, or it comes out in
         // fragments and backwards.
@@ -1391,26 +1449,106 @@ fn weighted_median(mut v: Vec<(f64, f64)>) -> Option<f64> {
 }
 
 /// How far a word's ink reaches above and below its baseline, in ems, from
-/// the letters it holds; `None` for a word of punctuation alone.
+/// the letters it holds and the marks around them; `None` for a word of
+/// punctuation alone.
 fn ink_extent(text: &str) -> Option<(f64, f64)> {
+    use unicode_normalization::char::canonical_combining_class;
+    use unicode_normalization::UnicodeNormalization;
     let mut up: Option<f64> = None;
     let mut down: f64 = 0.0;
-    for c in text.chars() {
+    // Punctuation reaches as far as its letters' ink, but makes no word.
+    let (mut marks_up, mut marks_down) = (0.0_f64, 0.0_f64);
+    // How high the letter a combining mark sits on reaches.
+    let mut base: Option<f64> = None;
+    for c in text.nfd() {
+        match canonical_combining_class(c) {
+            0 => {}
+            // Below: attached (cedilla, ogonek), or apart (dot, comma).
+            202 | 218 | 220 | 222 | 233 => {
+                if base.is_some() {
+                    down = DESCENDER_EM;
+                }
+                continue;
+            }
+            // Above, attached or apart.
+            214 | 216 | 228 | 230 | 232 | 234 => {
+                if let Some(b) = base {
+                    let over = if b < CAP_HEIGHT_EM {
+                        CAP_HEIGHT_EM
+                    } else {
+                        ACCENTED_CAP_EM.max(b)
+                    };
+                    up = Some(up.map_or(over, |u: f64| u.max(over)));
+                }
+                continue;
+            }
+            _ => continue,
+        }
         let reach = if is_cjk(c) {
             CJK_HEIGHT_EM
-        } else if c.is_uppercase() || c.is_ascii_digit() || "bdfhklt&$%#@".contains(c) {
+        } else if c.is_uppercase() || c.is_ascii_digit() || "bdfhklt&$%#@ßđħł".contains(c) {
             CAP_HEIGHT_EM
         } else if c.is_alphabetic() {
             X_HEIGHT_EM
         } else {
+            let (u, d) = match c {
+                '(' | ')' | '[' | ']' | '{' | '}' | '|' => (CAP_HEIGHT_EM, DESCENDER_EM),
+                ',' | ';' => (0.0, TAIL_EM),
+                '/' | '\\' | '!' | '?' | '"' | '\'' | '‘' | '’' | '“' | '”' => {
+                    (CAP_HEIGHT_EM, 0.0)
+                }
+                _ => (0.0, 0.0),
+            };
+            marks_up = marks_up.max(u);
+            marks_down = marks_down.max(d);
+            base = None;
             continue;
         };
+        base = Some(reach);
         up = Some(up.map_or(reach, |u: f64| u.max(reach)));
         if "gjpqy".contains(c) {
             down = DESCENDER_EM;
+        } else if c == '$' {
+            down = down.max(TAIL_EM);
         }
     }
-    up.map(|u| (u, down))
+    up.map(|u| (u.max(marks_up), down.max(marks_down)))
+}
+
+/// How tall a detector box over `text` is, in ems of its type
+/// ([`BOX_BASE_EM`]): from the letters it holds, the dots over `i` and `j`
+/// reaching about as high as a capital, as the box does over them, and from
+/// its `aspect`, its length over its thickness. A box of punctuation alone
+/// is taken as one over a line of prose.
+///
+/// A mark over a capital stands over one letter. Over a word it is a share
+/// of the ink the detector boxes, and the box rises with it; over a line it
+/// is a speck, and a line opening on `À` or `É` boxes only about half as
+/// much taller than the same line without the mark (0.03 to 0.07 em over
+/// four fonts at 150 to 300 dpi, against the 0.09 a word's gives). A box of
+/// [`SHORT_BOX_ASPECT`] and over reaches half as far above its capitals.
+fn box_height_em(text: &str, aspect: f64) -> f64 {
+    let (up, down) = ink_extent(text).map_or((CAP_HEIGHT_EM, DESCENDER_EM), |(up, down)| {
+        if text.contains(['i', 'j']) {
+            (up.max(CAP_HEIGHT_EM), down)
+        } else {
+            (up, down)
+        }
+    });
+    // No letter reaches past a capital or a CJK character: only a mark does.
+    let up = if aspect >= SHORT_BOX_ASPECT && up > CAP_HEIGHT_EM.max(CJK_HEIGHT_EM) {
+        (up + CAP_HEIGHT_EM) / 2.0
+    } else {
+        up
+    };
+    let short = (1.0 / aspect.max(1.0) - 1.0 / SHORT_BOX_ASPECT).max(0.0);
+    BOX_BASE_EM + BOX_INK_SHARE * (up + down) + BOX_SHORT_EM * short
+}
+
+/// A box's length over its thickness, from its corners (top left, top
+/// right, bottom right, bottom left).
+fn aspect(quad: &[(f64, f64); 4]) -> f64 {
+    dist(quad[0], quad[1]) / dist(quad[0], quad[3])
 }
 
 fn is_cjk(c: char) -> bool {
@@ -1486,7 +1624,8 @@ fn runs(words: &[Level]) -> Vec<Vec<usize>> {
 }
 
 /// A run's size and baseline, deskewed: the median of what each of its
-/// words says. A detector box is [`BOX_HEIGHT_EM`] tall with its baseline
+/// words says. A detector box is as tall as its letters make it
+/// ([`box_height_em`]) with its baseline
 /// [`BASELINE_FROM_TOP`] down; an ink box reaches as far as its letters do,
 /// so a word with no ascenders still sits at the size of its line.
 struct Run {
@@ -1521,7 +1660,7 @@ impl Run {
                     baselines.push(w.bottom - down * font);
                 }
                 _ => {
-                    fonts.push(h / BOX_HEIGHT_EM);
+                    fonts.push(h / box_height_em(&w.word.text, (w.x1 - w.x0) / h));
                     baselines.push(w.top + h * BASELINE_FROM_TOP);
                 }
             }
@@ -1539,19 +1678,18 @@ impl Run {
 /// Widest difference from its page's median size, as a share of it, that a
 /// run boxed by a detector is put down to its box rather than to its type.
 ///
-/// A detector box reaches below the descenders, and on a line that has them
-/// it is a little taller than on one that has none: on synthetic forms and
-/// letters read by the built-in engine, the line `Policy holder Margaret
-/// Holloway` boxes 8 to 15% taller than the lines of the same size around
-/// it, about 11% over the median. Sized from its box, such a line reads as a
-/// heading set larger than the body. A heading set larger by its size alone
-/// is more than 15% over its body, and over the band too: a 12 pt heading
-/// over 10 pt text, boxed a little short, may not be. One set larger whose
-/// letters stop at the baseline boxes no taller than a line of the body with
-/// descenders, and is not one by its size on a scan: a 14 pt `Terms and
-/// conditions` over 11 pt prose boxes 9% over the median at 200 dpi, as tall
-/// at 144.
-const SNAP_SIZE_SHARE: f64 = 0.12;
+/// A box is sized by its letters ([`box_height_em`]), so what sets a line
+/// of the body apart from another is the engine's noise: a pixel or two of
+/// the box, a font that boxes its descenders deeper or shallower than the
+/// fit. On the synthetic lines `BOX_BASE_EM` was measured on (an em of 16 px
+/// and up), 94% of the lines size within 10% of their page's median, 3%
+/// over it; sized by one height whatever their letters, 75% did, and 15%
+/// over it. A heading set larger is 15% over its body and up (12 pt over 10
+/// is 20%), and its box shows it whatever its letters: a 14 pt `Exclusions`
+/// over 11.5 pt prose sizes 21% over its page's median at 200 dpi. Snapped
+/// within 12%, a 15 pt `Renewal terms` on a page of 12 pt prose was set to
+/// it; within 8%, the lines of a sparse cover page read as headings.
+const SNAP_SIZE_SHARE: f64 = 0.10;
 
 /// Lines (detector boxes) a page needs to be sized by its own median; a page
 /// of fewer is sized by the document's.
@@ -1782,9 +1920,16 @@ fn fit_stacked(runs: &mut [Run], lines: &[Vec<usize>]) {
 }
 
 /// The baseline nearest `at` that sits at least `d` from each `(b, d)`.
-/// Some candidate always qualifies: the farthest blocker's far side.
+/// Some candidate always qualifies: the farthest blocker's far side. A
+/// candidate `b ± d` is `d` from `b` only to rounding (`110.4 - 10.5315` is
+/// 10.531499999999994 below it), so `d` is compared with that much slack: a
+/// strict test refused every candidate and left the stamp where it was.
 fn clear_baseline(at: f64, blockers: &[(f64, f64)]) -> f64 {
-    let clear = |y: f64| blockers.iter().all(|&(b, d)| (y - b).abs() >= d);
+    let clear = |y: f64| {
+        blockers
+            .iter()
+            .all(|&(b, d)| (y - b).abs() >= d - 1e-9 * d.max(b.abs()))
+    };
     std::iter::once(at)
         .chain(blockers.iter().flat_map(|&(b, d)| [b - d, b + d]))
         .filter(|&y| clear(y))
@@ -3009,7 +3154,11 @@ mod tests {
         // Halved onto the page, and spread evenly along it.
         assert!((g[0].bbox.unwrap().x0 - 72.0).abs() < 1e-9);
         assert!((g[6].bbox.unwrap().x1 - 142.0).abs() < 1e-9);
-        assert!((g[0].font_size - 10.0).abs() < 0.1);
+        // A detector box 13 pt tall on the page, at the engine's calibration.
+        assert!(
+            (f64::from(g[0].font_size) - 13.0 / box_height_em("Account", 140.0 / 26.0)).abs()
+                < 0.01
+        );
         assert_eq!(r[0].mean_conf, Some(0.9));
     }
 
@@ -3443,9 +3592,11 @@ mod tests {
         assert_eq!((r[0].taken, r[0].dropped), (1, 1));
         let g = doc.pages[0].glyphs.iter().rfind(|g| g.text == "B").unwrap();
         assert!((g.bbox.unwrap().x0 - 100.0).abs() < 1e-9);
-        // Inside the word's band, 319 to 329 on the page.
+        // On the word's band, 319 to 329 on the page: laid in a line box
+        // of its size, an em and a little, where a box over a word with no
+        // descenders is a little under an em.
         let b = g.bbox.unwrap();
-        assert!(b.y0 >= 319.0 && b.y1 <= 329.5, "{b:?}");
+        assert!(b.y0 >= 318.5 && b.y1 <= 329.5, "{b:?}");
     }
 
     #[test]
@@ -6602,6 +6753,21 @@ mod tests {
         );
     }
 
+    /// Lines of the given sizes in points, each boxed as tall as a detector
+    /// boxes its letters at that size, as long as [`lines_every`] boxes it.
+    fn boxed<'a>(lines: &[(&'a str, f64)]) -> Vec<(&'a str, f64)> {
+        lines
+            .iter()
+            .map(|&(t, pt)| (t, box_tall(t, pt, 6.0 * t.chars().count() as f64)))
+            .collect()
+    }
+
+    /// How tall a detector boxes `text` set at `pt`, in a box `len` long:
+    /// the height its aspect gives, found by iterating.
+    fn box_tall(text: &str, pt: f64, len: f64) -> f64 {
+        (0..32).fold(pt, |h, _| pt * box_height_em(text, len / h))
+    }
+
     /// A form's lines as a detector boxes them, one box a line, each `h`
     /// tall, two lines' height apart.
     fn detected_lines(lines: &[(&str, f64)]) -> Vec<OcrWord> {
@@ -6652,12 +6818,23 @@ mod tests {
 
     #[test]
     fn a_line_boxed_taller_for_its_descenders_is_not_a_heading() {
-        // One size of type throughout; the line with descenders boxed a
-        // tenth taller, as the built-in engine boxes it.
-        let lines: Vec<(&str, f64)> = FORM
-            .iter()
-            .map(|&t| (t, if t.starts_with("Policy") { 14.3 } else { 13.0 }))
-            .collect();
+        // One size of type throughout, and one line with descenders among
+        // lines with none, boxed 13% taller than they are, as the built-in
+        // engine boxes a form in 11 pt at 150 dpi (26 px over 23): over the
+        // band of a size taken whatever the letters.
+        let lines: Vec<(&str, f64)> = [
+            "Account number 4417-0093-21",
+            "Date of birth 15-OCT-1997",
+            "Policy holder Margaret Holloway",
+            "Premium due on the first of March",
+            "Contract reference AB-1180",
+            "Branch office North Street 14",
+            "Renewal date 01-MAR-2027",
+            "Total amount 1,250.00 EUR",
+        ]
+        .iter()
+        .map(|&t| (t, if t.starts_with("Policy") { 14.7 } else { 13.0 }))
+        .collect();
         let mut doc = blank_scan();
         let r = inject(
             &mut doc,
@@ -6673,15 +6850,15 @@ mod tests {
     #[test]
     fn a_heading_set_larger_on_a_scan_is_still_a_heading() {
         // Below the page's first lines, where only its size makes it one.
-        let mut lines: Vec<(&str, f64)> = FORM[..4].iter().map(|&t| (t, 13.0)).collect();
-        // A fifth larger than the body, the least a heading set larger is:
-        // over the band within which a box is put down to its letters.
-        lines.push(("Policy schedule", 15.6));
-        lines.extend(FORM[4..].iter().map(|&t| (t, 13.0)));
+        let mut lines: Vec<(&str, f64)> = FORM[..4].iter().map(|&t| (t, 12.0)).collect();
+        // A sixth larger than the body, over what a heading set larger by
+        // its size alone needs to be.
+        lines.push(("Policy schedule", 14.0));
+        lines.extend(FORM[4..].iter().map(|&t| (t, 12.0)));
         let mut doc = blank_scan();
         let r = inject(
             &mut doc,
-            &[(0, Crop::Page, page_units(detected_lines(&lines)))],
+            &[(0, Crop::Page, page_units(detected_lines(&boxed(&lines))))],
         );
         let els = analysed(&mut doc, &r);
         assert_eq!(headings(&els), ["Policy schedule"], "{els:?}");
@@ -6701,8 +6878,332 @@ mod tests {
     ];
 
     #[test]
+    fn a_heading_with_no_descenders_over_prose_that_has_them_is_a_heading() {
+        // A 14 pt heading over 11.5 pt prose. Its letters stop at the
+        // baseline, and the engine boxes it 0.96 em tall, 13.4 pt: within a
+        // tenth of the prose's boxes, which reach below their descenders,
+        // and taken as one height whatever their letters, it was set to the
+        // body.
+        let mut lines = boxed(&CLAUSE[..4].iter().map(|&t| (t, 11.5)).collect::<Vec<_>>());
+        lines.push(("Exclusions", 13.4));
+        lines.extend(boxed(
+            &CLAUSE[4..].iter().map(|&t| (t, 11.5)).collect::<Vec<_>>(),
+        ));
+        let mut doc = blank_scan();
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Page, page_units(lines_every(&lines, 16.0)))],
+        );
+        let els = analysed(&mut doc, &r);
+        assert_eq!(headings(&els), ["Exclusions"], "{els:?}");
+    }
+
+    #[test]
+    fn a_detector_box_is_as_tall_as_its_letters_make_it() {
+        // The median height, in ems, the built-in engine boxes each line of
+        // prose at over five fonts, 8 to 18 pt, 100 to 300 dpi.
+        for (text, measured) in [
+            ("Policy holder Margaret Holloway", 1.09),
+            ("Terms of cover and exclusions", 1.0),
+            ("ACCOUNT SUMMARY", 0.96),
+            ("paying your premium", 1.09),
+            ("we serve on mere success", 0.87),
+        ] {
+            let em = box_height_em(text, 14.0);
+            assert!((em - measured).abs() < 0.03, "{text}: {em}");
+        }
+    }
+
+    #[test]
+    fn a_short_or_accented_line_reads_at_the_size_of_the_prose() {
+        // The median height, in ems of its type, and aspect the built-in
+        // engine boxes each line at in paragraphs set 1.3 em apart, over
+        // DejaVu Sans and Serif, Liberation Sans, Serif and Mono at 10 to 12
+        // pt, 200 and 300 dpi. A word alone on its line boxes taller for its
+        // type than a line of prose, and a mark over or under its letters, or
+        // a bracket, reaches further than its letters: each must read within
+        // a tenth of its type, short of the margin a heading needs.
+        let prose = 1.08
+            / box_height_em(
+                "Nous vous informons que votre contrat arrive à échéance prochainement.",
+                33.7,
+            );
+        for (text, aspect, measured) in [
+            ("Reçu", 2.1, 1.24),
+            ("Année", 3.0, 1.08),
+            ("Été 2026", 3.9, 1.14),
+            ("Änderung", 3.8, 1.26),
+            ("Größe", 2.8, 1.13),
+            ("Noël", 2.2, 1.15),
+            ("Ça va", 2.5, 1.18),
+            ("zéro", 2.0, 1.17),
+            ("Total", 2.3, 1.13),
+            ("Bill to:", 3.1, 1.08),
+            ("x; y", 1.9, 1.15),
+            ("(1,250.00)", 4.7, 1.09),
+            ("$ 98.40", 3.6, 1.08),
+            ("Name / Surname", 8.2, 0.91),
+            (
+                "le détail des garanties souscrites et la date limite de règlement.",
+                29.0,
+                1.06,
+            ),
+            // Set a fifth larger than the paragraphs around them.
+            ("Échéance", 4.2, 1.11),
+            ("Über uns", 3.8, 1.19),
+            ("Terms", 3.0, 1.02),
+        ] {
+            let read = measured / box_height_em(text, aspect) / prose;
+            assert!((read - 1.0).abs() < 0.1, "{text}: {read}");
+        }
+    }
+
+    #[test]
+    fn a_line_opening_on_an_accented_capital_reads_at_the_size_of_its_paragraph() {
+        // The median height, in ems of its type, and aspect the built-in
+        // engine boxes each line at, in 11 pt paragraphs set 1.3 em apart,
+        // over DejaVu Sans and Serif, Liberation Sans and Serif, at 150, 200
+        // and 300 dpi: each line with its capital accented, and the same
+        // line without the accent. The mark over one capital of a line
+        // raised its box about half as much as the mark over a word's: sized
+        // as a word's, these lines read 3% under the others, and pulled the
+        // page's median down until `Reçu` at body size read as a heading
+        // over it.
+        use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+        let mut read: Vec<f64> = [
+            (
+                "À compter du premier janvier, votre contrat sera renouvelé par tacite reconduction.",
+                1.109,
+                1.076,
+                36.0,
+            ),
+            (
+                "Équipe de gestion : votre conseiller reste joignable par téléphone ou par courrier.",
+                1.152,
+                1.097,
+                35.0,
+            ),
+            (
+                "État des lieux : la visite aura lieu le jeudi suivant, à partir de quatorze heures.",
+                1.129,
+                1.076,
+                33.6,
+            ),
+            (
+                "Éventuellement, vous pouvez résilier avant la date d'échéance du contrat en cours.",
+                1.146,
+                1.043,
+                36.1,
+            ),
+        ]
+        .iter()
+        .map(|&(accented, with, without, aspect)| {
+            let plain: String = accented.nfd().filter(|c| !is_combining_mark(*c)).collect();
+            (with / box_height_em(accented, aspect)) / (without / box_height_em(&plain, aspect))
+        })
+        .collect();
+        read.sort_by(f64::total_cmp);
+        let median = (read[1] + read[2]) / 2.0;
+        assert!((median - 1.0).abs() < 0.02, "{read:?}");
+        // Only a mark reaches over a capital: a line of CJK, as tall as its
+        // characters, is not one with a mark.
+        let cjk = box_height_em("保险合同续期通知书", 14.0);
+        assert!(
+            (cjk - (BOX_BASE_EM + BOX_INK_SHARE * CJK_HEIGHT_EM)).abs() < 1e-9,
+            "{cjk}"
+        );
+    }
+
+    #[test]
+    fn a_word_s_ink_reaches_as_far_as_its_marks_and_punctuation() {
+        let (cap, x, desc) = (CAP_HEIGHT_EM, X_HEIGHT_EM, DESCENDER_EM);
+        for (text, reach) in [
+            ("zero", Some((x, 0.0))),
+            ("zéro", Some((cap, 0.0))),
+            ("über", Some((cap, 0.0))),
+            ("Été", Some((ACCENTED_CAP_EM, 0.0))),
+            ("Über", Some((ACCENTED_CAP_EM, 0.0))),
+            ("ça", Some((x, desc))),
+            ("Reçu", Some((cap, desc))),
+            ("ąę", Some((x, desc))),
+            ("(annual)", Some((cap, desc))),
+            ("[eur]", Some((cap, desc))),
+            ("a|b", Some((cap, desc))),
+            ("1,250.00", Some((cap, TAIL_EM))),
+            ("x; z", Some((x, TAIL_EM))),
+            ("$ 98.40", Some((cap, TAIL_EM))),
+            ("a/c", Some((cap, 0.0))),
+            ("'one'", Some((cap, 0.0))),
+            ("“once”", Some((cap, 0.0))),
+            ("now?", Some((cap, 0.0))),
+            // A mark stands over the letter before it, not over a comma.
+            ("x,\u{301}", Some((x, TAIL_EM))),
+            ("(),;", None),
+        ] {
+            assert_eq!(ink_extent(text), reach, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_word_alone_with_accents_at_body_size_is_not_a_heading() {
+        // A letter in 11 pt with words alone on their lines between its
+        // paragraphs, each boxed as tall and as long as the built-in engine
+        // boxes it (`a_short_or_accented_line_reads_at_the_size_of_the_prose`).
+        // Sized with no mark over or under their letters counted, or as a
+        // line of prose is whatever its length, they read a fifth larger than
+        // the paragraphs and came out as headings: `## Reçu`, `#### Année`.
+        let prose = [
+            (
+                "Nous vous informons que votre contrat arrive à échéance prochainement.",
+                1.08,
+                33.7,
+            ),
+            (
+                "Le montant de la prime pour la période à venir figure ci-dessous, avec",
+                1.02,
+                32.6,
+            ),
+            (
+                "le détail des garanties souscrites et la date limite de règlement.",
+                1.06,
+                29.0,
+            ),
+        ];
+        let lines: Vec<(&str, f64, f64)> = prose
+            .iter()
+            .copied()
+            .chain([
+                ("Reçu", 1.24, 2.1),
+                ("Année", 1.08, 3.0),
+                ("Été 2026", 1.14, 3.9),
+                ("Änderung", 1.26, 3.8),
+                ("Größe", 1.13, 2.8),
+            ])
+            .chain(prose.iter().copied())
+            .collect();
+        let words: Vec<OcrWord> = lines
+            .iter()
+            .enumerate()
+            .map(|(k, &(text, em, aspect))| {
+                let (y, h) = (72.0 + 14.3 * k as f64, 11.0 * em);
+                word(text, [72.0, y, 72.0 + aspect * h, y + h])
+            })
+            .collect();
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        let els = analysed(&mut doc, &r);
+        assert_eq!(headings(&els), [""; 0], "{els:?}");
+    }
+
+    #[test]
+    fn a_page_of_lines_boxed_a_pixel_apart_is_set_at_one_size() {
+        // Capitals and figures only, no descenders: each line boxes 0.98 em
+        // of its type, a pixel taller or shorter by the engine's noise. The
+        // page's median is taken as the lines are sized, by their letters;
+        // taken as a line of prose is sized, it was a tenth under every line,
+        // none was set to it, and the page read at two sizes.
+        let lines: Vec<(&str, f64)> = (0..10)
+            .map(|k| {
+                (
+                    "ACCOUNT 4417 TOTAL 1250",
+                    if k % 2 == 0 { 13.0 } else { 13.8 },
+                )
+            })
+            .collect();
+        let mut doc = blank_scan();
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Page, page_units(lines_every(&lines, 20.0)))],
+        );
+        assert_eq!(r[0].taken, 10);
+        let sizes: Vec<f32> = doc.pages[0].glyphs.iter().map(|g| g.font_size).collect();
+        assert!(sizes.iter().all(|&f| f == sizes[0]), "{sizes:?}");
+    }
+
+    #[test]
+    fn a_line_of_dashes_reads_at_the_size_of_the_lines_around_it() {
+        // A rule typed as dashes holds no letter to size it by, and is taken
+        // as a line of prose: boxed as tall as the prose around it, it is
+        // set at its size. Taken as letters of the x-height, it read a
+        // quarter larger.
+        let mut lines: Vec<(&str, f64)> = CLAUSE[..4].iter().map(|&t| (t, 13.0)).collect();
+        lines.push(("------------------------------------", 13.0));
+        lines.extend(CLAUSE[4..].iter().map(|&t| (t, 13.0)));
+        let mut doc = blank_scan();
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Page, page_units(lines_every(&lines, 16.0)))],
+        );
+        let size = |c: &str| {
+            doc.pages[0]
+                .glyphs
+                .iter()
+                .find(|g| g.text == c)
+                .map(|g| g.font_size)
+        };
+        assert_eq!(r[0].taken, 10);
+        assert_eq!(size("-"), size("T"));
+    }
+
+    #[test]
+    fn a_stamp_set_at_an_angle_is_sized_by_its_letters() {
+        // `void` turned 30 degrees over level text: no capital and no
+        // descender, a dot over its `i`, and four letters to a box under four
+        // times as long as it is thick.
+        let mut words = Vec::new();
+        for k in 0..20 {
+            words.extend(run_words(
+                "The quick brown fox jumps over the dog",
+                72.0,
+                100.0 + 14.0 * k as f64,
+                13.0,
+                6.0,
+            ));
+        }
+        words.push(OcrWord {
+            angle: Some(30.0),
+            ..word("void", [250.0, 300.0, 350.0, 326.0])
+        });
+        let mut doc = blank_scan();
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        let v = doc.pages[0].glyphs.iter().find(|g| g.text == "v").unwrap();
+        let font = 26.0 / box_height_em("void", 100.0 / 26.0);
+        assert!(
+            (f64::from(v.font_size) - font).abs() < 0.01,
+            "{}",
+            v.font_size
+        );
+    }
+
+    #[test]
+    fn a_baseline_a_blocker_s_reach_away_is_clear_of_it() {
+        // `110.4 - 10.5315` is 10.531499999999994 below `110.4`: short of
+        // the reach by rounding alone, and refused, the stamp's nearer
+        // candidate gave way to the farther side.
+        let (b, d) = (110.4, 10.5315);
+        assert_eq!(clear_baseline(105.0, &[(b, d)]), b - d);
+        // A baseline clear already stays.
+        assert_eq!(clear_baseline(99.0, &[(b, d)]), 99.0);
+    }
+
+    #[test]
+    fn a_run_is_snapped_within_a_tenth_of_its_page_s_size_and_no_further() {
+        let run = |font: f64| Run {
+            words: Vec::new(),
+            font,
+            baseline: 0.0,
+            x0: 0.0,
+            x1: 1.0,
+        };
+        let mut runs: Vec<Run> = [8.9, 9.1, 10.9, 11.1].into_iter().map(run).collect();
+        snap_sizes(&mut runs, 10.0);
+        let fonts: Vec<f64> = runs.iter().map(|r| r.font).collect();
+        assert_eq!(fonts, [8.9, 10.0, 10.0, 11.1]);
+    }
+
+    #[test]
     fn a_page_set_larger_than_the_others_reads_as_its_own_body() {
-        // Two pages of one body and a third set about 14% larger, its lines
+        // Two pages of one body and a third set about 11% larger, its lines
         // boxed a little apart as a reading boxes them. Snapped to the
         // document's median, the lines of the third that fall within the
         // band were set down to it and the others kept their size: the
@@ -6715,16 +7216,20 @@ mod tests {
                     .iter()
                     .enumerate()
                     .map(|(k, &t)| {
-                        let h = match (i, k % 2) {
-                            (2, 0) => 14.4,
-                            (2, _) => 15.2,
-                            _ => 13.0,
+                        let pt = match (i, k % 2) {
+                            (2, 0) => 12.95,
+                            (2, _) => 13.7,
+                            _ => 12.0,
                         };
-                        (t, h)
+                        (t, pt)
                     })
                     .collect();
                 let pitch = if i == 2 { 17.0 } else { 15.0 };
-                (i, Crop::Page, page_units(lines_every(&lines, pitch)))
+                (
+                    i,
+                    Crop::Page,
+                    page_units(lines_every(&boxed(&lines), pitch)),
+                )
             })
             .collect();
         let r = inject(&mut doc, &readings);
@@ -6746,14 +7251,15 @@ mod tests {
         // is the cells', the paragraph's lines are too far under it to be
         // set to it, and its last line, one word boxed a little taller,
         // was set to it alone and read as a heading.
-        let mut lines: Vec<(&str, f64)> = CLAUSE[..3].iter().map(|&t| (t, 12.0)).collect();
-        lines.push(("transfer.", 13.1));
-        let mut words = lines_every(&lines, 15.0);
+        let mut lines: Vec<(&str, f64)> = CLAUSE[..3].iter().map(|&t| (t, 11.0)).collect();
+        lines.push(("transfer.", 11.9));
+        let mut words = lines_every(&boxed(&lines), 15.0);
+        let cell = box_tall("1,250.00", 13.0, 48.0);
         for row in 0..6 {
             for col in 0..3 {
                 let x = 72.0 + 120.0 * col as f64;
                 let y = 180.0 + 22.0 * row as f64;
-                words.push(word("1,250.00", [x, y, x + 48.0, y + 14.4]));
+                words.push(word("1,250.00", [x, y, x + 48.0, y + cell]));
             }
         }
         let mut doc = blank_scan();
@@ -6776,11 +7282,11 @@ mod tests {
         // third would read as headings over the first's body.
         let mut doc = scans(3);
         let at = |h: f64| -> Vec<(&str, f64)> { FORM.iter().map(|&t| (t, h)).collect() };
-        let readings: Vec<(usize, Crop, WordReading)> = [13.0, 14.0, 15.2]
+        let readings: Vec<(usize, Crop, WordReading)> = [12.0, 12.9, 14.0]
             .into_iter()
             .enumerate()
-            .map(|(i, h)| {
-                let mut words = lines_every(&at(h), 60.0);
+            .map(|(i, pt)| {
+                let mut words = lines_every(&boxed(&at(pt)), 60.0);
                 if i > 0 {
                     for w in &mut words {
                         let [x0, y0, x1, y1] = w.bbox;
@@ -6802,5 +7308,64 @@ mod tests {
             "{:?}",
             headings(&els)
         );
+    }
+
+    /// A letter's lines at 10 pt on a leading of 1.35, boxed as the built-in
+    /// engine boxes them: each line's box `h` ems tall (about 1.05 over
+    /// prose, 1.0 over a line with no descenders), its baseline `down` of
+    /// the box from its top. Measured on synthetic pages of Helvetica, Times
+    /// and Courier at 8 to 24 pt, rendered at 100 to 300 dpi.
+    fn letter_as_detected() -> Vec<OcrWord> {
+        let lines: [(&str, f64, f64, usize); 8] = [
+            ("January 10, 2026", 1.08, 0.79, 0),
+            ("Quinn Testwell", 1.0, 0.86, 2),
+            ("7 Orchard Road", 0.99, 0.86, 3),
+            ("Lakeside, WA 98002", 1.02, 0.84, 4),
+            ("Dear Policyholder,", 1.1, 0.78, 6),
+            ("Thank you for your letter of last week.", 1.05, 0.79, 8),
+            ("We have reviewed the account: the balance", 1.05, 0.79, 9),
+            ("is due by August 7; quote the reference.", 1.05, 0.79, 10),
+        ];
+        lines
+            .iter()
+            .map(|&(text, h, down, k)| {
+                let baseline = 120.0 + 13.5 * k as f64;
+                let top = baseline - down * h * 10.0;
+                let w = 5.0 * text.chars().count() as f64;
+                word(text, [72.0, top, 72.0 + w, top + h * 10.0])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_letter_read_by_the_engine_keeps_its_size_and_its_blocks() {
+        let mut doc = blank_scan();
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Page, page_units(letter_as_detected()))],
+        );
+        let body = doc.pages[0]
+            .glyphs
+            .iter()
+            .find(|g| g.text == "T")
+            .unwrap()
+            .font_size;
+        assert!((f64::from(body) - 10.0).abs() < 0.6, "10 pt read as {body}");
+        let els = analysed(&mut doc, &r);
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        // The address is one block, as on the born-digital page: its lines,
+        // judged one by one, made `7 Orchard Road` a numbered heading.
+        assert!(
+            texts.contains(&"Quinn Testwell 7 Orchard Road Lakeside, WA 98002"),
+            "{texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("Thank you") && t.ends_with("the reference.")),
+            "{texts:?}"
+        );
+        // The page's first line is its title, as on the born-digital page.
+        assert_eq!(headings(&els), ["January 10, 2026"], "{texts:?}");
     }
 }
