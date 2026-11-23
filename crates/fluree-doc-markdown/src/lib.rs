@@ -28,7 +28,10 @@ pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
 }
 
 /// [`parse`], against `budget`.
-fn parse_within(src: &str, budget: Budget) -> Result<Vec<Element>, TooLarge> {
+fn parse_within(src: &str, mut budget: Budget) -> Result<Vec<Element>, TooLarge> {
+    // pulldown-cmark builds the tree of the whole document before its first
+    // event, out of the reader's sight: spent first, and held throughout.
+    budget.spend_cells(tree_slots(tree_marks(src.as_bytes())))?;
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -38,6 +41,68 @@ fn parse_within(src: &str, budget: Budget) -> Result<Vec<Element>, TooLarge> {
         ..Reader::default()
     }
     .run(Parser::new_ext(src, opts))
+}
+
+/// What pulldown-cmark's tree of `marks` marks ([`tree_marks`]) costs, in
+/// cell slots: one and a half a mark, 192 bytes. About 100 bytes a mark
+/// were measured at their peak, from `*a* ` to `[a`, nested `- ` and lines
+/// of `a`, and up to 210 in address space, the tree's vector of nodes
+/// reserving up to twice what it holds: 19 million `[a` aborted at 4 GB,
+/// 60 MB of `*a* ` too, where a 108 MB log, six marks a line, took 522 MB.
+fn tree_slots(marks: u64) -> u64 {
+    marks.saturating_add(marks / 2)
+}
+
+/// The marks of `src` from which pulldown-cmark's tree is made: each byte
+/// that may open or close inline markup (`` ` ``, `\`, `&`, `*`, `_`, `~`,
+/// `!`, `<`, `[`, `]`, `|`, as the parser looks for them) and each line
+/// end, each a node of the tree and, at most, the text before it, and each
+/// container a line opens (a quote's `>`, a list item's marker), a node or
+/// two. Text between them, however long, is one node.
+fn tree_marks(src: &[u8]) -> u64 {
+    let mut marks = containers(src);
+    for (i, b) in src.iter().enumerate() {
+        match b {
+            b'`' | b'\\' | b'&' | b'*' | b'_' | b'~' | b'!' | b'<' | b'[' | b']' | b'|' | b'\r' => {
+                marks += 1
+            }
+            b'\n' => marks += 1 + containers(&src[i + 1..]),
+            _ => {}
+        }
+    }
+    marks
+}
+
+/// The containers the line at the start of `line` opens: each `>`, and each
+/// list item's marker (`-`, `+`, `*`, or up to nine digits and `.` or `)`,
+/// before a space or the line's end), as many as are nested, blanks between.
+fn containers(line: &[u8]) -> u64 {
+    let blank = |b: Option<&u8>| matches!(b, None | Some(b' ' | b'\t' | b'\r' | b'\n'));
+    let mut n = 0;
+    let mut i = 0;
+    loop {
+        while matches!(line.get(i), Some(b' ' | b'\t')) {
+            i += 1;
+        }
+        let digits = line[i..]
+            .iter()
+            .take(10)
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+        let next = match line.get(i) {
+            Some(b'>') => i + 1,
+            Some(b'-' | b'+' | b'*') if blank(line.get(i + 1)) => i + 1,
+            _ if (1..10).contains(&digits)
+                && matches!(line.get(i + digits), Some(b'.' | b')'))
+                && blank(line.get(i + digits + 1)) =>
+            {
+                i + digits + 1
+            }
+            _ => return n,
+        };
+        n += 1;
+        i = next;
+    }
 }
 
 /// The character offset of each byte offset in `s`, offsets in ascending
@@ -367,14 +432,16 @@ mod tests {
     fn paragraphs_and_cells_past_the_budget_are_refused() {
         let src = "w\n\n".repeat(1000);
         let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
-        let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES);
+        // Each line end a mark of the parser's tree, a slot and a half.
+        let need = 1000 * (ELEMENT_BYTES + TEXT_BYTES) + 3000 * CELL_BYTES;
         assert_eq!(within(need).unwrap().len(), 1000);
         assert!(within(need - 1).is_err());
         // A header of 3 cells over a row of 1, which the parser gives the
         // header's cells: 6 cells, 4 that hold text and the table, for
-        // Markdown.
+        // Markdown, and the parser's tree, its 10 pipes and 3 line ends at a
+        // slot and a half (19).
         let src = "| a | b | c |\n|---|---|---|\n| 1 |\n";
-        let need = 6 * CELL_BYTES + FLAT_ELEMENT_BYTES + 4 * (FLAT_CELL_BYTES + TEXT_BYTES);
+        let need = (6 + 19) * CELL_BYTES + FLAT_ELEMENT_BYTES + 4 * (FLAT_CELL_BYTES + TEXT_BYTES);
         let within =
             |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
         assert_eq!(within(need).unwrap()[0].cells.as_ref().unwrap()[1].len(), 3);
@@ -552,10 +619,36 @@ mod tests {
         let src = "[a](bc) ".repeat(100);
         let within = |memory: u64| parse_within(&src, Budget::new(memory, 0));
         let text = 2 * 100 - 1;
-        let need =
-            ELEMENT_BYTES + text * TEXT_BYTES + 100 * (ELEMENT_BYTES + CELL_BYTES + 2 * TEXT_BYTES);
+        // Each link's brackets, marks of the parser's tree: three slots.
+        let need = ELEMENT_BYTES
+            + text * TEXT_BYTES
+            + 100 * (ELEMENT_BYTES + 4 * CELL_BYTES + 2 * TEXT_BYTES);
         assert_eq!(within(need).unwrap()[0].links.as_ref().unwrap().len(), 100);
         assert!(within(need - 1).is_err());
+    }
+
+    #[test]
+    fn the_parsers_tree_is_spent_from_its_marks_before_it_is_built() {
+        // Each byte that may open or close inline markup, each line end.
+        assert_eq!(tree_marks(b"plain text, no marks"), 0);
+        assert_eq!(tree_marks(b"*a* `b` [c](d) <e> &f; !g \\h ~i~ |j|\r\n"), 16);
+        // Each container a line opens, nested ones included, and no list
+        // marker that is not followed by a blank.
+        assert_eq!(
+            tree_marks(b"> > >quoted\n- - item\n  12. x\n1.5 -3 +4"),
+            3 + (1 + 2) + (1 + 1) + 1
+        );
+        assert_eq!(tree_marks(b"1234567890. ten digits are no marker"), 0);
+        // 15 million `*a* ` on one line, 60 MB, aborted the process at 4 GB:
+        // 30 million marks are past the budget, refused before the parse.
+        let hostile = "*a* ".repeat(1 << 20);
+        assert_eq!(tree_marks(hostile.as_bytes()), 2 << 20);
+        assert_eq!(tree_slots(2 << 20), 3 << 20);
+        let refused = parse_within(&hostile, Budget::new((3 << 20) * CELL_BYTES - 1, 0));
+        assert!(refused.unwrap_err().to_string().starts_with("cells past"));
+        // Text between marks costs nothing more, however long.
+        let log = "2026-11-23T12:00:00Z INFO [worker-3] done\n".repeat(1000);
+        assert_eq!(tree_marks(log.as_bytes()), 3000);
     }
 
     #[test]

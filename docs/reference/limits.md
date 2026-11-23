@@ -8,8 +8,8 @@ thousands of cells wide over rows of one, a cell merged down over thousands
 of rows: a file of a few kilobytes can describe gigabytes. So the readers
 of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
 `.docx`, `.odt`, `.ppt`, `.pptx`, `.odp`, `.rtf`), of Markdown and of HTML
-(a page, or an email's HTML body, the parser's tree included, as the
-parser builds it) are each handed one budget for the document
+(a page, or an email's HTML body), their parsers' trees included, are each
+handed one budget for the document
 (`fluree_doc_model::budget::Budget`) and spend it *before* they allocate. Past it, the document is refused with an
 error that names what ran out (`workbook too large: cells past the 2560 MiB
 of memory a document may take`) rather than taking the process down with
@@ -84,8 +84,9 @@ convert to DoCO from a `.csv`, at 1.77 GB, and are refused as an `.xlsx`,
 convert. Counted at an element's 2 KiB, a `.csv` of 100,000 rows
 by 12 columns (13 MB) was refused as Markdown where the same `.xlsx`
 converted; it now converts, at 144 MB, and 100,000 rows by 15 columns (1.5
-million cells) at 162 MB, about 110 B a cell, and 290 MB from a Markdown
-table. As DoCO, 2.9 KB a cell were measured
+million cells) at 162 MB, about 110 B a cell, 290 MB from a Markdown table,
+whose parser's tree is counted too ([A Markdown document's
+tree](#a-markdown-documents-tree)). As DoCO, 2.9 KB a cell were measured
 (20,000 rows by 15 columns, 883 MB), so both are refused there. Counted
 at 2 KiB on top of its slots, each of an `.ods` sheet's cells spent twice,
 and its content bound to 64 MiB, a LibreOffice `.ods` of 50,000 rows by 12
@@ -203,6 +204,25 @@ What nests more than 512 deep, where a browser stops nesting, is set
 beside its ancestor at that depth, as a browser sets it, and read: the
 walk that reads the tree recurses down it, and 1,000 tables nested, a 30
 KB page, overflowed a 2 MiB stack.
+
+## A Markdown document's tree
+
+A Markdown document (and a `.txt`, read as one) is parsed by pulldown-cmark,
+which builds the tree of the whole document, its blocks and the marks of
+their inline markup, before the reader sees its first event, and holds it
+while the elements are made. So the tree is spent first, from the
+document's text, without parsing it: each byte the parser looks for as it
+builds the tree (`` ` ``, `\`, `&`, `*`, `_`, `~`, `!`, `<`, `[`, `]`, `|`),
+each line end, and each container a line opens (a quote's `>`, a list
+item's marker, nested ones each) is a mark, a node of the tree and at most
+the text before it, and costs a cell slot and a half, 192 bytes. Text
+between marks, however long, is one node. About 100 bytes a mark were
+measured at the peak, from `*a* ` to `[a`, nested `- ` and lines of one
+letter, and up to 210 bytes in address space, the tree's vector reserving
+up to twice what it holds: 60 MB of `*a* ` on one line, 30 million marks,
+aborted at 4 GB, and 19 million `[a` too; both are refused now, before the
+parse, and no such run near the budget aborts. A 108 MB log of 720,000
+lines, six marks a line, takes 522 MB and converts to every output.
 
 ## Parts inflated
 
