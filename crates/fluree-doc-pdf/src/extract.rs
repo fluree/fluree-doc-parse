@@ -63,6 +63,10 @@ pub struct Page {
     /// Larger filled areas — header shading and zebra striping, which mark row
     /// structure in tables drawn without vertical rules.
     pub fills: Vec<Fill>,
+    /// What the router made of this page as it was drawn, kept by
+    /// [`crate::document::analyze_with`] before it cleans the glyphs (see
+    /// [`Page::routing`]); `None` until then.
+    pub routing: Option<crate::route::Routing>,
     /// Page size in PDF units, in the frame the glyphs are in — the reading
     /// frame (see [`Page::rotation`]). Needed to express positions as a
     /// fraction of page height, which is how furniture detection compares
@@ -1154,6 +1158,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             glyphs: dev.glyphs,
             images: dev.images,
             rules: dev.rules,
+            routing: None,
             fills: dev.fills,
             width: w as f64,
             height: h as f64,
@@ -1466,6 +1471,7 @@ mod tests {
             glyphs,
             images: Vec::new(),
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,

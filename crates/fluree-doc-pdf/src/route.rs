@@ -203,7 +203,7 @@ fn unread_regions(page: &Page, min_fraction: f64) -> Vec<BBox> {
 ///
 /// Empty for a page read whole (scanned, near-blank, broken text).
 pub fn ocr_regions(page: &Page) -> Vec<BBox> {
-    let routed = match decide(page).0 {
+    let routed = match page.routing().into_owned().route {
         Route::Vlm(_) => return Vec::new(),
         Route::VlmRegions(r) => r,
         Route::Deterministic => Vec::new(),
@@ -253,6 +253,49 @@ pub fn decide(page: &Page) -> (Route, Signals) {
     (Route::Deterministic, s)
 }
 
+/// What the router makes of a page, as a page keeps it ([`Page::routing`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Routing {
+    /// [`decide`]'s verdict, which numbers the routed regions.
+    pub route: Route,
+}
+
+/// What the router makes of a page as it stands.
+pub fn routing(page: &Page) -> Routing {
+    Routing {
+        route: decide(page).0,
+    }
+}
+
+impl Page {
+    /// What the router made of this page as it was drawn, once
+    /// [`Page::keep_routing`] has run; until then, of the page as it stands.
+    ///
+    /// Analysis cleans a page's glyphs (a word drawn twice for bold, a
+    /// struck underline), and a caption drawn twice over a capture can leave
+    /// it, cleaned, under the handful of glyphs that make a glyph void: routed
+    /// again, the page would gain a region, and every region after it a new
+    /// number. Crop names, OCR word files and model readings are named on the
+    /// page as drawn, so whatever reads a page after its analysis reads this.
+    /// [`crate::ocr::inject`] keeps it before it lays a word on the page: an
+    /// OCR reading's glyphs count in the page's signals, and could route it
+    /// another way.
+    pub fn routing(&self) -> std::borrow::Cow<'_, Routing> {
+        match &self.routing {
+            Some(r) => std::borrow::Cow::Borrowed(r),
+            None => std::borrow::Cow::Owned(routing(self)),
+        }
+    }
+
+    /// Keep what the router makes of this page as it stands, unless a
+    /// routing is kept already: the first is of the page as drawn.
+    pub fn keep_routing(&mut self) {
+        if self.routing.is_none() {
+            self.routing = Some(routing(self));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +342,7 @@ mod tests {
                 })
                 .collect(),
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,

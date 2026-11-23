@@ -543,6 +543,7 @@ mod tests {
             glyphs,
             images: Vec::new(),
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,

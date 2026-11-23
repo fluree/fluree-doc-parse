@@ -217,6 +217,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
                 grid,
             }],
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             width,
             height,

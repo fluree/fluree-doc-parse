@@ -118,7 +118,7 @@ pub fn unread_pages(
             });
             continue;
         }
-        if let route::Route::Vlm(reason) = route::decide(p).0 {
+        if let route::Route::Vlm(reason) = p.routing().route {
             out.push(fluree_doc_model::UnreadPage {
                 index: p.index,
                 reason: format!("{reason:?}"),

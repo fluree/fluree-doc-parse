@@ -474,10 +474,10 @@ fn select(doc: &Document, analysis: &Analysis, hints: &CropHints) -> (CropJobs, 
         // What an OCR reading already read is not asked for again. A region
         // keeps its number either way, so a crop named before the reading
         // still names the same region.
-        match crate::route::decide(p).0 {
+        match &p.routing().route {
             Route::Vlm(r) => {
                 jobs.push((p.index, None));
-                reasons.insert(p.index, CropReason::from(r));
+                reasons.insert(p.index, CropReason::from(*r));
             }
             Route::VlmRegions(r) => {
                 let unread: Vec<(String, BBox)> = r
@@ -697,16 +697,13 @@ pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJ
                 // routed regions a doubt widened to the whole page still
                 // holds pixels only a reader can read, so it ranks with
                 // those regions, not with the doubt pages.
-                let routed = doc
-                    .pages
-                    .iter()
-                    .find(|p| p.index == page)
-                    .map(|p| crate::route::decide(p).0);
-                let rank = match routed {
-                    Some(crate::route::Route::Vlm(_)) => 0,
-                    Some(crate::route::Route::VlmRegions(_)) => 1,
-                    _ => 4,
-                };
+                let rank = doc.pages.iter().find(|p| p.index == page).map_or(4, |p| {
+                    match &p.routing().route {
+                        crate::route::Route::Vlm(_) => 0,
+                        crate::route::Route::VlmRegions(_) => 1,
+                        _ => 4,
+                    }
+                });
                 crops.push(Ranked {
                     rank,
                     order,
@@ -1253,6 +1250,7 @@ mod tests {
                 Vec::new()
             },
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,

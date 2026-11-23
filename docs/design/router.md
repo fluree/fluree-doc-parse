@@ -37,6 +37,14 @@ Below the page level, a raster region routes when a pixel probe reads it as
 text or table structure — **gated on a glyph void**. A region the text layer
 already covers never routes, however picture-like it looks.
 
+The void is measured on the page as drawn, before analysis cleans its glyphs
+(a word drawn twice to look bold, an underline struck over a word) and before
+OCR words are laid on it, and the page keeps that routing. The routed regions
+are numbered on it (`r0`, `r1`, …), and the number names a region's crop, its
+OCR word file, a model's reading of it and its splice anchor alike. Routed again after cleaning, a
+caption drawn twice over a capture would count half its glyphs, the capture
+would become one more region, and every region after it would be renumbered.
+
 This gate is what makes region routing safe: because our text is never
 replaced, a routed region can only *add*. The tier is therefore
 recall-oriented, biased toward routing when uncertain, since the cost of a

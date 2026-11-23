@@ -188,7 +188,19 @@ impl Injected {
 /// page before any word is added, so two readings of one page are judged
 /// against the page as extracted, not against each other.
 pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Vec<Injected> {
-    let routes: Vec<Route> = doc.pages.iter().map(|p| route::decide(p).0).collect();
+    // Each page's routing is kept as drawn, before any word is added: what
+    // reads the page after its analysis reads that routing. A reading's
+    // glyphs are counted in the page's signals, and a few words of a region
+    // on a short page whose font resolves badly would route it `BrokenText`
+    // and leave its other regions without an anchor or a report.
+    for p in doc.pages.iter_mut() {
+        p.keep_routing();
+    }
+    let routes: Vec<Route> = doc
+        .pages
+        .iter()
+        .map(|p| p.routing().route.clone())
+        .collect();
     // The regions an engine may fill: the routed ones, then those too small
     // for a model (see `route::ocr_regions`).
     let regions: Vec<Vec<BBox>> = doc.pages.iter().map(route::ocr_regions).collect();
@@ -1548,7 +1560,7 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
-        let routed = match route::decide(p).0 {
+        let routed = match &p.routing().route {
             Route::Vlm(_) => {
                 crops.push((0, p.index, None));
                 continue;
@@ -1704,6 +1716,7 @@ mod tests {
             glyphs,
             images,
             rules: Vec::new(),
+            routing: None,
             fills: Vec::new(),
             width: 612.0,
             height: 792.0,
@@ -3241,6 +3254,67 @@ mod tests {
             let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             assert_eq!(r[0].taken + r[0].dropped, n, "{r:?}");
         }
+    }
+
+    #[test]
+    fn a_region_reading_leaves_the_page_routed_as_drawn() {
+        // A short page whose font resolves 45 of its 99 glyphs, under the
+        // 100 glyph events the router needs before it judges their Unicode,
+        // and two captures in glyph voids, A then B. A's reading adds glyph
+        // events: counted, they route the page `BrokenText`, and B, which
+        // nothing read, would lose its anchor.
+        let mut glyphs = Vec::new();
+        for row in 0..3 {
+            glyphs.extend(native(&"a".repeat(33), 72.0, 40.0 + row as f64 * 14.0));
+        }
+        for g in glyphs.iter_mut().skip(45) {
+            g.text = String::new();
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let image = |y0, y1| ImagePlacement {
+            bbox: BBox {
+                x0: 60.0,
+                y0,
+                x1: 560.0,
+                y1,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+        };
+        let (a, b) = (image(150.0, 300.0), image(400.0, 550.0));
+        let mut doc = Document {
+            pages: vec![page(glyphs, vec![a, b])],
+        };
+        let drawn = route::Route::VlmRegions(vec![a.bbox, b.bbox]);
+        assert_eq!(route::decide(&doc.pages[0]).0, drawn);
+        let words = vec![word("Balance", [80.0, 160.0, 200.0, 190.0])];
+        let r = inject(&mut doc, &[(0, Crop::Region(0), page_units(words))]);
+        assert!(r[0].taken > 0, "{r:?}");
+        assert_eq!(
+            route::decide(&doc.pages[0]).0,
+            route::Route::Vlm(route::Reason::BrokenText),
+            "the reading's glyphs tip the page as it now stands"
+        );
+        let a = crate::document::analyze_with(
+            &mut doc,
+            &[],
+            &crate::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(doc.pages[0].routing().route, drawn);
+        let anchors: Vec<(&str, Option<BBox>)> = a
+            .elements
+            .iter()
+            .filter(|e| e.text.starts_with("[[VLM"))
+            .map(|e| (e.text.as_str(), e.bbox))
+            .collect();
+        assert_eq!(anchors, vec![("[[VLM:p0:r1]]", Some(b.bbox))]);
     }
 
     #[test]
