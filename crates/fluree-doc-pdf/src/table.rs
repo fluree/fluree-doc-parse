@@ -1012,6 +1012,10 @@ impl Grid {
     /// the year-vs-amount distinction is exactly what the demotion test must
     /// not blur.
     ///
+    /// A list of fields has no header at all: a label column, bold on every
+    /// row, or a ruled `Label | value` list whose first row is set like the
+    /// rest (`lists_fields`).
+    ///
     /// Stacked headers (spanning banner bands over the column-name row — the
     /// eligibility-matrix layout) are read from the fills: the header block
     /// is shaded as a run of banded rows and the data region is not, so a
@@ -1022,6 +1026,7 @@ impl Grid {
         &self,
         rows: &[Vec<String>],
         glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
         fills: &[crate::rule::Fill],
     ) -> usize {
         if rows.len() < 2 {
@@ -1045,13 +1050,144 @@ impl Grid {
             && run == 0
             && weights.iter().all(|w| bold(w[0]))
             && weights.iter().all(|w| w[1..].iter().all(|c| !bold(*c)));
-        if label_column {
+        if label_column || self.lists_fields(rows, glyphs, rules, fills) {
             return 0;
         }
         // run == 1 is itself the exclusive-stripe evidence: band 0 filled,
         // band 1 not (where the run stopped).
         let styled = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, 1) || run == 1;
         decide_header_rows(rows, styled)
+    }
+
+    /// A list of fields ruled into rows, `Label | value` on every row, the
+    /// first included: nothing sets the first row apart as a header.
+    ///
+    /// A spec sheet sets its data this way, with no header row. Taken for
+    /// one, its first field named every value under it (`1 µL – 50,000 µL`
+    /// was a `Positive displacement dispenser`) and was lost as a field. A
+    /// header is set apart from the rows under it, and here nothing does
+    /// that:
+    ///
+    /// - every row is ruled off from the next across both columns, and the
+    ///   rule under the first is no heavier than the others;
+    /// - the first row is shaded like some row under it, or bare like one;
+    /// - in each column, the first row is set in the size and weight of
+    ///   the rows under it;
+    /// - a label stands in the first column of every row.
+    ///
+    /// A header set plain still names its column, and in fewer words than
+    /// any value under it: `Settings | Recommendations` over sentences of
+    /// advice. A field's value is one more value, `Positive displacement
+    /// dispenser` beside `1` and `No`.
+    fn lists_fields(
+        &self,
+        rows: &[Vec<String>],
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        fills: &[crate::rule::Fill],
+    ) -> bool {
+        let n = self.rows();
+        if self.cols() != 2 || n < MIN_FIELDS || rows.len() != n {
+            return false;
+        }
+        let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
+        let labelled = (0..n).all(|r| {
+            let t = text(r, 0);
+            t.chars().any(char::is_alphabetic) && !is_numeric_cell(t)
+        });
+        let words = |t: &str| t.split_whitespace().count();
+        let first = text(0, 1);
+        let names = first.chars().any(char::is_alphabetic)
+            && (1..n)
+                .map(|r| text(r, 1))
+                .filter(|t| !t.is_empty())
+                .all(|t| words(first) < words(t));
+        if !labelled || names {
+            return false;
+        }
+        let Some(strokes) = (1..n)
+            .map(|r| self.rule_between(rules, r))
+            .collect::<Option<Vec<f64>>>()
+        else {
+            return false;
+        };
+        let others = strokes[1..].iter().copied().fold(0.0, f64::max);
+        if strokes[0] > others * HEAVIER_RULE {
+            return false;
+        }
+        let shaded = |r: usize| self.band_has_fill(fills, r);
+        if (1..n).all(|r| shaded(r) != shaded(0)) {
+            return false;
+        }
+        let styles = self.cell_styles(glyphs);
+        let bold = |(_, weighted, heavy): (f32, usize, usize)| weighted > 0 && heavy * 2 > weighted;
+        (0..2).all(|c| {
+            let Some(head) = styles[c] else {
+                return true;
+            };
+            let below: Vec<(f32, usize, usize)> =
+                (1..n).filter_map(|r| styles[r * 2 + c]).collect();
+            if below.is_empty() {
+                return true;
+            }
+            let mut sizes: Vec<f32> = below.iter().map(|s| s.0).collect();
+            sizes.sort_by(f32::total_cmp);
+            let size = sizes[sizes.len() / 2];
+            let heavy = below.iter().filter(|s| bold(**s)).count() * 2 > below.len();
+            (head.0 - size).abs() <= size * SAME_SIZE && bold(head) == heavy
+        })
+    }
+
+    /// The stroke of the rule drawn under `row` across every column, or
+    /// `None` where some column is left open.
+    fn rule_between(&self, rules: &[Rule], row: usize) -> Option<f64> {
+        let y = *self.ys.get(row)?;
+        let at: Vec<&Rule> = rules
+            .iter()
+            .filter(|r| r.orientation == Orientation::Horizontal)
+            .filter(|r| (r.axis_pos() - y).abs() <= AXIS_TOLERANCE)
+            .collect();
+        let ruled = self.xs.windows(2).all(|w| {
+            let spans = at.iter().map(|r| (r.bbox.x0, r.bbox.x1));
+            span_coverage(spans, w[0], w[1]) >= 0.6 * (w[1] - w[0])
+        });
+        ruled.then(|| at.iter().map(|r| r.bbox.height()).fold(0.0, f64::max))
+    }
+
+    /// Per cell, row by row: the size most of its glyphs are set in, how
+    /// many of them declare a weight, and how many of those are bold.
+    /// `None` for a cell with no ink.
+    fn cell_styles(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<(f32, usize, usize)>> {
+        let cols = self.cols();
+        let mut sizes: Vec<Vec<f32>> = vec![Vec::new(); self.rows() * cols];
+        let mut weights = vec![(0usize, 0usize); self.rows() * cols];
+        for g in glyphs {
+            if g.bbox.is_none() || g.text.trim().is_empty() {
+                continue;
+            }
+            let (x, y) = g.center();
+            let Some((r, c)) = self.cell_at(x, y) else {
+                continue;
+            };
+            sizes[r * cols + c].push(g.font_size);
+            if let Some(w) = g.weight {
+                weights[r * cols + c].0 += 1;
+                if w >= 600 {
+                    weights[r * cols + c].1 += 1;
+                }
+            }
+        }
+        sizes
+            .into_iter()
+            .zip(weights)
+            .map(|(mut s, (weighted, heavy))| {
+                if s.is_empty() {
+                    return None;
+                }
+                s.sort_by(f32::total_cmp);
+                Some((s[s.len() / 2], weighted, heavy))
+            })
+            .collect()
     }
 
     /// The first row is set apart the way a header is: bold over a row
@@ -1295,6 +1431,17 @@ fn span_coverage(spans: impl Iterator<Item = (f64, f64)>, x0: f64, x1: f64) -> f
     }
     covered
 }
+
+/// Fewest rows a ruled field list is read from. With one field under the
+/// first there is too little to say how the fields are set.
+const MIN_FIELDS: usize = 3;
+
+/// How many times heavier than the rules between the rows below it the rule
+/// under a first row has to be to rule it off as a header.
+const HEAVIER_RULE: f64 = 1.5;
+
+/// Relative difference within which two cells are set in one size.
+const SAME_SIZE: f32 = 0.05;
 
 /// Deepest stacked header the fill-run signal may claim. Real matrices run
 /// two banners plus the column-name row; anything deeper is a fully shaded
@@ -3696,7 +3843,7 @@ mod header_tests {
         let rows: Vec<Vec<String>> = (0..5)
             .map(|r| (0..4).map(|c| format!("r{r}c{c}")).collect())
             .collect();
-        assert_eq!(g.header_rows(&rows, &[], &fills), 3);
+        assert_eq!(g.header_rows(&rows, &[], &[], &fills), 3);
     }
 
     #[test]
@@ -3710,7 +3857,7 @@ mod header_tests {
             .collect();
         // Run covers the whole grid -> falls back to the single-row logic;
         // all-text rows keep the presumed single header.
-        assert_eq!(g.header_rows(&rows, &[], &fills), 1);
+        assert_eq!(g.header_rows(&rows, &[], &[], &fills), 1);
     }
 
     /// A letterhead: one row of fields ruled side by side, closed top and
@@ -4208,7 +4355,7 @@ mod header_tests {
             &["Tax", "3.86"],
             &["Total", "42.46"],
         ]);
-        assert_eq!(g.header_rows(&t, &glyphs, &[]), 0);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 0);
         // A header bold in every cell over plain rows still is one, numbers
         // and all.
         let mut glyphs = Vec::new();
@@ -4217,7 +4364,96 @@ mod header_tests {
         glyphs.extend(run(5.0, 135.0, "10", false));
         glyphs.extend(run(105.0, 135.0, "12", false));
         let t = rows(&[&["1", "2"], &["10", "12"], &["", ""]]);
-        assert_eq!(g.header_rows(&t, &glyphs, &[]), 1);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
+    }
+
+    /// Two columns of `fields`, one 20pt row each, label and value set in
+    /// `weight` (the first row in `head`), with a rule under every row.
+    fn field_list(
+        fields: &[(&str, &str)],
+        head: Option<u32>,
+        weight: Option<u32>,
+    ) -> (Grid, Vec<Vec<String>>, Vec<crate::glyph::Glyph>, Vec<Rule>) {
+        let ys: Vec<f64> = (0..=fields.len())
+            .map(|i| 100.0 + 20.0 * i as f64)
+            .collect();
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 100.0, 400.0],
+            ys: ys.clone(),
+            bbox: BBox {
+                x0: 0.0,
+                y0: ys[0],
+                x1: 400.0,
+                y1: ys[fields.len()],
+            },
+        };
+        let mut glyphs = Vec::new();
+        for (r, (label, value)) in fields.iter().enumerate() {
+            for (x, text) in [(5.0, label), (105.0, value)] {
+                glyphs.extend(text.chars().enumerate().map(|(i, c)| {
+                    let mut gl = gly(x + 5.0 * i as f64, ys[r] + 15.0, 5.0, &c.to_string());
+                    gl.weight = if r == 0 { head } else { weight };
+                    gl
+                }));
+            }
+        }
+        let t = fields
+            .iter()
+            .map(|(a, b)| vec![a.to_string(), b.to_string()])
+            .collect();
+        let rules = ys.iter().map(|&y| h(0.0, 400.0, y)).collect();
+        (g, t, glyphs, rules)
+    }
+
+    const FIELDS: &[(&str, &str)] = &[
+        ("Pipetting type", "Positive displacement dispenser"),
+        ("Channel options", "1"),
+        ("Volume range", "1 µL – 50,000 µL"),
+        ("Operation", "Electronic"),
+    ];
+
+    #[test]
+    fn a_ruled_list_of_fields_has_no_header_row() {
+        let (g, t, glyphs, rules) = field_list(FIELDS, None, None);
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 0);
+        // Set the same, weights declared or not.
+        let (g, t, glyphs, rules) = field_list(FIELDS, Some(400), Some(400));
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 0);
+    }
+
+    #[test]
+    fn a_first_row_set_apart_is_a_header_over_fields() {
+        // Bold over plain.
+        let (g, t, glyphs, rules) = field_list(FIELDS, Some(700), Some(400));
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+        // Ruled off more heavily than the rows under it.
+        let (g, t, glyphs, mut rules) = field_list(FIELDS, None, None);
+        rules[1].bbox.y1 = rules[1].bbox.y0 + 1.5;
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+        // The only row ruled off from the next.
+        let (g, t, glyphs, mut rules) = field_list(FIELDS, None, None);
+        rules.drain(2..4);
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
+        // Shaded over bare rows.
+        let (g, t, glyphs, rules) = field_list(FIELDS, None, None);
+        let band = [fill(0.0, 100.0, 400.0, 120.0)];
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &band), 1);
+    }
+
+    #[test]
+    fn a_plain_header_names_its_column_in_fewer_words_than_its_values() {
+        let (g, t, glyphs, rules) = field_list(
+            &[
+                ("Settings", "Recommendations"),
+                ("General", "Change the pump frit as specified"),
+                ("Mobile phase", "Use a clean solvent reservoir"),
+            ],
+            None,
+            None,
+        );
+        assert_eq!(g.header_rows(&t, &glyphs, &rules, &[]), 1);
     }
 
     #[test]
@@ -4899,7 +5135,7 @@ mod tests {
             cells.chunks(2).map(|c| c.to_vec()).collect()
         };
         assert_eq!(
-            grids[0].header_rows(&rows, &gl, &[]),
+            grids[0].header_rows(&rows, &gl, &[], &[]),
             0,
             "a field is not a header"
         );

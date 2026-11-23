@@ -179,6 +179,36 @@ values are missing: a receipt's `TOTAL` with no amount sits over `Cash` and
 over `months (95% CI)`) is carried on, not a group, and a two-column list is
 left alone, since a field left empty there looks the same.
 
+## A list of fields has no header row
+
+A spec sheet sets its data as fields, `Label | value` down two columns and
+ruled between rows, with no header row. A table's first row is presumed to be
+its header, and taken for one, a field list's first field named every value
+under it (`1 µL – 50,000 µL` was a `Positive displacement dispenser`) and was
+lost as a field.
+
+A header is set apart from the rows under it, and a field's row is not. Two
+columns are read as fields, with no header row, when:
+
+- every row is ruled off from the next across both columns, and the rule
+  under the first is no heavier than the others;
+- the first row is shaded like some row under it, or bare like one, so the
+  first band of a striped table is no header;
+- in each column, the first row is set in the size and weight of the rows
+  under it. A label column set bold beside plain values is a field list, and
+  so is one whose values set a phrase bold here and there;
+- a label stands in the first column of every row.
+
+A header set no differently from its rows still names its column, and in
+fewer words than any value under it. `Settings | Recommendations` over
+sentences of advice keeps its header row. A field's value is one more value:
+`Positive displacement dispenser` beside `1` and `No`.
+
+The cells of a field list carry no column header. Each label is the row
+header of its value, and the first field is a row like the rest. Markdown
+has no table without a header row, so it still prints the first field
+there.
+
 ## Merges
 
 Spanning cells are detected from which boundaries are *not* drawn across a

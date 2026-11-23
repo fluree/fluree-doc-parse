@@ -264,6 +264,11 @@ This is what lets a query ask for "the Supply voltage row of the LM358B
 column" without the consumer reconstructing the grid. Merged cells are
 denormalized first, so every cell stands on its own.
 
+A table with no header row has no `doc:columnHeader` on its cells, and
+`doc:rowIndex` counts from its first row. A list of fields set `Label |
+value` is one: each value's `doc:rowHeader` is its label. See [a list of
+fields](../design/tables.md#a-list-of-fields-has-no-header-row).
+
 A cell's offsets slice the projection to its `doc:cellValue`, which is its
 text, so it carries no `nif:isString` repeating it. A value copied into a cell
 by a merge has no place in the projection and no offsets.

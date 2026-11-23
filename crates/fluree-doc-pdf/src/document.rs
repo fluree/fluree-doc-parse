@@ -1488,8 +1488,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     lay.header_rows
                 }
                 None => {
-                    let h = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
-                    g.stacked_header_rows(h, &rows, &merges, &raw.pages[pi].rules)
+                    let page = &raw.pages[pi];
+                    let h = g.header_rows(&rows, &page.glyphs, &page.rules, &page.fills);
+                    g.stacked_header_rows(h, &rows, &merges, &page.rules)
                 }
             };
             // An unruled table read by alignment has no rules to say a header
