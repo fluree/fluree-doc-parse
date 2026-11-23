@@ -931,6 +931,78 @@ fn raised_mark(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Opti
     Some(mark)
 }
 
+/// The fraction `idxs[k]` begins, set against the whole number before it:
+/// the index of its last glyph.
+///
+/// A mixed number is typeset with no space between its parts: `22⅜` as `22`,
+/// a numerator set small and high, a slash, and a denominator set small.
+/// The text layer gives the digits alone, and read as one number `22 3/8`
+/// was `223/8`. Small is the ink's height against the whole number's
+/// figures, which a fraction's figures share whether a smaller size sets
+/// them or the font's own fraction figures do. High is the numerator's foot
+/// above the whole number's baseline: old-style figures are as short and
+/// stand on it.
+fn fraction_at(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Option<usize> {
+    if adv.vertical() {
+        return None;
+    }
+    let figure = |g: &Glyph| !g.text.is_empty() && g.text.chars().all(|c| c.is_ascii_digit());
+    let whole = idxs[..k]
+        .iter()
+        .rev()
+        .map(|&i| &glyphs[i])
+        .find(|p| p.bbox.is_some() || !p.text.trim().is_empty())?;
+    let ink = whole.bbox.filter(|_| figure(whole))?;
+    // A fraction the font draws whole, `½`, which its text map spells out.
+    let spelled = glyphs[idxs[k]]
+        .text
+        .split_once(['/', '\u{2044}'])
+        .is_some_and(|(n, d)| {
+            [n, d]
+                .iter()
+                .all(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+        });
+    if spelled {
+        return Some(k);
+    }
+    let small = |g: &Glyph| {
+        figure(g)
+            && g.bbox
+                .is_some_and(|b| b.height() <= ink.height() * FRACTION_FIGURE)
+    };
+    let run = |from: usize| {
+        (from..idxs.len())
+            .take_while(|&j| small(&glyphs[idxs[j]]))
+            .last()
+    };
+    let numerator = run(k)?;
+    let high = idxs[k..=numerator].iter().all(|&i| {
+        glyphs[i]
+            .bbox
+            .is_some_and(|b| ink.y1 - b.y1 >= ink.height() * FRACTION_RAISE)
+    });
+    let slash = numerator + 1;
+    if !high
+        || !idxs
+            .get(slash)
+            .is_some_and(|&i| matches!(glyphs[i].text.as_str(), "/" | "\u{2044}"))
+    {
+        return None;
+    }
+    let denominator = run(slash + 1)?;
+    let ends = idxs
+        .get(denominator + 1)
+        .is_none_or(|&i| !glyphs[i].text.starts_with(|c: char| c.is_ascii_digit()));
+    ends.then_some(denominator)
+}
+
+/// Tallest a fraction's figure stands, against the whole number's.
+const FRACTION_FIGURE: f64 = 0.8;
+
+/// Least height, against the whole number's figures, of a numerator's foot
+/// above their baseline.
+const FRACTION_RAISE: f64 = 0.25;
+
 /// Signs a power may carry beside its digits.
 const POWER_SIGNS: &[char] = &['-', '+', '\u{2212}', '\u{2013}'];
 
@@ -1111,6 +1183,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut sizes: Vec<f32> = Vec::new();
     // A power being read: its size and baseline.
     let mut exponent: Option<(f32, f64)> = None;
+    // The last glyph of a mixed number's fraction being read.
+    let mut fraction: Option<usize> = None;
     let mut words: Vec<Word> = Vec::new();
 
     for (k, &i) in idxs.iter().enumerate() {
@@ -1147,9 +1221,18 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                         text.push(' ');
                     }
                 }
+                // A mixed number's fraction parts from its whole number:
+                // `22 3/8`, not `223/8`.
+                if fraction.is_none_or(|end| k > end) && !text.ends_with(' ') {
+                    fraction = fraction_at(glyphs, idxs, k, adv);
+                    if fraction.is_some() {
+                        text.push(' ');
+                    }
+                }
+                let in_fraction = fraction.is_some_and(|end| k <= end);
                 // A note's mark raised after a word parts from it:
                 // `Acrylonitrile` and its `a`, not `Acrylonitrilea`.
-                let raised = if text.ends_with(' ') {
+                let raised = if text.ends_with(' ') || in_fraction {
                     None
                 } else {
                     raised_mark(glyphs, idxs, k, adv)
@@ -1167,7 +1250,9 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     (g.font_size - size).abs() <= size * 0.1
                         && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
                 });
-                if !continues {
+                if in_fraction {
+                    exponent = None;
+                } else if !continues {
                     exponent = raised
                         .as_deref()
                         .filter(|m| {
@@ -1853,6 +1938,80 @@ mod tests {
             v.extend(word(raised, 5.0 * base.len() as f64, true));
             assert_eq!(assemble(&v)[0].text, want);
         }
+    }
+
+    /// Figures from `x`, each 5 wide, at `size`, with their ink from `top`
+    /// down to `foot` over a baseline at 10.
+    fn figures(text: &str, x: f64, size: f32, top: f64, foot: f64) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let cx = x + 5.0 * i as f64;
+                let mut f = g(&c.to_string(), cx, 0.0, 4.5, 0.0);
+                f.bbox = Some(BBox {
+                    x0: cx,
+                    y0: top,
+                    x1: cx + 4.5,
+                    y1: foot,
+                });
+                f.font_size = size;
+                f.advance = Some(5.0);
+                f
+            })
+            .collect()
+    }
+
+    /// A whole number, then a numerator, a slash and a denominator, each
+    /// with its ink at `(top, foot)`; the whole number's figures stand 3 to
+    /// 10, and the slash runs their height.
+    fn mixed(whole: &str, num: (&str, f64, f64), den: (&str, f64, f64)) -> String {
+        let mut v = figures(whole, 0.0, 10.0, 3.0, 10.0);
+        let mut x = 5.0 * whole.len() as f64;
+        v.extend(figures(num.0, x, 10.0, num.1, num.2));
+        x += 5.0 * num.0.len() as f64;
+        v.extend(figures("/", x, 10.0, 3.0, 10.0));
+        v.extend(figures(den.0, x + 5.0, 10.0, den.1, den.2));
+        assemble(&v)[0].text.clone()
+    }
+
+    #[test]
+    fn a_mixed_numbers_fraction_parts_from_its_whole_number() {
+        // The font's fraction figures: the numerator short and high, the
+        // denominator short on the baseline.
+        assert_eq!(mixed("22", ("3", 3.0, 7.0), ("8", 6.0, 10.0)), "22 3/8");
+        // The whole fraction set small and raised.
+        assert_eq!(mixed("21", ("13", 3.0, 6.5), ("16", 3.0, 6.5)), "21 13/16");
+        // A fraction the font draws whole, which its text map spells out.
+        let mut v = figures("2", 0.0, 10.0, 3.0, 10.0);
+        v.extend(figures("x", 5.0, 10.0, 3.0, 10.0));
+        v[1].text = "1/2".into();
+        assert_eq!(assemble(&v)[0].text, "2 1/2");
+    }
+
+    #[test]
+    fn a_numerator_set_raised_is_no_power() {
+        // A numerator set smaller and raised, read as `78⁵/16` by the rule
+        // that keeps a power raised.
+        let mut v = figures("78", 0.0, 10.0, 3.0, 10.0);
+        let mut num = word("5", 10.0, true);
+        num[0].bbox = Some(BBox {
+            x0: 10.0,
+            y0: 3.0,
+            x1: 12.5,
+            y1: 6.5,
+        });
+        v.extend(num);
+        v.extend(figures("/", 13.0, 10.0, 3.0, 10.0));
+        v.extend(figures("16", 18.0, 6.0, 6.0, 10.0));
+        assert_eq!(assemble(&v)[0].text, "78 5/16");
+    }
+
+    #[test]
+    fn short_figures_on_the_baseline_or_over_full_ones_are_no_fraction() {
+        // Old-style figures are as short, and stand on the baseline.
+        assert_eq!(mixed("20", ("12", 6.0, 10.0), ("13", 6.0, 10.0)), "2012/13");
+        // A power over a whole number is no fraction's numerator.
+        assert_eq!(mixed("10", ("5", 3.0, 7.0), ("16", 3.0, 10.0)), "105/16");
     }
 
     #[test]

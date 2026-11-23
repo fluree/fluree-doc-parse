@@ -136,6 +136,15 @@ or a note's number: `kg/10⁶ dscm`, not `kg/106 dscm`; `4.0x10⁻³`, not
 `4.0x10-3`; `2024³`, not `20243`. An ordinal's ending stays with the number
 it agrees with (`22nd`, `118th`, `21e`).
 
+**Mixed numbers.** A spec sheet sets `22 3/8"` with no space before the
+fraction. The fraction is set small, in a smaller size or in the font's own
+fraction figures, its numerator high over a slash; some fonts draw `½` whole
+and spell it `1/2` in the text. The text layer gives the digits alone, and
+read as one number `22 3/8"` is `223/8"`. A fraction set small after a whole
+number is read apart from it, `22 3/8"`, and a numerator raised over a slash
+is a fraction's, not a power: `78 5/16"`, not `78⁵/16"`. Old-style figures
+are as short, but stand on the baseline, and stay as they are.
+
 **Text the producer states.** Where a PDF wraps what it draws in marked
 content with `/ActualText`, that text stands for the glyphs inside: a browser
 states `青` over a glyph its font maps to the radical `⻘`, and some producers
