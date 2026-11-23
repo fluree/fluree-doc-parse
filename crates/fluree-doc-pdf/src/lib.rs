@@ -63,6 +63,7 @@ pub(crate) mod glyph;
 pub mod heading;
 pub mod image;
 pub mod info;
+pub(crate) mod ligature;
 pub mod line;
 pub mod link;
 pub mod outline;

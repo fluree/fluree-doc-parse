@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "omb-ap_10_expenditures_fy2027.pdf",
+    "url": "https://www.whitehouse.gov/wp-content/uploads/2026/04/ap_10_expenditures_fy2027.pdf",
+    "sha256": "e983c6b6e9c1fa0c6c0b083cfe6f25ea61cdede36bced2f12f17145cc6965a30",
+    "about": "OMB, Analytical Perspectives FY 2027, chapter 10, Tax Expenditures (public domain): table rows whose dot leaders are mapped to U+FFFD."
+  },
+  "notes": [
+    "A leader's glyph is a small round mark on the baseline, read as the full stop it is."
+  ],
+  "checks": [
+    {
+      "id": "no-replacement-character",
+      "found": "2026-11-23",
+      "issue": "415 text lines held runs of U+FFFD where the leaders are.",
+      "no_text": "�"
+    },
+    {
+      "id": "leader-read-as-dots",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "text": "Exclusion of certain allowances for Federal employees abroad ....."
+    }
+  ]
+}

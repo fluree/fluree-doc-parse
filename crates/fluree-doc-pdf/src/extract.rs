@@ -179,6 +179,12 @@ struct Collector {
     /// `Glyph` because it is scaffolding: once weights are resolved it has no
     /// further use, and every consumer of `Glyph` would have to carry it.
     ink: Vec<Option<(u128, f64)>>,
+    /// The letters a ligature joins, as the document draws them, kept across
+    /// pages to read the ligatures it draws unmapped; see [`crate::ligature`].
+    letters: crate::ligature::Letters,
+    /// Glyphs drawn as U+FFFD, by index into `glyphs`, with their family and
+    /// outline, to be read by shape once the document's letters are known.
+    unread: Vec<(usize, String, kurbo::BezPath)>,
 }
 
 impl<'a> Device<'a> for Collector {
@@ -292,6 +298,31 @@ impl<'a> Device<'a> for Collector {
             }
         }
 
+        // The letters a ligature is made of, and a glyph whose characters
+        // the document left unknown, kept by family to be compared once the
+        // whole document is read.
+        let mut unread = None;
+        if let HGlyph::Outline(o) = glyph {
+            let lost = text == "\u{FFFD}";
+            if lost || crate::ligature::is_ligature_letter(&text) {
+                let family = self.letters.family(o.font_cache_key(), || {
+                    o.font_data().and_then(|f| f.postscript_name)
+                });
+                if let Some(family) = family {
+                    if lost {
+                        unread = Some((family, o.outline()));
+                    } else if let Some(c) = text
+                        .chars()
+                        .next()
+                        .filter(|c| self.letters.wants(&family, *c))
+                    {
+                        let advance = o.advance_width().unwrap_or(0.0) as f64;
+                        self.letters.keep(family, c, o.outline(), advance);
+                    }
+                }
+            }
+        }
+
         let full = transform * glyph_transform;
         let m = full.as_coeffs();
         // Baseline direction = image of the x-axis under the full transform.
@@ -375,6 +406,9 @@ impl<'a> Device<'a> for Collector {
             return;
         }
         let draw_index = self.glyphs.len();
+        if let Some((family, outline)) = unread {
+            self.unread.push((draw_index, family, outline));
+        }
         self.ink.push(ink);
         self.glyphs.push(Glyph {
             text,
@@ -559,6 +593,20 @@ fn lookalike_repair(text: &str, outline: &kurbo::BezPath) -> Option<&'static str
     if w <= 0.0 || h <= 0.0 {
         return None;
     }
+    // A full stop: one small round mark resting on the baseline. Dot
+    // leaders are set in it, and a producer that maps the leader's glyph to
+    // U+FFFD leaves a run of unknowns between a table's label and its
+    // figures. In the font's 1000-unit em a stop is about a tenth of it
+    // each way; a middle dot sits higher, an ellipsis is three marks.
+    if text == "\u{FFFD}"
+        && subpaths == 1
+        && w <= 250.0
+        && h <= 250.0
+        && (0.6 * h..=1.7 * h).contains(&w)
+        && (-40.0..=60.0).contains(&b.y0)
+    {
+        return Some(".");
+    }
     if subpaths == 2 && w >= 2.0 * h && segments <= 16 {
         return Some("=");
     }
@@ -580,7 +628,6 @@ fn lookalike_repair(text: &str, outline: &kurbo::BezPath) -> Option<&'static str
             (false, false) => "]",
         });
     }
-    let _ = text;
     None
 }
 
@@ -723,6 +770,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let settings = InterpreterSettings::default();
     let mut pages = Vec::new();
     let mut ink: Vec<Vec<Option<(u128, f64)>>> = Vec::new();
+    let mut letters = crate::ligature::Letters::default();
+    let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
 
     for (index, page) in pdf.pages().iter().enumerate() {
         let (w, h) = page.render_dimensions();
@@ -733,6 +782,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             rules: Vec::new(),
             fills: Vec::new(),
             ink: Vec::new(),
+            letters: std::mem::take(&mut letters),
+            unread: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -748,6 +799,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             settings.clone(),
         );
         interpret_page(page, &mut ctx, &mut dev);
+        letters = std::mem::take(&mut dev.letters);
+        unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let mut page = Page {
             index,
             glyphs: dev.glyphs,
@@ -764,6 +817,16 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         pages.push(page);
     }
     infer_weights(&mut pages, &ink);
+    // Read the unmapped glyphs by their shape, now that every letter the
+    // document draws is known. Glyph order is fixed from here on, so an
+    // index still names the glyph it was taken from.
+    for (page, i, family, outline) in unread {
+        if let Some(name) = letters.name(&family, &outline) {
+            if let Some(g) = pages[page].glyphs.get_mut(i) {
+                g.text = name.to_string();
+            }
+        }
+    }
 
     Ok(Document { pages })
 }
