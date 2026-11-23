@@ -121,7 +121,9 @@ use fluree_doc_vision::oar::{OarEngine, OarOptions};
 let engine = OarEngine::open(Path::new("/opt/assets/ocr"), &OarOptions::default())?;
 
 // Per document, before `analyze`.
-let pass = ocr::read_pages(&mut doc, &pdf, &engine, None);
+// At most 1,000 crops a document, as `ocr.max_crops` defaults to; 0 for no
+// limit.
+let pass = ocr::read_pages(&mut doc, &pdf, &engine, None, 1000);
 let mut analysis = document::analyze(&mut doc, &ol);
 ocr::mark_provenance(&mut analysis.elements, &pass.injected);
 ```
