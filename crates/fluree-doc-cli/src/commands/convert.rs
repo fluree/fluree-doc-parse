@@ -725,7 +725,7 @@ fn ocr_image(
             let mut readings = common::ocr_readings(dir, stem, &doc, quiet);
             readings.extend(image_words(dir, stem, quiet));
             let sized = |r: &fluree_doc_pdf::ocr::WordReading| {
-                r.coords == fluree_doc_pdf::ocr::Coords::Pdf
+                r.coords == fluree_doc_pdf::ocr::Coords::Page
                     || (r.width, r.height) == (Some(f64::from(h.width)), Some(f64::from(h.height)))
             };
             let pages = readings
@@ -873,6 +873,13 @@ fn render(
     }
 }
 
+/// The note when a document has more OCR crops than `ocr.max_crops`.
+pub(crate) fn ocr_cap_note(stem: &str, max: usize, capped: usize) -> String {
+    format!(
+        "note: --ocr: {stem}: reading {max} crops and leaving {capped} unread (pages read whole first, then routed regions, then small ones) — raise `ocr.max_crops` (0 for no limit) to read them all"
+    )
+}
+
 /// One stderr line per OCR reading set aside, and with `--verbose` one per
 /// reading taken.
 fn report_ocr(
@@ -917,6 +924,7 @@ fn convert_bytes(
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
     let injected = if let Some(engine) = &cfg.ocr {
+        let max = cfg.config.ocr.max_crops();
         // At the stored resolution of what is under each crop (#11): an
         // engine reads small text a 2× render loses.
         let pass = fluree_doc_pdf::ocr::read_pages(
@@ -925,11 +933,15 @@ fn convert_bytes(
             engine.0.as_ref(),
             pages,
             fluree_doc_pdf::escalate::CropScale::Stored,
+            max,
         );
         for (crop, e) in &pass.failed {
             if !quiet {
                 eprintln!("warning: --ocr: {stem}_{crop}: {e}");
             }
+        }
+        if pass.capped > 0 && !quiet {
+            eprintln!("{}", ocr_cap_note(stem, max, pass.capped));
         }
         report_ocr(stem, "--ocr", &pass.injected, cfg.verbose, quiet);
         pass.injected

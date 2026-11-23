@@ -24,7 +24,7 @@ fn capture() -> (u32, u32, Vec<u8>) {
         &vec![(0, None)],
         |_, _| 4.0,
         |c| {
-            let gray = c.pixels.rgba.chunks_exact(4).map(|p| p[0]).collect();
+            let gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
             out = (c.pixels.width, c.pixels.height, gray);
         },
     );
@@ -32,9 +32,10 @@ fn capture() -> (u32, u32, Vec<u8>) {
 }
 
 /// A Letter page of ten headings over body text, which the router doubts the
-/// structure of, with the capture pasted four times at [`PPI`]; `background`
-/// lays a one-bit full-page image under everything.
-fn page(background: bool) -> Vec<u8> {
+/// structure of, with the capture pasted left to right at each of `ppis`
+/// ([`PPI`] in the tests below); `background` lays a one-bit full-page image
+/// under everything.
+fn page(background: bool, ppis: &[f64]) -> Vec<u8> {
     let mut ops = Vec::new();
     let body = "The quick brown fox jumps over the lazy dog and keeps running";
     for i in 0..10 {
@@ -62,7 +63,7 @@ fn page(background: bool) -> Vec<u8> {
             bits,
         ));
     }
-    for (k, ppi) in PPI.iter().enumerate() {
+    for (k, ppi) in ppis.iter().enumerate() {
         let (pw, ph) = (f64::from(w) * 72.0 / ppi, f64::from(h) * 72.0 / ppi);
         let x = 40.0 + k as f64 * 140.0;
         ops.push(format!("q {pw:.3} 0 0 {ph:.3} {x:.1} 40 cm /I{k} Do Q"));
@@ -198,7 +199,7 @@ fn region_scales(records: &[serde_json::Value]) -> Vec<f64> {
 fn a_doubted_page_still_gets_its_region_crops() {
     // The page is read whole on a doubt, which an OCR engine skips; the
     // captures on it are crops of their own, as `convert --ocr` reads them.
-    let records = render_routed("doubt", &page(false));
+    let records = render_routed("doubt", &page(false, &PPI));
     let reasons: Vec<&str> = records
         .iter()
         .filter_map(|r| r["reason"].as_str())
@@ -215,15 +216,39 @@ fn a_doubted_page_still_gets_its_region_crops() {
 fn each_capture_renders_at_its_own_resolution() {
     // Each at its own resolution: 150 to 300 ppi, all above the model's
     // 144.
-    let scales = region_scales(&render_routed("scales", &page(false)));
+    let scales = region_scales(&render_routed("scales", &page(false, &PPI)));
     assert_ppi(&scales);
 }
 
 #[test]
 fn a_background_does_not_set_a_captures_resolution() {
     // The same captures over a one-bit page background.
-    let scales = region_scales(&render_routed("background", &page(true)));
+    let scales = region_scales(&render_routed("background", &page(true, &PPI)));
     assert_ppi(&scales);
+}
+
+#[test]
+fn manifest_lines_come_in_the_jobs_order() {
+    // The captures finest first: a page's renders go coarsest first, so the
+    // crops are cut in the reverse of their regions' order, and the manifest
+    // still lists them in it.
+    let finest_first: Vec<f64> = PPI.iter().rev().copied().collect();
+    let records = render_routed("order", &page(false, &finest_first));
+    let regions: Vec<(usize, f64)> = records
+        .iter()
+        .filter(|r| r["kind"] == "region")
+        .map(|r| {
+            let png = r["png"].as_str().unwrap();
+            let tag = png.rsplit_once("_r").unwrap().1.trim_end_matches(".png");
+            (tag.parse().unwrap(), r["scale"].as_f64().unwrap())
+        })
+        .collect();
+    let tags: Vec<usize> = regions.iter().map(|r| r.0).collect();
+    assert_eq!(tags, [0, 1, 2, 3], "{records:?}");
+    assert!(
+        regions.windows(2).all(|w| w[0].1 > w[1].1),
+        "cut coarsest first, so not in this order: {regions:?}"
+    );
 }
 
 #[test]

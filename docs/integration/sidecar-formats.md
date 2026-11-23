@@ -134,13 +134,17 @@ page does, and every character keeps a position for
 
 | field | required | use |
 |---|---|---|
-| `coords` | no | `px` (default): pixels of the image read. `pdf`: PDF units of the page as displayed, y down |
+| `coords` | no | `px` (default): pixels of the image read. `page`: units of the page as displayed (after `/Rotate`), y down — not PDF user space, whose y runs up |
 | `width`, `height` | with `px` | size of the image read, which shows the crop |
 | `engine` | no | recorded for whoever compares two engines |
 | `words[].text` | yes | a word, or a whole line: a space inside it is a space |
 | `words[].box` | yes | `[x0, y0, x1, y1]`, y down: the word's own extent |
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
 | `words[].conf` | no | the engine's confidence, 0-1 |
+
+The format is stable: `--ocr-words` (`FDOC_OCR_WORDS`), the file names, the
+fields above and their units. A release changes or removes one only as a
+breaking change; a new optional field may be added.
 
 **The crop, in pixels.** A `px` reading of `full` covers the whole page; one
 of `r{i}` covers the region plus a 6-unit margin, clipped to the page —
@@ -164,8 +168,11 @@ shows on the page as displayed, which is where this mapping places it.
 - an `r{i}` reading for one of the page's unread regions, keeping only the
   words whose center falls inside the region, not its margin.
 
-A page's unread regions are its raster images that look like text and that
-the text layer does not cover. The router sends a model only those over a
+A page's unread regions are its raster images that look like text, whose own
+pixels can hold a line of it (10 px on the short side: a checkbox drawn from an
+8 × 8 mask or a rule stretched from a 1 × 1 one is not a region), and that
+the text layer does not cover; an image drawn twice in one place is one
+region. The router sends a model only those over a
 tenth of the page, a price rather than a property of the pixels: an OCR
 engine is cheap per pixel, and a capture an inch high still holds a date. So
 OCR reads them all, the routed ones first, numbered as the router numbers
@@ -191,7 +198,10 @@ picture): those are the ones whose readings the document takes. A
 (see [escalation tiers](escalation-tiers.md#producing-the-crops)). [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
 and a `table` or `table_missing` crop asks about structure; read, they would
-only be refused or ignored.
+only be refused or ignored. Skipping `table_missing` has the one known gap
+the escalation tiers name: a raster table too small for the router to send a
+reader is boxed by the layout detector alone, and its text stays unread until
+a reader that sees structure takes the crop.
 
 **How words become text.** Each box is chained to its nearest neighbour on
 the right — same line, comparable height, no wider apart than a word space —
@@ -233,8 +243,11 @@ few for line boxes.
 its number among the page's regions, so a model reading of another region
 still lands where it belongs, and is not sent to a model. A page read whole
 asks a model for nothing — neither its whole page nor its tables: escalating
-past OCR is a decision of its own, and such a page is not reported unread,
-however little it held. A reading that took no word reads nothing: the page
+past OCR is a decision of its own. Such a page is not reported unread unless
+its text stays under the floor every page is held to (40 characters): then it
+is listed in `doc:unreadPages` as `OcrSparse`, with a warning on stderr, since
+an engine that gave two words for a dense scan has not read it. A reading
+that took no word reads nothing: the page
 stays as it was, routed and reported unread. So does a whole-page reading
 most of whose words land nowhere: it is refused. When a page has both a
 `full` reading and `r{i}` readings, the whole-page one is taken first, and a

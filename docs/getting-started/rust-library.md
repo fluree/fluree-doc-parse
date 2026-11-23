@@ -122,8 +122,10 @@ let engine = OarEngine::open(Path::new("/opt/assets/ocr"), &OarOptions::default(
 
 // Per document, before `analyze`.
 // Each crop at the resolution of the image under it: what an engine reads.
+// At most 1,000 crops a document, as `ocr.max_crops` defaults to; 0 for no
+// limit.
 let stored = fluree_doc_pdf::escalate::CropScale::Stored;
-let pass = ocr::read_pages(&mut doc, &pdf, &engine, None, stored);
+let pass = ocr::read_pages(&mut doc, &pdf, &engine, None, stored, 1000);
 let mut analysis = document::analyze(&mut doc, &ol);
 ocr::mark_provenance(&mut analysis.elements, &pass.injected);
 ```
@@ -131,9 +133,10 @@ ocr::mark_provenance(&mut analysis.elements, &pass.injected);
 `read_pages` reads the same crops `--ocr-words` expects (`ocr::ocr_jobs`):
 pages whose text is pixels, whole, and the unread raster regions of the
 others, small ones included. It renders one page at a time, at most four
-times for its crops, so a long scan holds one page's pixels and its crops,
-and a crop the engine cannot read is reported in `pass.failed` while the
-rest is read. The engine is `Send + Sync`: share one
+times for its crops (plus one per crop held to its long-edge cap), and reads
+each crop as it is cut, so a long scan holds one render of one page and one
+crop at a time, and a crop the engine cannot read is reported in
+`pass.failed` while the rest is read. The engine is `Send + Sync`: share one
 across threads. Any other engine plugs in by implementing
 `fluree_doc_vision::OcrEngine`.
 
@@ -194,7 +197,7 @@ Reachability is not an offer of stability.
 | `forms::fields` | AcroForm values |
 | `outline::extract` | PDF bookmark tree |
 | `link::extract` / `link::attach` | link annotations and their anchors |
-| `image::as_document` | a raster image as a one-page document |
+| `image::page_of` | a raster image of a given size as a one-page document; `fluree_doc_image::header` reads the size upright |
 | `arbiter::TierBackend` / `arbiter::splice` | the model-tier contract |
 | `arbiter::scrub_furniture` | strip running headers from a model reading |
 | `ocr::inject` / `ocr::mark_provenance` / `ocr::WordReading` | OCR words as glyphs, before `analyze_with` |

@@ -354,8 +354,9 @@ pub struct UnreadPage {
     #[serde(rename = "pageIndex")]
     pub index: usize,
     /// What the router saw: `Scanned`, `NearBlank` or `BrokenText`; or
-    /// `LaterPage`, a page after the first of a multi-page image file, which
-    /// is not read.
+    /// `OcrSparse`, a page an OCR reading read whole that still holds next
+    /// to no text; or `LaterPage`, a page after the first of a multi-page
+    /// image file, which is not read.
     pub reason: String,
 }
 
@@ -531,12 +532,9 @@ impl Notes {
         if self.unread.is_empty() {
             return None;
         }
-        let mut pages: Vec<String> = self
-            .unread
-            .iter()
-            .map(|u| (u.index + 1).to_string())
-            .collect();
-        pages.sort_by_key(|p| p.parse::<usize>().unwrap_or(0));
+        let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
+        pages.sort_unstable();
+        pages.dedup();
         let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
         reasons.sort_unstable();
         reasons.dedup();
@@ -544,16 +542,57 @@ impl Notes {
             "fluree-doc-parse: page{} {} carr{} content no reader transcribed ({}). \
              This output is missing it.",
             if pages.len() == 1 { "" } else { "s" },
-            pages.join(", "),
+            page_runs(&pages),
             if pages.len() == 1 { "ies" } else { "y" },
             reasons.join(", ")
         ))
     }
 }
 
+/// Sorted, distinct page numbers as a list a reader can take in: a run of
+/// consecutive pages as its first and last, `1, 4–9, 12`, so the 10,000
+/// unread pages after the first of a TIFF read as one range, not a line of
+/// 60 kB.
+fn page_runs(pages: &[usize]) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < pages.len() {
+        let mut j = i;
+        while j + 1 < pages.len() && pages[j + 1] == pages[j] + 1 {
+            j += 1;
+        }
+        out.push(if j == i {
+            pages[i].to_string()
+        } else {
+            format!("{}–{}", pages[i], pages[j])
+        });
+        i = j + 1;
+    }
+    out.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unread_pages_in_a_run_are_summarised_as_a_range() {
+        assert_eq!(page_runs(&[1, 4, 5, 6, 9, 10, 12]), "1, 4–6, 9–10, 12");
+        assert_eq!(page_runs(&[3]), "3");
+        // A TIFF of 10,050 pages, the first read: one range.
+        let n = Notes {
+            unread: (1..10_050)
+                .map(|index| UnreadPage {
+                    index,
+                    reason: "LaterPage".into(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let s = n.summary().unwrap();
+        assert!(s.contains("pages 2–10050 carry content"), "{s}");
+        assert!(s.len() < 200, "{s}");
+    }
 
     #[test]
     fn a_date_is_passed_on_only_as_a_real_one() {

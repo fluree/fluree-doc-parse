@@ -13,10 +13,10 @@
 //! configured the honest answer is no content, and the caller is told so
 //! rather than handed an empty document.
 //!
-//! Dimensions are read from the file header rather than by decoding. A page
-//! size is four numbers, a decoder is a large dependency and a large attack
-//! surface, and nothing here needs the pixels — the reader gets the bytes
-//! exactly as they arrived.
+//! The page's size comes from the caller: `fluree_doc_image::header` reads
+//! it upright, by the image's EXIF orientation, without decoding the pixels.
+//! [`dimensions`] reads the size as stored, by hand, for a header the
+//! decoder will not take. The reader gets the bytes exactly as they arrived.
 
 use crate::extract::{Document, ImagePlacement, Page};
 use crate::geom::BBox;
@@ -64,7 +64,8 @@ impl Format {
 /// Extensions that name a raster image, for a caller routing by filename.
 pub const EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff"];
 
-/// The image's pixel size, read from its header.
+/// The image's pixel size as stored, read from its header by hand: a phone
+/// photo's EXIF orientation is not applied, nor a BigTIFF's size read.
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     match Format::sniff(bytes)? {
         Format::Png => png_size(bytes),
@@ -178,7 +179,7 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// Build the one-page document an image stands for.
+/// The one-page document an image `width` × `height` pixels stands for.
 ///
 /// The page carries the image as its only content and no glyphs, which is
 /// what makes [`crate::route::decide`] return `Scanned` — the same verdict a
@@ -190,20 +191,12 @@ fn be32(b: &[u8]) -> u32 {
 /// assumed DPI would put a wrong number in `doc:pages` for every consumer
 /// that scales by it.
 ///
-/// Sized as stored: a phone photo's EXIF orientation is not applied here.
-/// `fluree_doc_image::header` gives the upright size, for [`page_of`].
-pub fn as_document(bytes: &[u8]) -> Option<Document> {
-    let (w, h) = dimensions(bytes)?;
-    if w == 0 || h == 0 {
-        return None;
-    }
-    Some(page_of(w, h, false))
-}
-
-/// The one-page document an image `width` × `height` pixels stands for, as
-/// [`as_document`] builds it, for a caller that has decoded the image (and
-/// turned it upright) itself. `bitonal` says the image is one bit deep.
+/// Sized as the caller says: upright, by its EXIF orientation, is the size a
+/// reader sees, which `fluree_doc_image::header` gives without decoding the
+/// pixels ([`dimensions`], the size as stored, does not). `bitonal` says the
+/// image is one bit deep.
 pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
+    let grid = (width, height);
     let (width, height) = (f64::from(width), f64::from(height));
     let bbox = BBox {
         x0: 0.0,
@@ -221,6 +214,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
                 // One pixel per unit: 72 per inch of the page's units.
                 ppi: Some(72.0),
                 bitonal,
+                grid,
             }],
             rules: Vec::new(),
             fills: Vec::new(),
@@ -329,7 +323,7 @@ mod tests {
 
     #[test]
     fn an_image_becomes_one_page_of_pixels_with_no_glyphs() {
-        let doc = as_document(&png(1224, 1584)).expect("document");
+        let doc = page_of(1224, 1584, false);
         assert_eq!(doc.pages.len(), 1);
         let p = &doc.pages[0];
         assert!(p.glyphs.is_empty());
@@ -341,16 +335,10 @@ mod tests {
     #[test]
     fn a_page_of_pixels_routes_to_a_full_reading() {
         // The same verdict a scanned PDF page gets, reached the same way.
-        let doc = as_document(&png(1224, 1584)).unwrap();
+        let doc = page_of(1224, 1584, false);
         assert!(matches!(
             crate::route::decide(&doc.pages[0]).0,
             crate::route::Route::Vlm(_)
         ));
-    }
-
-    #[test]
-    fn a_zero_sized_image_is_not_a_page() {
-        assert!(as_document(&png(0, 100)).is_none());
-        assert!(as_document(b"not an image").is_none());
     }
 }

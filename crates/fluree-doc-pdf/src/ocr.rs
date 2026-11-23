@@ -481,7 +481,7 @@ fn place(
 ) -> Result<Vec<Option<Placed>>, &'static str> {
     use unicode_normalization::UnicodeNormalization;
     let rect = crop_rect(p, shown);
-    // Pixels of the image read → display frame. A reading in PDF units is
+    // Pixels of the image read → display frame. A reading in page units is
     // already there.
     let (sx, sy, ox, oy) = match (reading.coords, reading.width, reading.height) {
         (Coords::Px, Some(w), Some(h)) if w > 0.0 && h > 0.0 => {
@@ -491,7 +491,7 @@ fn place(
             (rect.width() / w, rect.height() / h, rect.x0, rect.y0)
         }
         (Coords::Px, _, _) => return Err("pixel coordinates without a size"),
-        (Coords::Pdf, _, _) => (1.0, 1.0, 0.0, 0.0),
+        (Coords::Page, _, _) => (1.0, 1.0, 0.0, 0.0),
     };
     let placed = reading
         .words
@@ -1101,12 +1101,11 @@ fn runs(words: &[Level]) -> Vec<Vec<usize>> {
     }
     let mut out = Vec::new();
     for start in (0..words.len()).filter(|i| !has_left[*i]) {
+        // A chain cannot loop: each link is strictly rightward
+        // (`right_neighbours`), and each word has one left neighbour.
         let mut run = vec![start];
         let mut at = start;
         while let Some(j) = next[at] {
-            if run.contains(&j) {
-                break;
-            }
             run.push(j);
             at = j;
         }
@@ -1310,7 +1309,11 @@ fn fit_stacked(runs: &mut [Run], lines: &[Vec<usize>]) {
             let (ra, fa) = (&runs[a], runs[a].font);
             let reach = fa * STACKED_PITCH_EM;
             let from = by_base.partition_point(|l| l.0 <= ra.baseline - reach);
-            let to = by_base.partition_point(|l| l.0 < ra.baseline + reach);
+            // A run thinner than one step of its coordinate has no reach, and
+            // `to` would land before its own line: clamp it to `from`.
+            let to = by_base
+                .partition_point(|l| l.0 < ra.baseline + reach)
+                .max(from);
             by_base[from..to]
                 .iter()
                 .filter(|(_, k, _)| *k != line_of[a])
@@ -1530,31 +1533,55 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// and on every other page its unread raster regions
 /// ([`route::ocr_regions`]), small ones included. Limited to `only`'s pages
 /// when given.
-pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>) -> OcrJobs {
-    let mut jobs = Vec::new();
+///
+/// At most `max_crops` crops (`0` for no limit), the page order kept, and
+/// how many were left out. Past the limit the crops that lose the most if
+/// left unread are kept first: a page read whole, whose text is all pixels;
+/// then a region the router sends a reader; then a region too small for a
+/// model's call. Within each kind, the earlier pages first.
+pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (OcrJobs, usize) {
+    // Every crop, in page order, with its kind: 0 a page read whole, 1 a
+    // routed region, 2 a small one.
+    type Ranked = (u8, usize, Option<(String, BBox)>);
+    let mut crops: Vec<Ranked> = Vec::new();
     for p in &doc.pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
-        if let Route::Vlm(_) = route::decide(p).0 {
-            jobs.push((p.index, None));
-            continue;
-        }
-        let regions = route::ocr_regions(p);
-        if !regions.is_empty() {
-            jobs.push((
-                p.index,
-                Some(
-                    regions
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, b)| (Crop::Region(i).tag(), b))
-                        .collect(),
-                ),
-            ));
+        let routed = match route::decide(p).0 {
+            Route::Vlm(_) => {
+                crops.push((0, p.index, None));
+                continue;
+            }
+            Route::VlmRegions(r) => r.len(),
+            Route::Deterministic => 0,
+        };
+        for (i, b) in route::ocr_regions(p).into_iter().enumerate() {
+            let kind = if i < routed { 1 } else { 2 };
+            crops.push((kind, p.index, Some((Crop::Region(i).tag(), b))));
         }
     }
-    jobs
+    let mut dropped = 0;
+    if max_crops > 0 && crops.len() > max_crops {
+        let mut order: Vec<usize> = (0..crops.len()).collect();
+        order.sort_by_key(|&i| (crops[i].0, i));
+        let mut keep = vec![false; crops.len()];
+        for &i in &order[..max_crops] {
+            keep[i] = true;
+        }
+        dropped = crops.len() - max_crops;
+        let mut k = keep.into_iter();
+        crops.retain(|_| k.next() == Some(true));
+    }
+    let mut jobs: OcrJobs = Vec::new();
+    for (_, page, crop) in crops {
+        match (crop, jobs.last_mut()) {
+            (None, _) => jobs.push((page, None)),
+            (Some(c), Some((last, Some(list)))) if *last == page => list.push(c),
+            (Some(c), _) => jobs.push((page, Some(vec![c]))),
+        }
+    }
+    (jobs, dropped)
 }
 
 /// What one OCR pass over a document did.
@@ -1565,10 +1592,13 @@ pub struct OcrPass {
     /// Crops the engine could not read, with its error, by crop name
     /// (`p{page}_{tag}`). The rest of the document is read regardless.
     pub failed: Vec<(String, String)>,
+    /// Crops left unread past the limit ([`ocr_jobs`]).
+    pub capped: usize,
 }
 
 /// Read a document's pixels with an engine and lay the words on its pages:
-/// [`ocr_jobs`], rendered one crop at a time, read, then [`inject`]ed.
+/// [`ocr_jobs`] (at most `max_crops`, `0` for no limit), rendered one crop
+/// at a time, read, then [`inject`]ed.
 ///
 /// Runs on the document as extracted, before analysis, as [`inject`] does;
 /// no file is written. The crops are rendered as `render-routed` renders
@@ -1584,33 +1614,48 @@ pub fn read_pages(
     engine: &dyn fluree_doc_vision::OcrEngine,
     only: Option<&[usize]>,
     scale: crate::escalate::CropScale,
+    max_crops: usize,
 ) -> OcrPass {
-    let jobs = ocr_jobs(doc, only);
+    let (jobs, capped) = ocr_jobs(doc, only, max_crops);
+    // Each crop is read as it is cut, its pixels dropped after; the
+    // readings are put back in the jobs' order, which a page rendered at
+    // several scales hands its crops over out of.
+    let order = crate::escalate::crop_order(&jobs);
     let mut readings = Vec::new();
     let mut failed = Vec::new();
     crate::escalate::for_each_crop_of(pdf, doc, &jobs, scale, |crop| {
+        let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
         let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
         let Some(which) = Crop::from_tag(tag) else {
             return;
         };
         match engine.read(&crop.pixels) {
-            Ok(reading) => readings.push((crop.page, which, reading)),
-            Err(e) => failed.push((crop.name, e)),
+            Ok(reading) => readings.push((at, (crop.page, which, reading))),
+            Err(e) => failed.push((at, (crop.name, e))),
         }
     });
+    readings.sort_by_key(|(at, _)| *at);
+    failed.sort_by_key(|(at, _)| *at);
+    let readings: Vec<_> = readings.into_iter().map(|(_, r)| r).collect();
+    let failed = failed.into_iter().map(|(_, f)| f).collect();
     OcrPass {
         injected: inject(doc, &readings),
         failed,
+        capped,
     }
 }
 
 /// Mark the elements OCR words make up as `provenance: "ocr"`.
 ///
 /// Called on the final elements, after analysis has turned glyphs into
-/// paragraphs and tables. An element is OCR's when at least half of its
-/// characters lie on characters a reading added — so a scanned page's
-/// stamped header, which the text layer had, keeps its own provenance.
-/// Elements a model tier spliced in keep theirs.
+/// paragraphs and tables. An element is OCR's when any of its characters
+/// lies on a character a reading added: a character read from pixels is
+/// never presented as the PDF's own, so an element that holds both — a
+/// table whose rows mix them, a line set across both — is OCR's. Block
+/// assembly keeps an OCR line out of the page's own paragraphs, so the text
+/// layer's prose keeps its provenance, and a scanned page's stamped header,
+/// which the text layer had, keeps its own. Elements a model tier spliced in
+/// keep theirs.
 pub fn mark_provenance(elements: &mut [fluree_doc_model::Element], injected: &[Injected]) {
     use std::collections::HashMap;
     // Per page, character centers sorted by y: an element looks only at
@@ -1642,7 +1687,7 @@ pub fn mark_provenance(elements: &mut [fluree_doc_model::Element], injected: &[I
             .take_while(|c| c.1 <= b.y1)
             .filter(|c| b.contains(c.0, c.1))
             .count();
-        if ocr > 0 && ocr * 2 >= total {
+        if ocr > 0 {
             e.provenance = "ocr";
         }
     }
@@ -1678,6 +1723,7 @@ mod tests {
             texty: true,
             ppi: None,
             bitonal: false,
+            grid: (1000, 1000),
         }
     }
 
@@ -1841,6 +1887,7 @@ mod tests {
             &engine,
             None,
             crate::escalate::CropScale::Model,
+            0,
         );
         // The page whole, at the model tier's scale: 2 × 200 by 2 × 100.
         assert_eq!(*engine.0.lock().unwrap(), vec![(400, 200)]);
@@ -1856,6 +1903,7 @@ mod tests {
             &engine,
             Some(&[3]),
             crate::escalate::CropScale::Model,
+            0,
         );
         assert!(pass.injected.is_empty());
         assert_eq!(engine.0.lock().unwrap().len(), 1);
@@ -1968,7 +2016,7 @@ mod tests {
             &vec![(0, Some(vec![("r0".to_string(), region)]))],
             crate::escalate::CropScale::Model,
             |c| {
-                let px = c.pixels.rgba.chunks_exact(4);
+                let px = c.pixels.data.chunks_exact(4);
                 let n = px.len();
                 dark = Some(px.filter(|q| q[0] < 64).count() as f64 / n as f64);
             },
@@ -2020,7 +2068,7 @@ mod tests {
 
     #[cfg(feature = "render")]
     #[test]
-    fn crops_rendered_at_several_scales_come_in_the_jobs_order() {
+    fn crops_rendered_at_several_scales_are_handed_over_as_cut() {
         let bytes = image_pdf(
             b"/Width 600 /Height 300 /BitsPerComponent 8",
             &vec![0x80; 600 * 300],
@@ -2036,15 +2084,76 @@ mod tests {
             .map(|i| (format!("r{i}"), b(10.0 + 30.0 * i as f64)))
             .collect();
         let scales = [3.0f32, 2.0, 4.0, 2.0, 3.5];
+        let jobs = vec![(0, Some(regions))];
         let mut names = Vec::new();
         crate::escalate::for_each_crop_scaled(
             &pdf,
-            &vec![(0, Some(regions))],
+            &jobs,
             |_, r| scales[((r.unwrap().x0 - 10.0) / 30.0) as usize],
             |c| names.push((c.name, c.scale)),
         );
-        let want: Vec<(String, f32)> = (0..5).map(|i| (format!("p0_r{i}"), scales[i])).collect();
-        assert_eq!(names, want);
+        // Each render's crops as it is cut, coarsest first, in the jobs'
+        // order within one.
+        let named = |i: &[usize]| -> Vec<(String, f32)> {
+            i.iter().map(|&i| (format!("p0_r{i}"), scales[i])).collect()
+        };
+        assert_eq!(names, named(&[1, 3, 0, 4, 2]));
+        // The jobs' order, given back.
+        let order = crate::escalate::crop_order(&jobs);
+        names.sort_by_key(|(n, _)| order[n]);
+        assert_eq!(names, named(&[0, 1, 2, 3, 4]));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_page_read_at_several_scales_is_injected_in_the_jobs_order() {
+        // A text page with two small captures, the first at 288 ppi and the
+        // second at 150: the second is rendered, cut and read first.
+        let shot = |y0: f64, ppi: f64| ImagePlacement {
+            bbox: BBox {
+                x0: 100.0,
+                y0,
+                x1: 300.0,
+                y1: y0 + 30.0,
+            },
+            texty: true,
+            ppi: Some(ppi),
+            bitonal: false,
+            grid: (1000, 1000),
+        };
+        let mut doc = Document {
+            pages: vec![page(
+                (0..1500)
+                    .flat_map(|i| {
+                        native("a", 20.0 + (i % 50) as f64 * 10.0, 600.0 + (i / 50) as f64)
+                    })
+                    .collect(),
+                vec![shot(100.0, 288.0), shot(200.0, 150.0)],
+            )],
+        };
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(pdf_with(
+            b"/MediaBox [0 0 612 792]",
+            b"",
+            b"q 200 0 0 30 100 100 cm /Im0 Do Q",
+            b"/Width 2 /Height 2 /BitsPerComponent 8",
+            &[0x20, 0xe0, 0xe0, 0x20],
+        )))
+        .unwrap();
+        let (jobs, _) = ocr_jobs(&doc, None, 0);
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        let engine = OneWord(Default::default());
+        let pass = read_pages(
+            &mut doc,
+            &pdf,
+            &engine,
+            None,
+            crate::escalate::CropScale::Stored,
+            0,
+        );
+        let heights: Vec<u32> = engine.0.lock().unwrap().iter().map(|r| r.1).collect();
+        assert!(heights[0] < heights[1], "read coarsest first: {heights:?}");
+        let crops: Vec<Crop> = pass.injected.iter().map(|r| r.crop).collect();
+        assert_eq!(crops, [Crop::Region(0), Crop::Region(1)]);
     }
 
     /// A one-page PDF of `page` entries, resources beside its image, one
@@ -2125,7 +2234,7 @@ mod tests {
         ] {
             let mut doc = crate::extract::extract_bytes(bytes.clone()).unwrap();
             let engine = OneWord(Default::default());
-            let pass = read_pages(&mut doc, &pdf, &engine, None, mode);
+            let pass = read_pages(&mut doc, &pdf, &engine, None, mode, 0);
             assert_eq!(*engine.0.lock().unwrap(), vec![want], "{mode:?}");
             assert_eq!(pass.injected[0].taken, 1);
         }
@@ -2152,6 +2261,7 @@ mod tests {
                     texty: true,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -2161,7 +2271,7 @@ mod tests {
             &[(
                 0,
                 Crop::Region(0),
-                pdf_units(vec![word("ACCT 4417", [120.0, 108.0, 200.0, 122.0])]),
+                page_units(vec![word("ACCT 4417", [120.0, 108.0, 200.0, 122.0])]),
             )],
         );
         assert_eq!(r[0].refused, None, "{r:?}");
@@ -2172,7 +2282,7 @@ mod tests {
             &[(
                 0,
                 Crop::Region(1),
-                pdf_units(vec![word("x", [120.0, 108.0, 130.0, 122.0])]),
+                page_units(vec![word("x", [120.0, 108.0, 130.0, 122.0])]),
             )],
         );
         assert_eq!(r[0].refused, Some("region not routed to a reader"));
@@ -2266,6 +2376,7 @@ mod tests {
                     texty: true,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -2402,7 +2513,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.words[0].conf, Some(0.5));
-        assert!(WordReading::from_json(r#"{"coords":"pdf","words":[]}"#).is_ok());
+        assert!(WordReading::from_json(r#"{"coords":"page","words":[]}"#).is_ok());
     }
 
     #[test]
@@ -2477,9 +2588,9 @@ mod tests {
         assert!(crate::unread_pages(&doc, &a.elements).is_empty());
     }
 
-    fn pdf_units(words: Vec<OcrWord>) -> WordReading {
+    fn page_units(words: Vec<OcrWord>) -> WordReading {
         WordReading {
-            coords: Coords::Pdf,
+            coords: Coords::Page,
             width: None,
             height: None,
             engine: None,
@@ -2520,7 +2631,7 @@ mod tests {
                 };
                 let r = inject(
                     &mut doc,
-                    &[(0, Crop::Page, pdf_units(skewed_line(deg, stated)))],
+                    &[(0, Crop::Page, page_units(skewed_line(deg, stated)))],
                 );
                 assert!(
                     (r[0].skew_deg - deg).abs() < 0.2,
@@ -2579,7 +2690,7 @@ mod tests {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
         };
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let els = analysed(&mut doc, &r);
         let kinds: Vec<(&str, &str)> = els
             .iter()
@@ -2618,6 +2729,7 @@ mod tests {
             texty: true,
             ppi: None,
             bitonal: false,
+            grid: (1000, 1000),
         });
         let mut doc = Document {
             pages: vec![page(glyphs, shots.to_vec())],
@@ -2628,7 +2740,7 @@ mod tests {
                 word("Revenue", [x, 450.0, x + 60.0, 463.0])
             })
             .collect();
-        let r = inject(&mut doc, &[(0, Crop::Region(0), pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Region(0), page_units(words))]);
         assert_eq!(r[0].taken, 5);
         assert!(matches!(route::decide(&doc.pages[0]).0, Route::VlmRegions(ref v) if v.len() == 2));
         let a = crate::document::analyze_with(
@@ -2666,7 +2778,7 @@ mod tests {
         };
         let mut w = word("CONFIDENTIAL", [100.0, 185.0, 300.0, 215.0]);
         w.angle = Some(45.0);
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![w]))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(vec![w]))]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 0));
     }
 
@@ -2706,7 +2818,7 @@ mod tests {
             word("ok", [100.0, 190.0, 120.0, 203.0]),
             word("ok", [100.0, 220.0, 120.0, 233.0]),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!((r[0].taken, r[0].dropped), (5, 4));
         assert_eq!(text_of(&doc.pages[0]), "okokokokok");
     }
@@ -2722,7 +2834,7 @@ mod tests {
             word("42", [125.0, 100.0, 140.0, 113.0]),
         ];
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(text_of(&doc.pages[0]).matches('|').count(), 2);
     }
 
@@ -2740,7 +2852,7 @@ mod tests {
             x += len + 3.0;
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(
             texts(&mut doc, &r),
             ["Certified true copy — 02/01/2026 — P. Vantongeren"]
@@ -2758,15 +2870,27 @@ mod tests {
             })
             .collect();
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(texts(&mut doc, &r), ["東京都庁の案内"]);
     }
 
     #[test]
-    fn a_page_ocr_read_whole_is_not_reported_unread() {
+    fn a_page_ocr_read_whole_is_reported_unread_only_when_nearly_empty() {
+        // Two words for a scan: read, but next to nothing came of it.
         let mut doc = blank_scan();
         let short = vec![word("KYC screen", [72.0, 72.0, 140.0, 85.0])];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(short))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
+        let els = analysed(&mut doc, &r);
+        let unread = crate::unread_pages(&doc, &els);
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert_eq!(unread[0].reason, crate::OCR_SPARSE);
+        // A line of real text clears it.
+        let mut doc = blank_scan();
+        let line = vec![word(
+            "Account holder: Jane Doe, opened on 2026-01-05 at the branch",
+            [72.0, 72.0, 432.0, 85.0],
+        )];
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(line))]);
         let els = analysed(&mut doc, &r);
         assert!(crate::unread_pages(&doc, &els).is_empty());
     }
@@ -2799,7 +2923,7 @@ mod tests {
                     5.0,
                 ));
                 w.extend(run_words(&format!("{m}"), 300.0, 760.0, 10.0, 5.0));
-                (m - 1, Crop::Page, pdf_units(w))
+                (m - 1, Crop::Page, page_units(w))
             })
             .collect();
         let r = inject(&mut doc, &readings);
@@ -2837,7 +2961,7 @@ mod tests {
             at("914-35-7075", 60.0, 118.0, 36.0),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         for t in ["Party Name", "Ann Nancy Mitchell", "SSN/TIN", "914-35-7075"] {
             assert!(all.contains(t), "{t} in {all}");
@@ -2859,7 +2983,7 @@ mod tests {
             word("citizen or other U.S. person.", [56.0, 299.0, 160.0, 309.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("shown on this form"), "{all}");
     }
@@ -2874,7 +2998,7 @@ mod tests {
             word("11/06/202513:54", [115.0, 3.0, 202.0, 12.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("555-0181 11/06/2025"), "{all}");
     }
@@ -2891,7 +3015,7 @@ mod tests {
             word("Completed", [201.0, 89.5, 219.0, 95.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         for t in ["Reference", "MSG757644818", "Status", "Completed"] {
             assert!(all.contains(t), "{t} in {all}");
@@ -2917,7 +3041,7 @@ mod tests {
             w
         })
         .collect();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("HART"), "{all}");
     }
@@ -2930,7 +3054,7 @@ mod tests {
             word("OWNER ROLE", [320.0, 110.0, 334.0, 180.0]),
         ];
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(all.contains("Account Holder"), "{all}");
         assert!(all.contains("OWNER ROLE"), "{all}");
@@ -2955,7 +3079,7 @@ mod tests {
                     w.push(word(b, [300.0, y, 312.0, y + 10.0]));
                 }
                 w.push(word(&(i + 1).to_string(), [300.0, 760.0, 306.0, 770.0]));
-                (i, Crop::Page, pdf_units(w))
+                (i, Crop::Page, page_units(w))
             })
             .collect();
         let r = inject(&mut doc, &readings);
@@ -2970,7 +3094,7 @@ mod tests {
             let mut w = word("RECEIVED 12 MAR 2026", [200.0, 300.0, 320.0, 316.0]);
             w.angle = Some(angle);
             let mut doc = blank_scan();
-            let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![w]))]);
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(vec![w]))]);
             assert_eq!(texts(&mut doc, &r), ["RECEIVED 12 MAR 2026"], "{angle}");
         }
     }
@@ -2986,7 +3110,7 @@ mod tests {
         }
         words.push(word("|", [97.0, 98.0, 103.0, 152.0]));
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         for t in ["North", "East", "South", "West", "Upper", "Lower"] {
             assert!(all.contains(t), "{t} in {all}");
@@ -3002,7 +3126,7 @@ mod tests {
             words.push(word("far", [x, 5000.0, x + 30.0, 5010.0]));
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert!(r[0].refused.is_some());
         assert!(doc.pages[0].glyphs.is_empty() && doc.pages[0].ocr.is_none());
         assert_eq!(crate::unread_pages(&doc, &[]).len(), 1);
@@ -3019,7 +3143,7 @@ mod tests {
             })
             .collect();
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert!(doc.pages[0].glyphs.iter().all(|g| g.rotation_deg == 0.0));
     }
 
@@ -3051,10 +3175,28 @@ mod tests {
             words.push(word("a", [x, 100.0, x + 1.0, 100.0 + 1e-9]));
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(r[0].taken + r[0].dropped, 202);
         assert!(text_of(&doc.pages[0]).contains("tall"));
         assert!(!text_of(&doc.pages[0]).contains("huge"));
+    }
+
+    #[test]
+    fn a_box_one_float_step_tall_is_laid_without_a_panic() {
+        // Thinner than one step of its coordinate: it passes the `y1 > y0`
+        // check but lays out at size 0, with no reach for its neighbours.
+        let up = |y: f64| f64::from_bits(y.to_bits() + 1);
+        let alone = vec![word("ab", [72.0, 300.0, 142.0, up(300.0)])];
+        let beside = vec![
+            word("Balance", [72.0, 300.0, 140.0, 313.0]),
+            word("_", [144.0, 313.0, 160.0, up(313.0)]),
+        ];
+        for words in [alone, beside] {
+            let n = words.len();
+            let mut doc = blank_scan();
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+            assert_eq!(r[0].taken + r[0].dropped, n, "{r:?}");
+        }
     }
 
     #[test]
@@ -3064,7 +3206,7 @@ mod tests {
         };
         let mut w = word("Cafe\u{301}", [60.0, 100.0, 100.0, 113.0]);
         w.angle = Some(359.4);
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![w]))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(vec![w]))]);
         assert_eq!(text_of(&doc.pages[0]), "Café");
         assert!(doc.pages[0].glyphs.iter().all(|g| g.rotation_deg == 0.0));
     }
@@ -3076,7 +3218,7 @@ mod tests {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
         };
         let short = vec![word("Page", [72.0, 72.0, 110.0, 85.0])];
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(short))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
         let a = crate::document::analyze_with(
             &mut doc.clone(),
             &[],
@@ -3097,7 +3239,7 @@ mod tests {
             word("of returned information", [86.0, 500.0, 184.0, 507.0]),
             word("against that of SS Pack", [184.0, 500.0, 276.0, 507.0]),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let texts: Vec<String> = analysed(&mut doc, &r)
             .iter()
             .map(|e| e.text.clone())
@@ -3127,6 +3269,7 @@ mod tests {
                     texty: true,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -3139,7 +3282,7 @@ mod tests {
                 [64.0, 640.0, 300.0, 653.0],
             ),
         ];
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 2));
         assert_eq!(doc.pages[0].glyphs.len() - before, 36);
         assert_eq!(doc.pages[0].ocr.as_ref().unwrap().regions, [0]);
@@ -3198,7 +3341,7 @@ mod tests {
             }
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         assert_eq!(r[0].taken, 22);
         // Each character is still marked where the image shows it.
         let first = words_box_of("The", &r[0].chars);
@@ -3247,7 +3390,7 @@ mod tests {
         };
         let r = inject(
             &mut doc,
-            &[(0, Crop::Page, pdf_units(upside_down_words(0)))],
+            &[(0, Crop::Page, page_units(upside_down_words(0)))],
         );
         assert_eq!(
             r[0].refused,
@@ -3267,7 +3410,7 @@ mod tests {
         let before = doc.pages[0].images[0].bbox;
         let r = inject(
             &mut doc,
-            &[(0, Crop::Page, pdf_units(upside_down_words(15)))],
+            &[(0, Crop::Page, page_units(upside_down_words(15)))],
         );
         assert_eq!(
             r[0].refused,
@@ -3295,9 +3438,9 @@ mod tests {
                 (
                     0,
                     Crop::Page,
-                    pdf_units(vec![word("Statement", [72.0, 480.0, 126.0, 493.0])]),
+                    page_units(vec![word("Statement", [72.0, 480.0, 126.0, 493.0])]),
                 ),
-                (0, Crop::Region(0), pdf_units(region_words)),
+                (0, Crop::Region(0), page_units(region_words)),
             ],
         );
         assert_eq!(r[0].taken, 1);
@@ -3323,7 +3466,7 @@ mod tests {
             }
             words.push(word("PAID", [250.0, 204.0 + dy, 450.0, 269.0 + dy]));
             let mut doc = blank_scan();
-            let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             let text = texts(&mut doc, &r).join("\n");
             let body = text
                 .matches("The quick brown fox jumps over the dog")
@@ -3370,7 +3513,7 @@ mod tests {
                 let void = paid - gap - 32.5 + 0.22 * 65.0;
                 words.push(word("VOID", [280.0, void, 380.0, void + 32.5]));
                 let mut doc = blank_scan();
-                let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+                let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
                 let text = texts(&mut doc, &r).join("\n");
                 let body = text
                     .matches("The quick brown fox jumps over the dog")
@@ -3442,7 +3585,7 @@ mod tests {
         }
         words.push(word("PAID", [250.0, 204.0, 450.0, 269.0]));
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let body: Vec<f32> = doc.pages[0]
             .glyphs
             .iter()
@@ -3487,6 +3630,7 @@ mod tests {
                     texty: true,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -3496,12 +3640,12 @@ mod tests {
                 (
                     0,
                     Crop::Page,
-                    pdf_units(vec![word("Elsewhere", [100.0, 100.0, 160.0, 113.0])]),
+                    page_units(vec![word("Elsewhere", [100.0, 100.0, 160.0, 113.0])]),
                 ),
                 (
                     0,
                     Crop::Region(0),
-                    pdf_units(vec![word("Inside", [100.0, 500.0, 150.0, 513.0])]),
+                    page_units(vec![word("Inside", [100.0, 500.0, 150.0, 513.0])]),
                 ),
             ],
         );
@@ -3526,6 +3670,7 @@ mod tests {
                         texty: true,
                         ppi: None,
                         bitonal: false,
+                        grid: (1000, 1000),
                     })
                     .collect(),
             )],
@@ -3554,22 +3699,22 @@ mod tests {
                 (
                     0,
                     Crop::Page,
-                    pdf_units(vec![word("Above", [100.0, 150.0, 140.0, 163.0])]),
+                    page_units(vec![word("Above", [100.0, 150.0, 140.0, 163.0])]),
                 ),
                 (
                     0,
                     Crop::Region(0),
-                    pdf_units(vec![word("Again", [100.0, 150.0, 140.0, 163.0])]),
+                    page_units(vec![word("Again", [100.0, 150.0, 140.0, 163.0])]),
                 ),
                 (
                     0,
                     Crop::Region(1),
-                    pdf_units(vec![word("Below", [100.0, 500.0, 140.0, 513.0])]),
+                    page_units(vec![word("Below", [100.0, 500.0, 140.0, 513.0])]),
                 ),
                 (
                     0,
                     Crop::Region(9),
-                    pdf_units(vec![word("Nowhere", [100.0, 500.0, 140.0, 513.0])]),
+                    page_units(vec![word("Nowhere", [100.0, 500.0, 140.0, 513.0])]),
                 ),
             ],
         );
@@ -3617,10 +3762,10 @@ mod tests {
                 .unwrap()
                 .font_size
         };
-        let alone = size(&[(0, Crop::Page, pdf_units(whole.clone()))]);
+        let alone = size(&[(0, Crop::Page, page_units(whole.clone()))]);
         let both = size(&[
-            (0, Crop::Page, pdf_units(whole)),
-            (0, Crop::Region(0), pdf_units(ink)),
+            (0, Crop::Page, page_units(whole)),
+            (0, Crop::Region(0), page_units(ink)),
         ]);
         assert_eq!(alone, both);
     }
@@ -3660,6 +3805,7 @@ mod tests {
             texty: true,
             ppi: None,
             bitonal: false,
+            grid: (1000, 1000),
         };
         let mut doc = Document {
             pages: vec![page(
@@ -3681,12 +3827,12 @@ mod tests {
                 (
                     0,
                     Crop::Region(0),
-                    pdf_units(vec![word("Overlap", [100.0, 540.0, 160.0, 553.0])]),
+                    page_units(vec![word("Overlap", [100.0, 540.0, 160.0, 553.0])]),
                 ),
                 (
                     0,
                     Crop::Region(1),
-                    pdf_units(vec![word("Overlap", [100.5, 540.4, 160.5, 553.4])]),
+                    page_units(vec![word("Overlap", [100.5, 540.4, 160.5, 553.4])]),
                 ),
             ],
         );
@@ -3710,7 +3856,7 @@ mod tests {
             &[(
                 0,
                 Crop::Page,
-                pdf_units(vec![
+                page_units(vec![
                     word("Account", [60.0, 300.0, 120.0, 313.0]),
                     word("4417-0093-21", [300.0, 301.5, 400.0, 314.5]),
                 ]),
@@ -3780,7 +3926,7 @@ mod tests {
             }
             let mut doc = blank_scan();
             let t = std::time::Instant::now();
-            inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             t.elapsed().as_secs_f64()
         };
         let (small, large) = (time(2_000, false), time(8_000, false));
@@ -3809,7 +3955,7 @@ mod tests {
                 .collect();
             let mut doc = blank_scan();
             let t = std::time::Instant::now();
-            inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             t.elapsed().as_secs_f64()
         };
         let (small, large) = (time(5_000), time(20_000));
@@ -3841,8 +3987,8 @@ mod tests {
             let r = inject(
                 &mut doc,
                 &[
-                    (0, Crop::Page, pdf_units(grid(n, 0.0))),
-                    (0, Crop::Page, pdf_units(grid(n, 0.4))),
+                    (0, Crop::Page, page_units(grid(n, 0.0))),
+                    (0, Crop::Page, page_units(grid(n, 0.4))),
                 ],
             );
             let took = t.elapsed().as_secs_f64();
@@ -3888,7 +4034,7 @@ mod tests {
             ));
         }
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert!(
             all.contains("Revenue rose in the quarter as customers renewed"),
@@ -3903,7 +4049,7 @@ mod tests {
         words.extend(run_words("alpha beta gamma delta", 320.0, 100.0, 10.0, 5.0));
         words.extend(run_words("one two three four", 320.0, 113.0, 10.0, 5.0));
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let size_of = |c: &str| {
             doc.pages[0]
                 .glyphs
@@ -3934,7 +4080,7 @@ mod tests {
         words.push(word("CONFIDENTIAL", [20.0, 95.0, 32.0, 170.0]));
         words.push(word("Total 42", [300.0, 98.0, 360.0, 126.0]));
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let all = texts(&mut doc, &r).join("\n");
         assert_eq!(all.matches("the line of body text").count(), 5, "{all}");
         assert!(
@@ -3963,7 +4109,7 @@ mod tests {
             words.push(ink_box(w, 60.0, 300.0 + i as f64 * 13.0, 10.0));
         }
         let mut doc = blank_scan();
-        inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+        inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         for g in doc.pages[0].glyphs.iter().filter(|g| g.bbox.is_some()) {
             assert!(
                 (g.font_size - 10.0).abs() < 1.0,
@@ -3978,7 +4124,7 @@ mod tests {
     fn a_reading_that_takes_nothing_leaves_the_page_as_it_was() {
         // An empty reading of a scan: still unread, still routed.
         let mut doc = blank_scan();
-        let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(vec![]))]);
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(vec![]))]);
         assert_eq!(r[0].taken, 0);
         assert!(doc.pages[0].ocr.is_none());
         // A BrokenText page whose reading lands nowhere keeps its glyphs.
@@ -3989,7 +4135,7 @@ mod tests {
         let mut doc = Document {
             pages: vec![page(glyphs, Vec::new())],
         };
-        let far = pdf_units(vec![word("far", [5000.0, 5000.0, 5050.0, 5013.0])]);
+        let far = page_units(vec![word("far", [5000.0, 5000.0, 5050.0, 5013.0])]);
         inject(&mut doc, &[(0, Crop::Page, far)]);
         assert_eq!(doc.pages[0].glyphs.len(), 150);
         assert!(doc.pages[0].ocr.is_none());
@@ -4015,11 +4161,12 @@ mod tests {
                     texty: true,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 }],
             )],
         };
         let w = || {
-            pdf_units(vec![word(
+            page_units(vec![word(
                 "Evaluated against tests",
                 [64.0, 640.0, 300.0, 653.0],
             )])
@@ -4047,7 +4194,7 @@ mod tests {
             }
             let mut doc = blank_scan();
             let t = std::time::Instant::now();
-            inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
             t.elapsed().as_secs_f64()
         };
         let (small, large) = (time(10_000), time(40_000));
@@ -4058,7 +4205,87 @@ mod tests {
     }
 
     #[test]
-    fn elements_mostly_of_ocr_words_are_marked() {
+    fn ocr_lines_under_a_paragraph_do_not_join_it() {
+        // A text page with a screenshot pasted under its paragraph, the
+        // screenshot's lines read by OCR at the paragraph's size and pitch,
+        // one with an O/0 confusion. The PDF's own text stays the PDF's; the
+        // characters read from pixels are said to be.
+        let body = [
+            "The statement below records each transfer made from the old",
+            "account and the date on which it was booked, in the order of",
+            "the ledger, so that a reader can follow every entry through",
+            "the period it covers and up to its later reconciliation and",
+        ];
+        let mut glyphs = Vec::new();
+        for (row, line) in body.iter().enumerate() {
+            glyphs.extend(native(line, 72.0, 140.0 + row as f64 * 12.0));
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let shot = BBox {
+            x0: 66.0,
+            y0: 182.0,
+            x1: 540.0,
+            y1: 300.0,
+        };
+        let mut doc = Document {
+            pages: vec![page(
+                glyphs,
+                vec![ImagePlacement {
+                    bbox: shot,
+                    texty: true,
+                    ppi: None,
+                    bitonal: false,
+                    grid: (1000, 1000),
+                }],
+            )],
+        };
+        assert!(matches!(
+            route::decide(&doc.pages[0]).0,
+            Route::VlmRegions(_)
+        ));
+        // Detector boxes, 1.3 ems tall with the baseline 0.78 down: on the
+        // paragraph's next two baselines.
+        let line = |text: &str, baseline: f64| {
+            word(
+                text,
+                [
+                    72.0,
+                    baseline - 0.78 * 13.0,
+                    72.0 + text.len() as f64 * 6.0,
+                    baseline + 0.22 * 13.0,
+                ],
+            )
+        };
+        let reading = page_units(vec![
+            line(
+                "Balance on 15-0CT-1997 was 1,25O.00 in the account named",
+                188.0,
+            ),
+            line(
+                "above, carried forward to the next statement of the period",
+                200.0,
+            ),
+        ]);
+        let r = inject(&mut doc, &[(0, Crop::Region(0), reading)]);
+        assert_eq!(r[0].taken, 2, "{r:?}");
+        let els = analysed(&mut doc, &r);
+        let born = els
+            .iter()
+            .find(|e| e.text.contains("statement below"))
+            .expect("the PDF's paragraph");
+        assert_eq!(born.provenance, "rust", "{els:#?}");
+        assert!(!born.text.contains("15-0CT"), "{els:#?}");
+        let read = els
+            .iter()
+            .find(|e| e.text.contains("15-0CT-1997"))
+            .expect("the screenshot's lines");
+        assert_eq!(read.provenance, "ocr", "{els:#?}");
+    }
+
+    #[test]
+    fn elements_holding_any_ocr_character_are_marked() {
         use fluree_doc_model::Element;
         // "Account": seven characters, ten units each.
         let injected = vec![Injected {
@@ -4081,9 +4308,233 @@ mod tests {
             }),
             ..Element::new("doco:Paragraph", text, "rust", "layout")
         };
-        let mut els = vec![at(60.0, "Account"), at(300.0, "Elsewhere")];
+        // Over the same characters, most of its own from the text layer: a
+        // table row mixing both, say. Still read from pixels in part.
+        let mixed = at(60.0, "Account, then a long run of the page's own text");
+        let mut els = vec![at(60.0, "Account"), at(300.0, "Elsewhere"), mixed];
         mark_provenance(&mut els, &injected);
         assert_eq!(els[0].provenance, "ocr");
         assert_eq!(els[1].provenance, "rust");
+        assert_eq!(els[2].provenance, "ocr");
+    }
+
+    /// A one-page Letter PDF: twenty lines of Helvetica at the top, so the
+    /// page has a text layer, then `content`, drawing the image masks
+    /// `masks` names, each `(name, width, height)` pixels, all ink.
+    fn form_pdf(content: &str, masks: &[(&str, u32, u32)]) -> Vec<u8> {
+        let text: String = (0..20)
+            .map(|i| {
+                format!(
+                    "BT /F1 9 Tf 40 {} Td (The quarterly statement lists every account opened this year.) Tj ET\n",
+                    770 - 12 * i
+                )
+            })
+            .collect();
+        let content = format!("{text}{content}");
+        let xobjects: String = masks
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _))| format!("/{name} {} 0 R ", 5 + i))
+            .collect();
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << \
+                 /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> \
+                 /XObject << {xobjects}>> >> /Contents 4 0 R >>"
+            )
+            .into_bytes(),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            )
+            .into_bytes(),
+        ];
+        for (_, w, h) in masks {
+            let data = vec![0u8; w.div_ceil(8) as usize * *h as usize];
+            objects.push(
+                [
+                    format!(
+                        "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ImageMask true \
+                         /BitsPerComponent 1 /Length {} >>\nstream\n",
+                        data.len()
+                    )
+                    .into_bytes(),
+                    data,
+                    b"\nendstream".to_vec(),
+                ]
+                .concat(),
+            );
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            out.extend(body);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").into_bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    /// Every crop [`ocr_jobs`] asks for, as `(page, tag)`.
+    fn crops_of(doc: &Document) -> Vec<(usize, String)> {
+        ocr_jobs(doc, None, 0)
+            .0
+            .into_iter()
+            .flat_map(|(page, crops)| match crops {
+                None => vec![(page, "full".to_string())],
+                Some(l) => l.into_iter().map(|(t, _)| (page, t)).collect(),
+            })
+            .collect()
+    }
+
+    /// A pasted capture, 200 × 30 pixels drawn at 200 × 30 pt, at `(x, y)`.
+    fn capture_at(x: u32, y: u32) -> String {
+        format!("q 200 0 0 30 {x} {y} cm /Cap Do Q\n")
+    }
+
+    #[test]
+    fn a_form_of_checkbox_masks_asks_the_engine_for_nothing() {
+        // 300 checkboxes, each an 8 × 8 image mask drawn 8 pt square, under
+        // the text: each would be a crop of its own, and its reading a `■`.
+        let boxes: String = (0..300)
+            .map(|i| {
+                format!(
+                    "q 8 0 0 8 {} {} cm /Cb Do Q\n",
+                    50 + (i % 15) * 32,
+                    100 + (i / 15) * 24
+                )
+            })
+            .collect();
+        let doc =
+            crate::extract_bytes(form_pdf(&boxes, &[("Cb", 8, 8), ("Cap", 200, 30)])).unwrap();
+        assert_eq!(doc.pages[0].images.len(), 300);
+        assert!(crops_of(&doc).is_empty(), "{:?}", crops_of(&doc).len());
+        // The same form with a capture an engine can read: that one crop.
+        let with = format!("{boxes}{}", capture_at(50, 40));
+        let doc = crate::extract_bytes(form_pdf(&with, &[("Cb", 8, 8), ("Cap", 200, 30)])).unwrap();
+        assert_eq!(crops_of(&doc), [(0, "r0".to_string())]);
+    }
+
+    #[test]
+    fn rules_stretched_from_a_pixel_are_not_read() {
+        // 40 underlines, each a 1 × 1 mask stretched 200 pt wide and 1 high.
+        let rules: String = (0..40)
+            .map(|i| {
+                format!(
+                    "q 200 0 0 1 {} {} cm /Ru Do Q\n",
+                    50 + (i % 2) * 260,
+                    100 + (i / 2) * 20
+                )
+            })
+            .collect();
+        let doc = crate::extract_bytes(form_pdf(&rules, &[("Ru", 1, 1)])).unwrap();
+        assert_eq!(doc.pages[0].images.len(), 40);
+        assert!(crops_of(&doc).is_empty());
+    }
+
+    #[test]
+    fn an_image_drawn_twice_in_one_place_is_read_once() {
+        let twice = format!(
+            "{}{}{}",
+            capture_at(50, 40),
+            capture_at(50, 40),
+            capture_at(300, 40)
+        );
+        let doc = crate::extract_bytes(form_pdf(&twice, &[("Cap", 200, 30)])).unwrap();
+        assert_eq!(doc.pages[0].images.len(), 3);
+        assert_eq!(
+            crops_of(&doc),
+            [(0, "r0".to_string()), (0, "r1".to_string())]
+        );
+    }
+
+    #[test]
+    fn past_its_limit_the_engine_reads_what_loses_most_unread() {
+        // Page 0: three small captures. Page 1: a scan, read whole. Page 2:
+        // a routed region and a small capture.
+        let small = |y: f64| ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: y,
+                x1: 150.0,
+                y1: y + 30.0,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (200, 60),
+        };
+        let text = || native("The quarterly statement lists every account.", 40.0, 40.0);
+        let mut p0 = page(text(), vec![small(200.0), small(300.0), small(400.0)]);
+        p0.index = 0;
+        let mut p1 = page(Vec::new(), vec![full_page_image()]);
+        p1.index = 1;
+        let routed = ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 400.0,
+                x1: 550.0,
+                y1: 600.0,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 400),
+        };
+        let mut p2 = page(text(), vec![small(200.0), routed]);
+        p2.index = 2;
+        let doc = Document {
+            pages: vec![p0, p1, p2],
+        };
+        let tags = |jobs: &OcrJobs| -> Vec<(usize, Vec<String>)> {
+            jobs.iter()
+                .map(|(p, c)| {
+                    let tags = match c {
+                        None => vec!["full".to_string()],
+                        Some(l) => l.iter().map(|(t, _)| t.clone()).collect(),
+                    };
+                    (*p, tags)
+                })
+                .collect()
+        };
+        let (all, dropped) = ocr_jobs(&doc, None, 0);
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            all.iter()
+                .map(|(_, c)| c.as_ref().map_or(1, Vec::len))
+                .sum::<usize>(),
+            6
+        );
+        let (kept, dropped) = ocr_jobs(&doc, None, 3);
+        assert_eq!(dropped, 3);
+        assert_eq!(
+            tags(&kept),
+            [
+                (0, vec!["r0".to_string()]),
+                (1, vec!["full".to_string()]),
+                (2, vec!["r0".to_string()]),
+            ],
+            "the scan, the routed region, then the first small capture"
+        );
+        let (kept, _) = ocr_jobs(&doc, None, 2);
+        assert_eq!(
+            tags(&kept),
+            [(1, vec!["full".to_string()]), (2, vec!["r0".to_string()])]
+        );
     }
 }

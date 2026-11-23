@@ -78,18 +78,25 @@ pub const MAX_LONG_EDGE_PX: f64 = 4000.0;
 /// resolution: 64 million, 256 MB of RGBA, held once (the crops are cut from
 /// the render itself; a whole page is copied out of it once). A crop is cut
 /// from a render of its whole page, so a small capture on a large page would
-/// otherwise draw the whole page at the capture's resolution. A page the
-/// model scale already draws larger is drawn at the model scale.
+/// otherwise draw the whole page at the capture's resolution. The bound is
+/// absolute for [`CropScale::Stored`]: a page the model scale would already
+/// draw larger is drawn below it, as large as the budget allows. The model's
+/// crops ([`CropScale::Model`]) are drawn at the model scale whatever the
+/// page's size.
 pub const MAX_PAGE_PIXELS: f64 = 64.0e6;
 
 /// The longest side, in pixels, the renderer can draw: it sizes its canvas
 /// in 16 bits, and a page drawn wider loses what lies past the edge.
 pub const MAX_RENDER_SIDE: f64 = 65_535.0;
 
-/// The most renders of one page its crops are cut from. Crops at their
+/// The most renders of one page its crops are cut from, plus one per crop
+/// held to its long-edge cap that no shared render fits. Crops at their
 /// stored resolution each ask for their own scale, and a page of hundreds of
 /// captures would be rendered hundreds of times; past this many scales,
-/// crops share the next scale up, so none is drawn coarser than it asks.
+/// crops share the next scale up, so none is drawn coarser than it asks,
+/// nor past its long-edge cap ([`MAX_LONG_EDGE_PX`]): such a crop, when none
+/// of the shared scales lies between its own and its cap, keeps its own
+/// render. It takes a crop over about 960 points long, so it is rare.
 pub const MAX_RENDERS_PER_PAGE: usize = 4;
 
 /// How a crop is rendered.
@@ -115,11 +122,13 @@ pub enum CropScale {
 /// page when `region` is `None`.
 ///
 /// With [`CropScale::Stored`] it is the resolution of the image the crop
-/// shows, clamped between the model scale and [`MAX_STORED_PPI`], below
-/// [`MAX_LONG_EDGE_PX`] on the crop's long edge and [`MAX_PAGE_PIXELS`] on
-/// the page it is cut from; the model scale where no image is under it, or
-/// the image is one-bit or its resolution unknown. It is not rounded: small
-/// text in a capture reads worse a few dpi below the capture's own
+/// shows, clamped between the model scale and [`MAX_STORED_PPI`] and held
+/// back toward the model scale (never below it) by [`MAX_LONG_EDGE_PX`] on
+/// the crop's long edge; the model scale where no image is under it, or the
+/// image is one-bit or its resolution unknown. Whichever it is, the page it
+/// is cut from is then drawn within [`MAX_PAGE_PIXELS`] and
+/// [`MAX_RENDER_SIDE`], below the model scale if need be. It is not rounded:
+/// small text in a capture reads worse a few dpi below the capture's own
 /// resolution.
 ///
 /// The image a crop shows is the one most of which lies inside it (a
@@ -131,6 +140,14 @@ pub fn crop_scale(page: &crate::extract::Page, region: Option<&BBox>, mode: Crop
     if mode == CropScale::Model {
         return VLM_RENDER_SCALE;
     }
+    // The page is drawn whole whatever the crop, so every crop read at the
+    // stored resolution, the model-scale ones included, is held to what the
+    // page may be drawn at: the pixel budget, and never wider than the
+    // renderer draws. A pixel short of that, so the scale's rounding to f32
+    // cannot cross it.
+    let budget = (MAX_PAGE_PIXELS / (page.width * page.height).max(1.0)).sqrt();
+    let widest = (MAX_RENDER_SIDE - 1.0) / page.width.max(page.height).max(1.0);
+    let held = |s: f64| s.min(budget).min(widest) as f32;
     let area = match region {
         Some(b) => BBox {
             x0: b.x0 - CROP_MARGIN,
@@ -170,22 +187,16 @@ pub fn crop_scale(page: &crate::extract::Page, region: Option<&BBox>, mode: Crop
                 .max_by(|a, b| overlap(&a.bbox).total_cmp(&overlap(&b.bbox)))
         })
     else {
-        return VLM_RENDER_SCALE;
+        return held(base);
     };
     let Some(ppi) = image.ppi.filter(|_| !image.bitonal) else {
-        return VLM_RENDER_SCALE;
+        return held(base);
     };
     let long_edge = (area.x1 - area.x0).max(area.y1 - area.y0).max(1.0);
-    let page_area = (page.width * page.height).max(1.0);
     let scale = (ppi / 72.0)
         .min(MAX_STORED_PPI / 72.0)
-        .min(MAX_LONG_EDGE_PX / long_edge)
-        .min((MAX_PAGE_PIXELS / page_area).sqrt());
-    // Never wider than the renderer draws, even where that is below the
-    // model scale: a page past it renders cut off at the model scale too.
-    // A pixel short of it, so the scale's rounding to f32 cannot cross it.
-    let widest = (MAX_RENDER_SIDE - 1.0) / page.width.max(page.height).max(1.0);
-    scale.max(base).min(widest) as f32
+        .min(MAX_LONG_EDGE_PX / long_edge);
+    held(scale.max(base))
 }
 
 /// The scales a page is rendered at for crops asking for `scales`, each at
@@ -232,10 +243,13 @@ pub type CropJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// asked for on a doubt about its headings, figures or columns, have all
 /// their text already and want a reader that sees structure: an OCR engine
 /// has nothing to add there, and should skip them. A table no grid covered
-/// usually has its text too, but may be a raster table too small for the
-/// router to send a reader: skip it only where the page's text covers it.
+/// usually has its text too, and an OCR engine skips it as well; a raster
+/// table too small for the router to send a reader is the known gap there.
 /// A table on a page read whole for a doubt goes with its page, under the
 /// doubt's reason.
+///
+/// The names ([`CropReason::as_str`]) are a stable contract: a producer may
+/// filter on them, and renaming or removing one is a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CropReason {
     /// A whole page with no meaningful text layer.
@@ -669,7 +683,8 @@ pub fn crop_count(jobs: &CropJobs) -> usize {
 ///    whose every word the deterministic pass already has.
 ///
 /// Within a rank, earlier pages first. A whole-page job that superseded
-/// region crops on its page is one crop and is kept or dropped as one.
+/// region crops on its page is one crop, kept or dropped as one, and ranks
+/// with routed regions: the pixels it carries are still the text layer's gap.
 pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJobs, usize) {
     let total = crop_count(&jobs);
     if total <= max_crops {
@@ -686,11 +701,22 @@ pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJ
     for (order, (page, regions)) in jobs.into_iter().enumerate() {
         match regions {
             None => {
-                let routed = doc.pages.iter().find(|p| p.index == page).is_some_and(|p| {
-                    matches!(crate::route::decide(p).0, crate::route::Route::Vlm(_))
-                });
+                // Ranked by what the router sent the page: a page whose
+                // routed regions a doubt widened to the whole page still
+                // holds pixels only a reader can read, so it ranks with
+                // those regions, not with the doubt pages.
+                let routed = doc
+                    .pages
+                    .iter()
+                    .find(|p| p.index == page)
+                    .map(|p| crate::route::decide(p).0);
+                let rank = match routed {
+                    Some(crate::route::Route::Vlm(_)) => 0,
+                    Some(crate::route::Route::VlmRegions(_)) => 1,
+                    _ => 4,
+                };
                 crops.push(Ranked {
-                    rank: if routed { 0 } else { 4 },
+                    rank,
                     order,
                     page,
                     region: None,
@@ -747,7 +773,8 @@ pub fn render_crops_displayed(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
 /// A rendered crop encoded as PNG.
 fn png_of(c: RawCrop) -> Option<Crop> {
     let (w, h) = (c.pixels.width as usize, c.pixels.height as usize);
-    let png = encode(&c.pixels.rgba, w, 0, 0, w, h)?;
+    // Rendered crops are RGBA (see `for_each_crop`).
+    let png = encode(&c.pixels.data, w, 0, 0, w, h)?;
     Some(Crop {
         name: c.name,
         page: c.page,
@@ -770,15 +797,19 @@ pub struct RawCrop {
 
 /// Render each job's crops and hand them over one at a time, so a long
 /// scan never holds more than one page's pixels. The same pixels
-/// [`render_crops`] encodes: same renderer, scale and margin.
+/// [`render_crops`] encodes: same renderer, scale and margin, and RGBA, as
+/// the renderer gives them.
 pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, f: impl FnMut(RawCrop)) {
     for_each_crop_scaled(pdf, jobs, |_, _| VLM_RENDER_SCALE, f)
 }
 
 /// As [`for_each_crop`], each crop at the scale `scale_of(page, region)`
 /// gives it (see [`crop_scale`]). A page is rendered once per scale its
-/// crops ask for, at most [`MAX_RENDERS_PER_PAGE`] times, one render at a
-/// time; a page's crops are held until the last of its renders is cut.
+/// crops ask for (at most [`MAX_RENDERS_PER_PAGE`] times, plus one per crop
+/// held to its long-edge cap), one render at a time, and each crop is handed
+/// over as soon as it is cut: a page's crops come in the order of its
+/// renders, coarsest first, and in the jobs' order within each.
+/// [`crop_order`] gives the jobs' order back.
 ///
 /// A region is cut where it shows on the page as rendered: on a page read
 /// in a turned frame (`/Rotate`, or text drawn sideways), pass
@@ -813,6 +844,24 @@ pub fn for_each_crop_of(
     )
 }
 
+/// Each crop's place in `jobs`, by its name (`p{page}_{tag}`, `p{page}_full`
+/// for a whole page): the order a caller of [`for_each_crop_scaled`] or
+/// [`for_each_crop_of`] sorts by to have the crops of a page rendered at
+/// several scales back in the order it asked for them.
+pub fn crop_order(jobs: &CropJobs) -> HashMap<String, usize> {
+    jobs.iter()
+        .flat_map(|(page, regions)| match regions {
+            None => vec![format!("p{page}_full")],
+            Some(list) => list
+                .iter()
+                .map(|(tag, _)| format!("p{page}_{tag}"))
+                .collect(),
+        })
+        .enumerate()
+        .map(|(i, name)| (name, i))
+        .collect()
+}
+
 /// Render each job's pages and cut its crops, each region where `shown`
 /// says it lies on the render (in PDF units, display frame).
 fn cut_crops(
@@ -822,6 +871,7 @@ fn cut_crops(
     shown: impl Fn(usize, &BBox) -> BBox,
     mut f: impl FnMut(RawCrop),
 ) {
+    use fluree_doc_vision::Layout;
     let pages = pdf.pages();
     let cache = RenderCache::new();
     let draw = |page, scale| render_page(page, &cache, scale);
@@ -836,7 +886,9 @@ fn cut_crops(
                     let r = draw(page, scale);
                     (r.width, r.height, r.rgba().to_vec())
                 };
-                if let Some(pixels) = fluree_doc_vision::Pixels::new(w as u32, h as u32, rgba) {
+                if let Some(pixels) =
+                    fluree_doc_vision::Pixels::new(w as u32, h as u32, Layout::Rgba8, rgba)
+                {
                     f(RawCrop {
                         name: format!("p{page_idx}_full"),
                         page: *page_idx,
@@ -848,8 +900,8 @@ fn cut_crops(
             }
             Some(regions) => {
                 // One render per scale the page's crops ask for, each dropped
-                // once its crops are cut: never more than one render held.
-                // The crops are handed over in the jobs' order.
+                // once its crops are cut: never more than one render held,
+                // and each crop handed over as cut, never held past it.
                 // A crop shares a finer render only within its long-edge cap.
                 let most: Vec<f32> = regions
                     .iter()
@@ -868,7 +920,6 @@ fn cut_crops(
                 let mut distinct = scales.clone();
                 distinct.sort_by(f32::total_cmp);
                 distinct.dedup();
-                let mut cut: Vec<Option<RawCrop>> = regions.iter().map(|_| None).collect();
                 for scale in distinct {
                     let render = draw(page, scale);
                     let (w, h, rgba) = (render.width, render.height, render.rgba());
@@ -890,18 +941,22 @@ fn cut_crops(
                             let s = (row * w + x0) * 4;
                             buf.extend_from_slice(&rgba[s..s + (x1 - x0) * 4]);
                         }
-                        cut[k] =
-                            fluree_doc_vision::Pixels::new((x1 - x0) as u32, (y1 - y0) as u32, buf)
-                                .map(|pixels| RawCrop {
-                                    name: format!("p{page_idx}_{tag}"),
-                                    page: *page_idx,
-                                    bbox: Some(*b),
-                                    scale,
-                                    pixels,
-                                });
+                        if let Some(pixels) = fluree_doc_vision::Pixels::new(
+                            (x1 - x0) as u32,
+                            (y1 - y0) as u32,
+                            Layout::Rgba8,
+                            buf,
+                        ) {
+                            f(RawCrop {
+                                name: format!("p{page_idx}_{tag}"),
+                                page: *page_idx,
+                                bbox: Some(*b),
+                                scale,
+                                pixels,
+                            });
+                        }
                     }
                 }
-                cut.into_iter().flatten().for_each(&mut f);
             }
         }
     }
@@ -1209,6 +1264,7 @@ mod tests {
                     texty: true,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 }]
             } else {
                 Vec::new()
@@ -1431,6 +1487,7 @@ mod tests {
             texty: true,
             ppi: None,
             bitonal: false,
+            grid: (1000, 1000),
         }];
         assert!(matches!(
             crate::route::decide(&p).0,
@@ -1450,6 +1507,7 @@ mod tests {
             texty: true,
             ppi,
             bitonal,
+            grid: (1000, 1000),
         }];
         p
     }
@@ -1530,6 +1588,13 @@ mod tests {
         p.height = 200.0;
         let s = f64::from(crop_scale(&p, Some(&shot), CropScale::Stored));
         assert!(s * 20_000.0 <= MAX_RENDER_SIDE, "{s}");
+        // A page past the canvas at the model scale, nothing under the
+        // crop: drawn below the model scale for an engine.
+        let mut bare = page(0, 0, false);
+        bare.width = 40_000.0;
+        bare.height = 100.0;
+        let s = f64::from(crop_scale(&bare, None, CropScale::Stored));
+        assert!(s * 40_000.0 <= MAX_RENDER_SIDE, "{s}");
     }
 
     #[test]
@@ -1555,6 +1620,7 @@ mod tests {
                 texty: false,
                 ppi: Some(200.0),
                 bitonal: true,
+                grid: (1000, 1000),
             },
         );
         assert_eq!(crop_scale(&p, Some(&shot), CropScale::Stored), 4.0);
@@ -1572,20 +1638,41 @@ mod tests {
             x1: 216.0,
             y1: 129.0,
         };
+        let within = |p: &crate::extract::Page, s: f32| {
+            let s = f64::from(s);
+            // Up to the f32 the scale is given in.
+            s * s * p.width * p.height <= MAX_PAGE_PIXELS * 1.000_01
+        };
         let mut p = imaged(shot, Some(300.0), false);
         p.width = 14_400.0;
         p.height = 14_400.0;
+        // The model scale would draw it with 829 million pixels: below it,
+        // as large as the budget allows, whatever is under the crop.
+        let s = crop_scale(&p, Some(&shot), CropScale::Stored);
+        assert!(within(&p, s) && s < VLM_RENDER_SCALE, "{s}");
+        assert!(!within(&p, s * 1.001), "as large as the budget allows: {s}");
+        for (ppi, bitonal) in [(None, false), (Some(300.0), true)] {
+            let mut q = imaged(shot, ppi, bitonal);
+            q.width = p.width;
+            q.height = p.height;
+            assert_eq!(crop_scale(&q, Some(&shot), CropScale::Stored), s);
+            assert_eq!(crop_scale(&q, None, CropScale::Stored), s);
+        }
+        let mut bare = page(0, 0, false);
+        bare.width = p.width;
+        bare.height = p.height;
+        assert_eq!(crop_scale(&bare, None, CropScale::Stored), s);
+        // The model's crops stay at the model scale.
         assert_eq!(
-            crop_scale(&p, Some(&shot), CropScale::Stored),
+            crop_scale(&p, Some(&shot), CropScale::Model),
             VLM_RENDER_SCALE
         );
         // On an A0 page it is drawn within the budget.
         p.width = 2384.0;
         p.height = 3370.0;
-        let s = f64::from(crop_scale(&p, Some(&shot), CropScale::Stored));
-        // Within the budget, up to the f32 the scale is given in.
-        assert!(s * s * 2384.0 * 3370.0 <= MAX_PAGE_PIXELS * 1.000_01, "{s}");
-        assert!(s > f64::from(VLM_RENDER_SCALE), "{s}");
+        let s = crop_scale(&p, Some(&shot), CropScale::Stored);
+        assert!(within(&p, s), "{s}");
+        assert!(s > VLM_RENDER_SCALE, "{s}");
     }
 
     #[test]
@@ -1626,6 +1713,7 @@ mod tests {
             texty: true,
             ppi: None,
             bitonal: false,
+            grid: (1000, 1000),
         }];
         let doc = Document { pages: vec![p] };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
@@ -1653,6 +1741,7 @@ mod tests {
             texty: true,
             ppi: None,
             bitonal: false,
+            grid: (1000, 1000),
         }];
         let doc = Document { pages: vec![p] };
         let mut copy = doc.clone();
@@ -1673,6 +1762,35 @@ mod tests {
         let (jobs, reasons) = select(&doc, &analysis, &hints);
         assert_eq!(jobs, vec![(0, None)]);
         assert_eq!(reasons.get(&0), Some(&CropReason::FigureDoubt));
+    }
+
+    #[test]
+    fn the_budget_keeps_a_doubt_page_with_raster_regions_before_a_table() {
+        // The page above, read whole for a doubt, and an untrusted table on
+        // another page: under a budget of one, the pixels only a reader can
+        // read come before a table whose text the deterministic pass has.
+        let mut p = page(0, 1500, false);
+        p.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 550.0,
+                y1: 300.0,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+        }];
+        let doc = Document {
+            pages: vec![p, page(1, 500, false)],
+        };
+        let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+        jobs.push((1, Some(vec![region("t0")])));
+        let (kept, dropped) = within_budget(&doc, jobs, 1);
+        assert_eq!(dropped, 1);
+        assert_eq!(kept, vec![(0, None)], "the region page before the table");
     }
 
     #[test]

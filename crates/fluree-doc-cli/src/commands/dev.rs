@@ -608,10 +608,12 @@ fn pipeline(pdf: &Path) -> Doc {
             body_lines += kept.len();
             // Per column: "was this line wrapped?" is judged against the
             // column's own right edge, not the page's. The page's fills mark
-            // checkboxes and row bands, as they do in the pipeline.
+            // checkboxes and row bands, and its OCR characters lines apart,
+            // as they do in the pipeline.
             let checkboxes = rule::checkboxes(&doc.pages[pi].fills);
+            let ocr = block::ocr_centers(&doc.pages[pi]);
             out.extend(
-                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi])
+                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi], &ocr)
                     .into_iter()
                     .flat_map(block::split_structural_prefix),
             );
@@ -1122,6 +1124,15 @@ pub(crate) fn render_routed(
     // (`report.pdf` and `report.png`) would overwrite the first's crops and
     // take their readings.
     let mut stems = std::collections::HashSet::new();
+    // The limit `convert --ocr` reads under, from the same config.
+    let max_ocr_crops = match ocr_regions.then(crate::config::load) {
+        None => 0,
+        Some(Ok(l)) => l.config.ocr.max_crops(),
+        Some(Err(e)) => {
+            eprintln!("warning: {e}");
+            crate::config::DEFAULT_OCR_MAX_CROPS
+        }
+    };
 
     for f in &files {
         let stem = crate::commands::common::stem_of(f);
@@ -1191,21 +1202,30 @@ pub(crate) fn render_routed(
             &tiers.options_for(stem),
             &hints,
         );
-        // The regions a model call would not pay for, numbered after the
-        // routed ones as `route::ocr_regions` numbers them, on the pages
-        // whose text is not pixels. A page read whole on a doubt about its
-        // structure, which an OCR engine skips, gets its regions as crops of
-        // their own too: the crops `convert --ocr` reads on it.
+        // The crops `convert --ocr` reads, from the same `ocr::ocr_jobs`
+        // and under the same limit, so the three-step path reads what it
+        // reads: the regions a model call would not pay for are added, and a
+        // page read whole on a doubt about its structure, which an OCR
+        // engine skips, gets its regions as crops of their own too.
         let small = if ocr_regions {
-            let pages = doc.pages.iter().filter_map(|p| {
-                let routed = match fluree_doc_pdf::route::decide(p).0 {
-                    fluree_doc_pdf::route::Route::Vlm(_) => return None,
-                    fluree_doc_pdf::route::Route::VlmRegions(r) => r.len(),
-                    fluree_doc_pdf::route::Route::Deterministic => 0,
-                };
-                Some((p.index, routed, fluree_doc_pdf::route::ocr_regions(p)))
-            });
-            add_ocr_regions(&mut jobs, pages)
+            let (ocr, capped) = fluree_doc_pdf::ocr::ocr_jobs(&doc, None, max_ocr_crops);
+            if capped > 0 {
+                eprintln!(
+                    "{}",
+                    crate::commands::convert::ocr_cap_note(stem, max_ocr_crops, capped)
+                );
+            }
+            let routed: std::collections::HashMap<usize, usize> = doc
+                .pages
+                .iter()
+                .map(|p| match fluree_doc_pdf::route::decide(p).0 {
+                    fluree_doc_pdf::route::Route::VlmRegions(r) => (p.index, r.len()),
+                    _ => (p.index, 0),
+                })
+                .collect();
+            add_ocr_jobs(&mut jobs, ocr, |page| {
+                routed.get(&page).copied().unwrap_or(0)
+            })
         } else {
             Default::default()
         };
@@ -1221,7 +1241,13 @@ pub(crate) fn render_routed(
         } else {
             fluree_doc_pdf::escalate::CropScale::Model
         };
+        // Each crop is written as it is cut; its manifest line waits so the
+        // document's lines come in the jobs' order, which a page rendered at
+        // several scales hands its crops over out of.
+        let order = fluree_doc_pdf::escalate::crop_order(&jobs);
+        let mut lines: Vec<(usize, serde_json::Value)> = Vec::new();
         fluree_doc_pdf::escalate::for_each_crop_of(&pdf, &doc, &jobs, mode, |crop| {
+            let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
             let page_idx = crop.page;
             let name = format!("{stem}_{}.png", crop.name);
             let file = std::fs::File::create(outdir.join(&name)).expect("create png");
@@ -1234,7 +1260,7 @@ pub(crate) fn render_routed(
             enc.set_depth(png::BitDepth::Eight);
             enc.write_header()
                 .unwrap()
-                .write_image_data(&crop.pixels.rgba)
+                .write_image_data(&crop.pixels.data)
                 .unwrap();
             // A link is drawn as nothing: colour and an underline at most. A
             // reader looking at pixels sees an anchor and no address, and
@@ -1330,8 +1356,12 @@ pub(crate) fn render_routed(
             if !ls.is_empty() {
                 rec["links"] = serde_json::Value::Array(ls);
             }
-            writeln!(manifest, "{rec}").unwrap();
+            lines.push((at, rec));
         });
+        lines.sort_by_key(|(at, _)| *at);
+        for (_, rec) in lines {
+            writeln!(manifest, "{rec}").unwrap();
+        }
     }
     println!(
         "{n_pages} full pages, {n_crops} region crops, {n_media} embedded images -> {}",
@@ -1339,36 +1369,46 @@ pub(crate) fn render_routed(
     );
 }
 
-/// Add to a document's crop jobs the regions an OCR engine reads: each page's
-/// `(index, routed, regions)`, its regions numbered as `route::ocr_regions`
-/// numbers them, the first `routed` being the ones the router sends a model.
-/// A routed page gets its small regions added to its crops; a page with
-/// none gets a job of its small regions; a page read whole on a doubt gets
-/// all its regions as crops of their own, besides its whole page, since an
-/// OCR engine reads those and skips the page. Returns the small regions, by
-/// `(page, tag)`.
-pub(crate) fn add_ocr_regions(
+/// Add to a document's crop jobs the crops an OCR engine reads
+/// ([`fluree_doc_pdf::ocr::ocr_jobs`]), whose regions are numbered as the
+/// model's are, the first `routed(page)` of a page being the ones the router
+/// sends a model. A region crop the jobs do not hold yet is added to its
+/// page's; a page with no job gets one of its regions; a page read whole on
+/// a doubt gets all its regions as crops of their own, besides its whole
+/// page, since an OCR engine reads those and skips the page. A page the
+/// engine reads whole the model reads whole too. Returns the regions too
+/// small for a model, by `(page, tag)`.
+pub(crate) fn add_ocr_jobs(
     jobs: &mut fluree_doc_pdf::escalate::CropJobs,
-    pages: impl Iterator<Item = (usize, usize, Vec<fluree_doc_pdf::geom::BBox>)>,
+    ocr: fluree_doc_pdf::ocr::OcrJobs,
+    routed: impl Fn(usize) -> usize,
 ) -> std::collections::HashSet<(usize, String)> {
     let mut small = std::collections::HashSet::new();
     let mut doubted = Vec::new();
-    for (page, routed, regions) in pages {
-        let all: Vec<(String, fluree_doc_pdf::geom::BBox)> = regions
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| (format!("r{i}"), b))
-            .collect();
-        if all.is_empty() {
-            continue;
-        }
-        let extra = all[routed.min(all.len())..].to_vec();
-        small.extend(extra.iter().map(|(t, _)| (page, t.clone())));
+    for (page, crops) in ocr {
+        // A page whose text is pixels: the router's verdict, which the
+        // model's plan reads whole too.
+        let Some(crops) = crops else { continue };
+        small.extend(
+            crops
+                .iter()
+                .filter(|(t, _)| {
+                    t.strip_prefix('r')
+                        .and_then(|i| i.parse::<usize>().ok())
+                        .is_some_and(|i| i >= routed(page))
+                })
+                .map(|(t, _)| (page, t.clone())),
+        );
         match jobs.iter_mut().find(|(pi, _)| *pi == page) {
-            Some((_, None)) => doubted.push((page, Some(all))),
-            Some((_, Some(list))) => list.extend(extra),
-            None if !extra.is_empty() => jobs.push((page, Some(extra))),
-            None => {}
+            Some((_, None)) => doubted.push((page, Some(crops))),
+            Some((_, Some(list))) => {
+                for c in crops {
+                    if !list.iter().any(|(t, _)| *t == c.0) {
+                        list.push(c);
+                    }
+                }
+            }
+            None => jobs.push((page, Some(crops))),
         }
     }
     jobs.extend(doubted);
@@ -1413,8 +1453,7 @@ fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json
             }
         };
         let name = format!("{stem}_{}.png", m.tag());
-        flatten_over_white(&mut image.pixels);
-        write_rgba_png(&outdir.join(&name), &image.pixels)?;
+        write_png(&outdir.join(&name), &mut image.pixels)?;
         recs.push(serde_json::json!({
             "doc": stem, "kind": "media", "png": name, "figure": m.figure, "part": m.part,
             "reason": fluree_doc_pdf::escalate::CropReason::EmbeddedImage.as_str(), "scale": 1.0,
@@ -1423,28 +1462,32 @@ fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json
     Ok(recs)
 }
 
-/// Write an image as an 8-bit RGBA PNG.
-fn write_rgba_png(path: &Path, pixels: &fluree_doc_vision::Pixels) -> Result<(), String> {
+/// Write an image as an 8-bit PNG in the layout it was decoded in, over
+/// white where it is transparent (as the renderer draws a page). A
+/// transparent screenshot is black ink on nothing: flattened by a reader
+/// that drops the alpha channel, it would be black on black.
+fn write_png(path: &Path, pixels: &mut fluree_doc_vision::Pixels) -> Result<(), String> {
+    let color = match pixels.layout {
+        fluree_doc_vision::Layout::Luma8 => png::ColorType::Grayscale,
+        fluree_doc_vision::Layout::Rgb8 => png::ColorType::Rgb,
+        fluree_doc_vision::Layout::Rgba8 => {
+            for p in pixels.data.chunks_exact_mut(4) {
+                let a = u16::from(p[3]);
+                for c in &mut p[..3] {
+                    *c = ((u16::from(*c) * a + 255 * (255 - a)) / 255) as u8;
+                }
+                p[3] = 255;
+            }
+            png::ColorType::Rgba
+        }
+    };
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), pixels.width, pixels.height);
-    enc.set_color(png::ColorType::Rgba);
+    enc.set_color(color);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header()
-        .and_then(|mut w| w.write_image_data(&pixels.rgba))
+        .and_then(|mut w| w.write_image_data(&pixels.data))
         .map_err(|e| e.to_string())
-}
-
-/// Lay an image over white where it is transparent, as the renderer draws a
-/// page. A transparent screenshot is black ink on nothing: flattened by a
-/// reader that drops the alpha channel, it would be black on black.
-fn flatten_over_white(pixels: &mut fluree_doc_vision::Pixels) {
-    for p in pixels.rgba.chunks_exact_mut(4) {
-        let a = u16::from(p[3]);
-        for c in &mut p[..3] {
-            *c = ((u16::from(*c) * a + 255 * (255 - a)) / 255) as u8;
-        }
-        p[3] = 255;
-    }
 }
 
 /// A bare image's one crop: the image decoded upright, over white where it
@@ -1452,7 +1495,6 @@ fn flatten_over_white(pixels: &mut fluree_doc_vision::Pixels) {
 /// is 1: the page's units are its pixels.
 fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Value, String> {
     let mut image = fluree_doc_image::decode(bytes)?;
-    flatten_over_white(&mut image.pixels);
     let doc = fluree_doc_image::document(&image);
     let reason = match fluree_doc_pdf::route::decide(&doc.pages[0]).0 {
         fluree_doc_pdf::route::Route::Vlm(r) => fluree_doc_pdf::escalate::CropReason::from(r),
@@ -1465,7 +1507,7 @@ fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Val
         eprintln!("warning: {stem}: the file ends before its image does; part of it may be blank");
     }
     let name = format!("{stem}_p0_full.png");
-    write_rgba_png(&outdir.join(&name), &image.pixels)?;
+    write_png(&outdir.join(&name), &mut image.pixels)?;
     Ok(serde_json::json!({
         "doc": stem, "page": 0, "kind": "page", "png": name,
         "reason": reason.as_str(), "scale": 1.0,
@@ -1732,19 +1774,26 @@ mod tests {
     fn ocr_regions_join_each_kind_of_page_job() {
         // Page 0 routed with one region, plus a small one; page 1 read whole
         // on a doubt, with a routed region and a small one; page 2 with a
-        // small region only; page 3 with none.
-        let mut jobs: fluree_doc_pdf::escalate::CropJobs =
-            vec![(0, Some(vec![("r0".to_string(), b(0.0))])), (1, None)];
-        let small = add_ocr_regions(
-            &mut jobs,
-            vec![
-                (0, 1, vec![b(0.0), b(50.0)]),
-                (1, 1, vec![b(0.0), b(50.0)]),
-                (2, 0, vec![b(80.0)]),
-                (3, 0, vec![]),
-            ]
-            .into_iter(),
-        );
+        // small region only; page 3 read whole for its pixels; page 4 routed
+        // with two regions, the engine's limit leaving it the first.
+        let tagged = |l: &[(&str, f64)]| -> Option<Vec<(String, BBox)>> {
+            Some(l.iter().map(|(t, y)| (t.to_string(), b(*y))).collect())
+        };
+        let mut jobs: fluree_doc_pdf::escalate::CropJobs = vec![
+            (0, tagged(&[("r0", 0.0)])),
+            (1, None),
+            (3, None),
+            (4, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+        ];
+        let ocr: fluree_doc_pdf::ocr::OcrJobs = vec![
+            (0, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+            (1, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+            (2, tagged(&[("r0", 80.0)])),
+            (3, None),
+            (4, tagged(&[("r0", 0.0)])),
+        ];
+        let routed = |page: usize| [1, 1, 0, 0, 2][page];
+        let small = add_ocr_jobs(&mut jobs, ocr, routed);
         let tags = |page: usize| -> Vec<Option<Vec<String>>> {
             jobs.iter()
                 .filter(|(p, _)| *p == page)
@@ -1761,7 +1810,12 @@ mod tests {
             "the doubted page keeps its whole crop and gets its regions"
         );
         assert_eq!(tags(2), [Some(vec!["r0".to_string()])]);
-        assert!(tags(3).is_empty());
+        assert_eq!(tags(3), [None], "read whole once");
+        assert_eq!(
+            tags(4),
+            [Some(vec!["r0".to_string(), "r1".to_string()])],
+            "the model's crops stay whatever the engine's limit"
+        );
         let mut small: Vec<(usize, String)> = small.into_iter().collect();
         small.sort();
         assert_eq!(

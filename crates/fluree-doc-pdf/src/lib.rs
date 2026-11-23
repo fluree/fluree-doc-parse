@@ -22,7 +22,7 @@
 //! **Supported.** These follow semver and are what a consumer should build on:
 //!
 //! - [`extract_file`] / [`extract_bytes`] → [`Document`]
-//! - [`image::as_document`] — a bare raster image as a one-page document
+//! - [`image::page_of`] — a bare raster image as a one-page document
 //! - [`document::analyze_with`] → `Analysis`, plus [`document::to_markdown`]
 //!   and [`document::to_xhtml`]
 //! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
@@ -70,6 +70,10 @@ pub mod ocr;
 pub mod outline;
 pub mod overlay;
 
+/// The [`unread_pages`] reason of a page an OCR reading read whole that
+/// still holds next to no text.
+pub const OCR_SPARSE: &str = "OcrSparse";
+
 /// Pages the router says carry content, which the final element stream does
 /// not hold.
 ///
@@ -98,8 +102,18 @@ pub fn unread_pages(
             .filter(|e| e.page == p.index && !matches!(e.evidence, "header" | "footer"))
             .map(|e| e.text.trim().chars().count())
             .sum();
-        // A page an OCR reading read whole was read, however little it held.
-        if text >= NEARLY_EMPTY || p.ocr.as_ref().is_some_and(|o| o.whole) {
+        if text >= NEARLY_EMPTY {
+            continue;
+        }
+        // A page an OCR reading read whole was read, and asks no model for
+        // more; but an engine that gave a few words for a dense scan it could
+        // not read leaves the page as unread as before. Said, so it is not
+        // taken for a page with nothing on it.
+        if p.ocr.as_ref().is_some_and(|o| o.whole) {
+            out.push(fluree_doc_model::UnreadPage {
+                index: p.index,
+                reason: OCR_SPARSE.into(),
+            });
             continue;
         }
         if let route::Route::Vlm(reason) = route::decide(p).0 {

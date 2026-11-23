@@ -80,20 +80,38 @@ a 3,840-px screen capture pasted 6.5 inches wide comes out 960 px wide at 2×,
 its 22-px text at 5.5 px. `--stored-resolution` renders each crop at the
 resolution of the image it shows (the one mostly inside it, the largest of
 those; failing any, the one covering most of it), measured along the
-image's coarser axis, between 2× and 300 dpi, under 4,000 px on the long edge
-and with the page it is cut from drawn with at most 64 million pixels (256 MB,
-held once) and 65,535 on a side. A page is rendered at most four times for
-its crops: past four scales, a crop shares the next one up, never a coarser
-one. A one-bit image (a fax, an image mask, a CCITT or JBIG2 stream) stays at
-2×: smoothed, it reads better than its raw pixels. On a synthetic corpus of
-500 attachments this lifted the facts an OCR engine found only in pixels,
-counted as whole words, from 0.861 to 0.871; screenshots pasted into PDFs
-gained most. One limit comes from the built-in engine's recogniser, not from
-the rendering: it decides a line brought to 48 px high in steps of about
-8 px, and the word space of a narrow UI font, between groups of digits, spans
-about a step and a half. There the space and "no character" can come out
-nearly even, and the space is dropped (`25409834791723/02/2017`); any small
-change to the crop tips it one way or the other, at either scale.
+image's coarser axis, between 2× and 300 dpi. A one-bit image (a fax, an
+image mask, a CCITT or JBIG2 stream) stays at 2×: smoothed, it reads better
+than its raw pixels.
+
+What is bounded, for an engine:
+
+- A crop is held back toward 2× (never below it) to stay under 4,000 px on
+  its long edge.
+- A crop is cut from a render of its whole page, and that render is bounded
+  outright: at most 64 million pixels (256 MB of RGBA) and 65,535 on a side,
+  for every crop of the page, the 2× ones included. A page past what 2× draws
+  within those (about 4,000 points square) is drawn below 2×, as large as
+  they allow.
+- A page is rendered at most four times for its crops, plus once per crop
+  held to its long-edge cap that no shared scale fits: past four scales, a
+  crop shares the next one up, never a coarser one, nor one past its cap.
+  Such a crop is over about 960 points long, so it is rare.
+
+A model's crops are drawn at 2× whatever the page's size.
+
+On a synthetic corpus of 500 attachments this lifted the facts an OCR engine
+found only in pixels, counted as whole words, from 0.861 to 0.871;
+screenshots pasted into PDFs gained most. The finer crops cost time and
+memory in proportion to their pixels: on a page carrying a 288-ppi capture
+drawn 20 times, `convert --ocr` took 28.75 s, against 12.27 s at 2×, and a
+corpus of screenshots costs about that much more to read. One limit comes from the built-in
+engine's recogniser, not from the rendering: it decides a line brought to
+48 px high in steps of about 8 px, and the word space of a narrow UI font,
+between groups of digits, spans about a step and a half. There the space and
+"no character" can come out nearly even, and the space is dropped
+(`25409834791723/02/2017`); any small change to the crop tips it one way or
+the other, at either scale.
 
 The manifest maps every PNG back to its document, page and PDF-unit box, which
 is what lets a reading be spliced into the right place. The box is in the
@@ -114,10 +132,14 @@ rotation, as `--ocr-words` does, not through `bbox × scale` alone.
 | `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
 | `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |
 
+The names are stable: a producer may filter on them, and a release renames
+or removes one only as a breaking change. A new reason may be added.
+
 A reader that sees only characters (an OCR engine) has nothing to add to a
-`table` crop or a doubt page and should skip them. A `table_missing` crop it
-may skip only where the page's text covers it: a raster table too small for
-the router to send a reader is boxed by the layout detector alone. A table on
+`table` crop, a `table_missing` crop or a doubt page and should skip them.
+Skipping `table_missing` has one known gap: a raster table too small for the
+router to send a reader is boxed by the layout detector alone, so its text
+stays unread until a reader that sees structure takes the crop. A table on
 a page read whole for a doubt has no crop of its own: it goes with its page,
 under the doubt's reason. A `full` reading replaces its page whatever the
 reason, so on a doubt page any character it gets wrong replaces text the PDF
