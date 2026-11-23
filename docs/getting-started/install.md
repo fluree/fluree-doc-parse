@@ -18,13 +18,17 @@ target/release/fdoc convert --help
 ```
 
 The release binary carries no symbol table, which keeps it a fifth smaller.
-A panic still names the file and line it happened at; a backtrace
-(`RUST_BACKTRACE=1`) shows addresses rather than function names. To chase
-one, build with the names kept:
+A panic still names the file and line it happened at, but a backtrace has no
+function names: `RUST_BACKTRACE=1` prints no frames at all, and
+`RUST_BACKTRACE=full` only addresses. To chase one, build with the names
+kept, which is cargo's own release default:
 
 ```bash
-CARGO_PROFILE_RELEASE_STRIP=false cargo build --release
+CARGO_PROFILE_RELEASE_STRIP=debuginfo cargo build --release
 ```
+
+(`=false` would keep the standard library's debug info as well, a binary
+nearly a third larger than that.)
 
 ## Requirements
 
