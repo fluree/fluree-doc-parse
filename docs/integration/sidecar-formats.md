@@ -237,7 +237,15 @@ is taken as 1.3 em tall whatever its letters; a box around the ink
 (Tesseract, hOCR, ALTO) as tall as its letters reach, so `our` and
 `Payments` read at one size. Which kind a document's readings hold is
 decided once, over all of them: neighbouring ink boxes differ in height as
-their letters do. Punctuation alone in a box takes the size of its run. The sheet's
+their letters do. A detector box is still a little taller over a line with
+descenders: a run within 12% of the median size of its page's boxes, each
+box weighed by the letters it holds, is set at that size, so it does not
+read as a heading set larger. A page of fewer than eight lines is sized by
+the median of all the document's boxes instead. A heading on a scan is one
+by its size when it is set more than that larger (a 12 pt heading over
+10 pt text may not be), and when its box shows it: one with no descenders
+boxes no taller than a line of body text that has them, so a 14 pt `Terms
+and conditions` over 11 pt text can read as body text. Punctuation alone in a box takes the size of its run. The sheet's
 skew, stated by `angle` or measured between neighbouring words, is taken out
 first, and the runs of one visual line share one baseline. Lines are set
 level, so on a skewed sheet text sits off where it is drawn by its distance

@@ -320,26 +320,65 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
         .filter(|((_, crop, _), t)| *crop == Crop::Page && t.is_ok())
         .map(|((page, _, _), _)| *page)
         .collect();
-    let ink = boxes_ink(
-        readings
+    // The size detector boxes say is snapped to a median of the boxes the
+    // same readings give: their page's, or the document's on a page of too
+    // few lines to have one of its own (see `PAGE_MEDIAN_MIN_LINES`).
+    let (pairs, sizes): (Vec<_>, Vec<_>) = readings
+        .iter()
+        .zip(&judged)
+        .filter(|((page, crop, _), _)| *crop == Crop::Page || !read_whole_too.contains(page))
+        .filter_map(|((_, _, reading), target)| {
+            let t = target.as_ref().ok()?;
+            place(&doc.pages[t.pi], t.shown, reading)
+                .ok()
+                .map(|placed| (t.pi, placed))
+        })
+        .map(|(pi, placed)| {
+            let words: Vec<Placed> = placed.into_iter().flatten().collect();
+            // A box is as thick whichever way its text runs: a page that is
+            // to be turned for its reading sizes its words all the same. Each
+            // box weighs as many letters as it holds: a box over one figure
+            // or one word is taller for its length than one over a line of
+            // prose, and the cells of a table outnumber the lines of a
+            // paragraph under it.
+            let sizes: Vec<(usize, f64, f64)> = words
+                .iter()
+                .filter(|w| ink_extent(&w.text).is_some())
+                .map(|w| {
+                    let letters = w.text.chars().filter(|c| c.is_alphanumeric()).count();
+                    let size = dist(w.quad[0], w.quad[3]) / BOX_HEIGHT_EM;
+                    (pi, size, letters as f64)
+                })
+                .collect();
+            let sheet = sheet_angle(&words);
+            let level: Vec<Placed> = words
+                .into_iter()
+                .filter(|w| normalise_deg(w.angle - sheet).abs() < LEVEL_BELOW_DEG)
+                .collect();
+            let tan = skew(&level).to_radians().tan();
+            (ink_pairs(&level, tan), sizes)
+        })
+        .unzip();
+    let detected = !boxes_ink(pairs.into_iter());
+    let sizes: Vec<(usize, f64, f64)> = sizes.into_iter().flatten().collect();
+    let document_median = weighted_median(sizes.iter().map(|&(_, s, w)| (s, w)).collect());
+    let page_boxes = |pi: usize| -> Boxes {
+        if !detected {
+            return Boxes::Ink;
+        }
+        let own: Vec<(f64, f64)> = sizes
             .iter()
-            .zip(&judged)
-            .filter(|((page, crop, _), _)| *crop == Crop::Page || !read_whole_too.contains(page))
-            .filter_map(|((_, _, reading), target)| {
-                let t = target.as_ref().ok()?;
-                place(&doc.pages[t.pi], t.shown, reading).ok()
-            })
-            .map(|placed| {
-                let words: Vec<Placed> = placed.into_iter().flatten().collect();
-                let sheet = sheet_angle(&words);
-                let level: Vec<Placed> = words
-                    .into_iter()
-                    .filter(|w| normalise_deg(w.angle - sheet).abs() < LEVEL_BELOW_DEG)
-                    .collect();
-                let tan = skew(&level).to_radians().tan();
-                ink_pairs(&level, tan)
-            }),
-    );
+            .filter(|&&(p, _, _)| p == pi)
+            .map(|&(_, s, w)| (s, w))
+            .collect();
+        Boxes::Detected {
+            median: if own.len() >= PAGE_MEDIAN_MIN_LINES {
+                weighted_median(own)
+            } else {
+                document_median
+            },
+        }
+    };
     let mut out: Vec<Option<Injected>> = (0..readings.len()).map(|_| None).collect();
     // A whole-page reading holds what the page's region crops show: where one
     // took words in a region, taking that region's reading too would read it
@@ -421,7 +460,7 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 .collect();
             out[i] = Some(Injected {
                 pasted,
-                ..inject_one(&mut doc.pages[t.pi], *crop, t, ink, reading)
+                ..inject_one(&mut doc.pages[t.pi], *crop, t, page_boxes(t.pi), reading)
             });
         }
     }
@@ -596,8 +635,22 @@ struct Target {
     replaces: bool,
 }
 
+/// What a document's readings box: each word's ink, or the line a
+/// detector found, with the median size of the boxes on the page.
+#[derive(Clone, Copy)]
+enum Boxes {
+    Ink,
+    Detected { median: Option<f64> },
+}
+
 /// Lay one reading the router let in on its page.
-fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordReading) -> Injected {
+fn inject_one(
+    p: &mut Page,
+    crop: Crop,
+    t: &Target,
+    boxes: Boxes,
+    reading: &WordReading,
+) -> Injected {
     let page = p.index;
     let mut placed = match place(p, t.shown, reading) {
         Ok(placed) => placed,
@@ -637,7 +690,7 @@ fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordRea
         .count();
     let added_from = p.glyphs.iter().map(|g| g.draw_index + 1).max().unwrap_or(0);
     let (mut result, regions_read) =
-        add_words(p, crop, &t.area, first_glyph, t.replaces, ink, placed);
+        add_words(p, crop, &t.area, first_glyph, t.replaces, boxes, placed);
     result.engine = reading.engine.clone();
     if let Area::Regions(within) = &t.area {
         result.regions = within.iter().map(|(_, r)| p.to_display(*r)).collect();
@@ -889,9 +942,10 @@ fn add_words(
     area: &Area,
     first_glyph: usize,
     replaces: bool,
-    ink: bool,
+    boxes: Boxes,
     placed: Vec<Option<Placed>>,
 ) -> (Injected, Vec<usize>) {
+    let ink = matches!(boxes, Boxes::Ink);
     let mut result = Injected::new(p.index, crop);
     let mut regions_read = Vec::new();
     let page = BBox {
@@ -977,6 +1031,9 @@ fn add_words(
         .into_iter()
         .map(|r| Run::of(&words, r, ink))
         .collect();
+    if let Boxes::Detected { median: Some(body) } = boxes {
+        snap_sizes(&mut runs, body);
+    }
     // The whole reading goes back on the sheet by one offset, taken at its
     // middle. Set back line by line, at each line's own center, two stacked
     // lines of different extents would drift towards each other, and on a
@@ -1319,6 +1376,20 @@ fn median(mut v: Vec<f64>) -> f64 {
     v[v.len() / 2]
 }
 
+/// The value below which half the weight of `(value, weight)` lies; `None`
+/// with no weight at all.
+fn weighted_median(mut v: Vec<(f64, f64)>) -> Option<f64> {
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let half = v.iter().map(|p| p.1).sum::<f64>() / 2.0;
+    let mut acc = 0.0;
+    v.into_iter()
+        .find(|&(_, w)| {
+            acc += w;
+            w > 0.0 && acc >= half
+        })
+        .map(|(x, _)| x)
+}
+
 /// How far a word's ink reaches above and below its baseline, in ems, from
 /// the letters it holds; `None` for a word of punctuation alone.
 fn ink_extent(text: &str) -> Option<(f64, f64)> {
@@ -1461,6 +1532,50 @@ impl Run {
             words: run,
             font: median(fonts),
             baseline: median(baselines),
+        }
+    }
+}
+
+/// Widest difference from its page's median size, as a share of it, that a
+/// run boxed by a detector is put down to its box rather than to its type.
+///
+/// A detector box reaches below the descenders, and on a line that has them
+/// it is a little taller than on one that has none: on synthetic forms and
+/// letters read by the built-in engine, the line `Policy holder Margaret
+/// Holloway` boxes 8 to 15% taller than the lines of the same size around
+/// it, about 11% over the median. Sized from its box, such a line reads as a
+/// heading set larger than the body. A heading set larger by its size alone
+/// is more than 15% over its body, and over the band too: a 12 pt heading
+/// over 10 pt text, boxed a little short, may not be. One set larger whose
+/// letters stop at the baseline boxes no taller than a line of the body with
+/// descenders, and is not one by its size on a scan: a 14 pt `Terms and
+/// conditions` over 11 pt prose boxes 9% over the median at 200 dpi, as tall
+/// at 144.
+const SNAP_SIZE_SHARE: f64 = 0.12;
+
+/// Lines (detector boxes) a page needs to be sized by its own median; a page
+/// of fewer is sized by the document's.
+///
+/// The pages of one document are read one by one and need not share a body:
+/// a page set in 11.5 pt scanned with two in 10 is 15% over the document's
+/// median, and snapped to it, the lines its reading boxed within the band
+/// were set down to it and the others not, so its paragraphs came apart
+/// line by line. Each page is also read at its own scale: four copies of one
+/// form read in four orientations box their text from 10 to 11.6 pt, and a
+/// page snapped to its own median keeps its reading's. But a median is the
+/// body's only where the body holds most of the page's letters. Eight lines
+/// hold a short paragraph under a heading or two; a page of fewer (a cover,
+/// a signature, a slip) may have no body at all, and is sized with the
+/// document.
+const PAGE_MEDIAN_MIN_LINES: usize = 8;
+
+/// Set the runs within [`SNAP_SIZE_SHARE`] of their page's median size
+/// `body` to that size: what sets them apart is their letters and their
+/// reading, not their type.
+fn snap_sizes(runs: &mut [Run], body: f64) {
+    for r in runs {
+        if (r.font - body).abs() <= SNAP_SIZE_SHARE * body {
+            r.font = body;
         }
     }
 }
@@ -6484,6 +6599,208 @@ mod tests {
         assert_eq!(
             tags(&kept),
             [(1, vec!["full".to_string()]), (2, vec!["r0".to_string()])]
+        );
+    }
+
+    /// A form's lines as a detector boxes them, one box a line, each `h`
+    /// tall, two lines' height apart.
+    fn detected_lines(lines: &[(&str, f64)]) -> Vec<OcrWord> {
+        lines_every(lines, 26.0)
+    }
+
+    /// Lines as a detector boxes them, one box a line, each `h` tall, their
+    /// tops `pitch` apart.
+    fn lines_every(lines: &[(&str, f64)], pitch: f64) -> Vec<OcrWord> {
+        lines
+            .iter()
+            .enumerate()
+            .map(|(k, &(text, h))| {
+                let y = 72.0 + pitch * k as f64;
+                let w = 6.0 * text.chars().count() as f64;
+                word(text, [72.0, y, 72.0 + w, y + h])
+            })
+            .collect()
+    }
+
+    /// A document of one page per reading, every page a scan.
+    fn scans(pages: usize) -> Document {
+        Document {
+            pages: (0..pages)
+                .map(|index| Page {
+                    index,
+                    ..page(Vec::new(), vec![full_page_image()])
+                })
+                .collect(),
+        }
+    }
+
+    const FORM: [&str; 6] = [
+        "Account number 4417-0093-21",
+        "Date of birth 15-OCT-1997",
+        "Policy holder Margaret Holloway",
+        "Premium due on the first of March",
+        "Beneficiary Jonathan Pemberton",
+        "Coverage amount 250,000 dollars",
+    ];
+
+    fn headings(els: &[fluree_doc_model::Element]) -> Vec<&str> {
+        els.iter()
+            .filter(|e| e.kind == "doco:SectionTitle")
+            .map(|e| e.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_line_boxed_taller_for_its_descenders_is_not_a_heading() {
+        // One size of type throughout; the line with descenders boxed a
+        // tenth taller, as the built-in engine boxes it.
+        let lines: Vec<(&str, f64)> = FORM
+            .iter()
+            .map(|&t| (t, if t.starts_with("Policy") { 14.3 } else { 13.0 }))
+            .collect();
+        let mut doc = blank_scan();
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Page, page_units(detected_lines(&lines)))],
+        );
+        let els = analysed(&mut doc, &r);
+        assert!(
+            !headings(&els).iter().any(|h| h.contains("Policy holder")),
+            "{els:?}"
+        );
+    }
+
+    #[test]
+    fn a_heading_set_larger_on_a_scan_is_still_a_heading() {
+        // Below the page's first lines, where only its size makes it one.
+        let mut lines: Vec<(&str, f64)> = FORM[..4].iter().map(|&t| (t, 13.0)).collect();
+        // A fifth larger than the body, the least a heading set larger is:
+        // over the band within which a box is put down to its letters.
+        lines.push(("Policy schedule", 15.6));
+        lines.extend(FORM[4..].iter().map(|&t| (t, 13.0)));
+        let mut doc = blank_scan();
+        let r = inject(
+            &mut doc,
+            &[(0, Crop::Page, page_units(detected_lines(&lines)))],
+        );
+        let els = analysed(&mut doc, &r);
+        assert_eq!(headings(&els), ["Policy schedule"], "{els:?}");
+    }
+
+    /// A paragraph's lines, each as long as the others.
+    const CLAUSE: [&str; 9] = [
+        "This agreement is made between the lender and the borrower named",
+        "below and sets out the terms on which the loan is advanced to them",
+        "and the schedule on which it is to be repaid with interest accrued",
+        "at the rate stated in the schedule attached to this agreement here",
+        "and the borrower agrees to repay the loan in monthly instalments a",
+        "set out in the schedule with the interest accrued on each of them",
+        "until the whole of the loan and its interest have been repaid and",
+        "the lender may call the loan in should any instalment go unpaid a",
+        "month after the date on which it fell due under this agreement now",
+    ];
+
+    #[test]
+    fn a_page_set_larger_than_the_others_reads_as_its_own_body() {
+        // Two pages of one body and a third set about 14% larger, its lines
+        // boxed a little apart as a reading boxes them. Snapped to the
+        // document's median, the lines of the third that fall within the
+        // band were set down to it and the others kept their size: the
+        // paragraph came apart line by line, and its larger lines read as
+        // headings.
+        let mut doc = scans(3);
+        let readings: Vec<(usize, Crop, WordReading)> = (0..3)
+            .map(|i| {
+                let lines: Vec<(&str, f64)> = CLAUSE
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &t)| {
+                        let h = match (i, k % 2) {
+                            (2, 0) => 14.4,
+                            (2, _) => 15.2,
+                            _ => 13.0,
+                        };
+                        (t, h)
+                    })
+                    .collect();
+                let pitch = if i == 2 { 17.0 } else { 15.0 };
+                (i, Crop::Page, page_units(lines_every(&lines, pitch)))
+            })
+            .collect();
+        let r = inject(&mut doc, &readings);
+        let els = analysed(&mut doc, &r);
+        assert_eq!(headings(&els), [""; 0], "{:?}", headings(&els));
+        let third: Vec<&str> = els
+            .iter()
+            .filter(|e| e.page == 2)
+            .map(|e| e.text.as_str())
+            .collect();
+        assert_eq!(third.len(), 1, "{third:?}");
+    }
+
+    #[test]
+    fn a_table_page_is_sized_by_its_text_not_its_cells() {
+        // A paragraph over a table of figures. A box over a figure or a
+        // word alone is taller for its length than one over a line of
+        // prose, and the cells outnumber the lines: the median of the boxes
+        // is the cells', the paragraph's lines are too far under it to be
+        // set to it, and its last line, one word boxed a little taller,
+        // was set to it alone and read as a heading.
+        let mut lines: Vec<(&str, f64)> = CLAUSE[..3].iter().map(|&t| (t, 12.0)).collect();
+        lines.push(("transfer.", 13.1));
+        let mut words = lines_every(&lines, 15.0);
+        for row in 0..6 {
+            for col in 0..3 {
+                let x = 72.0 + 120.0 * col as f64;
+                let y = 180.0 + 22.0 * row as f64;
+                words.push(word("1,250.00", [x, y, x + 48.0, y + 14.4]));
+            }
+        }
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        let els = analysed(&mut doc, &r);
+        assert_eq!(headings(&els), [""; 0], "{els:?}");
+        assert!(
+            els.iter()
+                .any(|e| e.text.ends_with("interest accrued transfer.")),
+            "{els:?}"
+        );
+    }
+
+    #[test]
+    fn a_page_of_few_lines_is_sized_with_the_document() {
+        // Three short pages of one size of type, each boxed a little taller
+        // than the one before by its reading, as pages read turned can be,
+        // the last two fed upside down, and the lines set apart. Each page
+        // sized by its own few lines, or none snapped, the lines of the
+        // third would read as headings over the first's body.
+        let mut doc = scans(3);
+        let at = |h: f64| -> Vec<(&str, f64)> { FORM.iter().map(|&t| (t, h)).collect() };
+        let readings: Vec<(usize, Crop, WordReading)> = [13.0, 14.0, 15.2]
+            .into_iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let mut words = lines_every(&at(h), 60.0);
+                if i > 0 {
+                    for w in &mut words {
+                        let [x0, y0, x1, y1] = w.bbox;
+                        w.bbox = [612.0 - x1, 792.0 - y1, 612.0 - x0, 792.0 - y0];
+                        w.angle = Some(180.0);
+                    }
+                }
+                (i, Crop::Page, page_units(words))
+            })
+            .collect();
+        let r = inject(&mut doc, &readings);
+        assert_eq!(doc.pages[2].rotation, 180);
+        let els = analysed(&mut doc, &r);
+        // The first line is the document's title, as on the born-digital
+        // page; no other line is a heading.
+        assert_eq!(
+            headings(&els),
+            ["Account number 4417-0093-21"],
+            "{:?}",
+            headings(&els)
         );
     }
 }

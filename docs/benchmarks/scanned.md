@@ -96,28 +96,32 @@ What this shows:
   or a misread character costs the whole fact.
 - **The structure of a scan is not read the way the born-digital page's
   is.** On the four pasted pages fdoc reads the 12 headings of the gold, with
-  and without OCR. On the 54 scans, OCR reads 108 headings for 144 in the
-  gold, and only 79 of them are the gold's: 46 are missing and 10 extra, and
-  42 of the 54 pages have a heading count other than the gold's. OCR has no
-  bold, so a bold line of body size (`Re:`, a signature, `Closing balance`)
-  is mostly lost, and a heading is made of whichever line the detector's box
-  makes look taller (an address line, `Invoice no. …`). The per-document
-  headings are in the baseline, and a page that no longer reads one of its
-  gold's, or reads one other than those it read then, fails the check.
+  and without OCR. On the 54 scans, OCR reads 77 headings for 144 in the
+  gold, and 72 of them are the gold's: 67 are missing and none extra, and
+  all 54 pages have a heading count other than the gold's. OCR has no bold,
+  so a bold line of body size (`Re:`, a signature, `Bill to:`, `Closing
+  balance`) is lost: a scan's heading is a line set larger than its body, or
+  a page's first line. A line the detector boxes taller for its descenders,
+  or a word alone boxed taller than the lines of a paragraph, is sized as its
+  page's body is. An address line, `7 Orchard Road`, still reads as a
+  numbered heading on one profile of nine, and the whole address as one
+  heading on three. The per-document headings are in the baseline, and a
+  page that no longer reads one of its gold's, or reads one other than those
+  it read then, fails the check.
 
 | headings | pages | gold | OCR read | missing | extra | pages off | gold read |
 |---|---|---|---|---|---|---|---|
-| clean-300 | 6 | 16 | 10 | 6 | 0 | 5 | 9 |
-| clean-200 | 6 | 16 | 11 | 6 | 1 | 6 | 9 |
-| clean-150 | 6 | 16 | 10 | 7 | 1 | 6 | 9 |
-| clean-100 | 6 | 16 | 13 | 5 | 2 | 6 | 9 |
-| skew-300 | 6 | 16 | 9 | 7 | 0 | 5 | 8 |
-| noisy-300 | 6 | 16 | 12 | 4 | 0 | 2 | 8 |
-| fax-200 | 6 | 16 | 16 | 3 | 3 | 3 | 9 |
-| fax-std | 6 | 16 | 16 | 2 | 2 | 3 | 10 |
-| jpeg-150 | 6 | 16 | 11 | 6 | 1 | 6 | 8 |
+| clean-300 | 6 | 16 | 9 | 7 | 0 | 6 | 8 |
+| clean-200 | 6 | 16 | 9 | 7 | 0 | 6 | 8 |
+| clean-150 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
+| clean-100 | 6 | 16 | 9 | 7 | 0 | 6 | 8 |
+| skew-300 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
+| noisy-300 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
+| fax-200 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
+| fax-std | 6 | 16 | 9 | 7 | 0 | 6 | 9 |
+| jpeg-150 | 6 | 16 | 9 | 7 | 0 | 6 | 7 |
 | pasted, both densities | 4 | 12 | 12 | 0 | 0 | 0 | 12 |
-| **all scanned** | 54 | 144 | 108 | 46 | 10 | 42 | 79 |
+| **all scanned** | 54 | 144 | 77 | 67 | 0 | 54 | 72 |
 
 *Missing* and *extra* are a page's headings fewer or more than its gold's,
 summed; *gold read* counts the gold's headings read as headings, word for
