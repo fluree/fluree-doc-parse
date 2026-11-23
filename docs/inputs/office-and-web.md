@@ -90,11 +90,35 @@ which is not read a second time.
 
 **The text in a picture** — a screenshot pasted into the report — is read by
 the rules a [bare image](images.md) is read by. `fdoc dev render-routed`
-writes the image as `<stem>_m<n>.png`, reason `embedded_image`, for the
-figure `figure-0-<n>`, and each reader takes it under that name:
+writes the image as `<stem>_m<n>.png`, reason `embedded_image` (`small_image`
+under the floor a model is sent, below), for the
+figure `figure-0-<n>`, and each reader takes it under that name.
+
+First, the pixel probe a PDF's raster regions are routed by
+([the router](../design/router.md#the-pixel-probe)) looks at the picture.
+One it does not take for text (a photograph, a chart, a logo, a flat
+illustration), or too thin for a line of text (under 10 pixels on its
+shorter side, the floor a PDF's region is held to, under which an engine
+misreads what it reads), is read by nothing: neither OCR, which reads noise in such
+pixels, nor a model, whose call is billed and sends the picture off the
+machine. It is listed in
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read) as
+`NotTexty`, not counted in the note on stderr, and `render-routed` writes no
+crop of it. A capture, a scanned table or a labelled chart is taken for
+text, a capture with a few lines on a wide, light screen included. A
+picture that does not decode is not judged. The others go on:
 
 1. **OCR**, when `convert` has an engine (`--ocr`) or the words one wrote
-   (`--ocr-words`, `<stem>_m<n>.json`).
+   (`--ocr-words`, `<stem>_m<n>.json`). What it reads is held to a noise
+   rule, a net behind the probe for a photograph or a gradient it took for
+   text, as an OCR reading of a PDF's region is: words whose mean
+   confidence is under 0.5, or under 0.8 when most of them are fragments of
+   one or two letters or figures, or one fragment, or one word read under
+   0.8, boxed over nearly all of the picture. A line of text cropped close,
+   read surely, is kept. The picture is then not read: the configured model
+   may read it, and otherwise it is listed in
+   [`doc:unreadImages`](../formats/doco.md#images-nothing-read) as
+   `NotTexty`, not counted in the note on stderr.
 2. **A model's reading supplied** (`--tier-results`, `<stem>_m<n>.json`),
    which replaces what OCR read, as a scanned page's reading does, unless it
    lost most of OCR's letters (a truncated reply). With `--tier-results`,
@@ -105,6 +129,18 @@ figure `figure-0-<n>`, and each reader takes it under that name:
    noted on stderr and left unread. Only a PNG, JPEG or TIFF is sent. A
    document's pictures go through one reader, up to
    `escalation.concurrency` at a time, as a PDF's crops do.
+
+   A picture is sent when it has at least 400 pixels on its longer side and
+   48 on its shorter, as an e-mail's image needs, whatever size the
+   document shows it at: a small logo or an icon is under that floor.
+   With the probe, nothing else is judged: a sparse screenshot or a
+   labelled chart over the floor is sent, a request the provider bills,
+   even one the document shows an inch wide. One under the floor is listed in
+   [`doc:unreadImages`](../formats/doco.md#images-nothing-read) as `Small`
+   and, as a logo is, not counted in the note on stderr (`--verbose` names
+   it). OCR and a reading supplied are not held to the floor: they read
+   every picture with a line's pixels (see above), whatever size the
+   document shows it at.
 
 A group of pictures is one figure holding several images:
 the second and later are `m<n>_1`, `m<n>_2`, … and their text follows the

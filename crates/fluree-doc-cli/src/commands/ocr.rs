@@ -11,13 +11,14 @@ use std::sync::Arc;
 
 /// The manifest reasons whose crops a page takes words from. A doubt page
 /// has all its text, and a table crop asks about structure.
-pub(crate) const OCR_REASONS: [&str; 6] = [
+pub(crate) const OCR_REASONS: [&str; 7] = [
     "scanned",
     "near_blank",
     "broken_text",
     "region",
     "small_region",
     "embedded_image",
+    "small_image",
 ];
 
 thread_local! {

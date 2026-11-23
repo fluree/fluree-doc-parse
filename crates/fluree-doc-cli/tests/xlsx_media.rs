@@ -10,7 +10,12 @@ use std::process::Command;
 /// (`xl/media/image1.png`) anchored at row 3, a line on row 6.
 fn xlsx() -> Vec<u8> {
     let png = {
-        let img = image::RgbImage::from_pixel(300, 100, image::Rgb([200, 200, 200]));
+        let img = image::RgbImage::from_fn(300, 100, |x, y| {
+            // Lines of strokes a letter wide on a light ground: text, to
+            // the pixel probe.
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < 225;
+            image::Rgb(if ink { [40, 40, 40] } else { [200, 200, 200] })
+        });
         let mut out = Vec::new();
         image::DynamicImage::ImageRgb8(img)
             .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
@@ -179,7 +184,8 @@ fn render_routed_crops_a_sheets_picture_as_media() {
     assert_eq!(rec["png"], "book_m1.png");
     assert_eq!(rec["figure"], "figure-0-1");
     assert_eq!(rec["part"], "xl/media/image1.png");
-    assert_eq!(rec["reason"], "embedded_image");
+    // Under the pixels a model is sent: for OCR only.
+    assert_eq!(rec["reason"], "small_image");
     assert!(crops.join("book_m1.png").exists());
     let _ = std::fs::remove_dir_all(dir);
 }

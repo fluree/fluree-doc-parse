@@ -14,32 +14,31 @@ fn docx() -> Vec<u8> {
 }
 
 /// A DOCX of a paragraph, `figures` pictures all drawing one image
-/// (`word/media/image1.png`) and a paragraph.
+/// (`word/media/image1.png`, a screen of text, [`screen`]) and a paragraph.
 fn docx_of(figures: usize) -> Vec<u8> {
-    let png = {
-        let img = image::RgbImage::from_pixel(300, 100, image::Rgb([200, 200, 200]));
-        let mut out = Vec::new();
-        image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        out
-    };
-    docx_with(figures, "media/image1.png", png)
+    docx_with(figures, "media/image1.png", screen(600, 200))
+}
+
+/// A PNG of `w` × `h` pixels: lines of dark marks on white, which look
+/// like text to the probe a model's images are chosen by.
+fn screen(w: u32, h: u32) -> Vec<u8> {
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        let ink = (y / 4) % 3 == 0 && (x / 3) % 2 == 0;
+        image::Luma([if ink { 20 } else { 250 }])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
 }
 
 /// A DOCX of a paragraph, `images` pictures each drawing an image of its
-/// own (`word/media/image<i>.png`, alike in their pixels) and a paragraph:
-/// each read on its own.
+/// own (`word/media/image<i>.png`, alike in their pixels, [`screen`]) and a
+/// paragraph: each read on its own.
 fn docx_distinct(images: usize) -> Vec<u8> {
     let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    let png = {
-        let img = image::RgbImage::from_pixel(300, 100, image::Rgb([200, 200, 200]));
-        let mut out = Vec::new();
-        image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .unwrap();
-        out
-    };
+    let png = screen(600, 200);
     let picture = |i: usize| {
         format!(
             "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"{i}\" name=\"Picture {i}\"/><a:graphic><a:graphicData>\
@@ -619,6 +618,221 @@ fn no_more_pictures_go_to_the_model_than_a_document_may_send() {
     assert!(err.contains("2 image(s) not sent to the model"), "{err}");
     assert!(err.contains("3 of 3 image(s)"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The reasons `doc:unreadImages` gives, in order.
+fn reasons(doco: &str) -> Vec<String> {
+    document(doco)["doc:unreadImages"]["@value"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|u| u["reason"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_picture_of_few_pixels_is_not_sent_to_the_model() {
+    // A screen of text 300 pixels wide: small, as an e-mail's image of that
+    // size is, whatever size the document shows it at. It is listed, with
+    // why; left out by choice, as a logo is, it is not counted on stderr,
+    // and `--verbose` names it, with what reads it.
+    let dir = scratch("small");
+    let input = dir.join("report.docx");
+    let small = docx_with(1, "media/image1.png", screen(300, 200));
+    std::fs::write(&input, &small).unwrap();
+    let home = model_home(&dir, 0);
+    let (doco, err) = run(&input, &home, "doco", &[]);
+    assert!(!err.contains("configured model"), "{err}");
+    assert!(!err.contains("were not read"), "{err}");
+    assert_eq!(reasons(&doco), ["Small"]);
+    let (_, err) = run(&input, &home, "doco", &["--verbose".as_ref()]);
+    assert!(
+        err.contains("model: report_m1: not sent (Small); --ocr reads it"),
+        "{err}"
+    );
+    // OCR still reads it, whatever its size.
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "width": 300, "height": 200,
+        "words": [{ "text": "Account 4417-0093-21", "box": [20, 60, 280, 100] }]
+    });
+    std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+    let (text, _) = run(
+        &input,
+        &home,
+        "text",
+        &["--ocr-words".as_ref(), words.as_os_str()],
+    );
+    assert!(text.contains("4417-0093-21"), "{text}");
+    // A reading supplied is taken, whatever its size.
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    tier_reading(&tiers, "report_m1", "Reference 4417-0093-21");
+    let (text, _) = run(
+        &input,
+        &home,
+        "text",
+        &["--tier-results".as_ref(), tiers.as_os_str()],
+    );
+    assert!(text.contains("Reference 4417-0093-21"), "{text}");
+    // 400 pixels wide or more: sent (and refused, here).
+    let large = docx_with(1, "media/image1.png", screen(600, 200));
+    std::fs::write(&input, large).unwrap();
+    let (doco, err) = run(&input, &home, "doco", &[]);
+    assert!(err.contains("the configured model"), "{err}");
+    assert_eq!(reasons(&doco), ["Failed"]);
+    // With no model, nothing was asked to read it.
+    std::fs::write(&input, small).unwrap();
+    let (doco, err) = run(&input, &dir.join("home"), "doco", &[]);
+    assert!(err.contains("1 of 1 image(s)"), "{err}");
+    assert_eq!(reasons(&doco), ["NotRead"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_pictures_reading_that_is_noise_leaves_it_unread() {
+    // What an engine reads in a photograph or a gradient the probe took for
+    // text: a stroke or two, unsure, or one fragment boxed over all of it.
+    // Set aside: listed, as a PDF region whose reading is noise is, and not
+    // counted on stderr.
+    let dir = scratch("noise");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx()).unwrap();
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    for read in [
+        serde_json::json!([
+            { "text": "M", "box": [20, 20, 80, 70], "conf": 0.46 },
+            { "text": "—", "box": [150, 40, 200, 60], "conf": 0.1 }
+        ]),
+        serde_json::json!([{ "text": "7", "box": [0, 0, 300, 100], "conf": 0.66 }]),
+    ] {
+        let reading = serde_json::json!({ "width": 300, "height": 100, "words": read });
+        std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+        let ocr_words = ["--ocr-words".as_ref(), words.as_os_str()];
+        let (doco, err) = run(&input, &dir.join("home"), "doco", &ocr_words);
+        assert_eq!(reasons(&doco), ["NotTexty"], "{doco}");
+        assert!(!err.contains("were not read"), "{err}");
+        let (text, _) = run(&input, &dir.join("home"), "text", &ocr_words);
+        assert_eq!(
+            text.trim(),
+            "See the screen below.\n\nThat is all.",
+            "{text}"
+        );
+        // A model may still read what OCR read no text in.
+        let (_, err) = run(&input, &model_home(&dir, 0), "text", &ocr_words);
+        assert!(err.contains("the configured model"), "{err}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A 800 × 600 PNG of colour running from black to red across and to green
+/// down: nothing in it to read.
+#[cfg(feature = "ocr")]
+fn gradient() -> Vec<u8> {
+    let img = image::RgbImage::from_fn(800, 600, |x, y| {
+        image::Rgb([(x * 255 / 800) as u8, (y * 255 / 600) as u8, 120])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+#[cfg(feature = "ocr")]
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn an_engine_reads_no_text_into_a_gradient() {
+    let models = std::env::var("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS");
+    let dir = scratch("gradient-engine");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx_with(1, "media/image1.png", gradient())).unwrap();
+    let engine = [
+        "--ocr".as_ref(),
+        "oar-ocr".as_ref(),
+        "--models".as_ref(),
+        models.as_ref(),
+    ];
+    let (text, _) = run(&input, &dir.join("home"), "text", &engine);
+    assert_eq!(
+        text.trim(),
+        "See the screen below.\n\nThat is all.",
+        "{text}"
+    );
+    let (doco, _) = run(&input, &dir.join("home"), "doco", &engine);
+    assert_eq!(reasons(&doco), ["NotTexty"], "{doco}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A PNG of `w` × `h` pixels like a capture of a wide screen holding a few
+/// short lines of text at its top, the rest of it a light ground: the
+/// screenshot of #10's own report, whose text a model reads.
+fn sparse_capture(w: u32, h: u32) -> Vec<u8> {
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        let line = (40..180).contains(&y) && (y - 40) % 28 < 12;
+        let ink = line && (40..360).contains(&x) && (x / 3) % 2 == 0;
+        image::Luma([if ink { 30 } else { 245 }])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+/// A JPEG of `w` × `h` pixels like a photograph: light falling unevenly,
+/// and the noise of a phone's sensor.
+fn photo(w: u32, h: u32) -> Vec<u8> {
+    let mut seed = 0x2545_f491_u32;
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let light = 120 + 80 * (x + y) / (w + h);
+        let noise = (seed >> 24) as i32 % 41 - 20;
+        image::Luma([(light as i32 + noise).clamp(0, 255) as u8])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    out
+}
+
+#[test]
+fn a_picture_over_the_floor_is_sent_to_the_model_when_the_probe_takes_it_for_text() {
+    // A capture of a wide screen with a few lines of text and a line of a
+    // form captured on its own look like text: sent (and refused, here). A
+    // flat picture and a photograph do not: read by nothing, listed as
+    // `NotTexty`, and no request is made.
+    let grey = {
+        let img = image::RgbImage::from_pixel(600, 400, image::Rgb([200, 200, 200]));
+        let mut out = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    for (name, image, sent) in [
+        ("media/image1.png", sparse_capture(1366, 768), true),
+        ("media/image1.png", screen(2000, 56), true),
+        ("media/image1.png", grey, false),
+        ("media/image1.jpeg", photo(600, 800), false),
+    ] {
+        let dir = scratch("over-floor");
+        let input = dir.join("report.docx");
+        std::fs::write(&input, docx_with(1, name, image)).unwrap();
+        let (doco, err) = run(&input, &model_home(&dir, 0), "doco", &[]);
+        assert_eq!(err.contains("the configured model"), sent, "{name}: {err}");
+        let want = if sent { "Failed" } else { "NotTexty" };
+        assert_eq!(reasons(&doco), [want], "{name}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 #[test]

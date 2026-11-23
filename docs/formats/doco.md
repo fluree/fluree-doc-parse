@@ -336,17 +336,27 @@ first figure drawing it, and listed unread once for each figure. `reason` is
 relationship the file does not define), `UnsupportedFormat` (not a PNG, JPEG
 or TIFF: a vector drawing kept as EMF or WMF, a GIF), `PastAllowance` (past
 what one document may have read: 256 images, 512 million pixels as their
-headers state them) or `Failed` (its reading failed, or the part it names is
-not there; stderr says why). An image read that held no text was read, and
-is not listed.
+headers state them), `Small` (nothing else read it, and the configured model
+is not sent it: under 400 pixels on its longer side or 48 on its shorter),
+`NotTexty` (OCR read it, and what it read was noise, as a photograph or a
+gradient read for text gives: the rule a
+[`NotTexty` region](#regions-nothing-read)'s reading is held to; nothing
+else read it) or `Failed` (its reading failed, the part it names is not
+there, or its part is empty or ends before its format can be told; stderr
+says why). An image read that held no text was read, and is not listed.
 
 Unlike an unread page, it adds no comment to Markdown or XHTML: most
 documents carry a logo or a photo with no text in it, and a warning on each
 would be noise. The note on stderr counts them, except those no engine
 decodes (`UnsupportedFormat`, told by the image's first bytes whatever is
-configured, and never warned about): nearly every signed e-mail carries a GIF or
-BMP logo, and a vector drawing has no text to read anyway, so these are
-listed here only.
+configured, and never warned about), those under the model's floor
+(`Small`, which `--verbose` names, with `--ocr` to read them) and those
+the pixel probe does not take for text or whose OCR reading was noise
+(`NotTexty`): nearly every
+signed e-mail carries a logo, a GIF or a small PNG, a vector drawing
+has no text to read anyway, and a photograph is what it is as often as
+not, so these are listed here only, as a PDF's `Small` and `NotTexty`
+regions are.
 
 ## Sections are explicit
 

@@ -205,8 +205,8 @@ Only those names are looked up — `full` on every page, `r{i}` for each unread 
 **What to read.** The `render-routed` manifest says why each crop exists
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine
 needs to read only the crops whose `reason` is `scanned`, `near_blank`,
-`broken_text`, `region`, `small_region` or `embedded_image` (a DOCX's or an
-XLSX's picture, an e-mail's inline image): those are the ones whose readings the document takes. A
+`broken_text`, `region`, `small_region`, `embedded_image` (a DOCX's or an
+XLSX's picture, an e-mail's inline image) or `small_image` (one under a model's floor): those are the ones whose readings the document takes. A
 `table_missing` crop it reads only where the page's text does not cover it
 (see [escalation tiers](escalation-tiers.md#producing-the-crops)). [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
@@ -285,7 +285,7 @@ skipped silently: it comes from your pipeline, not from a partial batch. A
 ```bash
 fdoc dev render-routed scan.pdf ./crops --ocr-regions --stored-resolution
 # the crops whose readings the page takes
-jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region", "embedded_image")) | "./crops/" + .png' \
+jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region", "embedded_image", "small_image")) | "./crops/" + .png' \
   ./crops/manifest.jsonl > ./crops/for-ocr.txt
 your-ocr $(cat ./crops/for-ocr.txt) --out ./words   # one {stem}_p{N}_{tag}.json per crop
 fdoc convert scan.pdf -f doco --ocr-words ./words

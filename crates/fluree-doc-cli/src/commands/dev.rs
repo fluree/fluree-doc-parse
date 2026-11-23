@@ -1496,8 +1496,9 @@ fn email_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json
 /// `<stem>_<tag>.png`, named by the first figure drawing it (`m<n>` for the
 /// figure `figure-<page>-<n>`), its manifest record naming every figure it
 /// is drawn as and where the file keeps it (`part`). `bytes` reads one
-/// image by its part, one at a time. An image the file does not hold, or
-/// that is not a raster (EMF, WMF), has no crop, and one past what a
+/// image by its part, one at a time. An image the file does not hold, that
+/// is not a raster (EMF, WMF), or that the pixel probe does not take for
+/// text (`NotTexty`, read by nothing), has no crop, and one past what a
 /// document may have read ([`fluree_doc_model::Allowance::DOCUMENT`]) is not
 /// cropped either.
 fn media_crops(
@@ -1516,7 +1517,7 @@ fn media_crops(
         drawings: std::collections::HashSet<String>,
     }
     impl PictureReader for Cropper<'_> {
-        type Reading = serde_json::Value;
+        type Reading = Option<serde_json::Value>;
         fn ready(&mut self, picture: &Picture) -> bool {
             self.current = picture.tag();
             true
@@ -1530,16 +1531,33 @@ fn media_crops(
                     }
                 })
         }
-        fn read(&mut self, picture: &Picture, image: &[u8]) -> Result<serde_json::Value, String> {
+        fn read(
+            &mut self,
+            picture: &Picture,
+            image: &[u8],
+        ) -> Result<Option<serde_json::Value>, String> {
             let mut decoded = fluree_doc_image::decode(image)?;
+            // One the pixel probe does not take for text is read by nothing:
+            // no crop for a reader.
+            if !fluree_doc_image::texty(&decoded) {
+                return Ok(None);
+            }
+            // One under the pixels a model is sent, as `convert` sends it
+            // none, is told apart: for OCR only.
+            let (w, h) = (decoded.pixels.width, decoded.pixels.height);
+            let reason = if crate::commands::convert::under_model_floor(w, h) {
+                fluree_doc_pdf::escalate::CropReason::SmallImage
+            } else {
+                fluree_doc_pdf::escalate::CropReason::EmbeddedImage
+            };
             let name = format!("{}_{}.png", self.stem, picture.tag());
             write_png(&self.outdir.join(&name), &mut decoded.pixels)?;
-            Ok(serde_json::json!({
+            Ok(Some(serde_json::json!({
                 "doc": self.stem, "kind": "media", "png": name,
                 "figure": picture.uses[0].figure, "figures": picture.figures(),
                 "part": picture.source.part(),
-                "reason": fluree_doc_pdf::escalate::CropReason::EmbeddedImage.as_str(), "scale": 1.0,
-            }))
+                "reason": reason.as_str(), "scale": 1.0,
+            })))
         }
     }
     let mut cropper = Cropper {
@@ -1572,7 +1590,7 @@ fn media_crops(
     if past > 0 {
         eprintln!("warning: {stem}: {past} image(s) past what one document may have read were not cropped");
     }
-    Ok(reads.read.into_iter().map(|(_, rec)| rec).collect())
+    Ok(reads.read.into_iter().filter_map(|(_, rec)| rec).collect())
 }
 
 /// Write an image as an 8-bit PNG in the layout it was decoded in, over

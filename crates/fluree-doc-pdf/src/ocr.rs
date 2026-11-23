@@ -469,6 +469,21 @@ fn fragment(text: &str) -> bool {
     text.chars().filter(|c| c.is_alphanumeric()).count() <= 2
 }
 
+/// Whether a reading of the one page of `page`, a picture read on its own,
+/// is noise ([`MIN_PICTURE_CONFIDENCE`], [`MIN_FRAGMENTS_CONFIDENCE`],
+/// [`NOISE_BOX_SHARE`]): a photograph or a chart read for text it does not
+/// hold. The rule a region of a PDF page the pixel probe does not take for
+/// text is held to, for the pictures of a DOCX, an XLSX or an e-mail. A
+/// reading that cannot be placed is not noise: [`inject`] says why it is
+/// refused.
+pub fn is_noise(page: &Page, reading: &WordReading) -> bool {
+    let Ok(placed) = place(page, None, reading) else {
+        return false;
+    };
+    let words: Vec<&Placed> = placed.iter().flatten().collect();
+    noise(&words, page.width * page.height)
+}
+
 /// The words of `reading`, by their index among its words, that land in a
 /// region it may fill and are noise there ([`noise`]): each region judged
 /// by the words that land in it, as [`add_words`] lands them.

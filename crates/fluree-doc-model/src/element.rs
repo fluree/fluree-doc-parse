@@ -436,8 +436,10 @@ pub struct UnreadImage {
     /// link to an outside file, a relationship it does not define),
     /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a vector drawing kept as
     /// EMF or WMF, a GIF), `PastAllowance` (past the pictures or pixels one
-    /// document may have read, [`crate::Allowance::DOCUMENT`]) or `Failed`
-    /// (its reading failed, or the part it names is not there).
+    /// document may have read, [`crate::Allowance::DOCUMENT`]), `Small`
+    /// (nothing else read it, and it is under the pixels the configured
+    /// model is sent) or `Failed` (its reading failed, or the part it names
+    /// is not there).
     pub reason: String,
 }
 

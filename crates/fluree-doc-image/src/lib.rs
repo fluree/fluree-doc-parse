@@ -337,6 +337,24 @@ fn tiff_pages(b: &[u8]) -> usize {
 /// unread in the output, and a few kilobytes can chain a hundred thousand.
 const MAX_TIFF_PAGES: usize = 10_000;
 
+/// Whether a decoded image looks like text as the PDF router judges a raster
+/// region: its pixels to the probe ([`fluree_doc_vision::texty`]) — a
+/// capture, a scanned table or a labelled chart does; a photograph, a
+/// gradient or a logo does not — and enough of them on its short side for a
+/// line of text ([`fluree_doc_pdf::route::MIN_TEXT_LINE_PX`]), under which
+/// an engine misreads what it reads. Transparent pixels are laid over
+/// white, as a page draws them.
+pub fn texty(image: &Decoded) -> bool {
+    let p = &image.pixels;
+    p.width.min(p.height) >= fluree_doc_pdf::route::MIN_TEXT_LINE_PX
+        && fluree_doc_vision::texty::pixels_look_like_text(p)
+}
+
+/// [`texty`] of an image's bytes: `None` where they do not decode.
+pub fn looks_like_text(bytes: &[u8]) -> Option<bool> {
+    decode(bytes).ok().map(|image| texty(&image))
+}
+
 /// What [`read`] gives: the document, its page carrying the engine's words
 /// as glyphs, ready for analysis.
 pub struct ImageRead {
@@ -372,20 +390,58 @@ pub struct ImageElements {
     pub elements: Vec<fluree_doc_model::Element>,
     /// The page the boxes are on: the image upright, in pixels.
     pub size: fluree_doc_model::PageSize,
+    /// The pixel probe does not take the image for text ([`texty`]): a
+    /// photograph, a chart, a logo. Nothing read it, `elements` is empty,
+    /// and the image is not read.
+    pub not_texty: bool,
+    /// The reading was noise ([`ocr::is_noise`]): a photograph or a chart
+    /// read for text it does not hold. Its words are set aside, so
+    /// `elements` is empty, and the image is not read.
+    pub noise: bool,
     /// Pages of the file not read (a multi-page TIFF's after the first).
     pub more_pages: bool,
 }
 
-/// Decode an image, read it and analyse it.
+/// Decode an image, read it and analyse it: an image the pixel probe does
+/// not take for text ([`texty`]) is not read, and comes back
+/// [`ImageElements::not_texty`]. What an engine reads in one it takes for
+/// text is still held to the noise rule ([`without_noise`]).
 pub fn elements(bytes: &[u8], engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let image = decode(bytes)?;
+    if !texty(&image) {
+        return Ok(not_texty(&image));
+    }
+    read_texty(image, engine)
+}
+
+/// As [`elements`], of an image a caller has decoded and found [`texty`]
+/// itself: it is neither decoded nor probed again.
+pub fn read_texty(image: Decoded, engine: &dyn OcrEngine) -> Result<ImageElements, String> {
     let reading = engine.read(&image.pixels)?;
     Ok(analysed(document(&image), image.more_pages, reading))
 }
 
+/// What [`elements`] gives for an image the pixel probe does not take for
+/// text: nothing read in it.
+fn not_texty(image: &Decoded) -> ImageElements {
+    ImageElements {
+        elements: Vec::new(),
+        size: fluree_doc_model::PageSize {
+            index: 0,
+            width: f64::from(image.pixels.width),
+            height: f64::from(image.pixels.height),
+            folio: None,
+        },
+        not_texty: true,
+        noise: false,
+        more_pages: image.more_pages,
+    }
+}
+
 /// As [`elements`], from the words an engine already read in the image
 /// (decoded upright, as [`decode`] gives it). Only the image's header is
-/// read, for the page the words are on.
+/// read, for the page the words are on: the pixel probe is not run, the
+/// caller has chosen to read it.
 pub fn elements_from_words(
     bytes: &[u8],
     reading: fluree_doc_vision::WordReading,
@@ -396,11 +452,30 @@ pub fn elements_from_words(
     Ok(analysed(doc, h.pages > 1, reading))
 }
 
+/// `reading`, an engine's reading of the one page of `doc`, a picture, with
+/// its words set aside where they are noise ([`ocr::is_noise`]), and whether
+/// they were. A picture need not hold any text, and the pixel probe can
+/// take a photograph or a gradient for text: the words of a reading of it
+/// that is noise are set aside, as those of an OCR reading of a PDF
+/// region are, and the picture is left unread.
+pub fn without_noise(
+    doc: &Document,
+    reading: fluree_doc_vision::WordReading,
+) -> (fluree_doc_vision::WordReading, bool) {
+    if ocr::is_noise(&doc.pages[0], &reading) {
+        let words = Vec::new();
+        (fluree_doc_vision::WordReading { words, ..reading }, true)
+    } else {
+        (reading, false)
+    }
+}
+
 fn analysed(
     mut doc: Document,
     more_pages: bool,
     reading: fluree_doc_vision::WordReading,
 ) -> ImageElements {
+    let (reading, noise) = without_noise(&doc, reading);
     let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
     let page = &doc.pages[0];
     let size = fluree_doc_model::PageSize {
@@ -414,6 +489,8 @@ fn analysed(
     ImageElements {
         elements: analysis.elements,
         size,
+        not_texty: false,
+        noise,
         more_pages,
     }
 }
@@ -428,8 +505,10 @@ pub struct PlacedRead {
     /// figure drawing them, with why: `Missing` (not in the file),
     /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a drawing kept as EMF or
     /// WMF, a GIF), `PastAllowance` (past what one document may have read,
-    /// [`fluree_doc_model::Allowance::DOCUMENT`]) or `Failed` (its bytes or
-    /// its reading failed). Never `NotRead`: each image held is read.
+    /// [`fluree_doc_model::Allowance::DOCUMENT`]), `Failed` (its bytes or its
+    /// reading failed) or `NotTexty` (the pixel probe does not take it for
+    /// text, or its reading was noise: [`ImageElements::not_texty`],
+    /// [`ImageElements::noise`]). Never `NotRead`: each image held is read.
     pub unread: Vec<fluree_doc_model::UnreadImage>,
     /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
     /// the name it goes by (`m1`).
@@ -486,6 +565,11 @@ pub fn read_placed(
             elements(image, self.engine)
         }
     }
+    // Each picture's place among the document's, by the name it goes by.
+    let mut order: std::collections::HashMap<String, usize> = Default::default();
+    for (i, m) in media.iter().enumerate() {
+        order.entry(m.tag()).or_insert(i);
+    }
     let mut reader = Engine {
         engine,
         current: String::new(),
@@ -498,11 +582,18 @@ pub fn read_placed(
         fluree_doc_model::Allowance::DOCUMENT,
     );
     let mut out = PlacedRead::default();
+    let mut unread: Vec<(fluree_doc_model::Picture, &str)> = Vec::new();
     for (picture, r) in reads.read {
-        out.read.extend(picture.after_each_figure(r.elements));
-        if r.more_pages {
-            out.first_page_only.push(picture);
+        // An image the pixel probe does not take for text, or whose reading
+        // was noise, is read by nothing.
+        if r.not_texty || r.noise {
+            unread.push((picture, "NotTexty"));
+            continue;
         }
+        if r.more_pages {
+            out.first_page_only.push(picture.clone());
+        }
+        out.read.extend(picture.after_each_figure(r.elements));
     }
     for (picture, why) in reads.unread {
         let reason = match &why {
@@ -518,6 +609,11 @@ pub fn read_placed(
                 }
             }
         };
+        unread.push((picture, reason));
+    }
+    // In the order the document first draws them.
+    unread.sort_by_key(|(picture, _)| order.get(&picture.tag()).copied());
+    for (picture, reason) in unread {
         for figure in picture.figures() {
             out.unread.push(fluree_doc_model::UnreadImage {
                 figure: figure.to_string(),
@@ -596,13 +692,73 @@ mod tests {
     use fluree_doc_vision::{Coords, OcrWord, WordReading};
 
     /// A PNG of `w` × `h` grey pixels.
+    /// A `w × h` PNG the pixel probe takes for text: lines of strokes a
+    /// letter wide on a light ground, as a capture holds.
     fn png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < w * 3 / 4;
+            image::Rgb(if ink { [40, 40, 40] } else { [200, 200, 200] })
+        });
+        let mut out = Vec::new();
+        DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    /// A `w × h` PNG of one grey: no text, to the probe or to anyone.
+    fn flat_png(w: u32, h: u32) -> Vec<u8> {
         let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 200, 200]));
         let mut out = Vec::new();
         DynamicImage::ImageRgb8(img)
             .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
             .unwrap();
         out
+    }
+
+    /// An engine that must not be asked to read anything.
+    struct Unasked;
+
+    impl OcrEngine for Unasked {
+        fn name(&self) -> &str {
+            "unasked"
+        }
+        fn read(&self, _: &Pixels) -> Result<WordReading, String> {
+            panic!("an image the probe does not take for text was read")
+        }
+    }
+
+    #[test]
+    fn a_picture_too_thin_for_a_line_of_text_is_not_read() {
+        // The floor a PDF's region is held to: from 10 pixels on its short
+        // side, whichever side that is, the line is read; under it, it is
+        // not, as an engine misreads it.
+        assert_eq!(looks_like_text(&line_png(700, 10)), Some(true));
+        assert_eq!(looks_like_text(&line_png(700, 9)), Some(false));
+        let read = elements(&line_png(700, 9), &Unasked).unwrap();
+        assert!(read.not_texty);
+        let read = elements(&line_png(700, 10), &TwoLines).unwrap();
+        assert!(!read.not_texty);
+    }
+
+    #[test]
+    fn a_picture_the_probe_does_not_take_for_text_is_not_read() {
+        assert_eq!(looks_like_text(&flat_png(600, 400)), Some(false));
+        assert_eq!(looks_like_text(&png(600, 400)), Some(true));
+        assert_eq!(looks_like_text(b"not an image"), None);
+        let read = elements(&flat_png(600, 400), &Unasked).unwrap();
+        assert!(read.not_texty && !read.noise && read.elements.is_empty());
+        assert_eq!((read.size.width, read.size.height), (600.0, 400.0));
+        let media = fluree_doc_model::Media {
+            figure: "figure-0-1".into(),
+            source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+            index: 0,
+        };
+        let r = read_placed(vec![media], &mut |_| Ok(flat_png(600, 400)), &Unasked);
+        assert!(r.read.is_empty(), "{:?}", r.read);
+        let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
+        assert_eq!(reasons, ["NotTexty"]);
+        assert!(r.errors.is_empty());
     }
 
     /// An engine that reads two lines across whatever it is shown.
@@ -661,14 +817,32 @@ mod tests {
         );
     }
 
+    /// A `w × h` PNG of one line of strokes, a pixel of paper above and
+    /// below: text, to the probe, however thin.
+    fn line_png(w: u32, h: u32) -> Vec<u8> {
+        let img = image::GrayImage::from_fn(w, h, |x, y| {
+            let ink = y > 0 && y + 1 < h && x % 6 < 3;
+            image::Luma([if ink { 30 } else { 230 }])
+        });
+        let mut out = Vec::new();
+        DynamicImage::ImageLuma8(img)
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
     #[test]
     fn an_image_reads_as_a_page_of_text() {
         let ImageElements {
             elements,
             size,
+            not_texty,
+            noise,
             more_pages,
         } = elements(&png(600, 400), &TwoLines).unwrap();
         assert_eq!((size.width, size.height), (600.0, 400.0));
+        assert!(!not_texty);
+        assert!(!noise);
         assert!(!more_pages);
         let text: String = elements
             .iter()
@@ -683,6 +857,92 @@ mod tests {
             elements.iter().all(|e| e.provenance == "ocr"),
             "{elements:?}"
         );
+    }
+
+    /// A reading of a 600 × 400 picture: `words`, in its pixels, each
+    /// scored `conf`.
+    fn reading(words: &[(&str, [f64; 4])], conf: Option<f64>) -> WordReading {
+        WordReading {
+            coords: Coords::Px,
+            width: Some(600.0),
+            height: Some(400.0),
+            engine: None,
+            words: words
+                .iter()
+                .map(|&(text, bbox)| OcrWord {
+                    text: text.into(),
+                    bbox,
+                    angle: None,
+                    conf,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_pictures_reading_that_is_noise_reads_nothing() {
+        let image = png(600, 400);
+        let strokes = [
+            ("Account 4417", [40.0, 60.0, 240.0, 84.0]),
+            ("Balance 9,876.54", [40.0, 100.0, 300.0, 124.0]),
+        ];
+        let fragments = [
+            ("I7", [40.0, 60.0, 60.0, 84.0]),
+            ("1", [300.0, 100.0, 310.0, 124.0]),
+            ("J", [500.0, 300.0, 510.0, 324.0]),
+        ];
+        let all_of_it = [("7", [0.0, 0.0, 600.0, 400.0])];
+        // Unsure in the mean, fragments not sure enough to be a chart's, or
+        // boxed over the whole picture however sure: a photograph's or a
+        // gradient's noise.
+        for r in [
+            reading(&strokes, Some(0.3)),
+            reading(&fragments, Some(0.6)),
+            reading(&all_of_it, None),
+            reading(&all_of_it, Some(0.66)),
+        ] {
+            let read = elements_from_words(&image, r).unwrap();
+            assert!(read.noise);
+            assert!(read.elements.is_empty(), "{:?}", read.elements);
+        }
+        // Read with confidence it is text: words, fragments as sure as a
+        // chart's axis, a large word over most of it too.
+        let large = [("SALE", [60.0, 60.0, 540.0, 340.0])];
+        for r in [
+            reading(&strokes, Some(0.6)),
+            reading(&fragments, Some(0.9)),
+            reading(&large, Some(0.99)),
+        ] {
+            let read = elements_from_words(&image, r).unwrap();
+            assert!(!read.noise);
+            assert!(!read.elements.is_empty());
+        }
+    }
+
+    /// An engine that reads one unsure stroke in whatever it is shown.
+    struct Unsure;
+
+    impl OcrEngine for Unsure {
+        fn name(&self) -> &str {
+            "unsure"
+        }
+        fn read(&self, _: &Pixels) -> Result<WordReading, String> {
+            Ok(reading(&[("M", [40.0, 60.0, 200.0, 220.0])], Some(0.2)))
+        }
+    }
+
+    #[test]
+    fn a_placed_picture_read_as_noise_is_listed_unread() {
+        let media = fluree_doc_model::Media {
+            figure: "figure-0-1".into(),
+            source: fluree_doc_model::MediaSource::Part("word/media/image1.png".into()),
+            index: 0,
+        };
+        let r = read_placed(vec![media], &mut |_| Ok(png(600, 400)), &Unsure);
+        assert!(r.read.is_empty(), "{:?}", r.read);
+        let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
+        assert_eq!(reasons, ["NotTexty"]);
+        assert!(r.errors.is_empty());
     }
 
     #[test]

@@ -3178,11 +3178,12 @@ mod tests {
             }
         }
         let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            400,
-            120,
-            image::Rgb([240, 240, 240]),
-        ))
+        // Lines of strokes a letter wide on a light ground: text, to the
+        // pixel probe, which a picture is read only when it is.
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(400, 120, |x, y| {
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < 300;
+            image::Rgb(if ink { [40, 40, 40] } else { [240, 240, 240] })
+        }))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
         let bytes = workbook(

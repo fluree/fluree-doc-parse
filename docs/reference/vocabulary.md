@@ -95,6 +95,32 @@ A consumer should therefore not branch on either type expecting to see it.
 | `dcterms:creator` | `foaf:Document` | who made it, as the file names them: `/Author`, `dc:creator`, `<meta name="author">`, an email's sender |
 | `dcterms:created` / `dcterms:modified` | `foaf:Document` | `xsd:dateTime` (or `xsd:date`): when it was made and last saved, or an email sent |
 
+The `reason` of an image in `doc:unreadImages` is one of those
+[the document node describes](../formats/doco.md#images-nothing-read):
+`NotRead`, `Missing`, `UnsupportedFormat`, `Failed`, `PastAllowance` for
+one past what one document may have read (256 images, 512 million pixels),
+`Small` for one the model was not sent, under its floor of pixels, or
+`NotTexty` for one the pixel probe does not take for text, or whose OCR
+reading was noise. `Small`
+and `NotTexty` are listed, and not counted on stderr, as the regions of
+`doc:unreadRegions` that carry them are not.
+
+The two lists share these two reasons, and neither is measured the same way
+in each. `Small` says in both that no model was sent the image and that an
+OCR engine reads it. In `doc:unreadRegions` it is a share of the page: a
+region of a PDF page whose pixels look like text, under a tenth of the
+page. In `doc:unreadImages` it is a count of pixels: a picture under 400 on
+its longer side or 48 on its shorter, wherever it is placed, since an
+e-mail has no page to measure it against (a PNG logo is under the floor on
+nearly every signed message; `--verbose` names each). So the same capture
+can be `Small` in a DOCX and not in a PDF, or the other way round.
+`NotTexty` says in both that the pixel probe does not take its pixels for
+text, so that nothing read it. In `doc:unreadRegions` that is all it says:
+a region of a tenth of the page or more, which no reader is offered (an
+OCR reading of a routed or small region that is noise leaves it listed
+under its own reason). In `doc:unreadImages` it is also a picture the
+probe took for text in which OCR read only noise.
+
 **Transcript turns**
 
 | property | on | value |

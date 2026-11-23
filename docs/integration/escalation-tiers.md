@@ -198,6 +198,7 @@ rotation, as `--ocr-words` does, not through `bbox × scale` alone.
 | `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
 | `small_region` | a raster region under a tenth of the page, cropped only with `--ocr-regions`: not worth a model's call, read by an OCR engine | lacks what the pixels hold |
 | `embedded_image` | an image placed in a DOCX's flow, anchored to an XLSX's cells, or shown in an e-mail's body, once however many figures draw it (`kind: "media"`, with its first `figure`, every one of its `figures` and its `part`: a package part, or an e-mail's `cid:` URL or `attachment <n>`), `<stem>_m<n>.png`; read by OCR and by a model alike (see below) | has the text around it, not the image's |
+| `small_image` | such an image under the pixels a model is sent (400 on its longer side, 48 on its shorter: a logo, an icon, a one-line strip), as `embedded_image` otherwise; read by an OCR engine, not worth a model's call, as `convert` sends it none | has the text around it, not the image's |
 | `table` | a table the grid does not trust | has the text, not the structure |
 | `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
 | `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |
@@ -211,7 +212,8 @@ engine on it, then a model's reading of it supplied under the same name
 (`--tier-results`, `<stem>_m<n>.json`) replaces what OCR read, and a
 configured model reads one OCR read no text in (see
 [Office files](../inputs/office-and-web.md)). A pipeline may send these crops
-to its model as it sends a scanned page.
+to its model as it sends a scanned page; a `small_image` crop, read the same
+way, only to its OCR engine.
 
 A reader that sees only characters (an OCR engine) has nothing to add to a
 `table` crop, a `table_missing` crop or a doubt page and should skip them.

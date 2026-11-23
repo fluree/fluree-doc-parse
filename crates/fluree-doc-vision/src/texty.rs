@@ -1,24 +1,124 @@
-//! Whether pixels look like text: part of the probe that decides which
-//! images are worth reading.
+//! Whether pixels look like text: the probe that decides which images are
+//! worth reading.
 //!
 //! A raster image may hold text (a screen capture, a scanned table, a
 //! labelled chart) or not (a photograph, a gradient, an illustration). The
-//! PDF router sends a reader only to an image whose pixels look like text:
-//! ink on paper (most pixels dark or light, many rows crossing from one to
-//! the other often: a page of text, a table, a dense screen), or **lines of
-//! text** ([`lines_of_text`]): on the image's ground, its most common
-//! luminance, bands a line high, framed above and below by rows of bare
-//! ground, whose ink falls in many narrow runs across the band. A screen
-//! capture whose text is sparse or small, a few lines at the top of a wide,
-//! light screen, is the second and not the first.
+//! PDF router sends a reader only to an image whose pixels look like text,
+//! and a picture a DOCX, an XLSX or an e-mail places is read only when its
+//! pixels do. Two rules, either of which is enough:
 //!
-//! The rule works on luminance, one byte a pixel, at the image's own size,
-//! in two passes over its pixels: its cost grows with the pixels and stays
+//! - **Ink on paper** ([`ink_on_paper`]): most pixels dark or light rather
+//!   than mid-grey, and many rows crossing from one to the other often. A
+//!   page of text, a table or a dense screen.
+//! - **Lines of text** ([`lines_of_text`]): on the image's ground, its most
+//!   common luminance, bands a line high, framed above and below by rows of
+//!   bare ground, whose ink falls in many narrow runs across the band. A
+//!   screen capture whose text is sparse or small: a few lines at the top
+//!   of a wide, light screen, which the first rule misses.
+//!
+//! Both work on luminance, one byte a pixel, at the image's own size, in a
+//! pass or two over its pixels: their cost grows with the pixels and stays
 //! under the decode's. Measured on one core, a 1366 × 768 capture takes
 //! about 0.6 ms, a page scanned at 300 dpi (2550 × 3300) about 5 ms, and
 //! 100 million pixels about 55 ms, where decoding them takes seconds.
 //! Averaging a large image down first would cost a pass of its own, and
-//! would change what the rule sees: its lines are counted in pixels.
+//! would change what the second rule sees: its lines are counted in
+//! pixels.
+
+/// Whether `rgba` (8-bit RGBA, `width * height * 4` bytes, rows top to
+/// bottom) looks like text. Transparent pixels are laid over white, as a
+/// page draws them.
+pub fn rgba_looks_like_text(width: usize, height: usize, rgba: &[u8]) -> bool {
+    if rgba.len() < width * height * 4 {
+        return false;
+    }
+    let luma: Vec<u8> = rgba
+        .chunks_exact(4)
+        .take(width * height)
+        .map(|c| {
+            let a = u32::from(c[3]);
+            let m = (u32::from(c[0]) + u32::from(c[1]) + u32::from(c[2])) / 3;
+            ((m * a + 255 * (255 - a)) / 255) as u8
+        })
+        .collect();
+    looks_like_text(width, height, &luma)
+}
+
+/// Whether an image held in any [`crate::Layout`] looks like text, its grey
+/// taken as [`rgba_looks_like_text`] takes it: the mean of its channels,
+/// transparent pixels laid over white.
+pub fn pixels_look_like_text(p: &crate::Pixels) -> bool {
+    let (w, h) = (p.width as usize, p.height as usize);
+    match p.layout {
+        crate::Layout::Luma8 => looks_like_text(w, h, &p.data),
+        crate::Layout::Rgb8 => {
+            let luma: Vec<u8> = p
+                .data
+                .chunks_exact(3)
+                .map(|c| ((u32::from(c[0]) + u32::from(c[1]) + u32::from(c[2])) / 3) as u8)
+                .collect();
+            looks_like_text(w, h, &luma)
+        }
+        crate::Layout::Rgba8 => rgba_looks_like_text(w, h, &p.data),
+    }
+}
+
+/// Whether `luma` (one byte a pixel, `width * height`, rows top to bottom)
+/// looks like text: [`ink_on_paper`] or [`lines_of_text`].
+pub fn looks_like_text(width: usize, height: usize, luma: &[u8]) -> bool {
+    ink_on_paper(width, height, luma) || lines_of_text(width, height, luma)
+}
+
+/// Share of pixels that must sit in the outer luminance quartiles. Ink on
+/// paper is bimodal (near-white ground, near-dark marks); photographs live
+/// in the middle of the range.
+const MIN_BIMODAL_FRACTION: f64 = 0.55;
+
+/// Share of rows that must show frequent dark/light transitions. Text and
+/// table rows alternate ink and ground many times across their width; a
+/// photograph's rows do not survive binarisation with that structure.
+const MIN_TEXTY_ROW_FRACTION: f64 = 0.18;
+
+/// Transitions a row must show to count toward [`MIN_TEXTY_ROW_FRACTION`].
+const MIN_ROW_TRANSITIONS: usize = 6;
+
+/// Least luminance range: under it the image is a wash of colour, not marks
+/// on a ground.
+const MIN_LUMA_RANGE: u8 = 64;
+
+/// Ink on paper: at least [`MIN_BIMODAL_FRACTION`] of the pixels outside
+/// the middle half of the luminance range, a range of at least
+/// [`MIN_LUMA_RANGE`], and at least [`MIN_TEXTY_ROW_FRACTION`] of the rows
+/// crossing the range's midpoint [`MIN_ROW_TRANSITIONS`] times or more. A
+/// page of text, a table, a dense screen. It misses a capture whose text is
+/// sparse: most of its rows are bare ground.
+pub fn ink_on_paper(w: usize, h: usize, luma: &[u8]) -> bool {
+    if w < 8 || h < 8 || luma.len() < w * h {
+        return false;
+    }
+    let luma = &luma[..w * h];
+    let bimodal = luma.iter().filter(|&&v| !(64..192).contains(&v)).count();
+    if (bimodal as f64) < MIN_BIMODAL_FRACTION * luma.len() as f64 {
+        return false;
+    }
+    let (lo, hi) = luma
+        .iter()
+        .fold((u8::MAX, u8::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    if hi - lo < MIN_LUMA_RANGE {
+        return false;
+    }
+    let mid = lo + (hi - lo) / 2;
+    let texty_rows = luma
+        .chunks_exact(w)
+        .filter(|row| {
+            row.windows(2)
+                .filter(|pair| (pair[0] >= mid) != (pair[1] >= mid))
+                .count()
+                >= MIN_ROW_TRANSITIONS
+        })
+        .count();
+    texty_rows as f64 >= MIN_TEXTY_ROW_FRACTION * h as f64
+}
 
 /// How far from the ground's luminance a pixel is still ground.
 const GROUND_TOLERANCE: usize = 16;
@@ -76,10 +176,11 @@ const MIN_ONE_LINE_SHARE: f64 = 0.08;
 ///
 /// Measured on synthetic images (screens light and dark, dialogs, charts,
 /// tables, labels, against landscapes, foliage, gradients, textures, logos
-/// and crops of photographs), OR-ed with ink on paper it misses 29 images
-/// of 361 that hold text, where ink on paper alone misses 151, sparse
-/// captures among them all 80; of 400 that hold none, it takes 96 for text
-/// where ink on paper takes 79, the photographs it takes the same.
+/// and crops of photographs), OR-ed with [`ink_on_paper`] it misses 29
+/// images of 361 that hold text, where [`ink_on_paper`] alone misses 151,
+/// sparse captures among them all 80; of 400 that hold none, it takes 96
+/// for text where [`ink_on_paper`] takes 79, the photographs it takes the
+/// same.
 pub fn lines_of_text(w: usize, h: usize, luma: &[u8]) -> bool {
     if w < 8 || h < 8 || luma.len() < w * h {
         return false;
@@ -236,7 +337,7 @@ mod tests {
         }
 
         fn texty(&self) -> bool {
-            lines_of_text(self.w, self.h, &self.px)
+            looks_like_text(self.w, self.h, &self.px)
         }
     }
 
@@ -254,10 +355,13 @@ mod tests {
     #[test]
     fn a_wide_light_screen_with_two_short_lines_at_its_top_holds_text() {
         // As issue #10's capture: a wide, light screen, a few short lines at
-        // its top, the rest bare.
+        // its top, the rest bare. Most of its rows are bare ground, so ink
+        // on paper misses it.
         let mut c = Canvas::new(1600, 700, 243);
         c.text(24, 20, 12, 3, 6, 40);
         c.text(24, 48, 12, 2, 7, 40);
+        assert!(!ink_on_paper(c.w, c.h, &c.px));
+        assert!(lines_of_text(c.w, c.h, &c.px));
         assert!(c.texty());
     }
 
@@ -267,6 +371,7 @@ mod tests {
         for i in 0..8 {
             c.text(40, 40 + 30 * i, 11, 5, 5, 220);
         }
+        assert!(lines_of_text(c.w, c.h, &c.px));
         assert!(c.texty());
     }
 
@@ -310,10 +415,10 @@ mod tests {
     fn a_gradient_holds_no_text() {
         let (w, h) = (900, 500);
         let px: Vec<u8> = (0..w * h).map(|i| ((i % w) * 255 / w) as u8).collect();
-        assert!(!lines_of_text(w, h, &px));
+        assert!(!looks_like_text(w, h, &px));
         // Top to bottom too.
         let px: Vec<u8> = (0..w * h).map(|i| ((i / w) * 255 / h) as u8).collect();
-        assert!(!lines_of_text(w, h, &px));
+        assert!(!looks_like_text(w, h, &px));
     }
 
     #[test]
@@ -445,8 +550,28 @@ mod tests {
     }
 
     #[test]
+    fn rgba_is_laid_over_white() {
+        // Black text on a transparent ground reads as on paper.
+        let mut c = Canvas::new(1600, 700, 255);
+        c.text(24, 20, 12, 3, 6, 0);
+        c.text(24, 48, 12, 2, 7, 0);
+        let rgba: Vec<u8> =
+            c.px.iter()
+                .flat_map(|&v| {
+                    if v == 255 {
+                        [0, 0, 0, 0]
+                    } else {
+                        [0, 0, 0, 255]
+                    }
+                })
+                .collect();
+        assert!(rgba_looks_like_text(c.w, c.h, &rgba));
+        assert!(!rgba_looks_like_text(c.w, c.h, &rgba[..100]));
+    }
+
+    #[test]
     fn too_small_or_short_buffers_hold_no_text() {
-        assert!(!lines_of_text(7, 100, &[0; 700]));
-        assert!(!lines_of_text(100, 100, &[0; 50]));
+        assert!(!looks_like_text(7, 100, &[0; 700]));
+        assert!(!looks_like_text(100, 100, &[0; 50]));
     }
 }

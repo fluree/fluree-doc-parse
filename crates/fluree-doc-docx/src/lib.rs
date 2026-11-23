@@ -1616,11 +1616,12 @@ mod tests {
             }
         }
         let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            400,
-            120,
-            image::Rgb([240, 240, 240]),
-        ))
+        // Lines of strokes a letter wide on a light ground: text, to the
+        // pixel probe, which a picture is read only when it is.
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(400, 120, |x, y| {
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < 300;
+            image::Rgb(if ink { [40, 40, 40] } else { [240, 240, 240] })
+        }))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -2010,9 +2011,13 @@ mod tests {
             }
         }
         let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4))
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
+        // Text, to the pixel probe: the engine is asked, and fails.
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(100, 60, |x, y| {
+            let ink = (12..24).contains(&y) && x % 10 < 6 && x < 75;
+            image::Rgb(if ink { [40, 40, 40] } else { [240, 240, 240] })
+        }))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
         let docx = package(
             &format!("{}{}{}", picture("rId1"), picture("rId2"), picture("rId3")),
             &[
@@ -2077,12 +2082,12 @@ mod tests {
                 })
             }
         }
+        // Lines of dark marks on white, which the pixel probe takes for text.
         let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            200,
-            60,
-            image::Rgb([240, 240, 240]),
-        ))
+        image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(200, 60, |x, y| {
+            let ink = (y / 4) % 3 == 0 && (x / 3) % 2 == 0;
+            image::Luma([if ink { 20 } else { 250 }])
+        }))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
         // Fifty figures of one image, by two relationships to it.

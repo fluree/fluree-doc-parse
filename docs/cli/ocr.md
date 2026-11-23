@@ -23,14 +23,16 @@ about its structure, `render-routed --ocr-regions` gives the page its doubt's
 reason and crops its raster regions apart, so `fdoc ocr` reads the regions,
 as `convert --ocr` does, and not the page.
 
-An image is read only if its own pixels can hold a line of text: 10 px on its
-short side, whatever size it is drawn at (measured: the engine reads a line
-exactly from 10 px tall, and misreads it below). A form's checkboxes drawn
-from 8 × 8 masks and rules stretched from a 1 × 1 mask are not read, and an
-image drawn twice in one place is read once. So is an image drawn again
-elsewhere, on its page or another, at the same size and the same way up: a
-form's checkbox drawn two hundred times is read once, its reading laid on
-every box, and counts once against the cap. A document's crops are capped
+An image a document draws or places (a PDF's raster region, a DOCX's or a
+workbook's picture, an e-mail's inline image) is read only if its own pixels
+can hold a line of text: 10 px on its short side, whatever size it is drawn
+at (measured: the engine reads a line exactly from 10 px tall, and misreads
+it below); an image given on its own is read whatever its size. A form's
+checkboxes drawn from 8 × 8 masks and rules stretched from a 1 × 1 mask are
+not read, and an image drawn twice in one place is read once. So is an image
+drawn again elsewhere, on its page or another, at the same size and the same
+way up: a form's checkbox drawn two hundred times is read once, its reading
+laid on every box, and counts once against the cap. A document's crops are capped
 by [`ocr.max_crops`](config.md#ocr) (default 1000): past it, pages read whole
 come first, then routed regions, then small ones, and a note on stderr says
 how many were left. `render-routed --ocr-regions` adds the crops `convert
@@ -46,8 +48,8 @@ and lends its reading to none.
 
 Given a crops directory, `fdoc ocr` reads its `manifest.jsonl` and only the crops
 whose words a document takes, by their `reason`: `scanned`, `near_blank`,
-`broken_text`, `region`, `small_region` and `embedded_image` (a DOCX's or an
-XLSX's picture, an e-mail's inline image). A page asked for on a doubt about its
+`broken_text`, `region`, `small_region`, `embedded_image` (a DOCX's or an
+XLSX's picture, an e-mail's inline image) and `small_image` (one under a model's floor). A page asked for on a doubt about its
 structure already has its text, and a table crop asks about structure; both are
 left for a model. Given image files (PNG, JPEG, TIFF), it reads them all,
 decoded upright by their EXIF orientation; of a multi-page TIFF, the first page.

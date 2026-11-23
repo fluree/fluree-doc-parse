@@ -259,6 +259,10 @@ pub enum CropReason {
     /// An image placed in a document's flow (a DOCX's or an XLSX's picture,
     /// an e-mail's inline image).
     EmbeddedImage,
+    /// Such an image under the pixels a model is sent (400 on its longer
+    /// side, 48 on its shorter: a logo, an icon, a one-line strip), which
+    /// an OCR engine still reads.
+    SmallImage,
     /// A table the deterministic grid found but does not trust.
     Table,
     /// A table a layout detector found and no grid covered: text the grid
@@ -283,6 +287,7 @@ impl CropReason {
             CropReason::Region => "region",
             CropReason::SmallRegion => "small_region",
             CropReason::EmbeddedImage => "embedded_image",
+            CropReason::SmallImage => "small_image",
             CropReason::Table => "table",
             CropReason::TableMissing => "table_missing",
             CropReason::HeadingDoubt => "heading_doubt",

@@ -25,17 +25,16 @@ const INTERPRET_BOUNDS: f64 = 20_000.0;
 pub struct ImagePlacement {
     /// Placement on the page, clipped to the page box.
     pub bbox: BBox,
-    /// True when the pixels look like text or line structure: bimodal
-    /// luminance with frequent dark/light transitions along rows, or lines
-    /// of text on a ground of one colour
-    /// ([`fluree_doc_vision::texty::lines_of_text`]). A raster table, a
-    /// scanned paragraph, a labelled chart or a screen capture with a few
-    /// lines on it reads true; a photograph reads false. This is what
-    /// separates "the VLM can recover content here" from "it is a picture",
-    /// which placement geometry alone cannot see:
-    /// two documents with near-identical image coverage can still diverge
-    /// sharply — the AI-routed reference engine *loses* 0.38 on one and
-    /// *gains* 0.62 on the other.
+    /// True when the pixels look like text or line structure
+    /// ([`fluree_doc_vision::texty`]): bimodal luminance with frequent
+    /// dark/light transitions along rows, or lines of text on a ground of
+    /// one colour. A raster table, a scanned paragraph, a labelled chart or
+    /// a screen capture with a few lines on it reads true; a photograph
+    /// reads false. This is what separates "the VLM can recover content
+    /// here" from "it is a picture", which placement geometry alone cannot
+    /// see: two documents with near-identical image coverage can still
+    /// diverge sharply — the AI-routed reference engine *loses* 0.38 on one
+    /// and *gains* 0.62 on the other.
     pub texty: bool,
     /// The image's own resolution where it is drawn: its pixels per inch on
     /// the page, along whichever of its axes is drawn coarser. `None` when
@@ -1005,21 +1004,6 @@ fn image_key(i: &hayro_interpret::Image<'_, '_>, t: Affine) -> Option<u64> {
 /// image's own size, and the probe looks at all of it.
 const PROBE_DIM: u32 = 256;
 
-/// Fraction of pixels that must sit in the outer luminance quartiles. Ink on
-/// paper is bimodal — near-white ground, near-dark marks; photographs live in
-/// the middle of the range.
-const MIN_BIMODAL_FRACTION: f64 = 0.55;
-
-/// Fraction of rows that must show frequent dark/light transitions. Text and
-/// table rows alternate ink and ground many times across their width; a
-/// photograph's rows do not survive binarisation with that structure.
-const MIN_TEXTY_ROW_FRACTION: f64 = 0.18;
-
-/// Transitions per row (at probe resolution) for the row to count as texty.
-const MIN_ROW_TRANSITIONS: usize = 6;
-
-/// Whether decoded pixels look like text or line structure rather than a
-/// photograph. See [`ImagePlacement::texty`].
 /// The rules a path of several straight subpaths draws, one per subpath, when
 /// every subpath is a horizontal rule a figure wide; `None` for a path of one
 /// subpath, a curve, or any other subpath (a box, a cell background, a
@@ -1074,6 +1058,8 @@ fn subpath_rules(path: &kurbo::BezPath, page: usize) -> Option<Vec<Rule>> {
         .collect()
 }
 
+/// Whether decoded pixels look like text or line structure rather than a
+/// photograph. See [`ImagePlacement::texty`].
 fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
     let (w, h, luma): (usize, usize, Vec<u8>) = match data {
         hayro_interpret::ImageData::Luma(l) => {
@@ -1088,50 +1074,11 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
                 .collect(),
         ),
     };
-    let texty = ink_on_paper(w, h, &luma) || fluree_doc_vision::texty::lines_of_text(w, h, &luma);
+    let texty = fluree_doc_vision::texty::looks_like_text(w, h, &luma);
     if std::env::var_os("FDOC_PROBE_DEBUG").is_some() {
         eprintln!("PROBE texty={texty} {w}x{h}");
     }
     texty
-}
-
-/// Ink on paper: most pixels in the outer luminance quartiles, a range of
-/// 64 levels or more, and enough rows crossing its midpoint often. A page
-/// of text, a table, a dense screen; it misses a capture whose text is
-/// sparse, most of its rows bare ground.
-fn ink_on_paper(w: usize, h: usize, luma: &[u8]) -> bool {
-    if w < 8 || h < 8 || luma.len() < w * h {
-        return false;
-    }
-
-    let bimodal = luma.iter().filter(|&&v| !(64..192).contains(&v)).count();
-    if (bimodal as f64) < MIN_BIMODAL_FRACTION * luma.len() as f64 {
-        return false;
-    }
-
-    // Binarise at the luminance midpoint and count row transitions.
-    let (mut lo, mut hi) = (u8::MAX, u8::MIN);
-    for &v in luma {
-        lo = lo.min(v);
-        hi = hi.max(v);
-    }
-    if hi - lo < 64 {
-        return false; // near-uniform: a wash of colour, not marks on ground
-    }
-    let mid = lo + (hi - lo) / 2;
-    let mut texty_rows = 0usize;
-    for row in luma.chunks_exact(w) {
-        let mut transitions = 0usize;
-        for pair in row.windows(2) {
-            if (pair[0] >= mid) != (pair[1] >= mid) {
-                transitions += 1;
-            }
-        }
-        if transitions >= MIN_ROW_TRANSITIONS {
-            texty_rows += 1;
-        }
-    }
-    texty_rows as f64 / h as f64 >= MIN_TEXTY_ROW_FRACTION
 }
 
 /// A private-use character Word gives a glyph set in one of its symbol

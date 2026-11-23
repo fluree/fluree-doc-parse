@@ -9,7 +9,12 @@ use std::process::Command;
 /// as Outlook writes it, the screenshot a related part.
 fn eml() -> Vec<u8> {
     let png = {
-        let img = image::RgbImage::from_pixel(300, 100, image::Rgb([200, 200, 200]));
+        let img = image::RgbImage::from_fn(300, 100, |x, y| {
+            // Lines of strokes a letter wide on a light ground: text, to
+            // the pixel probe.
+            let ink = (12..24).contains(&(y % 40)) && x % 10 < 6 && x < 225;
+            image::Rgb(if ink { [40, 40, 40] } else { [200, 200, 200] })
+        });
         let mut out = Vec::new();
         image::DynamicImage::ImageRgb8(img)
             .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
@@ -194,7 +199,12 @@ fn a_logo_no_engine_decodes_is_listed_but_not_counted() {
 fn eml_with_logo() -> Vec<u8> {
     let gif: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00\
 \x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b";
-    let mut m = eml();
+    with_logo(eml(), "image/gif", gif)
+}
+
+/// The message `m` of [`eml_of`], showing after its text a signature's
+/// logo, `logo` of type `content_type`.
+fn with_logo(mut m: Vec<u8>, content_type: &str, logo: &[u8]) -> Vec<u8> {
     let end = b"\r\n--rel-7f3a--\r\n";
     m.truncate(m.len() - end.len());
     // The logo after the screenshot, as a signature follows the message.
@@ -205,14 +215,223 @@ fn eml_with_logo() -> Vec<u8> {
         + 14;
     m.splice(at..at, b"\r\n[cid:logo@example.org]\r\n".iter().copied());
     m.extend(
-        b"\r\n--rel-7f3a\r\n\
-Content-Type: image/gif; name=\"logo.gif\"\r\n\
-Content-ID: <logo@example.org>\r\n\
-Content-Transfer-Encoding: binary\r\n\r\n",
+        format!(
+            "\r\n--rel-7f3a\r\n\
+             Content-Type: {content_type}; name=\"logo\"\r\n\
+             Content-ID: <logo@example.org>\r\n\
+             Content-Transfer-Encoding: binary\r\n\r\n"
+        )
+        .bytes(),
     );
-    m.extend(gif);
+    m.extend(logo);
     m.extend(end);
     m
+}
+
+/// A PNG of `w` × `h` pixels: lines of dark marks on white, which look
+/// like text to the probe a model's images are chosen by.
+fn screen(w: u32, h: u32) -> Vec<u8> {
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        let ink = (y / 4) % 3 == 0 && (x / 3) % 2 == 0;
+        image::Luma([if ink { 20 } else { 250 }])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+#[test]
+fn a_signatures_logo_is_not_sent_to_the_model_and_a_screenshot_is() {
+    // A screenshot and a logo, both of text, with a model configured whose
+    // key it cannot use: the screenshot is sent (and refused), the logo,
+    // under the pixels an image with no page must have, is not; it is
+    // listed, with why, and not counted on stderr, as a GIF logo is not:
+    // only the screenshot the model failed on is.
+    let dir = scratch("logo-model");
+    let input = dir.join("mail.eml");
+    let mail = with_logo(
+        eml_of("image/png", &screen(600, 200)),
+        "image/png",
+        &screen(200, 60),
+    );
+    std::fs::write(&input, mail).unwrap();
+    with_model(&dir);
+    let out = convert(&dir, &input, &["-f".as_ref(), "doco".as_ref()]);
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(err.matches("the configured model").count(), 1, "{err}");
+    assert!(
+        err.contains("mail: 1 of 1 image(s) in the document were not read\n"),
+        "{err}"
+    );
+    assert_eq!(reasons(&out.stdout), ["Failed", "Small"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_strip_too_short_to_hold_a_line_is_not_sent_to_the_model() {
+    // A strip of text wide enough, but 30 pixels high: under the 48 an
+    // image must have on its shorter side, as a rule or a banner is.
+    let dir = scratch("strip-model");
+    let input = dir.join("mail.eml");
+    std::fs::write(&input, eml_of("image/png", &screen(600, 30))).unwrap();
+    with_model(&dir);
+    let out = convert(&dir, &input, &["-f".as_ref(), "doco".as_ref()]);
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("the configured model"), "{err}");
+    assert!(!err.contains("were not read"), "{err}");
+    assert_eq!(reasons(&out.stdout), ["Small"]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A PNG of `w` × `h` pixels: one line of strokes, a pixel of paper above
+/// and below.
+fn line(w: u32, h: u32) -> Vec<u8> {
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        let ink = y > 0 && y + 1 < h && x % 6 < 3;
+        image::Luma([if ink { 30 } else { 230 }])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+#[test]
+fn an_image_too_thin_for_a_line_of_text_is_read_by_nothing() {
+    // The floor a PDF's region is held to (10 pixels on its short side):
+    // a strip of 9 is not read, its words written or not, and listed as
+    // the probe's; one of 10 is read.
+    let dir = scratch("thin");
+    let input = dir.join("mail.eml");
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    for (h, read) in [(9, false), (10, true)] {
+        std::fs::write(&input, eml_of("image/png", &line(700, h))).unwrap();
+        let reading = serde_json::json!({
+            "width": 700, "height": h,
+            "words": [{ "text": "Ref 4417-0093", "box": [10, 1, 300, h - 1] }]
+        });
+        std::fs::write(words.join("mail_m1.json"), reading.to_string()).unwrap();
+        let out = convert(
+            &dir,
+            &input,
+            &[
+                "-f".as_ref(),
+                "doco".as_ref(),
+                "--ocr-words".as_ref(),
+                words.as_os_str(),
+            ],
+        );
+        assert!(out.status.success());
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(text.contains("4417-0093"), read, "{h}: {text}");
+        let reasons = reasons(&out.stdout);
+        assert_eq!(reasons.is_empty(), read, "{h}: {reasons:?}");
+        if !read {
+            assert_eq!(reasons, ["NotTexty"]);
+        }
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A model configured in `dir`'s home, whose key it cannot sign in with:
+/// what is sent to it fails, and nothing leaves the machine.
+fn with_model(dir: &std::path::Path) {
+    let home = dir.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let key = home.join("key.json");
+    std::fs::write(&key, "{}").unwrap();
+    std::fs::write(
+        home.join("config.toml"),
+        format!(
+            "[escalation]\nprovider = \"gemini\"\n[escalation.gemini]\ncredentials = {:?}\n",
+            key.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+}
+
+/// The reasons `doc:unreadImages` gives in a DoCO graph, in order.
+fn reasons(doco: &[u8]) -> Vec<String> {
+    document(doco)["doc:unreadImages"]["@value"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|u| u["reason"].as_str().unwrap().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A JPEG of `w` × `h` pixels like a photograph: light falling unevenly,
+/// and the noise of a phone's sensor.
+fn photo(w: u32, h: u32) -> Vec<u8> {
+    let mut seed = 0x2545_f491_u32;
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let light = 120 + 80 * (x + y) / (w + h);
+        let noise = (seed >> 24) as i32 % 41 - 20;
+        image::Luma([(light as i32 + noise).clamp(0, 255) as u8])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut out),
+            image::ImageFormat::Jpeg,
+        )
+        .unwrap();
+    out
+}
+
+/// A PNG of `w` × `h` pixels like a capture of a wide screen holding a few
+/// short lines of text at its top, the rest of it a light ground: the
+/// screenshot of #10's own report, whose text a model reads.
+fn sparse_capture(w: u32, h: u32) -> Vec<u8> {
+    let img = image::GrayImage::from_fn(w, h, |x, y| {
+        let line = (40..180).contains(&y) && (y - 40) % 28 < 12;
+        let ink = line && (40..360).contains(&x) && (x / 3) % 2 == 0;
+        image::Luma([if ink { 30 } else { 245 }])
+    });
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+#[test]
+fn an_image_over_the_floor_is_sent_to_the_model_when_the_probe_takes_it_for_text() {
+    // A capture of a wide screen with a few lines of text and a line of a
+    // form captured on its own look like text: sent (and refused, here). A
+    // photograph does not: read by nothing, listed as `NotTexty` and not
+    // counted on stderr. A small dialog box is under the floor, listed and
+    // not counted either.
+    for (content_type, image, reason) in [
+        ("image/png", sparse_capture(1366, 768), "Failed"),
+        ("image/png", screen(2000, 56), "Failed"),
+        ("image/jpeg", photo(600, 800), "NotTexty"),
+        ("image/png", screen(380, 150), "Small"),
+    ] {
+        let dir = scratch(&format!("over-floor-{reason}"));
+        let input = dir.join("mail.eml");
+        std::fs::write(&input, eml_of(content_type, &image)).unwrap();
+        with_model(&dir);
+        let out = convert(&dir, &input, &["-f".as_ref(), "doco".as_ref()]);
+        assert!(out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            err.contains("mail: 1 of 1 image(s)"),
+            reason == "Failed",
+            "{err}"
+        );
+        assert_eq!(reasons(&out.stdout), [reason]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 #[test]
@@ -294,8 +513,21 @@ fn render_routed_crops_an_inline_image_as_media() {
     assert_eq!(rec["png"], "mail_m1.png");
     assert_eq!(rec["figure"], "figure-0-1");
     assert_eq!(rec["part"], "cid:shot1@example.org");
-    assert_eq!(rec["reason"], "embedded_image");
+    // 300 pixels wide: under the floor a model is sent, for OCR only.
+    assert_eq!(rec["reason"], "small_image");
     assert!(crops.join("mail_m1.png").exists());
+    // A screenshot over it is one a pipeline may send its model.
+    std::fs::write(&input, eml_of("image/png", &screen(600, 200))).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["dev", "render-routed"])
+        .arg(&input)
+        .arg(&crops)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let manifest = std::fs::read_to_string(crops.join("manifest.jsonl")).unwrap();
+    let rec: serde_json::Value = serde_json::from_str(manifest.lines().next().unwrap()).unwrap();
+    assert_eq!(rec["reason"], "embedded_image");
     let _ = std::fs::remove_dir_all(dir);
 }
 
