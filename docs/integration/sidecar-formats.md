@@ -15,7 +15,12 @@ Model readings are keyed by a **crop name**: `p{page}_{tag}`, where the tag is
 | `full` | the whole page |
 
 `page` is 0-based. `fdoc dev render-routed` emits PNGs named
-`{stem}_{crop}.png` and a manifest tying each back to its source.
+`{stem}_{crop}.png` and a manifest tying each back to its source, with the
+`reason` each crop was asked for
+([escalation tiers](escalation-tiers.md#producing-the-crops)). A `full`
+reading replaces its page whatever the reason, so a reader that does not see
+structure should skip the crops asked for on a heading, figure or column
+doubt.
 
 ## 1. Layout boxes — `--layout-boxes`
 
