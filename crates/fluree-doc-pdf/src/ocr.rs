@@ -1106,12 +1106,11 @@ fn runs(words: &[Level]) -> Vec<Vec<usize>> {
     }
     let mut out = Vec::new();
     for start in (0..words.len()).filter(|i| !has_left[*i]) {
+        // A chain cannot loop: each link is strictly rightward
+        // (`right_neighbours`), and each word has one left neighbour.
         let mut run = vec![start];
         let mut at = start;
         while let Some(j) = next[at] {
-            if run.contains(&j) {
-                break;
-            }
             run.push(j);
             at = j;
         }
