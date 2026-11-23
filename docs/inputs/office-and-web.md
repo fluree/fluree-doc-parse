@@ -254,6 +254,32 @@ the lists set in columns by spaces alone. Only what is never drawn is dropped:
 the whitespace before the first character and after the last, and the spaces
 a line ends in.
 
+A page that declares no headings but shows them, as statutes and contracts do,
+has them read by their shape. The Official Journal sets a regulation's
+outline in classes of its own, and a filer sets a contract's in centred bold,
+with no `<h1>`–`<h6>` anywhere. A paragraph that is nothing but a structural
+keyword and its number becomes a section title: `CHAPTER IV`, `Section 1`,
+`Article 30`, `ARTICLE II`, `ANNEX III`, `§ 7002`. The keywords are Book,
+Part, Title, Chapter, Article, Section, Annex, Appendix, Schedule and Exhibit,
+and their sub- forms. A short paragraph after it that reads as a title is
+joined to it (`Article 30 Records of processing activities`), and so is a
+title in capitals broken mid-phrase over two paragraphs. Such a heading
+carries the evidence `keyword`.
+
+The levels come from how the document nests its keywords, not from a fixed
+table. A regulation sets articles inside sections, and a contract sets
+sections inside articles. In each case the outer keyword is the rarer, so
+keywords rank by how often they occur, divisions (part, title, chapter) above
+units (article, section). An annex or schedule sits beside the outermost
+division, or above the articles where there are no divisions, so an
+agreement attached to another keeps its own articles. A label that comes
+before any of the body, such as the `Exhibit 10.1` a filing is made under,
+names the document and is left as it is.
+
+A heading set at the start of its own text (`Section 2.1 Closing. Unless this
+Agreement…`) stays a paragraph. A page that declares any heading keeps its
+headings as declared, and an email body is never read this way.
+
 A table used for **layout** is read as the containers its cells are, not as
 data. Email, and many older pages, are laid out in tables: a column of
 boxes, a logo beside a banner, tables nested to centre a column. Read as

@@ -116,8 +116,23 @@ fn skipped(h: &Handle) -> bool {
 }
 
 /// Parse an HTML document into elements in reading order.
+///
+/// A page that declares no headings but shows them by keyword and number,
+/// as a statute or a contract does (`CHAPTER IV`, `Article 30`), has them
+/// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
+/// read through [`parse_with_quote_depth`], is not.
 pub fn parse(src: &str) -> Vec<Element> {
-    parse_with_quote_depth(src).0
+    let mut elements = parse_with_quote_depth(src).0;
+    if fluree_doc_model::outline::infer_headings(&mut elements) {
+        number(&mut elements);
+    }
+    elements
+}
+
+fn number(elements: &mut [Element]) {
+    for (i, e) in elements.iter_mut().enumerate() {
+        e.id = format!("elem-{:05}", i + 1);
+    }
 }
 
 /// Decode an HTML file's bytes. A byte-order mark decides; then UTF-8, when
@@ -203,9 +218,7 @@ pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
             walk(m, &mut out);
         }
     }
-    for (i, e) in out.elements.iter_mut().enumerate() {
-        e.id = format!("elem-{:05}", i + 1);
-    }
+    number(&mut out.elements);
     (out.elements, out.depths)
 }
 
@@ -1135,6 +1148,39 @@ mod tests {
         // A block set inside one starts a line of its own.
         let d = parse("<pre><div>a</div><div>b</div>c</pre>");
         assert_eq!(d[0].text, "a\nb\nc");
+    }
+
+    #[test]
+    fn a_statute_without_heading_markup_reads_as_sections() {
+        // How the Official Journal publishes a regulation: its outline is in
+        // classes and identifiers of its own, with no heading element.
+        let els = parse(
+            "<div id=\"cpt_IV\"><p class=\"oj-ti-section-1\"><span class=\"oj-italic\">CHAPTER IV</span></p>\
+             <div class=\"eli-title\"><p class=\"oj-ti-section-2\">Controller and processor</p></div>\
+             <div class=\"eli-subdivision\" id=\"art_30\"><p class=\"oj-ti-art\">Article\u{a0}30</p>\
+             <div class=\"eli-title\"><p class=\"oj-sti-art\">Records of processing activities</p></div>\
+             <p class=\"oj-normal\">1.\u{a0}\u{a0}\u{a0}Each controller shall maintain a record.</p></div></div>",
+        );
+        assert_eq!(
+            kinds(&els),
+            ["doco:SectionTitle", "doco:SectionTitle", "doco:Paragraph"]
+        );
+        assert_eq!(
+            texts(&els)[..2],
+            [
+                "CHAPTER IV Controller and processor",
+                "Article 30 Records of processing activities"
+            ]
+        );
+        assert_eq!((els[0].level, els[1].level), (Some(1), Some(2)));
+        let ids: Vec<&str> = els.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["elem-00001", "elem-00002", "elem-00003"]);
+        // A page that declares its headings keeps them as declared.
+        let declared = parse("<h1>Terms</h1><p>Article 1</p><p>Scope</p>");
+        assert_eq!(
+            kinds(&declared),
+            ["doco:SectionTitle", "doco:Paragraph", "doco:Paragraph"]
+        );
     }
 
     #[test]

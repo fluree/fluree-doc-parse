@@ -75,6 +75,12 @@ reader decides where a quoted message begins, from the line that introduces
 it. An email body sent only as HTML keeps the HTML reader's evidence,
 `html`, under the email reader's provenance.
 
+One value in a declared format is inferred: `keyword`, a heading an HTML page
+shows without declaring it, read from a paragraph that is nothing but a
+structural keyword and its number (`CHAPTER IV`, `Article 30`). Its level is
+inferred too, from how the document nests those keywords; see
+[HTML](../inputs/office-and-web.md#html).
+
 ## Reading it
 
 ```bash

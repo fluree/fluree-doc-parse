@@ -11,6 +11,7 @@ pub mod emit;
 pub mod geom;
 pub mod merges;
 pub mod message;
+pub mod outline;
 
 pub use doco::{to_doco, to_text, DocoOptions};
 pub use element::{
