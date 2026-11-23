@@ -89,26 +89,44 @@ also keeps a fallback copy of a drawing for readers that cannot show it,
 which is not read a second time.
 
 **The text in a picture** — a screenshot pasted into the report — is read by
-OCR when `convert` has an engine (`--ocr`) or the words one wrote
-(`--ocr-words`, `<stem>_m<n>.json` for the figure `figure-0-<n>`; `fdoc dev
-render-routed` writes the image as `<stem>_m<n>.png`, reason
-`embedded_image`). A group of pictures is one figure holding several images:
+the rules a [bare image](images.md) is read by. `fdoc dev render-routed`
+writes the image as `<stem>_m<n>.png`, reason `embedded_image`, for the
+figure `figure-0-<n>`, and each reader takes it under that name:
+
+1. **OCR**, when `convert` has an engine (`--ocr`) or the words one wrote
+   (`--ocr-words`, `<stem>_m<n>.json`).
+2. **A model's reading supplied** (`--tier-results`, `<stem>_m<n>.json`),
+   which replaces what OCR read, as a scanned page's reading does, unless it
+   lost most of OCR's letters (a truncated reply). With `--tier-results`,
+   no model is called for any picture, even one it holds no reading of.
+3. **The configured model** (`--escalate`, or a reader configured), for a
+   picture OCR read no text in, or with no OCR at all; at most
+   `escalation.max_crops` pictures a document (0 for no limit), the others
+   noted on stderr and left unread. Only a PNG, JPEG or TIFF is sent. A
+   document's pictures go through one reader, up to
+   `escalation.concurrency` at a time, as a PDF's crops do.
+
+A group of pictures is one figure holding several images:
 the second and later are `m<n>_1`, `m<n>_2`, … and their text follows the
 first's. An image several figures draw (a logo, a capture pasted twice) is
 read once, by the name of the first figure drawing it, and its text follows
 each of them. What it reads follows the figure in the flow, marked
-`provenance: "ocr"`: its paragraphs and tables, with no `bbox` (the image's
+`provenance: "ocr"` (`"vlm"` for a model's reading): its paragraphs and tables, with no `bbox` (the image's
 pixels are no position in the document), and a heading of the screen read
 as a paragraph so the document's outline stays its own. A picture deleted
 under tracked changes is no figure and is not read, and a shape's image fill
 (a texture) is not one of its pictures. A picture whose image is not in the
 package (a link to an outside file, a missing part) is counted among those
 not read; a part name is matched ignoring case, with backslashes read as
-slashes. Without OCR, a note on stderr counts the pictures not read, and no
-image is even decompressed. Either way each picture not read is listed in
+slashes. With nothing to read them (no OCR, no `--tier-results`, no model
+configured), a note on stderr counts the pictures not read, and only the
+first bytes of each image are decompressed; a configured model is sent each
+picture's bytes as they are. Either way each picture not read is listed in
 [`doc:unreadImages`](../formats/doco.md#images-nothing-read), with its figure,
 its part and why. An
-image Word keeps as a vector drawing (EMF, WMF) has no pixels to read. Images
+image Word keeps as a vector drawing (EMF, WMF) has no pixels to read: told
+by its first bytes, whatever is configured, it is listed there as
+`UnsupportedFormat`, not counted in the note and not warned about. Images
 are read one at a time, each at most 64 MiB decompressed and 128 million pixels
 decoded; one past either is reported and left as its figure. A document as a
 whole has at most 256 images read, holding 512 million pixels together, as

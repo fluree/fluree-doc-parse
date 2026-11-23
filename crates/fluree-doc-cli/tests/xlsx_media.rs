@@ -90,6 +90,7 @@ fn convert(dir: &Path, input: &Path, args: &[&std::ffi::OsStr]) -> std::process:
         .args(args)
         .env("FDOC_HOME", dir.join("home"))
         .env_remove("FDOC_OCR_WORDS")
+        .env_remove("FDOC_TIER_RESULTS")
         .output()
         .unwrap()
 }
@@ -180,5 +181,43 @@ fn render_routed_crops_a_sheets_picture_as_media() {
     assert_eq!(rec["part"], "xl/media/image1.png");
     assert_eq!(rec["reason"], "embedded_image");
     assert!(crops.join("book_m1.png").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_model_reading_supplied_for_the_image_is_placed_where_it_is() {
+    let dir = scratch("tier");
+    let input = dir.join("book.xlsx");
+    std::fs::write(&input, xlsx()).unwrap();
+    let tiers = dir.join("tiers");
+    std::fs::create_dir_all(&tiers).unwrap();
+    let reading = serde_json::json!([{ "parsing_res_list": [
+        { "block_label": "text", "block_content": "Reference 4417-0093-21", "block_order": 0 }
+    ]}]);
+    std::fs::write(tiers.join("book_m1.json"), reading.to_string()).unwrap();
+    let out = convert(
+        &dir,
+        &input,
+        &[
+            "-f".as_ref(),
+            "text".as_ref(),
+            "--tier-results".as_ref(),
+            tiers.as_os_str(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    let (before, read, after) = (
+        text.find("See the screen below.").unwrap(),
+        text.find("Reference 4417-0093-21").expect(&text),
+        text.find("That is all.").unwrap(),
+    );
+    assert!(before < read && read < after, "{text}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("were not read"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -221,7 +221,8 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "DIR")]
     pub layout_boxes: Option<PathBuf>,
 
-    /// Directory of model-tier readings (`<stem>_<crop>.json`) to splice into
+    /// Directory of model-tier readings (`<stem>_<crop>.json`; `<stem>_m<n>.json`
+    /// for an image a DOCX, XLSX or e-mail places in its flow) to splice into
     /// the output [env: FDOC_TIER_RESULTS]
     #[arg(long, value_name = "DIR")]
     pub tier_results: Option<PathBuf>,

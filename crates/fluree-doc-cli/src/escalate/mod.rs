@@ -17,7 +17,9 @@ use fluree_doc_pdf::escalate::{self, Crop, CropHints, CropJobs, Readings};
 use fluree_doc_pdf::Document;
 use std::path::Path;
 
-/// Read a bare image: one crop, which is the file itself.
+/// Read a bare image, or an image a document places in its flow: one crop,
+/// which is the image itself, read as a whole page, its reading keyed
+/// `crop` (`p0_full` for a bare image, `m<n>` for a placed one).
 ///
 /// No rendering step — the bytes already are the page, and re-encoding them
 /// would only lose information the reader could have used. No crop selection
@@ -25,11 +27,49 @@ use std::path::Path;
 /// glyphs to say where anything is.
 pub(crate) fn read_image(
     file: &Path,
+    crop: &str,
     bytes: &[u8],
     mime: &str,
     config: &Config,
     verbose: bool,
 ) -> Result<Readings, String> {
+    let mut read = read_images(file, &[(crop, bytes, mime)], config, verbose)?;
+    match read.failures.pop() {
+        Some((_, e)) => Err(e),
+        None => Ok(read.readings),
+    }
+}
+
+/// What [`read_images`] gives, by crop.
+#[derive(Default)]
+pub(crate) struct ImagesRead {
+    /// The text read in each image that has any.
+    pub(crate) readings: Readings,
+    /// The images read that hold no text: a real answer, and a reading.
+    pub(crate) empty: Vec<String>,
+    /// The images that could not be read, each with why.
+    pub(crate) failures: Vec<(String, String)>,
+}
+
+/// Read the images a document places in its flow, each as [`read_image`]
+/// reads one, with one reader for them all and up to
+/// `escalation.concurrency` of them in flight, as a document's crops are
+/// read: a message of many pictures pays for one sign-in, not one each, and
+/// does not wait on each picture in turn. `images` are `(crop, bytes, mime)`.
+///
+/// Returns what came of each image: its reading, keyed by crop, that it
+/// held no text, or why it could not be read. Fails as a whole only when
+/// the reader cannot be opened.
+pub(crate) fn read_images(
+    file: &Path,
+    images: &[(&str, &[u8], &str)],
+    config: &Config,
+    verbose: bool,
+) -> Result<ImagesRead, String> {
+    let mut out = ImagesRead::default();
+    if images.is_empty() {
+        return Ok(out);
+    }
     let gemini = &config.escalation.gemini;
     let credentials = gemini
         .credentials
@@ -38,25 +78,69 @@ pub(crate) fn read_image(
     let reader = gemini::Reader::open(credentials, gemini.project.as_deref(), config.model())?;
     if verbose {
         eprintln!(
-            "{}: reading as one page ({mime}) with {}",
+            "{}: reading {} image(s) as one page each with {}",
             file.display(),
+            images.len(),
             config.model()
         );
     }
-    let crop = Crop {
+    // Prompted as the whole page it is, whatever its reading is keyed by:
+    // an image is a whole page, so its reading has to carry structure and
+    // not only text.
+    let page = Crop {
         name: "p0_full".into(),
         page: 0,
         bbox: None,
-        png: bytes.to_vec(),
+        png: Vec::new(),
     };
-    // The page prompt: an image is a whole page, so its reading has to carry
-    // structure and not only text.
-    let prompt = escalate::prompt_for_crop(&crop, &[]);
-    let mut readings = Readings::default();
-    if let Some(text) = reader.read_typed(&crop.png, mime, &prompt)? {
-        readings.insert(crop.name, text);
+    let prompt = escalate::prompt_for_crop(&page, &[]);
+    let workers = config.escalation.concurrency.clamp(1, 32);
+    let read = read_each(images, workers, |(_, bytes, mime)| {
+        reader.read_typed(bytes, mime, &prompt)
+    });
+    for ((crop, _, _), got) in images.iter().zip(read) {
+        match got {
+            Ok(Some(text)) => out.readings.insert(crop.to_string(), text),
+            // An image with nothing printed on it is a real answer.
+            Ok(None) => out.empty.push(crop.to_string()),
+            Err(e) => out.failures.push((crop.to_string(), e)),
+        }
     }
-    Ok(readings)
+    Ok(out)
+}
+
+/// What a reader answers for one image: its text, `None` for an image with
+/// nothing printed on it, or why it could not be read.
+type Answer = Result<Option<String>, String>;
+
+/// `read` applied to each of `items` by up to `workers` threads, the
+/// results in the order of `items`. A panic in `read` is not caught: the
+/// scope raises it again once the threads are joined, as it would be raised
+/// on one thread.
+fn read_each<T: Sync>(
+    items: &[T],
+    workers: usize,
+    read: impl Fn(&T) -> Answer + Sync,
+) -> Vec<Answer> {
+    let workers = workers.clamp(1, items.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let out: std::sync::Mutex<Vec<Option<Answer>>> = std::sync::Mutex::new(vec![None; items.len()]);
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(item) = items.get(i) else { break };
+                let got = read(item);
+                out.lock().unwrap()[i] = Some(got);
+            });
+        }
+    });
+    // Past the scope, every worker returned, so every item has its answer.
+    out.into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .into_iter()
+        .map(|r| r.expect("each item is answered"))
+        .collect()
 }
 
 /// Read the crops a document asks for: `jobs`, from
@@ -171,4 +255,36 @@ pub(crate) fn read_document(
             .into_iter()
             .collect(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn images_are_read_side_by_side_and_answered_in_order() {
+        // Eight images, four workers, each read taking a while: more than
+        // one is in flight at once, and each answer stays with its image.
+        let images: Vec<usize> = (0..8).collect();
+        let in_flight = std::sync::atomic::AtomicUsize::new(0);
+        let most = std::sync::atomic::AtomicUsize::new(0);
+        let got = read_each(&images, 4, |&i| {
+            use std::sync::atomic::Ordering::SeqCst;
+            let now = in_flight.fetch_add(1, SeqCst) + 1;
+            most.fetch_max(now, SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            in_flight.fetch_sub(1, SeqCst);
+            match i {
+                3 => Err("refused".into()),
+                5 => Ok(None),
+                _ => Ok(Some(format!("image {i}"))),
+            }
+        });
+        assert!(most.into_inner() > 1);
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[0], Ok(Some("image 0".into())));
+        assert_eq!(got[3], Err("refused".into()));
+        assert_eq!(got[5], Ok(None));
+        assert_eq!(got[7], Ok(Some("image 7".into())));
+    }
 }

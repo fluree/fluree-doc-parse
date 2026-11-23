@@ -67,6 +67,22 @@ pub fn read_pictures<R: PictureReader>(
     fluree_doc_model::read_pictures(media, &mut |part| read_media(pkg, part), reader, allowance)
 }
 
+/// The first bytes of an image part of an opened package, enough to tell
+/// its format by (`fluree_doc_pdf::image::Format::sniff`); only they are
+/// decompressed.
+pub fn read_media_head(pkg: &mut Package<'_>, part: &str) -> Result<Vec<u8>, String> {
+    let entry = pkg.zip.by_name(part).map_err(|e| format!("{part}: {e}"))?;
+    let mut v = Vec::new();
+    entry
+        .take(MEDIA_HEAD_BYTES)
+        .read_to_end(&mut v)
+        .map_err(|e| format!("{part}: {e}"))?;
+    Ok(v)
+}
+
+/// How many bytes [`read_media_head`] reads.
+const MEDIA_HEAD_BYTES: u64 = 16;
+
 /// What a picture says in words: its alternative text (`descr`), or else its
 /// title, on one line, without the notice Office appends to text it wrote
 /// itself.
@@ -406,6 +422,23 @@ mod tests {
     }
 
     const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    #[test]
+    fn only_the_head_of_an_image_part_is_read_for_its_format() {
+        let body = format!("GIF89a{}", "x".repeat(200));
+        let bytes = package(&[("word/media/image1.gif", &body)]);
+        let mut pkg = Package::open(&bytes).unwrap();
+        let head = read_media_head(&mut pkg, "word/media/image1.gif").unwrap();
+        assert_eq!(head, body.as_bytes()[..16]);
+        // A part shorter than the head is read whole.
+        let bytes = package(&[("word/media/image1.gif", "GIF8")]);
+        let mut pkg = Package::open(&bytes).unwrap();
+        assert_eq!(
+            read_media_head(&mut pkg, "word/media/image1.gif").unwrap(),
+            b"GIF8"
+        );
+        assert!(read_media_head(&mut pkg, "word/media/image2.png").is_err());
+    }
 
     #[test]
     fn targets_resolve_against_their_parts_directory() {

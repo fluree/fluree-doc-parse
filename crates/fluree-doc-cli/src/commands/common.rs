@@ -426,6 +426,43 @@ pub(crate) fn apply_tiers(
     fluree_doc_pdf::arbiter::scrub_furniture(elements, furniture);
 }
 
+/// A model's reading of a screen pasted into a document (a picture a DOCX,
+/// an XLSX or an e-mail places), with its headings read as paragraphs: they
+/// are the screen's, not the document's, and as headings they would put the
+/// document's own text under them. A title block is read as text, and a
+/// line marked up as a Markdown heading loses its marks; a table is left as
+/// it is.
+pub(crate) fn screen_blocks(
+    blocks: Vec<fluree_doc_pdf::arbiter::Block>,
+) -> Vec<fluree_doc_pdf::arbiter::Block> {
+    blocks
+        .into_iter()
+        .map(|mut b| {
+            if matches!(b.label.as_str(), "title" | "doc_title" | "paragraph_title") {
+                b.label = "text".into();
+            }
+            if !b.content.trim_start().starts_with("<table") {
+                b.content = b
+                    .content
+                    .lines()
+                    .map(|line| {
+                        let t = line.trim_start();
+                        let marks = t.len() - t.trim_start_matches('#').len();
+                        let rest = &t[marks..];
+                        if (1..=6).contains(&marks) && rest.starts_with([' ', '\t']) {
+                            rest.trim_start()
+                        } else {
+                            line
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+            b
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +475,31 @@ mod tests {
             level: (kind == "doco:SectionTitle").then_some(2),
             ..Element::new(kind, text, "rust", "font-size")
         }
+    }
+
+    #[test]
+    fn a_screens_headings_are_read_as_paragraphs() {
+        let block = |label: &str, content: &str| fluree_doc_pdf::arbiter::Block {
+            label: label.into(),
+            content: content.into(),
+        };
+        let got = screen_blocks(vec![
+            block("doc_title", "SCREENSHOT"),
+            block("text", "## Balance 9,876.54\n#7781 opened\n####### not one"),
+            block("table", "<table><tr><td># kept</td></tr></table>"),
+        ]);
+        let got: Vec<(&str, &str)> = got
+            .iter()
+            .map(|b| (b.label.as_str(), b.content.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("text", "SCREENSHOT"),
+                ("text", "Balance 9,876.54\n#7781 opened\n####### not one"),
+                ("table", "<table><tr><td># kept</td></tr></table>"),
+            ]
+        );
     }
 
     #[test]

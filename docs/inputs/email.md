@@ -258,17 +258,27 @@ Outlook's `[cid:…]` or Apple Mail's `<name.png>` in plain text, or by
 its name): the one written exactly so, else one written in another case.
 An image shown twice is one image, its figure drawn twice.
 
-Its text is read by OCR when `convert` has an engine (`--ocr`) or the words
-one wrote (`--ocr-words`, `<stem>_m<n>.json`), and placed right after its
-figure, marked `provenance: "ocr"`, as a DOCX picture's is (see
-[Office files](office-and-web.md)). `fdoc dev render-routed` writes each
+Its text is read as a DOCX picture's is (see
+[Office files](office-and-web.md#docx)): by OCR (`--ocr`, `--ocr-words`,
+`<stem>_m<n>.json`), by a model's reading supplied (`--tier-results`,
+`<stem>_m<n>.json`) or by the configured model, and placed right after its
+figure. `fdoc dev render-routed` writes each
 image as `<stem>_m<n>.png`, `kind: "media"`, reason `embedded_image`, with
 its `figure` and its `part`: the `cid:` URL the message names it by, or
 `attachment <n>` (its place in `doc:attachments`, from 1) where no
 Content-ID names that part alone. Each part is one image, whatever its file
 name: two pasted images a client called `image.png` alike are read apart. An
 image nothing read is counted on stderr and listed in
-[`doc:unreadImages`](../formats/doco.md#images-nothing-read).
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read); one no engine
+decodes, such as a signature's GIF or BMP logo, is told by its first bytes
+whatever is configured, and listed there as `UnsupportedFormat`, but neither
+counted nor warned about, since nearly every signed message carries one.
+
+With a model configured and no OCR, every image the body shows is sent to
+it, a signature's PNG or JPEG logo included: each is a request the
+provider bills, and each image leaves the machine. `escalation.max_crops`
+caps how many a message sends. With `--ocr` or `--ocr-words`, only an image
+OCR read no text in is sent; with `--tier-results`, none is.
 
 Where the body does not mark it — the plain text is read and only the HTML
 version shows the image, as most clients send it — an inline image is drawn

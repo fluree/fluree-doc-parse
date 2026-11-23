@@ -197,7 +197,7 @@ rotation, as `--ocr-words` does, not through `bbox × scale` alone.
 | `scanned` (an image over half the page), `near_blank` (a smaller one: a logo, a signature), `broken_text` | whole page | has nothing usable there |
 | `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
 | `small_region` | a raster region under a tenth of the page, cropped only with `--ocr-regions`: not worth a model's call, read by an OCR engine | lacks what the pixels hold |
-| `embedded_image` | an image placed in a DOCX's flow, anchored to an XLSX's cells, or shown in an e-mail's body, once however many figures draw it (`kind: "media"`, with its first `figure`, every one of its `figures` and its `part`: a package part, or the `cid:` URL), `<stem>_m<n>.png`; for an OCR engine only for now (see below) | has the text around it, not the image's |
+| `embedded_image` | an image placed in a DOCX's flow, anchored to an XLSX's cells, or shown in an e-mail's body, once however many figures draw it (`kind: "media"`, with its first `figure`, every one of its `figures` and its `part`: a package part, or an e-mail's `cid:` URL or `attachment <n>`), `<stem>_m<n>.png`; read by OCR and by a model alike (see below) | has the text around it, not the image's |
 | `table` | a table the grid does not trust | has the text, not the structure |
 | `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
 | `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |
@@ -205,11 +205,13 @@ rotation, as `--ocr-words` does, not through `bbox × scale` alone.
 The names are stable: a producer may filter on them, and a release renames
 or removes one only as a breaking change. A new reason may be added.
 
-An `embedded_image` crop is read by OCR only, for now: `convert` takes its
-words (`--ocr-words`, `<stem>_m<n>.json`) or runs its engine on it, but has
-no way back for a model's reading of it, and a configured model never reads
-one. A model reading a DOCX picture is still open in #10. A pipeline that
-sends every crop to its model should leave these to its OCR engine.
+An `embedded_image` crop is read by the rules a bare image is read by:
+`convert` takes its words (`--ocr-words`, `<stem>_m<n>.json`) or runs its
+engine on it, then a model's reading of it supplied under the same name
+(`--tier-results`, `<stem>_m<n>.json`) replaces what OCR read, and a
+configured model reads one OCR read no text in (see
+[Office files](../inputs/office-and-web.md)). A pipeline may send these crops
+to its model as it sends a scanned page.
 
 A reader that sees only characters (an OCR engine) has nothing to add to a
 `table` crop, a `table_missing` crop or a doubt page and should skip them.

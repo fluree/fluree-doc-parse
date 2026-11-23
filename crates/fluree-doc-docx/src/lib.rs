@@ -61,9 +61,10 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
 }
 
 /// The opened package [`read_media`] and [`read_pictures`] read from; the
-/// bytes of one image part, at most [`MAX_MEDIA_BYTES`] of them; and the
-/// loop a document's pictures are read through.
-pub use fluree_doc_ooxml::{read_media, read_pictures, Package, MAX_MEDIA_BYTES};
+/// bytes of one image part, at most [`MAX_MEDIA_BYTES`] of them, or only its
+/// first, to tell its format by; and the loop a document's pictures are
+/// read through.
+pub use fluree_doc_ooxml::{read_media, read_media_head, read_pictures, Package, MAX_MEDIA_BYTES};
 
 /// The images a document places in its flow and the loop that reads them,
 /// shared with the other containers of pictures (a workbook, an e-mail):

@@ -68,6 +68,16 @@ The bytes are sent as they arrived, with their real media type. A file named
 content; re-encoding to fit one code path would spend a decode and could only
 lose detail the reader might have used.
 
+## Images inside a document
+
+The images a document places in its flow — the pictures of a DOCX, the
+pictures anchored to an XLSX's cells, the images an e-mail shows in its
+body — are read by these same rules, each as a one-page image named
+`<stem>_m<n>` (its crop `<stem>_m<n>.png`, its words and its reading
+`<stem>_m<n>.json`), and what is read in it is placed after its figure. See
+[Office files](office-and-web.md#docx) and
+[E-mail](email.md#images-in-the-body).
+
 ## Size and coordinates
 
 **Pixels are treated as PDF units at 1:1.** A bare image declares no physical

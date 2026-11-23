@@ -51,9 +51,10 @@ use fluree_doc_ooxml::{attr, local, PartNames};
 pub use fluree_doc_model::{Allowance, Media, MediaSource, PictureReader, Unread};
 
 /// The opened package [`read_media`] and [`read_pictures`] read from; the
-/// bytes of one image part, at most [`MAX_MEDIA_BYTES`] (64 MiB) of them;
-/// and the loop a document's pictures are read through.
-pub use fluree_doc_ooxml::{read_media, read_pictures, MAX_MEDIA_BYTES};
+/// bytes of one image part, at most [`MAX_MEDIA_BYTES`] (64 MiB) of them, or
+/// only its first, to tell its format by; and the loop a document's pictures
+/// are read through.
+pub use fluree_doc_ooxml::{read_media, read_media_head, read_pictures, MAX_MEDIA_BYTES};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};

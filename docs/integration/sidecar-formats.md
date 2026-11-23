@@ -22,6 +22,11 @@ reading replaces its page whatever the reason, so a reader that does not see
 structure should skip the crops asked for on a heading, figure or column
 doubt.
 
+An image a DOCX, an XLSX or an e-mail places in its flow has no page: its
+crop name is `m{n}` (`m{n}_{k}` for a figure's later images), the name
+`render-routed` gives its crop, `{stem}_m{n}.png`. Its reading is read as a
+whole page's is, and placed after the image's figure.
+
 ## 1. Layout boxes — `--layout-boxes`
 
 **Filename:** `{stem}_p{page}_page.json`

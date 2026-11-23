@@ -4,6 +4,7 @@ use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
 use fluree_doc_pdf::document::Element;
 use fluree_doc_pdf::{extract_bytes, outline};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -329,10 +330,14 @@ fn convert_path(
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
             // when something is there to read them.
+            // Each image's first bytes are read from a package of their own,
+            // so its format is told without decompressing the rest.
             let mut pkg = fluree_doc_docx::Package::open(&data)?;
-            let media = read_media(
+            let mut heads = fluree_doc_docx::Package::open(&data)?;
+            let media = read_media_with(
                 src.stem,
                 media,
+                &mut |part| fluree_doc_docx::read_media_head(&mut heads, part),
                 &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
                 cfg,
                 quiet,
@@ -373,10 +378,14 @@ fn convert_path(
         Some(SourceKind::Xlsx) => {
             let (mut elements, info, media) =
                 fluree_doc_xlsx::parse_with_media(&data).map_err(|e| e.to_string())?;
+            // Each image's first bytes are read from a package of their own,
+            // so its format is told without decompressing the rest.
             let mut pkg = fluree_doc_xlsx::Package::open(&data)?;
-            let media = read_media(
+            let mut heads = fluree_doc_xlsx::Package::open(&data)?;
+            let media = read_media_with(
                 src.stem,
                 media,
+                &mut |part| fluree_doc_xlsx::read_media_head(&mut heads, part),
                 &mut |part| fluree_doc_xlsx::read_media(&mut pkg, part),
                 cfg,
                 quiet,
@@ -483,7 +492,7 @@ fn convert_email(
     let media = read_media(
         stem,
         email.media.clone(),
-        &mut |part| {
+        &|part| {
             email
                 .media_bytes(part)
                 .map(<[u8]>::to_vec)
@@ -592,40 +601,15 @@ fn convert_image(
         })
         .collect();
     let mut elements: Vec<Element> = Vec::new();
-    // A reading someone already has (`--tier-results`, `<stem>_p0_full.json`),
-    // else the configured reader, as for a scanned PDF page.
-    let readings: Option<Box<dyn fluree_doc_pdf::arbiter::TierBackend>> =
-        if let Some(dir) = cfg.tier_results.as_deref() {
-            Some(Box::new(fluree_doc_pdf::arbiter::FixtureBackend::new(
-                dir.to_path_buf(),
-            )))
-        } else if cfg.escalate {
-            let readings = crate::escalate::read_image(
-                std::path::Path::new(stem),
-                &data,
-                format.mime(),
-                &cfg.config,
-                cfg.verbose,
-            )?;
-            (!readings.is_empty()).then(|| Box::new(readings) as Box<_>)
-        } else {
-            None
-        };
-    if let Some(readings) = readings {
+    let page = "p0_full";
+    if let Some(readings) = image_readings(stem, page, &data, format.mime(), cfg, cfg.escalate)? {
         // One synthetic element for the splice to replace, so the image
         // travels the same page-tier path a scanned PDF page does.
         elements.push(Element {
             bbox: Some(doc.pages[0].images[0].bbox),
             ..Element::new("doco:Paragraph", String::new(), "rust", "layout")
         });
-        fluree_doc_pdf::arbiter::splice_with_page(
-            &mut elements,
-            stem,
-            readings.as_ref(),
-            None,
-            &[Vec::new()],
-        );
-        elements.retain(|e| !e.text.trim().is_empty());
+        splice_image_reading(&mut elements, stem, page, readings.as_ref(), &[]);
     }
     if elements.is_empty() && !quiet {
         eprintln!(
@@ -658,6 +642,79 @@ fn convert_image(
     Ok(render(&elements, src, args, sizes, &notes))
 }
 
+/// The model readings of an image read whole, as a page: a reading someone
+/// already has (`--tier-results`, `<stem>_<crop>.json`), else, where `live`
+/// allows it, the configured reader, as for a scanned PDF page. `None` where
+/// neither has one to give. The image's bytes are sent only to a live
+/// reader.
+fn image_readings(
+    stem: &str,
+    crop: &str,
+    image: &[u8],
+    mime: &str,
+    cfg: &TierConfig,
+    live: bool,
+) -> Result<Option<Box<dyn fluree_doc_pdf::arbiter::TierBackend>>, String> {
+    if let Some(dir) = cfg.tier_results.as_deref() {
+        return Ok(Some(Box::new(
+            fluree_doc_pdf::arbiter::FixtureBackend::new(dir.to_path_buf()),
+        )));
+    }
+    if !live {
+        return Ok(None);
+    }
+    let readings = crate::escalate::read_image(
+        std::path::Path::new(stem),
+        crop,
+        image,
+        mime,
+        &cfg.config,
+        cfg.verbose,
+    )?;
+    Ok((!readings.is_empty()).then(|| Box::new(readings) as Box<_>))
+}
+
+/// Splice the reading of an image read whole (`crop`: `p0_full` for a bare
+/// image, `m<n>` for a placed one) over `elements`, what was read of it
+/// before (a synthetic page element, or what OCR read), as a scanned PDF
+/// page's reading replaces the page: unless it lost most of `lines`, the
+/// words already read. Returns whether the reading was taken. A placed
+/// image's headings are the screen's, not the document's: read as
+/// paragraphs ([`common::screen_blocks`]), as OCR's are; a bare image's are
+/// its own.
+fn splice_image_reading(
+    elements: &mut Vec<Element>,
+    stem: &str,
+    crop: &str,
+    readings: &dyn fluree_doc_pdf::arbiter::TierBackend,
+    lines: &[String],
+) -> bool {
+    /// A reading of `crop`, served as the whole page it stands for.
+    struct AsPage<'a> {
+        inner: &'a dyn fluree_doc_pdf::arbiter::TierBackend,
+        crop: &'a str,
+    }
+    impl fluree_doc_pdf::arbiter::TierBackend for AsPage<'_> {
+        fn read(&self, stem: &str, crop: &str) -> Option<Vec<fluree_doc_pdf::arbiter::Block>> {
+            let blocks = (crop == "p0_full")
+                .then(|| self.inner.read(stem, self.crop))
+                .flatten()?;
+            Some(if self.crop == "p0_full" {
+                blocks
+            } else {
+                common::screen_blocks(blocks)
+            })
+        }
+    }
+    let page = AsPage {
+        inner: readings,
+        crop,
+    };
+    fluree_doc_pdf::arbiter::splice_with_page(elements, stem, &page, None, &[lines.to_vec()]);
+    elements.retain(|e| !e.text.trim().is_empty());
+    elements.iter().any(|e| e.evidence == "page-tier")
+}
+
 /// What came of the images a document places in its flow.
 #[derive(Default)]
 struct MediaRead {
@@ -668,69 +725,52 @@ struct MediaRead {
 }
 
 /// Read the images a document places in its flow, each once however many
-/// figures draw it, and place its text after each of them: with the OCR
-/// engine, or from the words an engine wrote (`<stem>_m<n>.json`, named by
-/// the first figure drawing it). `bytes` reads one image's bytes by the
-/// part the file holds it under; it is called only when something is there
-/// to read it, one image at a time, within what one document may have read
-/// ([`fluree_doc_model::Allowance::DOCUMENT`]). An image nothing read is
-/// listed, with why, for the output to say so, and counted in one note: the
-/// output's silence is not mistaken for an empty image.
-fn read_media(
+/// figures draw it ([`fluree_doc_model::read_pictures`]), within what one
+/// document may have read ([`fluree_doc_model::Allowance::DOCUMENT`]), each
+/// by the rules a bare image is read by: OCR, with the engine or from the
+/// words one wrote (`<stem>_m<n>.json` under `--ocr-words`, named by the
+/// first figure drawing it); a model's reading someone already has
+/// (`<stem>_m<n>.json` under `--tier-results`), which replaces what OCR read
+/// as it replaces a scanned page's; else the configured model, for an image
+/// OCR did not read any text in, within the document's
+/// `escalation.max_crops`: the images it reads are sent together, through
+/// one reader, as a document's crops are. What was read is placed after
+/// each figure drawing the image. An image nothing read is listed, with
+/// why, once for each figure drawing it, for the output to say so, and
+/// counted in one note: the output's silence is not mistaken for an empty
+/// image. `bytes` reads one image's bytes by the part the file holds it
+/// under; it is called only when something is there to read them, one image
+/// at a time, and only the bytes of the images sent to the model are held
+/// until it has read them. `head` reads its first bytes, which tell its
+/// format before anything else is read.
+fn read_media_with(
     stem: &str,
     media: Vec<fluree_doc_model::Media>,
+    head: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
     cfg: &TierConfig,
     quiet: bool,
 ) -> MediaRead {
-    use fluree_doc_model::{Picture, PictureReader, Unread};
-    struct Reader<'c> {
-        stem: &'c str,
-        cfg: &'c TierConfig,
-        /// The picture being read, by tag.
-        current: String,
-        /// The pictures whose bytes are no image OCR decodes (a drawing kept
-        /// as EMF or WMF, a GIF), by tag.
-        unsupported: std::collections::HashSet<String>,
+    use fluree_doc_model::{Picture, Unread};
+    // Each picture's place among the document's, by the name it goes by:
+    // the order its first figure is drawn in.
+    let mut order: HashMap<String, usize> = HashMap::new();
+    for (i, m) in media.iter().enumerate() {
+        order.entry(m.tag()).or_insert(i);
     }
-    impl Reader<'_> {
-        fn words(&self, picture: &Picture) -> Option<std::path::PathBuf> {
-            let dir = self.cfg.ocr_words.as_deref()?;
-            Some(dir.join(format!("{}_{}.json", self.stem, picture.tag())))
-        }
-    }
-    impl PictureReader for Reader<'_> {
-        type Reading = fluree_doc_image::ImageElements;
-        fn ready(&mut self, picture: &Picture) -> bool {
-            self.current = picture.tag();
-            self.cfg.ocr.is_some() || self.words(picture).is_some_and(|p| p.is_file())
-        }
-        fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
-            // A drawing Word keeps as EMF or WMF, or a GIF, is no image OCR
-            // decodes: told by its first bytes once its header is refused.
-            fluree_doc_image::header(image)
-                .map(|h| u64::from(h.width) * u64::from(h.height))
-                .inspect_err(|_| {
-                    if fluree_doc_pdf::image::Format::sniff(image).is_none() {
-                        self.unsupported.insert(self.current.clone());
-                    }
-                })
-        }
-        fn read(&mut self, picture: &Picture, image: &[u8]) -> Result<Self::Reading, String> {
-            if let Some(engine) = &self.cfg.ocr {
-                return fluree_doc_image::elements(image, engine.0.as_ref());
-            }
-            let path = self.words(picture).ok_or("no words to read it with")?;
-            let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            let reading = fluree_doc_vision::WordReading::from_json(&text)?;
-            fluree_doc_image::elements_from_words(image, reading)
-        }
-    }
-    let mut reader = Reader {
+    let total = fluree_doc_model::pictures(media.clone()).len();
+    let mut reader = MediaReader {
         stem,
         cfg,
-        current: String::new(),
-        unsupported: Default::default(),
+        head,
+        given: cfg
+            .tier_results
+            .as_deref()
+            .map(|dir| fluree_doc_pdf::arbiter::FixtureBackend::new(dir.to_path_buf())),
+        asked: 0,
+        over_budget: 0,
+        verdicts: HashMap::new(),
+        quiet,
     };
     let reads = fluree_doc_model::read_pictures(
         media,
@@ -738,59 +778,73 @@ fn read_media(
         &mut reader,
         fluree_doc_model::Allowance::DOCUMENT,
     );
-    let total = reads.read.len() + reads.unread.len();
-    let mut out = MediaRead::default();
-    for (picture, image) in reads.read {
-        // Read, whatever it held: a photo with no text was read too.
-        let name = format!("{stem}_{}", picture.tag());
-        if cfg.verbose {
-            eprintln!("ocr: {name}: {} element(s)", image.elements.len());
-        }
-        if image.more_pages && !quiet {
-            eprintln!("warning: {name}: only the first page of a multi-page image is read");
-        }
-        out.read.extend(picture.after_each_figure(image.elements));
-    }
+    // Each picture as read so far, in the order it is first drawn, settled
+    // once the model has read those sent to it.
+    let mut placed: Vec<(Picture, Placed)> = reads.read;
     let mut past = 0usize;
-    for (picture, why) in &reads.unread {
-        let name = format!("{stem}_{}", picture.tag());
-        let reason = match why {
-            // A picture that could not be read is the user's to know about,
-            // as a PDF page that failed is.
-            Unread::Failed(e) => {
-                if !quiet {
-                    eprintln!("warning: {name}: {e}");
-                }
-                if reader.unsupported.contains(&picture.tag()) {
-                    "UnsupportedFormat"
-                } else {
-                    "Failed"
-                }
-            }
+    for (picture, why) in reads.unread {
+        let tag = picture.tag();
+        let p = match why {
+            // Told before its bytes were read: its format, or that nothing
+            // was there to read it.
+            Unread::NotAsked => reader
+                .verdicts
+                .remove(&tag)
+                .unwrap_or_else(|| Placed::new(tag, None)),
             // An image the file does not hold (a link to an outside file, a
             // relationship it does not define) has nothing to read.
             Unread::NotInPackage => {
                 if !quiet {
-                    eprintln!("warning: {name}: {}", picture.source);
+                    eprintln!("warning: {stem}_{tag}: {}", picture.source);
                 }
-                "Missing"
+                Placed::new(tag, Some(("Missing", String::new())))
             }
             Unread::PastAllowance => {
                 past += 1;
-                "PastAllowance"
+                Placed::new(tag, Some(("PastAllowance", String::new())))
             }
-            Unread::NotAsked => "NotRead",
+            // Its bytes could not be read (a part that is not there, one
+            // past the cap).
+            Unread::Failed(e) => {
+                if !quiet {
+                    eprintln!("warning: {stem}_{tag}: {e}");
+                }
+                Placed::new(tag, Some(("Failed", e)))
+            }
         };
-        for figure in picture.figures() {
-            out.unread.push(fluree_doc_model::UnreadImage {
-                figure: figure.to_string(),
-                image: picture.tag(),
-                part: picture.source.name().to_string(),
-                reason: reason.into(),
-            });
+        placed.push((picture, p));
+    }
+    placed.sort_by_key(|(picture, _)| order.get(&picture.tag()).copied());
+    let over_budget = reader.over_budget;
+    read_by_model(stem, &mut placed, cfg, quiet);
+    let mut out = MediaRead::default();
+    for (picture, p) in placed {
+        match p.read {
+            Some(elements) => out.read.extend(picture.after_each_figure(elements)),
+            None => {
+                let reason = match &p.failure {
+                    Some((reason, _)) => reason,
+                    None if p.unsupported => "UnsupportedFormat",
+                    None => "NotRead",
+                };
+                for figure in picture.figures() {
+                    out.unread.push(fluree_doc_model::UnreadImage {
+                        figure: figure.to_string(),
+                        image: p.tag.clone(),
+                        part: picture.source.name().to_string(),
+                        reason: reason.into(),
+                    });
+                }
+            }
         }
     }
     if !quiet {
+        let max = cfg.config.escalation.max_crops;
+        if over_budget > 0 {
+            eprintln!(
+                "note: {stem}: {over_budget} image(s) not sent to the model, past `escalation.max_crops` ({max})"
+            );
+        }
         if past > 0 {
             let a = fluree_doc_model::Allowance::DOCUMENT;
             eprintln!(
@@ -800,19 +854,333 @@ fn read_media(
                 a.pixels / 1_000_000
             );
         }
-        if !reads.unread.is_empty() {
-            let hint = if cfg.ocr.is_none() && cfg.ocr_words.is_none() {
-                " (read them with --ocr or --ocr-words)"
-            } else {
-                ""
-            };
-            eprintln!(
-                "note: {stem}: {} of {total} image(s) in the document were not read{hint}",
-                reads.unread.len(),
-            );
-        }
+    }
+    // An image no engine decodes (a vector drawing, a GIF or BMP logo) is
+    // listed, not counted: nearly every signed e-mail carries such a logo,
+    // and a note on each message would be noise. Counted by image, however
+    // many figures draw it.
+    let mut unread: Vec<(&str, &str)> = out
+        .unread
+        .iter()
+        .map(|u| (u.image.as_str(), u.reason.as_str()))
+        .collect();
+    unread.dedup();
+    let undecodable = unread
+        .iter()
+        .filter(|(_, reason)| *reason == "UnsupportedFormat")
+        .count();
+    if unread.len() > undecodable && !quiet {
+        let ocr = cfg.ocr.is_some() || cfg.ocr_words.is_some();
+        let hint = if !ocr && cfg.tier_results.is_none() && !cfg.escalate {
+            " (read them with --ocr, --ocr-words, --tier-results or a configured model)"
+        } else {
+            ""
+        };
+        eprintln!(
+            "note: {stem}: {} of {} image(s) in the document were not read{hint}",
+            unread.len() - undecodable,
+            total - undecodable,
+        );
     }
     out
+}
+
+/// What reads a document's placed images for [`read_media_with`], one
+/// picture at a time.
+struct MediaReader<'a> {
+    stem: &'a str,
+    cfg: &'a TierConfig,
+    /// Reads an image's first bytes, by its part.
+    head: &'a mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    /// The readings someone already has (`--tier-results`).
+    given: Option<fluree_doc_pdf::arbiter::FixtureBackend>,
+    /// Images sent to the configured model so far.
+    asked: usize,
+    /// Images not sent to it, past `escalation.max_crops`.
+    over_budget: usize,
+    /// What became of each picture told apart before its bytes were read,
+    /// by the name it goes by.
+    verdicts: HashMap<String, Placed>,
+    quiet: bool,
+}
+
+impl fluree_doc_model::PictureReader for MediaReader<'_> {
+    type Reading = Placed;
+
+    fn ready(&mut self, picture: &fluree_doc_model::Picture) -> bool {
+        let tag = picture.tag();
+        let name = format!("{}_{tag}", self.stem);
+        // An image no engine decodes and no model is sent (an EMF or WMF
+        // drawing, a GIF or BMP logo), told by its first bytes before
+        // anything else, whatever reads the others: listed as what it is,
+        // and nothing more of it is read. A part that ends before its
+        // format could be told (empty, or cut short) is no format at all:
+        // it failed, and is counted.
+        if let Some(h) = picture
+            .source
+            .part()
+            .and_then(|part| (self.head)(part).ok())
+            .filter(|h| fluree_doc_pdf::image::Format::sniff(h).is_none())
+        {
+            let p = if h.len() < fluree_doc_pdf::image::Format::SNIFFED {
+                let e = format!("its part holds {} byte(s), too few for an image", h.len());
+                if !self.quiet {
+                    eprintln!("warning: {name}: {e}");
+                }
+                Placed::new(tag.clone(), Some(("Failed", e)))
+            } else {
+                Placed {
+                    unsupported: true,
+                    ..Placed::new(tag.clone(), None)
+                }
+            };
+            self.verdicts.insert(tag, p);
+            return false;
+        }
+        let cfg = self.cfg;
+        let ocr = cfg.ocr.is_some() || cfg.ocr_words.is_some();
+        ocr || cfg.tier_results.is_some() || cfg.escalate
+    }
+
+    fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
+        // An image whose size cannot be read is not charged: a model may
+        // read what the decoder refuses, and OCR fails on it anyway.
+        Ok(fluree_doc_image::header(image)
+            .map(|h| u64::from(h.width) * u64::from(h.height))
+            .unwrap_or(0))
+    }
+
+    fn read(&mut self, picture: &fluree_doc_model::Picture, b: &[u8]) -> Result<Placed, String> {
+        let (stem, cfg, quiet) = (self.stem, self.cfg, self.quiet);
+        let tag = picture.tag();
+        let name = format!("{stem}_{tag}");
+        let ocr = cfg.ocr.is_some() || cfg.ocr_words.is_some();
+        // Why it is not read, should nothing read it.
+        let mut failure: Option<(&'static str, String)> = None;
+        // What OCR read in it: `None` where OCR did not read it.
+        let mut read: Option<Vec<Element>> = None;
+        if ocr {
+            // The words an engine wrote, where they are what is read.
+            let words = match &cfg.ocr {
+                Some(_) => Some(None),
+                None => cfg
+                    .ocr_words
+                    .as_deref()
+                    .map(|dir| std::fs::read_to_string(dir.join(format!("{name}.json"))).ok()),
+            };
+            let got = match (&words, &cfg.ocr) {
+                // No words were written for it: OCR did not read it.
+                (Some(None), None) => None,
+                (Some(Some(text)), _) => Some(
+                    fluree_doc_vision::WordReading::from_json(text)
+                        .and_then(|reading| fluree_doc_image::elements_from_words(b, reading)),
+                ),
+                (_, Some(engine)) => Some(fluree_doc_image::elements(b, engine.0.as_ref())),
+                _ => unreachable!("words or an engine"),
+            };
+            match got {
+                // Read, whatever it held: a photo with no text was read too.
+                Some(Ok(image)) => {
+                    if cfg.verbose {
+                        eprintln!("ocr: {name}: {} element(s)", image.elements.len());
+                    }
+                    if image.more_pages && !quiet {
+                        eprintln!(
+                            "warning: {name}: only the first page of a multi-page image is read"
+                        );
+                    }
+                    read = Some(image.elements);
+                }
+                // A picture that could not be read is the user's to know
+                // about, as a PDF page that failed is.
+                Some(Err(e)) => {
+                    if !quiet {
+                        eprintln!("warning: {name}: {e}");
+                    }
+                    failure = Some(("Failed", e));
+                }
+                None => {}
+            }
+        }
+        // A model's reading: one someone already has, over what OCR read;
+        // else the configured model, for an image OCR read no text in.
+        let ocr_read_text = read.as_ref().is_some_and(|r| !r.is_empty());
+        // A reading someone already has wins, and the model is not called.
+        let live = cfg.escalate && cfg.tier_results.is_none() && !ocr_read_text;
+        let mut p = Placed {
+            read,
+            failure,
+            ..Placed::new(tag, None)
+        };
+        let max = cfg.config.escalation.max_crops;
+        if let Some(given) = &self.given {
+            p.take(stem, given, cfg.verbose);
+        } else if live {
+            if max == 0 || self.asked < max {
+                // Only an image a model is sent as it is (PNG, JPEG, TIFF):
+                // a drawing kept as EMF or WMF is not.
+                if let Some(format) = fluree_doc_pdf::image::Format::sniff(b) {
+                    self.asked += 1;
+                    p.send = Some((b.to_vec(), format.mime()));
+                }
+            } else {
+                self.over_budget += 1;
+            }
+        }
+        Ok(p)
+    }
+}
+
+/// [`read_media_with`] for a source that holds its images' bytes in memory
+/// (an e-mail's), whose first bytes are read with the rest.
+fn read_media(
+    stem: &str,
+    media: Vec<fluree_doc_model::Media>,
+    bytes: &dyn Fn(&str) -> Result<Vec<u8>, String>,
+    cfg: &TierConfig,
+    quiet: bool,
+) -> MediaRead {
+    read_media_with(
+        stem,
+        media,
+        &mut |p| bytes(p),
+        &mut |p| bytes(p),
+        cfg,
+        quiet,
+    )
+}
+
+/// An image a document places in its flow, as read so far
+/// ([`read_media_with`]).
+struct Placed {
+    /// Its name among the document's images (`m<n>`), which its readings
+    /// are keyed by.
+    tag: String,
+    /// What was read in it: `None` where nothing read it.
+    read: Option<Vec<Element>>,
+    /// Why it is not read, should nothing read it.
+    failure: Option<(&'static str, String)>,
+    /// Its bytes are no image OCR or a model reads (EMF, WMF).
+    unsupported: bool,
+    /// Its bytes and their MIME type, to send to the configured model.
+    send: Option<(Vec<u8>, &'static str)>,
+}
+
+impl Placed {
+    /// An image nothing is to read, `failure` saying why where it is not
+    /// that nothing was asked to.
+    fn new(tag: String, failure: Option<(&'static str, String)>) -> Self {
+        Placed {
+            tag,
+            read: None,
+            failure,
+            unsupported: false,
+            send: None,
+        }
+    }
+
+    /// Take a model's reading of it from `readings`, over what OCR read,
+    /// unless it lost most of that. A reading that holds nothing to place
+    /// (the model's sentence that the image has no text, the furniture of
+    /// a screen) read it all the same.
+    fn take(
+        &mut self,
+        stem: &str,
+        readings: &dyn fluree_doc_pdf::arbiter::TierBackend,
+        verbose: bool,
+    ) {
+        if readings.read(stem, &self.tag).is_some() {
+            self.read_empty();
+        }
+        let mut els = self.read.clone().unwrap_or_default();
+        let lines: Vec<String> = els
+            .iter()
+            .flat_map(|e| e.text.lines().map(str::to_string).collect::<Vec<_>>())
+            .collect();
+        if splice_image_reading(&mut els, stem, &self.tag, readings, &lines) {
+            if verbose {
+                eprintln!("model: {stem}_{}: read", self.tag);
+            }
+            self.read = Some(els);
+            self.failure = None;
+        }
+    }
+
+    /// The model read it and found no text in it: read, as an image OCR
+    /// read with no text in it is.
+    fn read_empty(&mut self) {
+        self.read.get_or_insert_with(Vec::new);
+        self.failure = None;
+    }
+
+    /// The model could not read it: a failure, unless OCR read it.
+    fn not_read_by_model(&mut self, e: String) {
+        if self.read.is_none() {
+            self.failure = Some(("Failed", e));
+        }
+    }
+}
+
+/// Send the images of `placed` that are to go to the configured model
+/// together, through one reader, and take what it read of each.
+fn read_by_model(
+    stem: &str,
+    placed: &mut [(fluree_doc_model::Picture, Placed)],
+    cfg: &TierConfig,
+    quiet: bool,
+) {
+    let sent: Vec<(&str, &[u8], &str)> = placed
+        .iter()
+        .filter_map(|(_, p)| {
+            let (bytes, mime) = p.send.as_ref()?;
+            Some((p.tag.as_str(), bytes.as_slice(), *mime))
+        })
+        .collect();
+    if sent.is_empty() {
+        return;
+    }
+    let got =
+        crate::escalate::read_images(std::path::Path::new(stem), &sent, &cfg.config, cfg.verbose);
+    // A reader that cannot be opened is said once, for the document.
+    if let (Err(e), false) = (&got, quiet) {
+        eprintln!("warning: {stem}: the configured model: {e}");
+    }
+    settle(
+        stem,
+        placed.iter_mut().map(|(_, p)| p),
+        &got,
+        cfg.verbose,
+        quiet,
+    );
+}
+
+/// Take what the model made of each image of `placed` sent to it.
+fn settle<'p>(
+    stem: &str,
+    placed: impl IntoIterator<Item = &'p mut Placed>,
+    got: &Result<crate::escalate::ImagesRead, String>,
+    verbose: bool,
+    quiet: bool,
+) {
+    for p in placed {
+        if p.send.take().is_none() {
+            continue;
+        }
+        match got {
+            Ok(read) => match read.failures.iter().find(|(crop, _)| *crop == p.tag) {
+                Some((_, e)) => {
+                    if !quiet {
+                        eprintln!("warning: {stem}_{}: the configured model: {e}", p.tag);
+                    }
+                    p.not_read_by_model(e.clone());
+                }
+                // Read, and found to hold no text: read all the same.
+                None if read.empty.contains(&p.tag) => p.read_empty(),
+                None => p.take(stem, &read.readings, verbose),
+            },
+            Err(e) => p.not_read_by_model(e.clone()),
+        }
+    }
 }
 
 /// What OCR made of a bare image.
@@ -1452,6 +1820,43 @@ mod tests {
             "{line}"
         );
         assert!(parse_warning_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn an_image_the_model_found_no_text_in_was_read() {
+        let mut placed = vec![
+            Placed::new("m1".into(), None),
+            Placed::new("m2".into(), None),
+        ];
+        for p in &mut placed {
+            p.send = Some((Vec::new(), "image/png"));
+        }
+        let got = Ok(crate::escalate::ImagesRead {
+            empty: vec!["m1".into()],
+            failures: vec![("m2".into(), "refused".into())],
+            ..Default::default()
+        });
+        settle("report", placed.iter_mut(), &got, false, true);
+        assert!(placed[0].read.as_ref().is_some_and(Vec::is_empty));
+        assert!(placed[0].failure.is_none());
+        assert!(placed[1].read.is_none());
+        assert_eq!(placed[1].failure, Some(("Failed", "refused".into())));
+        // A reading that says, in prose, that the image holds no text has
+        // nothing to place, and read it all the same.
+        let mut placed = [Placed::new("m1".into(), None)];
+        placed[0].send = Some((Vec::new(), "image/png"));
+        let mut readings = fluree_doc_pdf::escalate::Readings::default();
+        readings.insert(
+            "m1".into(),
+            "The image does not contain any printed text to transcribe.".into(),
+        );
+        let got = Ok(crate::escalate::ImagesRead {
+            readings,
+            ..Default::default()
+        });
+        settle("report", placed.iter_mut(), &got, false, true);
+        assert!(placed[0].read.as_ref().is_some_and(Vec::is_empty));
+        assert!(placed[0].failure.is_none());
     }
 
     #[test]

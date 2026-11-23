@@ -316,9 +316,10 @@ reported: a clean document says nothing.
 
 The same statement for the images a document places in its flow: a picture
 in a DOCX, a picture anchored to an XLSX sheet's cells, an image an e-mail
-shows in its body. Their text is read by OCR when `convert` has an engine
-(`--ocr`) or the words one wrote (`--ocr-words`), and placed after the
-figure the image is drawn as. An image nothing read is listed here, so a
+shows in its body. Their text is read as a bare image's is — by OCR
+(`--ocr`, `--ocr-words`), by a model's reading supplied (`--tier-results`)
+or by the configured model — and placed after the figure the image is drawn
+as. An image nothing read is listed here, so a
 pasted screenshot whose text is missing is not taken for a picture with
 none.
 
@@ -341,7 +342,11 @@ is not listed.
 
 Unlike an unread page, it adds no comment to Markdown or XHTML: most
 documents carry a logo or a photo with no text in it, and a warning on each
-would be noise. The note on stderr counts them.
+would be noise. The note on stderr counts them, except those no engine
+decodes (`UnsupportedFormat`, told by the image's first bytes whatever is
+configured, and never warned about): nearly every signed e-mail carries a GIF or
+BMP logo, and a vector drawing has no text to read anyway, so these are
+listed here only.
 
 ## Sections are explicit
 
