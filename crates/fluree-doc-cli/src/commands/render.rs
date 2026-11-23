@@ -32,10 +32,23 @@ pub(crate) fn run(path: &Path, outdir: &Path, scale: f32, pages: Option<&str>) -
             failed += 1;
             continue;
         };
-        let Ok(pdf) = hayro_syntax::Pdf::new(std::sync::Arc::new(data)) else {
-            eprintln!("error: cannot parse {}", f.display());
-            failed += 1;
-            continue;
+        let pdf = match fluree_doc_pdf::open(data) {
+            Ok(pdf) => pdf,
+            // Past a bound, it says which, rather than that it is broken.
+            Err(e @ fluree_doc_pdf::ExtractError::TooLarge(_)) => {
+                eprintln!(
+                    "error: {}: {}",
+                    f.display(),
+                    crate::commands::common::refused(&e)
+                );
+                failed += 1;
+                continue;
+            }
+            Err(_) => {
+                eprintln!("error: cannot parse {}", f.display());
+                failed += 1;
+                continue;
+            }
         };
         let stem = crate::commands::common::stem_of(f);
         for index in 0..pdf.pages().len() {

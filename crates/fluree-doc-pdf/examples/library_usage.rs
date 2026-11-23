@@ -12,7 +12,7 @@
 //! first page (see `docs/integration/sidecar-formats.md`).
 
 use fluree_doc_model::{to_markdown, to_xhtml};
-use fluree_doc_pdf::{doco, document, extract_bytes, ocr, outline, route};
+use fluree_doc_pdf::{doco, document, extract_pdf, ocr, outline, route};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
@@ -23,11 +23,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The outline (bookmark tree) is a near-ground-truth heading signal, but it
     // comes from the PDF object graph rather than the content stream, so it is
     // read separately and handed to `analyze`. Pass `&[]` to skip it.
-    let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
-        .map_err(|e| format!("parse: {e:?}"))?;
+    // Opened once, its page tree measured first (`open`), for both.
+    let pdf = fluree_doc_pdf::open(data)?;
     let ol = outline::extract(&pdf);
 
-    let mut doc = extract_bytes(data)?;
+    let mut doc = extract_pdf(&pdf)?;
 
     // Escalation verdicts, before any structure work.
     for (i, page) in doc.pages.iter().enumerate() {

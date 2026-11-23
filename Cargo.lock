@@ -1132,6 +1132,7 @@ dependencies = [
  "hayro-interpret",
  "hayro-syntax",
  "kurbo",
+ "memchr",
  "png 0.17.16",
  "read-fonts",
  "serde",

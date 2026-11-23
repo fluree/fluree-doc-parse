@@ -190,10 +190,15 @@ fn a_limit_that_does_not_read_stops_before_any_document() {
 
 /// A one-page PDF `side` points square, with nothing on it.
 fn square_page(side: u32) -> Vec<u8> {
+    page_sized(u64::from(side), u64::from(side))
+}
+
+/// A one-page PDF `width` by `height` points, with nothing on it.
+fn page_sized(width: u64, height: u64) -> Vec<u8> {
     let objs = [
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {side} {side}] >>"),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] >>"),
     ];
     let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::new();
@@ -251,6 +256,78 @@ fn a_page_past_the_render_pixels_is_drawn_smaller_and_said() {
     assert!(stderr(&o).is_empty(), "{}", stderr(&o));
     let png = std::fs::read(dir.join("out/letter_p0.png")).unwrap();
     assert_eq!(png_size(&png), (600, 600));
+}
+
+#[test]
+fn a_page_held_by_the_longest_side_says_so() {
+    let dir = scratch("render-side");
+    let out = dir.join("out");
+    let out = out.to_str().unwrap();
+    // 40,000 x 3 pt at 2x: within the pixels, past the side.
+    let strip = dir.join("strip.pdf");
+    std::fs::write(&strip, page_sized(40_000, 3)).unwrap();
+    let o = fdoc(&dir, &["render", strip.to_str().unwrap(), out], &[]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let e = stderr(&o);
+    assert!(
+        e.contains("the longest side a render may take, 32767 pixels"),
+        "{e}"
+    );
+    assert!(!e.contains("--max-render-pixels"), "{e}");
+    // A billion points long, its three points high are under a pixel at
+    // the scale the side allows: said, not drawn.
+    let thread = dir.join("thread.pdf");
+    std::fs::write(&thread, page_sized(1_000_000_000, 3)).unwrap();
+    let o = fdoc(&dir, &["render", thread.to_str().unwrap(), out], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    let e = stderr(&o);
+    assert!(e.contains("page 1 is less than a pixel high"), "{e}");
+    assert!(!e.contains("would not render"), "{e}");
+}
+
+#[test]
+fn render_and_forms_say_which_bound_a_pdf_is_past() {
+    let dir = scratch("tree");
+    // A page tree 300 levels deep, past the 256 a PDF is opened within.
+    let mut objs = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+    for i in 0..300 {
+        objs.push(format!("<< /Type /Pages /Kids [{} 0 R] >>", i + 3));
+    }
+    objs.push("<< /Type /Page /MediaBox [0 0 612 792] >>".to_string());
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
+    for o in offsets {
+        pdf.extend(format!("{o:010} 00000 n \n").bytes());
+    }
+    pdf.extend(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+            objs.len() + 1
+        )
+        .bytes(),
+    );
+    let path = dir.join("deep.pdf");
+    std::fs::write(&path, pdf).unwrap();
+    let path = path.to_str().unwrap();
+    let out = dir.join("out");
+    for args in [
+        vec!["render", path, out.to_str().unwrap()],
+        vec!["forms", path],
+    ] {
+        let o = fdoc(&dir, &args, &[]);
+        assert_eq!(o.status.code(), Some(1), "{args:?}");
+        let e = stderr(&o);
+        assert!(
+            e.contains("PDF too large: its page tree nests more than 256 deep"),
+            "{args:?}: {e}"
+        );
+    }
 }
 
 /// A PDF of `n` pages, each saying its number.
@@ -338,4 +415,38 @@ fn a_pdf_past_the_page_limit_is_read_to_it_and_says_so() {
     // Within the limit: nothing said.
     let o = fdoc(&dir, &["convert", pdf, "--no-escalate"], &[]);
     assert!(stderr(&o).is_empty(), "{}", stderr(&o));
+}
+
+#[test]
+fn a_page_tree_nested_past_the_parsers_stack_is_refused_not_a_crash() {
+    let dir = scratch("tree");
+    // 20,000 `/Pages` nodes, each the parent of the next, over one page:
+    // walking it overflowed the stack and aborted the process.
+    let depth = 20_000;
+    let mut objects = vec!["<< /Type /Catalog /Pages 2 0 R >>".to_string()];
+    for i in 0..depth {
+        objects.push(format!("<< /Type /Pages /Kids [{} 0 R] /Count 1 >>", i + 3));
+    }
+    objects.push("<< /Type /Page /MediaBox [0 0 612 792] >>".to_string());
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    for (i, o) in objects.iter().enumerate() {
+        pdf.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+    }
+    pdf.extend(b"trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    let path = dir.join("deep.pdf");
+    std::fs::write(&path, pdf).unwrap();
+    let path = path.to_str().unwrap();
+    for args in [
+        vec!["convert", path, "--no-escalate"],
+        vec!["render", path, dir.join("r").to_str().unwrap()],
+    ] {
+        let o = fdoc(&dir, &args, &[]);
+        assert_eq!(o.status.code(), Some(1), "{args:?}: {}", stderr(&o));
+    }
+    let o = fdoc(&dir, &["convert", path, "--no-escalate"], &[]);
+    assert!(
+        stderr(&o).contains("its page tree nests more than 256 deep"),
+        "{}",
+        stderr(&o)
+    );
 }

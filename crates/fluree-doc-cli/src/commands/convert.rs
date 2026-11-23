@@ -3,7 +3,7 @@
 use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
 use fluree_doc_pdf::document::Element;
-use fluree_doc_pdf::{extract_bytes, outline};
+use fluree_doc_pdf::outline;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -2290,10 +2290,12 @@ fn convert_bytes(
     quiet: bool,
 ) -> Result<String, String> {
     let stem = src.stem;
-    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
-        .map_err(|e| format!("parse: {e:?}"))?;
+    // Opened once, for the outline, the links and the renders as well as
+    // the extraction.
+    let raw = fluree_doc_pdf::open(data).map_err(|e| common::refused(&e))?;
     let ol = outline::extract(&raw);
-    let mut doc = extract_bytes(data).map_err(|e| format!("extract: {}", common::refused(&e)))?;
+    let mut doc = fluree_doc_pdf::extract_pdf(&raw)
+        .map_err(|e| format!("extract: {}", common::refused(&e)))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.

@@ -21,7 +21,10 @@
 //!
 //! **Supported.** These follow semver and are what a consumer should build on:
 //!
-//! - [`extract_file`] / [`extract_bytes`] → [`Document`]
+//! - [`extract_file`] / [`extract_bytes`] → [`Document`], and [`extract_pdf`]
+//!   for a document already [`open`]ed
+//! - [`open`] — a PDF as hayro-syntax reads it, its page tree's depth
+//!   bounded first ([`page_tree`])
 //! - [`image::page_of`] — a bare raster image as a one-page document
 //! - [`document::analyze_with`] → `Analysis`, plus [`document::to_markdown`]
 //!   and [`document::to_xhtml`]
@@ -77,6 +80,7 @@ pub(crate) mod marked;
 pub mod ocr;
 pub mod outline;
 pub mod overlay;
+pub mod page_tree;
 
 /// The [`unread_pages`] reason of a page an OCR reading read whole that
 /// still holds next to no text.
@@ -324,11 +328,14 @@ pub mod textgrid;
 pub mod watermark;
 
 pub use block::Block;
-pub use extract::{extract_bytes, extract_file, Document, ExtractError, ImagePlacement, Page};
+pub use extract::{
+    extract_bytes, extract_file, extract_pdf, Document, ExtractError, ImagePlacement, Page,
+};
 pub use furniture::Furniture;
 pub use geom::BBox;
 pub use glyph::Glyph;
 pub use line::Line;
+pub use page_tree::open;
 pub use text::PageText;
 
 #[cfg(test)]

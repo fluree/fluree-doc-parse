@@ -15,13 +15,25 @@ pub fn run(pdf: &Path) -> i32 {
             return 1;
         }
     };
-    let Ok(raw) = hayro_syntax::Pdf::new(std::sync::Arc::new(data)) else {
-        eprintln!(
-            "error: {} is not a readable PDF — `forms` reads AcroForm fields, \
-             which only PDFs have",
-            pdf.display()
-        );
-        return 1;
+    let raw = match fluree_doc_pdf::open(data) {
+        Ok(raw) => raw,
+        // Past a bound, it says which, rather than that it is no PDF.
+        Err(e @ fluree_doc_pdf::ExtractError::TooLarge(_)) => {
+            eprintln!(
+                "error: {}: {}",
+                pdf.display(),
+                crate::commands::common::refused(&e)
+            );
+            return 1;
+        }
+        Err(_) => {
+            eprintln!(
+                "error: {} is not a readable PDF — `forms` reads AcroForm fields, \
+                 which only PDFs have",
+                pdf.display()
+            );
+            return 1;
+        }
     };
     let fields = fluree_doc_pdf::forms::fields(&raw);
     println!("{}", serde_json::to_string_pretty(&fields).unwrap());

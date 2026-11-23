@@ -33,18 +33,23 @@ for e in &analysis.elements {
 That second argument is the PDF **outline** (bookmark tree) — a
 near-ground-truth heading signal, and one no other engine tested uses. It is
 read from the PDF object graph rather than the content stream, so it comes
-from a separate call and you construct the `Pdf` yourself:
+from a separate call: open the `Pdf` once with `fluree_doc_pdf::open`, and
+extract from it:
 
 ```rust
-use fluree_doc_pdf::{document, extract_bytes, outline};
+use fluree_doc_pdf::{document, extract_pdf, open, outline};
 
-let data = std::fs::read("report.pdf")?;
-let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))?;
+let pdf = open(std::fs::read("report.pdf")?)?;
 let ol = outline::extract(&pdf);
 
-let mut doc = extract_bytes(data)?;
+let mut doc = extract_pdf(&pdf)?;
 let analysis = document::analyze(&mut doc, &ol);
 ```
+
+`open` measures the page tree before the parser walks it, and refuses one
+that would overflow the stack or list more pages than it can hold
+([Limits](../reference/limits.md#a-pdfs-page-tree)); `hayro_syntax::Pdf::new`
+called directly walks it unguarded, and a crafted file aborts the process.
 
 Passing `&[]` costs you only the outline signal; the other heading detectors
 still run.

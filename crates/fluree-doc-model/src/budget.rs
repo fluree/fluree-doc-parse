@@ -364,7 +364,8 @@ pub enum Limit {
     /// [`Limits::work`], in steps.
     Work,
     /// A reader's own bound, fixed (a part read beside the document, the
-    /// cells calamine may allocate, how deep a page tree nests).
+    /// cells calamine may allocate, how deep a page tree nests and how many
+    /// pages it lists).
     Fixed,
 }
 

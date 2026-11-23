@@ -338,9 +338,9 @@ pub(crate) fn pair(pdf: &Path, needle: &str) {
 /// pipeline never made.
 pub(crate) fn furn(pdf: &Path) {
     let data = std::fs::read(pdf).expect("read");
-    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone())).expect("parse");
+    let raw = fluree_doc_pdf::open(data).expect("parse");
     let ol = outline::extract(&raw);
-    let mut doc = fluree_doc_pdf::extract_bytes(data).expect("extract");
+    let mut doc = fluree_doc_pdf::extract_pdf(&raw).expect("extract");
     let a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for(pdf));
     // Group by (kind, text) so every distinct piece of furniture is visible -
     // reporting one example per kind hid the watermark behind the footer.
@@ -484,13 +484,13 @@ pub(crate) fn leading(target: &Path) {
 /// element is a link the emitters cannot mark up.
 pub(crate) fn links(pdf: &Path) {
     let data = std::fs::read(pdf).expect("read");
-    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone())).expect("parse");
+    let raw = fluree_doc_pdf::open(data).expect("parse");
     let links = fluree_doc_pdf::link::extract(&raw);
     if links.is_empty() {
         println!("(no link annotations in this document)");
         return;
     }
-    let mut doc = fluree_doc_pdf::extract_bytes(data).expect("extract");
+    let mut doc = fluree_doc_pdf::extract_pdf(&raw).expect("extract");
     let ol = fluree_doc_pdf::outline::extract(&raw);
     let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts_for(pdf));
     fluree_doc_pdf::link::attach(&mut a.elements, &links, &doc.pages);
@@ -539,7 +539,7 @@ pub(crate) fn links(pdf: &Path) {
 /// Dump the PDF outline/bookmark tree.
 pub(crate) fn outline_cmd(pdf: &Path) {
     let data = std::fs::read(pdf).expect("read");
-    let doc = hayro_syntax::Pdf::new(std::sync::Arc::new(data)).expect("parse");
+    let doc = fluree_doc_pdf::open(data).expect("parse");
     let items = fluree_doc_pdf::outline::extract(&doc);
     if items.is_empty() {
         println!("(no outline in this document)");
@@ -658,7 +658,7 @@ pub(crate) fn blocks(pdf: &Path, page: Option<usize>) {
 /// Detected headings with their level and which signal produced them.
 pub(crate) fn headings(pdf: &Path) {
     let data = std::fs::read(pdf).expect("read");
-    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data)).expect("parse");
+    let raw = fluree_doc_pdf::open(data).expect("parse");
     let ol = outline::extract(&raw);
     let d = pipeline(pdf);
     let hs = heading::detect(&d.pages, &ol);
@@ -1118,9 +1118,7 @@ pub(crate) fn render_routed(
     ocr_regions: bool,
     stored_resolution: bool,
 ) {
-    use hayro_syntax::Pdf;
     use std::io::Write;
-    use std::sync::Arc;
 
     std::fs::create_dir_all(outdir).expect("create outdir");
     let files: Vec<PathBuf> = if path.is_dir() {
@@ -1223,7 +1221,7 @@ pub(crate) fn render_routed(
                 continue;
             }
         };
-        let pdf = Pdf::new(Arc::new(bytes)).expect("parse pdf");
+        let pdf = fluree_doc_pdf::open(bytes).expect("parse pdf");
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
         // (named crops so the adapter can find each by its anchor token).
@@ -1713,9 +1711,7 @@ fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Val
 pub(crate) fn render_crops(manifest: &Path, corpus: &Path, outdir: &Path) {
     use fluree_doc_pdf::escalate;
     use fluree_doc_pdf::geom::BBox;
-    use hayro_syntax::Pdf;
     use std::collections::BTreeMap;
-    use std::sync::Arc;
 
     let text = std::fs::read_to_string(manifest).expect("read manifest");
     let regions: Vec<serde_json::Value> = serde_json::from_str(&text).expect("parse manifest");
@@ -1759,7 +1755,7 @@ pub(crate) fn render_crops(manifest: &Path, corpus: &Path, outdir: &Path) {
         let pdf_path = corpus.join(format!("{doc}.pdf"));
         let data =
             std::fs::read(&pdf_path).unwrap_or_else(|e| panic!("read {}: {e}", pdf_path.display()));
-        let pdf = Pdf::new(Arc::new(data))
+        let pdf = fluree_doc_pdf::open(data)
             .unwrap_or_else(|e| panic!("parse {}: {e:?}", pdf_path.display()));
         let jobs: escalate::CropJobs = pages
             .iter()
@@ -1794,8 +1790,6 @@ pub(crate) fn render_crops(manifest: &Path, corpus: &Path, outdir: &Path) {
 pub(crate) fn render_pages(path: &Path, outdir: &Path) {
     use hayro::vello_cpu::color::{AlphaColor, Srgb};
     use hayro::{render, RenderCache, RenderSettings};
-    use hayro_syntax::Pdf;
-    use std::sync::Arc;
 
     std::fs::create_dir_all(outdir).expect("create outdir");
     let files: Vec<PathBuf> = if path.is_dir() {
@@ -1806,7 +1800,7 @@ pub(crate) fn render_pages(path: &Path, outdir: &Path) {
     let mut n = 0usize;
     for f in &files {
         let Ok(data) = std::fs::read(f) else { continue };
-        let Ok(pdf) = Pdf::new(Arc::new(data)) else {
+        let Ok(pdf) = fluree_doc_pdf::open(data) else {
             continue;
         };
         let pages = pdf.pages();
@@ -1880,7 +1874,7 @@ pub(crate) fn timings(path: &Path, warmup: usize, runs: usize) {
             pages += doc.pages.len();
             let ol = std::fs::read(f)
                 .ok()
-                .and_then(|d| hayro_syntax::Pdf::new(std::sync::Arc::new(d)).ok())
+                .and_then(|d| fluree_doc_pdf::open(d).ok())
                 .map(|raw| outline::extract(&raw))
                 .unwrap_or_default();
             let opts = opts_for(f);

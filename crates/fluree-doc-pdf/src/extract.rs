@@ -11,7 +11,6 @@ use crate::rule::{self, Fill, Rule};
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::symbols;
 use hayro_interpret::font::Glyph as HGlyph;
-use hayro_interpret::hayro_syntax::Pdf;
 use hayro_interpret::util::TransformExt;
 use hayro_interpret::{interpret_page, Context, Device, InterpreterCache, InterpreterSettings};
 use kurbo::{Affine, Rect, Shape};
@@ -1444,8 +1443,16 @@ impl std::error::Error for ExtractError {
     }
 }
 
+/// Extract the PDF in `data`: opened ([`crate::open`], its page tree
+/// measured first), then read ([`extract_pdf`]).
 pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
-    let pdf = Pdf::new(Arc::new(data)).map_err(|e| ExtractError::Parse(format!("{e:?}")))?;
+    extract_pdf(&crate::page_tree::open(data)?)
+}
+
+/// Extract a PDF already opened ([`crate::open`]): a caller that also needs
+/// the parsed document (its outline, its links, its renders) opens it once
+/// for both.
+pub fn extract_pdf(pdf: &hayro_interpret::hayro_syntax::Pdf) -> Result<Document, ExtractError> {
     let cache = InterpreterCache::new();
     // The interpreter's warnings, gathered per page: by default they go
     // nowhere, and an image that failed to decode is placed all the same.

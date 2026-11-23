@@ -5,14 +5,13 @@
 //! list one page a million times.
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use std::sync::Arc;
 
 /// Pages analysed at most.
 const MAX_PAGES: usize = 4;
 
 fuzz_target!(|data: &[u8]| {
     fluree_doc_parse_fuzz::reading(data, || {
-        let Ok(raw) = hayro_syntax::Pdf::new(Arc::new(data.to_vec())) else {
+        let Ok(raw) = fluree_doc_pdf::open(data.to_vec()) else {
             return;
         };
         let outline = fluree_doc_pdf::outline::extract(&raw);

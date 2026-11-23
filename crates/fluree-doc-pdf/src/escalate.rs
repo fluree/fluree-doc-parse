@@ -17,11 +17,11 @@
 //! take them.
 //!
 //! ```no_run
-//! # use fluree_doc_pdf::{document, escalate, extract_bytes, outline};
+//! # use fluree_doc_pdf::{document, escalate, extract_pdf, outline};
 //! # let bytes: Vec<u8> = vec![];
-//! let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+//! let pdf = fluree_doc_pdf::open(bytes).unwrap();
 //! let ol = outline::extract(&pdf);
-//! let mut doc = extract_bytes(bytes).unwrap();
+//! let mut doc = extract_pdf(&pdf).unwrap();
 //! let opts = document::AnalyzeOptions { emit_anchors: true, ..Default::default() };
 //! let mut analysis = document::analyze_with(&mut doc, &ol, &opts);
 //!
