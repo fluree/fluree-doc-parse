@@ -80,9 +80,13 @@ a 3,840-px screen capture pasted 6.5 inches wide comes out 960 px wide at 2×,
 its 22-px text at 5.5 px. `--stored-resolution` renders each crop at the
 resolution of the image it shows (the one mostly inside it, the largest of
 those; failing any, the one covering most of it), measured along the
-image's coarser axis, between 2× and 300 dpi, under 4,000 px on the long edge
-and with the page it is cut from drawn with at most 64 million pixels (256 MB,
-held once) and 65,535 on a side. A page is rendered at most four times for
+image's coarser axis, between 2× and 300 dpi, held back toward 2× (never
+below it) to stay under 4,000 px on the crop's long edge. A crop is cut from a
+render of its whole page, and for an engine that render is bounded outright:
+at most 64 million pixels (256 MB of RGBA) and 65,535 on a side, for every
+crop of the page, the 2× ones included. A page past what 2× draws within
+those (about 4,000 points square) is drawn below 2×, as large as they allow.
+A model's crops are drawn at 2× whatever the page's size. A page is rendered at most four times for
 its crops: past four scales, a crop shares the next one up, never a coarser
 one. A one-bit image (a fax, an image mask, a CCITT or JBIG2 stream) stays at
 2×: smoothed, it reads better than its raw pixels. On a synthetic corpus of

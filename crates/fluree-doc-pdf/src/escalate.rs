@@ -78,8 +78,11 @@ pub const MAX_LONG_EDGE_PX: f64 = 4000.0;
 /// resolution: 64 million, 256 MB of RGBA, held once (the crops are cut from
 /// the render itself; a whole page is copied out of it once). A crop is cut
 /// from a render of its whole page, so a small capture on a large page would
-/// otherwise draw the whole page at the capture's resolution. A page the
-/// model scale already draws larger is drawn at the model scale.
+/// otherwise draw the whole page at the capture's resolution. The bound is
+/// absolute for [`CropScale::Stored`]: a page the model scale would already
+/// draw larger is drawn below it, as large as the budget allows. The model's
+/// crops ([`CropScale::Model`]) are drawn at the model scale whatever the
+/// page's size.
 pub const MAX_PAGE_PIXELS: f64 = 64.0e6;
 
 /// The longest side, in pixels, the renderer can draw: it sizes its canvas
@@ -115,11 +118,13 @@ pub enum CropScale {
 /// page when `region` is `None`.
 ///
 /// With [`CropScale::Stored`] it is the resolution of the image the crop
-/// shows, clamped between the model scale and [`MAX_STORED_PPI`], below
-/// [`MAX_LONG_EDGE_PX`] on the crop's long edge and [`MAX_PAGE_PIXELS`] on
-/// the page it is cut from; the model scale where no image is under it, or
-/// the image is one-bit or its resolution unknown. It is not rounded: small
-/// text in a capture reads worse a few dpi below the capture's own
+/// shows, clamped between the model scale and [`MAX_STORED_PPI`] and held
+/// back toward the model scale (never below it) by [`MAX_LONG_EDGE_PX`] on
+/// the crop's long edge; the model scale where no image is under it, or the
+/// image is one-bit or its resolution unknown. Whichever it is, the page it
+/// is cut from is then drawn within [`MAX_PAGE_PIXELS`] and
+/// [`MAX_RENDER_SIDE`], below the model scale if need be. It is not rounded:
+/// small text in a capture reads worse a few dpi below the capture's own
 /// resolution.
 ///
 /// The image a crop shows is the one most of which lies inside it (a
@@ -131,6 +136,14 @@ pub fn crop_scale(page: &crate::extract::Page, region: Option<&BBox>, mode: Crop
     if mode == CropScale::Model {
         return VLM_RENDER_SCALE;
     }
+    // The page is drawn whole whatever the crop, so every crop read at the
+    // stored resolution, the model-scale ones included, is held to what the
+    // page may be drawn at: the pixel budget, and never wider than the
+    // renderer draws. A pixel short of that, so the scale's rounding to f32
+    // cannot cross it.
+    let budget = (MAX_PAGE_PIXELS / (page.width * page.height).max(1.0)).sqrt();
+    let widest = (MAX_RENDER_SIDE - 1.0) / page.width.max(page.height).max(1.0);
+    let held = |s: f64| s.min(budget).min(widest) as f32;
     let area = match region {
         Some(b) => BBox {
             x0: b.x0 - CROP_MARGIN,
@@ -170,22 +183,16 @@ pub fn crop_scale(page: &crate::extract::Page, region: Option<&BBox>, mode: Crop
                 .max_by(|a, b| overlap(&a.bbox).total_cmp(&overlap(&b.bbox)))
         })
     else {
-        return VLM_RENDER_SCALE;
+        return held(base);
     };
     let Some(ppi) = image.ppi.filter(|_| !image.bitonal) else {
-        return VLM_RENDER_SCALE;
+        return held(base);
     };
     let long_edge = (area.x1 - area.x0).max(area.y1 - area.y0).max(1.0);
-    let page_area = (page.width * page.height).max(1.0);
     let scale = (ppi / 72.0)
         .min(MAX_STORED_PPI / 72.0)
-        .min(MAX_LONG_EDGE_PX / long_edge)
-        .min((MAX_PAGE_PIXELS / page_area).sqrt());
-    // Never wider than the renderer draws, even where that is below the
-    // model scale: a page past it renders cut off at the model scale too.
-    // A pixel short of it, so the scale's rounding to f32 cannot cross it.
-    let widest = (MAX_RENDER_SIDE - 1.0) / page.width.max(page.height).max(1.0);
-    scale.max(base).min(widest) as f32
+        .min(MAX_LONG_EDGE_PX / long_edge);
+    held(scale.max(base))
 }
 
 /// The scales a page is rendered at for crops asking for `scales`, each at
@@ -1550,6 +1557,13 @@ mod tests {
         p.height = 200.0;
         let s = f64::from(crop_scale(&p, Some(&shot), CropScale::Stored));
         assert!(s * 20_000.0 <= MAX_RENDER_SIDE, "{s}");
+        // A page past the canvas at the model scale, nothing under the
+        // crop: drawn below the model scale for an engine.
+        let mut bare = page(0, 0, false);
+        bare.width = 40_000.0;
+        bare.height = 100.0;
+        let s = f64::from(crop_scale(&bare, None, CropScale::Stored));
+        assert!(s * 40_000.0 <= MAX_RENDER_SIDE, "{s}");
     }
 
     #[test]
@@ -1593,20 +1607,41 @@ mod tests {
             x1: 216.0,
             y1: 129.0,
         };
+        let within = |p: &crate::extract::Page, s: f32| {
+            let s = f64::from(s);
+            // Up to the f32 the scale is given in.
+            s * s * p.width * p.height <= MAX_PAGE_PIXELS * 1.000_01
+        };
         let mut p = imaged(shot, Some(300.0), false);
         p.width = 14_400.0;
         p.height = 14_400.0;
+        // The model scale would draw it with 829 million pixels: below it,
+        // as large as the budget allows, whatever is under the crop.
+        let s = crop_scale(&p, Some(&shot), CropScale::Stored);
+        assert!(within(&p, s) && s < VLM_RENDER_SCALE, "{s}");
+        assert!(!within(&p, s * 1.001), "as large as the budget allows: {s}");
+        for (ppi, bitonal) in [(None, false), (Some(300.0), true)] {
+            let mut q = imaged(shot, ppi, bitonal);
+            q.width = p.width;
+            q.height = p.height;
+            assert_eq!(crop_scale(&q, Some(&shot), CropScale::Stored), s);
+            assert_eq!(crop_scale(&q, None, CropScale::Stored), s);
+        }
+        let mut bare = page(0, 0, false);
+        bare.width = p.width;
+        bare.height = p.height;
+        assert_eq!(crop_scale(&bare, None, CropScale::Stored), s);
+        // The model's crops stay at the model scale.
         assert_eq!(
-            crop_scale(&p, Some(&shot), CropScale::Stored),
+            crop_scale(&p, Some(&shot), CropScale::Model),
             VLM_RENDER_SCALE
         );
         // On an A0 page it is drawn within the budget.
         p.width = 2384.0;
         p.height = 3370.0;
-        let s = f64::from(crop_scale(&p, Some(&shot), CropScale::Stored));
-        // Within the budget, up to the f32 the scale is given in.
-        assert!(s * s * 2384.0 * 3370.0 <= MAX_PAGE_PIXELS * 1.000_01, "{s}");
-        assert!(s > f64::from(VLM_RENDER_SCALE), "{s}");
+        let s = crop_scale(&p, Some(&shot), CropScale::Stored);
+        assert!(within(&p, s), "{s}");
+        assert!(s > VLM_RENDER_SCALE, "{s}");
     }
 
     #[test]
