@@ -96,6 +96,17 @@ of a cluster's shapes are strips spanning it, the cluster is boxes around
 text and the text stays prose. A plot's background rectangle spans its
 cluster too, but is as tall as it is wide, and the plot stays a figure.
 
+A drawing sits inside the page's margins. Shapes that run from the page's
+edge along nine-tenths of it are a band of the page's design: a sidebar
+down one side, a banner across the top, a footer strip. The side-heads and
+product names set on them are headings and text, not labels.
+
+A drawing's labels are the short blocks around it. Text set smaller than
+the page's prose (tick labels, a legend, a source note) is gathered from
+one label to the next, as a chart's labels chain out from its axis. Text at
+the size of the prose is gathered only when it is near the drawing itself:
+a logo beside a column of headings and bullets does not take the column.
+
 ## Tables
 
 `cells` is row-major `Vec<Vec<String>>`. Two extra fields carry what the

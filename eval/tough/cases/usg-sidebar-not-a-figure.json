@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). A grey sidebar runs down the left of the page, off its top and foot, and holds the side-heads of the text beside it."
+  },
+  "notes": [
+    "2026-11-23: the sidebar was taken for a drawing, and its side-heads were typed as its labels and hoisted to the top of the page (#50)."
+  ],
+  "checks": [
+    {
+      "id": "description-side-head",
+      "found": "2026-11-23",
+      "issue": "The side-head `DESCRIPTION` was typed doco:Figure, a label of the sidebar.",
+      "section": {
+        "title": "DESCRIPTION"
+      }
+    },
+    {
+      "id": "limitations-side-head",
+      "found": "2026-11-23",
+      "issue": "As above, for `LIMITATIONS`.",
+      "section": {
+        "title": "LIMITATIONS"
+      }
+    },
+    {
+      "id": "page-3-side-head",
+      "found": "2026-11-23",
+      "issue": "As above, on the third page: `SUBMITTAL APPROVALS`.",
+      "section": {
+        "title": "SUBMITTAL APPROVALS"
+      }
+    }
+  ]
+}
