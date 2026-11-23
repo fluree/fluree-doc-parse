@@ -204,6 +204,19 @@ beside its ancestor at that depth, as a browser sets it, and read: the
 walk that reads the tree recurses down it, and 1,000 tables nested, a 30
 KB page, overflowed a 2 MiB stack.
 
+The walk is linear in the tree. What it asks of each element, whether a
+block or a table is under it and whether it is left out (an `<aside>` is,
+unless it is in an article or a section), is worked out once for the
+whole tree before the walk, in one pass down it and back up. Asked as the
+walk went, each was a walk of its own, down the element's subtree at each
+level above it, or up its ancestors, and nothing counted it: 500 `<span>`
+around a million `<br>x` (5 MB) took 54 s, around 2.5 million `<br>` (10
+MB) 111 s, and a million `<aside>` 500 elements deep (15 MB) 18 s; they
+now take 0.7, 1.2 and 1.0 s, as the same pages do without the depth. An
+element with a fact to keep (a block under it, or left out) takes about
+70 bytes more at the peak, within what its node is counted at: the page
+of a million `<aside>` peaks 68 MB higher, at 265 MB.
+
 ## A Markdown document's tree
 
 A Markdown document (and a `.txt`, read as one) is parsed by pulldown-cmark,

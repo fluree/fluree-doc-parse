@@ -31,11 +31,13 @@
 //! links, a table's grid before it is made (a `colspan` of a billion asks
 //! for a billion cells), the cells its spans mark, and what DoCO copies of
 //! its cells. Past it, the page is refused ([`TooLarge`]). What nests past
-//! [`MAX_DEPTH`] is read beside its ancestor at that depth.
+//! [`MAX_DEPTH`] is read beside its ancestor at that depth. The walk that
+//! reads the tree is linear in it.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
 use fluree_doc_model::budget::{Budget, TooLarge};
@@ -107,35 +109,164 @@ fn role_of(h: &Handle) -> Option<String> {
         .map(|r| r.to_ascii_lowercase())
 }
 
-/// Is this element furniture? A landmark role can say so, and so does an
-/// `<aside>` that belongs to the page rather than to an article or section —
-/// the rule by which browsers make it a complementary landmark: a sidebar of
-/// other stories, not a factbox inside the story.
-fn is_chrome(h: &Handle) -> bool {
+/// Is this element, with the tag `tag`, furniture? A landmark role can say
+/// so, and so does an `<aside>` that belongs to the page rather than to an
+/// article or section (`in_article`, whether one is among its ancestors) —
+/// the rule by which browsers make it a complementary landmark: a sidebar
+/// of other stories, not a factbox inside the story.
+fn is_chrome(h: &Handle, tag: &str, in_article: bool) -> bool {
     if let Some(role) = role_of(h) {
         return CHROME_ROLES.contains(&role.as_str());
     }
-    tag_of(h).as_deref() == Some("aside") && !has_ancestor(h, &["article", "section"])
+    tag == "aside" && !in_article
 }
 
-fn has_ancestor(h: &Handle, tags: &[&str]) -> bool {
-    let mut at = h.parent.take();
-    h.parent.set(at.clone());
-    while let Some(weak) = at {
-        let Some(p) = weak.upgrade() else { break };
-        if tag_of(&p).is_some_and(|t| tags.contains(&t.as_str())) {
-            return true;
+/// Is this element, with the tag `tag`, a subtree left out of the reading:
+/// never content, undrawn, or the page's furniture? Asked once of each
+/// element, by [`Facts::of`].
+fn left_out(h: &Handle, tag: &str, in_article: bool) -> bool {
+    SKIP.contains(&tag) || undrawn(h) || is_chrome(h, tag, in_article)
+}
+
+/// What the walk asks of an element of the tree, beyond its own tag.
+#[derive(Clone, Copy, Default, PartialEq)]
+struct Fact {
+    /// It is left out of the reading, and what is under it ([`left_out`]).
+    skipped: bool,
+    /// An element under it, not left out, lays out as a block.
+    holds_block: bool,
+    /// A table is under it.
+    holds_table: bool,
+}
+
+/// The [`Fact`] of each element of a page's tree, worked out once for the
+/// whole tree before it is walked, in one pass down it and back up.
+///
+/// Asked as the walk went, each was a walk of its own, of a size the page
+/// chooses: whether an element holds a block, down its subtree, at each
+/// level of the walk above it (500 `<span>` around a million `<br>x`, a 5
+/// MB page, took 54 s, and without the `x` 111 s); and whether an `<aside>`
+/// is in an article, up its ancestors (a million of them 500 elements
+/// deep, 18 s). Worked out here, the walk is linear in the tree, which the
+/// budget counts as the parser makes it ([`Sink`]). Only an element with a
+/// fact has an entry: about 70 bytes at the peak, as the table grows (a
+/// million `<aside>`, each left out), within the 112 its node is counted at
+/// beyond the 144 it takes ([`node_slots`]). The map of the others, most
+/// of a page's elements, stays small, and a page of nothing but them reads
+/// as fast as it did.
+#[derive(Default)]
+struct Facts(HashMap<*const Node, Fact, BuildHasherDefault<ByAddress>>);
+
+/// An element on the way down [`Facts::of`]: what it gives the element it
+/// is in, once its own children have given theirs.
+struct Open {
+    node: Handle,
+    block: bool,
+    table: bool,
+    fact: Fact,
+}
+
+impl Facts {
+    fn of(root: &Handle) -> Self {
+        let mut facts = Facts::default();
+        // The nodes still to go down to, each with whether it is in an
+        // article or a section; `None` where the element last opened is
+        // done.
+        let mut todo: Vec<Option<(Handle, bool)>> = Vec::new();
+        down_to(&mut todo, root, false);
+        let mut open: Vec<Open> = Vec::new();
+        while let Some(next) = todo.pop() {
+            let Some((h, in_article)) = next else {
+                let Some(done) = open.pop() else { break };
+                if done.fact != Fact::default() {
+                    facts.0.insert(Rc::as_ptr(&done.node), done.fact);
+                }
+                if let Some(parent) = open.last_mut() {
+                    parent.fact.holds_block |=
+                        !done.fact.skipped && (done.block || done.fact.holds_block);
+                    parent.fact.holds_table |= done.table || done.fact.holds_table;
+                }
+                continue;
+            };
+            let Some(tag) = tag_of(&h) else { continue };
+            let inside = in_article || matches!(tag.as_str(), "article" | "section");
+            todo.push(None);
+            down_to(&mut todo, &h, inside);
+            open.push(Open {
+                fact: Fact {
+                    skipped: left_out(&h, &tag, in_article),
+                    ..Fact::default()
+                },
+                block: is_block(&tag),
+                table: tag == "table",
+                node: h,
+            });
         }
-        at = p.parent.take();
-        p.parent.set(at.clone());
+        facts
     }
-    false
+
+    /// `h`'s facts.
+    fn of_node(&self, h: &Handle) -> Fact {
+        self.0.get(&Rc::as_ptr(h)).copied().unwrap_or_default()
+    }
+
+    /// Is this subtree left out of the reading?
+    fn skipped(&self, h: &Handle) -> bool {
+        self.of_node(h).skipped
+    }
+
+    /// Does anything under this node lay out as a block?
+    fn holds_block(&self, h: &Handle) -> bool {
+        self.of_node(h).holds_block
+    }
+
+    /// Is a table under this node?
+    fn holds_table(&self, h: &Handle) -> bool {
+        self.of_node(h).holds_table
+    }
+
+    /// Content that flows inline: text, and elements with no block inside.
+    fn is_inline(&self, h: &Handle) -> bool {
+        match tag_of(h) {
+            Some(t) => !is_block(&t) && !self.holds_block(h),
+            None => true,
+        }
+    }
 }
 
-/// Is this subtree left out of the reading: never content, undrawn, or the
-/// page's furniture?
-fn skipped(h: &Handle) -> bool {
-    tag_of(h).is_some_and(|t| SKIP.contains(&t.as_str())) || undrawn(h) || is_chrome(h)
+/// Set `h`'s children to be gone down to next, in order, each with
+/// `in_article`.
+fn down_to(todo: &mut Vec<Option<(Handle, bool)>>, h: &Handle, in_article: bool) {
+    let children = h.children.borrow();
+    todo.extend(children.iter().rev().map(|c| Some((c.clone(), in_article))));
+}
+
+/// Hashes a node by its address, all a [`Facts`] key is: the default
+/// hasher took a third of the pass.
+#[derive(Default)]
+struct ByAddress(u64);
+
+impl Hasher for ByAddress {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.write_u64(u64::from(*b));
+        }
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+
+    fn write_u64(&mut self, n: u64) {
+        // Spread over the high bits, then folded into the low ones, which
+        // an address, aligned, leaves at zero.
+        let x = (self.0 ^ n).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.0 = x ^ (x >> 29);
+    }
 }
 
 /// Parse an HTML document into elements in reading order, or say why it
@@ -256,9 +387,10 @@ pub fn parse_message(src: &str) -> Result<MessageBody, TooLarge> {
 }
 
 fn ids_in(dom: &RcDom) -> Vec<String> {
+    let facts = Facts::of(&dom.document);
     let mut found = Vec::new();
     for c in dom.document.children.borrow().iter() {
-        cid_images(c, &mut found);
+        cid_images(c, &facts, &mut found);
     }
     found.into_iter().map(|(id, _)| id).collect()
 }
@@ -289,17 +421,19 @@ fn read_dom(
     budget: Budget,
     cid_images: bool,
 ) -> Result<(Vec<Element>, Vec<usize>), TooLarge> {
+    let facts = Facts::of(&dom.document);
     let mut out = Out {
         cid_images,
         budget,
+        facts,
         ..Out::default()
     };
     // A page that marks its main content is read for that alone: what lies
     // outside it is the site around the document. One whose main holds no
     // text has marked it wrongly, and is read whole.
     let mut mains = Vec::new();
-    find_mains(&dom.document, &mut mains);
-    mains.retain(|m| !text_of(m).0.is_empty());
+    find_mains(&dom.document, &out.facts, &mut mains);
+    mains.retain(|m| !text_of(m, &out.facts).0.is_empty());
     if mains.is_empty() {
         walk(&dom.document, &mut out);
     } else {
@@ -881,15 +1015,15 @@ fn attribute_steps(src: &str) -> u64 {
 
 /// The outermost `<main>` elements, or elements in the `main` role, that the
 /// page draws.
-fn find_mains(h: &Handle, out: &mut Vec<Handle>) {
+fn find_mains(h: &Handle, facts: &Facts, out: &mut Vec<Handle>) {
     for c in h.children.borrow().iter() {
-        if tag_of(c).is_none() || skipped(c) {
+        if tag_of(c).is_none() || facts.skipped(c) {
             continue;
         }
         if tag_of(c).as_deref() == Some("main") || role_of(c).as_deref() == Some("main") {
             out.push(c.clone());
         } else {
-            find_mains(c, out);
+            find_mains(c, facts, out);
         }
     }
 }
@@ -908,6 +1042,8 @@ struct Out {
     /// Why the page is refused, once its budget is spent: nothing more is
     /// kept.
     over: Option<TooLarge>,
+    /// What the walk asks of each node of the page.
+    facts: Facts,
 }
 
 impl Out {
@@ -951,7 +1087,7 @@ impl Out {
         }
         let mut found = Vec::new();
         for n in nodes {
-            cid_images(n, &mut found);
+            cid_images(n, &self.facts, &mut found);
         }
         for (cid, alt) in found {
             let mut f = element("doco:Figure", alt, None);
@@ -965,9 +1101,9 @@ impl Out {
 /// its own parts: `<img src="cid:…">`, by content id (RFC 2392, percent
 /// signs decoded), with their alternative text. An image the page does not
 /// draw is not shown.
-fn cid_images(h: &Handle, out: &mut Vec<(String, String)>) {
+fn cid_images(h: &Handle, facts: &Facts, out: &mut Vec<(String, String)>) {
     let Some(tag) = tag_of(h) else { return };
-    if skipped(h) {
+    if facts.skipped(h) {
         return;
     }
     if tag == "img" {
@@ -987,7 +1123,7 @@ fn cid_images(h: &Handle, out: &mut Vec<(String, String)>) {
         return;
     }
     for c in h.children.borrow().iter() {
-        cid_images(c, out);
+        cid_images(c, facts, out);
     }
 }
 
@@ -1056,7 +1192,9 @@ pub fn info(src: &str) -> DocumentInfo {
     for h in head.iter().flat_map(children_of) {
         match tag_of(&h).as_deref() {
             Some("title") if info.title.is_none() => {
-                info.title = Some(text_of(&h).0).filter(|t| !t.is_empty());
+                // Its own facts: a title's text is all it holds.
+                let facts = Facts::of(&h);
+                info.title = Some(text_of(&h, &facts).0).filter(|t| !t.is_empty());
             }
             Some("meta") => {
                 let named_author =
@@ -1106,33 +1244,38 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
 /// located. Inline markup (`<em>`, `<a>`, `<span>`) is transparent: it styles
 /// a phrase, it does not divide one — but an `<a>` also says something about
 /// the phrase it styles, and that survives here as a span.
-fn text_of(h: &Handle) -> (String, Vec<Link>) {
+fn text_of(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
     let mut raw = String::new();
     let mut anchors = Vec::new();
-    collect(h, &mut raw, &mut anchors);
+    collect(h, facts, &mut raw, &mut anchors);
     squeeze(&raw, &anchors)
 }
 
-fn collect(h: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
+fn collect(h: &Handle, facts: &Facts, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
     for child in h.children.borrow().iter() {
-        collect_node(child, out, anchors);
+        collect_node(child, facts, out, anchors);
     }
 }
 
 /// One node's contribution to the text [`collect`] gathers.
-fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
+fn collect_node(
+    node: &Handle,
+    facts: &Facts,
+    out: &mut String,
+    anchors: &mut Vec<(usize, usize, String)>,
+) {
     match &node.data {
         NodeData::Text { contents } => out.push_str(&contents.borrow()),
         NodeData::Element { .. } => {
             let Some(tag) = tag_of(node) else { return };
-            if skipped(node) {
+            if facts.skipped(node) {
                 return;
             }
             if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
                 out.push(' ');
             }
             let raised = tag == "sup" || (tag == "a" && note_link(node));
-            if raised && fluree_doc_model::marks::note_mark(out, &text_of(node).0) {
+            if raised && fluree_doc_model::marks::note_mark(out, &text_of(node, facts).0) {
                 out.push(' ');
             }
             // Recorded around the recursion: an anchor's text is whatever
@@ -1140,7 +1283,7 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
             // bytes, which `squeeze` turns into characters once: counting
             // the characters here, at each element, is quadratic in a run.
             let start = out.len();
-            collect(node, out, anchors);
+            collect(node, facts, out, anchors);
             if tag == "a" {
                 if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
                     anchors.push((start, out.len(), href));
@@ -1233,29 +1376,12 @@ fn is_block(tag: &str) -> bool {
     BLOCK.contains(&tag) || SKIP.contains(&tag)
 }
 
-/// Does anything under this node lay out as a block?
-fn holds_block(h: &Handle) -> bool {
-    h.children.borrow().iter().any(|c| match tag_of(c) {
-        Some(_) if skipped(c) => false,
-        Some(t) => is_block(&t) || holds_block(c),
-        None => false,
-    })
-}
-
-/// Content that flows inline: text, and elements with no block inside.
-fn is_inline(h: &Handle) -> bool {
-    match tag_of(h) {
-        Some(t) => !is_block(&t) && !holds_block(h),
-        None => true,
-    }
-}
-
 /// A paragraph from a run of inline siblings, when it has any text.
 fn flush_run(run: &mut Vec<Handle>, out: &mut Out) {
     let mut raw = String::new();
     let mut anchors = Vec::new();
     for node in run.iter() {
-        collect_node(node, &mut raw, &mut anchors);
+        collect_node(node, &out.facts, &mut raw, &mut anchors);
     }
     let (text, links) = squeeze(&raw, &anchors);
     if !text.is_empty() {
@@ -1277,7 +1403,7 @@ fn walk_container(h: &Handle, out: &mut Out) {
     let mut run: Vec<Handle> = Vec::new();
     let mut last_br = false;
     for c in children_of(h) {
-        if !is_inline(&c) {
+        if !out.facts.is_inline(&c) {
             flush_run(&mut run, out);
             last_br = false;
             walk(&c, out);
@@ -1302,7 +1428,7 @@ fn walk_container(h: &Handle, out: &mut Out) {
 
 /// An element's text excluding nested block containers, so a list item that
 /// holds a sub-list contributes only its own label.
-fn own_text(h: &Handle) -> (String, Vec<Link>) {
+fn own_text(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
     let mut raw = String::new();
     let mut anchors = Vec::new();
     for child in h.children.borrow().iter() {
@@ -1310,12 +1436,12 @@ fn own_text(h: &Handle) -> (String, Vec<Link>) {
             NodeData::Text { contents } => raw.push_str(&contents.borrow()),
             NodeData::Element { .. } => {
                 let Some(tag) = tag_of(child) else { continue };
-                if skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
+                if facts.skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
                     continue;
                 }
                 raw.push(' ');
                 let start = raw.len();
-                collect(child, &mut raw, &mut anchors);
+                collect(child, facts, &mut raw, &mut anchors);
                 if tag == "a" {
                     if let Some(href) = attr_of(child, "href").filter(|h| !h.trim().is_empty()) {
                         anchors.push((start, raw.len(), href));
@@ -1395,10 +1521,10 @@ fn spans(at: &[Option<usize>], anchors: &[(usize, usize, String)]) -> Vec<Link> 
 /// law is published as one, its letterhead centred and its witness list set
 /// in columns by spaces alone. So nothing is collapsed. A `<br>` is a line
 /// break, and a block set inside one starts a line of its own.
-fn pre_text(h: &Handle) -> (String, Vec<Link>) {
+fn pre_text(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
     let mut raw = Raw::default();
     let mut anchors = Vec::new();
-    collect_pre(h, &mut raw, &mut anchors);
+    collect_pre(h, facts, &mut raw, &mut anchors);
     verbatim(&raw.text, &anchors)
 }
 
@@ -1425,13 +1551,18 @@ impl Raw {
     }
 }
 
-fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, String)>) {
+fn collect_pre(
+    h: &Handle,
+    facts: &Facts,
+    out: &mut Raw,
+    anchors: &mut Vec<(usize, usize, String)>,
+) {
     for node in h.children.borrow().iter() {
         match &node.data {
             NodeData::Text { contents } => out.push_str(&contents.borrow()),
             NodeData::Element { .. } => {
                 let Some(tag) = tag_of(node) else { continue };
-                if skipped(node) {
+                if facts.skipped(node) {
                     continue;
                 }
                 if tag == "br" {
@@ -1443,7 +1574,7 @@ fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, Strin
                     out.break_line();
                 }
                 let start = out.chars;
-                collect_pre(node, out, anchors);
+                collect_pre(node, facts, out, anchors);
                 if tag == "a" {
                     if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
                         anchors.push((start, out.chars, href));
@@ -1554,18 +1685,19 @@ fn paragraph(out: &mut Out, kind: &str, level: Option<usize>, (text, links): (St
 fn walk_node(h: &Handle, out: &mut Out) {
     if let Some(tag) = tag_of(h) {
         let t = tag.as_str();
-        if skipped(h) {
+        if out.facts.skipped(h) {
             return;
         }
         if t == "table" {
-            if is_layout(h) {
+            if is_layout(h, &out.facts) {
                 walk_container(h, out);
             } else {
                 // The caption is where a table states its subject or unit
                 // (`Price list, prices in EUR`); it reads before the table.
                 for c in children_of(h) {
                     if tag_of(&c).as_deref() == Some("caption") {
-                        paragraph(out, "doco:Paragraph", None, text_of(&c));
+                        let block = text_of(&c, &out.facts);
+                        paragraph(out, "doco:Paragraph", None, block);
                     }
                 }
                 emit_table(h, out); // innermost wins: cells own their text
@@ -1574,7 +1706,8 @@ fn walk_node(h: &Handle, out: &mut Out) {
             return;
         }
         if let Some(level) = heading_level(t) {
-            paragraph(out, "doco:SectionTitle", Some(level), text_of(h));
+            let block = text_of(h, &out.facts);
+            paragraph(out, "doco:SectionTitle", Some(level), block);
             out.figures([h]);
             return;
         }
@@ -1582,7 +1715,8 @@ fn walk_node(h: &Handle, out: &mut Out) {
             "li" => {
                 // A nested list inside an item is walked separately; the
                 // item's own text stops at it.
-                paragraph(out, "doc:ListItem", None, own_text(h));
+                let block = own_text(h, &out.facts);
+                paragraph(out, "doc:ListItem", None, block);
                 let children = children_of(h);
                 out.figures(
                     children
@@ -1598,15 +1732,17 @@ fn walk_node(h: &Handle, out: &mut Out) {
             }
             // A quotation or a caption that holds paragraphs of its own is a
             // container of them, not one paragraph run together.
-            "blockquote" | "figcaption" | "dd" | "dt" if holds_block(h) => {}
+            "blockquote" | "figcaption" | "dd" | "dt" if out.facts.holds_block(h) => {}
             // One paragraph, its lines and spacing kept, as a Markdown code
             // block is read.
             "pre" => {
-                paragraph(out, "doco:Paragraph", None, pre_text(h));
+                let block = pre_text(h, &out.facts);
+                paragraph(out, "doco:Paragraph", None, block);
                 return;
             }
             "p" | "blockquote" | "figcaption" | "dd" | "dt" => {
-                paragraph(out, "doco:Paragraph", None, text_of(h));
+                let block = text_of(h, &out.facts);
+                paragraph(out, "doco:Paragraph", None, block);
                 out.figures([h]);
                 return;
             }
@@ -1619,14 +1755,14 @@ fn walk_node(h: &Handle, out: &mut Out) {
 /// Every `tr` under a node, at any depth — `thead`/`tbody`/`tfoot` are
 /// transparent, and html5ever inserts a `tbody` even where the source had
 /// none. This is the one query the reader needs, as a descendant walk.
-fn rows_under(h: &Handle, out: &mut Vec<Handle>) {
+fn rows_under(h: &Handle, facts: &Facts, out: &mut Vec<Handle>) {
     for c in h.children.borrow().iter() {
         match tag_of(c).as_deref() {
-            Some(_) if skipped(c) => {}
+            Some(_) if facts.skipped(c) => {}
             Some("tr") => out.push(c.clone()),
             // Do not descend into a nested table: its rows are its own.
             Some("table") => {}
-            _ => rows_under(c, out),
+            _ => rows_under(c, facts, out),
         }
     }
 }
@@ -1641,16 +1777,16 @@ fn rows_under(h: &Handle, out: &mut Vec<Handle>) {
 /// table holding a table, or of one row, is laid out whatever its cells are
 /// called, because email frameworks set their columns in `<th>`. A layout
 /// table's cells are read as the containers they are.
-fn is_layout(table: &Handle) -> bool {
+fn is_layout(table: &Handle, facts: &Facts) -> bool {
     let role = attr_of(table, "role").map(|r| r.trim().to_ascii_lowercase());
     if matches!(role.as_deref(), Some("presentation" | "none")) {
         return true;
     }
-    if holds_table(table) {
+    if facts.holds_table(table) {
         return true;
     }
     let mut trs = Vec::new();
-    rows_under(table, &mut trs);
+    rows_under(table, facts, &mut trs);
     let widths: Vec<usize> = trs
         .iter()
         .map(|tr| {
@@ -1676,13 +1812,6 @@ fn is_layout(table: &Handle) -> bool {
     // One column is a stack of boxes, unless a header says it is a list of
     // values.
     !headed && widths.iter().all(|w| *w <= 1)
-}
-
-fn holds_table(h: &Handle) -> bool {
-    h.children
-        .borrow()
-        .iter()
-        .any(|c| tag_of(c).as_deref() == Some("table") || holds_table(c))
 }
 
 fn num_attr(h: &Handle, name: &str) -> usize {
@@ -1852,8 +1981,8 @@ fn heads_over_figures(rows: &[Vec<(String, usize, usize)>], kinds: &mut [RowKind
 }
 
 /// Is this cell set as a header: ruled beneath, or bold throughout?
-fn header_styled(cell: &Handle) -> bool {
-    ruled_below(cell) || bold_throughout(cell, false) == Some(true)
+fn header_styled(cell: &Handle, facts: &Facts) -> bool {
+    ruled_below(cell) || bold_throughout(cell, false, facts) == Some(true)
 }
 
 /// An element's inline style, lowercase and without whitespace.
@@ -1903,13 +2032,13 @@ fn bold_style(h: &Handle) -> bool {
 }
 
 /// Is every word under this node set bold? `None` where it holds no text.
-fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
+fn bold_throughout(h: &Handle, inherited: bool, facts: &Facts) -> Option<bool> {
     let bold = inherited || bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong"));
     let mut seen = None;
     for c in h.children.borrow().iter() {
         let here = match &c.data {
             NodeData::Text { contents } if !contents.borrow().trim().is_empty() => Some(bold),
-            NodeData::Element { .. } if !skipped(c) => bold_throughout(c, bold),
+            NodeData::Element { .. } if !facts.skipped(c) => bold_throughout(c, bold, facts),
             _ => None,
         };
         match here {
@@ -1929,7 +2058,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
         return;
     }
     let mut trs = Vec::new();
-    rows_under(table, &mut trs);
+    rows_under(table, &out.facts, &mut trs);
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
     let mut kinds: Vec<RowKind> = Vec::new();
@@ -1944,7 +2073,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
             };
             // A table cell's text becomes a grid position, which has no
             // room for an anchor span; the link is dropped with it.
-            let text = text_of(&cell).0;
+            let text = text_of(&cell, &out.facts).0;
             let caption = {
                 let t = text.trim();
                 t.len() > 2 && t.starts_with('(') && t.ends_with(')')
@@ -1952,12 +2081,12 @@ fn emit_table(table: &Handle, out: &mut Out) {
             marks.push(CellMark {
                 filled: !text.is_empty(),
                 th,
-                styled: !th && !text.is_empty() && header_styled(&cell),
+                styled: !th && !text.is_empty() && header_styled(&cell, &out.facts),
                 caption,
                 figure: !th
                     && text.chars().any(|c| c.is_ascii_digit())
                     && !text.chars().any(char::is_alphabetic)
-                    && bold_throughout(&cell, false) != Some(true),
+                    && bold_throughout(&cell, false, &out.facts) != Some(true),
             });
             cells.push((text, num_attr(&cell, "colspan"), num_attr(&cell, "rowspan")));
         }
@@ -1974,7 +2103,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
     let mut thead_trs = Vec::new();
     for c in children_of(table) {
         if tag_of(&c).as_deref() == Some("thead") {
-            rows_under(&c, &mut thead_trs);
+            rows_under(&c, &out.facts, &mut thead_trs);
         }
     }
     let thead = thead_trs
@@ -3248,5 +3377,38 @@ mod tests {
             "çà"
         );
         assert!(took.as_secs() < 10, "{took:?}");
+    }
+    #[test]
+    fn the_walk_asks_each_element_once_what_is_under_and_above_it() {
+        // Whether an element held a block was a walk down it at each level
+        // of the walk above it, and whether an `<aside>` was in an article
+        // a walk up its ancestors: 500 `<span>` around a million `<br>x`
+        // took 54 s, a million `<aside>` 500 elements deep 18 s.
+        let deep_inline = format!(
+            "{}{}<div>y</div>",
+            "<span>".repeat(500),
+            "<br>x".repeat(50_000)
+        );
+        let deep_asides = format!(
+            "{}<table><tr><td>{}",
+            "<div>".repeat(500),
+            "<aside></aside>".repeat(200_000)
+        );
+        for page in [deep_inline, deep_asides] {
+            let start = std::time::Instant::now();
+            assert!(super::parse(&page).is_ok());
+            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+        }
+        // What is under and above is read as it was.
+        let els = parse(
+            "<section><div><span><aside><p>Factbox.</p></aside></span></div></section>\
+             <div><span><span><aside><p>Sidebar.</p></aside></span></span></div>\
+             <span><b>Loose <i>run</i></b></span><span><em><div>Block</div></em></span>\
+             <div>One <span>run<script>x</script> with</span> a script</div>",
+        );
+        assert_eq!(
+            texts(&els),
+            ["Factbox.", "Loose run", "Block", "One run with a script"]
+        );
     }
 }
