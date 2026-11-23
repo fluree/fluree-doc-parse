@@ -25,13 +25,13 @@
       "id": "conditions-per-antibody",
       "found": "2026-11-17",
       "issue": "Read well from the start: each antibody's conditions on its row, units in the column headers. Guarded so it stays so.",
-      "row": {"mAb": "NISTmAb(1)", "Column Temp. (°C)": "25", "Run Duration (min)": "10", "Flow Rate / (mL/min)": "0.3", "Injection (μg)": "60"}
+      "row": {"mAb": "NISTmAb(1)", "Column Temp. (°C)": "25", "Run Duration (min)": "10", "Flow Rate / (mL/min)": "0.3", "Injection (µg)": "60"}
     },
     {
       "id": "conditions-second-antibody",
       "found": "2026-11-17",
       "issue": "The second antibody's conditions on its own row.",
-      "row": {"mAb": "Amgen IgG2(2)", "Run Duration (min)": "35", "Flow Rate / (mL/min)": "0.5", "Injection (μg)": "100"}
+      "row": {"mAb": "Amgen IgG2(2)", "Run Duration (min)": "35", "Flow Rate / (mL/min)": "0.5", "Injection (µg)": "100"}
     },
     {
       "id": "troubleshooting-continues-across-the-page",

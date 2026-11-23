@@ -236,6 +236,14 @@ fn marker_shaped(text: &str) -> bool {
         .all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
 }
 
+/// A character that is content, not a bullet's shape: a letter or digit, or
+/// a sign that stands for letters or digits — `™` for `TM`, `℃`, `№`, `㎡`
+/// — which line text keeps as printed and which spelled out was content.
+fn says_something(c: char) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    c.is_alphanumeric() || c.to_string().nfkc().any(char::is_alphanumeric)
+}
+
 /// True for a short line that is a bullet, list number or footnote reference
 /// rather than content.
 ///
@@ -259,9 +267,7 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
         return false;
     }
     let Some(nb) = neighbour else { return false };
-    if l.text.chars().any(char::is_alphanumeric)
-        && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0)
-    {
+    if l.text.chars().any(says_something) && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
         return false;
     }
     let smaller = (l.font_size as f64) < nb.font_size as f64 * 0.92;
@@ -1148,6 +1154,20 @@ mod tests {
             b[0].marker, None,
             "an inline superscript must not make a list item"
         );
+    }
+
+    #[test]
+    fn a_trade_mark_raised_after_a_name_is_not_a_list_marker() {
+        // Set apart in a smaller size after the name, as a flyer sets it on
+        // a line of its own; read as a bullet it was dropped.
+        for mark in ["\u{2122}", "\u{2120}"] {
+            let mut sup = l(mark, 120.0, 0.0, 6.0);
+            sup.bbox.x1 = 126.0;
+            let lines = vec![l("Thermo Scientific", 30.0, 2.0, 10.0), sup];
+            let b = assemble(&lines, 1.2);
+            assert!(b.iter().all(|b| b.marker.is_none()), "{mark}");
+            assert!(b.iter().any(|b| b.text().contains(mark)), "{mark}");
+        }
     }
 
     #[test]
