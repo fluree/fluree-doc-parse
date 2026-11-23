@@ -870,6 +870,58 @@ fn adaptive_space_ratio(glyphs: &[Glyph], groups: &[(Vec<usize>, i32, bool)]) ->
     }
 }
 
+/// The run of raised, smaller glyphs that `idxs[k]` begins, as text, where
+/// it follows a glyph of the line's own size: a superscript, which may be a
+/// note's mark. `None` mid-run, and on a vertical line.
+fn raised_mark(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Option<String> {
+    if adv.vertical() {
+        return None;
+    }
+    let g = &glyphs[idxs[k]];
+    let base = idxs[..k]
+        .iter()
+        .rev()
+        .map(|&i| &glyphs[i])
+        .find(|p| p.bbox.is_some())?;
+    let size = base.font_size.max(1.0) as f64;
+    let ratio = g.font_size as f64 / size;
+    // Raised: its baseline above the word's, in page space where y grows
+    // downward.
+    let raised = base.origin.1 - g.origin.1 >= size * MARK_RAISE;
+    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) || !raised {
+        return None;
+    }
+    // A word that holds a script of its own is a formula's term (`cₚhᵖ`),
+    // and what is raised after it is an index or a power.
+    let word = idxs[..k]
+        .iter()
+        .rev()
+        .map(|&i| &glyphs[i])
+        .take_while(|p| p.bbox.is_some() && !p.text.trim().is_empty());
+    let scripted = word.into_iter().any(|p| {
+        (p.font_size as f64) <= size * SCRIPT_SIZE_RATIO
+            || (p.origin.1 - base.origin.1).abs() >= size * MARK_RAISE
+    });
+    if scripted {
+        return None;
+    }
+    let mut mark = String::new();
+    for &i in &idxs[k..] {
+        let m = &glyphs[i];
+        let same = m.bbox.is_some()
+            && (m.font_size - g.font_size).abs() <= g.font_size * 0.1
+            && (m.origin.1 - g.origin.1).abs() < g.font_size.max(1.0) as f64 * 0.2;
+        if !same {
+            break;
+        }
+        mark.push_str(&m.text);
+    }
+    Some(mark)
+}
+
+/// Least rise, as a share of the word's size, of a superscript's baseline.
+const MARK_RAISE: f64 = 0.15;
+
 /// Word gaps in letter-spaced text sit this far above the letter gaps.
 const TRACKING_WORD_FACTOR: f64 = 1.5;
 
@@ -1026,6 +1078,14 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     {
                         text.push(' ');
                     }
+                }
+                // A note's mark raised after a word parts from it:
+                // `Acrylonitrile` and its `a`, not `Acrylonitrilea`.
+                if !text.ends_with(' ')
+                    && raised_mark(glyphs, idxs, k, adv)
+                        .is_some_and(|m| fluree_doc_model::marks::note_mark(&text, &m))
+                {
+                    text.push(' ');
                 }
                 // End of the previous glyph in *pen* space, not ink space.
                 // A right overhang (`f`, `y`, `r`) makes the ink box extend
@@ -1540,6 +1600,46 @@ mod tests {
         v.extend(run("the", 12.0, 2));
         v.push(space(10.0, 9));
         assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    /// `text` at 10pt from `x`, 5pt a letter, pen to pen; `raised` sets it
+    /// at 6pt, 3.5pt above the baseline, as a superscript.
+    fn word(text: &str, x: f64, raised: bool) -> Vec<Glyph> {
+        let (size, adv, lift) = if raised {
+            (6.0, 3.0, 3.5)
+        } else {
+            (10.0, 5.0, 0.0)
+        };
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let cx = x + adv * i as f64;
+                let mut l = g(&c.to_string(), cx, -lift, adv - 0.5, 0.0);
+                l.font_size = size;
+                l.advance = Some(adv);
+                l
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_note_mark_raised_after_a_word_parts_from_it() {
+        let mut v = word("Acrylonitrile", 0.0, false);
+        v.extend(word("a", 65.0, true));
+        assert_eq!(assemble(&v)[0].text, "Acrylonitrile a");
+        let mut v = word("Revenue", 0.0, false);
+        v.extend(word("12", 35.0, true));
+        assert_eq!(assemble(&v)[0].text, "Revenue 12");
+    }
+
+    #[test]
+    fn raised_text_of_the_word_stays_in_it() {
+        // A unit's power, an exponent, an ordinal's ending.
+        for (base, raised) in [("cm", "3"), ("10", "6"), ("1", "st"), ("e", "x")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, format!("{base}{raised}"));
+        }
     }
 
     #[test]
