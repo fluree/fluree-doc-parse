@@ -1393,6 +1393,247 @@ impl Grid {
             y1: self.ys[self.ys.len() - 1],
         };
     }
+
+    /// The column groups ruled along row boundary `k`: each piece of rule
+    /// drawn there, as the columns it runs under, where the pieces group
+    /// the columns. That is two pieces or more, parted where the groups
+    /// part, or one that leaves a column unruled, and one of them at least
+    /// runs under two columns. A boundary ruled across the whole table,
+    /// ruled column by column, or not ruled at all groups nothing.
+    fn column_groups(&self, rules: &[Rule], k: usize) -> Option<Vec<ColumnGroup>> {
+        let cols = self.cols();
+        let (left, right) = (*self.xs.first()?, *self.xs.last()?);
+        let y = *self.ys.get(k)?;
+        let mut runs: Vec<(f64, f64)> = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Horizontal
+                    && (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0
+            })
+            .map(|r| (r.bbox.x0.max(left), r.bbox.x1.min(right)))
+            .filter(|(a, b)| b > a)
+            .collect();
+        runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Segments that meet are one piece: a rule drawn cell by cell.
+        let mut pieces: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in runs {
+            match pieces.last_mut() {
+                Some(p) if a <= p.1 + RULE_JOIN => p.1 = p.1.max(b),
+                _ => pieces.push((a, b)),
+            }
+        }
+        let groups: Vec<ColumnGroup> = pieces
+            .iter()
+            .filter_map(|&(x0, x1)| {
+                let under: Vec<usize> = (0..cols)
+                    .filter(|&c| {
+                        let (a, b) = (self.xs[c], self.xs[c + 1]);
+                        x1.min(b) - x0.max(a) >= 0.6 * (b - a)
+                    })
+                    .collect();
+                Some(ColumnGroup {
+                    cols: *under.first()?..*under.last()? + 1,
+                    x0,
+                    x1,
+                })
+            })
+            .collect();
+        let ruled: usize = groups.iter().map(|g| g.cols.len()).sum();
+        let grouped = groups.len() >= 2 || (groups.len() == 1 && ruled < cols);
+        (grouped && groups.iter().any(|g| g.cols.len() >= 2)).then_some(groups)
+    }
+
+    /// Take in the line of column-group labels set over the grid's top rule.
+    ///
+    /// A table that groups its columns (`2024`, `2023` and `Percent
+    /// Change`, each over `Underground | Surface | Total`) sets each group's
+    /// label over a rule drawn under that group alone. Ruled with
+    /// horizontals only, its grid begins at those rules, so the labels over
+    /// them were left outside it, read as paragraphs, and the columns lost
+    /// the level that tells them apart. The line over the rules is the
+    /// grid's top row when it sits within a line of them, every mark on it
+    /// across the table's width stands over one of the rules, each group's
+    /// part of it is one run of text, and every rule has a label over it.
+    /// Lines a label wraps onto above come with it. A line set as close that
+    /// also stands over an unruled column, or across two groups, says the
+    /// header is more than a line of group labels, and none of it is taken:
+    /// part of it would be a fragment. A line further off is the table's
+    /// title or a caption, and stays outside.
+    pub fn take_group_labels(&mut self, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) {
+        // A table that draws its columns bounds its header's cells itself.
+        let (left, right, top) = (self.xs[0], self.xs[self.cols()], self.ys[0]);
+        if rules.iter().any(|r| {
+            r.orientation == Orientation::Vertical
+                && r.bbox.x1 > left
+                && r.bbox.x0 < right
+                && r.bbox.y1 > top - 2.0 * EDGE_TOLERANCE
+                && r.bbox.y0 < self.bbox.y1
+        }) {
+            return;
+        }
+        let Some(groups) = self.column_groups(rules, 0) else {
+            return;
+        };
+        let mut over: Vec<(f64, f64, BBox)> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter_map(|g| Some((g.origin.1, g.font_size.max(1.0) as f64, g.bbox?)))
+            .filter(|(_, _, b)| b.x1 > left && b.x0 < right && b.y1 <= top + 1.0)
+            .collect();
+        // Nearest first, then a line at a time by baseline.
+        over.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let within = |b: &BBox, g: &ColumnGroup| b.x0 >= g.x0 - 1.0 && b.x1 <= g.x1 + 1.0;
+        let mut taken: Vec<BBox> = Vec::new();
+        let mut below = top;
+        let mut i = 0;
+        while i < over.len() {
+            let (base, fs, _) = over[i];
+            let end = (i..over.len())
+                .find(|&k| base - over[k].0 > 0.3 * fs)
+                .unwrap_or(over.len());
+            let line: Vec<BBox> = over[i..end].iter().map(|o| o.2).collect();
+            // On the rules, or a label's line wrapped above the one below.
+            let reach = if taken.is_empty() { 1.0 } else { 1.6 };
+            if below - base > reach * fs {
+                break;
+            }
+            let over_groups = line.iter().all(|b| groups.iter().any(|g| within(b, g)));
+            let one_run = groups.iter().all(|g| {
+                let mut xs: Vec<(f64, f64)> = line
+                    .iter()
+                    .filter(|b| within(b, g))
+                    .map(|b| (b.x0, b.x1))
+                    .collect();
+                xs.sort_by(|a, b| a.0.total_cmp(&b.0));
+                xs.windows(2).all(|w| w[1].0 - w[0].1 <= fs)
+            });
+            // A line set as close that is not labels over the groups (a
+            // label over the row labels, a box's wrapped text) says the
+            // header above is more than one line of group labels, and the
+            // part of it taken would be a fragment.
+            if !(over_groups && one_run) {
+                return;
+            }
+            taken.extend(line);
+            below = base;
+            i = end;
+        }
+        let labelled = groups.iter().all(|g| taken.iter().any(|b| within(b, g)));
+        if taken.is_empty() || !labelled {
+            return;
+        }
+        let y0 = taken.iter().map(|b| b.y0).fold(f64::MAX, f64::min) - 1.0;
+        self.ys.insert(0, y0);
+        self.bbox.y0 = y0;
+    }
+
+    /// The spans of a top row of column-group labels: each label spans the
+    /// columns the rule under it runs under ([`Grid::column_groups`]).
+    ///
+    /// Read only where no column boundary is drawn through the row, so
+    /// nothing else says where its cells part, and where each group's part
+    /// of the row is a label: one run of text over the group. Values over a
+    /// rule that happens to leave a column out are set column by column,
+    /// with the columns' gutters between them.
+    pub fn group_label_merges(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        merges: &mut Merges,
+    ) {
+        let (rows, cols) = (self.rows(), self.cols());
+        if rows < 3 || cols < 3 || merges.continues_left.len() != rows * cols {
+            return;
+        }
+        let mid = (self.ys[0] + self.ys[1]) / 2.0;
+        let drawn = (1..cols).any(|c| {
+            rules.iter().any(|r| {
+                r.orientation == Orientation::Vertical
+                    && (r.bbox.x0 - self.xs[c]).abs() <= EDGE_TOLERANCE * 2.0
+                    && r.bbox.y0 <= mid
+                    && r.bbox.y1 >= mid
+            })
+        });
+        if drawn {
+            return;
+        }
+        let Some(groups) = self.column_groups(rules, 1) else {
+            return;
+        };
+        // The row's ink, by line.
+        let ink: Vec<(f64, f64, BBox)> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter_map(|g| Some((g.origin.1, g.font_size.max(1.0) as f64, g.bbox?)))
+            .filter(|(_, _, b)| {
+                let y = (b.y0 + b.y1) / 2.0;
+                y > self.ys[0] && y < self.ys[1]
+            })
+            .collect();
+        let homes = self.glyph_cells(glyphs);
+        let label = |g: &ColumnGroup| {
+            let (x0, x1) = (self.xs[g.cols.start], self.xs[g.cols.end]);
+            let mut held: Vec<&(f64, f64, BBox)> = ink
+                .iter()
+                .filter(|(_, _, b)| {
+                    let x = (b.x0 + b.x1) / 2.0;
+                    x > x0 && x < x1
+                })
+                .collect();
+            held.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut i = 0;
+            while i < held.len() {
+                let (base, fs, _) = *held[i];
+                let end = (i..held.len())
+                    .find(|&k| held[k].0 - base > 0.3 * fs)
+                    .unwrap_or(held.len());
+                let mut line: Vec<BBox> = held[i..end].iter().map(|h| h.2).collect();
+                line.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+                if line.windows(2).any(|w| w[1].x0 - w[0].x1 > fs) {
+                    return false;
+                }
+                i = end;
+            }
+            // One text: in one of the group's cells, or set across the cuts
+            // between them. Text the cuts part cleanly is a value a column.
+            let cells: std::collections::BTreeSet<usize> = homes
+                .iter()
+                .flatten()
+                .copied()
+                .filter(|i| g.cols.contains(i))
+                .collect();
+            match cells.len() {
+                0 => false,
+                1 => true,
+                _ => self
+                    .region_text(glyphs, merges, 0..1, g.cols.clone())
+                    .is_some(),
+            }
+        };
+        let wide: Vec<&ColumnGroup> = groups.iter().filter(|g| g.cols.len() >= 2).collect();
+        if !wide.iter().all(|g| label(g)) {
+            return;
+        }
+        for g in wide {
+            for c in g.cols.start + 1..g.cols.end {
+                merges.continues_left[c] = true;
+            }
+        }
+        merges.full_width_row[0] = false;
+    }
+}
+
+/// Segments of rule along one boundary at most this far apart are one
+/// piece, drawn in parts.
+const RULE_JOIN: f64 = 1.0;
+
+/// A run of columns a piece of rule along a row boundary runs under, and
+/// the piece's extent.
+#[derive(Debug, Clone)]
+struct ColumnGroup {
+    cols: std::ops::Range<usize>,
+    x0: f64,
+    x1: f64,
 }
 
 /// Detect one table grid from a related set of ruling lines.
@@ -4871,5 +5112,114 @@ mod tests {
             g.region_text(&gl, &m, 0..2, 0..1).as_deref(),
             Some("KEYTRUDA in combination with axitinib")
         );
+    }
+
+    /// A table that groups its columns, ruled with horizontals only: a row
+    /// label column, then two groups of three, each group's label set over
+    /// a rule drawn under that group alone, the rules parted at the cut
+    /// between the groups. `top` is what is ruled where the group rules
+    /// are; `beside` is set on the labels' line over the row labels.
+    fn grouped_columns(
+        top: &[Rule],
+        beside: Option<&str>,
+    ) -> (Grid, Vec<Rule>, Vec<crate::glyph::Glyph>) {
+        let xs = [40.0, 140.0, 190.0, 240.0, 290.0, 340.0, 390.0, 440.0];
+        let mut rules = top.to_vec();
+        for y in [120.0, 135.0, 150.0] {
+            rules.push(h(40.0, 440.0, y));
+        }
+        let mut gl = set("Table 1. Prices", 40.0, 70.0);
+        gl.extend(set("2024", 200.0, 96.0));
+        gl.extend(set("Change", 345.0, 96.0));
+        if let Some(t) = beside {
+            gl.extend(set(t, 42.0, 96.0));
+        }
+        gl.extend(set("State", 42.0, 116.0));
+        for (i, name) in ["Under", "Surf", "Total", "Under", "Surf", "Total"]
+            .iter()
+            .enumerate()
+        {
+            gl.extend(set(name, xs[i + 1] + 2.0, 116.0));
+        }
+        for (y, label) in [(131.0, "Alabama"), (146.0, "Alaska")] {
+            gl.extend(set(label, 42.0, y));
+            for x in &xs[1..7] {
+                gl.extend(set("12.5", x + 10.0, y));
+            }
+        }
+        (grid(&xs, &[100.0, 120.0, 135.0, 150.0]), rules, gl)
+    }
+
+    fn group_rules() -> Vec<Rule> {
+        vec![h(140.0, 288.0, 100.0), h(292.0, 440.0, 100.0)]
+    }
+
+    #[test]
+    fn labels_over_the_rules_that_group_the_columns_are_the_top_row() {
+        let (mut g, rules, gl) = grouped_columns(&group_rules(), None);
+        g.take_group_labels(&rules, &gl);
+        assert_eq!(g.rows(), 4, "the labels' line is taken in");
+        assert!(
+            g.ys[0] < 90.0 && g.ys[0] > 80.0,
+            "and nothing above it: {:?}",
+            g.ys
+        );
+        let cells = g.cell_texts(&gl);
+        assert_eq!(cells[2], "2024");
+        let mut m = g.merges(&rules, &[]);
+        g.group_label_merges(&gl, &rules, &mut m);
+        assert_eq!(
+            &m.continues_left[..7],
+            &[false, false, true, true, false, true, true],
+            "each label spans the columns its rule runs under"
+        );
+    }
+
+    #[test]
+    fn a_rule_across_the_whole_table_groups_nothing() {
+        // The table's top edge, and over it the table's caption.
+        let (mut g, rules, gl) = grouped_columns(&[h(40.0, 440.0, 100.0)], None);
+        g.take_group_labels(&rules, &gl);
+        assert_eq!(g.rows(), 3);
+        // Ruled column by column: each column's own underline.
+        let cut: Vec<Rule> = [40.0, 140.0, 190.0, 240.0, 290.0, 340.0, 390.0]
+            .iter()
+            .map(|&x| h(x + 2.0, x + 48.0, 100.0))
+            .collect();
+        let (mut g, rules, gl) = grouped_columns(&cut, None);
+        g.take_group_labels(&rules, &gl);
+        assert_eq!(g.rows(), 3);
+    }
+
+    #[test]
+    fn a_line_over_the_unruled_columns_is_no_row_of_group_labels() {
+        // A label over the row labels set with them: the header above is
+        // more than one line of group labels, and none of it is taken.
+        let (mut g, rules, gl) = grouped_columns(&group_rules(), Some("Region"));
+        g.take_group_labels(&rules, &gl);
+        assert_eq!(g.rows(), 3);
+    }
+
+    #[test]
+    fn values_over_a_rule_that_leaves_a_column_out_keep_their_columns() {
+        // A total's figures, the rule under them leaving the label column
+        // out: three values, the cuts falling cleanly between them.
+        let xs = [40.0, 140.0, 190.0, 240.0];
+        let g = grid(&xs, &[100.0, 120.0, 135.0, 150.0]);
+        let mut rules = vec![h(140.0, 240.0, 120.0)];
+        rules.extend([135.0, 150.0].map(|y| h(40.0, 240.0, y)));
+        let mut gl = set("Total", 42.0, 116.0);
+        for x in &xs[1..4] {
+            gl.extend(set("12.5", x + 10.0, 116.0));
+        }
+        for y in [131.0, 146.0] {
+            gl.extend(set("Item", 42.0, y));
+            for x in &xs[1..4] {
+                gl.extend(set("1.0", x + 10.0, y));
+            }
+        }
+        let mut m = g.merges(&rules, &[]);
+        g.group_label_merges(&gl, &rules, &mut m);
+        assert!(!m.continues_left.iter().any(|x| *x));
     }
 }

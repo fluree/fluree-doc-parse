@@ -960,6 +960,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
 
+        // The labels a ruled table sets over the rules that group its
+        // columns are its top row. Taken in once the readings above are
+        // chosen: to them the rules under the labels are the table's top
+        // edge, not a boundary between its rows ruled short.
+        for (g, source) in grids.iter_mut().zip(&grid_sources) {
+            if *source == GridSource::Ruled {
+                g.take_group_labels(&p.rules, &p.glyphs);
+            }
+        }
+
         let prose = timed(&mut timings.columns, || {
             glyphs_outside_grids(&p.glyphs, &grids)
         });
@@ -1443,6 +1453,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     let page = &raw.pages[pi];
                     let mut m = g.merges(&page.rules, &page.fills);
                     g.text_merges(&page.glyphs, &page.rules, &mut m);
+                    g.group_label_merges(&page.glyphs, &page.rules, &mut m);
                     m
                 }
             };
