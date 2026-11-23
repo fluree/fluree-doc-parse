@@ -96,8 +96,9 @@ impl Block {
         let mut prev: Option<&Line> = None;
         for l in &self.lines {
             if !out.is_empty() {
-                // A hyphen at a line end is usually a soft break introduced by
-                // wrapping; joining without it restores the original word.
+                // A line ending on a hyphen joins the next as
+                // [`HyphenJoin::of`] reads it.
+                //
                 // A script that sets no spaces between its words wraps between
                 // any two characters, and a line it wrapped joins the next
                 // without one: `有限公` and `司` are one name. A line that
@@ -114,8 +115,14 @@ impl Block {
                         .chars()
                         .next()
                         .is_some_and(crate::line::wraps_anywhere);
-                if out.ends_with('-') {
-                    out.pop();
+                if let Some(stem) = out.strip_suffix('-') {
+                    match HyphenJoin::of(stem, &l.text) {
+                        HyphenJoin::Word => {
+                            out.pop();
+                        }
+                        HyphenJoin::Hyphen => {}
+                        HyphenJoin::Dash => out.push(' '),
+                    }
                 } else if !cjk {
                     out.push(' ');
                 }
@@ -124,6 +131,50 @@ impl Block {
             prev = Some(l);
         }
         out
+    }
+}
+
+/// What a hyphen ending a line is, and so how the line joins the next.
+#[derive(Debug, PartialEq)]
+enum HyphenJoin {
+    /// A break wrapping set inside a word (`microcom-` over `puter`):
+    /// dropped, and the word read whole.
+    Word,
+    /// The text's own, in a number, a code, a compound or a range
+    /// (`1-800-222-` over `1222`, `Polish-` over `German`, `(A)-` over
+    /// `(L)`): kept, the lines joined without a space.
+    Hyphen,
+    /// A dash, set apart from the word before it (`a pause -`): kept, the
+    /// lines joined with a space.
+    Dash,
+}
+
+impl HyphenJoin {
+    /// Read from the text before the hyphen and the next line.
+    ///
+    /// A typesetter breaks a word between two letters of one case, and
+    /// leaves at least two on each side. Anything else at the end of a line
+    /// was printed there: a figure beside it, a capital after a lowercase
+    /// letter or before one (`Fly-Casting`, `R-warfarin`), a single letter
+    /// (`e-mail`, `X-Forwarded`). An all-capital compound (`BY-PRODUCTS`)
+    /// cannot be told from an all-capital word broken (`SO-LAR`), and is
+    /// read as the word.
+    fn of(stem: &str, next: &str) -> HyphenJoin {
+        let Some(before) = stem.chars().next_back().filter(|c| !c.is_whitespace()) else {
+            return HyphenJoin::Dash;
+        };
+        let Some(after) = next.chars().next() else {
+            return HyphenJoin::Hyphen;
+        };
+        let left = stem.chars().rev().take_while(|c| c.is_alphabetic()).count();
+        let right = next.chars().take_while(|c| c.is_alphabetic()).count();
+        let one_case = (before.is_lowercase() && after.is_lowercase())
+            || (before.is_uppercase() && after.is_uppercase());
+        if one_case && left >= 2 && right >= 2 {
+            HyphenJoin::Word
+        } else {
+            HyphenJoin::Hyphen
+        }
     }
 }
 
@@ -1444,6 +1495,52 @@ mod tests {
     fn rejoins_hyphenated_line_break() {
         let lines = vec![l("innova-", 10.0, 0.0, 10.0), l("tion", 10.0, 12.0, 10.0)];
         assert_eq!(assemble(&lines, 1.2)[0].text(), "innovation");
+    }
+
+    #[test]
+    fn a_hyphen_beside_a_digit_or_a_capital_is_the_texts_own() {
+        let joined = |a: &str, b: &str| {
+            let lines = vec![l(a, 10.0, 0.0, 10.0), l(b, 10.0, 12.0, 10.0)];
+            assemble(&lines, 1.2)[0].text()
+        };
+        assert_eq!(
+            joined("call Poison Control (1-800-222-", "1222) right away."),
+            "call Poison Control (1-800-222-1222) right away."
+        );
+        assert_eq!(
+            joined("in the 2019-", "2020 period"),
+            "in the 2019-2020 period"
+        );
+        assert_eq!(
+            joined("The Polish-", "German Gazetteer"),
+            "The Polish-German Gazetteer"
+        );
+        assert_eq!(
+            joined("test kits are MESA-", "approved"),
+            "test kits are MESA-approved"
+        );
+        // A dash set apart from its words stays one.
+        assert_eq!(joined("a pause -", "then more"), "a pause - then more");
+    }
+
+    #[test]
+    fn a_hyphen_is_a_word_break_only_between_two_letters_of_one_case() {
+        use HyphenJoin::*;
+        for (stem, next, want) in [
+            ("microcom", "puter is", Word),
+            ("accidental", "ly drained", Word),
+            ("the SO", "LAR model", Word),
+            ("Fly", "Casting", Hyphen),
+            ("S-warfarin/R", "warfarin", Hyphen),
+            ("an e", "mail address", Hyphen),
+            ("the X", "Forwarded-Proto header", Hyphen),
+            ("PD-1/PD", "L1 inhibitors", Hyphen),
+            ("COVID", "19", Hyphen),
+            ("subdivisions (v)(1)(A)", "(L), (ae)(1)", Hyphen),
+            ("a pause ", "then", Dash),
+        ] {
+            assert_eq!(HyphenJoin::of(stem, next), want, "{stem}- / {next}");
+        }
     }
 
     #[test]

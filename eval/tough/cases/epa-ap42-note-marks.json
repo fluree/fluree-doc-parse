@@ -61,6 +61,32 @@
       "found": "2026-11-23",
       "issue": "As above, for a list of notes: 610e,f.",
       "no_text": "610e,f"
+    },
+    {
+      "id": "report-number-whole",
+      "found": "2026-11-23",
+      "issue": "A report number broken across lines at one of its hyphens lost it: EPA-530-R-92019.",
+      "text": "EPA-530-R-92-019"
+    },
+    {
+      "id": "compound-kept",
+      "found": "2026-11-23",
+      "issue": "A hyphen after a single letter at a line's end was dropped, so one of the two statements of the test read ttest.",
+      "text": "via a two sample t-test at a 95%",
+      "count": 2
+    },
+    {
+      "id": "address-kept",
+      "found": "2026-11-23",
+      "issue": "A web address broken at one of its hyphens lost it, so one of its two citations read no2pollution.",
+      "text": "available at https://www.epa.gov/no2-pollution/basic-information-about-no2",
+      "count": 2
+    },
+    {
+      "id": "page-reference-kept",
+      "found": "2026-11-23",
+      "issue": "Page references broken at their hyphens ran together: B11, C3Flares-1.",
+      "text": "B-21, B-22, C3-Flares-1)"
     }
   ]
 }

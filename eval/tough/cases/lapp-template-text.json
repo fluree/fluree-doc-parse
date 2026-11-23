@@ -28,6 +28,12 @@
       "found": "2026-11-23",
       "issue": "The last line of a repeated sentence, gland., was deleted, and the sentence ran into what followed.",
       "text": "cable gland. Application ranges"
+    },
+    {
+      "id": "standard-number-whole",
+      "found": "2026-11-23",
+      "issue": "A standard's number broken across lines at its hyphen ran together: EN 455452.",
+      "text": "DIN EN 45545-2, requirement sets"
     }
   ]
 }

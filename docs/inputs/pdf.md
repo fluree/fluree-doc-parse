@@ -107,6 +107,19 @@ as one name. A line that stops short was ended by hand, and the next is
 another item, so a space keeps them apart. Korean spaces its words and
 wraps at the spaces, and joins with one.
 
+**Hyphens at a line's end.** A hyphen ending a line between two letters of
+one case, with at least two on each side, is the break a typesetter set
+inside a word, and the word reads whole: `microcom-` over `puter` is
+`microcomputer`. Any other hyphen there is the text's own and stays, the
+lines joined without a space: in a number or a code (`1-800-222-` over
+`1222`, `EPA-530-R-92-019`), a compound with a capital or a single letter
+(`Polish-German`, `t-test`), a range (`(A)-(L)`). A hyphen with a space
+before it is a dash, and a space follows it too. An all-capital compound
+broken at its hyphen cannot be told from an all-capital word the typesetter
+broke, and reads as the word. Some producers map the hyphens they draw to
+U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
+draws nothing is dropped.
+
 **Bold inside the text.** A heading set in bold is bold from its first word
 to its last, so a line reads as bold only when it is: most of its glyphs
 bold, and its first and last words. A face that declares no weight counts
