@@ -321,6 +321,24 @@ fn layout_boxes(
     )
 }
 
+/// The size most of a page's text is set in: its prose, against which a
+/// drawing's labels are set smaller.
+fn prose_size(blocks: &[Block]) -> f32 {
+    let mut by_size: Vec<(f32, usize)> = Vec::new();
+    for b in blocks {
+        let size = (b.font_size * 2.0).round() / 2.0;
+        let chars: usize = b.lines.iter().map(|l| l.text.chars().count()).sum();
+        match by_size.iter_mut().find(|(s, _)| *s == size) {
+            Some((_, n)) => *n += chars,
+            None => by_size.push((size, chars)),
+        }
+    }
+    by_size
+        .into_iter()
+        .max_by_key(|&(_, n)| n)
+        .map_or(0.0, |(s, _)| s)
+}
+
 /// Fraction of a block that must lie inside a figure's box for the block to
 /// belong to it. High enough that a paragraph brushing the drawing's margin
 /// stays prose, low enough that a caption tucked under the axis comes along.
@@ -1324,9 +1342,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut figures = figure::detect(&page.fills, &page.rules, pi, (page.width, page.height));
         // The drawing does not contain its own labels; grow each region to
         // reach them before deciding which blocks belong to it.
-        let block_boxes: Vec<(crate::geom::BBox, usize)> =
-            blocks.iter().map(|b| (b.bbox, b.lines.len())).collect();
-        figure::attach(&mut figures, &block_boxes, (page.width, page.height));
+        let block_boxes: Vec<(crate::geom::BBox, f32)> =
+            blocks.iter().map(|b| (b.bbox, b.font_size)).collect();
+        figure::attach(
+            &mut figures,
+            &block_boxes,
+            (page.width, page.height),
+            prose_size(blocks),
+        );
         // Which figure each block falls in, if any. A block counts as inside
         // when most of it is: a caption sitting just below the drawing is
         // part of the figure, a paragraph merely overlapping its margin is
