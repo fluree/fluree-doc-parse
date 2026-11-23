@@ -1315,7 +1315,11 @@ fn fit_stacked(runs: &mut [Run], lines: &[Vec<usize>]) {
             let (ra, fa) = (&runs[a], runs[a].font);
             let reach = fa * STACKED_PITCH_EM;
             let from = by_base.partition_point(|l| l.0 <= ra.baseline - reach);
-            let to = by_base.partition_point(|l| l.0 < ra.baseline + reach);
+            // A run thinner than one step of its coordinate has no reach, and
+            // `to` would land before its own line: clamp it to `from`.
+            let to = by_base
+                .partition_point(|l| l.0 < ra.baseline + reach)
+                .max(from);
             by_base[from..to]
                 .iter()
                 .filter(|(_, k, _)| *k != line_of[a])
@@ -2518,6 +2522,24 @@ mod tests {
         assert_eq!(r[0].taken + r[0].dropped, 202);
         assert!(text_of(&doc.pages[0]).contains("tall"));
         assert!(!text_of(&doc.pages[0]).contains("huge"));
+    }
+
+    #[test]
+    fn a_box_one_float_step_tall_is_laid_without_a_panic() {
+        // Thinner than one step of its coordinate: it passes the `y1 > y0`
+        // check but lays out at size 0, with no reach for its neighbours.
+        let up = |y: f64| f64::from_bits(y.to_bits() + 1);
+        let alone = vec![word("ab", [72.0, 300.0, 142.0, up(300.0)])];
+        let beside = vec![
+            word("Balance", [72.0, 300.0, 140.0, 313.0]),
+            word("_", [144.0, 313.0, 160.0, up(313.0)]),
+        ];
+        for words in [alone, beside] {
+            let n = words.len();
+            let mut doc = blank_scan();
+            let r = inject(&mut doc, &[(0, Crop::Page, pdf_units(words))]);
+            assert_eq!(r[0].taken + r[0].dropped, n, "{r:?}");
+        }
     }
 
     #[test]
