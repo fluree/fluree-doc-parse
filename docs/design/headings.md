@@ -20,6 +20,28 @@ tells you how far down the ladder it came from.
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
+## Bold, throughout
+
+`bold` reads a line's weight, so a line must be set in bold, not hold some:
+most of its inked glyphs bold, and its first and last words with letters
+bold too. Three things make the line test stricter than a glyph vote:
+
+- **A face that declares no weight counts as regular.** Many documents
+  declare a weight for the bold face only. Counting only the glyphs that
+  declare one made a run-in label (`PUMP: With stainless steel pump…`)
+  most of its line.
+- **A label can fill most of its line** (`MICROCOMPUTER CONTROL SYSTEM:
+  Hobart`) and still end in the plain text it introduces, or open mid-line
+  (`Sani-Dwell. Chemical Sanitizing…`). The first and last words decide.
+- **Only words with letters decide.** A bold face's figures and signs often
+  come from a face that declares no weight (`E3/E3x`, a chart's
+  `October 2020`), and a heading may be numbered in another face (`3.2`).
+
+Block assembly then treats the line that opens on a bold label as the start
+of a paragraph, and a line that ran out of room as continuing into the next
+whatever the weights, so a run-in paragraph reads whole and bold words
+wrapped onto their own line stay in their sentence.
+
 ## Numbering that is not an outline
 
 A bare integer — `5 Results`, `2 — Never` — is the weakest numbering form,

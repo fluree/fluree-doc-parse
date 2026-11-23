@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "eppendorf-multipette-e3.pdf",
+    "url": "https://www.eppendorf.com/product-media/doc/en/148063/Eppendorf_Liquid-Handling_Technical-data_MultipetteE3-E3x_Combitips-advanced_Multipette-E3-E3x-Combitips-advanced-Performance-Data-Sheet.pdf",
+    "sha256": "2d4b6e0e628c0d56eedcc72a7b4e52ec50a3f27ce67b7eb222fcc1c35b48b45e",
+    "about": "Eppendorf Multipette E3/E3x performance data sheet (2 pages). Each item of its Applications list sets one abbreviation bold, Dispensing (Dis). Only the bold face declares a weight, and the bold face's digits and signs come from a face that declares none (E3/E3x)."
+  },
+  "checks": [
+    {
+      "id": "item-with-a-bold-abbreviation-is-no-section",
+      "found": "2026-11-23",
+      "issue": "An item holding one bold abbreviation was a level-5 section, and its wrapped second line a paragraph apart from it.",
+      "no_section": "> Dispensing (Dis)"
+    },
+    {
+      "id": "short-item-is-no-section",
+      "found": "2026-11-23",
+      "issue": "As above, for an item on one line.",
+      "no_section": "> Pipetting (Pip)"
+    },
+    {
+      "id": "heading-with-figures-from-another-face-kept",
+      "found": "2026-11-23",
+      "issue": "A guard: a bold heading whose figures come from a face that declares no weight is still bold.",
+      "section": {
+        "title": "Multipette® E3/E3x",
+        "level": 2
+      }
+    },
+    {
+      "id": "list-heading-kept",
+      "found": "2026-11-23",
+      "issue": "A guard: the bold heading over the list stays one.",
+      "section": {
+        "title": "Applications",
+        "level": 2
+      }
+    }
+  ]
+}
