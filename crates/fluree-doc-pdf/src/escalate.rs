@@ -81,10 +81,13 @@ pub type CropJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// asked for on a doubt about its headings, figures or columns, have all
 /// their text already and want a reader that sees structure: an OCR engine
 /// has nothing to add there, and should skip them. A table no grid covered
-/// usually has its text too, but may be a raster table too small for the
-/// router to send a reader: skip it only where the page's text covers it.
+/// usually has its text too, and an OCR engine skips it as well; a raster
+/// table too small for the router to send a reader is the known gap there.
 /// A table on a page read whole for a doubt goes with its page, under the
 /// doubt's reason.
+///
+/// The names ([`CropReason::as_str`]) are a stable contract: a producer may
+/// filter on them, and renaming or removing one is a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CropReason {
     /// A whole page with no meaningful text layer.
