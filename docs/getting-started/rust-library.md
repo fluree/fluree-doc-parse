@@ -97,6 +97,7 @@ Each reader returns the same `Vec<Element>`:
 
 ```rust
 let els = fluree_doc_markdown::parse(&src);       // &str
+let els = fluree_doc_text::parse(&src);           // &str; decode(&bytes) gives one
 let els = fluree_doc_html::parse(&src);           // &str
 let els = fluree_doc_docx::parse(&bytes)?;        // &[u8]
 let els = fluree_doc_pptx::parse(&bytes)?;        // &[u8]
@@ -108,6 +109,13 @@ let els = &email.elements;                        //   plus email.info, email.at
 
 Those elements have `bbox: None` — see [Measured vs declared
 structure](../concepts/geometry-vs-declared.md).
+
+A text file may be Markdown under another name; `fluree_doc_text::is_markdown`
+tells, as `fdoc` asks before choosing a reader. The HTML and plain-text
+readers read the headings a statute or contract shows without declaring them
+(`CHAPTER IV`, `Article 30`, `§ 7001. Definitions.`). The same reading is
+`fluree_doc_model::outline::infer_headings`, for elements from anywhere else;
+see [HTML](../inputs/office-and-web.md#html).
 
 ## What is a compatibility surface
 
@@ -150,5 +158,6 @@ stable — the same promise [`fdoc dev`](../cli/dev.md) makes about its output.
 `ExtractError`, `DocxError` and `PptxError` all implement
 `std::error::Error`, so they compose with `?`, `Box<dyn Error>` and `anyhow`.
 
-`fluree_doc_markdown::parse` and `fluree_doc_html::parse` are infallible —
-both formats are defined so that every byte sequence is a valid parse.
+`fluree_doc_markdown::parse`, `fluree_doc_text::parse` and
+`fluree_doc_html::parse` are infallible — each format is defined so that every
+byte sequence is a valid parse.

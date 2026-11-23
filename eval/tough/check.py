@@ -197,6 +197,11 @@ def run_check(check, reading):
             return True, None
         near = [s for s in reading.sections if s[0] == want["title"]]
         return False, f"as (title, level, within): {near[:2]}" if near else "no section has this title"
+    if "no_section" in check:
+        # No section headed by a title that begins with this: a line that
+        # must stay text, wherever and however often it occurs.
+        hits = [s[0] for s in reading.sections if (s[0] or "").startswith(check["no_section"])]
+        return not hits, None if not hits else f"{len(hits)} sections, e.g. {hits[0]!r}"
     raise SystemExit(f"unknown check kind in {check.get('id')}: {sorted(check)}")
 
 

@@ -18,6 +18,7 @@ path = "src/main.rs"
 fluree-doc-pdf = { path = "../fluree-doc-pdf", features = ["render"] }
 fluree-doc-model.workspace = true
 fluree-doc-markdown.workspace = true
+fluree-doc-text.workspace = true
 fluree-doc-docx.workspace = true
 fluree-doc-html.workspace = true
 fluree-doc-pptx.workspace = true

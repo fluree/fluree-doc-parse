@@ -8,10 +8,11 @@
 //! that publisher alone. The shape is common to all of them, so it is the
 //! shape that is read here, in the paragraphs any reader produces.
 //!
-//! Only a paragraph that is nothing but the keyword and its number is a
-//! heading. A heading run into its text (`Section 2.1 Closing. Unless this
-//! Agreement…`) stays a paragraph: taking it would make a heading of the
-//! clause it opens.
+//! A heading is a paragraph that is nothing but the keyword and its number,
+//! or those and a short title (`§ 7001. Definitions.`, `ARTICLE 1. GENERAL
+//! PROVISIONS`), or a code's section number alone (`1798.100.`). A heading
+//! run into its text (`Section 2.1 Closing. Unless this Agreement…`) stays a
+//! paragraph: taking it would make a heading of the clause it opens.
 
 use std::collections::HashMap;
 
@@ -36,6 +37,7 @@ const KEYWORDS: &[(&str, Kind, Option<&str>)] = &[
     ("subpart", Kind::Division, Some("part")),
     ("title", Kind::Division, None),
     ("subtitle", Kind::Division, Some("title")),
+    ("division", Kind::Division, None),
     ("chapter", Kind::Division, None),
     ("subchapter", Kind::Division, Some("chapter")),
     ("article", Kind::Unit, None),
@@ -80,13 +82,14 @@ const NUMBER_WORDS: &[&str] = &[
     "twenty",
 ];
 
-/// Is this a heading's number: `30`, `1.01`, `6a`, `IV`, `C`, `ONE`?
+/// Is this a heading's number: `30`, `1.01`, `6a`, `59.1-575`, `IV`, `C`,
+/// `ONE`?
 fn is_number(s: &str) -> bool {
     let s = s.strip_suffix('.').unwrap_or(s);
     if s.is_empty() {
         return false;
     }
-    let arabic = s.split('.').all(|part| {
+    let arabic = s.split(['.', '-']).all(|part| {
         let digits = part.trim_end_matches(|c: char| c.is_ascii_alphabetic());
         !digits.is_empty()
             && digits.chars().all(|c| c.is_ascii_digit())
@@ -98,29 +101,108 @@ fn is_number(s: &str) -> bool {
     arabic || roman || letter || word
 }
 
-/// The keyword a paragraph names when it is nothing but a heading:
-/// `CHAPTER IV`, `Article 30`, `Article\u{a0}43`, `§ 7002`, `SEC. 2.`.
-fn heading_keyword(text: &str) -> Option<&'static str> {
+/// What a heading paragraph says of its own title.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Title {
+    /// None: `Article 30`. The paragraph after it may be its title.
+    Apart,
+    /// One that stops at the line's end without a full stop, which a wrapped
+    /// line may finish: `§ 7004. Requirements … and Obtaining`.
+    Open,
+    /// One that is whole: `§ 7001. Definitions.`
+    Whole,
+}
+
+/// A paragraph read as a heading: the keyword it names and what it says of
+/// its title.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Heading {
+    keyword: &'static str,
+    title: Title,
+}
+
+/// A code's section number set as a heading of its own: `1798.100.`, and
+/// not a date (`4.5.2016`) or a paragraph's number (`1.`).
+fn code_number(t: &str) -> bool {
+    let Some(n) = t.strip_suffix('.') else {
+        return false;
+    };
+    let parts: Vec<&str> = n.split('.').collect();
+    parts.len() >= 2
+        && parts[0].len() >= 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The heading a paragraph is, if it is one: `CHAPTER IV`, `Article 30`,
+/// `Article\u{a0}43`, `§ 7002`, `SEC. 2.`; `§ 7001. Definitions.`, `ARTICLE 1.
+/// GENERAL PROVISIONS`; `1798.100.`.
+///
+/// A title on the heading's own line follows a number closed by a full
+/// stop, is short and one sentence at most, and is in title case or
+/// capitals, except after `§`, where a code's own titles are in sentence
+/// case (`Scope; exemptions.`). A paragraph that goes on past that is a
+/// clause that opens with its number.
+fn heading(text: &str) -> Option<Heading> {
     let t = text.trim();
-    if t.chars().count() > 40 || !t.starts_with(|c: char| c.is_uppercase() || c == '§') {
+    if code_number(t) {
+        return Some(Heading {
+            keyword: "section",
+            title: Title::Apart,
+        });
+    }
+    if !t.starts_with(|c: char| c.is_uppercase() || c == '§') {
         return None;
     }
     // `§7002` sets its number against the sign.
-    let (name, number) = match t.strip_prefix('§') {
+    let (name, rest) = match t.strip_prefix('§') {
         Some(rest) => ("§".to_string(), rest.trim_start()),
         None => {
-            let mut words = t.split_whitespace();
-            let (Some(name), Some(number), None) = (words.next(), words.next(), words.next())
-            else {
-                return None;
-            };
-            (name.to_lowercase(), number)
+            let (name, rest) = t.split_once(char::is_whitespace)?;
+            (name.to_lowercase(), rest.trim_start())
         }
     };
-    if number.split_whitespace().count() != 1 || !is_number(number) {
+    let keyword = keyword(&name)?.0;
+    let (number, after) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    let after = after.trim();
+    if !is_number(number) {
         return None;
     }
-    keyword(&name).map(|(k, _, _)| k)
+    if after.is_empty() {
+        return (t.chars().count() <= 40).then_some(Heading {
+            keyword,
+            title: Title::Apart,
+        });
+    }
+    let first = after
+        .trim_start_matches(['"', '\'', '“', '‘', '«'])
+        .chars()
+        .next();
+    let cased = name == "§" || title_case(after) || all_caps(after);
+    let one_sentence = !after.trim_end_matches('.').contains(". ");
+    if !number.ends_with('.')
+        || after.split_whitespace().count() > 16
+        || !first.is_some_and(|c| c.is_alphabetic() && c.is_uppercase())
+        || !cased
+        || !one_sentence
+    {
+        return None;
+    }
+    Some(Heading {
+        keyword,
+        title: if after.ends_with('.') {
+            Title::Whole
+        } else {
+            Title::Open
+        },
+    })
+}
+
+/// Is this line, standing alone, a heading? A plain-text reader asks, to
+/// set a heading apart from the lines under it that no blank line divides.
+pub fn is_heading(line: &str) -> bool {
+    heading(line).is_some()
 }
 
 /// Words a title leaves in lowercase.
@@ -164,7 +246,7 @@ fn title_like(text: &str) -> bool {
         return false;
     }
     let opening: String = t.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
-    if heading_keyword(t).is_some() || heading_keyword(&opening).is_some() {
+    if heading(t).is_some() || heading(&opening).is_some() {
         return false;
     }
     let first = t
@@ -281,23 +363,23 @@ pub fn infer_headings(elements: &mut Vec<Element>) -> bool {
     // begun at its first heading of another kind, list, table, or paragraph
     // of more than a dozen words; a filing's envelope lines are shorter.
     let mut body = false;
-    let heads: Vec<Option<&'static str>> = elements
+    let heads: Vec<Option<Heading>> = elements
         .iter()
         .map(|e| {
-            let k = (e.kind == "doco:Paragraph")
-                .then(|| heading_keyword(&e.text))
+            let h = (e.kind == "doco:Paragraph")
+                .then(|| heading(&e.text))
                 .flatten();
-            let attachment = k
-                .and_then(keyword)
+            let attachment = h
+                .and_then(|h| keyword(h.keyword))
                 .is_some_and(|(_, kind, _)| kind == Kind::Attachment);
             let named = attachment && !body;
-            body |= (k.is_some() && !attachment)
+            body |= (h.is_some() && !attachment)
                 || e.kind != "doco:Paragraph"
                 || e.text.split_whitespace().count() > 12;
-            k.filter(|_| !named)
+            h.filter(|_| !named)
         })
         .collect();
-    let found: Vec<&'static str> = heads.iter().flatten().copied().collect();
+    let found: Vec<&'static str> = heads.iter().flatten().map(|h| h.keyword).collect();
     if found.is_empty() {
         return false;
     }
@@ -309,8 +391,18 @@ pub fn infer_headings(elements: &mut Vec<Element>) -> bool {
     let mut old: Vec<Option<Element>> = std::mem::take(elements).into_iter().map(Some).collect();
     for i in 0..old.len() {
         let Some(mut e) = old[i].take() else { continue };
-        if let Some(k) = heads[i] {
-            if old.get(i + 1).is_some_and(is_title) {
+        if let Some(h) = heads[i] {
+            // A title its own line left open goes on in the next paragraph
+            // when that one ends it: `§ 7004. Requirements … and Obtaining`
+            // / `Consumer Consent.`
+            let finishes = |n: &Option<Element>| {
+                is_title(n) && n.as_ref().is_some_and(|n| n.text.ends_with('.'))
+            };
+            if h.title == Title::Open && old.get(i + 1).is_some_and(finishes) {
+                let rest = old[i + 1].take().unwrap();
+                absorb(&mut e, rest);
+            }
+            if h.title == Title::Apart && old.get(i + 1).is_some_and(is_title) {
                 let title = old[i + 1].take().unwrap();
                 let caps = all_caps(&title.text) && breaks_off(&title.text);
                 let words = title.text.split_whitespace().count();
@@ -329,7 +421,7 @@ pub fn infer_headings(elements: &mut Vec<Element>) -> bool {
                 }
             }
             e.kind = "doco:SectionTitle".into();
-            e.level = levels.get(k).copied();
+            e.level = levels.get(h.keyword).copied();
             e.evidence = "keyword";
         }
         elements.push(e);
@@ -551,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_paragraph_that_is_nothing_but_the_heading_is_one() {
+    fn only_a_heading_and_at_most_its_title_is_one() {
         for not in [
             "See Article 30.",
             "Article 30 applies.",
@@ -561,23 +653,128 @@ mod tests {
             "Section 1.1 Definitions. For purposes of this Agreement.",
             "Item 7",
             "Article (a)",
+            // A clause that opens with its number, in sentence case.
+            "Section 3. The parties agree to the terms set forth herein.",
+            // Two sentences: a heading run into its text.
+            "Section 2.1. Closing. Unless this Agreement terminates, it closes.",
+            "§ 7002. Definitions. A business shall comply.",
+            // A date, and a paragraph's number.
+            "4.5.2016",
+            "1.",
+            "12.5.",
         ] {
-            assert_eq!(heading_keyword(not), None, "{not}");
+            assert_eq!(heading(not), None, "{not}");
         }
-        for (yes, k) in [
-            ("CHAPTER IV", "chapter"),
-            ("Article\u{a0}43", "article"),
-            ("ARTICLE I.", "article"),
-            ("Section 4.2", "section"),
-            ("§ 7002", "section"),
-            ("SEC. 2.", "section"),
-            ("Article 6a", "article"),
-            ("PART ONE", "part"),
-            ("Exhibit 10.22", "exhibit"),
-            ("Schedule B", "schedule"),
+        use Title::*;
+        for (yes, k, title) in [
+            ("CHAPTER IV", "chapter", Apart),
+            ("Article\u{a0}43", "article", Apart),
+            ("ARTICLE I.", "article", Apart),
+            ("Section 4.2", "section", Apart),
+            ("§ 7002", "section", Apart),
+            ("SEC. 2.", "section", Apart),
+            ("Article 6a", "article", Apart),
+            ("PART ONE", "part", Apart),
+            ("Exhibit 10.22", "exhibit", Apart),
+            ("Schedule B", "schedule", Apart),
+            ("1798.100.", "section", Apart),
+            ("§ 7001. Definitions.", "section", Whole),
+            ("§ 59.1-576. Scope; exemptions.", "section", Whole),
+            ("ARTICLE 1. GENERAL PROVISIONS", "article", Open),
+            (
+                "DIVISION 6. CALIFORNIA PRIVACY PROTECTION AGENCY",
+                "division",
+                Open,
+            ),
+            (
+                "TITLE 1.81.5. California Consumer Privacy Act of 2018 [1798.100 - 1798.199.100]",
+                "title",
+                Open,
+            ),
         ] {
-            assert_eq!(heading_keyword(yes), Some(k), "{yes}");
+            assert_eq!(heading(yes), Some(Heading { keyword: k, title }), "{yes}");
         }
+    }
+
+    #[test]
+    fn a_code_reads_with_its_titles_on_their_own_lines() {
+        // How a state's regulations are set: each heading with its title on
+        // its line, one wrapped onto the next.
+        let els = read(&[
+            "TITLE 11. LAW",
+            "DIVISION 6. CALIFORNIA PRIVACY PROTECTION AGENCY",
+            "CHAPTER 1. CALIFORNIA CONSUMER PRIVACY ACT REGULATIONS",
+            "ARTICLE 1. GENERAL PROVISIONS",
+            "§ 7001. Definitions.",
+            "In addition to the definitions set forth in the Civil Code, for purposes of these regulations:",
+            "§ 7004. Requirements for Methods for Submitting CCPA Requests and Obtaining",
+            "Consumer Consent.",
+            "Except as expressly allowed by the CCPA and these regulations, businesses shall comply.",
+            "ARTICLE 2. REQUIRED DISCLOSURES TO CONSUMERS",
+            "§ 7010. Overview of Required Disclosures.",
+            "Summary Of Changes",
+        ]);
+        assert_eq!(
+            outline(&els),
+            [
+                (Some(1), "TITLE 11. LAW"),
+                (Some(2), "DIVISION 6. CALIFORNIA PRIVACY PROTECTION AGENCY"),
+                (Some(3), "CHAPTER 1. CALIFORNIA CONSUMER PRIVACY ACT REGULATIONS"),
+                (Some(4), "ARTICLE 1. GENERAL PROVISIONS"),
+                (Some(5), "§ 7001. Definitions."),
+                (
+                    None,
+                    "In addition to the definitions set forth in the Civil Code, for purposes of these regulations:"
+                ),
+                (
+                    Some(5),
+                    "§ 7004. Requirements for Methods for Submitting CCPA Requests and Obtaining Consumer Consent."
+                ),
+                (
+                    None,
+                    "Except as expressly allowed by the CCPA and these regulations, businesses shall comply."
+                ),
+                (Some(4), "ARTICLE 2. REQUIRED DISCLOSURES TO CONSUMERS"),
+                // A whole title takes nothing from the paragraph after it.
+                (Some(5), "§ 7010. Overview of Required Disclosures."),
+                (None, "Summary Of Changes"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_code_section_number_alone_heads_its_section() {
+        let els = read(&[
+            "PART 4. OBLIGATIONS ARISING FROM PARTICULAR TRANSACTIONS [1738 - 3273.91]",
+            "( Part 4 enacted 1872. )",
+            "1798.100.",
+            "General Duties of Businesses that Collect Personal Information",
+            "(a) A business that controls the collection of personal information shall inform consumers.",
+            "1798.105.",
+            "Consumers’ Right to Delete Personal Information",
+        ]);
+        assert_eq!(
+            outline(&els),
+            [
+                (
+                    Some(1),
+                    "PART 4. OBLIGATIONS ARISING FROM PARTICULAR TRANSACTIONS [1738 - 3273.91]"
+                ),
+                (None, "( Part 4 enacted 1872. )"),
+                (
+                    Some(2),
+                    "1798.100. General Duties of Businesses that Collect Personal Information"
+                ),
+                (
+                    None,
+                    "(a) A business that controls the collection of personal information shall inform consumers."
+                ),
+                (
+                    Some(2),
+                    "1798.105. Consumers’ Right to Delete Personal Information"
+                ),
+            ]
+        );
     }
 
     #[test]

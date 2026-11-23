@@ -6,7 +6,7 @@ Convert documents to Markdown, XHTML, JSON, DoCO JSON-LD or plain text.
 fdoc convert <FILE|DIR|->... [options]
 ```
 
-Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip transcripts,
+Reads PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip transcripts,
 and email (`.eml`, `.msg`). PDF structure is inferred from layout; the others declare theirs
 and carry no geometry. See [Input formats](../inputs/README.md).
 

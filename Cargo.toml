@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/fluree-doc-model",
     "crates/fluree-doc-markdown",
+    "crates/fluree-doc-text",
     "crates/fluree-doc-docx",
     "crates/fluree-doc-html",
     "crates/fluree-doc-pptx",
@@ -25,6 +26,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 fluree-doc-model = { path = "crates/fluree-doc-model" }
 fluree-doc-markdown = { path = "crates/fluree-doc-markdown" }
+fluree-doc-text = { path = "crates/fluree-doc-text" }
 fluree-doc-docx = { path = "crates/fluree-doc-docx" }
 fluree-doc-html = { path = "crates/fluree-doc-html" }
 fluree-doc-pptx = { path = "crates/fluree-doc-pptx" }
