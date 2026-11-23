@@ -579,6 +579,15 @@ impl<'a> Device<'a> for Collector {
                 span.inked.push(draw_index);
             }
         }
+        // A soft hyphen drawn with ink is the hyphen it prints. Some
+        // producers map every hyphen they draw to U+00AD, a compound's and a
+        // code's (`60-70`, `MESA-approved`) as well as the one a line break
+        // set (`microcom-` over `puter`), so it is read as `-`, and a line
+        // ending on it joins the next by the rule for a printed hyphen. One
+        // that draws nothing shows nothing.
+        if text.contains('\u{AD}') {
+            text = text.replace('\u{AD}', if inks { "-" } else { "" });
+        }
         self.ink.push(ink);
         self.glyphs.push(Glyph {
             text,
