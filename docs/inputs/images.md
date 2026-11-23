@@ -78,10 +78,21 @@ size, and inventing one from an assumed DPI would put a wrong number in
 turned upright by its EXIF orientation reports the upright size.
 
 For the model, and for words already read (`--ocr-words`), dimensions come
-from the file header and its EXIF orientation, without decoding. An engine
-decodes the image, since it reads its pixels: an image of more than 128
-million pixels is refused before anything is allocated, as a file of a few
-kilobytes can declare a size that takes gigabytes to decode.
+from the file header and its EXIF orientation, without decoding (a PNG's
+colour profile and text chunks are inflated within 16 MiB, past which they
+are dropped). An engine decodes the image, since it reads its pixels: an
+image of more than 128 million pixels, longer than 65,535 on a side, or of
+more than 512 MiB as stored (a 16-bit RGBA image of more than 64 Mi pixels)
+is refused before anything is allocated, as a file of a few kilobytes can
+declare a size that takes gigabytes to decode.
+
+Grey stays grey, one byte a pixel, and colour three; only an image with
+transparency is held as RGBA. Decoding peaks at about **1 GB** in the worst
+case, an 8-bit RGBA image at the cap turned a quarter by its EXIF
+orientation (the turn holds two copies); unturned, or grey, it takes half of
+that or less. The OCR engine then adds an RGB copy of the image (384 MB at
+the cap) and its own working memory. Size a worker for the largest images it
+takes.
 
 ## What a model reading does not give
 

@@ -53,15 +53,24 @@ pub struct Header {
     pub pages: usize,
 }
 
-/// The most pixels an image may hold to be decoded: 128 million, 512 MB as
-/// RGBA. A file's header states its size, and a few kilobytes of PNG can
-/// state a size that takes gigabytes to decode; such a file is refused
-/// before anything is allocated.
+/// The most pixels an image may hold to be decoded: 128 million. A file's
+/// header states its size, and a few kilobytes of PNG can state a size that
+/// takes gigabytes to decode; such a file is refused before anything is
+/// allocated.
+///
+/// What [`decode`] holds at once, under this cap and [`MAX_DECODED_BYTES`]:
+/// the image as stored (at most 512 MiB), its eight-bit copy where it is
+/// stored deeper, and a second copy while a quarter turn by its EXIF
+/// orientation is made. The worst case is an 8-bit RGBA image at the cap
+/// turned a quarter: about 1 GB (985 MiB measured). Unturned, or grey, it
+/// is half that or less. An OCR engine reading it adds an RGB copy (384 MB
+/// at the cap) once the turn is done, and its own working memory.
 pub const MAX_PIXELS: u64 = 128_000_000;
 
-/// The most bytes the decoder may produce, in the image's own colour type
-/// (16-bit RGBA at [`MAX_PIXELS`] is 1 GB).
-const MAX_DECODED_BYTES: u64 = 1 << 30;
+/// The most bytes the decoder may produce, in the image's own colour type:
+/// an 8-bit image keeps all of [`MAX_PIXELS`], one stored wider gets fewer
+/// pixels (64 Mi for 16-bit RGBA).
+const MAX_DECODED_BYTES: u64 = 512 << 20;
 
 /// The longest side an image may have to be decoded, in pixels: what bounds
 /// one row's buffer, so a one-pixel-high image a hundred million wide is
@@ -668,6 +677,12 @@ mod tests {
         // Within the pixels, too many bytes: floating-point RGBA.
         let e = decodable(10_000, 10_000, 1_600_000_000).unwrap_err();
         assert!(e.contains("16 bytes each"), "{e}");
+        // 8-bit RGBA at the cap is decoded; 16-bit RGBA is, up to 64 Mi
+        // pixels.
+        assert!(decodable(11_313, 11_313, 11_313 * 11_313 * 4).is_ok());
+        let e = decodable(11_313, 11_313, 11_313 * 11_313 * 8).unwrap_err();
+        assert!(e.contains("8 bytes each"), "{e}");
+        assert!(decodable(8192, 8192, 8192 * 8192 * 8).is_ok());
     }
 
     #[test]
