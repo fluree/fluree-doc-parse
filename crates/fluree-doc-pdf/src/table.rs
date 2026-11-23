@@ -372,9 +372,12 @@ impl Grid {
         // and a space glyph has none, so a cell's text was rebuilt from gaps
         // alone: a Helvetica space beside a digit is narrower than the gap
         // that reads as one (`paint,1 gal`, `SPF50200ml`), and a cell has too
-        // few gaps to measure its own. A space joins the cell that holds the
-        // ink on both sides of it on its line; one between two cells is the
-        // gap that separates them and stays out.
+        // few gaps to measure its own. A space joins the cell of the word it
+        // ends, when ink follows it on its line. Between two cells it is
+        // that cell's trailing space and trims away; where the two cells
+        // are one merged cell read whole, it is the space between its words
+        // (`Évolution depuis le T2 2026`, cut by the grid after `T2`, read
+        // `T22026` without it).
         let mut drawn: Vec<usize> = (0..glyphs.len())
             .filter(|&i| !glyphs[i].text.is_empty() && glyphs[i].is_horizontal())
             .collect();
@@ -411,10 +414,8 @@ impl Grid {
                 .take_while(|&j| same_line(j))
                 .find(|&j| !is_space(j));
             if let (Some(p), Some(n)) = (before, after) {
-                if let (Some(a), Some(b)) = (home[p], home[n]) {
-                    if a == b {
-                        home[s] = Some(a);
-                    }
+                if let (Some(a), Some(_)) = (home[p], home[n]) {
+                    home[s] = Some(a);
                 }
             }
         }
@@ -5183,6 +5184,26 @@ mod tests {
             g.region_text(&gl, &m, 0..1, 0..2).as_deref(),
             Some("Weight (kg)")
         );
+    }
+
+    #[test]
+    fn a_space_the_grid_cuts_after_stays_in_the_merged_cell() {
+        // `le T2 2026`, its year set a narrow space after the quarter and
+        // cut from it by the grid: the page's space glyph is the only sign
+        // of the word break, narrower than a gap between digits reads as.
+        let g = grid(&[0.0, 59.0, 120.0], &[0.0, 20.0]);
+        let mut gl = set("le T2", 30.0, 14.0);
+        let mut sp = set(" ", 57.5, 14.0);
+        sp[0].advance = Some(2.6);
+        gl.extend(sp);
+        gl.extend(set("2026", 60.1, 14.0));
+        let m = merged(&g, &[], &[(0, 1)]);
+        assert_eq!(
+            g.region_text(&gl, &m, 0..1, 0..2).as_deref(),
+            Some("le T2 2026")
+        );
+        // Each cell on its own trims the space away.
+        assert_eq!(g.cell_texts(&gl), ["le T2", "2026"]);
     }
 
     #[test]

@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "insee-IR270_Chomage_3T2026.pdf",
+    "url": "https://www.insee.fr/fr/statistiques/fichier/version-html/9118603/IR270_Chomage_3T2026.pdf",
+    "sha256": "011891a84957bf6b0c395433034bbee56d4bb314248335e0d6dc458ba34ec131",
+    "about": "INSEE Informations rapides no. 270, unemployment in the third quarter of 2026 (Licence Ouverte). A ruled table on page 7 heads its columns Évolution depuis le T2 2026, the year set a narrow space after the quarter and cut from it by the grid."
+  },
+  "notes": [
+    "The table read its cells' text from their ink alone, dropping the page's space glyphs, and a space between two digits narrower than a digit gap was lost."
+  ],
+  "checks": [
+    {
+      "id": "quarter-and-year-apart",
+      "found": "2026-11-23",
+      "issue": "The column header read Évolution depuis le T22026.",
+      "text": "Évolution depuis le T2 2026"
+    },
+    {
+      "id": "cumulative-header-apart",
+      "found": "2026-11-23",
+      "issue": "As above: Évolution cumulée depuis le T42024.",
+      "text": "Évolution cumulée depuis le T4 2024"
+    },
+    {
+      "id": "no-glued-quarter",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "no_text": "T22026"
+    }
+  ]
+}
