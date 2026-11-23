@@ -331,9 +331,11 @@ from the top down, joined with ` / ` (`Three months ended September 30, /
 its currency sign is under the period above both.
 
 A raised note mark is kept apart from the word it marks: `April 2026<sup>r</sup>`
-reads `April 2026 r`, and `Expenses<sup>1</sup>` reads `Expenses 1`. Raised
+reads `April 2026 r`, and `Expenses<sup>1</sup>` reads `Expenses 1`. So is a
+number raised after a quantity (`26TB<sup>1</sup>` reads `26TB 1`) or after a
+bracket that holds words (`(49 N)<sup>5</sup>` reads `(49 N) 5`). Raised
 text that belongs to the word stays in it: a unit's power
-(`m<sup>2</sup>` reads `m2`), an exponent (`10<sup>6</sup>`, `106`), an
+(`m<sup>2</sup>` reads `m2`, `PIES<sup>2</sup>` reads `PIES2`), an exponent (`10<sup>6</sup>`, `106`), an
 ordinal's ending (`1<sup>st</sup>`, `1st`) and a formula's index or power
 (`2<sup>p</sup>`, a raised letter after a single letter, a term of a formula
 set after `=`). PDFs follow the same rule for the raised glyphs they draw.
