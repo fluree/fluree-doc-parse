@@ -1710,7 +1710,6 @@ mod tests {
         // with the right fragment for want of a box — is no space at the cut.
         let mut indented = glyphs.clone();
         indented[1].origin.0 = 57.0;
-        let mut right = right;
         right.glyphs = vec![1, 2, 3];
         left.glyphs = vec![0];
         let mut v = vec![vec![left], vec![right]];
