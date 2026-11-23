@@ -102,7 +102,8 @@ cargo +nightly fuzz run xls corpus/xls seeds/xls -O -a -s none -- \
 
 [`fuzz/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/fuzz/README.md)
 lists the targets, how their seeds are made, and how a crash becomes a
-regression test.
+regression test. CI runs every target for 15 seconds over its seeds (the
+`fuzz` job), a smoke test rather than a campaign.
 
 ## Adding tests
 
