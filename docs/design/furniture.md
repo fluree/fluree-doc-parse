@@ -37,6 +37,36 @@ fdoc dev furniture report.pdf
 
 Measured on the regression document: 738 lines → 679 body lines, 59 removed.
 
+## Watermarks
+
+Away from the top and bottom of the page, repetition is not enough. A
+templated document (a data-sheet family, a catalogue, an install guide that
+repeats its figure in each language) sets real text at the same place on
+page after page: a spec table's labels, a box's heading, the close of a
+standard sentence. Taken for watermarks, these were deleted from every page,
+leaving values without their labels and sentences without their ends.
+
+A watermark also looks like one, and that is what is checked:
+
+- **Laid over the text.** A `DRAFT`, a diagonal `CONFIDENTIAL` or an
+  `Uncontrolled copy` stamp is drawn over (or under) the page's text, and
+  the text beneath it changes from page to page. It is set apart from that
+  text as a layer of its own: turned, much larger, or drawn before or after
+  all of it.
+- **Beside the text.** A note in a side margin (`For internal use only`, a
+  `Downloaded from …` line turned up the edge, a catalogue's thumb index)
+  shares no width with the page's other text.
+
+A watermark laid over the text is taken out before lines are assembled, as
+the run of glyphs it was drawn as. Left in, it shares the baseline of every
+line it crosses, and its letters are sorted in among that line's words:
+`imDpeller flangeR impeller gasAket`.
+
+Template text does neither: it sits among the page's lines, at their size,
+and nothing lies on it. A figure that repeats and overlaps its own labels
+does so the same way on every page, and is drawn among the page's text, so
+it is kept as well.
+
 ## Matching inside table cells
 
 Removing furniture from prose is not enough — it also has to be scrubbed from

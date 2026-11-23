@@ -705,10 +705,19 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let mut layouts: Vec<PageLayout> = Vec::new();
     let mut flat_lines: Vec<(Vec<Line>, f64)> = Vec::new();
 
+    // Glyphs drawn twice first: a copy laid on its own original is not a
+    // watermark laid over text.
     for p in raw.pages.iter_mut() {
         timed(&mut timings.dedup, || {
             dedup::remove_faux_bold(&mut p.glyphs, 8)
         });
+    }
+    // A watermark laid over the text, before it is read into the lines it
+    // crosses.
+    timed(&mut timings.furniture, || {
+        crate::watermark::strip_overlaid(&mut raw.pages)
+    });
+    for p in raw.pages.iter_mut() {
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
         // consumer of `rules` — grids, column rulers, row banding — would

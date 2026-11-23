@@ -64,6 +64,16 @@ aside before tables and figures are looked for: read as structure, a page of
 marked-up prose looked like a bar chart, or like a table of its numbered
 clauses.
 
+**Watermarks.** A `DRAFT`, a diagonal `CONFIDENTIAL` or an `Uncontrolled
+copy` stamp is drawn over the page's text, at the same place on every page.
+Read in place, its letters land among the words of every line it crosses.
+It is taken out before lines are read: a run of text that repeats at one
+place across pages and lies on the text beneath it, set apart from that
+text (turned, much larger, or drawn as a layer of its own), or stands in a
+margin beside all of it. Text a template repeats at the same place, such as
+a spec table's labels or a box's heading, sits among the page's lines and
+is kept.
+
 **Glyphs mapped to nothing.** Some producers map a glyph to U+FFFD, the
 character for "unknown", and every reader of the text layer then reads
 `d’a�aires` where the page prints `d’affaires`. Two such glyphs are read
