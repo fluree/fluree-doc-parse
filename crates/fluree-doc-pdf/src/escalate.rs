@@ -79,10 +79,13 @@ pub type CropJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// asked for on a doubt about its headings, figures or columns, have all
 /// their text already and want a reader that sees structure: an OCR engine
 /// has nothing to add there, and should skip them. A table no grid covered
-/// usually has its text too, but may be a raster table too small for the
-/// router to send a reader: skip it only where the page's text covers it.
+/// usually has its text too, and an OCR engine skips it as well; a raster
+/// table too small for the router to send a reader is the known gap there.
 /// A table on a page read whole for a doubt goes with its page, under the
 /// doubt's reason.
+///
+/// The names ([`CropReason::as_str`]) are a stable contract: a producer may
+/// filter on them, and renaming or removing one is a breaking change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CropReason {
     /// A whole page with no meaningful text layer.
@@ -500,7 +503,8 @@ pub fn crop_count(jobs: &CropJobs) -> usize {
 ///    whose every word the deterministic pass already has.
 ///
 /// Within a rank, earlier pages first. A whole-page job that superseded
-/// region crops on its page is one crop and is kept or dropped as one.
+/// region crops on its page is one crop, kept or dropped as one, and ranks
+/// with routed regions: the pixels it carries are still the text layer's gap.
 pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJobs, usize) {
     let total = crop_count(&jobs);
     if total <= max_crops {
@@ -517,11 +521,22 @@ pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJ
     for (order, (page, regions)) in jobs.into_iter().enumerate() {
         match regions {
             None => {
-                let routed = doc.pages.iter().find(|p| p.index == page).is_some_and(|p| {
-                    matches!(crate::route::decide(p).0, crate::route::Route::Vlm(_))
-                });
+                // Ranked by what the router sent the page: a page whose
+                // routed regions a doubt widened to the whole page still
+                // holds pixels only a reader can read, so it ranks with
+                // those regions, not with the doubt pages.
+                let routed = doc
+                    .pages
+                    .iter()
+                    .find(|p| p.index == page)
+                    .map(|p| crate::route::decide(p).0);
+                let rank = match routed {
+                    Some(crate::route::Route::Vlm(_)) => 0,
+                    Some(crate::route::Route::VlmRegions(_)) => 1,
+                    _ => 4,
+                };
                 crops.push(Ranked {
-                    rank: if routed { 0 } else { 4 },
+                    rank,
                     order,
                     page,
                     region: None,
@@ -1135,6 +1150,32 @@ mod tests {
         });
         let (jobs, _) = reasons_with_doubts(&read, &[]);
         assert!(jobs.is_empty(), "{jobs:?}");
+    }
+
+    #[test]
+    fn the_budget_keeps_a_doubt_page_with_raster_regions_before_a_table() {
+        // The page above, read whole for a doubt, and an untrusted table on
+        // another page: under a budget of one, the pixels only a reader can
+        // read come before a table whose text the deterministic pass has.
+        let mut p = page(0, 1500, false);
+        p.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 550.0,
+                y1: 300.0,
+            },
+            texty: true,
+        }];
+        let doc = Document {
+            pages: vec![p, page(1, 500, false)],
+        };
+        let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::Region));
+        jobs.push((1, Some(vec![region("t0")])));
+        let (kept, dropped) = within_budget(&doc, jobs, 1);
+        assert_eq!(dropped, 1);
+        assert_eq!(kept, vec![(0, None)], "the region page before the table");
     }
 
     #[test]
