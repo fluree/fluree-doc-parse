@@ -357,21 +357,26 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
         false => Vec::new(),
     };
     let rels = pkg.relationships(book);
+    // Each sheet's part by its relationship id, the first internal one
+    // that has it: found in one lookup per sheet listed, where a scan of
+    // every relationship for each made the listing's cost its square.
+    let mut targets = std::collections::HashMap::new();
+    for r in rels.iter().filter(|r| !r.external) {
+        targets.entry(r.id.as_str()).or_insert(r.target.as_str());
+    }
     let mut sheets = Vec::new();
     let mut total = 0u64;
     // A sheet part is read once, at its first listing: listed again, under
     // any name, it would be inflated and laid out again for each.
     let mut read = std::collections::HashSet::new();
     for (name, rel) in listed {
-        let target = rels
-            .iter()
-            .find(|r| r.id == rel && !r.external)
-            .map(|r| r.target.clone())
+        let target = *targets
+            .get(rel.as_str())
             .ok_or_else(|| malformed(&format!("sheet {name} names no part")))?;
-        if !read.insert(target.clone()) {
+        if !read.insert(target) {
             continue;
         }
-        let data = part(&mut pkg, &target)?;
+        let data = part(&mut pkg, target)?;
         let mut cells = Vec::new();
         let mut row = 0u32;
         for r in records(&data) {
@@ -580,6 +585,12 @@ pub(crate) mod tests {
 
     /// [`sheet_book`], its one sheet listed `times` times.
     fn listed_book(strings: &[String], cells: &[Vec<u8>], times: usize) -> Vec<u8> {
+        related_book(strings, cells, times, 0)
+    }
+
+    /// [`listed_book`], its workbook relating `others` ids no sheet names
+    /// before the sheet's.
+    fn related_book(strings: &[String], cells: &[Vec<u8>], times: usize, others: usize) -> Vec<u8> {
         let mut sst = rec(0x9F, &[0u8; 8]);
         for s in strings {
             sst.extend(rec(0x13, &[vec![0u8], wide(s)].concat()));
@@ -595,7 +606,10 @@ pub(crate) mod tests {
             rec(0x92, &[]),
         ]
         .concat();
-        let rels = "<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet1.bin\"/></Relationships>";
+        let rels = format!(
+            "<Relationships>{}<Relationship Id=\"rId1\" Target=\"worksheets/sheet1.bin\"/></Relationships>",
+            "<Relationship Id=\"p\" Target=\"a\"/>".repeat(others)
+        );
         let mut buf = Cursor::new(Vec::new());
         let mut z = zip::ZipWriter::new(&mut buf);
         for (name, data) in [
@@ -704,6 +718,17 @@ pub(crate) mod tests {
             shared_strings(&part, &mut slots(999)),
             Err(XlsError::TooLarge(ref m)) if m.contains("cells")
         ));
+    }
+
+    #[test]
+    fn a_sheet_is_found_among_the_relationships_in_one_lookup() {
+        // 10,000 listings and 500,000 relationships: each listing scanning
+        // them all, 1.9 million of them took 28 s in a release build.
+        let bytes = related_book(&[], &[inline(0, "a")], MAX_ENTRIES, 500_000);
+        let start = std::time::Instant::now();
+        assert!(parse_xlsb(&bytes).is_ok());
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]

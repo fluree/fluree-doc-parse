@@ -264,7 +264,8 @@ of 200 million empty shared strings (`<si/>`, five bytes of the part and a
 string in the table) aborted the process at 3 GB; it is refused now, at
 1.1 GB. A 3 KB one whose 5,000 cell styles each copied one format's
 megabyte of literals aborted at 3.9 GB; it takes 18 MB now. A workbook's
-million shared strings count 128 MB.
+million shared strings count 128 MB. A sheet's part is read once however
+many times the workbook lists it, as an `.xlsb`'s is.
 
 An `.xlsb`'s parts are not spent: the package is first inflated to nowhere
 against bounds of its own, 64 MiB a part and 256 MiB in all, and then its

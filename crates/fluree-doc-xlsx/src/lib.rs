@@ -48,6 +48,7 @@
 //! before they are allocated, and the passes that mend islands into blocks,
 //! which compare them pairwise, spend its work; past either, the workbook
 //! is refused. A number format is kept once, however many cell styles name
+//! it, and a sheet's part read once, however many times the workbook lists
 //! it. A sheet's merges past about a million cells are read unmerged,
 //! its tables past about four million cells of grid as their cells' text,
 //! and past 2,048 islands no island is mended.
@@ -197,15 +198,29 @@ pub fn parse_with_media(
     };
     let (sheets, date1904) = parse_workbook_xml(&workbook, &mut budget)?;
     let names = PartNames::new(&pkg);
+    // Each sheet's part by its relationship id, the first internal one
+    // that has it: found in one lookup per sheet listed, where a scan of
+    // every relationship for each made the listing's cost its square.
+    let mut targets: HashMap<&str, &str> = HashMap::new();
+    for r in rels.iter().filter(|r| !r.external) {
+        targets.entry(r.id.as_str()).or_insert(r.target.as_str());
+    }
+    // A sheet part is read once, at its first listing: listed again, under
+    // any name, its part, its drawing and their relationships would be
+    // read and laid out again for each.
+    let mut read = HashSet::new();
 
     let mut out = Vec::new();
     let mut media = Vec::new();
     let mut figure_count = 0usize;
     for (page, sheet_ref) in sheets.iter().enumerate() {
-        let Some(target) = rels.iter().find(|r| r.id == sheet_ref.rid && !r.external) else {
+        let Some(&target) = targets.get(sheet_ref.rid.as_str()) else {
             continue;
         };
-        let Some(xml) = pkg.read_within(&target.target, &mut budget)? else {
+        if !read.insert(target) {
+            continue;
+        }
+        let Some(xml) = pkg.read_within(target, &mut budget)? else {
             continue;
         };
         let ctx = Context {
@@ -219,7 +234,7 @@ pub fn parse_with_media(
         let mut figures = Vec::new();
         if let Some(rid) = &sheet.drawing {
             let drawing = pkg
-                .relationships(&target.target)
+                .relationships(target)
                 .into_iter()
                 .find(|r| r.id == *rid && !r.external)
                 .map(|r| r.target);
@@ -3778,6 +3793,62 @@ mod tests {
         let bytes = zw.finish().unwrap().into_inner();
         assert!(matches!(parse(&bytes), Err(XlsxError::NoWorkbook)));
         assert!(matches!(parse(b"not a zip"), Err(XlsxError::Zip(_))));
+    }
+
+    /// A workbook listing `listed` sheets, each by the relationship id
+    /// `rId1`, and relating `rels` ids no sheet names before the sheet's
+    /// part, `rId1`, once external and then within the package.
+    fn listing(listed: usize, rels: usize) -> Vec<u8> {
+        use std::io::Write;
+        let list: String = (0..listed)
+            .map(|i| format!("<sheet name=\"S{i}\" r:id=\"rId1\"/>"))
+            .collect();
+        let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+        let others = "<Relationship Id=\"p\" Target=\"a\"/>".repeat(rels);
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, body) in [
+            (
+                "xl/workbook.xml",
+                format!("<workbook {NS}><sheets>{list}</sheets></workbook>"),
+            ),
+            (
+                "xl/_rels/workbook.xml.rels",
+                format!(
+                    "<Relationships>{others}\
+                     <Relationship Id=\"rId1\" Type=\"{rel}\" Target=\"https://example.com/x.xml\" TargetMode=\"External\"/>\
+                     <Relationship Id=\"rId1\" Type=\"{rel}\" Target=\"worksheets/sheet1.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "xl/worksheets/sheet1.xml",
+                sheet(&[text("A1", 0, "cell")], ""),
+            ),
+        ] {
+            zw.start_file(name, opts).unwrap();
+            zw.write_all(body.as_bytes()).unwrap();
+        }
+        zw.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn a_sheet_listed_again_is_read_once() {
+        // Its first internal relationship names its part; listed again,
+        // under any name, it is not read again.
+        let els = parse(&listing(3, 0)).unwrap();
+        let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts, vec!["S0", "cell"]);
+    }
+
+    #[test]
+    fn a_sheet_is_found_among_the_relationships_in_one_lookup() {
+        // 20,000 listings and 200,000 relationships, 21 KB zipped: each
+        // listing scanning them all took 15 s in a release build.
+        let bytes = listing(20_000, 200_000);
+        let start = std::time::Instant::now();
+        assert_eq!(parse(&bytes).unwrap().len(), 2);
+        let took = start.elapsed();
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     const XDR: &str = r#"xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
