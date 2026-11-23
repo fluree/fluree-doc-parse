@@ -122,8 +122,10 @@ let engine = OarEngine::open(Path::new("/opt/assets/ocr"), &OarOptions::default(
 
 // Per document, before `analyze`.
 // Each crop at the resolution of the image under it: what an engine reads.
+// At most 1,000 crops a document, as `ocr.max_crops` defaults to; 0 for no
+// limit.
 let stored = fluree_doc_pdf::escalate::CropScale::Stored;
-let pass = ocr::read_pages(&mut doc, &pdf, &engine, None, stored);
+let pass = ocr::read_pages(&mut doc, &pdf, &engine, None, stored, 1000);
 let mut analysis = document::analyze(&mut doc, &ol);
 ocr::mark_provenance(&mut analysis.elements, &pass.injected);
 ```
