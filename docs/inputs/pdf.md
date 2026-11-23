@@ -64,6 +64,20 @@ aside before tables and figures are looked for: read as structure, a page of
 marked-up prose looked like a bar chart, or like a table of its numbered
 clauses.
 
+**Glyphs mapped to nothing.** Some producers map a glyph to U+FFFD, the
+character for "unknown", and every reader of the text layer then reads
+`d’a�aires` where the page prints `d’affaires`. Two such glyphs are read
+from their shape instead:
+
+- A ligature (`ff`, `fi`, `fl`, `ffi`, `ffl`), often set in a font of its
+  own that keeps no names or character map, is compared with the same
+  family's `f`, `i` and `l` as the document draws them elsewhere, set
+  together. It is named after the ligature it matches best, when that match
+  is close and clearly better than any other; otherwise it is left unknown.
+- A small round mark resting on the baseline is a full stop: the dot
+  leaders between a table's labels and its figures, a decimal point, the
+  stops in `U.S.`.
+
 **NFKC normalization.** Ligatures arrive as single codepoints; searching
 un-normalized output for `profile` finds one occurrence in six. Normalization
 can change string length, so the engine keeps a bijective map between raw
