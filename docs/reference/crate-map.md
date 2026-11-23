@@ -81,6 +81,10 @@ own, so they are listed here.
 - `fluree_doc_xls::XlsError` has a new variant, `Package`, for an `.xlsb`
   that is no readable zip; the enum is not `#[non_exhaustive]`, so an
   exhaustive `match` on it needs the arm.
+- `fluree_doc_xlsx::CellStyle::format` is an `Arc<NumFmt>`: the cell
+  styles that name a number format share it. `parse_styles` and
+  `parse_shared_strings` read within a default budget, and return
+  `XlsxError::TooLarge` past it.
 - `fluree_doc_odf::MAX_PART_BYTES`, `MAX_TEXT_CELLS` and
   `MAX_TEXT_CELL_BYTES` are gone: an OpenDocument part and its tables are
   spent from the budget instead.

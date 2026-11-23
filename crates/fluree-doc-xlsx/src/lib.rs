@@ -41,12 +41,14 @@
 //! wanting the address has the table's row and column.
 //!
 //! **Bounds.** A cell past Excel's grid ([`MAX_ROWS`], [`MAX_COLUMNS`]) is
-//! not read. Every cell read and every copy the layout makes of it, every
-//! cell a merge covers or a table's grid holds, every element made and the
-//! text of each cell are spent from the workbook's [`Budget`] before they
-//! are allocated, and the passes that mend islands into blocks, which
-//! compare them pairwise, spend its work; past either, the workbook is
-//! refused. A sheet's merges past about a million cells are read unmerged,
+//! not read. Every part read whole, every shared string, cell style and
+//! sheet listed, every cell read and every copy the layout makes of it,
+//! every cell a merge covers or a table's grid holds, every element made
+//! and the text of each cell are spent from the workbook's [`Budget`]
+//! before they are allocated, and the passes that mend islands into blocks,
+//! which compare them pairwise, spend its work; past either, the workbook
+//! is refused. A number format is kept once, however many cell styles name
+//! it. A sheet's merges past about a million cells are read unmerged,
 //! its tables past about four million cells of grid as their cells' text,
 //! and past 2,048 islands no island is mended.
 
@@ -69,6 +71,7 @@ pub use fluree_doc_ooxml::{read_media, read_media_head, read_pictures, MAX_MEDIA
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum XlsxError {
@@ -184,17 +187,15 @@ pub fn parse_with_media(
         part("sharedStrings", "xl/sharedStrings.xml"),
         part("styles", "xl/styles.xml"),
     );
-    let shared = pkg
-        .read_within(&shared, &mut budget)?
-        .map(|x| parse_shared_strings(&x))
-        .transpose()?
-        .unwrap_or_default();
-    let styles = pkg
-        .read_within(&styles, &mut budget)?
-        .map(|x| parse_styles(&x))
-        .transpose()?
-        .unwrap_or_default();
-    let (sheets, date1904) = parse_workbook_xml(&workbook)?;
+    let shared = match pkg.read_within(&shared, &mut budget)? {
+        Some(x) => read_shared_strings(&x, &mut budget)?,
+        None => Vec::new(),
+    };
+    let styles = match pkg.read_within(&styles, &mut budget)? {
+        Some(x) => read_styles(&x, &mut budget)?,
+        None => Styles::default(),
+    };
+    let (sheets, date1904) = parse_workbook_xml(&workbook, &mut budget)?;
     let names = PartNames::new(&pkg);
 
     let mut out = Vec::new();
@@ -510,7 +511,10 @@ struct SheetRef {
     rid: String,
 }
 
-fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
+/// The sheets the workbook lists, each and its name and relationship id
+/// spent from `budget` before it is kept, and whether it counts dates from
+/// 1904.
+fn parse_workbook_xml(xml: &str, budget: &mut Budget) -> Result<(Vec<SheetRef>, bool), XlsxError> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut sheets = Vec::new();
@@ -523,6 +527,9 @@ fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
                 "sheet" => {
                     let name = attr(&e, "name").unwrap_or_default();
                     let rid = attr(&e, "id").unwrap_or_default();
+                    budget.spend_cells(1)?;
+                    budget.spend_text(&name)?;
+                    budget.spend_text(&rid)?;
                     sheets.push(SheetRef { name, rid });
                 }
                 "workbookPr" => {
@@ -541,6 +548,14 @@ fn parse_workbook_xml(xml: &str) -> Result<(Vec<SheetRef>, bool), XlsxError> {
 /// The shared string table, one entry per `<si>`, rich-text runs joined and
 /// phonetic guides (`<rPh>`) left out.
 pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
+    read_shared_strings(xml, &mut Budget::default())
+}
+
+/// [`parse_shared_strings`], each entry spent from `budget` as a cell slot
+/// before it is kept: `<si/>` is five bytes of the part, and a string in
+/// the table. Their text is no more than the part's, which is spent as it
+/// is read; a copy of one is spent where a cell names it.
+fn read_shared_strings(xml: &str, budget: &mut Budget) -> Result<Vec<String>, XlsxError> {
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -560,6 +575,7 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
             },
             Ok(Event::Empty(e)) => {
                 if local(e.name().as_ref()) == "si" {
+                    budget.spend_cells(1)?;
                     out.push(String::new());
                 }
             }
@@ -571,7 +587,14 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
                 }
             }
             Ok(Event::End(e)) => match local(e.name().as_ref()) {
-                "si" => out.push(cur.take().unwrap_or_default()),
+                "si" => {
+                    budget.spend_cells(1)?;
+                    // Runs joined leave room behind them; the table keeps
+                    // the text only.
+                    let mut s = cur.take().unwrap_or_default();
+                    s.shrink_to_fit();
+                    out.push(s);
+                }
                 "rPh" => phonetic = phonetic.saturating_sub(1),
                 "t" => in_t = false,
                 _ => {}
@@ -585,9 +608,12 @@ pub fn parse_shared_strings(xml: &str) -> Result<Vec<String>, XlsxError> {
 
 /// What a cell's style index resolves to: how its number displays, and
 /// whether its font is bold and how large.
+///
+/// The format is shared: every cell style that names a number format holds
+/// the one the workbook declares, not a copy of it with its literals.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CellStyle {
-    pub format: NumFmt,
+    pub format: Arc<NumFmt>,
     pub bold: bool,
     pub size: f32,
 }
@@ -595,7 +621,7 @@ pub struct CellStyle {
 impl Default for CellStyle {
     fn default() -> Self {
         Self {
-            format: NumFmt::General,
+            format: Arc::new(NumFmt::General),
             bold: false,
             size: 11.0,
         }
@@ -662,6 +688,9 @@ fn builtin_fmt(id: u32) -> NumFmt {
         _ => NumFmt::General,
     }
 }
+
+/// The last id [`builtin_fmt`] knows: every id past it is General.
+const LAST_BUILTIN_FMT: u32 = 58;
 
 /// Classify a custom format code. Quoted literals, bracketed conditions and
 /// locale tags, and escaped characters say nothing about the value, so they
@@ -978,9 +1007,20 @@ fn round_decimal(v: f64, decimals: usize) -> (String, String) {
 /// `xl/styles.xml`: custom number formats, fonts, and the cell style table
 /// that indexes both.
 pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
+    read_styles(xml, &mut Budget::default())
+}
+
+/// [`parse_styles`], each number format (its literals as text) and each
+/// cell style spent from `budget` before it is kept. A cell style holds
+/// its number format shared, so one format's literals are kept once
+/// however many styles name it.
+fn read_styles(xml: &str, budget: &mut Budget) -> Result<Styles, XlsxError> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
-    let mut custom: HashMap<u32, NumFmt> = HashMap::new();
+    // The number formats the file declares, by id, and the built-in ones
+    // named so far, each made once.
+    let mut custom: HashMap<u32, Arc<NumFmt>> = HashMap::new();
+    let mut builtin: HashMap<u32, Arc<NumFmt>> = HashMap::new();
     let mut fonts: Vec<(bool, f32)> = Vec::new();
     let mut xfs: Vec<CellStyle> = Vec::new();
     let mut in_fonts = false;
@@ -1022,7 +1062,9 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
                 });
                 if let (Some(id), Some(code)) = (attr(&e, "numFmtId"), code) {
                     if let Ok(id) = id.parse::<u32>() {
-                        custom.insert(id, custom_fmt(&code));
+                        budget.spend_cells(1)?;
+                        budget.spend_text(&code)?;
+                        custom.insert(id, Arc::new(custom_fmt(&code)));
                     }
                 }
             }
@@ -1051,10 +1093,18 @@ pub fn parse_styles(xml: &str) -> Result<Styles, XlsxError> {
                 let num = attr(&e, "numFmtId")
                     .and_then(|v| v.parse::<u32>().ok())
                     .unwrap_or(0);
-                let format = custom
-                    .get(&num)
-                    .cloned()
-                    .unwrap_or_else(|| builtin_fmt(num));
+                budget.spend_cells(1)?;
+                let format = match custom.get(&num) {
+                    Some(f) => f.clone(),
+                    // Every id past the last built-in is General, one of them.
+                    None => {
+                        let id = num.min(LAST_BUILTIN_FMT + 1);
+                        builtin
+                            .entry(id)
+                            .or_insert_with(|| Arc::new(builtin_fmt(id)))
+                            .clone()
+                    }
+                };
                 let (bold, size) = attr(&e, "fontId")
                     .and_then(|v| v.parse::<usize>().ok())
                     .and_then(|i| fonts.get(i).copied())
@@ -1234,7 +1284,7 @@ pub fn format_number(raw: &str, style: &CellStyle, date1904: bool) -> String {
     let Ok(v) = raw.trim().parse::<f64>() else {
         return raw.trim().to_string();
     };
-    match &style.format {
+    match &*style.format {
         NumFmt::General => format_general(v),
         NumFmt::Percent(decimals) => format!("{:.*}%", decimals, v * 100.0),
         NumFmt::Number(f) => f.format(v),
@@ -1259,7 +1309,7 @@ pub fn cell_datum(kind: &str, value: &str, style: &CellStyle, date1904: bool) ->
         "d" => fluree_doc_model::xsd_temporal(v).map(|(ty, v)| Datum::new(ty, v)),
         "" | "n" => {
             let n = v.parse::<f64>().ok().filter(|n| n.is_finite())?;
-            let serial = match style.format {
+            let serial = match *style.format {
                 NumFmt::Date | NumFmt::Time | NumFmt::DateTime => {
                     serial_datum(n, &style.format, date1904)
                 }
@@ -2239,7 +2289,8 @@ fn element(kind: &str, text: String, level: Option<usize>, page: usize) -> Eleme
 mod tests {
     use super::*;
     use fluree_doc_model::budget::{
-        Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        text_cost, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+        TEXT_BYTES,
     };
 
     /// [`grid_elements`] within the default budget.
@@ -2579,6 +2630,63 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn each_shared_string_is_spent_before_it_is_kept() {
+        // `<si/>` is five bytes of the part and a string in the table: two
+        // hundred million of them, 1.5 MB zipped, took the process down.
+        let xml = |n: usize| format!("<sst {NS}>{}<si><t>a</t></si></sst>", "<si/>".repeat(n - 1));
+        let slots = |n: u64| Budget::new(n * CELL_BYTES, 0);
+        let table = read_shared_strings(&xml(1_000), &mut slots(1_000)).unwrap();
+        assert_eq!(table.len(), 1_000);
+        assert_eq!(table[999], "a");
+        assert!(matches!(
+            read_shared_strings(&xml(1_000), &mut slots(999)),
+            Err(XlsxError::TooLarge(_))
+        ));
+    }
+
+    #[test]
+    fn a_number_format_is_kept_once_however_many_styles_name_it() {
+        // A format's literals named by every style: copied into each, a
+        // megabyte of them under 5,000 styles, 3 KB zipped, took the
+        // process down.
+        let xml = |literal: &str, n: usize| {
+            format!(
+                "<styleSheet {NS}><numFmts count=\"1\"><numFmt numFmtId=\"200\" formatCode=\"&quot;{literal}&quot;0\"/></numFmts><cellXfs>{}</cellXfs></styleSheet>",
+                "<xf numFmtId=\"200\"/><xf numFmtId=\"3\"/><xf numFmtId=\"9999\"/>".repeat(n)
+            )
+        };
+        let st = parse_styles(&xml(&"A".repeat(1 << 20), 1_000)).unwrap();
+        assert_eq!(st.xfs.len(), 3_000);
+        assert!(st
+            .xfs
+            .chunks(3)
+            .all(|x| { (0..3).all(|k| Arc::ptr_eq(&x[k].format, &st.xfs[k].format)) }));
+        assert_eq!(format_number("7", &st.xfs[2_999], false), "7");
+        assert_eq!(format_number("1234", &st.xfs[2_998], false), "1,234");
+        // The format, its literals as text, and each style, spent before
+        // they are kept.
+        let format = CELL_BYTES + text_cost("\"AB\"0") * TEXT_BYTES;
+        let spent = |n: u64| Budget::new(format + n * CELL_BYTES, 0);
+        assert!(read_styles(&xml("AB", 100), &mut spent(300)).is_ok());
+        assert!(matches!(
+            read_styles(&xml("AB", 100), &mut spent(299)),
+            Err(XlsxError::TooLarge(_))
+        ));
+    }
+
+    #[test]
+    fn each_sheet_listed_is_spent_before_it_is_kept() {
+        let xml = format!(
+            "<workbook {NS}><sheets>{}</sheets></workbook>",
+            "<sheet name=\"Sheet\" r:id=\"rId1\"/>".repeat(100)
+        );
+        let each = CELL_BYTES + (text_cost("Sheet") + text_cost("rId1")) * TEXT_BYTES;
+        let (sheets, _) = parse_workbook_xml(&xml, &mut Budget::new(100 * each, 0)).unwrap();
+        assert_eq!(sheets.len(), 100);
+        assert!(parse_workbook_xml(&xml, &mut Budget::new(100 * each - 1, 0)).is_err());
+    }
+
     const NS: &str = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
 
     /// A cell: reference, type attribute (`""` for a number), style index,
@@ -2625,7 +2733,11 @@ mod tests {
     /// Styles 0: body; 1: bold body; 2: bold 16pt; 3: 9pt; 4: percent with
     /// one decimal; 5: date; 6: date-time.
     fn styles() -> Styles {
-        let st = |format, bold, size| CellStyle { format, bold, size };
+        let st = |format, bold, size| CellStyle {
+            format: Arc::new(format),
+            bold,
+            size,
+        };
         Styles {
             xfs: vec![
                 st(NumFmt::General, false, 11.0),
@@ -2869,7 +2981,7 @@ mod tests {
         assert_eq!(
             st.xfs[0],
             CellStyle {
-                format: NumFmt::General,
+                format: Arc::new(NumFmt::General),
                 bold: false,
                 size: 11.0
             }
@@ -2877,12 +2989,12 @@ mod tests {
         assert_eq!(
             st.xfs[1],
             CellStyle {
-                format: NumFmt::Date,
+                format: Arc::new(NumFmt::Date),
                 bold: true,
                 size: 14.0
             }
         );
-        assert_eq!(st.xfs[2].format, NumFmt::Percent(2));
+        assert_eq!(*st.xfs[2].format, NumFmt::Percent(2));
         // A quoted currency arrives entity-escaped in the attribute.
         let xml = format!(
             "<styleSheet {NS}><numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"&quot;$&quot;#,##0.00\"/></numFmts>\
@@ -2890,7 +3002,7 @@ mod tests {
         );
         let quoted = parse_styles(&xml).unwrap();
         assert_eq!(format_number("14.5", &quoted.xfs[0], false), "$14.50");
-        assert_eq!(st.xfs[3].format, NumFmt::DateTime);
+        assert_eq!(*st.xfs[3].format, NumFmt::DateTime);
         assert!(st.xfs[3].bold);
     }
 
@@ -2933,7 +3045,7 @@ mod tests {
     #[test]
     fn a_cell_stores_its_value_typed_beneath_what_it_shows() {
         let st = |format| CellStyle {
-            format,
+            format: Arc::new(format),
             ..Default::default()
         };
         let datum = |kind: &str, v: &str, format| cell_datum(kind, v, &st(format), false);

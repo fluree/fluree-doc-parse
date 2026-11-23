@@ -251,9 +251,11 @@ fn date_formats(part: &[u8]) -> Result<Vec<bool>, XlsError> {
 }
 
 /// The shared strings, in order: no more text than their part holds, which
-/// is read to at most [`MAX_PART_BYTES`]. A copy of one is spent where a
+/// is read to at most [`MAX_PART_BYTES`], and each entry spent from
+/// `budget` as a cell slot before it is kept (an empty one is a record of
+/// seven bytes, and a string in the table). A copy of one is spent where a
 /// cell names it.
-fn shared_strings(part: &[u8]) -> Result<Vec<String>, XlsError> {
+fn shared_strings(part: &[u8], budget: &mut Budget) -> Result<Vec<String>, XlsError> {
     let mut out = Vec::new();
     for r in records(part) {
         let r = r?;
@@ -261,6 +263,7 @@ fn shared_strings(part: &[u8]) -> Result<Vec<String>, XlsError> {
         if r.typ == 0x0013 {
             let (s, _) =
                 wide(r.data, 1).ok_or_else(|| malformed("a shared string record is cut short"))?;
+            budget.spend_cells(1).map_err(too_large)?;
             out.push(s);
         }
     }
@@ -346,7 +349,7 @@ fn read(bytes: &[u8], budget: &mut Budget) -> Result<Vec<GridSheet>, XlsError> {
     let names = pkg.part_names();
     let has = |n: &str| names.iter().any(|p| p == n);
     let strings = match has("xl/sharedStrings.bin") {
-        true => shared_strings(&part(&mut pkg, "xl/sharedStrings.bin")?)?,
+        true => shared_strings(&part(&mut pkg, "xl/sharedStrings.bin")?, budget)?,
         false => Vec::new(),
     };
     let dates = match has("xl/styles.bin") {
@@ -681,6 +684,25 @@ pub(crate) mod tests {
         assert!(matches!(
             parse_xlsb(&listed_book(&[], &cells, MAX_ENTRIES + 1)),
             Err(XlsError::TooLarge(ref m)) if m.contains("sheets")
+        ));
+    }
+
+    #[test]
+    fn each_shared_string_is_spent_before_it_is_kept() {
+        // An empty one is a record of seven bytes and a string in the
+        // table: nine million of them in 100 KB zipped.
+        use fluree_doc_model::budget::CELL_BYTES;
+        let part: Vec<u8> = (0..1_000)
+            .flat_map(|_| rec(0x13, &[vec![0u8], wide("")].concat()))
+            .collect();
+        let slots = |n: u64| Budget::new(n * CELL_BYTES, 0);
+        assert_eq!(
+            shared_strings(&part, &mut slots(1_000)).unwrap().len(),
+            1_000
+        );
+        assert!(matches!(
+            shared_strings(&part, &mut slots(999)),
+            Err(XlsError::TooLarge(ref m)) if m.contains("cells")
         ));
     }
 

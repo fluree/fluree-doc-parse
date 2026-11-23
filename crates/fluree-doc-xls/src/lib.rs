@@ -186,7 +186,7 @@ fn value(v: &calamine::Data, date1904: bool) -> Option<(String, Option<fluree_do
     use fluree_doc_xlsx::{cell_datum, format_general, format_serial, CellStyle, NumFmt};
     let number = |n: f64, fmt: NumFmt| {
         let style = CellStyle {
-            format: fmt.clone(),
+            format: std::sync::Arc::new(fmt.clone()),
             ..CellStyle::default()
         };
         let text = match fmt {

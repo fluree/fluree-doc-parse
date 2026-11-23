@@ -254,11 +254,25 @@ read: a 9 KB `.docx` whose three main parts each declared 1.3 GB for 1 MB
 was refused under a 3 GB address space as though it were that large. The parts read beside the document (relationships, core
 properties, settings, notes, comments) have a bound of their own, 64 MiB.
 
+What an `.xlsx` keeps of its parts while its sheets are read is spent as
+it is kept: each shared string, each cell style and each sheet the
+workbook lists a cell slot, a number format's literals and a sheet's name
+as text. A cell style holds its number format shared, so a format's
+literals are kept once however many styles name it. The shared strings'
+text is no more than their part's, spent as it is read. A 1.5 MB `.xlsx`
+of 200 million empty shared strings (`<si/>`, five bytes of the part and a
+string in the table) aborted the process at 3 GB; it is refused now, at
+1.1 GB. A 3 KB one whose 5,000 cell styles each copied one format's
+megabyte of literals aborted at 3.9 GB; it takes 18 MB now. A workbook's
+million shared strings count 128 MB.
+
 An `.xlsb`'s parts are not spent: the package is first inflated to nowhere
 against bounds of its own, 64 MiB a part and 256 MiB in all, and then its
 parts are read one at a time, each sheet's freed before the next is read,
-so it holds at most a sheet part and its shared strings beside the budget,
-within the margin a full budget leaves in a 4 GB address space. Spending
+so it holds at most a sheet part and its shared strings' text beside the
+budget, within the margin a full budget leaves in a 4 GB address space;
+each shared string is spent as a cell slot as it is read (9.5 million
+empty ones, seven bytes each, take 290 MB). Spending
 each sheet's part as it is read would count, for a workbook of many
 sheets, parts that are no longer held. The stream an `.xls`, a `.doc` or a
 `.ppt` is read from is bounded in the same way, 256 MiB: these files are
