@@ -103,7 +103,8 @@ gets 2×.
 
 A bare PNG, JPEG or TIFF is read the same way, as one page decoded upright;
 see [Images](../inputs/images.md). So are the pictures in a DOCX, whose text
-follows their figure (see [Office files](../inputs/office-and-web.md)), and
+follows their figure (see [Office files](../inputs/office-and-web.md)), the
+pictures anchored to an XLSX sheet's cells, placed by their anchor, and
 the images an e-mail shows in its body, whose text is placed where they are
 shown (see [E-mail](../inputs/email.md#images-in-the-body)). A
 picture nothing read is counted on stderr and listed in the graph's

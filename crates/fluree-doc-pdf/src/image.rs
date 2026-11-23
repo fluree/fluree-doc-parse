@@ -39,6 +39,11 @@ impl Format {
         }
     }
 
+    /// The bytes a format is told by: the longest signature [`Format::sniff`]
+    /// reads, PNG's. Fewer than that is no image of any format, but a part
+    /// emptied or cut short, which failed rather than held another format.
+    pub const SNIFFED: usize = 8;
+
     /// Recognise by content, not by extension: a file named `.png` holding a
     /// JPEG is common enough, and the reader must be told what it is actually
     /// looking at.

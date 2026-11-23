@@ -160,8 +160,8 @@ The pictures of a DOCX, their text after each figure (`fluree-doc-docx`'s
 
 ```rust
 let read = fluree_doc_docx::parse_with_ocr(&bytes, &engine)?;
-// read.elements, read.info; read.unread: each picture not read, with why
-// (`Unread`: not in the package, past the document's allowance, failed);
+// read.elements, read.info; read.unread: each picture not read, with why, as
+// doc:unreadImages lists it (read.errors: what went wrong, by picture);
 // read.first_page_only: multi-page images of which only the first page was read
 ```
 
@@ -174,6 +174,12 @@ your `PictureReader`, within an `Allowance`, and
 `fluree_doc_image::place_after_figures` puts what you read where it belongs
 (`Picture::after_each_figure` gives it once per figure). `read_media` reads one
 part of a package opened once (`fluree_doc_docx::Package::open`).
+`fluree-doc-xlsx` does the same for the pictures anchored to a workbook's
+cells (`parse_with_ocr`, `parse_with_media`, `read_pictures`, `read_media`),
+and `fluree-doc-email` for the images a message shows in its body
+(`email.media`, `email.media_bytes`), through the same loop
+(`fluree_doc_model::read_pictures`). `fluree_doc_image::read_placed` is the
+reading `parse_with_ocr` runs: each image read by an engine, once.
 
 ## Read a non-PDF source
 

@@ -218,9 +218,28 @@ flattened out of it. So this reader measures after all, but only shape.
   `00123` stored as text is a code, and stays one.
 
 Hidden sheets, rows and columns are read like any other; a consumer that
-wants what the author showed can drop them by name. Pictures anchored to
-cells are not read. `bbox` is absent: a cell address is not a position on a
-page, and the address is the table's row and column.
+wants what the author showed can drop them by name. `bbox` is absent: a cell
+address is not a position on a page, and the address is the table's row and
+column.
+
+**A picture anchored to a sheet's cells** — a screenshot pasted into a
+workbook — is a `doco:Figure` on its sheet's page, its text its alternative
+text, placed among the sheet's elements by the cell its top-left corner is
+anchored to, as a table is placed by its first cell: after what starts
+above it or on its row to its left, before what starts below. A picture
+placed by an absolute position, which names no cell, comes last on its
+sheet. Figures are numbered across the workbook, `figure-<sheet>-<n>`, and
+the picture's text is read and placed after its figure exactly as a DOCX
+picture's is (see [DOCX](#docx)): `--ocr`, `--ocr-words` (`<stem>_m<n>.json`),
+`render-routed` (`<stem>_m<n>.png`, with its package `part`), and
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read) for one nothing
+read. Only pictures (`xdr:pic`) are read: a chart has its data in the sheet,
+and a shape's image fill is a texture. A group of pictures is one figure
+holding several images. Pictures in a header or footer, comments' shapes,
+and Excel's pictures placed *in* a cell (`IMAGE()`, Place in Cell) are not
+read. A workbook without pictures converts as it did. In a library,
+`fluree_doc_xlsx::parse_with_ocr` (feature `ocr`) does it with an engine, and
+`parse_with_media` and `read_media` list and read the pictures as DOCX's do.
 
 Returns `XlsxError` for a malformed or non-archive file.
 

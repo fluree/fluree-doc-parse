@@ -1159,10 +1159,11 @@ pub(crate) fn render_routed(
         // A bare image is one page of pixels: its crop is the image itself,
         // decoded upright, at its own resolution. Its first bytes say so;
         // nothing else is read twice. A DOCX's crops are the images placed
-        // in its flow, one per figure; an e-mail's, the images its body
-        // shows.
+        // in its flow, one per figure; an XLSX's, the pictures anchored to
+        // its sheets' cells; an e-mail's, the images its body shows.
         let crops: Option<MediaCrops> = match crate::commands::common::source_kind(f) {
             Some(crate::commands::common::SourceKind::Docx) => Some(docx_crops),
+            Some(crate::commands::common::SourceKind::Xlsx) => Some(xlsx_crops),
             Some(crate::commands::common::SourceKind::Email) => Some(email_crops),
             _ => None,
         };
@@ -1453,6 +1454,20 @@ fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json:
     media_crops(
         media,
         &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
+        stem,
+        outdir,
+    )
+}
+
+/// An XLSX's crops ([`media_crops`]): each picture anchored to a sheet's
+/// cells, `<stem>_m<n>.png` for the figure `figure-<sheet>-<n>`, with its
+/// package part, read from its package, opened once.
+fn xlsx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let (_, _, media) = fluree_doc_xlsx::parse_with_media(bytes).map_err(|e| e.to_string())?;
+    let mut pkg = fluree_doc_xlsx::Package::open(bytes)?;
+    media_crops(
+        media,
+        &mut |part| fluree_doc_xlsx::read_media(&mut pkg, part),
         stem,
         outdir,
     )

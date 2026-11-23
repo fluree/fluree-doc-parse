@@ -9,9 +9,12 @@
 //! where most writers put them. So the readers ask the package, and fall back
 //! to the convention where a package does not say.
 
-use fluree_doc_model::{xsd_date_time, DocumentInfo};
+use fluree_doc_model::{
+    xsd_date_time, Allowance, DocumentInfo, Media, MediaSource, PictureReader, PictureReads,
+};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use std::collections::HashMap;
 use std::io::Read;
 
 /// An opened package.
@@ -39,6 +42,100 @@ impl Relationship {
     pub fn is(&self, name: &str) -> bool {
         self.kind.rsplit('/').next() == Some(name)
     }
+}
+
+/// The most bytes one image part is read to: 64 MiB, more than any picture
+/// a document pastes in.
+pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+
+/// The bytes of an image part of an opened package, at most
+/// [`MAX_MEDIA_BYTES`] of them. The package is opened once for all of a
+/// document's pictures: opening it reads the archive's whole directory.
+pub fn read_media(pkg: &mut Package<'_>, part: &str) -> Result<Vec<u8>, String> {
+    pkg.read_bytes(part, MAX_MEDIA_BYTES)
+}
+
+/// Read a document's pictures from its opened package
+/// ([`fluree_doc_model::read_pictures`]): each image once, however many
+/// figures draw it, one at a time, within `allowance`.
+pub fn read_pictures<R: PictureReader>(
+    pkg: &mut Package<'_>,
+    media: Vec<Media>,
+    reader: &mut R,
+    allowance: Allowance,
+) -> PictureReads<R::Reading> {
+    fluree_doc_model::read_pictures(media, &mut |part| read_media(pkg, part), reader, allowance)
+}
+
+/// What a picture says in words: its alternative text (`descr`), or else its
+/// title, on one line, without the notice Office appends to text it wrote
+/// itself.
+pub fn alt_text(descr: &str, title: &str) -> String {
+    let alt = if descr.trim().is_empty() {
+        title
+    } else {
+        descr
+    };
+    alt.lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("Description automatically generated")
+                && !l.starts_with("AI-generated content may be incorrect")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A package's part names, to find the part a relationship names as the
+/// package format finds it: exactly, or else ignoring case, a target written
+/// with backslashes, as some writers do, read with slashes.
+pub struct PartNames {
+    exact: std::collections::HashSet<String>,
+    folded: std::collections::HashMap<String, String>,
+}
+
+impl PartNames {
+    pub fn new(pkg: &Package<'_>) -> Self {
+        let names = pkg.part_names();
+        PartNames {
+            folded: names
+                .iter()
+                .map(|p| (p.to_lowercase(), p.clone()))
+                .collect(),
+            exact: names.into_iter().collect(),
+        }
+    }
+
+    /// Where the image of the relationship `rid` is, among a part's
+    /// relationships `by_id` ([`by_id`]). A link to a file outside the
+    /// package, or an id no relationship has, is still named, by what it was
+    /// given, for a reader to say which image it could not read; a part
+    /// that is not there is named as given, and fails to read.
+    pub fn resolve(&self, by_id: &HashMap<&str, &Relationship>, rid: &str) -> MediaSource {
+        match by_id.get(rid) {
+            Some(r) if !r.external => MediaSource::Part(if self.exact.contains(&r.target) {
+                r.target.clone()
+            } else {
+                self.folded
+                    .get(&r.target.to_lowercase())
+                    .map_or_else(|| r.target.clone(), Clone::clone)
+            }),
+            Some(r) => MediaSource::External(r.target.clone()),
+            None => MediaSource::Missing(rid.to_string()),
+        }
+    }
+}
+
+/// A part's relationships by id, so a document naming many images resolves
+/// each in one lookup; the first definition of an id wins, as a scan would
+/// have it.
+pub fn by_id(rels: &[Relationship]) -> HashMap<&str, &Relationship> {
+    let mut out: HashMap<&str, &Relationship> = HashMap::new();
+    for r in rels {
+        out.entry(r.id.as_str()).or_insert(r);
+    }
+    out
 }
 
 impl<'a> Package<'a> {

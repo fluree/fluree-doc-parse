@@ -329,16 +329,14 @@ fn convert_path(
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
             // when something is there to read them.
-            let media = match fluree_doc_docx::Package::open(&data) {
-                Ok(mut pkg) => read_media(
-                    src.stem,
-                    media,
-                    &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
-                    cfg,
-                    quiet,
-                ),
-                Err(e) => return Err(e.to_string()),
-            };
+            let mut pkg = fluree_doc_docx::Package::open(&data)?;
+            let media = read_media(
+                src.stem,
+                media,
+                &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
+                cfg,
+                quiet,
+            );
             fluree_doc_image::place_after_figures(&mut elements, media.read);
             // The page header and footer are read into the text, marked as
             // what they are; their lines are also the running text a PDF's
@@ -370,10 +368,27 @@ fn convert_path(
             (elements, declared(info))
         }
         // A workbook: each sheet is a page, its islands of cells are tables.
+        // A picture anchored to its cells is read as a DOCX's is, its text
+        // placed after its figure.
         Some(SourceKind::Xlsx) => {
-            let (elements, info) =
-                fluree_doc_xlsx::parse_with_info(&data).map_err(|e| e.to_string())?;
-            (elements, declared(info))
+            let (mut elements, info, media) =
+                fluree_doc_xlsx::parse_with_media(&data).map_err(|e| e.to_string())?;
+            let mut pkg = fluree_doc_xlsx::Package::open(&data)?;
+            let media = read_media(
+                src.stem,
+                media,
+                &mut |part| fluree_doc_xlsx::read_media(&mut pkg, part),
+                cfg,
+                quiet,
+            );
+            fluree_doc_image::place_after_figures(&mut elements, media.read);
+            (
+                elements,
+                fluree_doc_model::Notes {
+                    unread_images: media.unread,
+                    ..declared(info)
+                },
+            )
         }
         _ if fluree_doc_pdf::image::Format::sniff(&data).is_some() => {
             return convert_image(data, &src, cfg, args, quiet);

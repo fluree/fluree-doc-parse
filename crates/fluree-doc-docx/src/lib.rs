@@ -60,8 +60,10 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
     parse_with_media(bytes).map(|(elements, info, _)| (elements, info))
 }
 
-/// The opened package [`read_media`] and [`read_pictures`] read from.
-pub use fluree_doc_ooxml::Package;
+/// The opened package [`read_media`] and [`read_pictures`] read from; the
+/// bytes of one image part, at most [`MAX_MEDIA_BYTES`] of them; and the
+/// loop a document's pictures are read through.
+pub use fluree_doc_ooxml::{read_media, read_pictures, Package, MAX_MEDIA_BYTES};
 
 /// The images a document places in its flow and the loop that reads them,
 /// shared with the other containers of pictures (a workbook, an e-mail):
@@ -71,38 +73,21 @@ pub use fluree_doc_model::{
     pictures, Allowance, Media, MediaSource, Picture, PictureReader, PictureReads, Unread,
 };
 
-/// The most bytes one image part is read to: 64 MiB, more than any picture
-/// a document pastes in.
-pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
-
-/// The bytes of a media part of an opened package, at most
-/// [`MAX_MEDIA_BYTES`] of them. The package is opened once for all of a
-/// document's pictures: opening it reads the archive's whole directory.
-pub fn read_media(pkg: &mut Package<'_>, part: &str) -> Result<Vec<u8>, String> {
-    pkg.read_bytes(part, MAX_MEDIA_BYTES)
-}
-
-/// Read a document's pictures from its opened package
-/// ([`fluree_doc_model::read_pictures`]): each image once, however many
-/// figures draw it, one at a time, within `allowance`.
-pub fn read_pictures<R: PictureReader>(
-    pkg: &mut Package<'_>,
-    media: Vec<Media>,
-    reader: &mut R,
-    allowance: Allowance,
-) -> PictureReads<R::Reading> {
-    fluree_doc_model::read_pictures(media, &mut |part| read_media(pkg, part), reader, allowance)
-}
-
 /// What [`parse_with_ocr`] gives.
 #[cfg(feature = "ocr")]
 #[derive(Debug, Clone)]
 pub struct OcrParse {
     pub elements: Vec<Element>,
     pub info: DocumentInfo,
-    /// The pictures not read, each with why ([`Unread`]). Each is left as
-    /// its figures.
-    pub unread: Vec<(Picture, Unread)>,
+    /// The images not read, as `doc:unreadImages` lists them, once for each
+    /// figure drawing them, with why: `Missing` (not in the package),
+    /// `UnsupportedFormat` (a drawing kept as EMF or WMF, a GIF),
+    /// `PastAllowance` (past [`Allowance::DOCUMENT`]) or `Failed`. Each is
+    /// left as its figures.
+    pub unread: Vec<fluree_doc_model::UnreadImage>,
+    /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
+    /// the name it goes by (`m1`).
+    pub errors: Vec<(String, String)>,
     /// Images of more than one page (a multi-page TIFF), of which only the
     /// first was read.
     pub first_page_only: Vec<Picture>,
@@ -117,33 +102,16 @@ pub fn parse_with_ocr(
     bytes: &[u8],
     engine: &dyn fluree_doc_vision::OcrEngine,
 ) -> Result<OcrParse, DocxError> {
-    struct Engine<'e>(&'e dyn fluree_doc_vision::OcrEngine);
-    impl PictureReader for Engine<'_> {
-        type Reading = fluree_doc_image::ImageElements;
-        fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
-            fluree_doc_image::header(image).map(|h| u64::from(h.width) * u64::from(h.height))
-        }
-        fn read(&mut self, _: &Picture, image: &[u8]) -> Result<Self::Reading, String> {
-            fluree_doc_image::elements(image, self.0)
-        }
-    }
     let (mut elements, info, media) = parse_with_media(bytes)?;
     let mut pkg = Package::open(bytes).map_err(DocxError::Zip)?;
-    let reads = read_pictures(&mut pkg, media, &mut Engine(engine), Allowance::DOCUMENT);
-    let mut placed = Vec::new();
-    let mut first_page_only = Vec::new();
-    for (picture, r) in reads.read {
-        placed.extend(picture.after_each_figure(r.elements));
-        if r.more_pages {
-            first_page_only.push(picture);
-        }
-    }
-    fluree_doc_image::place_after_figures(&mut elements, placed);
+    let r = fluree_doc_image::read_placed(media, &mut |part| read_media(&mut pkg, part), engine);
+    fluree_doc_image::place_after_figures(&mut elements, r.read);
     Ok(OcrParse {
         elements,
         info,
-        unread: reads.unread,
-        first_page_only,
+        unread: r.unread,
+        errors: r.errors,
+        first_page_only: r.first_page_only,
     })
 }
 
@@ -233,32 +201,12 @@ pub fn parse_with_media(
     // file outside it, a relationship not defined) is still listed, so it
     // is counted among those not read; a part that is not there is listed
     // under the name it was given, and fails to read.
-    let names = pkg.part_names();
-    let exact: HashSet<&str> = names.iter().map(String::as_str).collect();
-    let folded: HashMap<String, &str> = names
-        .iter()
-        .map(|p| (p.to_lowercase(), p.as_str()))
-        .collect();
-    // By id, so a document naming many images resolves each in one lookup;
-    // the first definition of an id wins, as a scan would have it.
-    let mut by_id: HashMap<&str, &fluree_doc_ooxml::Relationship> = HashMap::new();
-    for r in &rels {
-        by_id.entry(r.id.as_str()).or_insert(r);
-    }
+    let names = fluree_doc_ooxml::PartNames::new(&pkg);
+    let by_id = fluree_doc_ooxml::by_id(&rels);
     let media = figure_rids
         .into_iter()
         .map(|(figure, rid, index)| {
-            let source = match by_id.get(rid.as_str()) {
-                Some(r) if !r.external => MediaSource::Part(if exact.contains(r.target.as_str()) {
-                    r.target.clone()
-                } else {
-                    folded
-                        .get(&r.target.to_lowercase())
-                        .map_or_else(|| r.target.clone(), |p| p.to_string())
-                }),
-                Some(r) => MediaSource::External(r.target.clone()),
-                None => MediaSource::Missing(rid),
-            };
+            let source = names.resolve(&by_id, &rid);
             Media {
                 figure,
                 source,
@@ -503,20 +451,7 @@ impl Pic {
     /// What the figure says in words: its alternative text, or its title,
     /// without the notice Word appends to text it wrote itself.
     fn text(&self) -> String {
-        let alt = if self.alt.trim().is_empty() {
-            &self.title
-        } else {
-            &self.alt
-        };
-        alt.lines()
-            .map(str::trim)
-            .filter(|l| {
-                !l.is_empty()
-                    && !l.starts_with("Description automatically generated")
-                    && !l.starts_with("AI-generated content may be incorrect")
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+        fluree_doc_ooxml::alt_text(&self.alt, &self.title)
     }
 }
 
@@ -2073,18 +2008,42 @@ mod tests {
                 Err("no engine".into())
             }
         }
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
         let docx = package(
-            &format!("{}{}", picture("rId1"), picture("rId2")),
-            &[("rId1", "media/image1.emf"), ("rId2", "media/gone.png")],
-            &[("word/media/image1.emf", b"\x01\x00\x00\x00 an EMF")],
+            &format!("{}{}{}", picture("rId1"), picture("rId2"), picture("rId3")),
+            &[
+                ("rId1", "media/image1.emf"),
+                ("rId2", "media/gone.png"),
+                ("rId3", "media/image3.png"),
+            ],
+            &[
+                ("word/media/image1.emf", &b"\x01\x00\x00\x00 an EMF"[..]),
+                ("word/media/image3.png", png.as_slice()),
+            ],
         );
         let read = parse_with_ocr(&docx, &Never).unwrap();
-        let why: Vec<(String, bool)> = read
+        // In the words `doc:unreadImages` uses.
+        let why: Vec<(&str, &str)> = read
             .unread
             .iter()
-            .map(|(p, e)| (p.tag(), matches!(e, Unread::Failed(e) if !e.is_empty())))
+            .map(|u| (u.image.as_str(), u.reason.as_str()))
             .collect();
-        assert_eq!(why, [("m1".to_string(), true), ("m2".to_string(), true)]);
+        assert_eq!(
+            why,
+            [
+                ("m1", "UnsupportedFormat"),
+                // A part that is not there fails to read.
+                ("m2", "Failed"),
+                ("m3", "Failed")
+            ]
+        );
+        // What went wrong, for the images the package names.
+        let errors: Vec<&str> = read.errors.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(errors, ["m1", "m2", "m3"]);
+        assert_eq!(read.errors[2].1, "no engine");
     }
 
     #[cfg(feature = "ocr")]

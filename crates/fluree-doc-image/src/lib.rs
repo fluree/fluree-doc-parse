@@ -418,6 +418,118 @@ fn analysed(
     }
 }
 
+/// What an engine made of the images a document places in its flow.
+#[derive(Debug, Clone, Default)]
+pub struct PlacedRead {
+    /// The elements read in each image, once after each figure drawing it,
+    /// for [`place_after_figures`].
+    pub read: Vec<(String, Vec<fluree_doc_model::Element>)>,
+    /// The images not read, as `doc:unreadImages` lists them, once for each
+    /// figure drawing them, with why: `Missing` (not in the file),
+    /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a drawing kept as EMF or
+    /// WMF, a GIF), `PastAllowance` (past what one document may have read,
+    /// [`fluree_doc_model::Allowance::DOCUMENT`]) or `Failed` (its bytes or
+    /// its reading failed). Never `NotRead`: each image held is read.
+    pub unread: Vec<fluree_doc_model::UnreadImage>,
+    /// What went wrong with each image `UnsupportedFormat` or `Failed`, by
+    /// the name it goes by (`m1`).
+    pub errors: Vec<(String, String)>,
+    /// Images of more than one page (a multi-page TIFF), of which only the
+    /// first was read.
+    pub first_page_only: Vec<fluree_doc_model::Picture>,
+}
+
+/// Read the images a document places in its flow with `engine`
+/// ([`fluree_doc_model::read_pictures`]): each image once however many
+/// figures draw it, one at a time, within what one document may have read.
+/// `bytes` reads one by the part the file holds it under; it is decoded,
+/// read and dropped before the next, so a document of many large pictures
+/// is never held decoded at once.
+pub fn read_placed(
+    media: Vec<fluree_doc_model::Media>,
+    bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    engine: &dyn OcrEngine,
+) -> PlacedRead {
+    use fluree_doc_model::{Picture, PictureReader, Unread};
+    struct Engine<'e> {
+        engine: &'e dyn OcrEngine,
+        /// The picture being read, by tag.
+        current: String,
+        /// The pictures whose bytes are no image OCR decodes, by tag.
+        unsupported: std::collections::HashSet<String>,
+    }
+    impl PictureReader for Engine<'_> {
+        type Reading = ImageElements;
+        fn ready(&mut self, picture: &Picture) -> bool {
+            self.current = picture.tag();
+            true
+        }
+        fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
+            // A part emptied or cut short failed; it is no drawing.
+            if image.len() < fluree_doc_pdf::image::Format::SNIFFED {
+                return Err(format!(
+                    "its part holds {} byte(s), too few for an image",
+                    image.len()
+                ));
+            }
+            // A drawing kept as EMF or WMF, or a GIF, is no image OCR
+            // decodes.
+            header(image)
+                .map(|h| u64::from(h.width) * u64::from(h.height))
+                .inspect_err(|_| {
+                    if fluree_doc_pdf::image::Format::sniff(image).is_none() {
+                        self.unsupported.insert(self.current.clone());
+                    }
+                })
+        }
+        fn read(&mut self, _: &Picture, image: &[u8]) -> Result<ImageElements, String> {
+            elements(image, self.engine)
+        }
+    }
+    let mut reader = Engine {
+        engine,
+        current: String::new(),
+        unsupported: Default::default(),
+    };
+    let reads = fluree_doc_model::read_pictures(
+        media,
+        bytes,
+        &mut reader,
+        fluree_doc_model::Allowance::DOCUMENT,
+    );
+    let mut out = PlacedRead::default();
+    for (picture, r) in reads.read {
+        out.read.extend(picture.after_each_figure(r.elements));
+        if r.more_pages {
+            out.first_page_only.push(picture);
+        }
+    }
+    for (picture, why) in reads.unread {
+        let reason = match &why {
+            Unread::NotInPackage => "Missing",
+            Unread::PastAllowance => "PastAllowance",
+            Unread::NotAsked => "NotRead",
+            Unread::Failed(e) => {
+                out.errors.push((picture.tag(), e.clone()));
+                if reader.unsupported.contains(&picture.tag()) {
+                    "UnsupportedFormat"
+                } else {
+                    "Failed"
+                }
+            }
+        };
+        for figure in picture.figures() {
+            out.unread.push(fluree_doc_model::UnreadImage {
+                figure: figure.to_string(),
+                image: picture.tag(),
+                part: picture.source.name().to_string(),
+                reason: reason.into(),
+            });
+        }
+    }
+    out
+}
+
 /// Place the text read from a document's images in its flow, each image's
 /// elements right after the figure it is drawn as (`Element::figure`).
 ///
@@ -519,6 +631,34 @@ mod tests {
                 ],
             })
         }
+    }
+
+    #[test]
+    fn a_part_too_short_for_any_format_failed() {
+        // Emptied, or cut short within PNG's signature: failed, as the CLI
+        // lists it; a part long enough to tell holds another format.
+        let mut parts = [&b""[..], b"\x89PNG", b"\x01\x00\x00\x00 EMF record"].into_iter();
+        let media = (1..=3)
+            .map(|n| fluree_doc_model::Media {
+                figure: format!("figure-0-{n}"),
+                source: fluree_doc_model::MediaSource::Part(format!("word/media/image{n}")),
+                index: 0,
+            })
+            .collect();
+        let r = read_placed(
+            media,
+            &mut |_| Ok(parts.next().unwrap().to_vec()),
+            &TwoLines,
+        );
+        let reasons: Vec<&str> = r.unread.iter().map(|u| u.reason.as_str()).collect();
+        assert_eq!(reasons, ["Failed", "Failed", "UnsupportedFormat"]);
+        assert_eq!(
+            r.errors[0],
+            (
+                "m1".to_string(),
+                "its part holds 0 byte(s), too few for an image".to_string()
+            )
+        );
     }
 
     #[test]
