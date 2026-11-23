@@ -187,8 +187,8 @@ or more, and next to no text layer), `NearBlank` (next to no glyphs and a
 smaller image: a logo on a separator sheet, a signature) or `BrokenText`;
 or `OcrSparse`, a page an OCR reading (`--ocr-words`) read whole that still
 holds next to no text — an engine that gave a few words for a scan it could
-not read. Escalating the page clears the entry, because then something did
-read it.
+not read. Escalating the page clears the entry, however short the model's
+reading, because then something did read it.
 
 Or it is `LaterPage`: a page after the first of a multi-page image file (a
 TIFF), which nothing reads. Its `pageIndex` is the page's place in the input
@@ -205,6 +205,31 @@ six.
 Deliberately not an element. A marker element would have to carry text to be
 visible, and inventing text puts characters into the projection that every
 `nif:beginIndex` in the graph is counted against.
+
+## Regions nothing read
+
+```json
+{ "@type": "foaf:Document",
+  "doc:unreadRegions": { "@type": "@json",
+                         "@value": [ { "pageIndex": 2,
+                                       "bbox": "56.00,582.00,556.00,732.00",
+                                       "reason": "Region" } ] } }
+```
+
+The same, for part of a page: a screenshot or a scanned table pasted into a
+page of prose. Such a page holds plenty of text, so it is never in
+`doc:unreadPages`, and the region's content would be missing with nothing
+saying so. Present only when the router sent a reader to a raster region the
+text layer does not cover and nothing read it: no OCR words taken for it, no
+model reading of it (`r{i}`) or of its whole page (`full`) spliced in.
+
+`bbox` is written as [`doc:bbox`](#an-element) is: PDF units, top-left
+origin, the page as displayed, so it joins `doc:pages` the same way, and a
+consumer can crop the region from a rendered page and read it. `reason` is
+`Region`, a region large enough to be worth a model's call. A smaller one,
+which only an OCR engine is offered, is not listed: below a tenth of the page
+it is a logo or an ornament as often as content, and listing it would put a
+warning on every letterhead.
 
 ## Sections are explicit
 

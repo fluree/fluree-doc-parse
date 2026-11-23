@@ -37,6 +37,16 @@ Step 4 applies the [arbitration
 rules](../concepts/escalation.md): shapes are compared, text is not replaced
 where the shapes agree, and with three readers the majority wins.
 
+What the router sent a reader to and no reading covers is reported, not
+dropped: a page in [`doc:unreadPages`](../formats/doco.md#pages-nothing-read),
+a routed region (a `region` crop, `r{i}`) in
+[`doc:unreadRegions`](../formats/doco.md#regions-nothing-read) with its box,
+and both in one warning on stderr. A region counts as read when its `r{i}`
+reading or its page's `full` reading was spliced in, or OCR words were taken
+for it; a missing or empty reading leaves it unread. A `small_region` crop
+is offered to an OCR engine only, and is never reported: too small for a
+model's call, it is a logo as often as content.
+
 ## The three inputs
 
 | flag | env | supplies |

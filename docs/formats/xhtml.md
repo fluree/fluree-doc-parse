@@ -71,10 +71,20 @@ A page carrying content the output does not hold gets a comment:
      (Scanned). This output is missing it. -->
 ```
 
-A comment rather than text, so extracting text from this file does not read a
-sentence this library wrote as though the document had said it. The
-machine-readable form is [`doc:unreadPages`](doco.md). Escalating the page
-clears it.
+So does a raster region of a page otherwise read — a screenshot pasted into
+prose — with its page and its box, in PDF units, top-left origin:
+
+```html
+<!-- fluree-doc-parse: 1 raster region carries content no reader
+     transcribed: page 3 at 56,582,556,732. This output is missing it. -->
+```
+
+One comment says both when there are both. A comment rather than text, so
+extracting text from this file does not read a sentence this library wrote
+as though the document had said it. The machine-readable forms are
+[`doc:unreadPages`](doco.md#pages-nothing-read) and
+[`doc:unreadRegions`](doco.md#regions-nothing-read). Escalating the page or
+the region, or reading it by OCR, clears it.
 
 ## Why this exists
 

@@ -522,7 +522,7 @@ fn convert_image(
         match ocr_image(&data, header, src, cfg, quiet) {
             Ok(read) if read.read_something || !model_after => {
                 if let (Some(note), false) = (read.notes.summary(), quiet) {
-                    eprintln!("warning: {note}");
+                    eprintln!("warning: {stem}: {note}");
                 }
                 return Ok(render(&read.elements, src, args, read.sizes, &read.notes));
             }
@@ -929,6 +929,7 @@ fn render(
                 doc_iri: args.doc_iri.clone(),
                 pages,
                 unread: notes.unread.clone(),
+                unread_regions: notes.unread_regions.clone(),
                 running_text: notes.running_text.clone(),
                 info: notes.info.clone(),
                 attachments: notes.attachments.clone(),
@@ -1119,10 +1120,17 @@ fn convert_bytes(
             }
         })
         .collect();
-    // After the tiers: a page is unread only once whatever was going to read
-    // it has run.
+    // After the tiers: a page or a region is unread only once whatever was
+    // going to read it has run. Only on the pages asked for: one left out
+    // was not read because nobody asked, which the output need not say.
+    let asked = |page: usize| pages.is_none_or(|keep| keep.contains(&page));
+    let mut unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    unread.retain(|u| asked(u.index));
+    let mut unread_regions = fluree_doc_pdf::unread_regions(&doc, &a.elements);
+    unread_regions.retain(|u| asked(u.page));
     let notes = fluree_doc_model::Notes {
-        unread: fluree_doc_pdf::unread_pages(&doc, &a.elements),
+        unread,
+        unread_regions,
         // A page number identifies nothing, bare or as `Page 3 of 15`; the
         // rest of the running block is the document's own name for itself.
         running_text: a
@@ -1135,7 +1143,7 @@ fn convert_bytes(
         ..Default::default()
     };
     if let (Some(note), false) = (notes.summary(), quiet) {
-        eprintln!("warning: {note}");
+        eprintln!("warning: {stem}: {note}");
     }
     Ok(render(&a.elements, src, args, sizes, &notes))
 }

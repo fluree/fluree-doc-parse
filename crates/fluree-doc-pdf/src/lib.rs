@@ -27,6 +27,8 @@
 //!   and [`document::to_xhtml`]
 //! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]
 //! - [`route::decide`] and [`route::signals`] — escalation verdicts
+//! - [`unread_pages`] and [`unread_regions`] — what the router sent a reader
+//!   to and nothing read
 //! - [`forms::fields`] — AcroForm values
 //! - [`outline::extract`] — the PDF bookmark tree
 //! - [`link::extract`] / [`link::attach`] — link annotations and their anchors
@@ -104,7 +106,12 @@ pub fn unread_pages(
             .filter(|e| e.page == p.index && !matches!(e.evidence, "header" | "footer"))
             .map(|e| e.text.trim().chars().count())
             .sum();
-        if text >= NEARLY_EMPTY {
+        // A page a model's page reading read whole was read, however little
+        // it held: the model is the last reader there is.
+        let page_read = elements
+            .iter()
+            .any(|e| e.page == p.index && e.evidence == "page-tier");
+        if text >= NEARLY_EMPTY || page_read {
             continue;
         }
         // A page an OCR reading read whole was read, and asks no model for
@@ -127,6 +134,86 @@ pub fn unread_pages(
     }
     out
 }
+
+/// Raster regions the router sends a reader to, which nothing read.
+///
+/// The region-level counterpart of [`unread_pages`], for a page whose text
+/// layer is fine but which carries a screenshot or a scanned table the text
+/// layer does not cover ([`route::Route::VlmRegions`]). Such a page holds
+/// plenty of text, so it is never an unread page, and without this the
+/// region's content would be missing with nothing saying so.
+///
+/// Called after the tiers, like [`unread_pages`]. A region counts as read
+/// when an OCR reading was taken for it (or for its whole page), when a
+/// model's reading of it was spliced in (an element `region-splice` or
+/// `region-chart` in its box), or when a model's reading of the whole page
+/// replaced the page. A reading that came back empty, or a whole-page one
+/// the splice refused as truncated, read nothing.
+///
+/// Only the regions the router routes, large enough to be worth a model's
+/// call. A smaller one ([`route::ocr_regions`] past the routed ones) is
+/// offered to an OCR engine when one runs, but is not reported when none
+/// does: the router judges it a logo or an ornament as often as content,
+/// and listing it would put a warning on every letterhead.
+pub fn unread_regions(
+    doc: &Document,
+    elements: &[fluree_doc_model::Element],
+) -> Vec<fluree_doc_model::UnreadRegion> {
+    let mut out = Vec::new();
+    for p in &doc.pages {
+        let route::Route::VlmRegions(regions) = route::decide(p).0 else {
+            continue;
+        };
+        let on_page = || elements.iter().filter(|e| e.page == p.index);
+        // A model's reading of the whole page holds its regions too.
+        if on_page().any(|e| e.evidence == "page-tier") {
+            continue;
+        }
+        for (i, b) in regions.iter().enumerate() {
+            if p.ocr_read_region(i) {
+                continue;
+            }
+            // Spliced in at the anchor's place, the reading keeps the box
+            // the anchor was given: the region's, as displayed.
+            let shown = p.to_display(*b);
+            if listed(&out, p.index, &shown) {
+                continue;
+            }
+            let spliced = on_page().any(|e| {
+                matches!(e.evidence, "region-splice" | "region-chart")
+                    && e.bbox.is_some_and(|eb| same_box(&eb, &shown))
+            });
+            if !spliced {
+                out.push(fluree_doc_model::UnreadRegion {
+                    page: p.index,
+                    bbox: shown,
+                    reason: "Region".into(),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Two boxes for the same region, computed the same way: equal but for
+/// floating-point noise.
+fn same_box(a: &BBox, b: &BBox) -> bool {
+    const EPS: f64 = 0.01;
+    (a.x0 - b.x0).abs() < EPS
+        && (a.y0 - b.y0).abs() < EPS
+        && (a.x1 - b.x1).abs() < EPS
+        && (a.y1 - b.y1).abs() < EPS
+}
+
+/// Whether `out` already lists this box on this page. An image the page
+/// draws twice in one place is one region to read, and one to report.
+fn listed(out: &[fluree_doc_model::UnreadRegion], page: usize, b: &BBox) -> bool {
+    out.iter()
+        .rev()
+        .take_while(|u| u.page == page)
+        .any(|u| same_box(&u.bbox, b))
+}
+
 #[cfg(feature = "render")]
 pub mod render;
 pub mod route;
@@ -144,3 +231,209 @@ pub use geom::BBox;
 pub use glyph::Glyph;
 pub use line::Line;
 pub use text::PageText;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extract::{ImagePlacement, OcrRead};
+    use fluree_doc_model::Element;
+
+    fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
+        BBox { x0, y0, x1, y1 }
+    }
+
+    /// A page of prose in its top band (1,500 glyphs between y 10 and 20),
+    /// with these texty images and no glyph over them.
+    fn page(images: &[BBox]) -> Page {
+        let glyphs = (0..1500)
+            .map(|i| Glyph {
+                text: "a".into(),
+                bbox: Some(b(10.0, 10.0, 15.0, 20.0)),
+                page: 0,
+                origin: (10.0, 20.0),
+                rotation_deg: 0.0,
+                font_size: 10.0,
+                weight: None,
+                advance: None,
+                draw_index: i,
+            })
+            .collect();
+        Page {
+            index: 0,
+            glyphs,
+            images: images
+                .iter()
+                .map(|&bbox| ImagePlacement {
+                    bbox,
+                    texty: true,
+                    ppi: None,
+                    bitonal: false,
+                    grid: (1000, 1000),
+                })
+                .collect(),
+            rules: Vec::new(),
+            routing: None,
+            fills: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+            ocr: None,
+        }
+    }
+
+    const BIG: BBox = BBox {
+        x0: 50.0,
+        y0: 300.0,
+        x1: 550.0,
+        y1: 500.0,
+    };
+    const OTHER: BBox = BBox {
+        x0: 50.0,
+        y0: 550.0,
+        x1: 550.0,
+        y1: 750.0,
+    };
+
+    /// A model's reading spliced in where the splice puts one.
+    fn spliced(bbox: BBox, evidence: &'static str) -> Element {
+        Element {
+            bbox: Some(bbox),
+            ..Element::new("doco:Paragraph", "Account 4417", "vlm", evidence)
+        }
+    }
+
+    #[test]
+    fn a_routed_region_nothing_read_is_unread_with_its_box() {
+        let doc = Document {
+            pages: vec![page(&[BIG, OTHER])],
+        };
+        let got = unread_regions(&doc, &[]);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[0].page, got[0].bbox), (0, BIG));
+        assert_eq!(got[0].reason, "Region");
+        assert_eq!(got[1].bbox, OTHER);
+        // A page of prose is never an unread page: the region is the trace.
+        assert!(unread_pages(&doc, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_region_a_model_read_is_not_unread() {
+        let doc = Document {
+            pages: vec![page(&[BIG, OTHER])],
+        };
+        for evidence in ["region-splice", "region-chart"] {
+            let got = unread_regions(&doc, &[spliced(BIG, evidence)]);
+            assert_eq!(got.len(), 1, "{evidence}: {got:?}");
+            assert_eq!(got[0].bbox, OTHER);
+        }
+        // An anchor left in place (`--emit-anchors`, no reading) is not one.
+        let anchor = Element {
+            bbox: Some(BIG),
+            ..Element::new("doco:Figure", "[[VLM:p0:r0]]", "rust", "route")
+        };
+        assert_eq!(unread_regions(&doc, &[anchor]).len(), 2);
+        // A reading elsewhere on the page does not read this region.
+        let elsewhere = spliced(b(50.0, 100.0, 550.0, 200.0), "region-splice");
+        assert_eq!(unread_regions(&doc, &[elsewhere]).len(), 2);
+        // Nor does one on another page.
+        let mut other_page = spliced(BIG, "region-splice");
+        other_page.page = 1;
+        assert_eq!(unread_regions(&doc, &[other_page]).len(), 2);
+    }
+
+    #[test]
+    fn an_image_drawn_twice_in_one_place_is_one_unread_region() {
+        let doc = Document {
+            pages: vec![page(&[BIG, OTHER, BIG])],
+        };
+        let got: Vec<BBox> = unread_regions(&doc, &[]).iter().map(|u| u.bbox).collect();
+        assert_eq!(got, [BIG, OTHER]);
+        // The same box on another page is another region.
+        let mut next = page(&[BIG]);
+        next.index = 1;
+        let doc = Document {
+            pages: vec![page(&[BIG]), next],
+        };
+        assert_eq!(unread_regions(&doc, &[]).len(), 2);
+    }
+
+    #[test]
+    fn a_whole_page_reading_reads_every_region() {
+        let doc = Document {
+            pages: vec![page(&[BIG, OTHER])],
+        };
+        let whole = Element::new("doco:Paragraph", "the page", "vlm", "page-tier");
+        assert!(unread_regions(&doc, &[whole]).is_empty());
+    }
+
+    #[test]
+    fn a_region_ocr_read_is_not_unread() {
+        let mut p = page(&[BIG, OTHER]);
+        p.ocr = Some(OcrRead {
+            first_glyph: 1500,
+            whole: false,
+            regions: vec![1],
+        });
+        let doc = Document {
+            pages: vec![p.clone()],
+        };
+        let got = unread_regions(&doc, &[]);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].bbox, BIG);
+        // A whole-page OCR reading read them all.
+        p.ocr.as_mut().unwrap().whole = true;
+        let doc = Document { pages: vec![p] };
+        assert!(unread_regions(&doc, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_region_too_small_for_a_model_is_not_reported() {
+        // A logo-sized capture: an OCR engine would be offered it, a model
+        // not, and with neither it is no more unread than a letterhead.
+        let small = b(50.0, 100.0, 250.0, 130.0);
+        let doc = Document {
+            pages: vec![page(&[small])],
+        };
+        assert_eq!(route::ocr_regions(&doc.pages[0]), vec![small]);
+        assert!(unread_regions(&doc, &[]).is_empty());
+        // Beside a routed one, only the routed one is.
+        let doc = Document {
+            pages: vec![page(&[small, BIG])],
+        };
+        let got = unread_regions(&doc, &[]);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].bbox, BIG);
+    }
+
+    #[test]
+    fn a_turned_pages_region_is_reported_as_displayed() {
+        // Read in a turned frame, the region's box is turned back to where
+        // the page shows it, the frame every element's box is in.
+        let mut p = page(&[BIG]);
+        p.rotation = 90;
+        let shown = p.to_display(BIG);
+        assert_ne!(shown, BIG);
+        let doc = Document { pages: vec![p] };
+        let got = unread_regions(&doc, &[]);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].bbox, shown);
+        // And a reading spliced at the displayed box reads it.
+        assert!(unread_regions(&doc, &[spliced(shown, "region-splice")]).is_empty());
+    }
+
+    #[test]
+    fn a_page_read_whole_by_the_router_has_no_regions() {
+        // A scan is an unread page, not a page of unread regions.
+        let mut p = page(&[b(0.0, 0.0, 600.0, 800.0)]);
+        p.glyphs.clear();
+        let doc = Document { pages: vec![p] };
+        assert!(unread_regions(&doc, &[]).is_empty());
+        assert_eq!(unread_pages(&doc, &[]).len(), 1);
+        // A model's reading of the page read it, however short.
+        let whole = Element::new("doco:Paragraph", "Short note", "vlm", "page-tier");
+        assert!(unread_pages(&doc, &[whole]).is_empty());
+        // Short text of another kind does not.
+        let layout = Element::new("doco:Paragraph", "Short note", "rust", "layout");
+        assert_eq!(unread_pages(&doc, &[layout]).len(), 1);
+    }
+}

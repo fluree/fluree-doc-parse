@@ -43,6 +43,13 @@ worth measuring before sizing anything.
 | `Fragmented` | a table's detected columns disagree with themselves |
 | `MergedRows` | a table's rows do not segment cleanly |
 
+A routed page or region that no reader then reads is not silently dropped
+from `fdoc convert`'s output: a page is listed in
+[`doc:unreadPages`](../formats/doco.md#pages-nothing-read) under its verdict,
+each of a `Regions(n)` page's regions in
+[`doc:unreadRegions`](../formats/doco.md#regions-nothing-read) with its box,
+and both are named in a warning on stderr.
+
 Four line kinds, and they answer different questions:
 
 | line | says |

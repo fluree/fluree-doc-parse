@@ -360,6 +360,35 @@ pub struct UnreadPage {
     pub reason: String,
 }
 
+/// A raster region of a page whose content nothing read.
+///
+/// The page-level [`UnreadPage`] cannot say this: a page of prose with a
+/// screenshot or a scanned table pasted into it has plenty of text, so it is
+/// never an unread page, and the region's content is simply absent. The
+/// router lists such a region for a reader; when none reads it (no OCR, no
+/// model reading of the region or of its whole page), it is reported here,
+/// with its box, so a consumer can crop it, read it, or at least know the
+/// output is missing it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct UnreadRegion {
+    /// 0-based physical page, the same space as [`Element::page`].
+    #[serde(rename = "pageIndex")]
+    pub page: usize,
+    /// Where on the page, in the same frame and the same `"x0,y0,x1,y1"`
+    /// form as an element's `doc:bbox`: PDF units, top-left origin, the
+    /// page as displayed.
+    #[serde(serialize_with = "bbox_string")]
+    pub bbox: crate::geom::BBox,
+    /// Why the router sent a reader there: `Region`, a raster region the
+    /// text layer does not cover, large enough to be worth a model's call.
+    pub reason: String,
+}
+
+/// A box as `doc:bbox` writes it, so one parser reads both.
+fn bbox_string<S: serde::Serializer>(b: &crate::geom::BBox, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&format!("{:.2},{:.2},{:.2},{:.2}", b.x0, b.y0, b.x1, b.y1))
+}
+
 /// What a document says about itself: its title, who made it, and when.
 ///
 /// Declared, never inferred: a PDF's Info dictionary, an Office file's core
@@ -506,10 +535,13 @@ pub struct Attachment {
 /// Facts about a document that are not elements of it.
 ///
 /// Additive: the emitters take this where they can carry it, and their
-/// existing signatures stay valid with an empty one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// existing signatures stay valid with an empty one. Not `Eq`: a region's
+/// box is floating-point.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Notes {
     pub unread: Vec<UnreadPage>,
+    /// Raster regions of pages otherwise read, which nothing read.
+    pub unread_regions: Vec<UnreadRegion>,
     /// Running header and footer text, kept once because it identifies the
     /// document even though it is noise inside the body.
     pub running_text: Vec<String>,
@@ -520,6 +552,7 @@ pub struct Notes {
 impl Notes {
     pub fn is_empty(&self) -> bool {
         self.unread.is_empty()
+            && self.unread_regions.is_empty()
             && self.running_text.is_empty()
             && self.info.is_empty()
             && self.attachments.is_empty()
@@ -529,22 +562,66 @@ impl Notes {
     /// wrong. Deliberately prose: it ends up in a comment, and a comment
     /// nobody understands is not a warning.
     pub fn summary(&self) -> Option<String> {
-        if self.unread.is_empty() {
+        let mut said: Vec<String> = Vec::new();
+        if !self.unread.is_empty() {
+            let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
+            pages.sort_unstable();
+            pages.dedup();
+            let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
+            reasons.sort_unstable();
+            reasons.dedup();
+            said.push(format!(
+                "page{} {} carr{} content no reader transcribed ({})",
+                if pages.len() == 1 { "" } else { "s" },
+                page_runs(&pages),
+                if pages.len() == 1 { "ies" } else { "y" },
+                reasons.join(", ")
+            ));
+        }
+        if !self.unread_regions.is_empty() {
+            // Each with its page (1-based, as above) and its box, to the
+            // unit: enough to find it on the page, and the exact box is in
+            // `doc:unreadRegions`.
+            let mut regions: Vec<&UnreadRegion> = self.unread_regions.iter().collect();
+            regions.sort_by(|a, b| {
+                (a.page, a.bbox.y0, a.bbox.x0)
+                    .partial_cmp(&(b.page, b.bbox.y0, b.bbox.x0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let at: Vec<String> = regions
+                .iter()
+                .map(|r| {
+                    let b = r.bbox;
+                    format!(
+                        "page {} at {:.0},{:.0},{:.0},{:.0}",
+                        r.page + 1,
+                        b.x0,
+                        b.y0,
+                        b.x1,
+                        b.y1
+                    )
+                })
+                .collect();
+            let one = at.len() == 1;
+            let verb = match (said.is_empty(), one) {
+                (true, true) => "carries content no reader transcribed",
+                (true, false) => "carry content no reader transcribed",
+                (false, true) => "does too",
+                (false, false) => "do too",
+            };
+            said.push(format!(
+                "{} raster region{} {verb}: {}",
+                at.len(),
+                if one { "" } else { "s" },
+                at.join("; ")
+            ));
+        }
+        if said.is_empty() {
             return None;
         }
-        let mut pages: Vec<usize> = self.unread.iter().map(|u| u.index + 1).collect();
-        pages.sort_unstable();
-        pages.dedup();
-        let mut reasons: Vec<&str> = self.unread.iter().map(|u| u.reason.as_str()).collect();
-        reasons.sort_unstable();
-        reasons.dedup();
         Some(format!(
-            "fluree-doc-parse: page{} {} carr{} content no reader transcribed ({}). \
-             This output is missing it.",
-            if pages.len() == 1 { "" } else { "s" },
-            page_runs(&pages),
-            if pages.len() == 1 { "ies" } else { "y" },
-            reasons.join(", ")
+            "fluree-doc-parse: {}. This output is missing it.",
+            said.join(". ")
         ))
     }
 }
