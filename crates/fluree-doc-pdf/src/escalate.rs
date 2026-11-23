@@ -89,10 +89,14 @@ pub const MAX_PAGE_PIXELS: f64 = 64.0e6;
 /// in 16 bits, and a page drawn wider loses what lies past the edge.
 pub const MAX_RENDER_SIDE: f64 = 65_535.0;
 
-/// The most renders of one page its crops are cut from. Crops at their
+/// The most renders of one page its crops are cut from, plus one per crop
+/// held to its long-edge cap that no shared render fits. Crops at their
 /// stored resolution each ask for their own scale, and a page of hundreds of
 /// captures would be rendered hundreds of times; past this many scales,
-/// crops share the next scale up, so none is drawn coarser than it asks.
+/// crops share the next scale up, so none is drawn coarser than it asks,
+/// nor past its long-edge cap ([`MAX_LONG_EDGE_PX`]): such a crop, when none
+/// of the shared scales lies between its own and its cap, keeps its own
+/// render. It takes a crop over about 960 points long, so it is rare.
 pub const MAX_RENDERS_PER_PAGE: usize = 4;
 
 /// How a crop is rendered.
@@ -794,8 +798,9 @@ pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, f: impl FnMut(RawCrop)) {
 
 /// As [`for_each_crop`], each crop at the scale `scale_of(page, region)`
 /// gives it (see [`crop_scale`]). A page is rendered once per scale its
-/// crops ask for, at most [`MAX_RENDERS_PER_PAGE`] times, one render at a
-/// time, and each crop is handed over as soon as it is cut: a page's crops come in the order of its
+/// crops ask for (at most [`MAX_RENDERS_PER_PAGE`] times, plus one per crop
+/// held to its long-edge cap), one render at a time, and each crop is handed
+/// over as soon as it is cut: a page's crops come in the order of its
 /// renders, coarsest first, and in the jobs' order within each.
 /// [`crop_order`] gives the jobs' order back.
 ///
