@@ -247,10 +247,18 @@ const MARKER_OUTDENT_TOLERANCE: f64 = 2.0;
 /// not spell a roman numeral are a word.
 /// Characters used as bullets, and only those.
 ///
-/// Geometric shapes and the typographic bullets. Dashes are deliberately
-/// absent: a line opening with an en dash is as likely to be a range, a
-/// dialogue dash or a torn compound as a list item, and treating it as a
-/// bullet deletes the character from text where it belonged.
+/// Geometric shapes, the typographic bullets, the arrows and boxes the
+/// dingbat fonts set as bullets, and the private-use codes a Word file
+/// gives its symbol-font bullets: a PDF made from Word maps the bullet of a
+/// default bulleted list to U+F0B7, the position of `•` in the Symbol font,
+/// and every reader of its text gets that code. Only codes that are no
+/// letter in Symbol or Wingdings are taken; U+F071 is `❑` in one and `θ` in
+/// the other.
+///
+/// Dashes are deliberately absent: a line opening with an en dash is as
+/// likely to be a range, a dialogue dash or a torn compound as a list item,
+/// and treating it as a bullet deletes the character from text where it
+/// belonged.
 const BULLETS: &[char] = &[
     '\u{2022}', // •
     '\u{25AA}', // ▪
@@ -266,7 +274,23 @@ const BULLETS: &[char] = &[
     '\u{2043}', // ⁃
     '\u{25B8}', // ▸
     '\u{25AC}', // ▬
+    '\u{25BA}', // ►
+    '\u{25C6}', // ◆
+    '\u{2751}', // ❑
+    '\u{2752}', // ❒
+    '\u{2756}', // ❖
+    '\u{27A2}', // ➢
+    '\u{27A4}', // ➤
+    '\u{F0B7}', // Symbol •
+    '\u{F0A7}', // Wingdings ▪ (Symbol ♣)
+    '\u{F0D8}', // Wingdings ➢ (Symbol ¬)
+    '\u{F0E8}', // Wingdings ➔ (Symbol ⎝)
 ];
+
+/// A character used as a bullet; see [`BULLETS`].
+pub(crate) fn is_bullet(c: char) -> bool {
+    BULLETS.contains(&c)
+}
 
 /// A bullet the layout pass read as the first character of its own line,
 /// rather than as a marker standing apart from it.
@@ -282,7 +306,7 @@ pub fn strip_leading_bullet(text: &str) -> Option<&str> {
     let t = text.trim_start();
     let mut chars = t.chars();
     let first = chars.next()?;
-    if !BULLETS.contains(&first) {
+    if !is_bullet(first) {
         return None;
     }
     let rest = chars.as_str();
@@ -1689,6 +1713,24 @@ mod tests {
             strip_leading_bullet("\u{2022}\u{00A0}Non-breaking space"),
             Some("Non-breaking space")
         );
+    }
+
+    #[test]
+    fn a_word_files_symbol_bullet_and_the_dingbat_boxes_mark_a_list() {
+        // Word maps its default bullet to U+F0B7, the Symbol font's `•`,
+        // and sets a tab after it.
+        assert_eq!(
+            strip_leading_bullet("\u{F0B7}\tHigh stiffness"),
+            Some("High stiffness")
+        );
+        assert_eq!(strip_leading_bullet("\u{2751} Peg rack"), Some("Peg rack"));
+        assert_eq!(
+            strip_leading_bullet("\u{27A2} Install before use"),
+            Some("Install before use")
+        );
+        // A private-use code that is a letter in the Symbol font is not
+        // taken: U+F071 is `θ` there.
+        assert_eq!(strip_leading_bullet("\u{F071} is the angle"), None);
     }
 
     #[test]

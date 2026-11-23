@@ -133,6 +133,19 @@ sentence. The next line goes on only from its column's left edge: a line
 starting well to the left of it belongs to another column. A bullet at the head of a line (`•`, `■`) begins a list item,
 even below a line that runs to the edge.
 
+**Bullets.** The typographic bullets and geometric shapes are read as
+bullets, and so are the arrows and boxes the dingbat fonts set as them
+(`➢`, `◆`, `❑`), and the private-use codes a Word file gives its symbol-font
+bullets: a PDF made from Word maps the bullet of a default bulleted list to
+U+F0B7, where `•` sits in the Symbol font, and every reader of its text layer
+gets that code. Only codes that are no letter in Symbol or Wingdings are
+read, since the same code is `❑` in one and `θ` in the other. A block that
+opens with a bullet is a list item unless it is a heading, and one that opens
+with a plain bullet or a box to tick is never a heading, whatever its size
+or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
+or a diamond is set before headings as often as before items (`❖ Gene` over
+a guideline's subsection), so there the heading pass decides.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
