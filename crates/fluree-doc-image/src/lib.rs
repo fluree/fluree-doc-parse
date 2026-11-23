@@ -63,6 +63,18 @@ pub const MAX_PIXELS: u64 = 128_000_000;
 /// (16-bit RGBA at [`MAX_PIXELS`] is 1 GB).
 const MAX_DECODED_BYTES: u64 = 1 << 30;
 
+/// The longest side an image may have to be decoded, in pixels: what bounds
+/// one row's buffer, so a one-pixel-high image a hundred million wide is
+/// refused too.
+pub const MAX_SIDE: u32 = 65_535;
+
+/// What a PNG decoder may allocate besides the image: a colour profile or a
+/// text chunk, inflated whole as the header is read. A profile runs to
+/// kilobytes; a file of a few hundred kilobytes can inflate one to a
+/// gigabyte. Past the budget the decoder drops the chunk and reads on. It
+/// bounds no pixels ([`decodable`] does), only chunk data and a row.
+const PNG_CHUNK_BUDGET: u64 = 16 << 20;
+
 /// The decoder for `bytes` and its format; with `capped`, refused beyond
 /// [`MAX_PIXELS`], for a caller about to decode.
 fn decoder(
@@ -77,9 +89,6 @@ fn decoder(
     if is_big_tiff(bytes) {
         reader.set_format(image::ImageFormat::Tiff);
     }
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(MAX_DECODED_BYTES);
-    reader.limits(limits);
     let format = reader.format();
     // The formats this crate reads. The `image` crate a build links may
     // decode more (an OCR engine's dependencies turn on all of them), and
@@ -91,6 +100,15 @@ fn decoder(
             None => "not an image: only PNG, JPEG and TIFF are read".into(),
         });
     }
+    // One number, two budgets: the TIFF and JPEG decoders bound their
+    // buffers by it, while the PNG decoder bounds its chunks by it, inflated
+    // as the header is read, before anything here can look at the size.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(match format {
+        Some(Png) => PNG_CHUNK_BUDGET,
+        _ => MAX_DECODED_BYTES,
+    });
+    reader.limits(limits);
     let decoder = reader.into_decoder().map_err(|e| e.to_string())?;
     let (w, h) = decoder.dimensions();
     if capped {
@@ -100,9 +118,14 @@ fn decoder(
 }
 
 /// Whether an image of `w` × `h` pixels, `bytes` once decoded in its own
-/// colour type, may be decoded: within [`MAX_PIXELS`] and
+/// colour type, may be decoded: within [`MAX_PIXELS`], [`MAX_SIDE`] and
 /// [`MAX_DECODED_BYTES`].
 fn decodable(w: u32, h: u32, bytes: u64) -> Result<(), String> {
+    if w.max(h) > MAX_SIDE {
+        return Err(format!(
+            "the image is {w} × {h} pixels, longer than the {MAX_SIDE} a side that may be decoded"
+        ));
+    }
     let pixels = u64::from(w) * u64::from(h);
     if pixels > MAX_PIXELS {
         return Err(format!(
@@ -639,6 +662,9 @@ mod tests {
     fn only_what_fits_is_decoded() {
         assert!(decodable(1000, 1000, 4_000_000).is_ok());
         assert!(decodable(20_000, 20_000, 4).is_err(), "too many pixels");
+        let e = decodable(100_000, 1, 100_000).unwrap_err();
+        assert!(e.contains("longer than"), "{e}");
+        assert!(decodable(MAX_SIDE, 1, 4).is_ok());
         // Within the pixels, too many bytes: floating-point RGBA.
         let e = decodable(10_000, 10_000, 1_600_000_000).unwrap_err();
         assert!(e.contains("16 bytes each"), "{e}");
@@ -683,6 +709,105 @@ mod tests {
         t[10..14].copy_from_slice(&0u32.to_le_bytes());
         assert_eq!(tiff_pages(&t), 1);
         assert_eq!(tiff_pages(b"not a tiff"), 0);
+    }
+
+    /// A PNG of one grey pixel claiming `(width, height)`, and with an
+    /// `iCCP` chunk holding `profile` zero bytes when given.
+    fn png_claiming(width: u32, height: u32, profile: Option<usize>) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut c = 0xffff_ffffu32;
+            for &b in bytes {
+                c ^= b as u32;
+                for _ in 0..8 {
+                    c = if c & 1 == 1 {
+                        0xedb8_8320 ^ (c >> 1)
+                    } else {
+                        c >> 1
+                    };
+                }
+            }
+            !c
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            out.extend((data.len() as u32).to_be_bytes());
+            let body = [kind, data].concat();
+            out.extend(&body);
+            out.extend(crc(&body).to_be_bytes());
+        }
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        let ihdr = [width.to_be_bytes(), height.to_be_bytes()].concat();
+        chunk(&mut out, b"IHDR", &[&ihdr[..], &[8, 0, 0, 0, 0]].concat());
+        if let Some(n) = profile {
+            chunk(
+                &mut out,
+                b"iCCP",
+                &[b"p\0\0".as_slice(), &zlib_zeros(n)].concat(),
+            );
+        }
+        // One row: filter byte 0, one grey pixel, as a stored zlib block.
+        chunk(
+            &mut out,
+            b"IDAT",
+            &[0x78, 0x01, 1, 2, 0, 0xfd, 0xff, 0, 128, 0, 0x81, 0, 0x81],
+        );
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    /// A zlib stream of `n` zero bytes, `n - 1` a multiple of 258: one
+    /// literal zero, then matches of 258 a distance of 1 back, in a block
+    /// of the fixed codes, a few bytes per 64 KiB.
+    fn zlib_zeros(n: usize) -> Vec<u8> {
+        assert_eq!((n - 1) % 258, 0);
+        let mut bits: Vec<bool> = Vec::new();
+        let mut put = |code: u32, len: u32, msb_first: bool| {
+            for i in 0..len {
+                let bit = if msb_first { len - 1 - i } else { i };
+                bits.push(code >> bit & 1 == 1);
+            }
+        };
+        put(1, 1, false); // final block
+        put(1, 2, false); // fixed codes
+        put(0x30, 8, true); // literal 0
+        for _ in 0..(n - 1) / 258 {
+            put(0b1100_0101, 8, true); // length 258
+            put(0, 5, true); // distance 1
+        }
+        put(0, 7, true); // end of block
+        let mut out = vec![0x78, 0x01];
+        for byte in bits.chunks(8) {
+            out.push(byte.iter().enumerate().map(|(i, &b)| (b as u8) << i).sum());
+        }
+        let b = (n % 65521) as u32;
+        out.extend(((b << 16) | 1).to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn a_png_colour_profile_is_inflated_within_a_budget() {
+        // The fixture is a real PNG: one pixel reads.
+        let one = decode(&png_claiming(1, 1, None)).unwrap();
+        assert_eq!((one.pixels.width, one.pixels.layout), (1, Layout::Luma8));
+        // A profile of 33 MB from a file of a quarter of that, past the
+        // chunk budget: dropped as the header is read, the image read on,
+        // whether its size alone is asked for or its pixels.
+        let bomb = png_claiming(1, 1, Some(258 * 130_000 + 1));
+        assert!(bomb.len() < 250_000, "33 MB from a small file");
+        let profile = |b: &[u8]| {
+            let (mut d, _) = decoder(b, false).unwrap();
+            d.icc_profile().unwrap().map(|p| p.len())
+        };
+        assert_eq!(profile(&bomb), None);
+        assert_eq!(header(&bomb).unwrap().width, 1);
+        assert!(decode(&bomb).is_ok());
+        // A profile of a normal size is kept.
+        assert_eq!(profile(&png_claiming(1, 1, Some(258 * 4 + 1))), Some(1033));
+        // A header claiming more than may be decoded is refused before any
+        // pixel is allocated; its size can still be read.
+        let big = png_claiming(20_000, 20_000, None);
+        assert!(decode(&big).unwrap_err().contains("more than"));
+        assert_eq!(upright_size(&big).unwrap(), (20_000, 20_000));
+        assert!(decode(&png_claiming(100_000, 1, None)).is_err());
     }
 
     /// `jpeg` with an APP1 EXIF segment carrying `orientation`, right after
