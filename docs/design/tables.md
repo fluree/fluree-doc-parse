@@ -95,6 +95,24 @@ every row it means, so a band between its rules is one row, a step whose
 instructions fill the page. A band as tall in a table ruled with lines is as
 often a body whose rows were never ruled, and is left for the text to read.
 
+## Currency signs
+
+A cell's text is read word by word, and a currency sign set apart from its
+figure is a word of its own that must go to the right cell. A financial
+statement pins its `$` at the column's left edge and sets the figure to the
+right, several ems away, so a lone sign is read with the figure after it.
+Invoices in French and other languages set the sign after the figure,
+`4,85 €`, and read the same way, every sign but the last moved to the next
+column's figure: `4,85 | € 19,40 €`.
+
+The line says which convention it follows. A sign a word space after a
+figure that prices no figure after it (the line's last, or one before a
+label) means the line sets its signs after its figures, and then every sign
+a word space after a figure is that figure's. On a line whose figures are
+all bare, a sign is still the next figure's. In a drawn grid the sign must
+also stand in its figure's column: a `$` pinned past a cut is the next
+column's.
+
 ## A one-column grid reads its columns from its text
 
 A key/value list ruled with horizontals only — a billing summary's `MS-DRG …

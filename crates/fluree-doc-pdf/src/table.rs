@@ -36,6 +36,14 @@ const EDGE_TOLERANCE: f64 = 3.0;
 /// verticals is a single cell — a box, not a table.
 const MIN_GRID_LINES: usize = 3;
 
+/// Furthest, in sizes, a lone currency sign reaches to the figure it
+/// prices: a statement pins its sign at the column's left edge.
+const CURRENCY_REACH: f64 = 8.0;
+
+/// Widest gap, in sizes, between a figure and a currency sign set after it
+/// as its own: a word space, breaking or not.
+const SIGN_SPACE: f64 = 0.6;
+
 /// Narrowest cell that can hold content, in PDF units. Boundaries closer than
 /// this are a border rule adjacent to a cell edge, not two cells.
 const MIN_CELL_EXTENT: f64 = 8.0;
@@ -228,6 +236,74 @@ impl Grid {
         if !run.is_empty() {
             runs.push(run);
         }
+        let lone_sign = |run: &[usize]| {
+            run.len() == 1 && matches!(glyphs[run[0]].text.trim(), "$" | "€" | "£" | "¥")
+        };
+        let numeric = |run: &[usize]| {
+            run.iter().all(|&i| {
+                glyphs[i]
+                    .text
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '(' | ')' | '%' | '-'))
+            })
+        };
+        // The gap from run `a`'s ink to run `b`'s on its line, in sizes;
+        // `None` across lines.
+        let apart = |a: &[usize], b: &[usize]| {
+            let (p, n) = (&glyphs[*a.last().unwrap()], &glyphs[b[0]]);
+            let fs = p.font_size.max(n.font_size).max(1.0) as f64;
+            ((n.origin.1 - p.origin.1).abs() < fs * 0.3)
+                .then(|| (n.bbox.unwrap().x0 - p.bbox.unwrap().x1) / fs)
+        };
+        // A sign a word space after a figure is that figure's where its line
+        // sets signs after figures (`4,85 €`), as a sign that prices no
+        // figure after it says: the line's last, or one before a label.
+        // Elsewhere it is the next figure's, as below.
+        // The column a glyph's ink is centred in.
+        let column = |i: usize| {
+            let b = glyphs[i].bbox.unwrap();
+            let x = (b.x0 + b.x1) * 0.5;
+            self.xs.windows(2).position(|w| x >= w[0] && x < w[1])
+        };
+        // In its figure's column: a sign past a cut is the next column's.
+        let after_figure = |m: usize| {
+            m > 0
+                && lone_sign(&runs[m])
+                && numeric(&runs[m - 1])
+                && apart(&runs[m - 1], &runs[m]).is_some_and(|g| g <= SIGN_SPACE)
+                && column(runs[m][0]) == column(*runs[m - 1].last().unwrap())
+        };
+        let prices_next = |m: usize| {
+            runs.get(m + 1).is_some_and(|n| {
+                numeric(n) && apart(&runs[m], n).is_some_and(|g| g < CURRENCY_REACH)
+            })
+        };
+        let line_of: Vec<usize> = {
+            let mut line = 0;
+            (0..runs.len())
+                .map(|m| {
+                    if m > 0 && apart(&runs[m - 1], &runs[m]).is_none() {
+                        line += 1;
+                    }
+                    line
+                })
+                .collect()
+        };
+        let suffixed: std::collections::HashSet<usize> = (0..runs.len())
+            .filter(|&m| after_figure(m) && !prices_next(m))
+            .map(|m| line_of[m])
+            .collect();
+        let suffix: Vec<bool> = (0..runs.len())
+            .map(|m| after_figure(m) && suffixed.contains(&line_of[m]))
+            .collect();
+        let mut kept: Vec<Vec<usize>> = Vec::with_capacity(runs.len());
+        for (m, run) in std::mem::take(&mut runs).into_iter().enumerate() {
+            match kept.last_mut() {
+                Some(prev) if suffix[m] => prev.extend(run),
+                _ => kept.push(run),
+            }
+        }
+        runs = kept;
         // A lone currency symbol belongs to the number it prices: merge it
         // into the following numeric run so `$` and `7,835,559` land in the
         // same cell. Financial statements pin the symbol at the column's
@@ -235,20 +311,14 @@ impl Grid {
         // can be wide — several ems — while still being one cell.
         let mut m = 0;
         while m + 1 < runs.len() {
-            let is_currency = runs[m].len() == 1
-                && matches!(glyphs[runs[m][0]].text.trim(), "$" | "€" | "£" | "¥");
-            let next_numeric = runs[m + 1].iter().all(|&i| {
-                glyphs[i]
-                    .text
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '(' | ')' | '%' | '-'))
-            });
+            let is_currency = lone_sign(&runs[m]);
+            let next_numeric = numeric(&runs[m + 1]);
             let close = {
                 let a = &glyphs[*runs[m].last().unwrap()];
                 let b = &glyphs[runs[m + 1][0]];
                 let fs = a.font_size.max(1.0) as f64;
                 (b.origin.1 - a.origin.1).abs() < fs * 0.3
-                    && b.bbox.unwrap().x0 - a.bbox.unwrap().x1 < fs * 8.0
+                    && b.bbox.unwrap().x0 - a.bbox.unwrap().x1 < fs * CURRENCY_REACH
             };
             if is_currency && next_numeric && close {
                 let tail = runs.remove(m + 1);
@@ -4991,6 +5061,54 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn a_sign_set_after_its_figure_is_read_into_its_cell() {
+        // `4,85 €` and `19,40 €` in a drawn grid: the first sign sits well
+        // inside its column, and was read with the figure after it.
+        let g = grid(&[40.0, 150.0, 230.0, 320.0, 400.0], &[100.0, 120.0]);
+        let mut gl = set("Seau", 42.0, 115.0);
+        gl.extend(set("4", 160.0, 115.0));
+        gl.extend(set("4,85", 240.0, 115.0));
+        gl.extend(set("€", 265.0, 115.0));
+        gl.extend(set("19,40", 330.0, 115.0));
+        gl.extend(set("€", 360.5, 115.0));
+        let cells = g.cell_texts(&gl);
+        assert_eq!(cells[2], "4,85 €");
+        assert_eq!(cells[3], "19,40 €");
+    }
+
+    #[test]
+    fn a_pinned_sign_still_prices_the_figure_after_it() {
+        // `$` a word space after the figure in the column before, its own
+        // figure set right: the line's figures are bare, so the sign is a
+        // prefix and goes with the figure after it.
+        let g = grid(&[40.0, 150.0, 285.0, 400.0], &[100.0, 120.0]);
+        let mut gl = set("Revenue", 42.0, 115.0);
+        gl.extend(set("1,234", 250.0, 115.0));
+        gl.extend(set("$", 281.0, 115.0));
+        gl.extend(set("5,678", 340.0, 115.0));
+        let cells = g.cell_texts(&gl);
+        assert_eq!(cells[1], "1,234");
+        assert_eq!(cells[2], "$ 5,678");
+    }
+
+    #[test]
+    fn a_sign_past_a_cut_is_not_the_figure_before_it() {
+        // `$` a word space after `1,234` but across the cut, pinned at its
+        // own column's edge, its figure further off than a prefix reaches:
+        // it stays in its column, whatever the line's other signs.
+        let g = grid(&[40.0, 150.0, 279.0, 400.0, 480.0], &[100.0, 120.0]);
+        let mut gl = set("Revenue", 42.0, 115.0);
+        gl.extend(set("1,234", 250.0, 115.0));
+        gl.extend(set("$", 281.0, 115.0));
+        gl.extend(set("5,678", 370.0, 115.0));
+        gl.extend(set("9,10", 410.0, 115.0));
+        gl.extend(set("€", 435.0, 115.0));
+        let cells = g.cell_texts(&gl);
+        assert_eq!(cells[1], "1,234");
+        assert_eq!(cells[3], "9,10 €");
     }
 
     fn grid(xs: &[f64], ys: &[f64]) -> Grid {

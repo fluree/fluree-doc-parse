@@ -58,6 +58,8 @@
  "eval/tables/fixtures/probe-caption.html": true,
  "eval/tables/fixtures/probe-statement-far.pdf": true,
  "eval/tables/fixtures/probe-statement.pdf": true,
+ "eval/tables/fixtures/probe-suffix-currency.html": true,
+ "eval/tables/fixtures/probe-suffix-currency.pdf": true,
  "eval/tables/fixtures/probe-th-band.html": true,
  "eval/tables/fixtures/w1-d001.docx": true,
  "eval/tables/fixtures/w1-d001.html": true,
