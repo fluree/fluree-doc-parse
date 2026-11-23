@@ -171,7 +171,10 @@ needs to read only the crops whose `reason` is `scanned`, `near_blank`,
 `broken_text` or `region`: those are the ones whose readings the page takes.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
 and a `table` or `table_missing` crop asks about structure; read, they would
-only be refused or ignored.
+only be refused or ignored. Skipping `table_missing` has the one known gap
+the escalation tiers name: a raster table too small for the router to send a
+reader is boxed by the layout detector alone, and its text stays unread until
+a reader that sees structure takes the crop.
 
 **How words become text.** Each box is chained to its nearest neighbour on
 the right — same line, comparable height, no wider apart than a word space —
