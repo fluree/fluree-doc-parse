@@ -139,6 +139,20 @@ beneath (`Monotherapy` over `Adult patients with …`) as a header over the
 column names (`Establishment` over `Name | Address | ID/FEI`), so the labels
 under it must be short, as column names are.
 
+A table ruled with horizontals only groups its columns another way. Each
+group's label (`2024`, `2023`, `Percent Change`) is set over a rule drawn
+under that group's columns alone, and the rules part where the groups do.
+The grid begins at those rules, so the line of labels over them is taken in
+as the table's top row, each label spanning the columns its rule runs
+under, and every column beneath is named by both (`2024 / Underground`).
+Only one kind of line is taken: within a line of the rules, every mark on it
+over a rule, each group's label one run of text. A line that also stands
+over a column no rule runs under, such as a label over the row labels, says
+the header above is more than one line of group labels. Taking part of it
+would leave a fragment, so none of it is taken. A rule across the whole
+table is the table's top edge, and what stands over it is its title. A table
+that draws its columns bounds its header's cells itself and is left alone.
+
 A row that holds only a label in its first column, drawn as cells of the
 table rather than a band across it, labels the rows beneath it when the row
 below fills every column. The full row is what tells a group from a row whose

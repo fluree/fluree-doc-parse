@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "eia-coal-table28.pdf",
+    "url": "https://www.eia.gov/coal/annual/pdf/table28.pdf",
+    "sha256": "0d4d2af7ccf60b9ee3f7f97334e52cdfabb340957d1f1035619bada3fe9899c8",
+    "about": "US EIA Annual Coal Report 2024, Table 28 (public domain): average sales price by state and mine type. Ruled with horizontals only, its columns grouped under 2024, 2023 and Percent Change, each label set over a rule drawn under its own three columns."
+  },
+  "notes": [
+    "The group rules were the grid's top edge, so the labels over them were left outside the table as paragraphs, Percent Change as a heading."
+  ],
+  "checks": [
+    {
+      "id": "2024-group-names-its-columns",
+      "found": "2026-11-23",
+      "issue": "Alabama's 2024 underground price was named Underground alone, like its 2023 price and its percent change.",
+      "cell": {"value": "184.68", "column": "2024 / Underground", "row": "Alabama"}
+    },
+    {
+      "id": "2023-group-names-its-columns",
+      "found": "2026-11-23",
+      "issue": "As above, for 2023.",
+      "cell": {"value": "211.26", "column": "2023 / Underground", "row": "Alabama"}
+    },
+    {
+      "id": "change-group-names-its-columns",
+      "found": "2026-11-23",
+      "issue": "As above, for the percent change.",
+      "row": {"Coal-Producing State": "U.S. Total", "Percent Change / Total": "-2.9", "2024 / Total": "52.47"}
+    },
+    {
+      "id": "group-label-is-no-heading",
+      "found": "2026-11-23",
+      "issue": "Percent Change was read as a section heading over the table.",
+      "no_section": "Percent Change"
+    }
+  ]
+}
