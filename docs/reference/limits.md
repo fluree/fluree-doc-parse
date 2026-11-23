@@ -91,8 +91,7 @@ tree](#a-markdown-documents-tree)). As DoCO, 2.9 KB a cell were measured
 at 2 KiB on top of its slots, each of an `.ods` sheet's cells spent twice,
 and its content bound to 64 MiB, a LibreOffice `.ods` of 50,000 rows by 12
 columns (2.2 MB, its content 77 MB) was refused as Markdown; it now
-converts, counted at 1.8 GB (its XML tree, at about 1.4 KB a cell, is most
-of it), and peaks at 0.9 GB.
+converts, and peaks at 0.9 GB, its XML tree most of it.
 
 A table of 50,000 rows by 15 columns, every cell filled (750,000 cells),
 peaks at:
@@ -233,14 +232,20 @@ metadata, with no smaller bound of their own), is read within what is left
 of the document's budget, and spent
 from it at two bytes a byte: the part, and the copy a reader makes of a run
 of text as long as it. An OpenDocument part's XML tree, held while the
-elements are made from it, is spent too as it is built, two cell slots a
-node and two an attribute, each node before it is copied out of the part,
-whose runs of text are read in place: a 1.2 MB `.odt` whose one paragraph
-is 1.2 GB of text is refused at 1.25 GB, the part alone. And a 202 KB `.ods` whose content inflates to 65 MB,
-two million cells, made a tree of about 600 MB the budget did not see, and
-peaked at 1.7 GB before its cells were refused, at 800 MB under the fuzz
-targets' budget of 160 MiB; with its tree spent, it peaks at 1.4 GB, and at
-115 MB under the fuzz targets. A 2 MB `.docx` whose main part inflates to 1.9 GB of
+elements are made from it, is spent too as it is built, each node before it
+is copied out of the part, whose runs of text are read in place: a cell
+slot a node and one for each 128 bytes of its XML, and one an attribute and
+one more for a node's list of them (a node 140 bytes measured, its first
+attribute 260, each other 90). A million `<a b=""/>` took 370 bytes a node,
+counted at 512. Counted at two slots a node and two an attribute, an `.odt`
+of 40 tables of 2,500 rows by 10 columns (a million cells, 3 MB), each cell
+with the three attributes LibreOffice writes, was refused as Markdown; it
+takes 1.03 GB, now counted at 1.98 GB, and converts. A 1.2 MB `.odt` whose
+one paragraph is 1.2 GB of text is refused at 1.25 GB, the part alone. And
+a 202 KB `.ods` whose content inflates to 65 MB, two million cells, made a
+tree of about 600 MB the budget did not see, and peaked at 1.7 GB before
+its cells were refused, at 800 MB under the fuzz targets' budget of 160
+MiB; with its tree spent, it peaks at 1.5 GB. A 2 MB `.docx` whose main part inflates to 1.9 GB of
 spaces peaked at 4.0 GB; it is refused now from the size its archive
 declares, before inflating, and a part whose declared size lies is cut as
 it inflates. The declared size is reserved only where memory is found for

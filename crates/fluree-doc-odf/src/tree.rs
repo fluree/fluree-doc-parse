@@ -8,23 +8,31 @@
 //! The tree is held while the document's elements are made from it, so it
 //! is spent from the document's [`Budget`] as it is built, each node before
 //! it is copied out of the part, in cell slots ([`Budget::spend_cells`]):
-//! [`NODE_CELLS`] a node, [`ATTR_CELLS`] an attribute, and one for each
-//! [`CELL_BYTES`] of the XML it is made from (a tag's name and attributes,
-//! a text), which is no shorter than what it holds. Four bytes of XML
+//! [`NODE_CELLS`] a node, [`ATTR_CELLS`] an attribute and once more for a
+//! node's list of them, and one for each [`CELL_BYTES`] of the XML it is
+//! made from (a tag's name and attributes, a text), which is no shorter
+//! than what it holds. Four bytes of XML
 //! (`<a/>`) are a node, and 9 MB of `<a b=""/>` took 376 MB as a tree.
 
 use fluree_doc_model::budget::{Budget, CELL_BYTES};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
-/// What a node costs, in cell slots: about 140 bytes were measured a node
-/// (its record, its name, its place in its parent's children), 160 for a
-/// node of text.
-pub const NODE_CELLS: u64 = 2;
-/// What an attribute costs, in cell slots: about 240 bytes were measured
-/// for an attribute with an empty value (its pair of strings, their
-/// allocations), its value's text counted apart.
-pub const ATTR_CELLS: u64 = 2;
+/// What a node costs, in cell slots, beside the one or more its XML costs:
+/// about 140 bytes were measured a node (its record, its name, its place in
+/// its parent's children), 160 for a node of text, 240 at most in address
+/// space, its record in a vector that reserves up to twice what it holds.
+pub const NODE_CELLS: u64 = 1;
+/// What an attribute costs, in cell slots, and once more for a node's
+/// first, which makes its list of them: about 90 bytes were measured an
+/// attribute (its pair of strings, their allocations), its value's text
+/// counted apart, and 260 the first. A million `<a b=""/>` took 370 bytes
+/// a node, counted at 512. A table cell of an `.odt` with three
+/// (`<table:table-cell table:style-name="T.A1" office:value-type="string"
+/// calcext:value-type="string">`), its paragraph and its text, a million of
+/// them, took 1.03 GB from the part through Markdown, counted at 1.98 GB
+/// with this and the cell's own cost.
+pub const ATTR_CELLS: u64 = 1;
 
 /// The most nodes a part's tree holds.
 pub const MAX_NODES: usize = 4 << 20;
@@ -66,8 +74,9 @@ fn local(q: &[u8]) -> String {
 /// text), which is no shorter than what it holds: before any of it is
 /// copied out of the part.
 fn spend(budget: &mut Budget, attrs: u64, bytes: usize) -> Result<(), String> {
+    let attrs = (attrs + u64::from(attrs > 0)) * ATTR_CELLS;
     budget
-        .spend_cells(NODE_CELLS + attrs * ATTR_CELLS + (bytes as u64).div_ceil(CELL_BYTES))
+        .spend_cells(NODE_CELLS + attrs + (bytes as u64).div_ceil(CELL_BYTES))
         .map_err(|e| e.to_string())
 }
 

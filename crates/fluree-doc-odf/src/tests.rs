@@ -517,7 +517,8 @@ fn a_parts_tree_is_spent_before_its_elements_are_made() {
     let part = 800_000 * PART_BYTES;
     let refused = parse_within(&pkg, &mut Budget::new(part + 10_000 * CELL_BYTES, 0)).unwrap_err();
     assert!(refused.to_string().contains("cells past the"), "{refused}");
-    // Each node, each attribute and the text they hold.
+    // Each node, each attribute and the list of them, and the text they
+    // hold.
     let mut b = Budget::new(MAX_MEMORY, 0);
     let t = Tree::parse("<a b=\"\" c=\"v\">x</a>", &mut b).unwrap();
     assert_eq!(t.nodes.len(), 3);
@@ -525,8 +526,12 @@ fn a_parts_tree_is_spent_before_its_elements_are_made() {
     let attr = tree::ATTR_CELLS * CELL_BYTES;
     assert_eq!(
         MAX_MEMORY - b.memory_left(),
-        2 * node + 2 * attr + 2 * CELL_BYTES
+        2 * node + 3 * attr + 2 * CELL_BYTES
     );
+    // A node of one attribute, 370 bytes measured, counts four slots.
+    let mut b = Budget::new(MAX_MEMORY, 0);
+    Tree::parse("<a b=\"\"/>", &mut b).unwrap();
+    assert_eq!(MAX_MEMORY - b.memory_left(), 4 * CELL_BYTES);
     // Within what the reading costs, read; a byte less, refused.
     let need = reading(&pkg) + ELEMENT_BYTES + TEXT_BYTES;
     assert!(parse_within(&pkg, &mut Budget::new(need, 0)).is_ok());
