@@ -3,7 +3,7 @@
 //! oar-ocr runs its models on ONNX Runtime, a native library. It is not
 //! linked into this crate: [`OarEngine::open`] loads it from the assets
 //! directory ([`crate::assets`]), after checking its hash, so a build carries
-//! the engine's code (about 6 MB in `fdoc`, 5 MB stripped) and a deployment
+//! the engine's code (5.8 MB in a release build of `fdoc`) and a deployment
 //! ships the library and the models for its platform beside the binary.
 //!
 //! The detector's settings are the ones the corpus benchmark measured
