@@ -578,12 +578,30 @@ impl Edge {
         if has_leader(&prev.text) {
             return false;
         }
+        // A wrapped line goes on at its column's left edge, at most a
+        // first-line indent left of the line it wraps from. One starting far
+        // to the left is in another column: a heading the line pass ran on
+        // across the gutter, below a full line of the column beside it.
+        // Centred and right-aligned lines start where their length puts
+        // them.
+        let fs = prev.font_size.max(next.font_size).max(1.0) as f64;
+        let centre = |l: &Line| (l.bbox.x0 + l.bbox.x1) / 2.0;
+        if prev.bbox.x0 - next.bbox.x0 > fs * WRAP_OUTDENT
+            && (centre(prev) - centre(next)).abs() > fs * 2.0
+            && (prev.bbox.x1 - next.bbox.x1).abs() > fs
+        {
+            return false;
+        }
         let mut end = prev.text.chars().rev();
         let breaks_word = matches!(end.next(), Some('-' | '\u{AD}'))
             && end.next().is_some_and(char::is_alphabetic);
         breaks_word || (self.agreed && self.right - prev.bbox.x1 < first_word_width(next))
     }
 }
+
+/// The furthest, in ems, a wrapped line goes on left of the line above it:
+/// a first-line indent.
+const WRAP_OUTDENT: f64 = 4.0;
 
 /// Holds a dot leader: four or more dots in a run, spaced or not.
 fn has_leader(text: &str) -> bool {
@@ -956,6 +974,47 @@ mod tests {
             "a bold heading must not absorb the paragraph below it"
         );
         assert_eq!(b[0].text(), "2 Depth Up-Scaling");
+    }
+
+    #[test]
+    fn a_full_line_does_not_go_on_into_a_line_far_to_its_left() {
+        // The right column's full line, then a heading the line pass ran on
+        // from the left column across the gutter into the right one.
+        let mut fused = l(
+            "1.2 Changing Business demand during the year;",
+            0.0,
+            0.0,
+            10.0,
+        );
+        fused.bbox.x1 = 550.0;
+        let item = l(
+            "• Moving into new products and services in high",
+            250.0,
+            12.0,
+            10.0,
+        );
+        let mut heading = l(
+            "9.5. Adapting to the New Normal: Changing demand",
+            0.0,
+            24.0,
+            10.0,
+        );
+        heading.bbox.x1 = 450.0;
+        heading.opens_bold = true;
+        let b = assemble(&[fused, item, heading], 1.2);
+        assert!(b.last().unwrap().text().starts_with("9.5."), "{b:?}");
+        // Right-aligned: each line starts where its length puts it.
+        let mut name = l("OWENS CORNING INSULATING SYSTEMS, LLC", 393.0, 0.0, 9.0);
+        name.bbox.x1 = 582.0;
+        name.bold = true;
+        let mut street = l(
+            "ONE OWENS CORNING PARKWAY TOLEDO, OH 43659 USA",
+            351.0,
+            10.0,
+            9.0,
+        );
+        street.bbox.x1 = 582.0;
+        assert_eq!(assemble(&[name, street], 1.2).len(), 1);
     }
 
     #[test]

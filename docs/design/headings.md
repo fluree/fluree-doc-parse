@@ -36,11 +36,20 @@ bold too. Three things make the line test stricter than a glyph vote:
 - **Only words with letters decide.** A bold face's figures and signs often
   come from a face that declares no weight (`E3/E3x`, a chart's
   `October 2020`), and a heading may be numbered in another face (`3.2`).
+- **The last word is the last before a gutter.** A space that puts no ink
+  down keeps the line pass from parting columns at it, so a heading can run
+  on into the next column's plain text (`9.5. Adapting to the New Normal:
+  Changing`, then across the gutter `demand during COVID-19;`). Words past
+  a gap the line pass parts columns at are not the heading's own.
 
 Block assembly then treats the line that opens on a bold label as the start
 of a paragraph, and a line that ran out of room as continuing into the next
 whatever the weights, so a run-in paragraph reads whole and bold words
-wrapped onto their own line stay in their sentence.
+wrapped onto their own line stay in their sentence. A wrapped line goes on
+at its column's left edge, at most a first-line indent left of the line it
+wraps from, so a line starting far to the left of a full line is in another
+column and begins its own block. Centred and right-aligned lines are exempt:
+they start where their length puts them.
 
 ## Numbering that is not an outline
 

@@ -1105,6 +1105,9 @@ struct Word {
     heavy_letters: usize,
     /// Holds a letter or a digit.
     spells: bool,
+    /// Set after a gap the line pass parts columns at ([`BLOCK_GAP_RATIO`]),
+    /// which a space that puts no ink down kept from parting this line.
+    parted: bool,
 }
 
 impl Word {
@@ -1195,6 +1198,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 // Prefer the pen position over the glyph box for the *start*
                 // too, so a left side bearing does not manufacture a gap.
                 let start = adv.start(&b).min(adv.at(g.origin));
+                let gap = prev_end.map(|pe| start - pe);
                 // Geometric fallback: many PDFs position words without emitting
                 // a space character at all, so a wide gap has to become one.
                 if let Some(pe) = prev_end {
@@ -1278,7 +1282,12 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     None => b,
                 });
                 if text.is_empty() || text.ends_with(' ') {
-                    words.push(Word::default());
+                    let parted =
+                        gap.is_some_and(|d| d > g.font_size.max(1.0) as f64 * BLOCK_GAP_RATIO);
+                    words.push(Word {
+                        parted,
+                        ..Word::default()
+                    });
                 }
                 if let Some(w) = words.last_mut() {
                     w.add(g);
@@ -1338,8 +1347,21 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let (inked, heavy) = words
         .iter()
         .fold((0, 0), |(n, h), w| (n + w.inked, h + w.heavy));
-    let opens = words.iter().find(|w| w.letters > 0);
-    let closes = words.iter().rev().find(|w| w.letters > 0);
+    //
+    // The last word is the last before a gutter. A space that puts no ink
+    // down keeps the line pass from parting columns at it, and a heading
+    // ran on into the next column's plain text (`9.5. Adapting to the New
+    // Normal: Changing` and, across the gutter, `demand during COVID-19;`)
+    // read as ending plain.
+    let first = words.iter().position(|w| w.letters > 0);
+    let own = first.map_or(words.len(), |f| {
+        words[f + 1..]
+            .iter()
+            .position(|w| w.parted)
+            .map_or(words.len(), |p| f + 1 + p)
+    });
+    let opens = first.map(|f| &words[f]);
+    let closes = words[..own].iter().rev().find(|w| w.letters > 0);
     let bold = heavy * 2 > inked && opens.is_none_or(Word::bold) && closes.is_none_or(Word::bold);
     let opens_bold = opens.is_some_and(Word::bold);
     let opens_with_script = idxs
@@ -1490,6 +1512,26 @@ mod tests {
         let mut v = weighted("3.2", 0.0, Some(400));
         v.extend(weighted("Results", 20.0, Some(700)));
         assert!(assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_heading_run_on_across_a_gutter_ends_where_its_column_does() {
+        // A bold heading, a space that puts no ink down, then the next
+        // column's plain text 3.5 ems on: the space keeps the line whole.
+        let mut v = weighted("Adapting", 0.0, Some(700));
+        v.push(Glyph {
+            bbox: None,
+            advance: Some(2.5),
+            ..g(" ", 40.0, 0.0, 2.5, 0.0)
+        });
+        v.extend(weighted("demand", 75.0, None));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].bold, "{}", lines[0].text);
+        // Without the gutter, the plain word ends it.
+        let mut v = weighted("Adapting", 0.0, Some(700));
+        v.extend(weighted("demand", 45.0, None));
+        assert!(!assemble(&v)[0].bold);
     }
 
     /// A glyph set at `size` with its baseline at `baseline`, cap height
