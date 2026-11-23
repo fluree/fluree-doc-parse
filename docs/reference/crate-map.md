@@ -31,7 +31,7 @@ a PDF engine.**
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them |
-| `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
+| `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |

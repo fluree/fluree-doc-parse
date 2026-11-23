@@ -127,7 +127,7 @@ rotation, as `--ocr-words` does, not through `bbox × scale` alone.
 | `scanned`, `near_blank`, `broken_text` | whole page | has nothing usable there |
 | `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
 | `small_region` | a raster region under a tenth of the page, cropped only with `--ocr-regions`: not worth a model's call, read by an OCR engine | lacks what the pixels hold |
-| `embedded_image` | an image placed in a DOCX's flow (`kind: "media"`, with its `figure` and package `part`), `<stem>_m<n>.png` | has the text around it, not the image's |
+| `embedded_image` | an image placed in a DOCX's flow, once however many figures draw it (`kind: "media"`, with its first `figure`, every one of its `figures` and its package `part`), `<stem>_m<n>.png` | has the text around it, not the image's |
 | `table` | a table the grid does not trust | has the text, not the structure |
 | `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
 | `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |

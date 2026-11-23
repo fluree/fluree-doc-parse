@@ -153,13 +153,20 @@ The pictures of a DOCX, their text after each figure (`fluree-doc-docx`'s
 
 ```rust
 let read = fluree_doc_docx::parse_with_ocr(&bytes, &engine)?;
-// read.elements, read.info; read.unread: each picture not read, with why;
+// read.elements, read.info; read.unread: each picture not read, with why
+// (`Unread`: not in the package, past the document's allowance, failed);
 // read.first_page_only: multi-page images of which only the first page was read
 ```
 
-Without the feature, `parse_with_media` lists the pictures (figure, package
-part), `fluree_doc_docx::read_media` reads one at a time, and
-`fluree_doc_image::place_after_figures` puts what you read where it belongs.
+Each image is read once however many figures draw it, and a document has at
+most `Allowance::DOCUMENT` read (256 images, 512 million pixels). Without the
+feature, `parse_with_media` lists each figure's images (figure, and a
+`MediaSource`: a package part, a file outside the package, or a missing
+relationship), `fluree_doc_docx::read_pictures` reads each image once with
+your `PictureReader`, within an `Allowance`, and
+`fluree_doc_image::place_after_figures` puts what you read where it belongs
+(`Picture::after_each_figure` gives it once per figure). `read_media` reads one
+part of a package opened once (`fluree_doc_docx::Package::open`).
 
 ## Read a non-PDF source
 

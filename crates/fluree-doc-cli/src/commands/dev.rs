@@ -1425,41 +1425,67 @@ fn is_image_file(path: &Path) -> bool {
     fluree_doc_pdf::image::Format::sniff(&head[..n]).is_some()
 }
 
-/// A DOCX's crops: each image placed in its flow, decoded upright and
-/// written as `<stem>_m<n>.png` for the figure `figure-0-<n>`, with the
-/// figure and the package part it came from. An image that is not a raster
-/// (EMF, WMF) has no crop.
+/// A DOCX's crops: each image placed in its flow, once however many
+/// figures draw it, decoded upright and written as `<stem>_m<n>.png`, named
+/// by the first figure drawing it (`figure-0-<n>`), with every figure it is
+/// drawn as and the package part it came from. An image that is not a
+/// raster (EMF, WMF) has no crop, and one past what a document may have
+/// read ([`fluree_doc_docx::Allowance::DOCUMENT`]) is not cropped either.
 fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    use fluree_doc_docx::{Picture, PictureReader, Unread};
+    struct Cropper<'a> {
+        stem: &'a str,
+        outdir: &'a Path,
+    }
+    impl PictureReader for Cropper<'_> {
+        type Reading = serde_json::Value;
+        fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
+            fluree_doc_image::header(image).map(|h| u64::from(h.width) * u64::from(h.height))
+        }
+        fn read(&mut self, picture: &Picture, image: &[u8]) -> Result<serde_json::Value, String> {
+            let mut decoded = fluree_doc_image::decode(image)?;
+            let name = format!("{}_{}.png", self.stem, picture.tag());
+            write_png(&self.outdir.join(&name), &mut decoded.pixels)?;
+            Ok(serde_json::json!({
+                "doc": self.stem, "kind": "media", "png": name,
+                "figure": picture.uses[0].figure, "figures": picture.figures(),
+                "part": picture.source.part(),
+                "reason": fluree_doc_pdf::escalate::CropReason::EmbeddedImage.as_str(), "scale": 1.0,
+            }))
+        }
+    }
     let (_, _, media) = fluree_doc_docx::parse_with_media(bytes).map_err(|e| e.to_string())?;
-    let mut recs = Vec::new();
-    for m in media {
-        // One image at a time, read, decoded, written and dropped.
-        let data = match fluree_doc_docx::read_media(bytes, &m.part) {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("warning: {stem}: {e}");
-                continue;
-            }
-        };
-        let mut image = match fluree_doc_image::decode(&data) {
-            Ok(image) => image,
+    let mut pkg = fluree_doc_docx::Package::open(bytes)?;
+    let reads = fluree_doc_docx::read_pictures(
+        &mut pkg,
+        media,
+        &mut Cropper { stem, outdir },
+        fluree_doc_docx::Allowance::DOCUMENT,
+    );
+    let mut past = 0usize;
+    for (picture, why) in &reads.unread {
+        match why {
             // A drawing (EMF, WMF) is no raster, and has no crop; anything
             // else that fails is worth a word.
-            Err(e) => {
-                if fluree_doc_pdf::image::Format::sniff(&data).is_some() {
-                    eprintln!("warning: {stem}: {}: {e}", m.part);
+            Unread::Failed(e) => {
+                let drawing = picture
+                    .source
+                    .part()
+                    .and_then(|part| fluree_doc_docx::read_media(&mut pkg, part).ok())
+                    .is_some_and(|data| fluree_doc_pdf::image::Format::sniff(&data).is_none());
+                if !drawing {
+                    eprintln!("warning: {stem}: {}: {e}", picture.source);
                 }
-                continue;
             }
-        };
-        let name = format!("{stem}_{}.png", m.tag());
-        write_png(&outdir.join(&name), &mut image.pixels)?;
-        recs.push(serde_json::json!({
-            "doc": stem, "kind": "media", "png": name, "figure": m.figure, "part": m.part,
-            "reason": fluree_doc_pdf::escalate::CropReason::EmbeddedImage.as_str(), "scale": 1.0,
-        }));
+            Unread::NotInPackage => eprintln!("warning: {stem}: {}", picture.source),
+            Unread::PastAllowance => past += 1,
+            Unread::NotAsked => {}
+        }
     }
-    Ok(recs)
+    if past > 0 {
+        eprintln!("warning: {stem}: {past} image(s) past what one document may have read were not cropped");
+    }
+    Ok(reads.read.into_iter().map(|(_, rec)| rec).collect())
 }
 
 /// Write an image as an 8-bit PNG in the layout it was decoded in, over

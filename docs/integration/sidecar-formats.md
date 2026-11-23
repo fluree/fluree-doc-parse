@@ -110,8 +110,9 @@ question about structure, and an OCR engine reads text. A bare image also
 takes `{stem}.json`, the name `fdoc ocr` gives the words of an image file;
 of the two, it reads the one sized as it is. A DOCX's pictures are read from
 `{stem}_m{n}.json`, for the figure `figure-0-{n}`, and `{stem}_m{n}_{k}.json`
-for the figure's `k`-th image after the first; their text follows the figure
-(see [Office files](../inputs/office-and-web.md)). Readings are looked up by
+for the figure's `k`-th image after the first; their text follows the figure.
+An image several figures draw is read once, from the name of the first figure
+drawing it, and its text follows each of them (see [Office files](../inputs/office-and-web.md)). Readings are looked up by
 stem, so two inputs of one stem in a batch (`report.pdf` and `report.png`)
 are warned about, and `render-routed` crops only the first.
 
