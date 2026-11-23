@@ -219,17 +219,60 @@ visible, and inventing text puts characters into the projection that every
 The same, for part of a page: a screenshot or a scanned table pasted into a
 page of prose. Such a page holds plenty of text, so it is never in
 `doc:unreadPages`, and the region's content would be missing with nothing
-saying so. Present only when the router sent a reader to a raster region the
-text layer does not cover and nothing read it: no OCR words taken for it, no
-model reading of it (`r{i}`) or of its whole page (`full`) spliced in.
+saying so. Present when a raster region the text layer does not cover was
+not read: no OCR words taken for it, no model reading of it (`r{i}`) or of
+its whole page (`full`) spliced in. An image the page draws twice in one
+place is one region, listed once.
 
 `bbox` is written as [`doc:bbox`](#an-element) is: PDF units, top-left
 origin, the page as displayed, so it joins `doc:pages` the same way, and a
-consumer can crop the region from a rendered page and read it. `reason` is
-`Region`, a region large enough to be worth a model's call. A smaller one,
-which only an OCR engine is offered, is not listed: below a tenth of the page
-it is a logo or an ornament as often as content, and listing it would put a
-warning on every letterhead.
+consumer can crop the region from a rendered page and read it. `reason` says
+what the router made of it:
+
+| reason | the region | read by | warned about |
+|---|---|---|---|
+| `Region` | its pixels look like text or a table, and it covers a tenth of the page or more | a model (`r{i}`), an OCR engine | yes |
+| `Small` | its pixels look like text, but it covers under a tenth of the page; half an inch (36 units) or more on its longer side | an OCR engine only (`small_region`) | no |
+| `NotTexty` | a tenth of the page or more, but the pixel probe does not take it for text: a photograph, a chart, an illustration | nothing | no |
+
+The router sends a model only to `Region`; the other two it declines. An
+OCR engine (`--ocr`, `--ocr-words`) reads the `Small` ones, and one it read
+is not listed: it runs locally and bills nothing, where a model call is
+billed and sends the image off the machine. A `NotTexty` region is read by
+neither: the probe is what tells where text is, and what an engine reads in
+a photograph is noise. The probe takes a screen capture for text when its
+pixels are mostly dark or light ink on paper, or when they hold lines of
+text on a ground of one colour, a few lines at the top of a wide, light
+screen among them.
+
+What an engine reads in any region (`r{i}`, routed or small) is held to a
+noise rule all the same, a net behind the probe for a photograph or a
+gradient it took for text: the reading is set aside when its words' mean
+confidence is under 0.5; or it is under 0.8 and more than two thirds of
+them are fragments of one or two letters or figures (`1`, `I`, `J`), as an
+engine reads foliage, whose noise it may score as surely as a date stamped
+in a landscape; or one word is boxed over nine tenths of the region or
+more and is a fragment or read under 0.8. A crop of one line of text, or a
+sign whose one word fills it, read surely, is kept. A reading scored on no
+scale, or with a score outside 0-1, is judged by its boxes alone. The
+region then stays listed. A reading of the whole page (`full`) is not
+judged: a scan's lines are words. Short lines of CJK signage (`出口`) and
+the short tokens of a reading boxed word by word count as fragments: read
+under 0.8 in the mean, such text can be set aside.
+
+Unread, the declined regions are listed anyway so a caller can decide: crop
+and read them, or take them for the logo, photograph or ornament they are as
+often as not. For the same reason only `Region` is in the stderr warning and
+the Markdown and XHTML comment, so a letterhead or a photograph never warns.
+An image under a tenth of the page that does not look like text either (an
+icon, a bullet, a small photograph) is not listed at all, nor any image the
+page's own text covers. Nor is a texty one under half an inch on its longer
+side: a checkbox or an icon, which a stencil (a 1-bit image mask) draws and
+the probe takes for text whatever it holds, so a form would list every box.
+An OCR engine is still offered those whose own pixels hold a line of text;
+a one-line capture of a date is a couple of inches wide and is listed. No
+image under 10 pixels on its short side is listed or read, whatever size it
+is drawn at: a rule stretched from a 1 × 1 mask holds no line of text.
 
 ## What the parser reported
 
@@ -248,8 +291,9 @@ like one whose image decoded and held nothing to read. `UnsupportedFont`, a
 font it cannot read, is passed on too, though the interpreter this version
 uses never reports it. An image several pages share is decoded each time a
 page draws it, so it is reported on every page that draws it. An image mask
-(a stencil, the 1-bit form some scans arrive in) is not decoded while a page
-is read, so one that is broken is not reported.
+(a stencil, the 1-bit form some scans arrive in) is decoded while a page is
+read only when it is small, 512 × 512 pixels at most, to tell a checkbox
+drawn again from another image: a larger one that is broken is not reported.
 
 Each kind is also one warning on stderr, naming its pages (the first ten):
 

@@ -18,7 +18,7 @@
 //! Both conditions are measured, not inferred: image coverage and glyph count
 //! for the first, Unicode resolution rate for the second.
 
-use crate::extract::Page;
+use crate::extract::{ImagePlacement, Page};
 use crate::geom::BBox;
 
 /// Fraction of the page a single image (or the union of images) must cover
@@ -42,6 +42,15 @@ const NEAR_BLANK_GLYPHS: usize = 20;
 /// A raster region must cover at least this fraction of the page before it is
 /// worth a VLM call: below it, whatever text it holds is a logo or ornament.
 const MIN_REGION_FRACTION: f64 = 0.10;
+
+/// Below this, in PDF units, on its longer side, a texty image too small for
+/// a model is not listed as declined ([`Declined::Small`]): half an inch,
+/// three lines of body text. Checkboxes, bullets and icons run 6 to 14
+/// units a side, and a stencil (an image mask) is texty whatever it draws,
+/// so a form would list every box; a pasted capture of a date or an account
+/// number is one line high but a couple of inches wide. An OCR engine is
+/// still offered them: the floor is about what is worth reporting.
+const MIN_SMALL_REGION_SIDE: f64 = 36.0;
 
 /// Above this many glyphs inside a candidate region, the text layer already
 /// reads it — a figure with overlaid glyph labels, or text drawn on a
@@ -155,67 +164,301 @@ pub fn signals(page: &Page) -> Signals {
 /// stamp repeated, an image and its mask) is one region, at its first
 /// placement: it is read once.
 fn unread_regions(page: &Page, min_fraction: f64) -> Vec<BBox> {
-    let page_area = (page.width * page.height).max(1.0);
+    let mut text = None;
     let mut seen = std::collections::HashSet::new();
-    let mut regions: Vec<BBox> = Vec::new();
-    for b in page
-        .images
+    page.images
         .iter()
+        .filter(|p| p.texty && holds_a_line(p) && share(page, &p.bbox) >= min_fraction)
         .filter(|p| {
-            if !p.texty
-                || p.grid.0.min(p.grid.1) < MIN_TEXT_LINE_PX
-                || (p.bbox.x1 - p.bbox.x0) * (p.bbox.y1 - p.bbox.y0) < min_fraction * page_area
-            {
-                return false;
-            }
-            let inside = page
-                .glyphs
-                .iter()
-                .filter(|g| {
-                    let (x, y) = match g.bbox {
-                        Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
-                        None => g.origin,
-                    };
-                    // An OCR reading's glyphs fill the void they read, and
-                    // are not the text layer: counted, the region would drop
-                    // out of the list and every region after it renumber.
-                    !g.text.trim().is_empty() && p.bbox.contains(x, y) && !page.is_ocr(g)
-                })
-                .count();
-            inside < MAX_GLYPHS_IN_UNREAD_REGION
+            text.get_or_insert_with(|| TextLayer::of(page))
+                .void(&p.bbox)
         })
         .map(|p| p.bbox)
-    {
-        if seen.insert([b.x0, b.y0, b.x1, b.y1].map(f64::to_bits)) {
-            regions.push(b);
-        }
+        .filter(|b| seen.insert(box_key(b)))
+        .collect()
+}
+
+/// Whether an image has the pixels for a line of text on its short side
+/// ([`MIN_TEXT_LINE_PX`]), whatever size it is drawn at.
+fn holds_a_line(p: &ImagePlacement) -> bool {
+    p.grid.0.min(p.grid.1) >= MIN_TEXT_LINE_PX
+}
+
+/// A box as a key, to tell an image drawn twice in one place.
+fn box_key(b: &BBox) -> [u64; 4] {
+    [b.x0, b.y0, b.x1, b.y1].map(f64::to_bits)
+}
+
+/// What each of `regions`, boxes of `page`'s images, shows, as a key
+/// ([`ImagePlacement::key`]): the key of the images drawn in that box, when
+/// they all have the one; `None` when one has none, two in the box differ,
+/// or no image is drawn there.
+pub(crate) fn region_keys(page: &Page, regions: &[BBox]) -> Vec<Option<u64>> {
+    let mut by_box: std::collections::HashMap<[u64; 4], Option<u64>> =
+        std::collections::HashMap::new();
+    for p in &page.images {
+        by_box
+            .entry(box_key(&p.bbox))
+            .and_modify(|k| {
+                if *k != p.key {
+                    *k = None;
+                }
+            })
+            .or_insert(p.key);
     }
     regions
+        .iter()
+        .map(|b| by_box.get(&box_key(b)).copied().flatten())
+        .collect()
+}
+
+/// The share of the page a box covers.
+fn share(page: &Page, b: &BBox) -> f64 {
+    (b.x1 - b.x0) * (b.y1 - b.y0) / (page.width * page.height).max(1.0)
+}
+
+/// Cells a side of the grid [`TextLayer`] files glyphs on.
+const TEXT_LAYER_BINS: usize = 64;
+
+/// A page's own text layer, each text-bearing glyph by its centre, filed on
+/// a grid of the page so that a box is measured against the glyphs of the
+/// cells it covers, not against every glyph of the page. A page may carry
+/// icons or checkboxes by the thousand, each measured: one pass over the
+/// glyphs, then a few cells an image.
+struct TextLayer {
+    /// Cell size, in PDF units.
+    cell: (f64, f64),
+    /// Where each cell's centres start in `centres`, and, last, their count.
+    starts: Vec<usize>,
+    /// The centres, cell by cell, row by row.
+    centres: Vec<(f64, f64)>,
+}
+
+impl TextLayer {
+    fn of(page: &Page) -> Self {
+        let cell = (
+            page.width.max(1.0) / TEXT_LAYER_BINS as f64,
+            page.height.max(1.0) / TEXT_LAYER_BINS as f64,
+        );
+        let own: Vec<(f64, f64)> = page
+            .glyphs
+            .iter()
+            // An OCR reading's glyphs fill the void they read, and are not
+            // the text layer: counted, the region would drop out of the list
+            // and every region after it renumber.
+            .filter(|g| !g.text.trim().is_empty() && !page.is_ocr(g))
+            .map(|g| match g.bbox {
+                Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
+                None => g.origin,
+            })
+            .collect();
+        let at = |(x, y): (f64, f64)| Self::bin(y, cell.1) * TEXT_LAYER_BINS + Self::bin(x, cell.0);
+        let mut starts = vec![0; TEXT_LAYER_BINS * TEXT_LAYER_BINS + 1];
+        for &c in &own {
+            starts[at(c) + 1] += 1;
+        }
+        for i in 1..starts.len() {
+            starts[i] += starts[i - 1];
+        }
+        let mut next = starts.clone();
+        let mut centres = vec![(0.0, 0.0); own.len()];
+        for c in own {
+            let i = at(c);
+            centres[next[i]] = c;
+            next[i] += 1;
+        }
+        TextLayer {
+            cell,
+            starts,
+            centres,
+        }
+    }
+
+    /// The cell a coordinate falls in along one axis; a glyph off the page
+    /// is filed in the edge cell, where a box reaching past the edge finds
+    /// it.
+    fn bin(v: f64, size: f64) -> usize {
+        ((v / size).floor().max(0.0) as usize).min(TEXT_LAYER_BINS - 1)
+    }
+
+    /// Whether the text layer leaves this box all but empty: what is drawn
+    /// there, nothing but the pixels hold.
+    fn void(&self, b: &BBox) -> bool {
+        let (c0, c1) = (Self::bin(b.x0, self.cell.0), Self::bin(b.x1, self.cell.0));
+        let (r0, r1) = (Self::bin(b.y0, self.cell.1), Self::bin(b.y1, self.cell.1));
+        let mut inside = 0;
+        for r in r0..=r1 {
+            let row = r * TEXT_LAYER_BINS;
+            let cells = self.starts[row + c0]..self.starts[row + c1 + 1];
+            for &(x, y) in &self.centres[cells] {
+                if b.contains(x, y) {
+                    inside += 1;
+                    if inside >= MAX_GLYPHS_IN_UNREAD_REGION {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+/// Why the router sends no model to a raster region whose pixels the text
+/// layer does not cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Declined {
+    /// Its pixels look like text, but it covers under a tenth of the page
+    /// ([`MIN_REGION_FRACTION`]): a logo or an ornament as often as a pasted
+    /// capture. An OCR engine reads it ([`ocr_regions`]).
+    Small,
+    /// A tenth of the page or more, but its pixels do not look like text or
+    /// a table to the probe ([`fluree_doc_vision::texty`]): a photograph, a
+    /// chart, an illustration. Nothing reads it, neither a model nor an OCR
+    /// engine: it is listed, for a caller to judge.
+    NotTexty,
+}
+
+/// The raster regions of a page that the text layer does not cover and the
+/// router sends no model to, each with why, in the order the page places
+/// them: what a caller may still want read.
+///
+/// Empty for a page read whole, whose regions go with the page. An image
+/// that is neither texty nor a tenth of the page (an icon, a bullet, a
+/// small photo) is not listed: nothing in it suggests content. Nor is a
+/// texty one under [`MIN_SMALL_REGION_SIDE`] (a checkbox, an icon), one
+/// whose own pixels cannot hold a line of text ([`MIN_TEXT_LINE_PX`], a
+/// mask stretched into a rule), or a second drawing of an image in one
+/// place.
+pub fn declined_regions(page: &Page) -> Vec<(BBox, Declined)> {
+    declined_regions_for(page, &page.routing().route)
+}
+
+/// [`declined_regions`] of a page whose route the caller already has from
+/// [`decide`], to route it once.
+pub fn declined_regions_for(page: &Page, route: &Route) -> Vec<(BBox, Declined)> {
+    declined_regions_numbered(page, route)
+        .into_iter()
+        .map(|(b, why, _)| (b, why))
+        .collect()
+}
+
+/// [`declined_regions_for`], each [`Declined::Small`] region with its
+/// number among the regions an OCR engine reads ([`ocr_regions_for`]): what
+/// a caller needs to tell whether an engine read it, without listing those
+/// regions again. A [`Declined::NotTexty`] one has none: no engine reads it.
+pub fn declined_regions_numbered(
+    page: &Page,
+    route: &Route,
+) -> Vec<(BBox, Declined, Option<usize>)> {
+    let routed: &[BBox] = match route {
+        Route::Vlm(_) => return Vec::new(),
+        Route::VlmRegions(r) => r,
+        Route::Deterministic => &[],
+    };
+    // Looked at only when one is worth listing, and only up to the last
+    // such: a page may carry icons and bullets by the thousand. A small
+    // texty image is counted whether listed or not, for the number of those
+    // after it: an OCR engine reads every one.
+    let large = |p: &ImagePlacement| share(page, &p.bbox) >= MIN_REGION_FRACTION;
+    let Some(last) = page.images.iter().rposition(|p| {
+        if !holds_a_line(p) {
+            false
+        } else if p.texty {
+            !large(p) && longer_side(&p.bbox) >= MIN_SMALL_REGION_SIDE
+        } else {
+            large(p)
+        }
+    }) else {
+        return Vec::new();
+    };
+    let mut text = None;
+    let mut seen = std::collections::HashSet::new();
+    let mut read = routed.len();
+    let mut out = Vec::new();
+    for p in &page.images[..=last] {
+        if !(p.texty || large(p))
+            || !holds_a_line(p)
+            || routed.contains(&p.bbox)
+            || !seen.insert(box_key(&p.bbox))
+        {
+            continue;
+        }
+        if !text
+            .get_or_insert_with(|| TextLayer::of(page))
+            .void(&p.bbox)
+        {
+            continue;
+        }
+        if !p.texty {
+            out.push((p.bbox, Declined::NotTexty, None));
+            continue;
+        }
+        let number = read;
+        read += 1;
+        // A checkbox or an icon; or, texty and large, a region the page's
+        // routing does not route, which only a routing kept from before the
+        // page changed can leave.
+        if !large(p) && longer_side(&p.bbox) >= MIN_SMALL_REGION_SIDE {
+            out.push((p.bbox, Declined::Small, Some(number)));
+        }
+    }
+    out
+}
+
+/// The images an OCR engine reads on a page past its routed regions, in
+/// the order the page places them: those the text layer does not cover
+/// whose pixels look like text and hold a line of it, whatever size they
+/// are drawn at, each box once.
+fn ocr_extras<'a>(page: &'a Page, routed: &'a [BBox]) -> impl Iterator<Item = BBox> + 'a {
+    let mut text = None;
+    let mut seen = std::collections::HashSet::new();
+    page.images
+        .iter()
+        .filter(move |p| p.texty && holds_a_line(p) && !routed.contains(&p.bbox))
+        .filter(move |p| {
+            text.get_or_insert_with(|| TextLayer::of(page))
+                .void(&p.bbox)
+        })
+        .map(|p| p.bbox)
+        .filter(move |b| seen.insert(box_key(b)))
+}
+
+/// A box's longer side.
+fn longer_side(b: &BBox) -> f64 {
+    (b.x1 - b.x0).max(b.y1 - b.y0)
 }
 
 /// The regions an OCR engine reads on a page: the routed ones, numbered as
-/// [`decide`] numbers them, then those too small to be worth a model's call.
+/// [`decide`] numbers them, then, in the order the page places them, the
+/// texty ones too small to be worth a model's call ([`Declined::Small`]).
 ///
 /// [`MIN_REGION_FRACTION`] is a price, not a property of the pixels: a model
 /// call costs the same for a logo as for a page, and below a tenth of the
-/// page it rarely pays. An OCR engine is cheap per pixel, and a pasted
-/// capture an inch high still holds a date or an account number. Numbered
-/// after the routed regions, so a model's crop names (`r0`, `r1`, …) mean
-/// the same regions whether or not an engine also reads the small ones.
+/// page it rarely pays. An OCR engine runs here and bills nothing, and a
+/// pasted capture an inch high still holds a date or an account number.
+/// What it reads in any region is held to the noise rule
+/// ([`crate::ocr::MIN_PICTURE_CONFIDENCE`]), a net behind the probe. A
+/// region the pixel probe does not take for text ([`Declined::NotTexty`])
+/// is read by neither: the probe is what tells a reader where text is.
+/// Numbered after the routed regions, so a model's crop names (`r0`, `r1`,
+/// …) mean the same regions whether or not an engine also reads the small
+/// ones.
 ///
 /// Empty for a page read whole (scanned, near-blank, broken text).
 pub fn ocr_regions(page: &Page) -> Vec<BBox> {
-    let routed = match page.routing().into_owned().route {
+    ocr_regions_for(page, &page.routing().route)
+}
+
+/// [`ocr_regions`] of a page whose route the caller already has from
+/// [`decide`], to route it once.
+pub fn ocr_regions_for(page: &Page, route: &Route) -> Vec<BBox> {
+    let routed: &[BBox] = match route {
         Route::Vlm(_) => return Vec::new(),
         Route::VlmRegions(r) => r,
-        Route::Deterministic => Vec::new(),
+        Route::Deterministic => &[],
     };
-    let mut all = routed.clone();
-    all.extend(
-        unread_regions(page, 0.0)
-            .into_iter()
-            .filter(|b| !routed.contains(b)),
-    );
+    let mut all = routed.to_vec();
+    all.extend(ocr_extras(page, routed));
     all
 }
 
@@ -267,13 +510,16 @@ pub fn decide(page: &Page) -> (Route, Signals) {
 pub struct Routing {
     /// [`decide`]'s verdict, which numbers the routed regions.
     pub route: Route,
+    /// The regions it declines, each small one with its number among the
+    /// regions an OCR engine reads ([`declined_regions_numbered`]).
+    pub declined: Vec<(BBox, Declined, Option<usize>)>,
 }
 
 /// What the router makes of a page as it stands.
 pub fn routing(page: &Page) -> Routing {
-    Routing {
-        route: decide(page).0,
-    }
+    let route = decide(page).0;
+    let declined = declined_regions_numbered(page, &route);
+    Routing { route, declined }
 }
 
 impl Page {
@@ -348,6 +594,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 })
                 .collect(),
             rules: Vec::new(),
@@ -380,6 +627,164 @@ mod tests {
         let p = page_with(1500, 0, vec![(small, true)]);
         assert_eq!(decide(&p).0, Route::Deterministic);
         assert_eq!(ocr_regions(&p), vec![small]);
+    }
+
+    #[test]
+    fn a_page_read_whole_declines_no_region() {
+        // A scan with a stamp pasted on it: the stamp goes with the page.
+        let p = page_with(
+            0,
+            0,
+            vec![
+                (b(0.0, 0.0, 600.0, 800.0), false),
+                (b(50.0, 100.0, 150.0, 130.0), true),
+            ],
+        );
+        assert!(matches!(decide(&p).0, Route::Vlm(_)));
+        assert!(declined_regions(&p).is_empty());
+        // The same stamp on a page of prose is declined as small.
+        let p = page_with(1500, 0, vec![(b(50.0, 100.0, 150.0, 130.0), true)]);
+        assert_eq!(
+            declined_regions(&p),
+            [(b(50.0, 100.0, 150.0, 130.0), Declined::Small)]
+        );
+    }
+
+    #[test]
+    fn a_checkbox_is_not_declined_but_keeps_its_ocr_number() {
+        // Two checkboxes a stencil draws (texty whatever they hold), then a
+        // capture a date's height high, then a routed capture. The boxes are
+        // under the side worth listing; an engine is still offered them, so
+        // the small capture's number counts them.
+        let boxes = [b(50.0, 100.0, 60.0, 110.0), b(50.0, 120.0, 60.0, 130.0)];
+        let small = b(100.0, 100.0, 300.0, 130.0);
+        let big = b(50.0, 300.0, 550.0, 500.0);
+        let p = page_with(
+            1500,
+            0,
+            vec![
+                (boxes[0], true),
+                (boxes[1], true),
+                (small, true),
+                (big, true),
+            ],
+        );
+        let route = decide(&p).0;
+        assert_eq!(
+            ocr_regions_for(&p, &route),
+            vec![big, boxes[0], boxes[1], small]
+        );
+        assert_eq!(
+            declined_regions_numbered(&p, &route),
+            [(small, Declined::Small, Some(3))]
+        );
+        // A form with nothing but its boxes declines nothing.
+        let p = page_with(1500, 0, vec![(boxes[0], true), (boxes[1], true)]);
+        assert!(declined_regions(&p).is_empty());
+        assert_eq!(ocr_regions(&p), boxes);
+    }
+
+    #[test]
+    fn an_image_the_probe_does_not_take_for_text_is_listed_and_read_by_nothing() {
+        // A capture a date's height high, a large image the probe does not
+        // take for text (a photograph), and a routed capture. A model reads
+        // only the last; an engine the first and the last, the small one
+        // numbered after the routed one. The photograph is listed with no
+        // number: nothing reads it.
+        let small = b(50.0, 100.0, 250.0, 130.0);
+        let photo = b(50.0, 150.0, 550.0, 290.0);
+        let big = b(50.0, 300.0, 550.0, 500.0);
+        let p = page_with(1500, 0, vec![(small, true), (photo, false), (big, true)]);
+        let route = decide(&p).0;
+        assert_eq!(route, Route::VlmRegions(vec![big]));
+        assert_eq!(ocr_regions_for(&p, &route), vec![big, small]);
+        assert_eq!(
+            declined_regions_numbered(&p, &route),
+            [
+                (small, Declined::Small, Some(1)),
+                (photo, Declined::NotTexty, None)
+            ]
+        );
+        // Before a small capture, it takes no number from it.
+        let p = page_with(1500, 0, vec![(photo, false), (small, true)]);
+        let route = decide(&p).0;
+        assert_eq!(ocr_regions_for(&p, &route), vec![small]);
+        assert_eq!(
+            declined_regions_numbered(&p, &route),
+            [
+                (photo, Declined::NotTexty, None),
+                (small, Declined::Small, Some(0))
+            ]
+        );
+        // Under text the page's own glyphs cover (they sit at 10-15 ×
+        // 10-20), nothing is offered: the text layer reads it.
+        let covered = b(0.0, 0.0, 300.0, 300.0);
+        let p = page_with(1500, 0, vec![(covered, false)]);
+        assert!(ocr_regions(&p).is_empty());
+        assert!(declined_regions(&p).is_empty());
+        // A small photograph is offered to nothing, and listed nowhere.
+        let p = page_with(1500, 0, vec![(small, false)]);
+        assert!(ocr_regions(&p).is_empty());
+        assert!(declined_regions(&p).is_empty());
+    }
+
+    #[test]
+    fn the_text_layer_grid_finds_what_a_walk_of_every_glyph_finds() {
+        // Glyphs strewn over the page and past its edges, some blank, a few
+        // more on a cell boundary; boxes of every size, some reaching off
+        // the page. The grid must answer as counting every glyph does.
+        let mut p = page_with(0, 0, Vec::new());
+        let mut seed = 7u64;
+        let mut next = |m: f64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * m
+        };
+        for i in 0..4000 {
+            let (x, y) = (next(700.0) - 50.0, next(900.0) - 50.0);
+            let mut g = page_with(1, 0, Vec::new()).glyphs.remove(0);
+            g.text = if i % 9 == 0 { " ".into() } else { "a".into() };
+            g.bbox = Some(b(x, y, x + 4.0, y + 6.0));
+            g.draw_index = i;
+            p.glyphs.push(g);
+        }
+        let cell = 600.0 / TEXT_LAYER_BINS as f64;
+        for k in 0..20 {
+            let mut g = p.glyphs[0].clone();
+            g.text = "b".into();
+            g.bbox = Some(b(
+                cell * 3.0 - 2.0,
+                100.0 + k as f64,
+                cell * 3.0 + 2.0,
+                102.0 + k as f64,
+            ));
+            p.glyphs.push(g);
+        }
+        let walk = |b: &BBox| {
+            p.glyphs
+                .iter()
+                .filter(|g| {
+                    let gb = g.bbox.unwrap();
+                    !g.text.trim().is_empty()
+                        && b.contains((gb.x0 + gb.x1) * 0.5, (gb.y0 + gb.y1) * 0.5)
+                })
+                .count()
+                < MAX_GLYPHS_IN_UNREAD_REGION
+        };
+        let text = TextLayer::of(&p);
+        let mut both = [0, 0];
+        for _ in 0..3000 {
+            let (x, y) = (next(760.0) - 80.0, next(960.0) - 80.0);
+            let (w, h) = (next(120.0), next(120.0));
+            let bx = b(x, y, x + w, y + h);
+            assert_eq!(text.void(&bx), walk(&bx), "{bx:?}");
+            both[usize::from(walk(&bx))] += 1;
+        }
+        // On the boundary column: the 20 stacked glyphs fill it.
+        let edge = b(cell * 3.0, 90.0, cell * 3.0 + 1.0, 130.0);
+        assert_eq!(text.void(&edge), walk(&edge));
+        assert!(both[0] > 100 && both[1] > 100, "{both:?}");
     }
 
     #[test]

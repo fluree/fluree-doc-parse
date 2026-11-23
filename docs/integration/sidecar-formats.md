@@ -179,9 +179,11 @@ region. The router sends a model only those over a
 tenth of the page, a price rather than a property of the pixels: an OCR
 engine is cheap per pixel, and a capture an inch high still holds a date. So
 OCR reads them all, the routed ones first, numbered as the router numbers
-them (`r0`, `r1`, …), then the small ones after them: a model's `r1` and an
-engine's `r1` are the same region. `render-routed --ocr-regions` crops the
-small ones too, with the reason `small_region`.
+them (`r0`, `r1`, …), then the small ones after them: a model's `r1` and
+an engine's `r1` are the same region. `render-routed --ocr-regions` crops
+the small ones too, with the reason `small_region`. An image the pixel probe
+does not take for text is no unread region: nothing reads it, and an `r{i}`
+reading names none.
 
 A whole-page reading for any other page is refused with a warning, so the
 text layer of a born-digital page is never replaced by a reading of it — a

@@ -2043,6 +2043,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         };
         let mut page = crate::image::page_of(612, 792, false).pages.remove(0);
         page.glyphs = glyphs;
@@ -2106,6 +2107,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         assert_eq!(
             crate::route::decide(&page).0,

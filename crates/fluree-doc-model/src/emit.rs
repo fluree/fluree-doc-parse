@@ -962,6 +962,27 @@ mod tests {
         assert!(x.contains("<!-- fluree-doc-parse: 1 raster region"), "{x}");
         assert!(to_markdown_with(&[e], &one).contains("page 3 at 56,582,556,732"));
 
+        // A region the router declined is listed, not warned about.
+        let declined = Notes {
+            unread_regions: vec![UnreadRegion {
+                reason: "Small".into(),
+                ..region(0, 40.0)
+            }],
+            ..Default::default()
+        };
+        assert_eq!(declined.summary(), None);
+        let mixed = Notes {
+            unread_regions: vec![
+                UnreadRegion {
+                    reason: "NotTexty".into(),
+                    ..region(0, 40.0)
+                },
+                region(2, 582.0),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(mixed.summary(), one.summary());
+
         // Listed in page order, then down the page; after unread pages.
         let both = Notes {
             unread: vec![UnreadPage {

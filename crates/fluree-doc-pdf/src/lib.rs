@@ -136,7 +136,8 @@ pub fn unread_pages(
     out
 }
 
-/// Raster regions the router sends a reader to, which nothing read.
+/// Raster regions nothing read: those the router sends a reader to, then
+/// those it declines.
 ///
 /// The region-level counterpart of [`unread_pages`], for a page whose text
 /// layer is fine but which carries a screenshot or a scanned table the text
@@ -151,25 +152,43 @@ pub fn unread_pages(
 /// replaced the page. A reading that came back empty, or a whole-page one
 /// the splice refused as truncated, read nothing.
 ///
-/// Only the regions the router routes, large enough to be worth a model's
-/// call. A smaller one ([`route::ocr_regions`] past the routed ones) is
-/// offered to an OCR engine when one runs, but is not reported when none
-/// does: the router judges it a logo or an ornament as often as content,
-/// and listing it would put a warning on every letterhead.
+/// Listed with the reason `Region`. After them, on any page not read whole,
+/// the regions the router declines to send a model to
+/// ([`route::declined_regions`]), so a caller can decide for itself:
+/// `Small`, texty but under a tenth of the page (and not a checkbox or an
+/// icon), which an OCR engine reads and is not listed once it has; and
+/// `NotTexty`, a tenth of the page or more whose pixels the probe does not
+/// take for text, which nothing reads and is always listed. Only `Region`
+/// is worth a warning: the declined ones are logos, photographs and charts
+/// as often as content.
 pub fn unread_regions(
     doc: &Document,
     elements: &[fluree_doc_model::Element],
 ) -> Vec<fluree_doc_model::UnreadRegion> {
     let mut out = Vec::new();
     for p in &doc.pages {
-        let route::Route::VlmRegions(regions) = route::decide(p).0 else {
+        // An OCR reading of the whole page read all of it: its glyphs can
+        // turn the page Deterministic, and the image under them would then
+        // look declined.
+        if p.ocr.as_ref().is_some_and(|o| o.whole) {
             continue;
+        }
+        // As routed before analysis cleaned the page: the numbers an OCR
+        // reading, a crop and an anchor name a region by.
+        let routing = p.routing();
+        let regions: &[BBox] = match &routing.route {
+            route::Route::Vlm(_) => continue,
+            route::Route::VlmRegions(r) => r,
+            route::Route::Deterministic => &[],
         };
         let on_page = || elements.iter().filter(|e| e.page == p.index);
         // A model's reading of the whole page holds its regions too.
         if on_page().any(|e| e.evidence == "page-tier") {
             continue;
         }
+        // The boxes listed on this page: an image the page draws twice in
+        // one place is one region to read, and one to report.
+        let mut listed = std::collections::HashSet::new();
         for (i, b) in regions.iter().enumerate() {
             if p.ocr_read_region(i) {
                 continue;
@@ -177,7 +196,7 @@ pub fn unread_regions(
             // Spliced in at the anchor's place, the reading keeps the box
             // the anchor was given: the region's, as displayed.
             let shown = p.to_display(*b);
-            if listed(&out, p.index, &shown) {
+            if listed.contains(&box_key(&shown)) {
                 continue;
             }
             let spliced = on_page().any(|e| {
@@ -185,10 +204,27 @@ pub fn unread_regions(
                     && e.bbox.is_some_and(|eb| same_box(&eb, &shown))
             });
             if !spliced {
+                listed.insert(box_key(&shown));
                 out.push(fluree_doc_model::UnreadRegion {
                     page: p.index,
                     bbox: shown,
                     reason: "Region".into(),
+                });
+            }
+        }
+        // A small region is numbered among the regions an OCR engine reads
+        // after the routed ones; that number says whether it was read. One
+        // the probe does not take for text has none: nothing reads it.
+        for &(b, why, ocr_number) in &routing.declined {
+            if ocr_number.is_some_and(|i| p.ocr_read_region(i)) {
+                continue;
+            }
+            let shown = p.to_display(b);
+            if listed.insert(box_key(&shown)) {
+                out.push(fluree_doc_model::UnreadRegion {
+                    page: p.index,
+                    bbox: shown,
+                    reason: format!("{why:?}"),
                 });
             }
         }
@@ -225,13 +261,11 @@ fn same_box(a: &BBox, b: &BBox) -> bool {
         && (a.y1 - b.y1).abs() < EPS
 }
 
-/// Whether `out` already lists this box on this page. An image the page
-/// draws twice in one place is one region to read, and one to report.
-fn listed(out: &[fluree_doc_model::UnreadRegion], page: usize, b: &BBox) -> bool {
-    out.iter()
-        .rev()
-        .take_while(|u| u.page == page)
-        .any(|u| same_box(&u.bbox, b))
+/// A box as a set key, to the hundredth of a unit [`same_box`] tolerates:
+/// the same image drawn twice in one place gives the same box, computed the
+/// same way, and the set keeps listing it from walking the list per region.
+fn box_key(b: &BBox) -> [i64; 4] {
+    [b.x0, b.y0, b.x1, b.y1].map(|v| (v * 100.0).round() as i64)
 }
 
 #[cfg(feature = "render")]
@@ -289,6 +323,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 })
                 .collect(),
             rules: Vec::new(),
@@ -407,23 +442,143 @@ mod tests {
         assert!(unread_regions(&doc, &[]).is_empty());
     }
 
+    /// `(reason, bbox)` of each unread region.
+    fn reasons(doc: &Document) -> Vec<(String, BBox)> {
+        unread_regions(doc, &[])
+            .into_iter()
+            .map(|u| (u.reason, u.bbox))
+            .collect()
+    }
+
     #[test]
-    fn a_region_too_small_for_a_model_is_not_reported() {
-        // A logo-sized capture: an OCR engine would be offered it, a model
-        // not, and with neither it is no more unread than a letterhead.
+    fn a_region_too_small_for_a_model_is_listed_as_small_until_ocr_reads_it() {
+        // A logo-sized capture: an OCR engine is offered it, a model not.
+        // Listed, for a caller to judge, after the routed regions.
         let small = b(50.0, 100.0, 250.0, 130.0);
-        let doc = Document {
-            pages: vec![page(&[small])],
-        };
-        assert_eq!(route::ocr_regions(&doc.pages[0]), vec![small]);
-        assert!(unread_regions(&doc, &[]).is_empty());
-        // Beside a routed one, only the routed one is.
         let doc = Document {
             pages: vec![page(&[small, BIG])],
         };
-        let got = unread_regions(&doc, &[]);
-        assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0].bbox, BIG);
+        assert_eq!(route::ocr_regions(&doc.pages[0]), vec![BIG, small]);
+        assert_eq!(
+            reasons(&doc),
+            [("Region".into(), BIG), ("Small".into(), small)]
+        );
+        // OCR read it: region 1 among those an engine reads.
+        let mut p = page(&[small, BIG]);
+        p.ocr = Some(OcrRead {
+            first_glyph: 1500,
+            whole: false,
+            regions: vec![1],
+        });
+        let doc = Document { pages: vec![p] };
+        assert_eq!(reasons(&doc), [("Region".to_string(), BIG)]);
+        // Alone on a page of prose, it is listed too: the page routes
+        // nothing, and the region is still the router's to decline.
+        let doc = Document {
+            pages: vec![page(&[small])],
+        };
+        assert_eq!(reasons(&doc), [("Small".to_string(), small)]);
+    }
+
+    #[test]
+    fn a_large_image_the_probe_does_not_take_for_text_is_listed_as_not_texty() {
+        let mut p = page(&[BIG, b(50.0, 100.0, 70.0, 120.0)]);
+        // A photograph a fifth of the page, and an icon: only the first is
+        // worth a caller's look.
+        for i in &mut p.images {
+            i.texty = false;
+        }
+        let doc = Document {
+            pages: vec![p.clone()],
+        };
+        assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
+        assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
+        // No OCR engine is offered it, so no reading of a region can clear
+        // it: it stays listed.
+        assert!(route::ocr_regions(&doc.pages[0]).is_empty());
+        let mut read = p.clone();
+        read.ocr = Some(OcrRead {
+            first_glyph: 1500,
+            whole: false,
+            regions: vec![0],
+        });
+        let doc = Document { pages: vec![read] };
+        assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
+        // Under text the page's own glyphs cover, it is not listed: the text
+        // layer reads it (a background behind real text).
+        let mut covered = p;
+        covered.glyphs.extend((0..40).map(|i| Glyph {
+            text: "b".into(),
+            bbox: Some(b(100.0, 350.0, 105.0, 360.0)),
+            page: 0,
+            origin: (100.0, 360.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            advance: None,
+            draw_index: 1500 + i,
+        }));
+        let doc = Document {
+            pages: vec![covered],
+        };
+        assert!(reasons(&doc).is_empty());
+        // A model's reading of the whole page reads it too.
+        let doc = Document {
+            pages: vec![page(&[BIG])],
+        };
+        let mut photo = doc.clone();
+        photo.pages[0].images[0].texty = false;
+        let whole = Element::new("doco:Paragraph", "the page", "vlm", "page-tier");
+        assert!(unread_regions(&photo, &[whole]).is_empty());
+    }
+
+    #[test]
+    fn a_declined_image_drawn_twice_in_one_place_is_listed_once() {
+        let small = b(50.0, 100.0, 250.0, 130.0);
+        let doc = Document {
+            pages: vec![page(&[small, BIG, small])],
+        };
+        assert_eq!(
+            reasons(&doc),
+            [("Region".into(), BIG), ("Small".into(), small)]
+        );
+        let mut p = page(&[BIG, BIG]);
+        for i in &mut p.images {
+            i.texty = false;
+        }
+        let doc = Document { pages: vec![p] };
+        assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
+    }
+
+    #[test]
+    fn a_scan_ocr_read_whole_lists_no_region() {
+        // A scan the probe does not take for text, read whole by OCR: the
+        // OCR glyphs route the page Deterministic, and its image is not a
+        // declined region for that.
+        let mut p = page(&[b(0.0, 0.0, 600.0, 800.0)]);
+        p.images[0].texty = false;
+        for (i, g) in p.glyphs.iter_mut().take(150).enumerate() {
+            g.bbox = Some(b(
+                50.0,
+                100.0 + i as f64 * 4.0,
+                55.0,
+                103.0 + i as f64 * 4.0,
+            ));
+        }
+        p.glyphs.truncate(150);
+        p.ocr = Some(OcrRead {
+            first_glyph: 0,
+            whole: true,
+            regions: Vec::new(),
+        });
+        assert_eq!(route::decide(&p).0, route::Route::Deterministic);
+        let doc = Document { pages: vec![p] };
+        assert!(unread_regions(&doc, &[]).is_empty());
+        // Handed no element, the reading left the page under the floor: it
+        // is listed as one OCR read sparsely, not as an unread scan.
+        let pages = unread_pages(&doc, &[]);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].reason, OCR_SPARSE);
     }
 
     #[test]

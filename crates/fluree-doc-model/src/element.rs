@@ -379,8 +379,14 @@ pub struct UnreadRegion {
     /// page as displayed.
     #[serde(serialize_with = "bbox_string")]
     pub bbox: crate::geom::BBox,
-    /// Why the router sent a reader there: `Region`, a raster region the
-    /// text layer does not cover, large enough to be worth a model's call.
+    /// `Region`: a raster region the text layer does not cover, large
+    /// enough for the router to send a model. Or one the router declined,
+    /// listed so a caller can decide: `Small`, whose pixels look like text
+    /// but which covers under a tenth of the page, half an inch or more on
+    /// its longer side;
+    /// `NotTexty`, a tenth of the page or more whose pixels the probe did
+    /// not take for text (a photograph, a chart). An OCR engine reads the
+    /// first, nothing reads the second. Only `Region` is warned about.
     pub reason: String,
 }
 
@@ -600,11 +606,18 @@ impl Notes {
                 reasons.join(", ")
             ));
         }
-        if !self.unread_regions.is_empty() {
+        // Only the regions the router sent a reader to: one it declined is a
+        // logo or a photograph as often as content, listed in
+        // `doc:unreadRegions` for a caller to judge, not warned about.
+        let mut regions: Vec<&UnreadRegion> = self
+            .unread_regions
+            .iter()
+            .filter(|r| r.reason == "Region")
+            .collect();
+        if !regions.is_empty() {
             // Each with its page (1-based, as above) and its box, to the
             // unit: enough to find it on the page, and the exact box is in
             // `doc:unreadRegions`.
-            let mut regions: Vec<&UnreadRegion> = self.unread_regions.iter().collect();
             regions.sort_by(|a, b| {
                 (a.page, a.bbox.y0, a.bbox.x0)
                     .partial_cmp(&(b.page, b.bbox.y0, b.bbox.x0))

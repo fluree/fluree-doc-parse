@@ -83,7 +83,7 @@ around it.
 
 | variable | effect |
 |---|---|
-| `FDOC_PROBE_DEBUG` | print per-glyph decode detail during extraction |
+| `FDOC_PROBE_DEBUG` | print the pixel probe's verdict on each raster image a PDF page draws, with its size |
 | `FDOC_NO_REJOIN` | leave lines split across a column boundary unjoined |
 | `GAPS_DIGITS_ONLY` | `dev gaps`: count only gaps between two digits |
 | `GAPS_NO_DIGITS` | `dev gaps`: count only gaps that are not between two digits |

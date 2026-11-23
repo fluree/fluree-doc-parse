@@ -27,13 +27,22 @@ An image is read only if its own pixels can hold a line of text: 10 px on its
 short side, whatever size it is drawn at (measured: the engine reads a line
 exactly from 10 px tall, and misreads it below). A form's checkboxes drawn
 from 8 × 8 masks and rules stretched from a 1 × 1 mask are not read, and an
-image drawn twice in one place is read once. A document's crops are capped
+image drawn twice in one place is read once. So is an image drawn again
+elsewhere, on its page or another, at the same size and the same way up: a
+form's checkbox drawn two hundred times is read once, its reading laid on
+every box, and counts once against the cap. A document's crops are capped
 by [`ocr.max_crops`](config.md#ocr) (default 1000): past it, pages read whole
 come first, then routed regions, then small ones, and a note on stderr says
 how many were left. `render-routed --ocr-regions` adds the crops `convert
 --ocr` reads, from the same selection and under the same cap; the model's own
 crops (pages, routed regions) are written whatever the cap, so past it the
-three-step path also reads those.
+three-step path also reads those. A copy is not cropped for the engine (a
+routed one still is, for the model): `convert --ocr-words` lays the words of
+the first drawing on it, unless it has a word file of its own. A drawing whose
+box shows more than the image (a glyph, a path or another image across it: a
+field's frame with a value typed in it, a tick over a box) or less (a clip
+cutting it, as one part of a sprite sheet) is no copy: it is read on its own
+and lends its reading to none.
 
 Given a crops directory, `fdoc ocr` reads its `manifest.jsonl` and only the crops
 whose words a document takes, by their `reason`: `scanned`, `near_blank`,

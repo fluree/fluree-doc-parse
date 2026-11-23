@@ -216,7 +216,8 @@ fn an_ocr_flag_beats_the_words_the_environment_names() {
 #[test]
 fn render_routed_crops_for_ocr_under_the_documents_limit() {
     // A text page with three small captures, and a limit of two: the crops
-    // `convert --ocr` would read, and a note for the one left.
+    // `convert --ocr` would read, and a note for the one left. One mask,
+    // drawn at three sizes: drawn at one, it would be read once.
     let dir = scratch("limit");
     std::fs::write(dir.join("config.toml"), "[ocr]\nmax_crops = 2\n").unwrap();
     let text: String = (0..12)
@@ -227,8 +228,8 @@ fn render_routed_crops_for_ocr_under_the_documents_limit() {
             )
         })
         .collect();
-    let shots: String = [40, 90, 140]
-        .map(|y| format!("q 100 0 0 15 40 {y} cm /Im0 Do Q\n"))
+    let shots: String = [(100, 40), (110, 90), (120, 140)]
+        .map(|(w, y)| format!("q {w} 0 0 15 40 {y} cm /Im0 Do Q\n"))
         .concat();
     let mask = [
         b"<< /Type /XObject /Subtype /Image /Width 200 /Height 30 /ImageMask true \

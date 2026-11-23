@@ -12,7 +12,9 @@
 //!   PP-OCRv6 through oar-ocr, on an ONNX Runtime loaded from an assets
 //!   directory rather than linked in;
 //! - how an image is sized for an OCR engine ([`sizing`]): at its own
-//!   resolution, in passes within a pixel cap.
+//!   resolution, in passes within a pixel cap;
+//! - the probe that tells whether an image looks like text at all
+//!   ([`texty`]), and so is worth reading.
 //!
 //! Laying the words out as text is the layout engine's job
 //! (`fluree_doc_pdf::ocr`).
@@ -24,6 +26,7 @@ pub mod assets;
 #[cfg(feature = "oar")]
 pub mod oar;
 pub mod sizing;
+pub mod texty;
 
 /// How each pixel of [`Pixels`] is laid out: 8 bits a channel.
 ///

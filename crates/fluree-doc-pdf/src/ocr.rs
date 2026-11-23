@@ -201,9 +201,14 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
         .iter()
         .map(|p| p.routing().route.clone())
         .collect();
-    // The regions an engine may fill: the routed ones, then those too small
-    // for a model (see `route::ocr_regions`).
-    let regions: Vec<Vec<BBox>> = doc.pages.iter().map(route::ocr_regions).collect();
+    // The regions an engine may fill: the routed ones, then those the router
+    // sends no model (see `route::ocr_regions`).
+    let regions: Vec<Vec<BBox>> = doc
+        .pages
+        .iter()
+        .zip(&routes)
+        .map(|(p, r)| route::ocr_regions_for(p, r))
+        .collect();
     // Each reading judged against the router first: where on its page it may
     // land, or why it may not.
     let judged: Vec<Result<Target, &'static str>> = readings
@@ -243,6 +248,37 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 area,
                 replaces,
             })
+        })
+        .collect();
+    // What an engine reads in a region's crop is held to the noise rule
+    // ([`noise`]), a net behind the pixel probe that sent it there: a
+    // capture the probe took for text may still be a photograph or a
+    // gradient, whose reading is strokes. Its words are set aside, and the
+    // region stays unread. A reading of the whole page is not judged: a
+    // scan's lines are words, and its regions are read with it.
+    let set_aside: Vec<Vec<usize>> = readings
+        .iter()
+        .zip(&judged)
+        .map(|((_, crop, reading), t)| match (crop, t) {
+            (Crop::Region(_), Ok(t)) => noise_in_regions(&doc.pages[t.pi], t, reading),
+            _ => Vec::new(),
+        })
+        .collect();
+    let readings: Vec<(usize, Crop, std::borrow::Cow<WordReading>)> = readings
+        .iter()
+        .zip(&set_aside)
+        .map(|((page, crop, reading), gone)| {
+            let kept = if gone.is_empty() {
+                std::borrow::Cow::Borrowed(reading)
+            } else {
+                let mut kept = reading.clone();
+                kept.words = (reading.words.iter().enumerate())
+                    .filter(|(i, _)| !gone.contains(i))
+                    .map(|(_, w)| w.clone())
+                    .collect();
+                std::borrow::Cow::Owned(kept)
+            };
+            (*page, *crop, kept)
         })
         .collect();
     // Whether the engine boxes ink or detected lines is one fact about the
@@ -343,8 +379,133 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
     }
 
     out.into_iter()
-        .map(|r| r.expect("every reading judged"))
+        .zip(&set_aside)
+        .map(|(r, gone)| {
+            let mut r = r.expect("every reading judged");
+            if r.refused.is_none() {
+                r.dropped += gone.len();
+            }
+            r
+        })
         .collect()
+}
+
+/// Mean confidence of its words under which an OCR reading of a region or
+/// of a picture is noise whatever its words look like: a net behind the
+/// pixel probe, for a photograph or a gradient it took for text.
+///
+/// Measured with the built-in engine on synthetic pictures: a field of grass
+/// read one "word" at 0.11 to 0.29, a photograph's one at 0.19, and a field
+/// of strokes 60 at 0.499. Real text read 0.66 at the least (a date in a
+/// corner of a landscape) and otherwise 0.87 to 1.0, so a mean this low is
+/// noise however its words look.
+pub const MIN_PICTURE_CONFIDENCE: f64 = 0.5;
+
+/// Mean confidence under which a reading of such pixels made mostly of
+/// fragments ([`FRAGMENT_SHARE`]) is noise.
+///
+/// Confidence alone does not tell noise from text: dense foliage read 16
+/// to 188 "words" at a mean of 0.57 to 0.63, and a texture of blobs 29 at
+/// 0.52, over the date in a landscape read at 0.66. What tells them apart
+/// is what the words are: in each reading of noise measured, 93 % of them
+/// or more were fragments of one or two letters or figures (`1`, `I`, `J`,
+/// `米`, `-----`), where the date was one fragment in two and the captures,
+/// signs, charts and stamps read one in six at most. A chart's axis or a
+/// code (`A1`) is fragments too; the text measured read at 0.87 to 1.0 in
+/// the mean, so over this mean fragments are taken for text. So is CJK
+/// signage read as short lines (`出口`, two characters a line), and the
+/// short tokens of a reading boxed word by word (a sidecar from an engine
+/// that boxes words, where a line of prose holds `a`, `of`, `to`) count
+/// as fragments more often than the built-in engine's lines do: read with
+/// a mean under this, such text can be set aside.
+pub const MIN_FRAGMENTS_CONFIDENCE: f64 = 0.8;
+
+/// Share of a reading's words over which they are mostly fragments
+/// ([`MIN_FRAGMENTS_CONFIDENCE`]): words of two letters or figures at most.
+const FRAGMENT_SHARE: f64 = 2.0 / 3.0;
+
+/// Share of the picture read over which one word's box makes a reading of
+/// it noise, when that word is a fragment or is read under
+/// [`MIN_FRAGMENTS_CONFIDENCE`].
+///
+/// The built-in engine boxes the one "word" it reads in a photograph or a
+/// gradient over all of the picture, and some of those it scores over
+/// [`MIN_PICTURE_CONFIDENCE`] (a grey gradient: a `7` at 0.66). The text of
+/// a capture or a chart boxes 0.02 of its picture at most, a large word or
+/// a large number set in it 0.61 to 0.88. A crop of one line of text, a
+/// few pixels of margin around it, boxes its line over all of it too, and
+/// so does a sign or a stamp whose one word fills the picture (`OPEN`,
+/// `PAID`): read surely (0.99, 1.0), words and not fragments, they are
+/// text, and are kept.
+const NOISE_BOX_SHARE: f64 = 0.9;
+
+/// Whether `words`, read in a picture of `area` (square PDF units), are an
+/// engine's noise rather than text: their mean confidence is under
+/// [`MIN_PICTURE_CONFIDENCE`], or under [`MIN_FRAGMENTS_CONFIDENCE`] with
+/// more than [`FRAGMENT_SHARE`] of them fragments, or one of them is boxed
+/// over [`NOISE_BOX_SHARE`] of the picture and is a fragment or is read
+/// under [`MIN_FRAGMENTS_CONFIDENCE`]. A reading with no confidence (none
+/// given, or scored outside 0-1) is judged by its boxes alone, a word with
+/// no confidence as one read unsurely. No words are no noise.
+fn noise(words: &[&Placed], area: f64) -> bool {
+    let confs: Vec<f64> = words.iter().filter_map(|w| w.conf).collect();
+    let fragments = words.iter().filter(|w| fragment(&w.text)).count();
+    let fragmented = fragments as f64 > FRAGMENT_SHARE * words.len() as f64;
+    let unsure = !confs.is_empty() && {
+        let mean = confs.iter().sum::<f64>() / (confs.len() as f64);
+        mean < MIN_PICTURE_CONFIDENCE || (fragmented && mean < MIN_FRAGMENTS_CONFIDENCE)
+    };
+    let over_all = words.iter().any(|w| {
+        let (bx, by) = quad_bounds(&w.quad);
+        let unsure = fragment(&w.text) || w.conf.is_none_or(|c| c < MIN_FRAGMENTS_CONFIDENCE);
+        unsure && (bx.1 - bx.0) * (by.1 - by.0) >= NOISE_BOX_SHARE * area
+    });
+    unsure || over_all
+}
+
+/// A word of two letters or figures at most, other marks not counted: the
+/// stroke an engine reads in a photograph's texture (`1`, `I7`, `-----`).
+fn fragment(text: &str) -> bool {
+    text.chars().filter(|c| c.is_alphanumeric()).count() <= 2
+}
+
+/// The words of `reading`, by their index among its words, that land in a
+/// region it may fill and are noise there ([`noise`]): each region judged
+/// by the words that land in it, as [`add_words`] lands them.
+fn noise_in_regions(p: &Page, t: &Target, reading: &WordReading) -> Vec<usize> {
+    let Area::Regions(within) = &t.area else {
+        return Vec::new();
+    };
+    let Ok(placed) = place(p, t.shown, reading) else {
+        return Vec::new();
+    };
+    // `place` skips the blank words: its slots are the others, in order.
+    let index = (reading.words.iter().enumerate())
+        .filter(|(_, w)| !w.text.trim().is_empty())
+        .map(|(i, _)| i);
+    let landed: Vec<(usize, usize, &Placed)> = placed
+        .iter()
+        .zip(index)
+        .filter_map(|(w, k)| {
+            let w = w.as_ref()?;
+            let (bx, by) = quad_bounds(&w.quad);
+            let (cx, cy) = ((bx.0 + bx.1) * 0.5, (by.0 + by.1) * 0.5);
+            let (region, _) = within.iter().find(|(_, r)| r.contains(cx, cy))?;
+            Some((*region, k, w))
+        })
+        .collect();
+    let mut gone = Vec::new();
+    for (i, region) in within {
+        let words: Vec<&Placed> = landed
+            .iter()
+            .filter(|(r, _, _)| r == i)
+            .map(|(_, _, w)| *w)
+            .collect();
+        if noise(&words, region.width() * region.height()) {
+            gone.extend(landed.iter().filter(|(r, _, _)| r == i).map(|(_, k, _)| *k));
+        }
+    }
+    gone
 }
 
 /// Where the router lets one reading land.
@@ -493,6 +654,30 @@ fn place(
 ) -> Result<Vec<Option<Placed>>, &'static str> {
     use unicode_normalization::UnicodeNormalization;
     let rect = crop_rect(p, shown);
+    // A score outside 0-1 says the whole reading is on another scale
+    // (Tesseract's 0-100, not divided), where its other scores mean
+    // something else too: a 0 or a 1 out of 100 is no score of 0-1. The
+    // reading then has no confidence, decided once for all its words: judged
+    // word by word, its zeros would sink the mean of a reading of text under
+    // the noise rule's floor.
+    let unscored;
+    let reading = if (reading.words.iter())
+        .filter(|w| !w.text.trim().is_empty())
+        .any(|w| w.conf.is_some_and(|c| !(0.0..=1.0).contains(&c)))
+    {
+        unscored = WordReading {
+            words: (reading.words.iter())
+                .map(|w| OcrWord {
+                    conf: None,
+                    ..w.clone()
+                })
+                .collect(),
+            ..reading.clone()
+        };
+        &unscored
+    } else {
+        reading
+    };
     // Pixels of the image read → display frame. A reading in page units is
     // already there.
     let (sx, sy, ox, oy) = match (reading.coords, reading.width, reading.height) {
@@ -1543,8 +1728,8 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 
 /// The crops an OCR engine reads: each page whose text is pixels, whole,
 /// and on every other page its unread raster regions
-/// ([`route::ocr_regions`]), small ones included. Limited to `only`'s pages
-/// when given.
+/// ([`route::ocr_regions`]), those no model is sent included. Limited to
+/// `only`'s pages when given.
 ///
 /// At most `max_crops` crops (`0` for no limit), the page order kept, and
 /// how many were left out. Past the limit the crops that lose the most if
@@ -1552,9 +1737,14 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// then a region the router sends a reader; then a region too small for a
 /// model's call. Within each kind, the earlier pages first.
 pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (OcrJobs, usize) {
+    // A region showing what an earlier one shows is not read again
+    // ([`copies`]): it takes the earlier one's reading, and counts against
+    // the limit only through it.
+    let copied: std::collections::HashMap<(usize, usize), (usize, usize)> =
+        copies(doc, only).into_iter().collect();
     // Every crop, in page order, with its kind: 0 a page read whole, 1 a
     // routed region, 2 a small one.
-    type Ranked = (u8, usize, Option<(String, BBox)>);
+    type Ranked = (u8, usize, Option<(usize, BBox)>);
     let mut crops: Vec<Ranked> = Vec::new();
     for p in &doc.pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
@@ -1569,8 +1759,11 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
             Route::Deterministic => 0,
         };
         for (i, b) in route::ocr_regions(p).into_iter().enumerate() {
+            if copied.contains_key(&(p.index, i)) {
+                continue;
+            }
             let kind = if i < routed { 1 } else { 2 };
-            crops.push((kind, p.index, Some((Crop::Region(i).tag(), b))));
+            crops.push((kind, p.index, Some((i, b))));
         }
     }
     let mut dropped = 0;
@@ -1584,9 +1777,15 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
         dropped = crops.len() - max_crops;
         let mut k = keep.into_iter();
         crops.retain(|_| k.next() == Some(true));
+        // The copies of a region left unread are left unread with it.
+        let read: std::collections::HashSet<(usize, usize)> = (crops.iter())
+            .filter_map(|(_, page, c)| c.as_ref().map(|(i, _)| (*page, *i)))
+            .collect();
+        dropped += copied.values().filter(|of| !read.contains(of)).count();
     }
     let mut jobs: OcrJobs = Vec::new();
     for (_, page, crop) in crops {
+        let crop = crop.map(|(i, b)| (Crop::Region(i).tag(), b));
         match (crop, jobs.last_mut()) {
             (None, _) => jobs.push((page, None)),
             (Some(c), Some((last, Some(list)))) if *last == page => list.push(c),
@@ -1594,6 +1793,105 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
         }
     }
     (jobs, dropped)
+}
+
+/// A region an OCR engine reads that shows what an earlier one shows, by
+/// `(page, region)`: the copy, then the region it is a copy of.
+pub type RegionCopy = ((usize, usize), (usize, usize));
+
+/// The regions an OCR engine reads ([`route::ocr_regions`]) that show what
+/// an earlier one shows, each with the first region showing it, in page
+/// then region order. Limited to `only`'s pages when given.
+///
+/// One image drawn at the same size and the same way up, with nothing
+/// else in its box and no clip cutting it
+/// ([`ImagePlacement::key`](crate::extract::ImagePlacement::key)), on pages
+/// turned alike, with a crop of the same size (not cut short by the page's
+/// edge), shows the same pixels: a form's checkbox drawn two hundred times
+/// is one region read once, not two hundred calls of the engine
+/// ([`ocr_jobs`]). A box that shows more (a value typed in a field's frame,
+/// a tick drawn over a box) or less (one part of a sprite sheet, through a
+/// clip) is read on its own, and lends its reading to none. The copies are
+/// numbered as before and take the reading of the region they copy
+/// ([`with_copies`]), its words laid where each is drawn and judged there,
+/// as a reading of its own would be: over the page's own text, outside the
+/// region, or noise. What the margin of each crop shows apart from the
+/// image is not read again: a word an engine would read across the edge of
+/// a copy's region is lost.
+pub fn copies(doc: &Document, only: Option<&[usize]>) -> Vec<RegionCopy> {
+    let mut first: std::collections::HashMap<(u64, i32, [i64; 2]), (usize, usize)> =
+        std::collections::HashMap::new();
+    let mut out = Vec::new();
+    for p in &doc.pages {
+        if only.is_some_and(|keep| !keep.contains(&p.index)) {
+            continue;
+        }
+        let regions = route::ocr_regions(p);
+        let keys = route::region_keys(p, &regions);
+        for (i, (b, key)) in regions.iter().zip(keys).enumerate() {
+            let Some(key) = key else { continue };
+            let r = crop_rect(p, Some(*b));
+            // To a thousandth of a unit, as the key's own size is.
+            let size = [r.width(), r.height()].map(|v| (v * 1000.0).round() as i64);
+            match first.entry((key, p.rotation, size)) {
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    out.push(((p.index, i), *e.get()));
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert((p.index, i));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `readings` with, for each copy of a region among `only`'s pages
+/// ([`copies`]) that has no reading of its own, the reading of the region
+/// it copies when that reading is in the crop's pixels (an engine's
+/// always is), in page then crop order: what [`inject`] takes, through
+/// [`read_pages`] or from word files, which [`ocr_jobs`] has no copy read
+/// for.
+pub fn with_copies(
+    doc: &Document,
+    only: Option<&[usize]>,
+    mut readings: Vec<(usize, Crop, WordReading)>,
+) -> Vec<(usize, Crop, WordReading)> {
+    let copies = copies(doc, only);
+    if copies.is_empty() {
+        return readings;
+    }
+    let own: std::collections::HashSet<(usize, usize)> = (readings.iter())
+        .filter_map(|(page, crop, _)| match crop {
+            Crop::Region(i) => Some((*page, *i)),
+            Crop::Page => None,
+        })
+        .collect();
+    let mut added = Vec::new();
+    for ((page, i), (of_page, of)) in copies {
+        if own.contains(&(page, i)) {
+            continue;
+        }
+        let read = readings
+            .iter()
+            .find(|(p, c, _)| *p == of_page && *c == Crop::Region(of));
+        // A reading in page units says where on the page its words are,
+        // not where in the crop: it is of its own region only.
+        if let Some((_, _, reading)) = read.filter(|(_, _, r)| r.coords == Coords::Px) {
+            added.push((page, Crop::Region(i), reading.clone()));
+        }
+    }
+    readings.extend(added);
+    readings.sort_by_key(|(page, crop, _)| {
+        (
+            *page,
+            match crop {
+                Crop::Page => None,
+                Crop::Region(i) => Some(*i),
+            },
+        )
+    });
+    readings
 }
 
 /// What one OCR pass over a document did.
@@ -1649,7 +1947,19 @@ pub fn read_pages(
     readings.sort_by_key(|(at, _)| *at);
     failed.sort_by_key(|(at, _)| *at);
     let readings: Vec<_> = readings.into_iter().map(|(_, r)| r).collect();
-    let failed = failed.into_iter().map(|(_, f)| f).collect();
+    let mut failed: Vec<(String, String)> = failed.into_iter().map(|(_, f)| f).collect();
+    // A copy of a region the engine could not read is not read either.
+    for ((page, i), (of_page, of)) in copies(doc, only) {
+        let of = format!("p{of_page}_{}", Crop::Region(of).tag());
+        if let Some(e) = failed
+            .iter()
+            .find(|(name, _)| *name == of)
+            .map(|f| f.1.clone())
+        {
+            failed.push((format!("p{page}_{}", Crop::Region(i).tag()), e));
+        }
+    }
+    let readings = with_copies(doc, only, readings);
     OcrPass {
         injected: inject(doc, &readings),
         failed,
@@ -1738,6 +2048,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }
     }
 
@@ -1921,6 +2232,57 @@ mod tests {
         );
         assert!(pass.injected.is_empty());
         assert_eq!(engine.0.lock().unwrap().len(), 1);
+    }
+
+    /// An engine that cannot read, and counts how often it was asked.
+    #[cfg(feature = "render")]
+    struct Broken(std::sync::atomic::AtomicUsize);
+
+    #[cfg(feature = "render")]
+    impl fluree_doc_vision::OcrEngine for Broken {
+        fn name(&self) -> &str {
+            "broken"
+        }
+        fn read(&self, _: &fluree_doc_vision::Pixels) -> Result<WordReading, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err("no model".into())
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn an_engine_reads_an_image_drawn_three_times_once() {
+        let content = format!(
+            "{}{}{}",
+            capture_at(50, 40),
+            capture_at(300, 40),
+            capture_at(50, 100)
+        );
+        let bytes = form_pdf(&content, &[("Cap", 200, 30)]);
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+        let mut doc = crate::extract::extract_bytes(bytes.clone()).unwrap();
+        let engine = OneWord(Default::default());
+        let stored = crate::escalate::CropScale::Stored;
+        let pass = read_pages(&mut doc, &pdf, &engine, None, stored, 0);
+        assert_eq!(engine.0.lock().unwrap().len(), 1);
+        let taken: Vec<(Crop, usize)> = pass.injected.iter().map(|r| (r.crop, r.taken)).collect();
+        assert_eq!(
+            taken,
+            [
+                (Crop::Region(0), 1),
+                (Crop::Region(1), 1),
+                (Crop::Region(2), 1)
+            ]
+        );
+        assert_eq!(text_of(&doc.pages[0]).matches("HELLO").count(), 3);
+        // Where the one reading fails, each drawing is told of.
+        let mut doc = crate::extract::extract_bytes(bytes).unwrap();
+        let engine = Broken(Default::default());
+        let pass = read_pages(&mut doc, &pdf, &engine, None, stored, 0);
+        assert_eq!(engine.0.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let failed: Vec<&str> = pass.failed.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(failed, ["p0_r0", "p0_r1", "p0_r2"]);
+        assert!(pass.injected.is_empty());
     }
 
     #[test]
@@ -2134,6 +2496,7 @@ mod tests {
             ppi: Some(ppi),
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         };
         let mut doc = Document {
             pages: vec![page(
@@ -2276,6 +2639,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }],
             )],
         };
@@ -2391,6 +2755,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }],
             )],
         };
@@ -2436,6 +2801,183 @@ mod tests {
         );
         assert_eq!(r[0].refused, Some("region not routed to a reader"));
         assert!(doc.pages[0].glyphs.is_empty());
+    }
+
+    /// A page of prose with, under it, a capture too small for a model
+    /// (region 0, which an OCR engine reads) and a photograph a sixth of the
+    /// page that the probe does not take for text (read by nothing).
+    fn prose_with_a_photograph() -> Document {
+        let image = |texty, (x0, y0, x1, y1)| ImagePlacement {
+            bbox: BBox { x0, y0, x1, y1 },
+            texty,
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        };
+        let line = "The account review and the record shown below";
+        Document {
+            pages: vec![page(
+                (0..30)
+                    .flat_map(|i| native(line, 56.0, 60.0 + 10.0 * f64::from(i)))
+                    .collect(),
+                vec![
+                    image(true, (56.0, 380.0, 200.0, 400.0)),
+                    image(false, (56.0, 450.0, 556.0, 600.0)),
+                ],
+            )],
+        }
+    }
+
+    /// Words in PDF units, each scored `conf`.
+    fn scored(words: &[(&str, [f64; 4])], conf: Option<f64>) -> WordReading {
+        WordReading {
+            coords: Coords::Page,
+            width: None,
+            height: None,
+            engine: None,
+            words: words
+                .iter()
+                .map(|&(text, bbox)| OcrWord {
+                    text: text.into(),
+                    bbox,
+                    angle: None,
+                    conf,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_reading_of_a_region_that_is_noise_is_set_aside() {
+        // The capture's own box is 56,380 to 200,400; its crop, its margin
+        // included, 50,374 to 206,406.
+        let strokes = [
+            ("M", [60.0, 382.0, 100.0, 398.0]),
+            ("I7", [120.0, 384.0, 140.0, 398.0]),
+        ];
+        let whole_crop = [("7", [50.0, 374.0, 206.0, 406.0])];
+        let run = |reading: WordReading, crop: Crop| {
+            let mut doc = prose_with_a_photograph();
+            assert_eq!(
+                (doc.pages[0].routing().declined.iter())
+                    .map(|d| (d.1, d.2))
+                    .collect::<Vec<_>>(),
+                [
+                    (route::Declined::Small, Some(0)),
+                    (route::Declined::NotTexty, None)
+                ]
+            );
+            let glyphs = doc.pages[0].glyphs.len();
+            let r = inject(&mut doc, &[(0, crop, reading)]);
+            let unread: Vec<String> = crate::unread_regions(&doc, &[])
+                .into_iter()
+                .map(|u| u.reason)
+                .collect();
+            let added: String = (doc.pages[0].glyphs[glyphs..].iter())
+                .map(|g| g.text.as_str())
+                .collect();
+            (r[0].clone(), added, unread)
+        };
+        // Unsure in the mean; fragments of one or two letters or figures,
+        // more than two thirds of the words, not sure enough to be a
+        // chart's or a code's; or one fragment boxed over the whole crop,
+        // however sure, or with no confidence: noise, set aside, and the
+        // capture is still listed.
+        let mostly_fragments = [
+            ("1", [60.0, 382.0, 66.0, 398.0]),
+            ("I7", [70.0, 382.0, 80.0, 398.0]),
+            ("J", [90.0, 382.0, 96.0, 398.0]),
+            ("Total", [110.0, 382.0, 150.0, 398.0]),
+        ];
+        for reading in [
+            scored(&strokes, Some(0.3)),
+            scored(&strokes, Some(0.6)),
+            scored(&mostly_fragments, Some(0.7)),
+            scored(&whole_crop, None),
+            scored(&whole_crop, Some(0.66)),
+            scored(&whole_crop, Some(0.99)),
+        ] {
+            let (r, added, unread) = run(reading.clone(), Crop::Region(0));
+            assert_eq!(
+                (r.refused, r.taken, r.dropped, added.as_str()),
+                (None, 0, reading.words.len(), ""),
+                "{reading:?}"
+            );
+            assert_eq!(unread, ["Small", "NotTexty"]);
+        }
+        // A date, read unsure but as words; exactly two thirds of the words
+        // fragments, not more; fragments read as surely as a chart's axis
+        // or a code; a line of text over the whole of a tight crop, read
+        // surely: text, taken, and no longer listed.
+        let date = [
+            ("1", [60.0, 382.0, 66.0, 398.0]),
+            ("2026-03-14 10:42", [80.0, 384.0, 190.0, 398.0]),
+        ];
+        let two_thirds = &mostly_fragments[1..];
+        let line = [("Account 4417", [50.0, 374.0, 206.0, 406.0])];
+        for reading in [
+            scored(&date, Some(0.66)),
+            scored(two_thirds, Some(0.7)),
+            scored(&strokes, Some(0.9)),
+            scored(&line, Some(0.99)),
+        ] {
+            let (r, added, unread) = run(reading.clone(), Crop::Region(0));
+            assert_eq!(r.taken, reading.words.len(), "{r:?}");
+            assert!(!added.is_empty());
+            assert_eq!(unread, ["NotTexty"]);
+        }
+        // The photograph is offered to no engine: a reading of it is
+        // refused, and it stays listed.
+        let (r, added, unread) = run(
+            scored(&[("Sunset", [80.0, 470.0, 160.0, 490.0])], Some(0.99)),
+            Crop::Region(1),
+        );
+        assert_eq!(r.refused, Some("region not routed to a reader"));
+        assert!(added.is_empty());
+        assert_eq!(unread, ["Small", "NotTexty"]);
+        // A whole reading of the page is not judged: its words in the
+        // capture are taken however unsure, and those in the photograph
+        // land in no region it may fill.
+        let acct = ("ACCT 4417", [70.0, 384.0, 150.0, 396.0]);
+        let mut both = scored(&[("", [0.0; 4]), acct], Some(0.3));
+        both.words
+            .extend(scored(&[("M", [80.0, 470.0, 160.0, 520.0])], Some(0.3)).words);
+        let (r, added, unread) = run(both, Crop::Page);
+        assert_eq!(r.taken, 1, "{r:?}");
+        assert_eq!(added, "ACCT 4417");
+        assert_eq!(unread, ["NotTexty"]);
+    }
+
+    #[test]
+    fn a_region_reading_scored_out_of_100_is_judged_by_its_boxes() {
+        // One decision for the whole reading: a score outside 0-1 says all
+        // of them are on another scale, a 0 out of 100 among them. Judged
+        // word by word, the 0 would be a score of 0-1, and the mean of the
+        // words that have one under the noise rule's floor.
+        let reading = scored(
+            &[
+                ("Account", [60.0, 382.0, 100.0, 398.0]),
+                ("4471", [110.0, 382.0, 140.0, 398.0]),
+                ("ref", [150.0, 382.0, 170.0, 398.0]),
+            ],
+            None,
+        );
+        let reading = WordReading {
+            words: (reading.words.into_iter().zip([96.0, 0.0, 88.0]))
+                .map(|(w, c)| OcrWord { conf: Some(c), ..w })
+                .collect(),
+            ..reading
+        };
+        let r = inject(
+            &mut prose_with_a_photograph(),
+            &[(0, Crop::Region(0), reading)],
+        );
+        assert_eq!(
+            (r[0].taken, r[0].dropped, r[0].mean_conf),
+            (3, 0, None),
+            "{r:?}"
+        );
     }
 
     #[test]
@@ -2744,6 +3286,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         });
         let mut doc = Document {
             pages: vec![page(glyphs, shots.to_vec())],
@@ -3285,6 +3828,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         };
         let (a, b) = (image(150.0, 300.0), image(400.0, 550.0));
         let mut doc = Document {
@@ -3389,6 +3933,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }],
             )],
         };
@@ -3750,6 +4295,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }],
             )],
         };
@@ -3790,6 +4336,7 @@ mod tests {
                         ppi: None,
                         bitonal: false,
                         grid: (1000, 1000),
+                        key: None,
                     })
                     .collect(),
             )],
@@ -3925,6 +4472,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         };
         let mut doc = Document {
             pages: vec![page(
@@ -4281,6 +4829,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }],
             )],
         };
@@ -4357,6 +4906,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }],
             )],
         };
@@ -4439,7 +4989,8 @@ mod tests {
 
     /// A one-page Letter PDF: twenty lines of Helvetica at the top, so the
     /// page has a text layer, then `content`, drawing the image masks
-    /// `masks` names, each `(name, width, height)` pixels, all ink.
+    /// `masks` names, each `(name, width, height)` pixels, all ink. `/F3`
+    /// is a Type3 font, whose one glyph, `x`, a cross, has no outline.
     fn form_pdf(content: &str, masks: &[(&str, u32, u32)]) -> Vec<u8> {
         let text: String = (0..20)
             .map(|i| {
@@ -4460,8 +5011,14 @@ mod tests {
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << \
-                 /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> \
-                 /XObject << {xobjects}>> >> /Contents 4 0 R >>"
+                 /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> \
+                 /F3 << /Type /Font /Subtype /Type3 /FontBBox [0 0 1000 1000] \
+                 /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << /x {cross} 0 R >> \
+                 /Encoding << /Type /Encoding /Differences [120 /x] >> \
+                 /FirstChar 120 /LastChar 120 /Widths [600] /ToUnicode {cmap} 0 R >> >> \
+                 /XObject << {xobjects}>> >> /Contents 4 0 R >>",
+                cross = 5 + masks.len(),
+                cmap = 6 + masks.len()
             )
             .into_bytes(),
             format!(
@@ -4484,6 +5041,20 @@ mod tests {
                     b"\nendstream".to_vec(),
                 ]
                 .concat(),
+            );
+        }
+        let cross = "600 0 0 0 600 600 d1 100 100 m 500 500 l 100 500 m 500 100 l S";
+        let cmap = "/CIDInit /ProcSet findresource begin 12 dict begin begincmap \
+                    1 begincodespacerange <00> <FF> endcodespacerange \
+                    1 beginbfchar <78> <0078> endbfchar endcmap \
+                    CMapName currentdict /CMap defineresource pop end end";
+        for stream in [cross, cmap] {
+            objects.push(
+                format!(
+                    "<< /Length {} >>\nstream\n{stream}\nendstream",
+                    stream.len()
+                )
+                .into_bytes(),
             );
         }
         let mut out = b"%PDF-1.4\n".to_vec();
@@ -4576,10 +5147,261 @@ mod tests {
         );
         let doc = crate::extract_bytes(form_pdf(&twice, &[("Cap", 200, 30)])).unwrap();
         assert_eq!(doc.pages[0].images.len(), 3);
-        assert_eq!(
-            crops_of(&doc),
-            [(0, "r0".to_string()), (0, "r1".to_string())]
+        // Two regions, the third drawing a copy of the first, which
+        // reads it for both ([`copies`]).
+        assert_eq!(route::ocr_regions(&doc.pages[0]).len(), 2);
+        assert_eq!(crops_of(&doc), [(0, "r0".to_string())]);
+        assert_eq!(copies(&doc, None), [((0, 1), (0, 0))]);
+    }
+
+    #[test]
+    fn an_image_drawn_again_at_its_size_is_read_once_for_every_drawing() {
+        // The capture three times at one size, once wider, another image
+        // drawn at the capture's size, the capture mirrored, and the
+        // capture cut short by the page's edge.
+        let content = format!(
+            "{}{}{}q 220 0 0 30 50 200 cm /Cap Do Q\nq 200 0 0 30 300 200 cm /Two Do Q\n\
+             q -200 0 0 30 250 300 cm /Cap Do Q\nq 200 0 0 30 500 400 cm /Cap Do Q\n",
+            capture_at(50, 40),
+            capture_at(300, 40),
+            capture_at(50, 100),
         );
+        let mut doc =
+            crate::extract_bytes(form_pdf(&content, &[("Cap", 200, 30), ("Two", 200, 32)]))
+                .unwrap();
+        let tags =
+            |doc: &Document| -> Vec<String> { crops_of(doc).into_iter().map(|(_, t)| t).collect() };
+        assert_eq!(tags(&doc), ["r0", "r3", "r4", "r5", "r6"]);
+        assert_eq!(copies(&doc, None), [((0, 1), (0, 0)), ((0, 2), (0, 0))]);
+        assert!(copies(&doc, Some(&[1])).is_empty());
+
+        // Past the limit, a copy counts only through what it copies: kept
+        // with it, and left unread with it. A page routed a region of its
+        // own comes first, and with one crop allowed the capture and its
+        // two copies, the wider one, the other image, the mirrored one and
+        // the one cut short are left unread.
+        assert_eq!(ocr_jobs(&doc, None, 5), (ocr_jobs(&doc, None, 0).0, 0));
+        let mut routed = page(
+            native("The quarterly statement lists every account.", 40.0, 40.0),
+            vec![ImagePlacement {
+                bbox: BBox {
+                    x0: 50.0,
+                    y0: 400.0,
+                    x1: 550.0,
+                    y1: 600.0,
+                },
+                texty: true,
+                ppi: None,
+                bitonal: false,
+                grid: (1000, 400),
+                key: None,
+            }],
+        );
+        routed.index = 1;
+        let mut two = doc.clone();
+        two.pages.push(routed);
+        assert_eq!(ocr_jobs(&two, None, 1).1, 7);
+        assert_eq!(ocr_jobs(&two, None, 2).1, 4);
+
+        // The capture's reading, in its crop's pixels, is laid on each
+        // drawing where it is drawn; one in page units is of its own
+        // region only.
+        let reading = |coords| WordReading {
+            coords,
+            width: Some(100.0),
+            height: Some(100.0),
+            engine: None,
+            words: vec![OcrWord {
+                text: "Account".into(),
+                bbox: [10.0, 30.0, 90.0, 70.0],
+                angle: None,
+                conf: Some(0.99),
+            }],
+        };
+        let page_units = with_copies(
+            &doc,
+            None,
+            vec![(0, Crop::Region(0), reading(Coords::Page))],
+        );
+        assert_eq!(page_units.len(), 1);
+        let readings = with_copies(&doc, None, vec![(0, Crop::Region(0), reading(Coords::Px))]);
+        let crops: Vec<Crop> = readings.iter().map(|r| r.1).collect();
+        assert_eq!(crops, [Crop::Region(0), Crop::Region(1), Crop::Region(2)]);
+        let regions = route::ocr_regions(&doc.pages[0]);
+        let r = inject(&mut doc, &readings);
+        for (r, region) in r.iter().zip(&regions) {
+            assert_eq!(r.taken, 1, "{r:?}");
+            let c = r.chars[0];
+            let (cx, cy) = ((c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5);
+            assert!(region.contains(cx, cy), "{r:?} {region:?}");
+        }
+        // A region with a reading of its own keeps it.
+        let own = with_copies(
+            &doc,
+            None,
+            vec![
+                (0, Crop::Region(0), reading(Coords::Px)),
+                (0, Crop::Region(2), reading(Coords::Page)),
+            ],
+        );
+        assert_eq!(own.len(), 3);
+        assert_eq!(own[2].2.coords, Coords::Page);
+    }
+
+    #[test]
+    fn a_field_frame_with_a_value_typed_in_it_lends_no_copy_its_reading() {
+        // One 200 × 40 stencil, a field's frame, drawn three times; only
+        // the first holds a value, set as text over it. Its crop shows the
+        // value: laid on the two empty fields, it would fill them with it.
+        let content = "q 200 0 0 40 50 300 cm /Fr Do Q\n\
+                       BT /F1 9 Tf 60 315 Td (Approved 2026) Tj ET\n\
+                       q 200 0 0 40 50 200 cm /Fr Do Q\n\
+                       q 200 0 0 40 50 100 cm /Fr Do Q\n";
+        let doc = crate::extract_bytes(form_pdf(content, &[("Fr", 200, 40)])).unwrap();
+        assert_eq!(route::ocr_regions(&doc.pages[0]).len(), 3);
+        assert_eq!(doc.pages[0].images[0].key, None);
+        // The two empty frames show the same pixels, and still read once.
+        assert_eq!(copies(&doc, None), [((0, 2), (0, 1))]);
+        let tags: Vec<String> = crops_of(&doc).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(tags, ["r0", "r1"]);
+
+        // A tick drawn over a box, as a path, or another image drawn
+        // across one, makes it a picture of its own too.
+        let content = "q 200 0 0 40 50 300 cm /Fr Do Q\n\
+                       q 200 0 0 40 50 200 cm /Fr Do Q\n\
+                       q 200 0 0 40 50 100 cm /Fr Do Q\n\
+                       q 200 0 0 40 300 100 cm /Fr Do Q\n\
+                       60 310 m 70 330 l S\n\
+                       q 20 0 0 20 60 210 cm /Ck Do Q\n";
+        let doc =
+            crate::extract_bytes(form_pdf(content, &[("Fr", 200, 40), ("Ck", 20, 20)])).unwrap();
+        let keys: Vec<bool> = (doc.pages[0].images.iter())
+            .map(|i| i.key.is_some())
+            .collect();
+        assert_eq!(keys, [false, false, true, true, false]);
+        assert_eq!(copies(&doc, None), [((0, 3), (0, 2))]);
+    }
+
+    #[test]
+    fn a_cross_a_type3_font_sets_on_a_box_lends_no_copy_its_reading() {
+        // Four boxes from one stencil. A Type3 cross, a glyph with no
+        // outline, is set at the first box's very corner, and another just
+        // under the second, its letter rising into the box: those two boxes
+        // show more than the stencil, the last two are one picture.
+        let content = "q 200 0 0 40 50 300 cm /Fr Do Q\n\
+                       q 200 0 0 40 50 200 cm /Fr Do Q\n\
+                       q 200 0 0 40 50 100 cm /Fr Do Q\n\
+                       q 200 0 0 40 300 100 cm /Fr Do Q\n\
+                       BT /F3 12 Tf 50 300 Td (x) Tj ET\n\
+                       BT /F3 12 Tf 120 198 Td (x) Tj ET\n";
+        let doc = crate::extract_bytes(form_pdf(content, &[("Fr", 200, 40)])).unwrap();
+        let crosses: Vec<&Glyph> = (doc.pages[0].glyphs.iter())
+            .filter(|g| g.text == "x")
+            .collect();
+        assert_eq!(crosses.len(), 2);
+        let keys: Vec<bool> = (doc.pages[0].images.iter())
+            .map(|i| i.key.is_some())
+            .collect();
+        assert_eq!(keys, [false, false, true, true]);
+        assert_eq!(copies(&doc, None), [((0, 3), (0, 2))]);
+    }
+
+    #[test]
+    fn a_tick_over_a_box_on_a_page_set_sideways_lends_no_copy_its_reading() {
+        // A page whose text runs up it, read turned a quarter, with three
+        // boxes from one stencil and a tick painted over the second: the
+        // tick is turned with the boxes, and still shows on its box.
+        let sideways: String = (0..200)
+            .map(|i| {
+                format!(
+                    "BT /F1 9 Tf 0 1 -1 0 {} 420 Tm (The quarterly statement lists every account.) Tj ET\n",
+                    20 + i
+                )
+            })
+            .collect();
+        let content = format!(
+            "{sideways}q 200 0 0 40 50 100 cm /Fr Do Q\n\
+             q 200 0 0 40 300 100 cm /Fr Do Q\n\
+             q 200 0 0 40 50 200 cm /Fr Do Q\n\
+             310 110 m 330 130 l S\n"
+        );
+        let doc = crate::extract_bytes(form_pdf(&content, &[("Fr", 200, 40)])).unwrap();
+        assert_ne!(doc.pages[0].rotation, 0);
+        let keys: Vec<bool> = (doc.pages[0].images.iter())
+            .map(|i| i.key.is_some())
+            .collect();
+        assert_eq!(keys, [true, false, true]);
+        assert_eq!(copies(&doc, None), [((0, 2), (0, 0))]);
+    }
+
+    #[test]
+    fn a_sprite_drawn_through_two_clips_is_read_twice() {
+        // One 200 × 40 image drawn twice at one size, each time through a
+        // clip showing one of its halves: two pictures. Drawn whole, twice,
+        // and once through a clip that leaves it whole, it is one.
+        let content = "q 50 300 200 20 re W n 200 0 0 40 50 300 cm /Sp Do Q\n\
+                       q 50 220 200 20 re W n 200 0 0 40 50 200 cm /Sp Do Q\n\
+                       q 200 0 0 40 50 100 cm /Sp Do Q\n\
+                       q 290 90 220 60 re W n 200 0 0 40 300 100 cm /Sp Do Q\n\
+                       q 300 300 m 500 300 l 400 340 l h W n 200 0 0 40 300 300 cm /Sp Do Q\n";
+        let doc = crate::extract_bytes(form_pdf(content, &[("Sp", 200, 40)])).unwrap();
+        let keys: Vec<bool> = (doc.pages[0].images.iter())
+            .map(|i| i.key.is_some())
+            .collect();
+        assert_eq!(keys, [false, false, true, true, false]);
+        assert_eq!(route::ocr_regions(&doc.pages[0]).len(), 5);
+        assert_eq!(copies(&doc, None), [((0, 3), (0, 2))]);
+    }
+
+    #[test]
+    fn a_form_of_checkboxes_drawn_from_one_mask_is_read_once() {
+        // 200 checkboxes, one 24 × 24 stencil drawn 12 pt square under the
+        // prose, a label beside each: one crop, its reading lent to all.
+        let boxes: String = (0..200)
+            .map(|i| {
+                let (x, y) = (40 + (i % 8) * 70, 60 + (i / 8) * 18);
+                format!(
+                    "q 12 0 0 12 {x} {y} cm /Cb Do Q\nBT /F1 9 Tf {} {} Td (Yes) Tj ET\n",
+                    x + 16,
+                    y + 2
+                )
+            })
+            .collect();
+        let doc = crate::extract_bytes(form_pdf(&boxes, &[("Cb", 24, 24)])).unwrap();
+        assert_eq!(route::ocr_regions(&doc.pages[0]).len(), 200);
+        assert_eq!(copies(&doc, None).len(), 199);
+        assert_eq!(crops_of(&doc), [(0, "r0".to_string())]);
+    }
+
+    #[test]
+    fn an_image_on_pages_turned_unlike_lends_no_copy() {
+        // One image, one key, one square box, on two pages: the second
+        // turned a quarter to be read upright. Its crop shows the image
+        // turned, and an upright reading's pixels would land in the wrong
+        // frame.
+        let square = ImagePlacement {
+            bbox: BBox {
+                x0: 100.0,
+                y0: 200.0,
+                x1: 160.0,
+                y1: 260.0,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (120, 120),
+            key: Some(7),
+        };
+        let text = || native("The quarterly statement lists every account.", 40.0, 40.0);
+        let p0 = page(text(), vec![square]);
+        let mut p1 = page(text(), vec![square]);
+        p1.index = 1;
+        let mut doc = Document {
+            pages: vec![p0, p1],
+        };
+        assert_eq!(copies(&doc, None), [((1, 0), (0, 0))]);
+        doc.pages[1].rotation = 90;
+        assert!(copies(&doc, None).is_empty());
     }
 
     #[test]
@@ -4597,6 +5419,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (200, 60),
+            key: None,
         };
         let text = || native("The quarterly statement lists every account.", 40.0, 40.0);
         let mut p0 = page(text(), vec![small(200.0), small(300.0), small(400.0)]);
@@ -4614,6 +5437,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 400),
+            key: None,
         };
         let mut p2 = page(text(), vec![small(200.0), routed]);
         p2.index = 2;

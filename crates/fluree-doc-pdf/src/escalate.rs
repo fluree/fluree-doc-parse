@@ -1245,6 +1245,7 @@ mod tests {
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
+                    key: None,
                 }]
             } else {
                 Vec::new()
@@ -1484,6 +1485,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         assert!(matches!(
             crate::route::decide(&p).0,
@@ -1504,6 +1506,7 @@ mod tests {
             ppi,
             bitonal,
             grid: (1000, 1000),
+            key: None,
         }];
         p
     }
@@ -1599,6 +1602,7 @@ mod tests {
                 ppi: Some(200.0),
                 bitonal: true,
                 grid: (1000, 1000),
+                key: None,
             },
         );
         assert_eq!(crop_scale(&p, Some(&shot), CropScale::Stored), 4.0);
@@ -1690,6 +1694,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         let doc = Document { pages: vec![p] };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
@@ -1718,6 +1723,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         let doc = Document { pages: vec![p] };
         let mut copy = doc.clone();
@@ -1757,6 +1763,7 @@ mod tests {
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
+            key: None,
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],

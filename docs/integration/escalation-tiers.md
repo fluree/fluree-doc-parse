@@ -43,9 +43,19 @@ a routed region (a `region` crop, `r{i}`) in
 [`doc:unreadRegions`](../formats/doco.md#regions-nothing-read) with its box,
 and both in one warning on stderr. A region counts as read when its `r{i}`
 reading or its page's `full` reading was spliced in, or OCR words were taken
-for it; a missing or empty reading leaves it unread. A `small_region` crop
-is offered to an OCR engine only, and is never reported: too small for a
-model's call, it is a logo as often as content.
+for it; a missing or empty reading leaves it unread. A `small_region` crop,
+offered to an OCR engine only, is listed with the reason `Small` when nothing
+read it and it is half an inch or more on its longer side (a checkbox is
+not). A large image the pixel probe does not take for text (a photograph, a
+chart) is cropped for no reader and listed with `NotTexty`. Neither is
+warned about, since each is a logo or a photograph as often as content.
+
+The probe takes a screen capture with a few lines on a wide, light ground
+for text (lines of text on a ground of one colour, besides ink on paper):
+such a capture a tenth of the page or more is a `region` crop, and with
+`--escalate` a request to the configured model, billed and sent off the
+machine, where the probe used to leave it out. See
+[the router](../design/router.md#the-pixel-probe).
 
 ## The three inputs
 

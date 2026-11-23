@@ -108,7 +108,9 @@ follows their figure; see [Office files](../inputs/office-and-web.md).
 What either reads is the same: the pages whose text is pixels (scanned,
 near-blank, broken text), whole, and on other pages the raster regions the
 text layer does not cover. A model is only asked for regions over a tenth of
-the page; an OCR engine reads the small ones too. Born-digital text is never
+the page whose pixels the probe takes for text; an OCR engine reads the
+small ones too, and nothing reads one the probe does not take for text (a
+photograph, a chart). Born-digital text is never
 replaced. With a model reader configured as well, it reads what OCR does not:
 pages in doubt about their structure, and tables.
 

@@ -25,11 +25,14 @@ const INTERPRET_BOUNDS: f64 = 20_000.0;
 pub struct ImagePlacement {
     /// Placement on the page, clipped to the page box.
     pub bbox: BBox,
-    /// True when the pixels look like text or line structure — bimodal
-    /// luminance with frequent dark/light transitions along rows. A raster
-    /// table, a scanned paragraph or a labelled chart reads true; a photograph
-    /// reads false. This is what separates "the VLM can recover content here"
-    /// from "it is a picture", which placement geometry alone cannot see:
+    /// True when the pixels look like text or line structure: bimodal
+    /// luminance with frequent dark/light transitions along rows, or lines
+    /// of text on a ground of one colour
+    /// ([`fluree_doc_vision::texty::lines_of_text`]). A raster table, a
+    /// scanned paragraph, a labelled chart or a screen capture with a few
+    /// lines on it reads true; a photograph reads false. This is what
+    /// separates "the VLM can recover content here" from "it is a picture",
+    /// which placement geometry alone cannot see:
     /// two documents with near-identical image coverage can still diverge
     /// sharply — the AI-routed reference engine *loses* 0.38 on one and
     /// *gains* 0.62 on the other.
@@ -48,6 +51,21 @@ pub struct ImagePlacement {
     /// no more than 8 × 8 pixels at any size, and a rule stretched from a
     /// 1 × 1 mask none at all.
     pub grid: (u32, u32),
+    /// What the placement shows, as a key: the image's own bytes (a raster
+    /// image's encoded stream with its dictionary, a small stencil's decoded
+    /// mask) with the size and orientation it is drawn at. Two placements
+    /// with one key show the same pixels the same way: a form's checkbox
+    /// drawn two hundred times is one image an OCR engine reads once
+    /// ([`crate::ocr::copies`]). `None` when not known: a stencil of more
+    /// than [`MAX_KEYED_STENCIL_PX`] pixels, which is not decoded for it.
+    ///
+    /// `None` too when its box shows more than the image, or less, since a
+    /// crop of it would show something else than the image's pixels: when
+    /// a glyph, a path (a rule, a fill, a tick) or another image (another
+    /// key, or this one drawn elsewhere) overlaps it, or a clip cuts it. A
+    /// form's field frame with a value typed in it, or a sprite sheet drawn
+    /// twice through two clips, is each time a picture of its own.
+    pub key: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -97,8 +115,9 @@ pub struct Page {
     /// one whose image decoded; this is the only trace of the difference.
     /// An image shared by several pages is reported on each that draws it:
     /// the interpreter decodes it at every placement. An image mask (a
-    /// stencil) is not decoded while the page is read, so a broken one is
-    /// not reported.
+    /// stencil) is decoded while the page is read only for its key, when it
+    /// is small ([`MAX_KEYED_STENCIL_PX`]), so a larger broken one is not
+    /// reported.
     pub warnings: Vec<&'static str>,
 }
 
@@ -259,6 +278,14 @@ struct Collector {
     symbol_fonts: std::collections::HashMap<u128, (Option<&'static str>, bool)>,
     /// Glyphs drawn in a symbol font, by index into `glyphs`, with the font.
     symbols: Vec<(usize, &'static str)>,
+    /// The clips in force, innermost last, in page space: each a rectangle's
+    /// box, or `None` for any other shape. An image no rectangle in force
+    /// holds whole is cut ([`ImagePlacement::key`]).
+    clips: Vec<Option<BBox>>,
+    /// The box of every path painted on the page, whatever it is taken for:
+    /// what an image's box may show besides the image
+    /// ([`unkey_what_shows_more`]).
+    painted: Vec<BBox>,
 }
 
 /// Marked content whose ActualText stands for the glyphs drawn inside it.
@@ -438,6 +465,7 @@ impl<'a> Device<'a> for Collector {
         if !self.page_box.intersects(&crate::geom::from_kurbo(r)) {
             return;
         }
+        self.painted.push(crate::geom::from_kurbo(r));
         // One path can carry many rules. A financial statement strokes every
         // underline on the page — a short rule under each figure, the double
         // rule under each total — as subpaths of a single path (`m l m l …
@@ -458,7 +486,17 @@ impl<'a> Device<'a> for Collector {
             None => {}
         }
     }
-    fn push_clip_path(&mut self, _c: &hayro_interpret::ClipPath) {}
+    fn push_clip_path(&mut self, c: &hayro_interpret::ClipPath) {
+        // A clip's path is in page space already. It is a rectangle when it
+        // is one closed figure filling its box: an axis-aligned rectangle,
+        // the only clip whose box says what it lets through.
+        let r = c.path.bounding_box();
+        let figures = (c.path.elements().iter())
+            .filter(|e| matches!(e, kurbo::PathEl::MoveTo(_)))
+            .count();
+        let rect = figures == 1 && r.area() > 0.0 && c.path.area().abs() >= r.area() * 0.999;
+        self.clips.push(rect.then(|| crate::geom::from_kurbo(r)));
+    }
     fn push_transparency_group(
         &mut self,
         _o: f32,
@@ -497,8 +535,10 @@ impl<'a> Device<'a> for Collector {
         let texty = match &i {
             hayro_interpret::Image::Raster(ri) => {
                 let mut texty = false;
-                // A low-resolution decode is plenty for a structure probe and
-                // keeps the cost per image at microseconds.
+                // The decoder honours a target size only for JPEG 2000:
+                // a Flate or DCT image is decoded, and probed, at its own
+                // size, a cost that grows with its pixels and stays under
+                // the decode's (`fluree_doc_vision::texty`).
                 ri.with_rgba(
                     |data, _| texty = looks_like_text(&data),
                     Some((PROBE_DIM, PROBE_DIM)),
@@ -509,6 +549,19 @@ impl<'a> Device<'a> for Collector {
             // arrive in. Treat as text-bearing.
             hayro_interpret::Image::Stencil(_) => true,
         };
+        // A clip that cuts the image shows part of it: another picture than
+        // the whole, which a key does not tell apart (a sprite sheet drawn
+        // through two clips). Measured on the image's full box, before the
+        // page's edge cuts it, which the crop's size tells.
+        let cut = self.clips.iter().any(|c| {
+            c.as_ref().is_none_or(|c| {
+                c.x0 > b.x0 + OVERLAP_EPS
+                    || c.y0 > b.y0 + OVERLAP_EPS
+                    || c.x1 < b.x1 - OVERLAP_EPS
+                    || c.y1 < b.y1 - OVERLAP_EPS
+            })
+        });
+        let key = if cut { None } else { image_key(&i, t) };
         self.images.push(ImagePlacement {
             bbox: BBox {
                 x0: b.x0.max(self.page_box.x0),
@@ -520,9 +573,12 @@ impl<'a> Device<'a> for Collector {
             ppi,
             bitonal,
             grid,
+            key,
         });
     }
-    fn pop_clip_path(&mut self) {}
+    fn pop_clip_path(&mut self) {
+        self.clips.pop();
+    }
     fn pop_transparency_group(&mut self) {}
 
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
@@ -750,8 +806,203 @@ impl<'a> Device<'a> for Collector {
     }
 }
 
-/// Requested decode size for the image structure probe. Enough to see text
-/// banding; small enough to cost microseconds.
+/// Most pixels a stencil is decoded for its key ([`ImagePlacement::key`]):
+/// a 512 × 512 mask. A stencil's encoded stream is out of reach, so its key
+/// is its decoded mask; what a page draws again and again (a checkbox, a
+/// bullet, a logo) is small, and a stencil the size of a scanned page is
+/// not decoded twice for a key it would rarely share.
+const MAX_KEYED_STENCIL_PX: u64 = 512 * 512;
+
+/// How far, in PDF units, two boxes must reach into each other to overlap,
+/// or a clip inside an image's edge to cut it: past the rounding of one
+/// `cm` against another, so a label set beside a checkbox, or a clip drawn
+/// on the image's own edge, is not taken for one drawn over it.
+const OVERLAP_EPS: f64 = 0.01;
+
+/// Whether two boxes share an area, not only an edge.
+fn overlap(a: &BBox, b: &BBox) -> bool {
+    a.x0.max(b.x0) + OVERLAP_EPS < a.x1.min(b.x1) && a.y0.max(b.y0) + OVERLAP_EPS < a.y1.min(b.y1)
+}
+
+/// Cells a side of the grid [`unkey_what_shows_more`] files what a page
+/// draws on, so that an image is measured against what is drawn near it,
+/// not against every glyph, path and image of a page that may hold
+/// thousands of each.
+const SHOWS_MORE_BINS: usize = 64;
+
+/// What [`unkey_what_shows_more`] looks for in an image's box.
+enum Drawn {
+    /// A glyph's ink or a painted path.
+    Area(BBox),
+    /// A glyph with text and no box, by where it is set.
+    Point(f64, f64),
+    /// Another image, by its index.
+    Image(usize),
+}
+
+/// Drops the key of each image whose box shows more than the image
+/// ([`ImagePlacement::key`]): a glyph with ink in it (or, with no box,
+/// set in it or on its edge), a path painted over it or under it, another
+/// image drawn across it. An image drawn again in its very box with its key
+/// is the same picture, and keeps it. Where an OCR reading's words go is not
+/// looked at: a page has none while it is read. Run once the glyphs a font
+/// draws no outline for (Type3) have the box layout reads them by
+/// ([`synthesize_missing_boxes`]).
+fn unkey_what_shows_more(
+    page_box: &BBox,
+    images: &mut [ImagePlacement],
+    glyphs: &[Glyph],
+    marks: &[BBox],
+) {
+    let keyed: Vec<usize> = (0..images.len())
+        .filter(|&i| images[i].key.is_some())
+        .collect();
+    if keyed.is_empty() {
+        return;
+    }
+    let cell = (
+        page_box.width().max(1.0) / SHOWS_MORE_BINS as f64,
+        page_box.height().max(1.0) / SHOWS_MORE_BINS as f64,
+    );
+    let bin = |v: f64, origin: f64, size: f64| {
+        (((v - origin) / size).floor().max(0.0) as usize).min(SHOWS_MORE_BINS - 1)
+    };
+    let span = |b: &BBox| {
+        let cols = bin(b.x0, page_box.x0, cell.0)..=bin(b.x1, page_box.x0, cell.0);
+        let rows = bin(b.y0, page_box.y0, cell.1)..=bin(b.y1, page_box.y0, cell.1);
+        (cols, rows)
+    };
+    let cells = |b: &BBox| {
+        let (cols, rows) = span(b);
+        rows.flat_map(move |r| cols.clone().map(move |c| r * SHOWS_MORE_BINS + c))
+    };
+    // Only the keyed images are filed, a few on most pages, and what the
+    // page draws is measured against those of the cells it covers: a page
+    // may paint paths by the hundred thousand, each across the page.
+    let mut grid: Vec<Vec<usize>> = vec![Vec::new(); SHOWS_MORE_BINS * SHOWS_MORE_BINS];
+    for &i in &keyed {
+        for c in cells(&images[i].bbox) {
+            grid[c].push(i);
+        }
+    }
+    let drawn = (glyphs.iter())
+        .filter_map(|g| match g.bbox {
+            Some(b) => Some((b, Drawn::Area(b))),
+            None => (!g.text.trim().is_empty()).then(|| {
+                let (x, y) = g.origin;
+                let at = BBox {
+                    x0: x,
+                    y0: y,
+                    x1: x,
+                    y1: y,
+                };
+                (at, Drawn::Point(x, y))
+            }),
+        })
+        .chain(marks.iter().map(|m| (*m, Drawn::Area(*m))))
+        .chain((images.iter().enumerate()).map(|(j, o)| (o.bbox, Drawn::Image(j))));
+    let shows = |i: usize, d: &Drawn| {
+        let b = &images[i].bbox;
+        match d {
+            Drawn::Area(m) => overlap(b, m),
+            // Set on the image's edge, a glyph with no box still has its
+            // letter over it.
+            Drawn::Point(x, y) => b.x0 <= *x && *x <= b.x1 && b.y0 <= *y && *y <= b.y1,
+            Drawn::Image(j) => {
+                let o = &images[*j];
+                *j != i && overlap(b, &o.bbox) && !(o.key == images[i].key && same_box(b, &o.bbox))
+            }
+        }
+    };
+    let mut shows_more = vec![false; images.len()];
+    let mut left = keyed.len();
+    for (b, d) in drawn {
+        let mut test = |i: usize| {
+            if !shows_more[i] && shows(i, &d) {
+                shows_more[i] = true;
+                left -= 1;
+            }
+        };
+        let (cols, rows) = span(&b);
+        // Across more cells than there are keyed images, the list is
+        // shorter than the cells' lists.
+        if cols.count() * rows.count() > keyed.len() {
+            keyed.iter().for_each(|&i| test(i));
+        } else {
+            cells(&b).for_each(|c| grid[c].iter().for_each(|&i| test(i)));
+        }
+        if left == 0 {
+            break;
+        }
+    }
+    for (i, more) in shows_more.into_iter().enumerate() {
+        if more {
+            images[i].key = None;
+        }
+    }
+}
+
+/// Whether two boxes are one, to the rounding [`image_key`] allows.
+fn same_box(a: &BBox, b: &BBox) -> bool {
+    [a.x0 - b.x0, a.y0 - b.y0, a.x1 - b.x1, a.y1 - b.y1]
+        .iter()
+        .all(|d| d.abs() <= OVERLAP_EPS)
+}
+
+/// Where a box of a page `w` × `h` lands once the page is turned by `turn`
+/// degrees, as [`turn_page`] turns it.
+fn turn_box(w: f64, h: f64, turn: i32, b: BBox) -> BBox {
+    let point = |(x, y): (f64, f64)| match turn {
+        90 => (y, w - x),
+        180 => (w - x, h - y),
+        _ => (h - y, x),
+    };
+    let (ax, ay) = point((b.x0, b.y0));
+    let (bx, by) = point((b.x1, b.y1));
+    BBox {
+        x0: ax.min(bx),
+        y0: ay.min(by),
+        x1: ax.max(bx),
+        y1: ay.max(by),
+    }
+}
+
+/// [`ImagePlacement::key`] of image `i` drawn with transform `t`.
+fn image_key(i: &hayro_interpret::Image<'_, '_>, t: Affine) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::hash::DefaultHasher::new();
+    match i {
+        hayro_interpret::Image::Raster(ri) => {
+            0u8.hash(&mut h);
+            ri.stream().dict().data().hash(&mut h);
+            ri.stream().raw_data().hash(&mut h);
+        }
+        hayro_interpret::Image::Stencil(si) => {
+            let pixels = u64::from(si.width()) * u64::from(si.height());
+            if pixels > MAX_KEYED_STENCIL_PX {
+                return None;
+            }
+            let mut mask = None;
+            si.with_stencil(|luma, _| mask = Some(luma), None);
+            let luma = mask?;
+            1u8.hash(&mut h);
+            (luma.width, luma.height, &luma.data).hash(&mut h);
+        }
+    }
+    // Drawn at another size, turned or mirrored, the same image shows other
+    // pixels; where on the page it is drawn is not part of what it shows.
+    // To a thousandth of a unit, so the rounding of one `cm` against
+    // another does not tell a box from itself.
+    let [a, b, c, d, _, _] = t.as_coeffs();
+    [a, b, c, d]
+        .map(|v| (v * 1000.0).round() as i64)
+        .hash(&mut h);
+    Some(h.finish())
+}
+
+/// Decode size asked for the pixel probe. Only a JPEG 2000 image is decoded
+/// to it, at a reduced resolution level; every other filter decodes at the
+/// image's own size, and the probe looks at all of it.
 const PROBE_DIM: u32 = 256;
 
 /// Fraction of pixels that must sit in the outer luminance quartiles. Ink on
@@ -837,6 +1088,18 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
                 .collect(),
         ),
     };
+    let texty = ink_on_paper(w, h, &luma) || fluree_doc_vision::texty::lines_of_text(w, h, &luma);
+    if std::env::var_os("FDOC_PROBE_DEBUG").is_some() {
+        eprintln!("PROBE texty={texty} {w}x{h}");
+    }
+    texty
+}
+
+/// Ink on paper: most pixels in the outer luminance quartiles, a range of
+/// 64 levels or more, and enough rows crossing its midpoint often. A page
+/// of text, a table, a dense screen; it misses a capture whose text is
+/// sparse, most of its rows bare ground.
+fn ink_on_paper(w: usize, h: usize, luma: &[u8]) -> bool {
     if w < 8 || h < 8 || luma.len() < w * h {
         return false;
     }
@@ -848,7 +1111,7 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
 
     // Binarise at the luminance midpoint and count row transitions.
     let (mut lo, mut hi) = (u8::MAX, u8::MIN);
-    for &v in &luma {
+    for &v in luma {
         lo = lo.min(v);
         hi = hi.max(v);
     }
@@ -868,14 +1131,7 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
             texty_rows += 1;
         }
     }
-    let frac = texty_rows as f64 / h as f64;
-    if std::env::var_os("FDOC_PROBE_DEBUG").is_some() {
-        eprintln!(
-            "PROBE texty_frac={frac:.3} bimodal={:.3} {w}x{h}",
-            bimodal as f64 / luma.len() as f64
-        );
-    }
-    frac >= MIN_TEXTY_ROW_FRACTION
+    texty_rows as f64 / h as f64 >= MIN_TEXTY_ROW_FRACTION
 }
 
 /// A private-use character Word gives a glyph set in one of its symbol
@@ -1151,6 +1407,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             open: Vec::new(),
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
+            clips: Vec::new(),
+            painted: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -1175,6 +1433,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         dev.read_symbols();
         letters = std::mem::take(&mut dev.letters);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
+        let painted = std::mem::take(&mut dev.painted);
         let warnings = heard
             .lock()
             .map(|mut h| h.drain(..).collect())
@@ -1194,6 +1453,20 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         };
         read_upright(&mut page);
         synthesize_missing_boxes(&mut page.glyphs);
+        // The paths' boxes, turned as the page was.
+        let painted: Vec<BBox> = match page.rotation {
+            0 => painted,
+            turn => (painted.into_iter())
+                .map(|b| turn_box(w as f64, h as f64, turn, b))
+                .collect(),
+        };
+        let page_box = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: page.width,
+            y1: page.height,
+        };
+        unkey_what_shows_more(&page_box, &mut page.images, &page.glyphs, &painted);
         ink.push(dev.ink);
         pages.push(page);
     }
@@ -1576,6 +1849,82 @@ mod tests {
         infer_weights(&mut pages, &ink(180, 20, 0.90));
         assert!(pages[0].glyphs.iter().all(|g| g.weight.is_none()));
     }
+
+    fn keyed_at(x0: f64, y0: f64, side: f64, key: u64) -> ImagePlacement {
+        ImagePlacement {
+            bbox: BBox {
+                x0,
+                y0,
+                x1: x0 + side,
+                y1: y0 + side,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (40, 40),
+            key: Some(key),
+        }
+    }
+
+    const LETTER: BBox = BBox {
+        x0: 0.0,
+        y0: 0.0,
+        x1: 612.0,
+        y1: 792.0,
+    };
+
+    #[test]
+    fn a_glyph_with_no_box_set_on_an_images_corner_shows_more_than_it() {
+        // Two boxes from one stencil, and a glyph turned a quarter, which
+        // no box is made for, set at the first one's very corner.
+        let mut images = vec![
+            keyed_at(50.0, 300.0, 20.0, 7),
+            keyed_at(50.0, 400.0, 20.0, 7),
+        ];
+        let glyph = Glyph {
+            text: "x".into(),
+            bbox: None,
+            page: 0,
+            origin: (50.0, 320.0),
+            rotation_deg: 90.0,
+            font_size: 12.0,
+            weight: None,
+            advance: None,
+            draw_index: 0,
+        };
+        unkey_what_shows_more(&LETTER, &mut images, &[glyph], &[]);
+        assert_eq!(images[0].key, None);
+        assert_eq!(images[1].key, Some(7));
+    }
+
+    #[test]
+    fn paths_by_the_hundred_thousand_across_a_page_cost_little_beside_a_logo() {
+        // A plot: 100,000 strokes, each across the whole page, so each
+        // covers every cell, and a logo none crosses, in the margin. What is
+        // drawn is measured against the one keyed image, not filed in every
+        // cell it covers.
+        let strokes: Vec<BBox> = (0..100_000)
+            .map(|i| {
+                let d = (i % 50) as f64;
+                BBox {
+                    x0: d,
+                    y0: 100.0 + d,
+                    x1: 562.0 + d,
+                    y1: 700.0 + d,
+                }
+            })
+            .collect();
+        let mut images = vec![keyed_at(560.0, 20.0, 40.0, 7)];
+        let t = std::time::Instant::now();
+        unkey_what_shows_more(&LETTER, &mut images, &[], &strokes);
+        let took = t.elapsed().as_secs_f64();
+        assert_eq!(images[0].key, Some(7));
+        assert!(took < 1.0, "100k strokes {took:.3}s");
+        // A stroke across it drops its key.
+        let mut images = vec![keyed_at(300.0, 300.0, 40.0, 7)];
+        unkey_what_shows_more(&LETTER, &mut images, &[], &strokes);
+        assert_eq!(images[0].key, None);
+    }
 }
 
 #[cfg(test)]
@@ -1625,6 +1974,8 @@ mod actual_text_tests {
             open: Vec::new(),
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
+            clips: Vec::new(),
+            painted: Vec::new(),
         };
         c.speak(Spoken {
             text: said.into(),

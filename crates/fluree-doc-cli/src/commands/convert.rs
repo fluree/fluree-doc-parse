@@ -1022,6 +1022,10 @@ fn convert_bytes(
         if let Some(keep) = pages {
             readings.retain(|(page, _, _)| keep.contains(page));
         }
+        // A region showing what an earlier one shows has no crop of its own
+        // to read (`render-routed --ocr-regions` cuts it once): it takes the
+        // earlier one's reading, as `--ocr` gives it.
+        let readings = fluree_doc_pdf::ocr::with_copies(&doc, pages, readings);
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
         report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
         injected
