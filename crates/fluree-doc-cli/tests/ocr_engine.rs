@@ -144,7 +144,7 @@ fn an_ocr_flag_beats_the_words_the_environment_names() {
     std::fs::create_dir_all(&words).unwrap();
     std::fs::write(
         words.join("scan_p0_full.json"),
-        r#"{"coords":"pdf","words":[{"text":"From the sidecar","box":[40,40,200,60]}]}"#,
+        r#"{"coords":"page","words":[{"text":"From the sidecar","box":[40,40,200,60]}]}"#,
     )
     .unwrap();
     let input = dir.join("scan.pdf");

@@ -84,12 +84,17 @@ pub enum Coords {
     /// `width` and `height` scale it onto what the image shows.
     #[default]
     Px,
-    /// The units of the page the image is placed on, as displayed, y down:
-    /// the frame the output's boxes are in.
-    Pdf,
+    /// The units of the page the image is placed on, as displayed (after
+    /// `/Rotate`), y down: the frame the output's boxes are in. Not PDF user
+    /// space, whose y runs up and which is taken before the page is turned.
+    Page,
 }
 
 /// What an engine read in one image.
+///
+/// The `--ocr-words` sidecar format, and stable as such: a release changes
+/// or removes a field only as a breaking change; a new optional field may
+/// be added.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WordReading {
     #[serde(default)]
@@ -174,7 +179,7 @@ mod tests {
     fn pixels_need_the_image_size() {
         let e = WordReading::from_json(r#"{"words": []}"#).unwrap_err();
         assert!(e.contains("width"), "{e}");
-        let pdf = WordReading::from_json(r#"{"coords": "pdf", "words": []}"#).unwrap();
-        assert_eq!(pdf.coords, Coords::Pdf);
+        let page = WordReading::from_json(r#"{"coords": "page", "words": []}"#).unwrap();
+        assert_eq!(page.coords, Coords::Page);
     }
 }

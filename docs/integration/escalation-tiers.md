@@ -88,10 +88,14 @@ is what lets a reading be spliced into the right place.
 | `table_missing` | a table a layout detector boxed and no grid covered | usually has the text, not the structure; a raster table too small to route as a region has neither |
 | `heading_doubt`, `figure_doubt`, `column_doubt` | whole page | has all of it; the doubt is about structure |
 
+The names are stable: a producer may filter on them, and a release renames
+or removes one only as a breaking change. A new reason may be added.
+
 A reader that sees only characters (an OCR engine) has nothing to add to a
-`table` crop or a doubt page and should skip them. A `table_missing` crop it
-may skip only where the page's text covers it: a raster table too small for
-the router to send a reader is boxed by the layout detector alone. A table on
+`table` crop, a `table_missing` crop or a doubt page and should skip them.
+Skipping `table_missing` has one known gap: a raster table too small for the
+router to send a reader is boxed by the layout detector alone, so its text
+stays unread until a reader that sees structure takes the crop. A table on
 a page read whole for a doubt has no crop of its own: it goes with its page,
 under the doubt's reason. A `full` reading replaces its page whatever the
 reason, so on a doubt page any character it gets wrong replaces text the PDF

@@ -144,7 +144,8 @@ already complete, and every crop only improves on it.
 The library's `escalate::within_budget` keeps the most valuable crops up to a
 count and reports how many it left out, ranked by what would be lost without
 each: whole pages the router sent — a scan, a near-blank page — where nothing
-else reads the page; routed regions; tables the deterministic pass found no
+else reads the page; routed regions, and a page read whole for a doubt that
+also carries them; tables the deterministic pass found no
 structure for; tables it found but does not trust; and last, whole pages asked
 for on a doubt about their hierarchy or layout, whose every word the
 deterministic pass already has. `fdoc convert` applies it at

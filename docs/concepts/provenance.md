@@ -106,6 +106,10 @@ each character keeps a position, spread evenly over the box the engine
 drew: on a square sheet, within a character for an engine that boxes words,
 within a few for one that boxes whole lines. On a skewed sheet lines are set
 level, so highlights drift with the distance from the middle of the page.
+An element is `ocr` as soon as one of its characters was read from pixels:
+a line OCR read never joins a paragraph of the page's own text, so that
+paragraph stays `rust`, and an element that still holds both (a table whose
+rows mix them) is `ocr` whole.
 
 Elements with `provenance: "vlm"` have text derived from pixels. Where a model
 supplies element-level boxes rather than character-level ones, an
