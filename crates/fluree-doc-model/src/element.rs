@@ -414,6 +414,33 @@ fn bbox_string<S: serde::Serializer>(b: &crate::geom::BBox, s: S) -> Result<S::O
     s.serialize_str(&format!("{:.2},{:.2},{:.2},{:.2}", b.x0, b.y0, b.x1, b.y1))
 }
 
+/// An image placed in a document's flow whose text nothing read.
+///
+/// The image's counterpart of [`UnreadPage`]: a pasted screenshot nothing
+/// read leaves its figure and the text around it, and the output would
+/// otherwise not say that its content is missing. Like it, carried beside
+/// the elements rather than as one of them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UnreadImage {
+    /// The figure it is drawn as (`doc:figure`). An image several figures
+    /// draw is read once, and listed once for each of them.
+    pub figure: String,
+    /// The name its crop and its words go by ([`crate::Picture::tag`], the
+    /// first figure drawing it): a reading of it is `<stem>_<image>.json`.
+    pub image: String,
+    /// Where the file keeps it, as the file names it
+    /// ([`crate::MediaSource::name`]).
+    pub part: String,
+    /// Why it was not read: `NotRead` (nothing was asked to read it, or no
+    /// reading of it was supplied), `Missing` (the file does not hold it: a
+    /// link to an outside file, a relationship it does not define),
+    /// `UnsupportedFormat` (not a PNG, JPEG or TIFF: a vector drawing kept as
+    /// EMF or WMF, a GIF), `PastAllowance` (past the pictures or pixels one
+    /// document may have read, [`crate::Allowance::DOCUMENT`]) or `Failed`
+    /// (its reading failed, or the part it names is not there).
+    pub reason: String,
+}
+
 /// What a document says about itself: its title, who made it, and when.
 ///
 /// Declared, never inferred: a PDF's Info dictionary, an Office file's core
@@ -569,6 +596,8 @@ pub struct Notes {
     pub unread_regions: Vec<UnreadRegion>,
     /// What the parser reported while reading the pages.
     pub warnings: Vec<ParseWarning>,
+    /// Images placed in the flow whose text nothing read.
+    pub unread_images: Vec<UnreadImage>,
     /// Running header and footer text, kept once because it identifies the
     /// document even though it is noise inside the body.
     pub running_text: Vec<String>,
@@ -581,6 +610,7 @@ impl Notes {
         self.unread.is_empty()
             && self.unread_regions.is_empty()
             && self.warnings.is_empty()
+            && self.unread_images.is_empty()
             && self.running_text.is_empty()
             && self.info.is_empty()
             && self.attachments.is_empty()

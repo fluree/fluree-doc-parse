@@ -63,66 +63,13 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Doc
 /// The opened package [`read_media`] and [`read_pictures`] read from.
 pub use fluree_doc_ooxml::Package;
 
-/// Where a figure's image is.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MediaSource {
-    /// A part of the package, as named in it, e.g. `word/media/image1.png`.
-    Part(String),
-    /// A file outside the package (`r:link`, `TargetMode="External"`), as
-    /// the relationship names it: never read, even when it is spelled like
-    /// one of the package's parts.
-    External(String),
-    /// A relationship id the document's relationships do not define.
-    Missing(String),
-}
-
-impl MediaSource {
-    /// The package part, for an image the package holds.
-    pub fn part(&self) -> Option<&str> {
-        match self {
-            MediaSource::Part(p) => Some(p),
-            MediaSource::External(_) | MediaSource::Missing(_) => None,
-        }
-    }
-}
-
-impl std::fmt::Display for MediaSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MediaSource::Part(p) => f.write_str(p),
-            MediaSource::External(url) => write!(f, "{url} (outside the package)"),
-            MediaSource::Missing(rid) => write!(f, "{rid} (no such relationship)"),
-        }
-    }
-}
-
-/// An image placed in the document's flow: the figure it is drawn as and
-/// where the image is. Its bytes are read on demand ([`read_media`]), one
-/// image at a time, so a document of many large pictures is never held
-/// decompressed all at once.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Media {
-    /// The figure element it is drawn as (`Element::figure`).
-    pub figure: String,
-    /// Where its image is.
-    pub source: MediaSource,
-    /// Its place among the figure's images: a group of pictures is one
-    /// figure holding several.
-    pub index: usize,
-}
-
-impl Media {
-    /// The name its crop and its words go by, `m<n>` for the figure
-    /// `figure-0-<n>`, `m<n>_<k>` for the figure's `k`-th image after the
-    /// first.
-    pub fn tag(&self) -> String {
-        let n = self.figure.rsplit('-').next().unwrap_or("0");
-        match self.index {
-            0 => format!("m{n}"),
-            k => format!("m{n}_{k}"),
-        }
-    }
-}
+/// The images a document places in its flow and the loop that reads them,
+/// shared with the other containers of pictures (a workbook, an e-mail):
+/// each image read once however many figures draw it, within an allowance
+/// per document.
+pub use fluree_doc_model::{
+    pictures, Allowance, Media, MediaSource, Picture, PictureReader, PictureReads, Unread,
+};
 
 /// The most bytes one image part is read to: 64 MiB, more than any picture
 /// a document pastes in.
@@ -135,196 +82,16 @@ pub fn read_media(pkg: &mut Package<'_>, part: &str) -> Result<Vec<u8>, String> 
     pkg.read_bytes(part, MAX_MEDIA_BYTES)
 }
 
-/// One image of the document, however many figures draw it: a logo or a
-/// screenshot pasted several times is read once.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Picture {
-    /// Where the image is.
-    pub source: MediaSource,
-    /// Each place the document draws it, in reading order. The first names
-    /// its crop and its words ([`Picture::tag`]).
-    pub uses: Vec<Media>,
-}
-
-impl Picture {
-    /// The name its crop and its words go by: its first use's
-    /// ([`Media::tag`]).
-    pub fn tag(&self) -> String {
-        self.uses[0].tag()
-    }
-
-    /// The figures it is drawn as, each once, in reading order.
-    pub fn figures(&self) -> Vec<&str> {
-        let mut out: Vec<&str> = Vec::new();
-        for m in &self.uses {
-            if !out.contains(&m.figure.as_str()) {
-                out.push(&m.figure);
-            }
-        }
-        out
-    }
-
-    /// What was read in it, once after each figure it is drawn as: the
-    /// readings `fluree_doc_image::place_after_figures` takes.
-    pub fn after_each_figure<T: Clone>(&self, read: Vec<T>) -> Vec<(String, Vec<T>)> {
-        let figures = self.figures();
-        let last = figures.len().saturating_sub(1);
-        let mut read = Some(read);
-        figures
-            .into_iter()
-            .enumerate()
-            .map(|(i, f)| {
-                let r = if i == last {
-                    read.take().unwrap_or_default()
-                } else {
-                    read.clone().unwrap_or_default()
-                };
-                (f.to_string(), r)
-            })
-            .collect()
-    }
-}
-
-/// The document's pictures: its media grouped by where their image is, in
-/// the order each is first drawn.
-pub fn pictures(media: Vec<Media>) -> Vec<Picture> {
-    let mut at: HashMap<MediaSource, usize> = HashMap::new();
-    let mut out: Vec<Picture> = Vec::new();
-    for m in media {
-        match at.get(&m.source) {
-            Some(&i) => out[i].uses.push(m),
-            None => {
-                at.insert(m.source.clone(), out.len());
-                out.push(Picture {
-                    source: m.source.clone(),
-                    uses: vec![m],
-                });
-            }
-        }
-    }
-    out
-}
-
-/// How much one document may ask a reader of its pictures to decode: past
-/// it, pictures are left unread ([`Unread::PastAllowance`]). Each picture is
-/// bounded on its own (the bytes of its part, the pixels of its image), but
-/// a document can hold hundreds of them in a few kilobytes each, so the
-/// document is bounded too, the way a PDF page bounds its crops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Allowance {
-    /// Pictures whose part is read.
-    pub pictures: usize,
-    /// Pixels the pictures read hold together, as their headers state them.
-    pub pixels: u64,
-}
-
-impl Allowance {
-    /// A document's: 256 pictures and 512 million pixels, four images at the
-    /// most one image may hold, or some sixty pages scanned at 300 dpi.
-    pub const DOCUMENT: Allowance = Allowance {
-        pictures: 256,
-        pixels: 512_000_000,
-    };
-}
-
-/// Why a picture was not read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Unread {
-    /// The package does not hold its image: a file outside it, or a
-    /// relationship the document does not define. Nothing is fetched.
-    NotInPackage,
-    /// The reader had nothing to read it with (no words written for it).
-    NotAsked,
-    /// Past the document's [`Allowance`].
-    PastAllowance,
-    /// Reading it failed: its part missing or too large, not a raster image
-    /// (EMF, WMF), or refused by the reader.
-    Failed(String),
-}
-
-impl std::fmt::Display for Unread {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Unread::NotInPackage => f.write_str("its image is not in the package"),
-            Unread::NotAsked => f.write_str("nothing was given to read it with"),
-            Unread::PastAllowance => {
-                f.write_str("past the pictures or pixels one document may have read")
-            }
-            Unread::Failed(e) => f.write_str(e),
-        }
-    }
-}
-
-/// What reads a document's pictures, for [`read_pictures`].
-pub trait PictureReader {
-    type Reading;
-    /// Whether there is anything to read `picture` with (an engine always
-    /// has; words written for it may not be there). Asked before its bytes
-    /// are read.
-    fn ready(&mut self, _picture: &Picture) -> bool {
-        true
-    }
-    /// The pixels an image holds, from its header, without decoding it; an
-    /// error for what this reader cannot read.
-    fn pixels(&mut self, image: &[u8]) -> Result<u64, String>;
-    /// Read the image.
-    fn read(&mut self, picture: &Picture, image: &[u8]) -> Result<Self::Reading, String>;
-}
-
-/// What [`read_pictures`] gives.
-#[derive(Debug, Clone)]
-pub struct PictureReads<R> {
-    /// The pictures read, in the order they are first drawn, each with its
-    /// reading.
-    pub read: Vec<(Picture, R)>,
-    /// The pictures not read, each with why.
-    pub unread: Vec<(Picture, Unread)>,
-}
-
-/// Read a document's pictures ([`pictures`]): each image once, however
-/// many figures draw it, one at a time (its bytes read, measured, read by
-/// `reader` and dropped), within `allowance`. A picture is charged to the
-/// allowance before its part is read, and its pixels once its header is.
+/// Read a document's pictures from its opened package
+/// ([`fluree_doc_model::read_pictures`]): each image once, however many
+/// figures draw it, one at a time, within `allowance`.
 pub fn read_pictures<R: PictureReader>(
     pkg: &mut Package<'_>,
     media: Vec<Media>,
     reader: &mut R,
     allowance: Allowance,
 ) -> PictureReads<R::Reading> {
-    let mut out = PictureReads {
-        read: Vec::new(),
-        unread: Vec::new(),
-    };
-    let (mut pictures_left, mut pixels_left) = (allowance.pictures, allowance.pixels);
-    for picture in pictures(media) {
-        let Some(part) = picture.source.part() else {
-            out.unread.push((picture, Unread::NotInPackage));
-            continue;
-        };
-        if !reader.ready(&picture) {
-            out.unread.push((picture, Unread::NotAsked));
-            continue;
-        }
-        if pictures_left == 0 {
-            out.unread.push((picture, Unread::PastAllowance));
-            continue;
-        }
-        pictures_left -= 1;
-        let got = read_media(pkg, part).and_then(|image| {
-            let pixels = reader.pixels(&image)?;
-            if pixels > pixels_left {
-                return Ok(None);
-            }
-            pixels_left -= pixels;
-            reader.read(&picture, &image).map(Some)
-        });
-        match got {
-            Ok(Some(r)) => out.read.push((picture, r)),
-            Ok(None) => out.unread.push((picture, Unread::PastAllowance)),
-            Err(e) => out.unread.push((picture, Unread::Failed(e))),
-        }
-    }
-    out
+    fluree_doc_model::read_pictures(media, &mut |part| read_media(pkg, part), reader, allowance)
 }
 
 /// What [`parse_with_ocr`] gives.

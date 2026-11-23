@@ -103,7 +103,9 @@ gets 2×.
 
 A bare PNG, JPEG or TIFF is read the same way, as one page decoded upright;
 see [Images](../inputs/images.md). So are the pictures in a DOCX, whose text
-follows their figure; see [Office files](../inputs/office-and-web.md).
+follows their figure; see [Office files](../inputs/office-and-web.md). A
+picture nothing read is counted on stderr and listed in the graph's
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read).
 
 What either reads is the same: the pages whose text is pixels (scanned,
 near-blank, broken text), whole, and on other pages the raster regions the

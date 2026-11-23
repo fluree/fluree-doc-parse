@@ -228,3 +228,67 @@ fn an_image_drawn_by_fifty_figures_is_cropped_and_read_once() {
     assert!(!err.contains("were not read"), "{err}");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The document node of a DoCO graph.
+fn document(doco: &str) -> serde_json::Value {
+    let v: serde_json::Value = serde_json::from_str(doco).unwrap();
+    v["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["@type"] == "foaf:Document")
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn a_picture_nothing_read_is_listed_unread_in_the_graph() {
+    let dir = scratch("unread");
+    let input = dir.join("report.docx");
+    std::fs::write(&input, docx()).unwrap();
+    let convert = |extra: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .arg("convert")
+            .arg(&input)
+            .args(["-f", "doco"])
+            .args(extra)
+            .env("FDOC_HOME", dir.join("home"))
+            .env_remove("FDOC_OCR_WORDS")
+            .output()
+            .unwrap()
+    };
+    // Nothing asked to read it.
+    let out = convert(&[]);
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("1 of 1 image(s)"), "{err}");
+    let doc = document(&String::from_utf8(out.stdout).unwrap());
+    assert_eq!(
+        doc["doc:unreadImages"]["@value"],
+        serde_json::json!([{
+            "figure": "figure-0-1", "image": "m1",
+            "part": "word/media/image1.png", "reason": "NotRead"
+        }])
+    );
+    // A word directory with no reading of it: still not read.
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let out = convert(&["--ocr-words".as_ref(), words.as_os_str()]);
+    let doc = document(&String::from_utf8(out.stdout).unwrap());
+    assert_eq!(doc["doc:unreadImages"]["@value"][0]["reason"], "NotRead");
+    // A reading that fails is listed as failed.
+    std::fs::write(words.join("report_m1.json"), "{ not json").unwrap();
+    let out = convert(&["--ocr-words".as_ref(), words.as_os_str()]);
+    let doc = document(&String::from_utf8(out.stdout).unwrap());
+    assert_eq!(doc["doc:unreadImages"]["@value"][0]["reason"], "Failed");
+    // Read, it is no longer listed.
+    let reading = serde_json::json!({
+        "width": 300, "height": 100,
+        "words": [{ "text": "Account 4417-0093-21", "box": [20, 30, 200, 50] }]
+    });
+    std::fs::write(words.join("report_m1.json"), reading.to_string()).unwrap();
+    let out = convert(&["--ocr-words".as_ref(), words.as_os_str()]);
+    let doc = document(&String::from_utf8(out.stdout).unwrap());
+    assert!(doc.get("doc:unreadImages").is_none(), "{doc}");
+    let _ = std::fs::remove_dir_all(dir);
+}

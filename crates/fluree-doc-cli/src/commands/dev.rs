@@ -1166,7 +1166,7 @@ pub(crate) fn render_routed(
             let stem = crate::commands::common::stem_of(f);
             match std::fs::read(f)
                 .map_err(|e| e.to_string())
-                .and_then(|bytes| media_crops(&bytes, stem, outdir))
+                .and_then(|bytes| docx_crops(&bytes, stem, outdir))
             {
                 Ok(recs) => {
                     n_media += recs.len();
@@ -1438,22 +1438,56 @@ fn is_image_file(path: &Path) -> bool {
     fluree_doc_pdf::image::Format::sniff(&head[..n]).is_some()
 }
 
-/// A DOCX's crops: each image placed in its flow, once however many
-/// figures draw it, decoded upright and written as `<stem>_m<n>.png`, named
-/// by the first figure drawing it (`figure-0-<n>`), with every figure it is
-/// drawn as and the package part it came from. An image that is not a
-/// raster (EMF, WMF) has no crop, and one past what a document may have
-/// read ([`fluree_doc_docx::Allowance::DOCUMENT`]) is not cropped either.
-fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
-    use fluree_doc_docx::{Picture, PictureReader, Unread};
+/// A DOCX's crops ([`media_crops`]), read from its package, opened once.
+fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let (_, _, media) = fluree_doc_docx::parse_with_media(bytes).map_err(|e| e.to_string())?;
+    let mut pkg = fluree_doc_docx::Package::open(bytes)?;
+    media_crops(
+        media,
+        &mut |part| fluree_doc_docx::read_media(&mut pkg, part),
+        stem,
+        outdir,
+    )
+}
+
+/// The crops of the images a document places in its flow: each image once
+/// however many figures draw it, decoded upright and written as
+/// `<stem>_<tag>.png`, named by the first figure drawing it (`m<n>` for the
+/// figure `figure-<page>-<n>`), its manifest record naming every figure it
+/// is drawn as and where the file keeps it (`part`). `bytes` reads one
+/// image by its part, one at a time. An image the file does not hold, or
+/// that is not a raster (EMF, WMF), has no crop, and one past what a
+/// document may have read ([`fluree_doc_model::Allowance::DOCUMENT`]) is not
+/// cropped either.
+fn media_crops(
+    media: Vec<fluree_doc_model::Media>,
+    bytes: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+    stem: &str,
+    outdir: &Path,
+) -> Result<Vec<serde_json::Value>, String> {
+    use fluree_doc_model::{Picture, PictureReader, Unread};
     struct Cropper<'a> {
         stem: &'a str,
         outdir: &'a Path,
+        /// The picture being cropped, by tag.
+        current: String,
+        /// The pictures that are drawings (EMF, WMF), not rasters, by tag.
+        drawings: std::collections::HashSet<String>,
     }
     impl PictureReader for Cropper<'_> {
         type Reading = serde_json::Value;
+        fn ready(&mut self, picture: &Picture) -> bool {
+            self.current = picture.tag();
+            true
+        }
         fn pixels(&mut self, image: &[u8]) -> Result<u64, String> {
-            fluree_doc_image::header(image).map(|h| u64::from(h.width) * u64::from(h.height))
+            fluree_doc_image::header(image)
+                .map(|h| u64::from(h.width) * u64::from(h.height))
+                .inspect_err(|_| {
+                    if fluree_doc_pdf::image::Format::sniff(image).is_none() {
+                        self.drawings.insert(self.current.clone());
+                    }
+                })
         }
         fn read(&mut self, picture: &Picture, image: &[u8]) -> Result<serde_json::Value, String> {
             let mut decoded = fluree_doc_image::decode(image)?;
@@ -1467,13 +1501,17 @@ fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json
             }))
         }
     }
-    let (_, _, media) = fluree_doc_docx::parse_with_media(bytes).map_err(|e| e.to_string())?;
-    let mut pkg = fluree_doc_docx::Package::open(bytes)?;
-    let reads = fluree_doc_docx::read_pictures(
-        &mut pkg,
+    let mut cropper = Cropper {
+        stem,
+        outdir,
+        current: String::new(),
+        drawings: Default::default(),
+    };
+    let reads = fluree_doc_model::read_pictures(
         media,
-        &mut Cropper { stem, outdir },
-        fluree_doc_docx::Allowance::DOCUMENT,
+        bytes,
+        &mut cropper,
+        fluree_doc_model::Allowance::DOCUMENT,
     );
     let mut past = 0usize;
     for (picture, why) in &reads.unread {
@@ -1481,12 +1519,7 @@ fn media_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json
             // A drawing (EMF, WMF) is no raster, and has no crop; anything
             // else that fails is worth a word.
             Unread::Failed(e) => {
-                let drawing = picture
-                    .source
-                    .part()
-                    .and_then(|part| fluree_doc_docx::read_media(&mut pkg, part).ok())
-                    .is_some_and(|data| fluree_doc_pdf::image::Format::sniff(&data).is_none());
-                if !drawing {
+                if !cropper.drawings.contains(&picture.tag()) {
                     eprintln!("warning: {stem}: {}: {e}", picture.source);
                 }
             }

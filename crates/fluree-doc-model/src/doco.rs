@@ -91,6 +91,10 @@ pub struct DocoOptions {
     /// document node as `doc:parseWarnings`: an image that failed to decode
     /// is otherwise indistinguishable from one that held nothing.
     pub warnings: Vec<crate::element::ParseWarning>,
+    /// Images placed in the flow whose text nothing read. Emitted on the
+    /// document node as `doc:unreadImages`, so a pasted screenshot nothing
+    /// read is not mistaken for a picture with no text in it.
+    pub unread_images: Vec<crate::element::UnreadImage>,
     /// Page sizes, in PDF user units, for sources that have pages.
     ///
     /// Emitted on the document node as `doc:pages`. A `doc:bbox` cannot be
@@ -901,6 +905,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
         em.nodes[doc_idx].insert(
             "doc:unreadRegions".into(),
             json!({ "@type": "@json", "@value": opts.unread_regions }),
+        );
+    }
+    if !opts.unread_images.is_empty() {
+        em.nodes[doc_idx].insert(
+            "doc:unreadImages".into(),
+            json!({ "@type": "@json", "@value": opts.unread_images }),
         );
     }
     if !opts.pages.is_empty() {
@@ -2077,6 +2087,33 @@ mod tests {
         assert!(find(quiet, "foaf:Document")[0]
             .get("doc:unreadRegions")
             .is_none());
+    }
+
+    #[test]
+    fn an_unread_image_is_listed_on_the_document_by_its_figure() {
+        let o = DocoOptions {
+            base_iri: "urn:test".into(),
+            unread_images: vec![crate::element::UnreadImage {
+                figure: "figure-0-1".into(),
+                image: "m1".into(),
+                part: "word/media/image1.png".into(),
+                reason: "NotRead".into(),
+            }],
+            ..Default::default()
+        };
+        let v: Value = serde_json::from_str(&to_doco(&[], &o)).unwrap();
+        let doc = &v["@graph"][0];
+        assert_eq!(doc["doc:unreadImages"]["@type"], "@json");
+        assert_eq!(
+            doc["doc:unreadImages"]["@value"],
+            serde_json::json!([{
+                "figure": "figure-0-1", "image": "m1",
+                "part": "word/media/image1.png", "reason": "NotRead"
+            }])
+        );
+        // Nothing unread, nothing said.
+        let v: Value = serde_json::from_str(&to_doco(&[], &opts())).unwrap();
+        assert!(v["@graph"][0].get("doc:unreadImages").is_none());
     }
 
     #[test]

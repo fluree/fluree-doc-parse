@@ -304,6 +304,43 @@ warning: report: ImageDecodeFailure on page 4: an image could not be decoded; wh
 Over the PDFs in this repository's test and evaluation fixtures, none is
 reported: a clean document says nothing.
 
+## Images nothing read
+
+```json
+{ "@type": "foaf:Document",
+  "doc:unreadImages": { "@type": "@json",
+                        "@value": [ { "figure": "figure-0-1", "image": "m1",
+                                      "part": "word/media/image1.png",
+                                      "reason": "NotRead" } ] } }
+```
+
+The same statement for the images a document places in its flow: a picture
+in a DOCX, a picture anchored to an XLSX sheet's cells, an image an e-mail
+shows in its body. Their text is read by OCR when `convert` has an engine
+(`--ocr`) or the words one wrote (`--ocr-words`), and placed after the
+figure the image is drawn as. An image nothing read is listed here, so a
+pasted screenshot whose text is missing is not taken for a picture with
+none.
+
+`figure` joins to the figure's `doc:figure`; `image` is the name its crop
+and its words go by (`<stem>_m1.png`, `<stem>_m1.json`); `part` is where the
+file keeps it: a package part, or for an e-mail the `cid:` URL its body
+names it by (or its attachment name). An image several figures draw (a logo
+or a screenshot pasted more than once) is read once, under the name of the
+first figure drawing it, and listed unread once for each figure. `reason` is
+`NotRead` (nothing was asked to read it, or no reading of it was supplied),
+`Missing` (the file does not hold it: a link to an outside file, a
+relationship the file does not define), `UnsupportedFormat` (not a PNG, JPEG
+or TIFF: a vector drawing kept as EMF or WMF, a GIF), `PastAllowance` (past
+what one document may have read: 256 images, 512 million pixels as their
+headers state them) or `Failed` (its reading failed, or the part it names is
+not there; stderr says why). An image read that held no text was read, and
+is not listed.
+
+Unlike an unread page, it adds no comment to Markdown or XHTML: most
+documents carry a logo or a photo with no text in it, and a warning on each
+would be noise. The note on stderr counts them.
+
 ## Sections are explicit
 
 The flat element list becomes a tree here. A `doco:Section` node is minted per

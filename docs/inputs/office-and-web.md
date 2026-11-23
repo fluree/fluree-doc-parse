@@ -105,7 +105,9 @@ under tracked changes is no figure and is not read, and a shape's image fill
 package (a link to an outside file, a missing part) is counted among those
 not read; a part name is matched ignoring case, with backslashes read as
 slashes. Without OCR, a note on stderr counts the pictures not read, and no
-image is even decompressed. An
+image is even decompressed. Either way each picture not read is listed in
+[`doc:unreadImages`](../formats/doco.md#images-nothing-read), with its figure,
+its part and why. An
 image Word keeps as a vector drawing (EMF, WMF) has no pixels to read. Images
 are read one at a time, each at most 64 MiB decompressed and 128 million pixels
 decoded; one past either is reported and left as its figure. A document as a

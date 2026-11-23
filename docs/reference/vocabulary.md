@@ -88,6 +88,7 @@ A consumer should therefore not branch on either type expecting to see it.
 | `doc:unreadPages` | `foaf:Document` | JSON literal: `[{pageIndex, reason}]` — content nothing transcribed |
 | `doc:unreadRegions` | `foaf:Document` | JSON literal: `[{pageIndex, bbox, reason}]` — raster regions of otherwise read pages nothing transcribed; `bbox` as `doc:bbox`; `reason` `Region` (routed), `Small` or `NotTexty` (declined by the router) |
 | `doc:parseWarnings` | `foaf:Document` | JSON literal: `[{pageIndex, kind, count}]` — what the PDF interpreter reported, once per page and kind: `ImageDecodeFailure` |
+| `doc:unreadImages` | `foaf:Document` | JSON literal: `[{figure, image, part, reason}]` — images placed in the flow whose text nothing read |
 | `doc:runningText` | `foaf:Document` | JSON literal: the header/footer text stripped from the body |
 | `doc:attachments` | `foaf:Document` | JSON literal: `[{filename?, contentType, size, sha256, inline?}]`, the files the document carries |
 | `dcterms:title` | `foaf:Document` | the title the file declares: a PDF's `/Title`, an Office file's `dc:title`, an HTML `<title>`, an email's subject |

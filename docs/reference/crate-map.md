@@ -28,7 +28,7 @@ a PDF engine.**
 
 | crate | contains |
 |---|---|
-| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization, `outline::infer_headings` (headings shown by keyword and number) |
+| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `Media` (an image placed in the flow) and `read_pictures`, the loop every container's pictures are read through, each once within a document's `Allowance`, `UnreadPage` and `UnreadImage` (what nothing read), `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization, `outline::infer_headings` (headings shown by keyword and number) |
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
 | `fluree-doc-text` | `parse(&str) -> Vec<Element>`; `decode(&[u8])`; `is_markdown` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |

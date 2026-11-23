@@ -10,6 +10,7 @@ pub mod element;
 pub mod emit;
 pub mod geom;
 pub mod marks;
+pub mod media;
 pub mod merges;
 pub mod message;
 pub mod outline;
@@ -18,13 +19,17 @@ pub mod symbols;
 pub use doco::{to_doco, to_text, DocoOptions};
 pub use element::{
     xsd_date_time, xsd_temporal, Attachment, Datum, DocumentInfo, Element, Link, Notes,
-    ParseWarning, Target, Turn, UnreadPage, UnreadRegion,
+    ParseWarning, Target, Turn, UnreadImage, UnreadPage, UnreadRegion,
 };
 pub use emit::{
     to_markdown, to_markdown_with, to_markdown_with_options, to_xhtml, to_xhtml_with,
     MarkdownOptions, MdLinks,
 };
 pub use geom::{BBox, PageSize};
+pub use media::{
+    pictures, read_pictures, Allowance, Media, MediaSource, Picture, PictureReader, PictureReads,
+    Unread,
+};
 pub use merges::{denormalize, Merges};
 pub use message::{Mailbox, Message};
 
