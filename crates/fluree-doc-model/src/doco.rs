@@ -340,7 +340,10 @@ pub fn table_projection(
 /// Each column's header path, as `doc:columnHeader` carries it.
 ///
 /// One header row names the columns by itself, and its label is the
-/// header, verbatim. A stacked header says more: a banner spanning several
+/// header, verbatim, and under each column it spans that has no label of
+/// its own: a filer sets a period over two columns, its currency sign's and
+/// its value's. A stacked header
+/// says more: a banner spanning several
 /// columns (`Price` over `Unit` and `Line`) is part of the name of every
 /// column under it, and dropping it leaves two columns that differ from
 /// the neighbouring ones only by a word. So under a stacked header each
@@ -359,14 +362,29 @@ fn column_headers(
     if n_header == 0 {
         return Vec::new();
     }
-    if n_header == 1 {
-        return rows[0].iter().map(|h| h.trim().to_string()).collect();
-    }
     let continues_left = |r: usize, c: usize| {
         merged_left
             .filter(|m| m.len() == rows.len() * ncols)
             .is_some_and(|m| m[r * ncols + c])
     };
+    // One header row: a column the row leaves empty, inside a label's span,
+    // is under that label. A column with text of its own keeps it, since a
+    // PDF's merged run can set its words across the columns it spans.
+    if n_header == 1 {
+        return (0..ncols)
+            .map(|c| {
+                let mut owner = c;
+                while owner > 0 && continues_left(0, owner) && rows[0][owner].trim().is_empty() {
+                    owner -= 1;
+                }
+                rows[0]
+                    .get(owner)
+                    .map(|t| t.trim())
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect();
+    }
     (0..ncols)
         .map(|c| {
             let mut path: Vec<&str> = Vec::new();
@@ -1779,8 +1797,9 @@ mod tests {
     }
 
     #[test]
-    fn a_single_header_row_is_read_verbatim() {
-        // One header row: a spanned label stays on the column that holds it.
+    fn a_single_header_row_names_every_column_it_spans() {
+        // One header row: its label, verbatim, under each column it spans,
+        // as a filer sets a period over its currency sign and its value.
         let mut t = el("doco:Table", "", None);
         t.cells = Some(vec![
             vec!["Item".into(), "Price".into(), "".into()],
@@ -1794,7 +1813,7 @@ mod tests {
             .iter()
             .find(|c| c["doc:cellValue"] == "29.00")
             .unwrap();
-        assert!(line.get("doc:columnHeader").is_none());
+        assert_eq!(line["doc:columnHeader"], "Price");
         let unit = cells
             .iter()
             .find(|c| c["doc:cellValue"] == "14.50")
