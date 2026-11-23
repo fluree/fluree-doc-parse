@@ -542,6 +542,13 @@ fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>)
         out.push(c);
         n += 1;
     }
+    let links = spans(&at, anchors);
+    (out, links)
+}
+
+/// The anchors located in the text a raw concatenation became, given where
+/// each raw character landed (`None` for one the text left out).
+fn spans(at: &[Option<usize>], anchors: &[(usize, usize, String)]) -> Vec<Link> {
     let mut links: Vec<Link> = anchors
         .iter()
         .filter_map(|(b, e, href)| {
@@ -563,7 +570,132 @@ fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>)
         }
         _ => false,
     });
-    (out, links)
+    links
+}
+
+/// A `<pre>`'s text as it is drawn, with any `<a href>` inside it located.
+///
+/// In a `<pre>` the line breaks, the blank lines and the runs of spaces are
+/// the content (HTML, the `pre` element): a hearing transcript or a public
+/// law is published as one, its letterhead centred and its witness list set
+/// in columns by spaces alone. So nothing is collapsed. A `<br>` is a line
+/// break, and a block set inside one starts a line of its own.
+fn pre_text(h: &Handle) -> (String, Vec<Link>) {
+    let mut raw = Raw::default();
+    let mut anchors = Vec::new();
+    collect_pre(h, &mut raw, &mut anchors);
+    verbatim(&raw.text, &anchors)
+}
+
+/// Text gathered in order, with its length in characters kept as it grows:
+/// a `<pre>` can run to hundreds of thousands of characters and hold an
+/// anchor on every line.
+#[derive(Default)]
+struct Raw {
+    text: String,
+    chars: usize,
+}
+
+impl Raw {
+    fn push_str(&mut self, s: &str) {
+        self.text.push_str(s);
+        self.chars += s.chars().count();
+    }
+
+    /// Start a new line unless one has just begun.
+    fn break_line(&mut self) {
+        if !self.text.is_empty() && !self.text.ends_with('\n') {
+            self.push_str("\n");
+        }
+    }
+}
+
+fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, String)>) {
+    for node in h.children.borrow().iter() {
+        match &node.data {
+            NodeData::Text { contents } => out.push_str(&contents.borrow()),
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(node) else { continue };
+                if skipped(node) {
+                    continue;
+                }
+                if tag == "br" {
+                    out.push_str("\n");
+                    continue;
+                }
+                let block = is_block(&tag);
+                if block {
+                    out.break_line();
+                }
+                let start = out.chars;
+                collect_pre(node, out, anchors);
+                if tag == "a" {
+                    if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
+                        anchors.push((start, out.chars, href));
+                    }
+                }
+                if block {
+                    out.break_line();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Preformatted text as written, carrying the anchor offsets through.
+///
+/// Only what is never drawn goes: the whitespace before the first character
+/// and after the last, as every element's text is trimmed, and the spaces a
+/// line ends in. A tab stays a tab, since it sets a column; any other space
+/// character, a no-break space among them, is a space.
+fn verbatim(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
+    let chars: Vec<char> = raw
+        .chars()
+        .map(repair_c1)
+        .map(|c| match c {
+            '\n' | '\t' => c,
+            c if c.is_whitespace() => ' ',
+            c => c,
+        })
+        .collect();
+    let Some(first) = chars.iter().position(|c| !c.is_whitespace()) else {
+        return (String::new(), Vec::new());
+    };
+    let last = chars
+        .iter()
+        .rposition(|c| !c.is_whitespace())
+        .unwrap_or(first);
+    let mut keep = vec![false; chars.len()];
+    // Walked backwards, so a run of spaces knows whether a line break or
+    // the end follows it.
+    let mut line_end = true;
+    for i in (first..=last).rev() {
+        match chars[i] {
+            '\n' => {
+                keep[i] = true;
+                line_end = true;
+            }
+            ' ' | '\t' if line_end => {}
+            _ => {
+                keep[i] = true;
+                line_end = false;
+            }
+        }
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut at = Vec::with_capacity(chars.len());
+    let mut n = 0usize;
+    for (c, k) in chars.iter().zip(&keep) {
+        if *k {
+            out.push(*c);
+            at.push(Some(n));
+            n += 1;
+        } else {
+            at.push(None);
+        }
+    }
+    (out, spans(&at, anchors))
 }
 
 /// An element carrying whatever links its text contained.
@@ -643,7 +775,16 @@ fn walk_node(h: &Handle, out: &mut Out) {
             // A quotation or a caption that holds paragraphs of its own is a
             // container of them, not one paragraph run together.
             "blockquote" | "figcaption" | "dd" | "dt" if holds_block(h) => {}
-            "p" | "pre" | "blockquote" | "figcaption" | "dd" | "dt" => {
+            // One paragraph, its lines and spacing kept, as a Markdown code
+            // block is read.
+            "pre" => {
+                let (text, links) = pre_text(h);
+                if !text.is_empty() {
+                    out.push(linked("doco:Paragraph", text, None, links));
+                }
+                return;
+            }
+            "p" | "blockquote" | "figcaption" | "dd" | "dt" => {
                 let (text, links) = text_of(h);
                 if !text.is_empty() {
                     out.push(linked("doco:Paragraph", text, None, links));
@@ -953,6 +1094,47 @@ mod tests {
             ]
         );
         assert_eq!(depths, [0, 1, 2, 3, 1, 0]);
+    }
+
+    #[test]
+    fn a_pre_keeps_its_lines_blank_lines_and_spacing() {
+        // How a hearing transcript or a public law is published: the whole
+        // document one `<pre>`, its letterhead and addresses set by spaces.
+        let els = parse(
+            "<body><pre>\nCOMMITTEE ON ENERGY AND COMMERCE\n\nWashington, DC 20515\n\n\
+             \x20   Dear Chairman Example:\n\n    Line with   three   spaces.\n</pre></body>",
+        );
+        assert_eq!(kinds(&els), ["doco:Paragraph"]);
+        assert_eq!(
+            els[0].text,
+            "COMMITTEE ON ENERGY AND COMMERCE\n\nWashington, DC 20515\n\n\
+             \x20   Dear Chairman Example:\n\n    Line with   three   spaces."
+        );
+        // Text outside a `<pre>` still flows.
+        let p = parse("<p>one\n\n   two</p><pre>a\n  b</pre><p>three</p>");
+        assert_eq!(texts(&p), ["one two", "a\n  b", "three"]);
+    }
+
+    #[test]
+    fn a_pre_keeps_its_links_columns_and_breaks() {
+        let e = parse(
+            "<pre>Name\tRoom   \nAda Park\t214\nwrite to <a href=\"mailto:a@example.org\">the\n  clerk</a>\
+             <br>l\u{92}art\u{a0}x  \n\n\n</pre>",
+        );
+        // A tab sets a column and stays; the spaces a line ends in are not
+        // drawn; a `<br>` breaks the line; a no-break space is a space.
+        assert_eq!(
+            e[0].text,
+            "Name\tRoom\nAda Park\t214\nwrite to the\n  clerk\nl\u{2019}art x"
+        );
+        let l = &e[0].links.as_ref().expect("links")[0];
+        let (b, end) = l.span().unwrap();
+        let anchor: String = e[0].text.chars().skip(b).take(end - b).collect();
+        assert_eq!(anchor, "the\n  clerk");
+        assert_eq!(l.href(), "mailto:a@example.org");
+        // A block set inside one starts a line of its own.
+        let d = parse("<pre><div>a</div><div>b</div>c</pre>");
+        assert_eq!(d[0].text, "a\nb\nc");
     }
 
     #[test]

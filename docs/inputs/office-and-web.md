@@ -246,6 +246,14 @@ browser lays it out: each run of it between blocks is a paragraph, and two
 all email, set their text. A `<blockquote>` that holds paragraphs of its own
 is their container rather than one paragraph run together.
 
+A `<pre>` is read as written: one paragraph whose text keeps its line breaks,
+blank lines and runs of spaces, so offsets index into the text as it was set.
+Government publishers serve whole documents as one `<pre>` (every hearing and
+public law on govinfo.gov, many SEC exhibits), with the letterhead centred and
+the lists set in columns by spaces alone. Only what is never drawn is dropped:
+the whitespace before the first character and after the last, and the spaces
+a line ends in.
+
 A table used for **layout** is read as the containers its cells are, not as
 data. Email, and many older pages, are laid out in tables: a column of
 boxes, a logo beside a banner, tables nested to centre a column. Read as
