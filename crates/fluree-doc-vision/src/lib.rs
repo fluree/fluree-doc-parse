@@ -43,6 +43,10 @@ pub enum Coords {
 }
 
 /// What an engine read in one image.
+///
+/// The `--ocr-words` sidecar format, and stable as such: a release changes
+/// or removes a field only as a breaking change; a new optional field may
+/// be added.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WordReading {
     #[serde(default)]

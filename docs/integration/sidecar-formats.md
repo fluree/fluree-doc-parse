@@ -135,6 +135,10 @@ page does, and every character keeps a position for
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
 | `words[].conf` | no | the engine's confidence, 0-1 |
 
+The format is stable: `--ocr-words` (`FDOC_OCR_WORDS`), the file names, the
+fields above and their units. A release changes or removes one only as a
+breaking change; a new optional field may be added.
+
 **The crop, in pixels.** A `px` reading of `full` covers the whole page; one
 of `r{i}` covers the region plus a 6-unit margin, clipped to the page —
 what `render-routed` draws. Any resolution works: `width` and `height` scale
