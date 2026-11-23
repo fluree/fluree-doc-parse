@@ -1138,7 +1138,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let marks = timed(&mut timings.furniture, || furniture::detect(&flat_lines));
+    let (marks, exact) = timed(&mut timings.furniture, || {
+        furniture::detect_with_exact(&flat_lines)
+    });
     // The folio is read from the page's edges over *every* glyph, not from
     // the lines left after grids took theirs: a form's key/value grid that
     // runs down into the footer band takes the footer's glyphs with it, and
@@ -1198,20 +1200,53 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             for (li, kind) in page_marks {
                 let text = flat_lines[pi].0[*li].text.trim().to_string();
                 let digits_vary = matches!(kind, furniture::Furniture::PageNumber);
-                let key: String = if digits_vary {
-                    text.chars()
-                        .map(|c| if c.is_ascii_digit() { '#' } else { c })
-                        .collect()
-                } else {
-                    text.clone()
-                };
-                if !text.is_empty() && seen.insert(key) {
+                if !text.is_empty() && seen.insert(furniture_key(&text, digits_vary)) {
                     v.push((text, digits_vary));
                 }
             }
         }
         v
     };
+    // The texts scrubbed from cells and blocks: those read by repetition.
+    // A short document's exact copies were each found as a line of their
+    // own, and the same words elsewhere are content (see
+    // `furniture::detect_with_exact`).
+    let scrub_texts: Vec<(String, bool)> = {
+        let repeated: std::collections::HashSet<String> = marks
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, page_marks)| {
+                let exact = &exact[pi];
+                let lines = &flat_lines[pi].0;
+                page_marks
+                    .iter()
+                    .filter(move |(li, _)| !exact.contains(li))
+                    .map(move |(li, kind)| {
+                        furniture_key(
+                            lines[*li].text.trim(),
+                            matches!(kind, furniture::Furniture::PageNumber),
+                        )
+                    })
+            })
+            .collect();
+        furniture_texts
+            .iter()
+            .filter(|(t, vary)| repeated.contains(&furniture_key(t, *vary)))
+            .cloned()
+            .collect()
+    };
+    // The sizes each furniture text is printed at, to tell a running head
+    // from a title page that sets the same words as its title.
+    let mut furniture_sizes: std::collections::HashMap<String, Vec<f32>> = Default::default();
+    for (pi, page_marks) in marks.iter().enumerate() {
+        for li in page_marks.keys() {
+            let l = &flat_lines[pi].0[*li];
+            furniture_sizes
+                .entry(l.text.trim().to_string())
+                .or_default()
+                .push(l.font_size);
+        }
+    }
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
 
@@ -1409,10 +1444,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // known furniture texts are stripped as substrings instead,
             // from a block that reaches the band headers and footers are
             // set in. A block in the middle of the page holds none.
+            //
+            // A block that is all of a running line, at another size, is
+            // no leak: it is a title page setting the words the later
+            // pages run over their heads (`Guild® | K-R33912` large on the
+            // first page, small at the top of the rest).
             let height = raw.pages[pi].height;
             let band = height * furniture::EDGE_BAND;
-            let scrubbed = if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
-                furniture::scrub_block(&text, &furniture_texts)
+            let retitled = furniture_sizes.get(text.trim()).is_some_and(|sizes| {
+                sizes
+                    .iter()
+                    .all(|s| (b.font_size - s).abs() > 0.15 * s.max(b.font_size))
+            });
+            let scrubbed = if retitled {
+                text.clone()
+            } else if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
+                furniture::scrub_block(&text, &scrub_texts)
             } else {
                 text.clone()
             };
@@ -1448,7 +1495,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 None => g.cell_texts(&raw.pages[pi].glyphs),
             }
             .into_iter()
-            .map(|c| furniture::scrub_cell(&c, &furniture_texts))
+            .map(|c| furniture::scrub_cell(&c, &scrub_texts))
             .collect();
             if layout.demoted_tables[gi] {
                 // Judged non-table by the layout arbiter: same reading
@@ -1497,7 +1544,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             let mut rows = rows;
             for &r in &layout.spanning_rows[gi] {
                 rows[r][0] =
-                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &furniture_texts);
+                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts);
                 for (c, cell) in rows[r].iter_mut().enumerate().skip(1) {
                     cell.clear();
                     merges.continues_left[r * cols + c] = true;
@@ -1597,7 +1644,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => furniture::scrub_cell(&t, &furniture_texts),
+                            Some(t) => furniture::scrub_cell(&t, &scrub_texts),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
                             None => continue,
                         };
@@ -1847,6 +1894,18 @@ pub fn column_doubt(page: &Page, analysis: &Analysis) -> Option<crate::column::D
         .cloned()
         .collect();
     crate::column::doubt(&prose)
+}
+
+/// A furniture text as the scrub list tells copies apart: a page number by
+/// its words, its digits any.
+fn furniture_key(text: &str, digits_vary: bool) -> String {
+    if digits_vary {
+        text.chars()
+            .map(|c| if c.is_ascii_digit() { '#' } else { c })
+            .collect()
+    } else {
+        text.to_string()
+    }
 }
 
 #[cfg(test)]
