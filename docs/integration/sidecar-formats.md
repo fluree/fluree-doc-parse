@@ -160,8 +160,11 @@ read whole pages there, or give the boxes in `page` units.
 - an `r{i}` reading for one of the page's unread regions, keeping only the
   words whose center falls inside the region, not its margin.
 
-A page's unread regions are its raster images that look like text and that
-the text layer does not cover. The router sends a model only those over a
+A page's unread regions are its raster images that look like text, whose own
+pixels can hold a line of it (10 px on the short side: a checkbox drawn from an
+8 × 8 mask or a rule stretched from a 1 × 1 one is not a region), and that
+the text layer does not cover; an image drawn twice in one place is one
+region. The router sends a model only those over a
 tenth of the page, a price rather than a property of the pixels: an OCR
 engine is cheap per pixel, and a capture an inch high still holds a date. So
 OCR reads them all, the routed ones first, numbered as the router numbers
