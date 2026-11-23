@@ -896,6 +896,12 @@ struct CellMark {
     th: bool,
     /// A `<td>` set as a header is: bold throughout, or ruled beneath.
     styled: bool,
+    /// Its text is a caption in brackets, the units a filer sets in the
+    /// label column of its header row: `(in millions)`.
+    caption: bool,
+    /// Its text is a bare figure, set neither bold nor in `<th>`: a value
+    /// however it is ruled.
+    figure: bool,
 }
 
 /// What a table row is, for finding where the header ends.
@@ -908,8 +914,14 @@ enum RowKind {
     Th { cells: usize },
     /// Its text is in two cells or more, each a `<th>` or a `<td>` set as a
     /// header: the header row a filer's table, an SEC inline-XBRL
-    /// statement among them, writes in `<td>`.
-    Styled,
+    /// statement among them, writes in `<td>`. A units caption in the
+    /// label column may stand plain beside them. `labelled` where the label
+    /// column holds text other than such a caption.
+    Styled { labelled: bool },
+    /// One `<td>` set as a header over a value column, the label column
+    /// left empty or given to the units: `Annual Output`, or a contents
+    /// page's `Page`.
+    StyledOne,
     /// Values: text in a `<td>` not set as a header.
     Data,
     /// Anything else: a row of one label, set bold (`Revenues`), or a
@@ -922,7 +934,14 @@ fn row_kind(marks: &[CellMark]) -> RowKind {
     if filled.is_empty() {
         return RowKind::Blank;
     }
-    if filled.iter().any(|m| !m.th && !m.styled) {
+    // The heads: every filled cell but a units caption in the label column,
+    // which a filer sets plain beside heads that are bold or ruled.
+    let heads: Vec<(usize, &CellMark)> = marks
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| m.filled && !(*i == 0 && m.caption && !m.th))
+        .collect();
+    if heads.iter().any(|(_, m)| !m.th && !m.styled) {
         return RowKind::Data;
     }
     let first_th = marks.iter().position(|m| m.th);
@@ -932,8 +951,18 @@ fn row_kind(marks: &[CellMark]) -> RowKind {
             cells: filled.len(),
         };
     }
-    if filled.len() >= 2 {
-        return RowKind::Styled;
+    // Two heads or more; or one over a value column, the label cell left
+    // empty or given to the units. One label alone in the label column is
+    // a band (`Revenues`).
+    if heads.len() >= 2 {
+        return RowKind::Styled {
+            labelled: heads[0].0 == 0,
+        };
+    }
+    // A lone figure ruled beneath is the line under the values before a
+    // subtotal, not a head.
+    if heads.first().is_some_and(|(i, m)| *i > 0 && !m.figure) {
+        return RowKind::StyledOne;
     }
     RowKind::Other
 }
@@ -957,12 +986,21 @@ fn row_kind(marks: &[CellMark]) -> RowKind {
 /// its last row of labels.
 fn header_rows(kinds: &[RowKind], thead: usize) -> usize {
     let values_follow = |from: usize| kinds[from..].contains(&RowKind::Data);
+    // The next row with text after `from`.
+    let next = |from: usize| kinds[from..].iter().find(|k| **k != RowKind::Blank);
     let mut end = thead;
     for (i, kind) in kinds.iter().enumerate().skip(thead) {
         let header = match kind {
             RowKind::Blank => continue,
             RowKind::Th { cells } => thead == 0 || *cells >= 2,
-            RowKind::Styled => values_follow(i + 1),
+            RowKind::Styled { .. } => values_follow(i + 1),
+            // One head over a column heads it when what follows is the
+            // body or more of the header. A styled row with a label of its
+            // own after it is a contents page's entry under its `Page`.
+            RowKind::StyledOne => {
+                values_follow(i + 1)
+                    && !matches!(next(i + 1), Some(RowKind::Styled { labelled: true }))
+            }
             RowKind::Data | RowKind::Other => false,
         };
         if !header {
@@ -971,6 +1009,43 @@ fn header_rows(kinds: &[RowKind], thead: usize) -> usize {
         end = i + 1;
     }
     end
+}
+
+/// A row of one head names a column of figures: `Annual Output` over
+/// output, a contents page's `Page` over page numbers. One over names and
+/// titles is a signature's line (`/s/ Jane Q. Signer` ruled above the
+/// signer), and is no header. Columns are counted by `colspan`.
+fn heads_over_figures(rows: &[Vec<(String, usize, usize)>], kinds: &mut [RowKind]) {
+    let spans = |row: &[(String, usize, usize)]| {
+        let mut c = 0usize;
+        row.iter()
+            .map(|(text, colspan, _)| {
+                let span = (c, c + (*colspan).max(1));
+                c = span.1;
+                (text.trim().to_string(), span)
+            })
+            .collect::<Vec<_>>()
+    };
+    for r in 0..rows.len() {
+        if kinds[r] != RowKind::StyledOne {
+            continue;
+        }
+        let Some((_, (a, b))) = spans(&rows[r])
+            .into_iter()
+            .skip(1)
+            .find(|(t, _)| !t.is_empty())
+        else {
+            continue;
+        };
+        let figures = rows[r + 1..].iter().any(|row| {
+            spans(row)
+                .iter()
+                .any(|(t, (x, y))| *x < b && a < *y && t.chars().any(|c| c.is_ascii_digit()))
+        });
+        if !figures {
+            kinds[r] = RowKind::Other;
+        }
+    }
 }
 
 /// Is this cell set as a header: ruled beneath, or bold throughout?
@@ -991,13 +1066,24 @@ fn style_of(h: &Handle) -> String {
 /// Does the cell draw a rule along its bottom edge: `border-bottom: 1px
 /// solid`, or `border-bottom-style: solid`? A rule on every side is a
 /// grid's, and says nothing of a header.
+///
+/// Any width above zero is a rule. Filings draw theirs at half a point
+/// (`border-bottom: 0.5pt solid #000`), which reading every width that
+/// began with a `0` as none took for no rule at all.
 fn ruled_below(cell: &Handle) -> bool {
     const LINES: &[&str] = &[
         "solid", "double", "dotted", "dashed", "groove", "ridge", "inset", "outset",
     ];
     style_of(cell).split(';').any(|d| match d.split_once(':') {
         Some(("border-bottom", v)) => {
-            !v.is_empty() && !v.contains("none") && !v.contains("hidden") && !v.starts_with('0')
+            // The width leads the shorthand when it is given first; the
+            // declaration's spaces are already gone (`0.5ptsolid#000`).
+            let width: String = v
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let zero = width.parse::<f64>().is_ok_and(|w| w <= 0.0);
+            !v.is_empty() && !v.contains("none") && !v.contains("hidden") && !zero
         }
         Some(("border-bottom-style", v)) => LINES.contains(&v),
         _ => false,
@@ -1053,10 +1139,19 @@ fn emit_table(table: &Handle, out: &mut Out) {
             // A table cell's text becomes a grid position, which has no
             // room for an anchor span; the link is dropped with it.
             let text = text_of(&cell).0;
+            let caption = {
+                let t = text.trim();
+                t.len() > 2 && t.starts_with('(') && t.ends_with(')')
+            };
             marks.push(CellMark {
                 filled: !text.is_empty(),
                 th,
                 styled: !th && !text.is_empty() && header_styled(&cell),
+                caption,
+                figure: !th
+                    && text.chars().any(|c| c.is_ascii_digit())
+                    && !text.chars().any(char::is_alphabetic)
+                    && bold_throughout(&cell, false) != Some(true),
             });
             cells.push((text, num_attr(&cell, "colspan"), num_attr(&cell, "rowspan")));
         }
@@ -1069,6 +1164,7 @@ fn emit_table(table: &Handle, out: &mut Out) {
     if rows.is_empty() {
         return;
     }
+    heads_over_figures(&rows, &mut kinds);
     let mut thead_trs = Vec::new();
     for c in children_of(table) {
         if tag_of(&c).as_deref() == Some("thead") {
@@ -1500,6 +1596,114 @@ mod tests {
              <tr><td style=\"border-bottom:1px solid\">B</td><td style=\"border-bottom:1px solid\">2</td></tr></table>",
             "<table><tr><td style=\"border-bottom:none\">A</td><td style=\"border-bottom-color:#000\">1</td></tr>\
              <tr><td>B</td><td>2</td></tr></table>",
+        ] {
+            assert_eq!(header(html).0, Some(0), "{html}");
+        }
+    }
+
+    #[test]
+    fn a_hairline_under_the_heads_is_a_rule() {
+        // A filing's unit caption over bold heads, each cell ruled beneath
+        // at half a point or less; the caption is plain.
+        for width in ["0.5pt", "0.75pt", ".5pt", "0.4px", "1px", "thin"] {
+            let r = format!("border-bottom:{width} solid #000");
+            let (n, _) = header(&format!(
+                "<table><tr><td style=\"{r}\">(in thousand tonnes)</td>\
+                 <td style=\"{r}\"><b>2024</b></td><td style=\"{r}\"><b>2023</b></td></tr>\
+                 <tr><td>North plant</td><td>1,240</td><td>1,180</td></tr>\
+                 <tr><td>South plant</td><td>615</td><td>590</td></tr></table>"
+            ));
+            assert_eq!(n, Some(1), "{width}");
+        }
+        // A width of zero draws nothing.
+        for width in ["0", "0px", "0.0pt"] {
+            let r = format!("border-bottom:{width} solid #000");
+            let (n, _) = header(&format!(
+                "<table><tr><td style=\"{r}\">A</td><td style=\"{r}\">1</td></tr>\
+                 <tr><td>B</td><td>2</td></tr><tr><td>C</td><td>3</td></tr></table>"
+            ));
+            assert_eq!(n, Some(0), "{width}");
+        }
+    }
+
+    #[test]
+    fn a_units_caption_or_an_empty_label_cell_leaves_the_heads_a_header() {
+        let r = "border-bottom:0.5pt solid #000";
+        // The units in the label column, plain, beside ruled year heads.
+        let (n, _) = header(&format!(
+            "<table><tr><td>(in millions)</td><td style=\"{r}\">2024</td><td style=\"{r}\">2023</td></tr>\
+             <tr><td>Northfield Power</td><td>214</td><td>198</td></tr>\
+             <tr><td>Lakeside Gas</td><td>11</td><td>12</td></tr></table>"
+        ));
+        assert_eq!(n, Some(1));
+        // One head over the value column, the label cell left empty.
+        let (n, _) = header(&format!(
+            "<table><tr><td style=\"{r}\">&#160;</td><td style=\"{r}\"><b>Annual Output</b></td></tr>\
+             <tr><td>North plant</td><td>1,240</td></tr><tr><td>South plant</td><td>615</td></tr></table>"
+        ));
+        assert_eq!(n, Some(1));
+        // A contents page's `Page` over its numbers, then a bold article
+        // with its page: the article is an entry, not a second header row.
+        let (n, _) = header(
+            "<table><tr><td></td><td><b>Page</b></td></tr>\
+             <tr><td><b>ARTICLE I DEFINITIONS</b></td><td><b>1</b></td></tr>\
+             <tr><td>Section 1.1 Definitions</td><td>1</td></tr>\
+             <tr><td><b>ARTICLE II TERM</b></td><td><b>5</b></td></tr></table>",
+        );
+        assert_eq!(n, Some(0));
+        // A signature ruled above the signer's name and title heads nothing.
+        let (n, _) = header(&format!(
+            "<table><tr><td></td><td style=\"{r}\">/s/ Jane Q. Signer</td></tr>\
+             <tr><td>By:</td><td>Jane Q. Signer</td></tr>\
+             <tr><td>Its:</td><td>President</td></tr></table>"
+        ));
+        assert_eq!(n, Some(0));
+        // A plain label that is no caption is a row's, and the row is data;
+        // a bold label alone in the label column is a band.
+        for html in [
+            format!(
+                "<table><tr><td>Net income</td><td style=\"{r}\">221</td><td style=\"{r}\">204</td></tr>\
+                 <tr><td>North</td><td>1</td><td>2</td></tr></table>"
+            ),
+            "<table><tr><td><b>Revenues</b></td><td></td></tr>\
+             <tr><td>North</td><td>1</td></tr></table>"
+                .to_string(),
+        ] {
+            assert_eq!(header(&html).0, Some(0), "{html}");
+        }
+    }
+
+    #[test]
+    fn one_head_over_every_value_column_beside_a_blank_corner_is_the_header() {
+        let r = "border-bottom:1px solid";
+        let (n, _) = header(&format!(
+            "<table><tr><td></td><td colspan=\"2\"><b>Year Ended December 31,</b></td></tr>\
+             <tr><td></td><td style=\"{r}\"><b>2024</b></td><td style=\"{r}\"><b>2023</b></td></tr>\
+             <tr><td>Revenue</td><td>120</td><td>110</td></tr>\
+             <tr><td>Costs</td><td>80</td><td>75</td></tr></table>"
+        ));
+        assert_eq!(n, Some(2));
+        // A year set bold over a single column of values heads it.
+        let (n, _) = header(
+            "<table><tr><td></td><td><b>2024</b></td></tr>\
+             <tr><td>Revenue</td><td>120</td></tr><tr><td>Costs</td><td>80</td></tr></table>",
+        );
+        assert_eq!(n, Some(1));
+    }
+
+    #[test]
+    fn emphasis_or_a_rule_beside_a_label_is_not_a_header() {
+        for html in [
+            // A key-value table's bold value.
+            "<table><tr><td>Borrower:</td><td><b>Acme Corp</b></td></tr>\
+             <tr><td>Amount:</td><td>$100</td></tr></table>",
+            // The figures underlined before a subtotal, with or without a
+            // label beside them.
+            "<table><tr><td>Cost of sales</td><td style=\"border-bottom:1px solid\">(60)</td>\
+             <td style=\"border-bottom:1px solid\">(50)</td></tr>\
+             <tr><td>Gross profit</td><td>40</td><td>40</td></tr></table>",
+            "<table><tr><td></td><td style=\"border-bottom:1px solid\">(60)</td></tr>\
+             <tr><td>Gross profit</td><td>40</td></tr></table>",
         ] {
             assert_eq!(header(html).0, Some(0), "{html}");
         }
