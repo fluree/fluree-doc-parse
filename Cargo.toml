@@ -45,3 +45,15 @@ unicode-normalization = "0.1"
 
 [profile.release]
 opt-level = 3
+# No symbol table in the binary: a fifth of its size (`fdoc` 20.2 -> 15.8 MB,
+# measured 2026-11-23) for no cost in build time or speed. This workspace's
+# code is built without debug info, and cargo's release default,
+# `strip = "debuginfo"`, already drops the standard library's, so the names
+# are all that is left to strip; `strip = false` is therefore not the inverse
+# of this setting but a larger binary (26.2 MB) carrying std's debug info. A
+# panic still names its file and line; only a backtrace loses its function
+# names (see docs/getting-started/install.md for a build that keeps them).
+# Link-time optimisation was measured too: thin LTO saves 0.2 MB more
+# and triples the rebuild after a one-line edit (12 -> 35 s), fat LTO 3 MB
+# more for a sevenfold rebuild (88 s), neither faster at run time.
+strip = true
