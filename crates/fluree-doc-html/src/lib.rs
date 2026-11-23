@@ -355,6 +355,41 @@ fn collect(h: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String
     }
 }
 
+/// Endings an ordinal sets raised after its number: `1st`, `2e`, `1er`, `3º`.
+const ORDINALS: &[&str] = &[
+    "st", "nd", "rd", "th", "e", "er", "re", "ère", "eme", "ème", "o", "a", "º", "ª",
+];
+
+/// Is a `<sup>` holding `mark`, set after the character `before`, a note's
+/// mark rather than part of the word?
+///
+/// Read into the word, a note's mark changes it: `April 2026` revised
+/// becomes `April 2026r`, and a footnoted `Acrylonitrile` becomes
+/// `Acrylonitrilea`. Raised text that belongs to the word stays in it: an
+/// exponent or a unit's power (`10⁶`, `m²`) and an ordinal's ending (`1st`,
+/// `1er`). So a mark is a symbol (`*`, `†`), letters after a word or after a
+/// number they are not the ordinal of, or a number after a word too long to
+/// be a unit (`Revenue¹`, not `km²`).
+fn footnote_mark(text_before: &str, mark: &str) -> bool {
+    let mark = mark.trim();
+    let Some(before) = text_before.chars().last().filter(|c| !c.is_whitespace()) else {
+        return false;
+    };
+    if mark.is_empty() || mark.chars().count() > 4 {
+        return false;
+    }
+    if mark.chars().all(|c| "*†‡§¶#".contains(c)) {
+        return true;
+    }
+    if mark.chars().all(char::is_alphabetic) {
+        return !(before.is_ascii_digit() && ORDINALS.contains(&mark.to_lowercase().as_str()));
+    }
+    let word = text_before.rsplit(char::is_whitespace).next().unwrap_or("");
+    mark.chars().all(|c| c.is_ascii_digit() || c == ',')
+        && word.chars().all(char::is_alphabetic)
+        && word.chars().count() >= 4
+}
+
 /// One node's contribution to the text [`collect`] gathers.
 fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
     match &node.data {
@@ -365,6 +400,9 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
                 return;
             }
             if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
+                out.push(' ');
+            }
+            if tag == "sup" && footnote_mark(out, &text_of(node).0) {
                 out.push(' ');
             }
             // Recorded around the recursion: an anchor's text is whatever
@@ -886,6 +924,149 @@ fn num_attr(h: &Handle, name: &str) -> usize {
         .unwrap_or(1)
 }
 
+/// What one cell of a row says about the row.
+struct CellMark {
+    /// It holds text.
+    filled: bool,
+    th: bool,
+    /// A `<td>` set as a header is: bold throughout, or ruled beneath.
+    styled: bool,
+}
+
+/// What a table row is, for finding where the header ends.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RowKind {
+    /// No text in any cell: a spacer.
+    Blank,
+    /// Its text is all in `<th>` cells. An empty `<td>` may stand before
+    /// them, the corner over the row labels.
+    Th { cells: usize },
+    /// Its text is in two cells or more, each a `<th>` or a `<td>` set as a
+    /// header: the header row a filer's table, an SEC inline-XBRL
+    /// statement among them, writes in `<td>`.
+    Styled,
+    /// Values: text in a `<td>` not set as a header.
+    Data,
+    /// Anything else: a row of one label, set bold (`Revenues`), or a
+    /// `<th>` label beside empty `<td>` values.
+    Other,
+}
+
+fn row_kind(marks: &[CellMark]) -> RowKind {
+    let filled: Vec<&CellMark> = marks.iter().filter(|m| m.filled).collect();
+    if filled.is_empty() {
+        return RowKind::Blank;
+    }
+    if filled.iter().any(|m| !m.th && !m.styled) {
+        return RowKind::Data;
+    }
+    let first_th = marks.iter().position(|m| m.th);
+    let empty_td_after_th = first_th.is_some_and(|f| marks[f..].iter().any(|m| !m.th));
+    if filled.iter().all(|m| m.th) && !(filled.len() == 1 && empty_td_after_th) {
+        return RowKind::Th {
+            cells: filled.len(),
+        };
+    }
+    if filled.len() >= 2 {
+        return RowKind::Styled;
+    }
+    RowKind::Other
+}
+
+/// How many rows from the top are the header.
+///
+/// HTML states its header, in `<th>` and `<thead>`, but not always both, and
+/// not always all of it:
+/// - With no `<thead>`, the header is the leading rows whose text is all in
+///   `<th>`, an empty `<td>` corner over the row labels notwithstanding.
+/// - A `<thead>` ends the header, except that rows of several `<th>` at the
+///   top of the body go on with it: a statistical table sets its units
+///   (`thousands of units`, `% change`) there, under the periods. A single
+///   `<th>` across the table there is a band over the rows beneath it, not
+///   a header row.
+/// - A filer's table sets its header in `<td>` cells, bold or ruled
+///   beneath, and nothing else so. Such leading rows are the header when
+///   rows of plain values follow.
+///
+/// Blank spacer rows inside the header are part of it; the header ends at
+/// its last row of labels.
+fn header_rows(kinds: &[RowKind], thead: usize) -> usize {
+    let values_follow = |from: usize| kinds[from..].contains(&RowKind::Data);
+    let mut end = thead;
+    for (i, kind) in kinds.iter().enumerate().skip(thead) {
+        let header = match kind {
+            RowKind::Blank => continue,
+            RowKind::Th { cells } => thead == 0 || *cells >= 2,
+            RowKind::Styled => values_follow(i + 1),
+            RowKind::Data | RowKind::Other => false,
+        };
+        if !header {
+            break;
+        }
+        end = i + 1;
+    }
+    end
+}
+
+/// Is this cell set as a header: ruled beneath, or bold throughout?
+fn header_styled(cell: &Handle) -> bool {
+    ruled_below(cell) || bold_throughout(cell, false) == Some(true)
+}
+
+/// An element's inline style, lowercase and without whitespace.
+fn style_of(h: &Handle) -> String {
+    attr_of(h, "style")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// Does the cell draw a rule along its bottom edge: `border-bottom: 1px
+/// solid`, or `border-bottom-style: solid`? A rule on every side is a
+/// grid's, and says nothing of a header.
+fn ruled_below(cell: &Handle) -> bool {
+    const LINES: &[&str] = &[
+        "solid", "double", "dotted", "dashed", "groove", "ridge", "inset", "outset",
+    ];
+    style_of(cell).split(';').any(|d| match d.split_once(':') {
+        Some(("border-bottom", v)) => {
+            !v.is_empty() && !v.contains("none") && !v.contains("hidden") && !v.starts_with('0')
+        }
+        Some(("border-bottom-style", v)) => LINES.contains(&v),
+        _ => false,
+    })
+}
+
+fn bold_style(h: &Handle) -> bool {
+    let style = style_of(h);
+    style.split(';').any(|d| {
+        d.strip_prefix("font-weight:").is_some_and(|w| {
+            matches!(w, "bold" | "bolder") || w.parse::<u32>().is_ok_and(|n| n >= 600)
+        })
+    })
+}
+
+/// Is every word under this node set bold? `None` where it holds no text.
+fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
+    let bold = inherited || bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong"));
+    let mut seen = None;
+    for c in h.children.borrow().iter() {
+        let here = match &c.data {
+            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => Some(bold),
+            NodeData::Element { .. } if !skipped(c) => bold_throughout(c, bold),
+            _ => None,
+        };
+        match here {
+            Some(false) => return Some(false),
+            Some(true) => seen = Some(true),
+            None => {}
+        }
+    }
+    seen
+}
+
 /// Build the flat grid, carrying `colspan` / `rowspan` into the model's merge
 /// flags — the same convention DOCX's gridSpan/vMerge map to and the PDF
 /// engine derives from ruling.
@@ -894,60 +1075,51 @@ fn emit_table(table: &Handle, out: &mut Out) {
     rows_under(table, &mut trs);
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
-    let mut header_rows = 0usize;
-    let mut saw_body = false;
+    let mut kinds: Vec<RowKind> = Vec::new();
     for tr in &trs {
         let mut cells = Vec::new();
-        let mut all_th = true;
+        let mut marks = Vec::new();
         for cell in children_of(tr) {
-            match tag_of(&cell).as_deref() {
-                Some("th") => {}
-                Some("td") => all_th = false,
+            let th = match tag_of(&cell).as_deref() {
+                Some("th") => true,
+                Some("td") => false,
                 _ => continue,
-            }
-            cells.push((
-                // A table cell's text becomes a grid position, which has no
-                // room for an anchor span; the link is dropped with it.
-                text_of(&cell).0,
-                num_attr(&cell, "colspan"),
-                num_attr(&cell, "rowspan"),
-            ));
+            };
+            // A table cell's text becomes a grid position, which has no
+            // room for an anchor span; the link is dropped with it.
+            let text = text_of(&cell).0;
+            marks.push(CellMark {
+                filled: !text.is_empty(),
+                th,
+                styled: !th && !text.is_empty() && header_styled(&cell),
+            });
+            cells.push((text, num_attr(&cell, "colspan"), num_attr(&cell, "rowspan")));
         }
         if cells.is_empty() {
             continue;
         }
-        // A leading run of all-`th` rows is the header — HTML states it,
-        // unlike a PDF where it has to be measured.
-        if all_th && !saw_body {
-            header_rows += 1;
-        } else {
-            saw_body = true;
-        }
+        kinds.push(row_kind(&marks));
         rows.push(cells);
     }
     if rows.is_empty() {
         return;
     }
-    // A `<thead>`, where there is one, is where the header ends: a `<th>`
-    // spanning the table at the top of `<tbody>` is a group heading
-    // (`scope="rowgroup"`), a band over the rows beneath it.
     let mut thead_trs = Vec::new();
     for c in children_of(table) {
         if tag_of(&c).as_deref() == Some("thead") {
             rows_under(&c, &mut thead_trs);
         }
     }
-    if !thead_trs.is_empty() {
-        let n = thead_trs
-            .iter()
-            .filter(|tr| {
-                children_of(tr)
-                    .iter()
-                    .any(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
-            })
-            .count();
-        header_rows = n.min(rows.len());
-    }
+    let thead = thead_trs
+        .iter()
+        .filter(|tr| {
+            children_of(tr)
+                .iter()
+                .any(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
+        })
+        .count()
+        .min(rows.len());
+    let header_rows = header_rows(&kinds, thead);
     let width = rows
         .iter()
         .map(|r| r.iter().map(|c| c.1).sum::<usize>())
@@ -1291,6 +1463,95 @@ mod tests {
         let t = &els[0];
         assert_eq!(t.header_rows, Some(1));
         assert_eq!(t.cells.as_ref().unwrap()[1], vec!["2024", "12"]);
+    }
+
+    fn header(html: &str) -> (Option<usize>, Vec<Vec<String>>) {
+        let els = parse(html);
+        let t = els
+            .iter()
+            .find(|e| e.kind == "doco:Table")
+            .expect("a table");
+        (t.header_rows, t.cells.clone().unwrap())
+    }
+
+    #[test]
+    fn a_units_row_of_th_under_the_thead_goes_on_with_the_header() {
+        let (n, cells) = header(
+            "<table><thead><tr><th></th><th>March<br/>2026</th><th>April<br/>2026<sup>r</sup></th>\
+             <th>March to April 2026</th></tr></thead><tbody>\
+             <tr><th></th><th>thousands of units</th><th>thousands of units</th><th>% change</th></tr>\
+             <tr><th>North</th><td>1,204</td><td>1,250</td><td>3.8</td></tr>\
+             <tr><th>South</th><td>980</td><td>1,011</td><td>3.2</td></tr></tbody></table>",
+        );
+        assert_eq!(n, Some(2));
+        // A revised mark is a note on the header, not part of its year.
+        assert_eq!(cells[0][2], "April 2026 r");
+    }
+
+    #[test]
+    fn an_empty_td_corner_does_not_make_a_header_row_data() {
+        let (n, _) = header(
+            "<table><tr><td></td><th colspan=\"2\">12-month rate (%)</th><th colspan=\"2\">1-month rate (%)</th></tr>\
+             <tr><td></td><th>May 2026</th><th>June 2026</th><th>May 2026</th><th>June 2026</th></tr>\
+             <tr><th>All items</th><td>3.6</td><td>3.7</td><td>0.4</td><td>0.5</td></tr>\
+             <tr><th>Food</th><td>2.1</td><td>2.4</td><td>0.2</td><td>0.3</td></tr></table>",
+        );
+        assert_eq!(n, Some(2));
+        // A label beside empty values is a row, not a header.
+        let (n, _) = header(
+            "<table><tr><th>Region</th><td></td><td></td></tr>\
+             <tr><th>North</th><td>1</td><td>2</td></tr><tr><th>South</th><td>3</td><td>4</td></tr></table>",
+        );
+        assert_eq!(n, Some(0));
+    }
+
+    #[test]
+    fn a_filers_header_in_bold_or_ruled_td_cells_is_the_header() {
+        let ruled = "font-weight:bold;border-bottom:1px solid #000";
+        let (n, _) = header(&format!(
+            "<table><tr><td style=\"{ruled}\">Region</td><td style=\"{ruled}\">2024</td>\
+             <td style=\"{ruled}\">2023</td></tr>\
+             <tr><td>North</td><td>120</td><td>110</td></tr><tr><td>South</td><td>95</td><td>90</td></tr></table>"
+        ));
+        assert_eq!(n, Some(1));
+        // As an SEC statement sets it: two rows of bold labels, spans and a
+        // spacer row, then a bold band over the values, which is not header.
+        let (n, cells) = header(
+            "<table><tr><td></td><td colspan=\"2\" style=\"font-weight:bold\">Three months ended</td>\
+               <td colspan=\"2\" style=\"font-weight:bold\">Nine months ended</td></tr>\
+             <tr><td></td><td></td><td></td><td></td><td></td></tr>\
+             <tr><td><b>(in millions)</b></td><td><b>2018</b></td><td><b>2017</b></td>\
+               <td style=\"border-bottom: 1px solid\">2018</td><td style=\"border-bottom-style:solid\">2017</td></tr>\
+             <tr><td><b>Revenues</b></td><td></td><td></td><td></td><td></td></tr>\
+             <tr><td>Premiums</td><td>321.1</td><td>282.8</td><td>914.5</td><td>750.6</td></tr></table>",
+        );
+        assert_eq!(n, Some(3));
+        assert_eq!(cells[3][0], "Revenues");
+        // Bold everywhere is emphasis, not a header; so is a grid's rule on
+        // every cell.
+        for html in [
+            "<table><tr><td><b>A</b></td><td><b>1</b></td></tr><tr><td><b>B</b></td><td><b>2</b></td></tr></table>",
+            "<table><tr><td style=\"border-bottom:1px solid\">A</td><td style=\"border-bottom:1px solid\">1</td></tr>\
+             <tr><td style=\"border-bottom:1px solid\">B</td><td style=\"border-bottom:1px solid\">2</td></tr></table>",
+            "<table><tr><td style=\"border-bottom:none\">A</td><td style=\"border-bottom-color:#000\">1</td></tr>\
+             <tr><td>B</td><td>2</td></tr></table>",
+        ] {
+            assert_eq!(header(html).0, Some(0), "{html}");
+        }
+    }
+
+    #[test]
+    fn a_raised_note_mark_stands_apart_and_a_power_does_not() {
+        let t = |html: &str| parse(html)[0].text.clone();
+        assert_eq!(
+            t("<p>Acrylonitrile<sup>a</sup> and Revenue<sup>1</sup></p>"),
+            "Acrylonitrile a and Revenue 1"
+        );
+        assert_eq!(t("<p>Net income<sup>*</sup></p>"), "Net income *");
+        assert_eq!(
+            t("<p>10 m<sup>2</sup>, 10<sup>6</sup>, the 1<sup>st</sup> and 2<sup>e</sup></p>"),
+            "10 m2, 106, the 1st and 2e"
+        );
     }
 
     #[test]

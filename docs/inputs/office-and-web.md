@@ -301,6 +301,33 @@ not make a table data when it holds a table or sits in a single row,
 because email frameworks set their columns in `<th>`. A data table inside a
 layout table is still read as a table.
 
+A data table's **header** is the rows at its top that label the columns:
+
+- With no `<thead>`, the leading rows whose text is all in `<th>` cells. An
+  empty `<td>` before them, the corner over the row labels, does not make
+  such a row data; a `<th>` label beside empty `<td>` values does.
+- A `<thead>` ends the header, except that rows of several `<th>` at the top
+  of the body go on with it: a statistical table sets its units there
+  (`thousands of units`, `% change`) under the periods. A single `<th>`
+  across the table there is a band over the rows beneath it.
+- A filer's table, as an SEC filing sets it, writes its header in `<td>`
+  cells, bold or ruled beneath (`font-weight: bold`, `border-bottom`), and
+  nothing else so. Leading rows of two such cells or more are the header
+  when rows of plain values follow. A single bold label in the first column
+  (`Revenues`) is a band, not a header row, and bold or a rule on every row
+  is emphasis or a grid.
+
+Under a header of several rows, a column's `doc:columnHeader` is its labels
+from the top down, joined with ` / ` (`Three months ended September 30, /
+2018`). A label spanning columns names each of them, so a value set beside
+its currency sign is under the period above both.
+
+A raised note mark is kept apart from the word it marks: `April 2026<sup>r</sup>`
+reads `April 2026 r`, and `Expenses<sup>1</sup>` reads `Expenses 1`. Raised
+text that belongs to the word stays in it: a unit's power
+(`m<sup>2</sup>` reads `m2`), an exponent (`10<sup>6</sup>`, `106`) and an
+ordinal's ending (`1<sup>st</sup>`, `1st`).
+
 In Rust, `fluree_doc_html::parse_with_quote_depth` returns beside the
 elements how many cited quotations enclose each one: a `<blockquote>` with
 `type="cite"` or a `cite` address, Gmail's `gmail_quote`, and the containers
