@@ -66,6 +66,7 @@ pub mod info;
 pub(crate) mod ligature;
 pub mod line;
 pub mod link;
+pub(crate) mod marked;
 pub mod outline;
 pub mod overlay;
 

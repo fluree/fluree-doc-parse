@@ -185,6 +185,146 @@ struct Collector {
     /// Glyphs drawn as U+FFFD, by index into `glyphs`, with their family and
     /// outline, to be read by shape once the document's letters are known.
     unread: Vec<(usize, String, kurbo::BezPath)>,
+    /// The page's marked content as its streams begin it, for the
+    /// ActualText the device is not told; see [`crate::marked`].
+    marks: crate::marked::Marks,
+    /// The marked content open now, innermost last: the outermost one that
+    /// states ActualText carries it, with the glyphs drawn inside it.
+    open: Vec<Option<Spoken>>,
+}
+
+/// Marked content whose ActualText stands for the glyphs drawn inside it.
+struct Spoken {
+    text: String,
+    /// `glyphs.len()` when it began: the glyphs drawn inside it follow.
+    start: usize,
+    /// Of those, the ones that put ink on the page.
+    inked: Vec<usize>,
+}
+
+/// Most glyphs one ActualText may be given to whole, as the cluster a
+/// shaper drew for it: a few. A longer span stated otherwise than one
+/// character a glyph is not a cluster, and its glyphs keep their own text.
+const MAX_CLUSTER: usize = 8;
+
+/// An ActualText as it can stand for ink: tabs and line breaks read as
+/// spaces and other control characters dropped. `None` when what is left
+/// says nothing but spacing and punctuation — a tab, a soft hyphen, a space
+/// a producer marks over a leader, the dots of the leader itself — which
+/// are the layout's to read from the page, or holds U+FFFD, which says
+/// nothing at all.
+fn spoken(text: &str) -> Option<String> {
+    let s: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\t' | '\n' | '\r' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect();
+    let format = |c: char| {
+        matches!(
+            c,
+            '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}'
+        )
+    };
+    let says = s.chars().any(|c| {
+        !c.is_whitespace() && !format(c) && !c.is_ascii_punctuation() && !is_punctuation(c)
+    });
+    (says && !s.contains('\u{FFFD}')).then_some(s)
+}
+
+/// A punctuation mark outside ASCII: dashes, quotation marks, the ellipsis,
+/// CJK and full-width stops and brackets.
+fn is_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2010}'..='\u{2027}' | '\u{2030}'..='\u{205E}' | '\u{3001}'..='\u{3003}' | '\u{3008}'..='\u{3011}'
+            | '\u{FF01}'..='\u{FF0F}' | '\u{FF1A}'..='\u{FF20}' | '\u{00A1}' | '\u{00A7}' | '\u{00AB}'
+            | '\u{00B6}' | '\u{00B7}' | '\u{00BB}' | '\u{00BF}'
+    )
+}
+
+impl Collector {
+    /// Give the glyphs a span drew the text its ActualText states for them.
+    ///
+    /// Taken only where it corrects the glyphs' own text: when the span inks
+    /// something, on one line, and says more than the glyphs say already. A
+    /// producer also states ActualText for the case a style changed — the
+    /// heading set in capitals says `ecent` over the drawn `ECENT`, and only
+    /// over some of its letters — and there the drawn capitals are the text
+    /// a reader sees, and stay.
+    fn speak(&mut self, span: Spoken) {
+        let Some(said) = spoken(&span.text) else {
+            return;
+        };
+        let Some(&first) = span.inked.first() else {
+            return;
+        };
+        let lead = &self.glyphs[first];
+        let size = span
+            .inked
+            .iter()
+            .map(|&i| self.glyphs[i].font_size as f64)
+            .fold(0.0, f64::max)
+            .max(1.0);
+        let (sin, cos) = (lead.rotation_deg as f64).to_radians().sin_cos();
+        let one_line = span.inked.iter().all(|&i| {
+            let g = &self.glyphs[i];
+            let (dx, dy) = (g.origin.0 - lead.origin.0, g.origin.1 - lead.origin.1);
+            g.rotation_bucket() == lead.rotation_bucket()
+                && (dx * sin + dy * cos).abs() <= 0.5 * size
+        });
+        if !one_line {
+            return;
+        }
+        let range = span.start..self.glyphs.len();
+        let drawn: String = self.glyphs[range.clone()]
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect();
+        let solid = |s: &str| -> String {
+            crate::text::normalize(s)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect()
+        };
+        let (was, now) = (solid(&drawn), solid(&said));
+        if was == now || was.to_lowercase() == now.to_lowercase() {
+            return;
+        }
+        let chars: Vec<char> = said.chars().collect();
+        let letters: Vec<char> = chars
+            .iter()
+            .copied()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if chars.len() == range.len() {
+            // One character a glyph, in drawing order.
+            for (g, c) in self.glyphs[range.clone()].iter_mut().zip(&chars) {
+                g.text = c.to_string();
+            }
+        } else if letters.len() == span.inked.len() {
+            // One letter an inked glyph; the spaces drawn between keep
+            // theirs.
+            for (&i, c) in span.inked.iter().zip(&letters) {
+                self.glyphs[i].text = c.to_string();
+            }
+        } else if span.inked.len() <= MAX_CLUSTER {
+            // A cluster stated whole: the first mark carries it.
+            for i in range.clone() {
+                self.glyphs[i].text = if i == first {
+                    said.trim().to_string()
+                } else {
+                    String::new()
+                };
+            }
+        } else {
+            return;
+        }
+        // Their text is stated now, not left to be read from their shape.
+        self.unread.retain(|(i, ..)| !range.contains(i));
+    }
 }
 
 impl<'a> Device<'a> for Collector {
@@ -267,6 +407,25 @@ impl<'a> Device<'a> for Collector {
     }
     fn pop_clip_path(&mut self) {}
     fn pop_transparency_group(&mut self) {}
+
+    fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
+        let actual = self.marks.begin(tag, mcid);
+        let outer = self.open.iter().any(Option::is_some);
+        self.open.push(match actual {
+            Some(text) if !outer => Some(Spoken {
+                text,
+                start: self.glyphs.len(),
+                inked: Vec::new(),
+            }),
+            _ => None,
+        });
+    }
+
+    fn end_marked_content(&mut self) {
+        if let Some(Some(span)) = self.open.pop() {
+            self.speak(span);
+        }
+    }
 
     fn draw_glyph(
         &mut self,
@@ -408,6 +567,17 @@ impl<'a> Device<'a> for Collector {
         let draw_index = self.glyphs.len();
         if let Some((family, outline)) = unread {
             self.unread.push((draw_index, family, outline));
+        }
+        // A glyph inside a span that states its text: note it if it puts
+        // ink down. A Type3 glyph has no box yet but draws all the same,
+        // unless it is a space.
+        let inks = bbox.is_some()
+            || (!matches!(glyph, HGlyph::Outline(_))
+                && (text.is_empty() || !text.trim().is_empty()));
+        if inks {
+            if let Some(span) = self.open.iter_mut().flatten().next() {
+                span.inked.push(draw_index);
+            }
         }
         self.ink.push(ink);
         self.glyphs.push(Glyph {
@@ -784,6 +954,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             ink: Vec::new(),
             letters: std::mem::take(&mut letters),
             unread: Vec::new(),
+            marks: crate::marked::Marks::read(page),
+            open: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -799,6 +971,12 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             settings.clone(),
         );
         interpret_page(page, &mut ctx, &mut dev);
+        // A span the page left open still covers what it drew.
+        while let Some(open) = dev.open.pop() {
+            if let Some(span) = open {
+                dev.speak(span);
+            }
+        }
         letters = std::mem::take(&mut dev.letters);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let mut page = Page {
@@ -1105,6 +1283,126 @@ mod tests {
         let mut pages = vec![page(200)];
         infer_weights(&mut pages, &ink(180, 20, 0.90));
         assert!(pages[0].glyphs.iter().all(|g| g.weight.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod actual_text_tests {
+    use super::*;
+
+    fn glyph(text: &str, x: f64, y: f64, inked: bool) -> Glyph {
+        Glyph {
+            text: text.into(),
+            bbox: inked.then_some(BBox {
+                x0: x,
+                y0: y - 8.0,
+                x1: x + 5.0,
+                y1: y + 2.0,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            advance: Some(5.0),
+            draw_index: 0,
+        }
+    }
+
+    /// The glyphs' text after a span stating `said` covers all of them.
+    fn spoken_over(glyphs: Vec<Glyph>, said: &str) -> Vec<String> {
+        let inked = (0..glyphs.len())
+            .filter(|&i| glyphs[i].bbox.is_some())
+            .collect();
+        let mut c = Collector {
+            page: 0,
+            glyphs,
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            page_box: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 600.0,
+                y1: 800.0,
+            },
+            ink: Vec::new(),
+            letters: crate::ligature::Letters::default(),
+            unread: Vec::new(),
+            marks: crate::marked::Marks::default(),
+            open: Vec::new(),
+        };
+        c.speak(Spoken {
+            text: said.into(),
+            start: 0,
+            inked,
+        });
+        c.glyphs.into_iter().map(|g| g.text).collect()
+    }
+
+    #[test]
+    fn a_radical_reads_as_the_ideograph_the_span_states() {
+        assert_eq!(
+            spoken_over(vec![glyph("\u{2ED8}", 0.0, 10.0, true)], "青"),
+            ["青"]
+        );
+    }
+
+    #[test]
+    fn a_cluster_stated_whole_goes_to_its_first_mark() {
+        let g = vec![glyph("", 0.0, 10.0, true), glyph("", 5.0, 10.0, true)];
+        assert_eq!(
+            spoken_over(g, "\u{0915}\u{094D}\u{0937}"),
+            ["\u{0915}\u{094D}\u{0937}", ""]
+        );
+    }
+
+    #[test]
+    fn letters_stated_one_for_one_keep_their_spaces() {
+        let g = vec![
+            glyph("h", 0.0, 10.0, true),
+            glyph(" ", 5.0, 10.0, false),
+            glyph("h", 10.0, 10.0, true),
+        ];
+        assert_eq!(spoken_over(g, "l l"), ["l", " ", "l"]);
+    }
+
+    #[test]
+    fn a_styled_case_a_leader_or_two_lines_keep_the_drawn_text() {
+        // Capitals a style drew over lower-case text.
+        let caps: Vec<Glyph> = "ECENT"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| glyph(&c.to_string(), i as f64 * 5.0, 10.0, true))
+            .collect();
+        assert_eq!(spoken_over(caps, "ecent").concat(), "ECENT");
+        // A leader's dots, stated with spaces between.
+        let mut dots = vec![glyph(" ", 0.0, 10.0, false)];
+        dots.extend((1..16).map(|i| glyph(".", i as f64 * 3.0, 10.0, true)));
+        assert_eq!(
+            spoken_over(dots, &". ".repeat(16)).concat(),
+            " ..............."
+        );
+        // A span that runs onto the next line.
+        let wrapped = vec![glyph("a", 0.0, 10.0, true), glyph("b", 0.0, 24.0, true)];
+        assert_eq!(spoken_over(wrapped, "xy"), ["a", "b"]);
+    }
+
+    #[test]
+    fn spacing_and_punctuation_state_nothing() {
+        for said in [
+            "\t",
+            "\u{00AD}",
+            "\u{2002}",
+            "\u{0007}",
+            ". . . .",
+            "\u{2026}",
+            "a\u{FFFD}",
+        ] {
+            assert_eq!(spoken(said), None, "{said:?}");
+        }
+        assert_eq!(spoken("fi").as_deref(), Some("fi"));
+        assert_eq!(spoken("x\ty").as_deref(), Some("x y"));
     }
 }
 

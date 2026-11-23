@@ -153,16 +153,20 @@ may cross a cell boundary.
 
 ## Normalization
 
-The text is NFKC-normalized, so ligatures are already decomposed — `ﬁnd`
-became `find` before your regex ran. This is what makes a search for `profile`
-find all six occurrences rather than one. Normalize your query the same way if
-it might contain composed forms:
+A PDF's ligatures are already read as letters — `ﬁnd` became `find` before
+your regex ran. This is what makes a search for `profile` find all six
+occurrences rather than one.
+
+Every other character is kept as the document prints it: `µm` (MICRO SIGN),
+`½`, `™`, full-width `（２）`, `m³` and `H₂O`. A PDF's text is in NFC; put
+your query in NFC too:
 
 ```python
 import unicodedata
-pattern = unicodedata.normalize("NFKC", user_query)
+pattern = unicodedata.normalize("NFC", user_query)
 ```
 
-Superscripts and subscripts are the exception: the text keeps `m³` and `H₂O`
-as printed, while NFKC folds them to `m3` and `H2O`. A query that contains
-them should keep them too.
+Do not fold the query with NFKC: it turns `µ` into the Greek `μ`, `½` into
+`1⁄2` and `™` into `TM`, and the pattern no longer matches the text. If your
+queries may spell a character differently from the document, match both
+spellings in the pattern (`[µμ]m`).

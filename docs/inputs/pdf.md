@@ -98,11 +98,22 @@ unit. Raised text that belongs to its word stays in it: a unit's power
 (`cm3`), an exponent (`10⁶`, `2ᵖ`), an ordinal's ending (`1st`) and a
 formula's index (`ρwLv²`, `Vol(∂Ω)ⁿ`).
 
-**NFKC normalization.** Ligatures arrive as single codepoints; searching
-un-normalized output for `profile` finds one occurrence in six. Normalization
+**Text the producer states.** Where a PDF wraps what it draws in marked
+content with `/ActualText`, that text stands for the glyphs inside: a browser
+states `青` over a glyph its font maps to the radical `⻘`, and some producers
+state the digits of a page number whose glyphs map to nothing. It is taken
+when it says more than the glyphs do. Text that only restates the drawn
+letters in another case (a heading set in capitals over lower-case text), or
+that holds nothing but spacing and punctuation (a tab, a soft hyphen, a dot
+leader), leaves the glyphs as drawn.
+
+**Characters as printed.** Text keeps the characters the PDF's text layer
+gives, as the other formats keep theirs: `µm`, `½`, `™`, `（２）`, `m³/h`.
+Ligatures arrive as single codepoints, and searching for `profile` would find
+one occurrence in six, so they are read as their letters, as are the other
+presentation forms and a Kangxi radical a font names for an ideograph. That
 can change string length, so the engine keeps a bijective map between raw
-glyph offsets and normalized text offsets. Superscripts and subscripts are
-kept as printed (`m³/h`, `H₂O`) rather than folded to plain digits.
+glyph offsets and text offsets. See [normalization](../formats/text.md#normalization).
 
 Measured Unicode resolution: **99.97%** on a 200-document Latin corpus,
 **99.73%** on CJK, with **zero** replacement characters on Japanese and

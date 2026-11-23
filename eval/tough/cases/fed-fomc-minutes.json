@@ -26,6 +26,12 @@
       "found": "2026-11-17",
       "issue": "As above, from the title.",
       "text": "Minutes of the Federal Open Market Committee January 30–31, 2024"
+    },
+    {
+      "id": "fractions-stay-fractions",
+      "found": "2026-11-23",
+      "issue": "Text was NFKC-folded, which spells a vulgar fraction as digit, fraction slash, digit: the target range 5¼ to 5½ percent read 51⁄4 to 51⁄2.",
+      "text": "maintain the target range for the federal funds rate at 5¼ to 5½ percent at this meeting"
     }
   ]
 }

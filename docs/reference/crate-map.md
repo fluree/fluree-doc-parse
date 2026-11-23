@@ -81,7 +81,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | encoding_rs | email charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |
-| unicode-normalization | NFKC | MIT OR Apache-2.0 |
+| unicode-normalization | NFC, reading PDF presentation forms | MIT OR Apache-2.0 |
 
 No copyleft anywhere in the tree — run `cargo tree` to verify. This is a
 release constraint rather than a preference: the engine is meant to be

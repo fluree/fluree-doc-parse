@@ -1121,10 +1121,10 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     }
 
     let bbox = bbox?;
-    // NFKC here (super- and subscripts kept) so line text is directly usable
-    // by NER and search. The raw offsets that resolve to bounding boxes live
-    // in `glyphs`, so normalizing the display text costs us nothing (T1.4 in
-    // eval/TEST_PLAN.md).
+    // Normalized here (ligatures read as letters; see `text::fold`) so line
+    // text is directly usable by NER and search. The raw offsets that resolve
+    // to bounding boxes live in `glyphs`, so normalizing the display text
+    // costs us nothing (T1.4 in eval/TEST_PLAN.md).
     let text = crate::text::normalize(text.trim());
     if text.is_empty() {
         return None;
@@ -1494,14 +1494,14 @@ mod tests {
     #[test]
     fn no_geometric_spaces_between_cjk_characters() {
         // Full-width glyphs advance wider than the Latin word threshold; a
-        // space here would corrupt `（別紙２）` into `( 別 紙 2 )`.
+        // space here would corrupt `（別紙２）` into `（ 別 紙 ２ ）`.
         let v = vec![
             g("\u{FF08}", 0.0, 0.0, 9.0, 0.0),
             g("\u{5225}", 12.0, 0.0, 9.0, 0.0),
             g("\u{7D19}", 24.0, 0.0, 9.0, 0.0),
         ];
         let lines = assemble(&v);
-        assert_eq!(lines[0].text, "(別紙", "no spaces between CJK chars");
+        assert_eq!(lines[0].text, "（別紙", "no spaces between CJK chars");
     }
 
     #[test]
@@ -1643,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn line_text_is_nfkc_normalized() {
+    fn line_text_reads_ligatures_as_letters() {
         let v = vec![
             g("pro", 0.0, 0.0, 15.0, 0.0),
             g("\u{FB01}", 15.0, 0.0, 5.0, 0.0),

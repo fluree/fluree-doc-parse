@@ -178,12 +178,13 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
         .map(|p| (p.element, p.begin))
 }
 
-/// Fold one character the way [`crate::line`] normalises
-/// line text (NFKC, keeping super- and subscripts).
+/// One character as the span lookup compares it (see
+/// [`crate::text::match_key`]).
 ///
-/// Line text is normalised on the way into the projection; glyph text keeps
-/// whatever the font's ToUnicode said. So the two spell the same character
-/// differently — a font emitting MICRO SIGN (U+00B5) against a projection
+/// Glyph text keeps whatever the font's ToUnicode said, line text is read
+/// on the way into the projection, and a needle may have been normalised
+/// again by whoever holds it. So the three can spell the same character
+/// differently — a font emitting MICRO SIGN (U+00B5) against a needle
 /// carrying GREEK SMALL LETTER MU (U+03BC), or a ﬁ ligature glyph standing
 /// for the two letters it draws. Comparing raw, every such span failed to
 /// resolve and the caller drew no highlight at all.
@@ -192,14 +193,14 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
 /// string maps position→glyph, and a whole-string normalisation could compose
 /// across a glyph boundary and desynchronise that mapping.
 fn fold(c: char) -> impl Iterator<Item = char> {
-    crate::text::fold(c)
+    crate::text::match_key(c)
 }
 
 /// Locate a string among a page's glyphs, preferring a match inside `within`.
 ///
 /// Glyph text carries no synthetic spaces, so the needle is compared with
 /// whitespace removed — the same reason link anchors are matched that way —
-/// and NFKC-folded so it meets the projection's normalisation (see [`fold`]).
+/// and folded so it meets the projection's normalisation (see [`fold`]).
 ///
 /// Kept as the reference implementation — rebuild the index, search it —
 /// against which the differential test holds [`SpanResolver`]'s cached form.
@@ -216,7 +217,7 @@ fn glyph_range_for(page: &Page, needle: &str, within: BBox) -> Option<(usize, us
 /// is why [`SpanResolver`] holds one per page rather than letting every span
 /// rebuild it. Depends only on the page, so caching it changes no result.
 pub struct PageIndex {
-    /// Every non-whitespace glyph character, NFKC-folded, concatenated.
+    /// Every non-whitespace glyph character, folded, concatenated.
     flat: String,
     /// `flat` character position → the glyph index that drew it.
     owner: Vec<usize>,
@@ -415,12 +416,12 @@ mod tests {
         assert_eq!(r[0].x1, 10.0);
     }
 
-    /// A font's ToUnicode and the text projection legitimately spell the
-    /// same character differently — the projection is NFKC-normalised on
-    /// the way in, glyph text is not. Comparing raw, "0.22 μm" (GREEK MU,
-    /// as the projection carries it) never located the glyphs drawing
-    /// "0.22 µm" (MICRO SIGN, as the font emits it), so the span resolved
-    /// to no highlight at all and a reviewer saw an unannotated page.
+    /// A font's ToUnicode and a needle legitimately spell the same
+    /// character differently — a needle normalised by whoever holds it,
+    /// glyph text as the font gave it. Comparing raw, "0.22 μm" (GREEK MU)
+    /// never located the glyphs drawing "0.22 µm" (MICRO SIGN, as the font
+    /// emits it), so the span resolved to no highlight at all and a
+    /// reviewer saw an unannotated page.
     #[test]
     fn micro_sign_glyphs_match_a_greek_mu_needle() {
         let within = BBox {
