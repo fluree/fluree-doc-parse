@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "cree-noctura-install.pdf",
+    "url": "https://cree.widen.net/content/9yzz8vhx6p/original/Noctura-Series-B-Wall-Mount-Install-Guide---Small_LPN00628X0001A1_A.pdf?u=wk1zzb&download=true",
+    "sha256": "e2f1f1f18974f51e54a258713f2185e037bdd5e39353c79adcd59be79086d482",
+    "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables."
+  },
+  "notes": [
+    "Taking the callouts for furniture is #42. Here the check is that furniture never takes characters out of a cell's text: a short string only as the whole cell, a longer one only as whole words."
+  ],
+  "checks": [
+    {
+      "id": "torque-kept",
+      "found": "2026-11-23",
+      "issue": "The callout 3 was cut out of the torque specification: Serrer les vis à 0 po-lb ( , Nm).",
+      "text": "Serrer les vis à 30 po-lb"
+    },
+    {
+      "id": "torque-in-newton-metres-kept",
+      "found": "2026-11-23",
+      "issue": "As above, for 3,3 Nm: the paragraph and the table cell each print it.",
+      "text": "(3,3 Nm)",
+      "count": 2
+    },
+    {
+      "id": "step-numbers-kept",
+      "found": "2026-11-23",
+      "issue": "The step numbers were cut out of their headings: STEP :.",
+      "no_text": "STEP :"
+    }
+  ]
+}

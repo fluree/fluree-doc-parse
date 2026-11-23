@@ -51,6 +51,15 @@ cells, and the match has to tolerate how the same text varies:
 An independent VLM labelling of the same page agrees with these deterministic
 furniture decisions line for line.
 
+A match is cut from a cell only as whole words: no letter or digit may run
+on into it, nor a number through a decimal or grouping mark. A short string
+(three characters or fewer, or nothing but numbers, such as a figure's
+callouts `1` to `7`) is cut only where it is the whole cell. Matched as a
+substring, a callout taken for furniture took its digit out of every cell
+that held it: `Serrer les vis à 30 po-lb (3,3 Nm)` read `0 po-lb ( , Nm)`,
+and an OCR'd newspaper whose stray letters were furniture lost every `r`
+and `e` from its table.
+
 Paragraphs are scrubbed too, for a header or footer that merged into a line of
 its own block on one page. There the match is held to where such a leak can
 be: the start or end of a block that reaches into the page's top or bottom
