@@ -1411,15 +1411,23 @@ fn is_image_file(path: &Path) -> bool {
 /// its manifest record. Its scale is 1: the page's units are its pixels.
 fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Value, String> {
     let mut image = fluree_doc_image::decode(bytes)?;
-    // A transparent screenshot is black ink on nothing: flattened by a
-    // reader that drops the alpha channel, it would be black on black.
-    for p in image.pixels.data.chunks_exact_mut(4) {
-        let a = u16::from(p[3]);
-        for c in &mut p[..3] {
-            *c = ((u16::from(*c) * a + 255 * (255 - a)) / 255) as u8;
+    // Written in the layout it was decoded in. A transparent screenshot is
+    // black ink on nothing: flattened by a reader that drops the alpha
+    // channel, it would be black on black, so it is laid on white here.
+    let color = match image.pixels.layout {
+        fluree_doc_vision::Layout::Luma8 => png::ColorType::Grayscale,
+        fluree_doc_vision::Layout::Rgb8 => png::ColorType::Rgb,
+        fluree_doc_vision::Layout::Rgba8 => {
+            for p in image.pixels.data.chunks_exact_mut(4) {
+                let a = u16::from(p[3]);
+                for c in &mut p[..3] {
+                    *c = ((u16::from(*c) * a + 255 * (255 - a)) / 255) as u8;
+                }
+                p[3] = 255;
+            }
+            png::ColorType::Rgba
         }
-        p[3] = 255;
-    }
+    };
     let doc = fluree_doc_image::document(&image);
     let reason = match fluree_doc_pdf::route::decide(&doc.pages[0]).0 {
         fluree_doc_pdf::route::Route::Vlm(r) => fluree_doc_pdf::escalate::CropReason::from(r),
@@ -1438,7 +1446,7 @@ fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Val
         image.pixels.width,
         image.pixels.height,
     );
-    enc.set_color(png::ColorType::Rgba);
+    enc.set_color(color);
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header()
         .and_then(|mut w| w.write_image_data(&image.pixels.data))

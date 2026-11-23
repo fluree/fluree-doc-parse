@@ -28,6 +28,8 @@ use std::io::Cursor;
 /// An image decoded upright.
 #[derive(Debug, Clone)]
 pub struct Decoded {
+    /// In the layout the image holds: grey, RGB, or RGBA only where it has
+    /// transparency.
     pub pixels: Pixels,
     /// One bit per pixel as stored (a fax, a bitonal scan).
     pub bitonal: bool,
@@ -126,18 +128,20 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, String> {
     // A missing or unreadable orientation tag leaves the image as stored.
     let mut decoder = decoder;
     let orientation = decoder.orientation().ok();
-    let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
+    // Eight bits a channel before it is turned, so a quarter turn copies the
+    // smaller image.
+    let mut img = eight_bit(DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?);
     if let Some(o) = orientation {
         img.apply_orientation(o);
     }
-    // Converted in place where it already is RGBA, the common case for a
-    // screenshot; any other layout is copied once.
-    let rgba = match img {
-        DynamicImage::ImageRgba8(rgba) => rgba,
-        other => other.to_rgba8(),
+    let (w, h) = (img.width(), img.height());
+    let (layout, data) = match img {
+        DynamicImage::ImageLuma8(b) => (Layout::Luma8, b.into_raw()),
+        DynamicImage::ImageRgb8(b) => (Layout::Rgb8, b.into_raw()),
+        // Not reached: `eight_bit` gives one of the three.
+        other => (Layout::Rgba8, other.into_rgba8().into_raw()),
     };
-    let (w, h) = rgba.dimensions();
-    let pixels = Pixels::new(w, h, Layout::Rgba8, rgba.into_raw()).ok_or("the image is empty")?;
+    let pixels = Pixels::new(w, h, layout, data).ok_or("the image is empty")?;
     let more_pages = format == Some(image::ImageFormat::Tiff) && tiff_pages(bytes) > 1;
     let truncated = format == Some(image::ImageFormat::Jpeg) && !jpeg_is_whole(bytes);
     Ok(Decoded {
@@ -146,6 +150,20 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, String> {
         more_pages,
         truncated,
     })
+}
+
+/// `img` in the layout it holds, eight bits a channel: grey stays one byte a
+/// pixel (a one-bit fax too), colour three, and only an image with
+/// transparency takes four. Kept as it is when it already is one of those.
+fn eight_bit(img: DynamicImage) -> DynamicImage {
+    use DynamicImage::{ImageLuma8, ImageRgb8, ImageRgba8};
+    let color = img.color();
+    match img {
+        ImageLuma8(_) | ImageRgb8(_) | ImageRgba8(_) => img,
+        other if color.has_alpha() => ImageRgba8(other.into_rgba8()),
+        other if color.has_color() => ImageRgb8(other.into_rgb8()),
+        other => ImageLuma8(other.into_luma8()),
+    }
 }
 
 /// What the image's header says: its size upright, whether it is one bit
@@ -426,6 +444,45 @@ mod tests {
         assert_eq!((d.pixels.width, d.pixels.height), (100, 300));
         let doc = document(&d);
         assert_eq!((doc.pages[0].width, doc.pages[0].height), (100.0, 300.0));
+    }
+
+    #[test]
+    fn an_image_is_decoded_in_the_layout_it_holds() {
+        let encode = |img: DynamicImage, format| {
+            let mut out = Vec::new();
+            img.write_to(&mut Cursor::new(&mut out), format).unwrap();
+            out
+        };
+        let grey = image::GrayImage::from_pixel(30, 10, image::Luma([200]));
+        let d = decode(&encode(grey.clone().into(), image::ImageFormat::Png)).unwrap();
+        assert_eq!((d.pixels.layout, d.pixels.data.len()), (Layout::Luma8, 300));
+        let rgb = image::RgbImage::from_pixel(30, 10, image::Rgb([1, 2, 3]));
+        let d = decode(&encode(rgb.into(), image::ImageFormat::Png)).unwrap();
+        assert_eq!(d.pixels.layout, Layout::Rgb8);
+        // Sixteen bits of grey are one byte of grey.
+        let deep =
+            image::ImageBuffer::<image::Luma<u16>, _>::from_pixel(30, 10, image::Luma([0x8000]));
+        let d = decode(&encode(
+            DynamicImage::ImageLuma16(deep),
+            image::ImageFormat::Png,
+        ))
+        .unwrap();
+        assert_eq!((d.pixels.layout, d.pixels.data[0]), (Layout::Luma8, 0x80));
+        // Grey with transparency keeps it, and reads as paper.
+        let clear = image::GrayAlphaImage::from_pixel(30, 10, image::LumaA([0, 0]));
+        let d = decode(&encode(clear.into(), image::ImageFormat::Png)).unwrap();
+        assert_eq!(d.pixels.layout, Layout::Rgba8);
+        assert_eq!(d.pixels.to_rgb()[..3], [255, 255, 255]);
+        // A grey photo turned upright stays grey.
+        let mut jpeg = Vec::new();
+        DynamicImage::ImageLuma8(image::GrayImage::from_pixel(300, 100, image::Luma([90])))
+            .write_to(&mut Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .unwrap();
+        let d = decode(&with_exif_orientation(&jpeg, 6)).unwrap();
+        assert_eq!(
+            (d.pixels.width, d.pixels.height, d.pixels.layout),
+            (100, 300, Layout::Luma8)
+        );
     }
 
     #[test]

@@ -298,6 +298,32 @@ fn an_image_crop_is_upright_opaque_and_named_for_its_page() {
 }
 
 #[test]
+fn a_grey_image_is_cropped_grey() {
+    // A grey scan's crop holds one byte a pixel, as the scan does.
+    let dir = scratch("grey-crop");
+    let input = dir.join("scan.png");
+    image::GrayImage::from_fn(40, 20, |x, _| image::Luma([if x < 20 { 255 } else { 0 }]))
+        .save_with_format(&input, image::ImageFormat::Png)
+        .unwrap();
+    let crops = dir.join("crops");
+    let status = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["dev", "render-routed"])
+        .arg(&input)
+        .arg(&crops)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let crop = image::open(crops.join("scan_p0_full.png")).unwrap();
+    assert_eq!(crop.color(), image::ColorType::L8);
+    let crop = crop.to_luma8();
+    assert_eq!(
+        (crop.get_pixel(5, 5).0, crop.get_pixel(30, 5).0),
+        ([255], [0])
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn an_image_ocr_left_unread_goes_to_the_configured_model() {
     // Words for another image only, and a model configured (with a key it
     // cannot use, so nothing leaves the machine): the image goes to it.
