@@ -24,7 +24,7 @@ fn capture() -> (u32, u32, Vec<u8>) {
         &vec![(0, None)],
         |_, _| 4.0,
         |c| {
-            let gray = c.pixels.rgba.chunks_exact(4).map(|p| p[0]).collect();
+            let gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
             out = (c.pixels.width, c.pixels.height, gray);
         },
     );

@@ -250,7 +250,9 @@ fn marker_shaped(text: &str) -> bool {
 /// each reads as the other's bullet. Both vanished from every chart in an
 /// annual report, leaving four figures with no years attached — the text was in
 /// the glyph layer, and in the assembled lines, and disappeared here.
-fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
+///
+/// `before` and `after` are the lines either side of it in the column.
+fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f64) -> bool {
     let n = l.text.chars().filter(|c| !c.is_whitespace()).count();
     if n == 0 || n > MAX_MARKER_CHARS {
         return false;
@@ -258,10 +260,33 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     if !marker_shaped(&l.text) {
         return false;
     }
-    let Some(nb) = neighbour else { return false };
-    if l.text.chars().any(char::is_alphanumeric)
-        && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0)
-    {
+    // Four digits are a year or an amount, never a list's ordinal: a chart's
+    // `2027` before its `Longer run` label.
+    let digits = l.text.trim();
+    if digits.len() >= 4 && digits.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let Some(nb) = after.or(before) else {
+        return false;
+    };
+    let worded = l.text.chars().any(char::is_alphanumeric);
+    if worded && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
+        return false;
+    }
+    // A number next to a number is a row of tick labels or figures, not a
+    // list number and its item: `2023` before `2024` on a chart's axis,
+    // `0.51` over `0.38` on a drawing, the `4.7` under a histogram bin's
+    // `4.6−`. Being at the left edge does not prove it, because a column
+    // may hold nothing else.
+    let number = |n: &Line| marker_shaped(&n.text) && n.text.chars().any(|c| c.is_ascii_digit());
+    if worded && [before, after].into_iter().flatten().any(number) {
+        return false;
+    }
+    // A list number sits on its item's first line. One a line or more above
+    // the text it would introduce is a label of its own: a drawing's pin `8`
+    // over the `SYMM` mark below it.
+    let fs = (l.font_size.max(nb.font_size) as f64).max(1.0);
+    if worded && (l.bbox.y1.min(nb.bbox.y1) - l.bbox.y0.max(nb.bbox.y0)) < -fs * 0.5 {
         return false;
     }
     let smaller = (l.font_size as f64) < nb.font_size as f64 * 0.92;
@@ -271,7 +296,7 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
 
 /// Group one page's lines into blocks, given the document's modal leading.
 pub fn assemble(lines: &[Line], leading: f64) -> Vec<Block> {
-    assemble_with_marks(lines, leading, &[], &[])
+    assemble_with_marks(lines, leading, &[], &[], &[])
 }
 
 /// The fill a line sits in: the smallest one that spans it horizontally and
@@ -317,14 +342,48 @@ fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
     })
 }
 
+/// The centers of the inked characters an OCR reading added to a page,
+/// sorted by y: what block assembly keeps apart from the page's own lines.
+pub fn ocr_centers(page: &crate::extract::Page) -> Vec<(f64, f64)> {
+    if page.ocr.is_none() {
+        return Vec::new();
+    }
+    let mut v: Vec<(f64, f64)> = page
+        .glyphs
+        .iter()
+        .filter(|g| page.is_ocr(g) && !g.text.trim().is_empty())
+        .filter_map(|g| g.bbox)
+        .map(|b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5))
+        .collect();
+    v.sort_by(|a, b| a.1.total_cmp(&b.1));
+    v
+}
+
+/// Whether OCR read any of a line's characters: one of `ocr`, the centers of
+/// the characters a reading added sorted by y, lies in the line's box.
+fn read_by_ocr(l: &Line, ocr: &[(f64, f64)]) -> bool {
+    let from = ocr.partition_point(|c| c.1 < l.bbox.y0);
+    ocr[from..]
+        .iter()
+        .take_while(|c| c.1 <= l.bbox.y1)
+        .any(|c| l.bbox.contains(c.0, c.1))
+}
+
 /// Assemble blocks, treating each supplied checkbox as a list marker — the
 /// line it introduces starts its own block and carries the marker — and each
 /// supplied fill as a band no block crosses; see [`band_of`].
+///
+/// `ocr` holds the centers of the characters an OCR reading added to the
+/// page, sorted by y. A line OCR read never joins a line the page drew in a
+/// block, however the geometry reads: a screenshot pasted under a paragraph,
+/// set at its size and pitch, would otherwise continue it, and the element's
+/// provenance could then say only one of the two.
 pub fn assemble_with_marks(
     lines: &[Line],
     leading: f64,
     checkboxes: &[BBox],
     bands: &[BBox],
+    ocr: &[(f64, f64)],
 ) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
     let right_edge = lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
@@ -334,10 +393,8 @@ pub fn assemble_with_marks(
     let mut content: Vec<Line> = Vec::new();
     let mut markers: Vec<Line> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
-        let neighbour = lines
-            .get(i + 1)
-            .or_else(|| i.checked_sub(1).and_then(|j| lines.get(j)));
-        if is_marker(l, neighbour, left_edge) {
+        let before = i.checked_sub(1).and_then(|j| lines.get(j));
+        if is_marker(l, before, lines.get(i + 1), left_edge) {
             markers.push(l.clone());
         } else {
             content.push(l.clone());
@@ -351,6 +408,7 @@ pub fn assemble_with_marks(
     // Lines a checkbox introduces, by index into `lines`.
     let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
+    let read: Vec<bool> = lines.iter().map(|l| read_by_ocr(l, ocr)).collect();
     let mut marked: Vec<usize> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
         if cur.is_empty() {
@@ -361,9 +419,11 @@ pub fn assemble_with_marks(
             continue;
         }
         // A checkbox always begins a new option, however the geometry reads,
-        // and a fill's edge is a row's edge.
+        // a fill's edge is a row's edge, and pixels read are not the page's
+        // own text.
         if !ticked[i]
             && band[i] == band[i - 1]
+            && read[i] == read[i - 1]
             && continues(cur.last().unwrap(), l, leading, right_edge, span)
         {
             cur.push(l.clone());
@@ -743,7 +803,7 @@ mod tests {
                 y1: i as f64 * 11.0 + 7.0,
             })
             .collect();
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], &[]);
         assert_eq!(b.len(), 3, "one block per option, got {b:?}");
         assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{2610}")));
     }
@@ -761,9 +821,24 @@ mod tests {
             x1: 407.0,
             y1: 7.0,
         }];
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], &[]);
         assert_eq!(b.len(), 1);
         assert!(b[0].marker.is_none());
+    }
+
+    #[test]
+    fn a_line_ocr_read_does_not_continue_the_pages_own() {
+        let lines = vec![
+            l("first line of", 10.0, 0.0, 10.0),
+            l("the paragraph", 10.0, 12.0, 10.0),
+            l("read from pixels", 10.0, 24.0, 10.0),
+        ];
+        let c = &lines[2].bbox;
+        let ocr = [((c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5)];
+        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &[], &[]).len(), 1);
+        let b = assemble_with_marks(&lines, 1.2, &[], &[], &ocr);
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert_eq!(b[1].text(), "read from pixels");
     }
 
     #[test]
@@ -956,7 +1031,7 @@ mod tests {
                 y1: 46.0,
             },
         ];
-        let b = assemble_with_marks(&lines, 1.48, &[], &bands);
+        let b = assemble_with_marks(&lines, 1.48, &[], &bands, &[]);
         assert_eq!(b.len(), 2, "one block per band, got {b:?}");
         assert!(b[0].text().starts_with("Q12") && b[0].text().ends_with("materials"));
         assert!(b[1].text().starts_with("Q13"));
@@ -974,7 +1049,7 @@ mod tests {
             x1: 400.0,
             y1: 30.0,
         }];
-        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands).len(), 1);
+        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands, &[]).len(), 1);
     }
 
     #[test]
@@ -1130,6 +1205,79 @@ mod tests {
             "must attach to the containing paragraph"
         );
         assert_eq!(b[1].marker, None);
+    }
+
+    /// A short line `text` from `x0` to `x1` at `y`, `fs` points.
+    fn label(text: &str, x0: f64, x1: f64, y: f64, fs: f32) -> Line {
+        let mut line = l(text, x0, y, fs);
+        line.bbox.x1 = x1;
+        line
+    }
+
+    /// Whether `text` reached the output as a block's text, not consumed as
+    /// a marker.
+    fn kept(blocks: &[Block], text: &str) -> bool {
+        blocks
+            .iter()
+            .any(|b| b.text().split_whitespace().any(|w| w == text))
+    }
+
+    #[test]
+    fn tick_labels_alone_in_a_column_are_not_markers() {
+        // A chart's axis years, the column holding nothing else: each sits
+        // at the column's left edge, outdented from the next.
+        let lines = vec![
+            label("2023", 277.0, 292.0, 235.0, 8.0),
+            label("2024", 314.0, 330.0, 235.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "2023"), "{b:?}");
+        // A drawing's two dimensions, one set just under the other's row.
+        let lines = vec![
+            label("0.38", 380.0, 393.0, 328.0, 7.9),
+            label("0.51", 362.7, 376.2, 332.0, 7.9),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "0.51"), "{b:?}");
+        // A histogram bin's two halves over a smaller label.
+        let lines = vec![
+            label("4.6\u{2212}", 452.0, 462.0, 213.0, 6.2),
+            label("4.7", 454.0, 462.0, 220.0, 6.2),
+            label("Number of participants", 470.0, 540.0, 242.0, 5.3),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "4.7"), "{b:?}");
+    }
+
+    #[test]
+    fn a_year_is_not_a_list_number() {
+        // A chart's last year before its `Longer run` label, on one row.
+        let lines = vec![
+            label("2027", 426.0, 441.0, 235.0, 8.0),
+            label("Longer", 459.0, 483.0, 234.0, 8.0),
+            label("run", 464.0, 478.0, 241.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "2027"), "{b:?}");
+    }
+
+    #[test]
+    fn a_number_a_line_above_the_text_is_not_its_marker() {
+        // A drawing's pin number over the symmetry mark well below it.
+        let lines = vec![
+            label("8", 390.0, 394.0, 188.0, 8.0),
+            label("SYMM", 405.0, 428.0, 221.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(kept(&b, "8"), "{b:?}");
+        // On its item's row, it still numbers it.
+        let lines = vec![
+            label("8", 390.0, 394.0, 221.0, 8.0),
+            label("SYMM", 405.0, 428.0, 221.0, 8.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].marker.as_deref(), Some("8"));
     }
 
     #[test]

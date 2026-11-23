@@ -22,25 +22,76 @@ pub mod assets;
 #[cfg(feature = "oar")]
 pub mod oar;
 
-/// An image held in memory: 8-bit RGBA, rows top to bottom, no padding.
+/// How each pixel of [`Pixels`] is laid out: 8 bits a channel.
+///
+/// An image is held as it was decoded or rendered, so a grey scan or a fax
+/// costs one byte a pixel, not four; an engine converts it only if it reads
+/// another layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// One grey channel.
+    Luma8,
+    /// Red, green, blue.
+    Rgb8,
+    /// Red, green, blue, and alpha (not premultiplied): what is transparent
+    /// is paper, white.
+    Rgba8,
+}
+
+impl Layout {
+    /// Bytes a pixel.
+    pub fn channels(self) -> usize {
+        match self {
+            Layout::Luma8 => 1,
+            Layout::Rgb8 => 3,
+            Layout::Rgba8 => 4,
+        }
+    }
+}
+
+/// An image held in memory: rows top to bottom, no padding, each pixel as
+/// [`Layout`] says.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pixels {
     pub width: u32,
     pub height: u32,
-    /// `width * height * 4` bytes.
-    pub rgba: Vec<u8>,
+    pub layout: Layout,
+    /// `width * height * layout.channels()` bytes.
+    pub data: Vec<u8>,
 }
 
 impl Pixels {
-    /// `None` when the buffer does not hold `width * height` pixels.
-    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Option<Pixels> {
-        (width > 0 && height > 0 && rgba.len() == width as usize * height as usize * 4).then_some(
-            Pixels {
-                width,
-                height,
-                rgba,
-            },
-        )
+    /// `None` when the buffer does not hold `width * height` pixels of
+    /// `layout`.
+    pub fn new(width: u32, height: u32, layout: Layout, data: Vec<u8>) -> Option<Pixels> {
+        let size = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(layout.channels())?;
+        (width > 0 && height > 0 && data.len() == size).then_some(Pixels {
+            width,
+            height,
+            layout,
+            data,
+        })
+    }
+
+    /// The image as 8-bit RGB, composited over white: what an engine that
+    /// reads colour takes. A copy whatever the layout, since the caller
+    /// keeps its image.
+    pub fn to_rgb(&self) -> Vec<u8> {
+        match self.layout {
+            Layout::Rgb8 => self.data.clone(),
+            Layout::Luma8 => self.data.iter().flat_map(|&g| [g, g, g]).collect(),
+            Layout::Rgba8 => self
+                .data
+                .chunks_exact(4)
+                .flat_map(|p| {
+                    let a = p[3] as u16;
+                    let over = |c: u8| ((c as u16 * a + 255 * (255 - a)) / 255) as u8;
+                    [over(p[0]), over(p[1]), over(p[2])]
+                })
+                .collect(),
+        }
     }
 }
 
@@ -84,12 +135,17 @@ pub enum Coords {
     /// `width` and `height` scale it onto what the image shows.
     #[default]
     Px,
-    /// The units of the page the image is placed on, as displayed, y down:
-    /// the frame the output's boxes are in.
-    Pdf,
+    /// The units of the page the image is placed on, as displayed (after
+    /// `/Rotate`), y down: the frame the output's boxes are in. Not PDF user
+    /// space, whose y runs up and which is taken before the page is turned.
+    Page,
 }
 
 /// What an engine read in one image.
+///
+/// The `--ocr-words` sidecar format, and stable as such: a release changes
+/// or removes a field only as a breaking change; a new optional field may
+/// be added.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WordReading {
     #[serde(default)]
@@ -171,10 +227,25 @@ mod tests {
     }
 
     #[test]
+    fn pixels_hold_their_layout_and_read_as_rgb() {
+        // One pixel each: a grey, a colour, a half-transparent black.
+        let grey = Pixels::new(1, 1, Layout::Luma8, vec![40]).unwrap();
+        assert_eq!(grey.to_rgb(), [40, 40, 40]);
+        let colour = Pixels::new(1, 1, Layout::Rgb8, vec![1, 2, 3]).unwrap();
+        assert_eq!(colour.to_rgb(), [1, 2, 3]);
+        let half = Pixels::new(1, 1, Layout::Rgba8, vec![0, 0, 0, 128]).unwrap();
+        assert_eq!(half.to_rgb(), [127, 127, 127], "over white paper");
+        // A buffer sized for another layout is refused.
+        assert!(Pixels::new(2, 2, Layout::Luma8, vec![0; 16]).is_none());
+        assert!(Pixels::new(2, 2, Layout::Rgba8, vec![0; 4]).is_none());
+        assert!(Pixels::new(0, 2, Layout::Luma8, Vec::new()).is_none());
+    }
+
+    #[test]
     fn pixels_need_the_image_size() {
         let e = WordReading::from_json(r#"{"words": []}"#).unwrap_err();
         assert!(e.contains("width"), "{e}");
-        let pdf = WordReading::from_json(r#"{"coords": "pdf", "words": []}"#).unwrap();
-        assert_eq!(pdf.coords, Coords::Pdf);
+        let page = WordReading::from_json(r#"{"coords": "page", "words": []}"#).unwrap();
+        assert_eq!(page.coords, Coords::Page);
     }
 }

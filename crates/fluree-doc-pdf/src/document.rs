@@ -1227,10 +1227,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let contents_layout = is_contents_layout(&kept_columns);
         let checkboxes = crate::rule::checkboxes(&raw.pages[pi].fills);
         let bands: Vec<crate::geom::BBox> = raw.pages[pi].fills.iter().map(|f| f.bbox).collect();
+        let ocr = block::ocr_centers(&raw.pages[pi]);
         let block_columns: Vec<Vec<Block>> = timed(&mut timings.blocks, || {
             kept_columns
                 .iter()
-                .map(|col| block::assemble_with_marks(col, leading, &checkboxes, &bands))
+                .map(|col| block::assemble_with_marks(col, leading, &checkboxes, &bands, &ocr))
                 .collect()
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();

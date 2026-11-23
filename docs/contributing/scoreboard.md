@@ -186,6 +186,14 @@ nobody pays for them twice.
   coverage, missed-gutter count and line-fusion counts were all tested as
   discriminators between the documents escalation helps and hurts; all three
   overlap completely.
+- **Splicing only the structure of a whole-page reading on a doubt page.**
+  The page has all its text, so the idea was to keep the PDF's characters and
+  take only the hierarchy from the model's reading, aligned word by word.
+  Two versions: a tolerant alignment lost text on the hard pages, where the
+  two readings disagree most; a strict one (same words, same counts, else
+  refuse) refused most of the pages and gave back the gains the whole-page
+  reading earns (1.459 over the six heading-doubt documents, five of six
+  better). The model's reading replaces the doubt page whole.
 - **A separate table-structure model, in either role.** As the reading source
   it scores 0.892130, below the layout boxes alone. As a corroboration veto
   over the deep reader it scores 0.927005, below not having it. It earned its

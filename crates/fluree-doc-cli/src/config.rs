@@ -47,6 +47,29 @@ pub struct Ocr {
     pub models: Option<PathBuf>,
     /// ONNX Runtime threads per crop read (default 1).
     pub threads: Option<usize>,
+    /// Most crops the engine reads in one document (default
+    /// [`DEFAULT_OCR_MAX_CROPS`], `0` for no limit). Past it, pages read
+    /// whole come first, then routed regions, then small ones, and a note
+    /// says how many were left.
+    ///
+    /// Its own limit rather than `escalation.max_crops`: a scanned page is
+    /// one crop, so a model's budget of 200 would leave page 201 of a long
+    /// scan unread, and a crop costs a fraction of a second of this
+    /// machine's time rather than a paid call.
+    pub max_crops: Option<usize>,
+}
+
+/// Default for `ocr.max_crops`: enough for a thousand-page scan read whole.
+/// A form's checkbox and rule masks, which once made a crop each, never
+/// count toward it: an image too small to hold a line of text is not read
+/// (`route::MIN_TEXT_LINE_PX`).
+pub const DEFAULT_OCR_MAX_CROPS: usize = 1000;
+
+impl Ocr {
+    /// `max_crops`, or its default.
+    pub fn max_crops(&self) -> usize {
+        self.max_crops.unwrap_or(DEFAULT_OCR_MAX_CROPS)
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

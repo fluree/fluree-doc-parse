@@ -391,51 +391,69 @@ fn rejoin_spanning_lines(
             continue;
         }
 
-        let mut moved: Vec<Line> = Vec::new();
+        // Each fragment with the left line it continues, by index: the one
+        // the test found, so a fragment taken out is always put back. Of two
+        // that pass, the one it abuts: the nearest across the cut, then on
+        // the baseline.
+        let mut moved: Vec<(usize, Line)> = Vec::new();
         per_col[i + 1].retain(|r| {
             let fs = r.font_size.max(1.0) as f64;
             if (r.bbox.x0 - cut).abs() > fs * FLUSH {
                 return true;
             }
-            let matches = left_edges.iter().any(|(x1, y0, _, rot)| {
-                (x1 - cut).abs() < fs * FLUSH
-                    && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
-                    && (y0 - r.bbox.y0).abs() < fs * 0.5
-                    && *rot == r.rotation_bucket
-            });
-            if matches {
-                moved.push(r.clone());
-                false
-            } else {
-                true
+            let joins = left_edges
+                .iter()
+                .enumerate()
+                .filter(|(_, (x1, y0, _, rot))| {
+                    (x1 - cut).abs() < fs * FLUSH
+                        && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
+                        && (y0 - r.bbox.y0).abs() < fs * 0.5
+                        && *rot == r.rotation_bucket
+                })
+                .min_by(|(_, a), (_, b)| {
+                    let off = |(x1, y0, _, _): &(f64, f64, f64, i32)| {
+                        (r.bbox.x0 - x1).abs() + (y0 - r.bbox.y0).abs()
+                    };
+                    off(a).total_cmp(&off(b))
+                })
+                .map(|(at, _)| at);
+            match joins {
+                Some(at) => {
+                    moved.push((at, r.clone()));
+                    false
+                }
+                None => true,
             }
         });
         // An explicit space at either end of a fragment: line assembly trims
         // it, and a monospaced face draws it with no gap of its own to
-        // measure (`Screenshot|of what`).
-        let spaced = |at: Option<&usize>| {
-            at.and_then(|&g| glyphs.get(g))
+        // measure (`Screenshot|of what`). Only one drawn at the join counts:
+        // a space with no box is filed by its origin, and the line's first
+        // glyph can be an indent drawn at the far margin (`recommenda|tions`
+        // read as two words).
+        let spaced = |at: Option<&usize>, from: f64, to: f64| {
+            at.and_then(|&g| glyphs.get(g)).is_some_and(|g| {
                 // A glyph with no text resolved is no space.
-                .is_some_and(|g| !g.text.is_empty() && g.text.chars().all(char::is_whitespace))
+                !g.text.is_empty()
+                    && g.text.chars().all(char::is_whitespace)
+                    && (from..=to).contains(&g.origin.0)
+            })
         };
-        for m in moved {
-            if let Some(l) = per_col[i].iter_mut().find(|l| {
-                let fs = l.font_size.max(1.0) as f64;
-                (l.bbox.x1 - cut).abs() < fs * FLUSH && (l.bbox.y0 - m.bbox.y0).abs() < fs * 0.5
-            }) {
-                // Fragments of one word must not gain a space: rejoin exactly
-                // unless the geometry shows a real gap.
-                let fs = l.font_size.max(1.0) as f64;
-                let space = m.bbox.x0 - l.bbox.x1 > fs * SPACE_GAP_RATIO
-                    || spaced(l.glyphs.last())
-                    || spaced(m.glyphs.first());
-                if space && !l.text.ends_with(' ') {
-                    l.text.push(' ');
-                }
-                l.text.push_str(&m.text);
-                l.bbox = l.bbox.union(&m.bbox);
-                l.glyphs.extend(m.glyphs.iter().copied());
+        for (at, m) in moved {
+            let l = &mut per_col[i][at];
+            // Fragments of one word must not gain a space: rejoin exactly
+            // unless the geometry shows a real gap.
+            let fs = l.font_size.max(1.0) as f64;
+            let (from, to) = (l.bbox.x1 - fs, m.bbox.x0 + fs);
+            let space = m.bbox.x0 - l.bbox.x1 > fs * SPACE_GAP_RATIO
+                || spaced(l.glyphs.last(), from, to)
+                || spaced(m.glyphs.first(), from, to);
+            if space && !l.text.ends_with(' ') {
+                l.text.push(' ');
             }
+            l.text.push_str(&m.text);
+            l.bbox = l.bbox.union(&m.bbox);
+            l.glyphs.extend(m.glyphs.iter().copied());
         }
     }
 }
@@ -1685,8 +1703,42 @@ mod tests {
         // A glyph whose text never resolved is no space.
         let mut unresolved = glyphs.clone();
         unresolved[1].text = String::new();
-        let mut v = vec![vec![left], vec![right]];
+        let mut v = vec![vec![left.clone()], vec![right.clone()]];
         rejoin_spanning_lines(&mut v, &unresolved, &cols);
         assert_eq!(v[0][0].text, "Screenshotof");
+        // A space drawn far from the join — an indent at the margin, filed
+        // with the right fragment for want of a box — is no space at the cut.
+        let mut indented = glyphs.clone();
+        indented[1].origin.0 = 57.0;
+        right.glyphs = vec![1, 2, 3];
+        left.glyphs = vec![0];
+        let mut v = vec![vec![left], vec![right]];
+        rejoin_spanning_lines(&mut v, &indented, &cols);
+        assert_eq!(v[0][0].text, "Screenshotof");
+    }
+
+    #[test]
+    fn a_fragment_taken_from_its_column_is_joined_where_it_matched() {
+        // The fragment's size decides whether it is flush with the cut; a
+        // left line set much smaller sits 5 units short of it, too far by its
+        // own size. Taken out, the fragment must land on that line, not
+        // vanish.
+        let cols = vec![
+            crate::column::Column { x0: 0.0, x1: 100.0 },
+            crate::column::Column {
+                x0: 100.0,
+                x1: 300.0,
+            },
+        ];
+        let mut v = vec![
+            vec![ln("small print", 40.0, 95.0, 100.0, 2.0)],
+            vec![
+                ln("Large", 100.0, 160.0, 100.0, 10.0),
+                ln("body text", 120.0, 280.0, 300.0, 10.0),
+            ],
+        ];
+        rejoin_spanning_lines(&mut v, &[], &cols);
+        let texts: Vec<&str> = v.iter().flatten().map(|l| l.text.as_str()).collect();
+        assert!(texts.iter().any(|t| t.contains("Large")), "{texts:?}");
     }
 }

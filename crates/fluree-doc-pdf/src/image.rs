@@ -199,6 +199,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
                 texty: true,
                 ppi: None,
                 bitonal: false,
+                grid: (w, h),
             }],
             rules: Vec::new(),
             fills: Vec::new(),

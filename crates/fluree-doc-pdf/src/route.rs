@@ -49,6 +49,19 @@ const MIN_REGION_FRACTION: f64 = 0.10;
 /// caption grazing the box.
 const MAX_GLYPHS_IN_UNREAD_REGION: usize = 15;
 
+/// Fewest pixels an image needs on its short side to hold a line of text:
+/// its own pixels, whatever size it is drawn at.
+///
+/// Measured with the built-in engine (PP-OCRv6 small) on a line of sans
+/// serif set to fill images 5 to 20 px tall, a pixel of paper above and
+/// below: from 10 px it reads the line exactly; at 9 it runs two words
+/// together, at 8 it misreads letters and digits, at 6 and 7 every word,
+/// and at 5 it reads nothing usable. An engine scales what it reads up
+/// (to 736 px for detection, 48 px a line for recognition), which adds no
+/// strokes. So a checkbox drawn from an 8 × 8 mask or a rule stretched from
+/// a 1 × 1 one, which a page may hold by the hundred, is never read.
+pub const MIN_TEXT_LINE_PX: u32 = 10;
+
 /// Grid resolution for image-coverage union. Coarse is fine: the signal is
 /// "half the page", not a measurement.
 const COVERAGE_BINS: usize = 32;
@@ -133,15 +146,22 @@ pub fn signals(page: &Page) -> Signals {
     }
 }
 
-/// The raster regions of a text page whose pixels look like text and which
-/// the glyph layer does not cover, at least `min_fraction` of the page each,
-/// in the order the page places them.
+/// The raster regions of a text page whose pixels look like text, hold
+/// enough of them for a line of it ([`MIN_TEXT_LINE_PX`]), and which the
+/// glyph layer does not cover, at least `min_fraction` of the page each, in
+/// the order the page places them. An image drawn twice in one place (a
+/// stamp repeated, an image and its mask) is one region, at its first
+/// placement: it is read once.
 fn unread_regions(page: &Page, min_fraction: f64) -> Vec<BBox> {
     let page_area = (page.width * page.height).max(1.0);
-    page.images
+    let mut seen = std::collections::HashSet::new();
+    let mut regions: Vec<BBox> = Vec::new();
+    for b in page
+        .images
         .iter()
         .filter(|p| {
             if !p.texty
+                || p.grid.0.min(p.grid.1) < MIN_TEXT_LINE_PX
                 || (p.bbox.x1 - p.bbox.x0) * (p.bbox.y1 - p.bbox.y0) < min_fraction * page_area
             {
                 return false;
@@ -163,7 +183,12 @@ fn unread_regions(page: &Page, min_fraction: f64) -> Vec<BBox> {
             inside < MAX_GLYPHS_IN_UNREAD_REGION
         })
         .map(|p| p.bbox)
-        .collect()
+    {
+        if seen.insert([b.x0, b.y0, b.x1, b.y1].map(f64::to_bits)) {
+            regions.push(b);
+        }
+    }
+    regions
 }
 
 /// The regions an OCR engine reads on a page: the routed ones, numbered as
@@ -270,6 +295,7 @@ mod tests {
                     texty,
                     ppi: None,
                     bitonal: false,
+                    grid: (1000, 1000),
                 })
                 .collect(),
             rules: Vec::new(),
