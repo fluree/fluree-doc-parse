@@ -1017,6 +1017,7 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         };
         Block {
             lines: vec![l; lines.max(1)],

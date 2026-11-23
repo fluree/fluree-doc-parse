@@ -351,9 +351,8 @@ pub fn assemble_with_marks(
     bands: &[BBox],
 ) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
-    let right_edge = lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let edge = Edge::of(lines);
     let left_edge = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
-    let span = (right_edge - left_edge).max(1.0);
     // Separate markers first so they cannot act as block boundaries.
     let mut content: Vec<Line> = Vec::new();
     let mut markers: Vec<Line> = Vec::new();
@@ -386,9 +385,7 @@ pub fn assemble_with_marks(
         }
         // A checkbox always begins a new option, however the geometry reads,
         // and a fill's edge is a row's edge.
-        if !ticked[i]
-            && band[i] == band[i - 1]
-            && continues(cur.last().unwrap(), l, leading, right_edge, span)
+        if !ticked[i] && band[i] == band[i - 1] && continues(cur.last().unwrap(), l, leading, &edge)
         {
             cur.push(l.clone());
         } else {
@@ -459,7 +456,7 @@ pub fn assemble_with_marks(
     blocks
 }
 
-fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64) -> bool {
+fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge) -> bool {
     if prev.rotation_bucket != next.rotation_bucket {
         return false;
     }
@@ -469,12 +466,31 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     }
     let fs = prev.font_size.max(next.font_size).max(1.0) as f64;
 
+    // A bullet set at the head of its line begins an item, however the
+    // geometry reads: below a full line at body leading and the same indent,
+    // the items of a list ran together into one paragraph.
+    if strip_leading_bullet(&next.text).is_some() {
+        return false;
+    }
+
     // Weight change — a run-in heading. Very common in academic papers, where
     // a bold section title sits directly above body text *at the same size*, so
     // the font-size test below cannot see it. Measured case: `2 Depth
     // Up-Scaling` was absorbed into an 11-line paragraph and never reached
     // heading detection at all.
-    if prev.bold != next.bold {
+    //
+    // A line opening on a bold label begins a paragraph the same way: the
+    // label is the paragraph's run-in head (`PUMP: With stainless steel…`
+    // below `…and long life.`), and the space between such paragraphs is
+    // often too slight to part them.
+    //
+    // Unless the line before ran out of room. A heading ends its line where
+    // it ends, so a line the next word did not fit on goes on into the next
+    // whatever its weight: bold names in a sentence wrapped onto a line of
+    // their own (`…Sweden, and the` over `United Kingdom.`), or a run-in
+    // label wrapped onto a second line.
+    let run_in = next.opens_bold && !next.bold;
+    if (prev.bold != next.bold || run_in) && !edge.ran_out_of_room(prev, next) {
         return false;
     }
 
@@ -483,8 +499,9 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     if rel > FONT_SIZE_TOLERANCE {
         return false;
     }
-    let full =
-        |l: &Line| (l.bbox.x1 - (right_edge - span * (1.0 - FULL_LINE_FRACTION))) >= -f64::EPSILON;
+    let full = |l: &Line| {
+        (l.bbox.x1 - (edge.right - edge.span * (1.0 - FULL_LINE_FRACTION))) >= -f64::EPSILON
+    };
     let prev_full = full(prev);
     if rel > SIZE_STEP && !(prev_full && full(next)) {
         return false;
@@ -509,6 +526,80 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     }
 
     true
+}
+
+/// The right edge a column's text wraps at.
+struct Edge {
+    right: f64,
+    /// From the column's left edge to `right`.
+    span: f64,
+    /// Two lines running at least half way across end at `right`, within
+    /// an em: it is where the text wraps, not only where the widest line
+    /// happens to end.
+    agreed: bool,
+}
+
+impl Edge {
+    /// The rightmost end another long line also reaches. One line standing
+    /// out past the rest (a centred notice under two columns, kept with the
+    /// first) is not the measure, and taking it made no line of the column
+    /// full. Where no two long lines agree, the widest line is.
+    fn of(lines: &[Line]) -> Edge {
+        let left = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+        let mut ends: Vec<(f64, f64)> = lines
+            .iter()
+            .map(|l| (l.bbox.x1, l.font_size.max(1.0) as f64))
+            .collect();
+        ends.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let widest = ends.first().map_or(f64::MIN, |e| e.0);
+        let half = left + (widest - left) / 2.0;
+        let agreed = ends
+            .windows(2)
+            .find(|w| w[1].0 >= half && w[0].0 - w[1].0 <= w[0].1.max(w[1].1))
+            .map(|w| w[0].0);
+        let right = agreed.unwrap_or(widest);
+        Edge {
+            right,
+            span: (right - left).max(1.0),
+            agreed: agreed.is_some(),
+        }
+    }
+
+    /// `prev` was broken because the first word of `next` did not fit after
+    /// it: it breaks a word with a hyphen, or ends short of the edge by less
+    /// than that word, the test [`split_hard_breaks`] makes the other way
+    /// round.
+    ///
+    /// Never against an edge no other line agrees on: the widest line is
+    /// short of its own end by nothing, whatever follows it. And never for a
+    /// line a dot leader carries to the edge (a contents entry and its
+    /// page), which reaches it by design.
+    fn ran_out_of_room(&self, prev: &Line, next: &Line) -> bool {
+        if has_leader(&prev.text) {
+            return false;
+        }
+        let mut end = prev.text.chars().rev();
+        let breaks_word = matches!(end.next(), Some('-' | '\u{AD}'))
+            && end.next().is_some_and(char::is_alphabetic);
+        breaks_word || (self.agreed && self.right - prev.bbox.x1 < first_word_width(next))
+    }
+}
+
+/// Holds a dot leader: four or more dots in a run, spaced or not.
+fn has_leader(text: &str) -> bool {
+    let mut dots = 0;
+    for c in text.chars() {
+        match c {
+            '.' | '·' | '․' => dots += 1,
+            '…' => dots += 3,
+            ' ' => {}
+            _ => dots = 0,
+        }
+        if dots >= 4 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Width of a line's first word plus the space before it, estimated from the
@@ -722,6 +813,7 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         }
     }
 
@@ -852,6 +944,7 @@ mod tests {
         // A bold run-in heading above same-size body text.
         let mut h = l("2 Depth Up-Scaling", 10.0, 0.0, 10.0);
         h.bold = true;
+        h.bbox.x1 = 100.0;
         let lines = vec![
             h,
             l("To efficiently scale-up LLMs, we aim to", 10.0, 12.0, 10.0),
@@ -863,6 +956,175 @@ mod tests {
             "a bold heading must not absorb the paragraph below it"
         );
         assert_eq!(b[0].text(), "2 Depth Up-Scaling");
+    }
+
+    #[test]
+    fn a_line_out_of_room_goes_on_whatever_the_weight_below() {
+        // Bold names in a sentence, the last wrapped onto its own line.
+        let mut name = l("United Kingdom.", 10.0, 24.0, 10.0);
+        name.bold = true;
+        name.bbox.x1 = 90.0;
+        let lines = vec![
+            l(
+                "We identified 10 countries that do not restrict",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "land ownership: Belgium, France, Sweden, and the",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            name,
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 1);
+        assert!(b[0].text().ends_with("and the United Kingdom."));
+    }
+
+    #[test]
+    fn a_line_carried_to_the_edge_by_design_has_not_run_out_of_room() {
+        let bold = |text: &str, y: f64| {
+            let mut b = l(text, 10.0, y, 10.0);
+            b.bold = true;
+            b.bbox.x1 = 150.0;
+            b
+        };
+        // A contents entry, its leader running to the page number.
+        let lines = vec![
+            l(
+                "Summary . . . . . . . . . . . . . . . . . . . . . 1",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "Overview . . . . . . . . . . . . . . . . . . . . 3",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            bold("Part 1: Recent Developments", 24.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 2);
+        // A short rule set as a row of dashes breaks no word.
+        let mut dashes = l("----------", 10.0, 0.0, 10.0);
+        dashes.bbox.x1 = 60.0;
+        let lines = vec![dashes, bold("Product Name", 12.0)];
+        assert_eq!(assemble(&lines, 1.2).len(), 2);
+    }
+
+    #[test]
+    fn a_word_broken_at_a_hyphen_goes_on_whatever_the_weight_below() {
+        let mut label = l(
+            "STRAINER SYSTEM: Equipped with self-flush-",
+            10.0,
+            0.0,
+            10.0,
+        );
+        label.bbox.x1 = 250.0;
+        label.bold = true;
+        let lines = vec![
+            label,
+            l("ing, easily removable strainers", 10.0, 12.0, 10.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn a_line_opening_on_a_bold_label_begins_a_paragraph() {
+        let label = |text: &str, y: f64| {
+            let mut b = l(text, 10.0, y, 10.0);
+            b.opens_bold = true;
+            b
+        };
+        let mut last = l("trim panels are 20 gauge.", 10.0, 24.0, 10.0);
+        last.bbox.x1 = 120.0;
+        let lines = vec![
+            label("CONSTRUCTION: Drawn tank, tank shelf and feet", 0.0),
+            l(
+                "of 16 gauge stainless steel. Wash chamber and",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            last,
+            label("PUMP: With stainless steel pump and impeller", 36.0),
+            l(
+                "motor assures alignment and quiet operation.",
+                10.0,
+                48.0,
+                10.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 2);
+        assert!(b[1].text().starts_with("PUMP:"));
+    }
+
+    #[test]
+    fn a_bold_word_opening_a_wrapped_line_begins_nothing() {
+        let mut names = l("Germany, Ireland, Japan, the Netherlands", 10.0, 12.0, 10.0);
+        names.opens_bold = true;
+        let lines = vec![
+            l(
+                "We identified 10 countries: Belgium, France,",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            names,
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn a_bullet_at_the_head_of_a_line_begins_an_item() {
+        // Each item full or nearly, at body leading and the same indent.
+        let lines = vec![
+            l(
+                "• store at room temperature away from direct light",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "• keep the carton for full directions and warnings",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            l("• keep out of reach of children", 10.0, 24.0, 10.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 3);
+    }
+
+    #[test]
+    fn a_bold_line_wider_than_the_rest_has_not_run_out_of_room() {
+        // The widest line ends at its own end; no other line says the text
+        // wraps there.
+        let mut h = l("Results of the second survey round", 10.0, 0.0, 10.0);
+        h.bold = true;
+        let mut body = l("Most firms kept their staff.", 10.0, 12.0, 10.0);
+        body.bbox.x1 = 200.0;
+        assert_eq!(assemble(&[h, body], 1.2).len(), 2);
+    }
+
+    #[test]
+    fn one_line_standing_out_past_the_column_is_not_its_measure() {
+        // A centred notice under two columns, kept with the first, ends far
+        // past the column's lines.
+        let mut lines: Vec<Line> = (0..4)
+            .map(|k| l("column text", 10.0, 12.0 * k as f64, 10.0))
+            .collect();
+        let mut notice = l("As continued improvement is a policy", 80.0, 60.0, 10.0);
+        notice.bbox.x1 = 500.0;
+        lines.push(notice);
+        let edge = Edge::of(&lines);
+        assert!(edge.agreed);
+        assert_eq!(edge.right, 310.0);
     }
 
     #[test]

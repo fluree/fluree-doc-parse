@@ -124,8 +124,12 @@ pub struct Line {
     pub glyphs: Vec<usize>,
     /// Median font size — the primary heading signal downstream.
     pub font_size: f32,
-    /// True when most of the line's glyphs are bold.
+    /// Set in bold throughout: most of its glyphs bold, and its first and
+    /// last words with letters.
     pub bold: bool,
+    /// Its first word with a letter is bold: a bold line, or one opening on
+    /// a run-in label (`PUMP: With stainless steel pump…`).
+    pub opens_bold: bool,
     /// The first inked glyph is a superscript or subscript: a footnote's
     /// number, an affiliation mark. Set from the glyph sizes at assembly,
     /// where the fact is still visible — the text reads `95 Ibid.` either
@@ -1019,6 +1023,42 @@ const SPACE_INSIDE: f64 = 0.15;
 /// Marks this close, in ems, begin at the same place.
 const SPACE_SAME_PLACE: f64 = 0.02;
 
+/// The weight of one word of a line, from the glyphs of it that put ink
+/// down. A face that declares no weight counts as regular.
+#[derive(Default)]
+struct Word {
+    inked: usize,
+    heavy: usize,
+    letters: usize,
+    heavy_letters: usize,
+    /// Holds a letter or a digit.
+    spells: bool,
+}
+
+impl Word {
+    fn add(&mut self, g: &Glyph) {
+        let heavy = usize::from(g.weight.is_some_and(|w| w >= 600));
+        self.inked += 1;
+        self.heavy += heavy;
+        if g.text.chars().any(char::is_alphabetic) {
+            self.letters += 1;
+            self.heavy_letters += heavy;
+        }
+        self.spells |= g.text.chars().any(char::is_alphanumeric);
+    }
+
+    /// Mostly bold, by its letters where it has any. A bold face's digits
+    /// and signs are often set from another face that declares no weight
+    /// (`E3/E3x`, every letter 700 and neither `3` nor `/`).
+    fn bold(&self) -> bool {
+        if self.letters > 0 {
+            self.heavy_letters * 2 > self.letters
+        } else {
+            self.heavy * 2 > self.inked
+        }
+    }
+}
+
 fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -> Option<Line> {
     if idxs.is_empty() {
         return None;
@@ -1071,6 +1111,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut sizes: Vec<f32> = Vec::new();
     // A power being read: its size and baseline.
     let mut exponent: Option<(f32, f64)> = None;
+    let mut words: Vec<Word> = Vec::new();
 
     for (k, &i) in idxs.iter().enumerate() {
         let g = &glyphs[i];
@@ -1151,6 +1192,12 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(acc) => acc.union(&b),
                     None => b,
                 });
+                if text.is_empty() || text.ends_with(' ') {
+                    words.push(Word::default());
+                }
+                if let Some(w) = words.last_mut() {
+                    w.add(g);
+                }
                 if exponent.is_some() {
                     text.extend(g.text.chars().map(superscript));
                 } else {
@@ -1187,14 +1234,29 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let font_size = sizes[sizes.len() / 2];
 
-    // Most, not any: a single bold word inside a sentence does not make the
-    // line a heading.
-    let weighted = idxs.iter().filter(|&&i| glyphs[i].weight.is_some()).count();
-    let heavy = idxs
+    // Bold throughout, not in part: a bold word inside a sentence, or a
+    // bold label opening a paragraph, does not make the line a heading.
+    //
+    // Most of the glyphs that put ink down are bold, a face that declares
+    // no weight counting as regular. Many documents declare one for the
+    // bold face alone, and counting only the glyphs that declare one made a
+    // run-in label (`PUMP: With stainless steel pump…`) most of its line.
+    //
+    // And the line opens and closes on bold words. A label long enough to
+    // fill most of its line still ends in the plain text it introduces
+    // (`MICROCOMPUTER CONTROL SYSTEM: Hobart`), and one wrapped from the
+    // line above opens it plain (`Sani-Dwell. Chemical Sanitizing (65 racks
+    // per hour) – 50`). Words with letters decide: a number may open a
+    // heading in another face (`3.2`), a sign may stand at either end
+    // (`®`), and a chart's bold labels may take every figure from a face
+    // that declares no weight (`October 2020`).
+    let (inked, heavy) = words
         .iter()
-        .filter(|&&i| glyphs[i].weight.unwrap_or(400) >= 600)
-        .count();
-    let bold = weighted > 0 && heavy * 2 > weighted;
+        .fold((0, 0), |(n, h), w| (n + w.inked, h + w.heavy));
+    let opens = words.iter().find(|w| w.letters > 0);
+    let closes = words.iter().rev().find(|w| w.letters > 0);
+    let bold = heavy * 2 > inked && opens.is_none_or(Word::bold) && closes.is_none_or(Word::bold);
+    let opens_bold = opens.is_some_and(Word::bold);
     let opens_with_script = idxs
         .iter()
         .map(|&i| &glyphs[i])
@@ -1209,6 +1271,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         glyphs: idxs.to_vec(),
         font_size,
         bold,
+        opens_bold,
         opens_with_script,
     })
 }
@@ -1263,6 +1326,85 @@ mod tests {
     fn splits_on_new_line() {
         let v = vec![g("a", 0.0, 0.0, 5.0, 0.0), g("b", 0.0, 20.0, 5.0, 0.0)];
         assert_eq!(assemble(&v).len(), 2);
+    }
+
+    /// `word` set from `x` in the given weight, one 5-wide glyph a letter.
+    fn weighted(word: &str, x: f64, weight: Option<u32>) -> Vec<Glyph> {
+        word.chars()
+            .enumerate()
+            .map(|(k, c)| Glyph {
+                weight,
+                ..g(&c.to_string(), x + 5.0 * k as f64, 0.0, 5.0, 0.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_bold_label_beside_a_face_declaring_no_weight_is_not_a_bold_line() {
+        // Only the bold face declares a weight; the regular one declares
+        // none. The label is 5 glyphs of 25.
+        let mut v = weighted("PUMP:", 0.0, Some(700));
+        v.extend(weighted("Withstainless", 30.0, None));
+        v.extend(weighted("steel", 100.0, None));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].bold, "{}", lines[0].text);
+    }
+
+    #[test]
+    fn a_bold_line_with_a_sign_in_another_face_stays_bold() {
+        let mut v = weighted("Features", 0.0, Some(700));
+        v.extend(weighted("®", 40.0, None));
+        assert!(assemble(&v)[0].bold);
+        // Digits and signs from a face that declares no weight, between
+        // bold letters.
+        let mut v = weighted("Multipette", 0.0, Some(700));
+        for (k, (c, w)) in [
+            ("E", 700),
+            ("3", 0),
+            ("/", 0),
+            ("E", 700),
+            ("3", 0),
+            ("x", 700),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            v.extend(weighted(c, 55.0 + 5.0 * k as f64, (w > 0).then_some(w)));
+        }
+        let line = &assemble(&v)[0];
+        assert_eq!(line.text, "Multipette E3/E3x");
+        assert!(line.bold);
+    }
+
+    #[test]
+    fn a_label_filling_most_of_its_line_is_not_a_bold_line() {
+        // Bold to the colon, then the first plain word of the paragraph.
+        let mut v = weighted("CONTROLSYSTEM:", 0.0, Some(700));
+        v.extend(weighted("Hobart", 75.0, Some(400)));
+        assert!(!assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_figure_from_a_face_declaring_no_weight_does_not_end_a_bold_line() {
+        // A chart's bold labels, every digit from another face.
+        let mut v = weighted("October", 0.0, Some(700));
+        v.extend(weighted("2020", 40.0, None));
+        assert!(assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_label_opening_mid_line_is_not_a_bold_line() {
+        let mut v = weighted("Sani-Dwell.", 0.0, Some(400));
+        v.extend(weighted("ChemicalSanitizing", 60.0, Some(700)));
+        assert!(!assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_heading_numbered_in_another_face_stays_bold() {
+        let mut v = weighted("3.2", 0.0, Some(400));
+        v.extend(weighted("Results", 20.0, Some(700)));
+        assert!(assemble(&v)[0].bold);
     }
 
     /// A glyph set at `size` with its baseline at `baseline`, cap height
@@ -1755,6 +1897,7 @@ mod tests {
             font_size: size,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         }
     }
 

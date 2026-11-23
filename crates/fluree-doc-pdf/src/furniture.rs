@@ -444,6 +444,7 @@ mod tests {
             font_size: 10.0,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         }
     }
 

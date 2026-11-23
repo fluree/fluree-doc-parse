@@ -107,6 +107,18 @@ as one name. A line that stops short was ended by hand, and the next is
 another item, so a space keeps them apart. Korean spaces its words and
 wraps at the spaces, and joins with one.
 
+**Bold inside the text.** A heading set in bold is bold from its first word
+to its last, so a line reads as bold only when it is: most of its glyphs
+bold, and its first and last words. A face that declares no weight counts
+as regular, since many documents declare one for their bold face only. A
+bold label opening a paragraph (`PUMP: With stainless steel pump…`) is the
+paragraph's run-in head, not a heading: the paragraph starts at the label
+and reads whole. A line that runs to its column's edge was wrapped, not
+ended, so the next line goes on with the same paragraph whatever its
+weight, and bold names wrapped onto a line of their own stay in their
+sentence. A bullet at the head of a line (`•`, `■`) begins a list item,
+even below a line that runs to the edge.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
