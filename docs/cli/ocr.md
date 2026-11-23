@@ -23,6 +23,15 @@ about its structure, `render-routed --ocr-regions` gives the page its doubt's
 reason and crops its raster regions apart, so `fdoc ocr` reads the regions,
 as `convert --ocr` does, and not the page.
 
+An image is read only if its own pixels can hold a line of text: 10 px on its
+short side, whatever size it is drawn at (measured: the engine reads a line
+exactly from 10 px tall, and misreads it below). A form's checkboxes drawn
+from 8 × 8 masks and rules stretched from a 1 × 1 mask are not read, and an
+image drawn twice in one place is read once. A document's crops are capped
+by [`ocr.max_crops`](config.md#ocr) (default 1000): past it, pages read whole
+come first, then routed regions, then small ones, and a note on stderr says
+how many were left.
+
 Given a crops directory, `fdoc ocr` reads its `manifest.jsonl` and only the crops
 whose words a page takes, by their `reason`: `scanned`, `near_blank`,
 `broken_text`, `region` and `small_region`. A page asked for on a doubt about its

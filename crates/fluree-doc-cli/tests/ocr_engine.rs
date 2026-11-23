@@ -103,7 +103,7 @@ fn a_scanned_page_reads_as_text() {
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
     let mut doc = fluree_doc_pdf::extract_bytes(bytes).unwrap();
     assert!(doc.pages[0].glyphs.is_empty(), "the scan has no text layer");
-    let pass = fluree_doc_pdf::ocr::read_pages(&mut doc, &raw, &engine, None);
+    let pass = fluree_doc_pdf::ocr::read_pages(&mut doc, &raw, &engine, None, 0);
     assert!(pass.failed.is_empty(), "{:?}", pass.failed);
     let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
     let text: String = analysis

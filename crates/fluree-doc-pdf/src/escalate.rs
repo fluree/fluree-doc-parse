@@ -943,7 +943,11 @@ mod tests {
                 })
                 .collect(),
             images: if scanned {
-                vec![crate::extract::ImagePlacement { bbox, texty: true }]
+                vec![crate::extract::ImagePlacement {
+                    bbox,
+                    texty: true,
+                    grid: (1000, 1000),
+                }]
             } else {
                 Vec::new()
             },
@@ -1163,6 +1167,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         assert!(matches!(
             crate::route::decide(&p).0,
@@ -1187,6 +1192,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         let doc = Document { pages: vec![p] };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
@@ -1212,6 +1218,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         let doc = Document { pages: vec![p] };
         let mut copy = doc.clone();
@@ -1248,6 +1255,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],

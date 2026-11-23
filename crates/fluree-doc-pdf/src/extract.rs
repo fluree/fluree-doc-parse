@@ -33,6 +33,11 @@ pub struct ImagePlacement {
     /// sharply — the AI-routed reference engine *loses* 0.38 on one and
     /// *gains* 0.62 on the other.
     pub texty: bool,
+    /// The image's own pixel grid, `(width, height)`: what it can show,
+    /// however large it is drawn. A checkbox drawn from an 8 × 8 mask holds
+    /// no more than 8 × 8 pixels at any size, and a rule stretched from a
+    /// 1 × 1 mask none at all.
+    pub grid: (u32, u32),
 }
 
 #[derive(Clone)]
@@ -263,7 +268,8 @@ impl<'a> Device<'a> for Collector {
     }
     fn draw_image(&mut self, i: hayro_interpret::Image<'a, '_>, t: Affine) {
         // The transform maps the image's *pixel* space onto the page.
-        let (w, h) = (i.width() as f64, i.height() as f64);
+        let grid = (i.width(), i.height());
+        let (w, h) = (grid.0 as f64, grid.1 as f64);
         let r: Rect = (t * Rect::new(0.0, 0.0, w, h).to_path(0.1)).bounding_box();
         let b = crate::geom::from_kurbo(r);
         if !self.page_box.intersects(&b) {
@@ -292,6 +298,7 @@ impl<'a> Device<'a> for Collector {
                 y1: b.y1.min(self.page_box.y1),
             },
             texty,
+            grid,
         });
     }
     fn pop_clip_path(&mut self) {}

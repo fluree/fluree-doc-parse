@@ -1533,31 +1533,55 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// and on every other page its unread raster regions
 /// ([`route::ocr_regions`]), small ones included. Limited to `only`'s pages
 /// when given.
-pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>) -> OcrJobs {
-    let mut jobs = Vec::new();
+///
+/// At most `max_crops` crops (`0` for no limit), the page order kept, and
+/// how many were left out. Past the limit the crops that lose the most if
+/// left unread are kept first: a page read whole, whose text is all pixels;
+/// then a region the router sends a reader; then a region too small for a
+/// model's call. Within each kind, the earlier pages first.
+pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (OcrJobs, usize) {
+    // Every crop, in page order, with its kind: 0 a page read whole, 1 a
+    // routed region, 2 a small one.
+    type Ranked = (u8, usize, Option<(String, BBox)>);
+    let mut crops: Vec<Ranked> = Vec::new();
     for p in &doc.pages {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }
-        if let Route::Vlm(_) = route::decide(p).0 {
-            jobs.push((p.index, None));
-            continue;
-        }
-        let regions = route::ocr_regions(p);
-        if !regions.is_empty() {
-            jobs.push((
-                p.index,
-                Some(
-                    regions
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, b)| (Crop::Region(i).tag(), b))
-                        .collect(),
-                ),
-            ));
+        let routed = match route::decide(p).0 {
+            Route::Vlm(_) => {
+                crops.push((0, p.index, None));
+                continue;
+            }
+            Route::VlmRegions(r) => r.len(),
+            Route::Deterministic => 0,
+        };
+        for (i, b) in route::ocr_regions(p).into_iter().enumerate() {
+            let kind = if i < routed { 1 } else { 2 };
+            crops.push((kind, p.index, Some((Crop::Region(i).tag(), b))));
         }
     }
-    jobs
+    let mut dropped = 0;
+    if max_crops > 0 && crops.len() > max_crops {
+        let mut order: Vec<usize> = (0..crops.len()).collect();
+        order.sort_by_key(|&i| (crops[i].0, i));
+        let mut keep = vec![false; crops.len()];
+        for &i in &order[..max_crops] {
+            keep[i] = true;
+        }
+        dropped = crops.len() - max_crops;
+        let mut k = keep.into_iter();
+        crops.retain(|_| k.next() == Some(true));
+    }
+    let mut jobs: OcrJobs = Vec::new();
+    for (_, page, crop) in crops {
+        match (crop, jobs.last_mut()) {
+            (None, _) => jobs.push((page, None)),
+            (Some(c), Some((last, Some(list)))) if *last == page => list.push(c),
+            (Some(c), _) => jobs.push((page, Some(vec![c]))),
+        }
+    }
+    (jobs, dropped)
 }
 
 /// What one OCR pass over a document did.
@@ -1568,10 +1592,13 @@ pub struct OcrPass {
     /// Crops the engine could not read, with its error, by crop name
     /// (`p{page}_{tag}`). The rest of the document is read regardless.
     pub failed: Vec<(String, String)>,
+    /// Crops left unread past the limit ([`ocr_jobs`]).
+    pub capped: usize,
 }
 
 /// Read a document's pixels with an engine and lay the words on its pages:
-/// [`ocr_jobs`], rendered one crop at a time, read, then [`inject`]ed.
+/// [`ocr_jobs`] (at most `max_crops`, `0` for no limit), rendered one crop
+/// at a time, read, then [`inject`]ed.
 ///
 /// Runs on the document as extracted, before analysis, as [`inject`] does;
 /// no file is written. The crops are rendered as the model tier renders
@@ -1583,8 +1610,9 @@ pub fn read_pages(
     pdf: &hayro_syntax::Pdf,
     engine: &dyn fluree_doc_vision::OcrEngine,
     only: Option<&[usize]>,
+    max_crops: usize,
 ) -> OcrPass {
-    let jobs = ocr_jobs(doc, only);
+    let (jobs, capped) = ocr_jobs(doc, only, max_crops);
     let mut readings = Vec::new();
     let mut failed = Vec::new();
     crate::escalate::for_each_crop(pdf, &jobs, |crop| {
@@ -1600,6 +1628,7 @@ pub fn read_pages(
     OcrPass {
         injected: inject(doc, &readings),
         failed,
+        capped,
     }
 }
 
@@ -1679,6 +1708,7 @@ mod tests {
                 y1: 792.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }
     }
 
@@ -1812,7 +1842,7 @@ mod tests {
         let mut doc = crate::extract::extract_bytes(bytes).unwrap();
         assert!(matches!(route::decide(&doc.pages[0]).0, Route::Vlm(_)));
         let engine = OneWord(Default::default());
-        let pass = read_pages(&mut doc, &pdf, &engine, None);
+        let pass = read_pages(&mut doc, &pdf, &engine, None, 0);
         // The page whole, at the model tier's scale: 2 × 200 by 2 × 100.
         assert_eq!(*engine.0.lock().unwrap(), vec![(400, 200)]);
         assert!(pass.failed.is_empty());
@@ -1821,7 +1851,7 @@ mod tests {
         assert!(text_of(&doc.pages[0]).contains("HELLO"));
         // Asked only for another page, it reads nothing.
         let mut again = crate::extract::extract_bytes(image_only_pdf()).unwrap();
-        let pass = read_pages(&mut again, &pdf, &engine, Some(&[3]));
+        let pass = read_pages(&mut again, &pdf, &engine, Some(&[3]), 0);
         assert!(pass.injected.is_empty());
         assert_eq!(engine.0.lock().unwrap().len(), 1);
     }
@@ -1845,6 +1875,7 @@ mod tests {
                         y1: 130.0,
                     },
                     texty: true,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -1957,6 +1988,7 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: shot,
                     texty: true,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -2304,7 +2336,11 @@ mod tests {
             x1: 550.0,
             y1: 760.0,
         };
-        let shots = [r0, r1].map(|bbox| ImagePlacement { bbox, texty: true });
+        let shots = [r0, r1].map(|bbox| ImagePlacement {
+            bbox,
+            texty: true,
+            grid: (1000, 1000),
+        });
         let mut doc = Document {
             pages: vec![page(glyphs, shots.to_vec())],
         };
@@ -2841,6 +2877,7 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: note,
                     texty: true,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -3199,6 +3236,7 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: region,
                     texty: true,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -3233,7 +3271,11 @@ mod tests {
                     .collect(),
                 regions
                     .iter()
-                    .map(|&bbox| ImagePlacement { bbox, texty: true })
+                    .map(|&bbox| ImagePlacement {
+                        bbox,
+                        texty: true,
+                        grid: (1000, 1000),
+                    })
                     .collect(),
             )],
         }
@@ -3365,6 +3407,7 @@ mod tests {
                 y1,
             },
             texty: true,
+            grid: (1000, 1000),
         };
         let mut doc = Document {
             pages: vec![page(
@@ -3718,6 +3761,7 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: note,
                     texty: true,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -3791,6 +3835,7 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: shot,
                     texty: true,
+                    grid: (1000, 1000),
                 }],
             )],
         };
@@ -3869,5 +3914,221 @@ mod tests {
         assert_eq!(els[0].provenance, "ocr");
         assert_eq!(els[1].provenance, "rust");
         assert_eq!(els[2].provenance, "ocr");
+    }
+
+    /// A one-page Letter PDF: twenty lines of Helvetica at the top, so the
+    /// page has a text layer, then `content`, drawing the image masks
+    /// `masks` names, each `(name, width, height)` pixels, all ink.
+    fn form_pdf(content: &str, masks: &[(&str, u32, u32)]) -> Vec<u8> {
+        let text: String = (0..20)
+            .map(|i| {
+                format!(
+                    "BT /F1 9 Tf 40 {} Td (The quarterly statement lists every account opened this year.) Tj ET\n",
+                    770 - 12 * i
+                )
+            })
+            .collect();
+        let content = format!("{text}{content}");
+        let xobjects: String = masks
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _, _))| format!("/{name} {} 0 R ", 5 + i))
+            .collect();
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << \
+                 /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> \
+                 /XObject << {xobjects}>> >> /Contents 4 0 R >>"
+            )
+            .into_bytes(),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            )
+            .into_bytes(),
+        ];
+        for (_, w, h) in masks {
+            let data = vec![0u8; w.div_ceil(8) as usize * *h as usize];
+            objects.push(
+                [
+                    format!(
+                        "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ImageMask true \
+                         /BitsPerComponent 1 /Length {} >>\nstream\n",
+                        data.len()
+                    )
+                    .into_bytes(),
+                    data,
+                    b"\nendstream".to_vec(),
+                ]
+                .concat(),
+            );
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            out.extend(body);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").into_bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    /// Every crop [`ocr_jobs`] asks for, as `(page, tag)`.
+    fn crops_of(doc: &Document) -> Vec<(usize, String)> {
+        ocr_jobs(doc, None, 0)
+            .0
+            .into_iter()
+            .flat_map(|(page, crops)| match crops {
+                None => vec![(page, "full".to_string())],
+                Some(l) => l.into_iter().map(|(t, _)| (page, t)).collect(),
+            })
+            .collect()
+    }
+
+    /// A pasted capture, 200 × 30 pixels drawn at 200 × 30 pt, at `(x, y)`.
+    fn capture_at(x: u32, y: u32) -> String {
+        format!("q 200 0 0 30 {x} {y} cm /Cap Do Q\n")
+    }
+
+    #[test]
+    fn a_form_of_checkbox_masks_asks_the_engine_for_nothing() {
+        // 300 checkboxes, each an 8 × 8 image mask drawn 8 pt square, under
+        // the text: each would be a crop of its own, and its reading a `■`.
+        let boxes: String = (0..300)
+            .map(|i| {
+                format!(
+                    "q 8 0 0 8 {} {} cm /Cb Do Q\n",
+                    50 + (i % 15) * 32,
+                    100 + (i / 15) * 24
+                )
+            })
+            .collect();
+        let doc =
+            crate::extract_bytes(form_pdf(&boxes, &[("Cb", 8, 8), ("Cap", 200, 30)])).unwrap();
+        assert_eq!(doc.pages[0].images.len(), 300);
+        assert!(crops_of(&doc).is_empty(), "{:?}", crops_of(&doc).len());
+        // The same form with a capture an engine can read: that one crop.
+        let with = format!("{boxes}{}", capture_at(50, 40));
+        let doc = crate::extract_bytes(form_pdf(&with, &[("Cb", 8, 8), ("Cap", 200, 30)])).unwrap();
+        assert_eq!(crops_of(&doc), [(0, "r0".to_string())]);
+    }
+
+    #[test]
+    fn rules_stretched_from_a_pixel_are_not_read() {
+        // 40 underlines, each a 1 × 1 mask stretched 200 pt wide and 1 high.
+        let rules: String = (0..40)
+            .map(|i| {
+                format!(
+                    "q 200 0 0 1 {} {} cm /Ru Do Q\n",
+                    50 + (i % 2) * 260,
+                    100 + (i / 2) * 20
+                )
+            })
+            .collect();
+        let doc = crate::extract_bytes(form_pdf(&rules, &[("Ru", 1, 1)])).unwrap();
+        assert_eq!(doc.pages[0].images.len(), 40);
+        assert!(crops_of(&doc).is_empty());
+    }
+
+    #[test]
+    fn an_image_drawn_twice_in_one_place_is_read_once() {
+        let twice = format!(
+            "{}{}{}",
+            capture_at(50, 40),
+            capture_at(50, 40),
+            capture_at(300, 40)
+        );
+        let doc = crate::extract_bytes(form_pdf(&twice, &[("Cap", 200, 30)])).unwrap();
+        assert_eq!(doc.pages[0].images.len(), 3);
+        assert_eq!(
+            crops_of(&doc),
+            [(0, "r0".to_string()), (0, "r1".to_string())]
+        );
+    }
+
+    #[test]
+    fn past_its_limit_the_engine_reads_what_loses_most_unread() {
+        // Page 0: three small captures. Page 1: a scan, read whole. Page 2:
+        // a routed region and a small capture.
+        let small = |y: f64| ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: y,
+                x1: 150.0,
+                y1: y + 30.0,
+            },
+            texty: true,
+            grid: (200, 60),
+        };
+        let text = || native("The quarterly statement lists every account.", 40.0, 40.0);
+        let mut p0 = page(text(), vec![small(200.0), small(300.0), small(400.0)]);
+        p0.index = 0;
+        let mut p1 = page(Vec::new(), vec![full_page_image()]);
+        p1.index = 1;
+        let routed = ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 400.0,
+                x1: 550.0,
+                y1: 600.0,
+            },
+            texty: true,
+            grid: (1000, 400),
+        };
+        let mut p2 = page(text(), vec![small(200.0), routed]);
+        p2.index = 2;
+        let doc = Document {
+            pages: vec![p0, p1, p2],
+        };
+        let tags = |jobs: &OcrJobs| -> Vec<(usize, Vec<String>)> {
+            jobs.iter()
+                .map(|(p, c)| {
+                    let tags = match c {
+                        None => vec!["full".to_string()],
+                        Some(l) => l.iter().map(|(t, _)| t.clone()).collect(),
+                    };
+                    (*p, tags)
+                })
+                .collect()
+        };
+        let (all, dropped) = ocr_jobs(&doc, None, 0);
+        assert_eq!(dropped, 0);
+        assert_eq!(
+            all.iter()
+                .map(|(_, c)| c.as_ref().map_or(1, Vec::len))
+                .sum::<usize>(),
+            6
+        );
+        let (kept, dropped) = ocr_jobs(&doc, None, 3);
+        assert_eq!(dropped, 3);
+        assert_eq!(
+            tags(&kept),
+            [
+                (0, vec!["r0".to_string()]),
+                (1, vec!["full".to_string()]),
+                (2, vec!["r0".to_string()]),
+            ],
+            "the scan, the routed region, then the first small capture"
+        );
+        let (kept, _) = ocr_jobs(&doc, None, 2);
+        assert_eq!(
+            tags(&kept),
+            [(1, vec!["full".to_string()]), (2, vec!["r0".to_string()])]
+        );
     }
 }
