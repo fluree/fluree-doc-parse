@@ -512,7 +512,13 @@ fn render(
     notes: &fluree_doc_model::Notes,
 ) -> String {
     match args.format {
-        Format::Md => fluree_doc_model::to_markdown_with(elements, notes),
+        Format::Md => fluree_doc_model::to_markdown_with_options(
+            elements,
+            notes,
+            &fluree_doc_model::MarkdownOptions {
+                links: args.md_links.into(),
+            },
+        ),
         Format::Xhtml => fluree_doc_model::to_xhtml_with(elements, notes),
         Format::Json => serde_json::to_string_pretty(elements).unwrap(),
         Format::Doco => {

@@ -10,7 +10,7 @@ the answer key — would make the engine worse at the job it is actually for.
 
 ## Links the reference does not carry
 
-**Cost: 0.0019 of the deterministic overall, across 21 of 200 documents.**
+**Cost: 0.0020 of the deterministic overall, across 22 of 200 documents.**
 
 A PDF carries its hyperlinks as annotations beside the content stream, not as
 glyphs. A parser that ignores them sees the anchor's words and nothing else,
@@ -50,6 +50,11 @@ to 0.929711. Both kept their places, and later work has since carried both
 past the figures they started from.
 
 We would make the same trade again. A link is content.
+
+The scores we report use the default. A caller who wants the reference's form
+can ask for it: `--md-links text` writes each anchor's words without the
+address, and on this benchmark it scores 0.900236 against the default's
+0.898213. Every link is still in `json`, `doco` and `xhtml` either way.
 
 ## Chart labels paired with their values
 

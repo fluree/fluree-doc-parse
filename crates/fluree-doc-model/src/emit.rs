@@ -34,35 +34,117 @@ fn link_segments(e: &Element) -> Vec<(String, Option<&Link>)> {
     out
 }
 
+/// How Markdown writes a link.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MdLinks {
+    /// `[the filing](https://…)`, or the autolink `<https://…>` where the
+    /// words are the address itself.
+    #[default]
+    Inline,
+    /// The anchor's words alone, as plain text. The addresses are still in
+    /// `json`, `doco` and `xhtml`; this is for a reader that wants the prose
+    /// without them, such as an embedding model.
+    Text,
+}
+
+/// Choices for [`to_markdown_with_options`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MarkdownOptions {
+    pub links: MdLinks,
+}
+
 /// An element's text with its links marked up as Markdown.
+fn md_linked(e: &Element, opts: &MarkdownOptions) -> String {
+    if e.links.is_none() || opts.links == MdLinks::Text {
+        return md_text(&e.text, true);
+    }
+    let mut out = String::new();
+    for (i, (text, link)) in link_segments(e).into_iter().enumerate() {
+        match link {
+            None => out.push_str(&md_text(&text, i == 0)),
+            Some(l) => out.push_str(&md_link(&text, &l.href())),
+        }
+    }
+    out
+}
+
+/// One link in Markdown.
 ///
 /// The autolink form is preferred where the anchor already *is* the address:
 /// a page that prints `https://example.org/a` and links it there says the
 /// same thing twice in `[…](…)`, and `<…>` is the idiom for exactly that.
-fn md_linked(e: &Element) -> String {
-    if e.links.is_none() {
-        return e.text.clone();
-    }
-    let mut out = String::new();
-    for (text, link) in link_segments(e) {
-        match link {
-            None => out.push_str(&text),
-            Some(l) => {
-                let href = l.href();
-                if text == href {
-                    out.push_str(&format!("<{href}>"));
-                } else {
-                    // `]` would close the label early; a destination with a
-                    // space or a paren needs the angle-bracket form.
-                    let label = text.replace('[', "\\[").replace(']', "\\]");
-                    if href.contains(['(', ')', ' ', '<', '>']) {
-                        out.push_str(&format!("[{label}](<{href}>)"));
-                    } else {
-                        out.push_str(&format!("[{label}]({href})"));
-                    }
-                }
+/// A page's link rectangle often takes in the sentence's full stop as well,
+/// so the punctuation after the address is written after the autolink,
+/// outside it.
+///
+/// Only an address with a scheme can be an autolink. `<www.example.org>` is
+/// not one: a renderer shows it as literal text, angle brackets included,
+/// and links nothing, so a target written without a scheme keeps the
+/// `[…](…)` form.
+fn md_link(text: &str, href: &str) -> String {
+    if is_absolute_uri(href) {
+        if let Some(rest) = text.strip_prefix(href) {
+            if rest.chars().all(|c| ".,:;!?)".contains(c)) {
+                return format!("<{href}>{rest}");
             }
         }
+    }
+    // `]` would close the label early; a destination with a space or a
+    // paren needs the angle-bracket form.
+    let label = text.replace('[', "\\[").replace(']', "\\]");
+    if href.contains(['(', ')', ' ', '<', '>']) {
+        format!("[{label}](<{href}>)")
+    } else {
+        format!("[{label}]({href})")
+    }
+}
+
+/// An address Markdown can write as an autolink, as CommonMark defines an
+/// absolute URI: a scheme of 2 to 32 characters (a letter, then letters,
+/// digits, `+`, `.` or `-`), a colon, and no space, `<`, `>` or control
+/// character after it.
+fn is_absolute_uri(s: &str) -> bool {
+    let Some((scheme, rest)) = s.split_once(':') else {
+        return false;
+    };
+    let mut cs = scheme.chars();
+    (2..=32).contains(&scheme.len())
+        && cs.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && cs.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+        && !rest
+            .chars()
+            .any(|c| c.is_ascii_control() || matches!(c, ' ' | '<' | '>'))
+}
+
+/// Text that is not a link, kept from reading as one.
+///
+/// `]` directly before `(` makes an inline link of whatever bracket opened
+/// it: mathematics such as `Γ[w](t)` renders as a link to `t` whose text
+/// is `w`, and the brackets and the parenthesis are gone. An image,
+/// `![…](…)`, is the same construct. A backslash before that `]` is all the
+/// link needs to fail, and it renders as nothing.
+///
+/// A block that opens with `[label]:` is worse: it is a link reference
+/// definition, which a renderer does not show at all. Where `opens_block`,
+/// such a bracket is escaped as well. Nothing else is: every other bracket
+/// pairing needs a definition to become a link, and this writer emits none.
+fn md_text(text: &str, opens_block: bool) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    // A definition may be indented up to three spaces, and its label holds no
+    // unescaped bracket.
+    let lead = chars.iter().take_while(|c| **c == ' ').count();
+    let defines = opens_block && lead <= 3 && chars.get(lead) == Some(&'[') && {
+        let label = chars[lead + 1..]
+            .iter()
+            .position(|c| matches!(c, '[' | ']'));
+        label.is_some_and(|n| chars[lead + 1 + n] == ']' && chars.get(lead + 2 + n) == Some(&':'))
+    };
+    let mut out = String::with_capacity(text.len());
+    for (i, &c) in chars.iter().enumerate() {
+        if (c == ']' && chars.get(i + 1) == Some(&'(')) || (defines && i == lead) {
+            out.push('\\');
+        }
+        out.push(c);
     }
     out
 }
@@ -98,10 +180,11 @@ fn md_turn(e: &Element, t: &Turn) -> String {
     let at = clock(t.start_ms);
     match speaker_and_words(e, t) {
         Some((s, words)) => format!(
-            "**{}** ({at}): {words}",
-            s.replace('*', "\\*").replace('_', "\\_")
+            "**{}** ({at}): {}",
+            s.replace('*', "\\*").replace('_', "\\_"),
+            md_text(words, false)
         ),
-        None => format!("({at}) {}", e.text),
+        None => format!("({at}) {}", md_text(&e.text, false)),
     }
 }
 
@@ -113,6 +196,8 @@ fn md_message(e: &Element, m: &Message) -> String {
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
+        .enumerate()
+        .map(|(i, l)| md_text(l, i == 0))
         .collect::<Vec<_>>()
         .join("  \n");
     if m.quoted {
@@ -471,13 +556,18 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
 /// which eats the delimiter and merges the cell with its neighbour. Two of
 /// the eighteen ragged rows survived escaping the pipe alone for exactly
 /// this reason, both of them mathematics set with trailing backslashes.
+///
+/// A `]` before `(` is escaped as it is in running text (see [`md_text`]), so
+/// a cell of mathematics does not render as a link.
 fn md_cell(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
             '\\' => out.push_str("\\\\"),
             '|' => out.push_str("\\|"),
             '\n' | '\r' => out.push(' '),
+            ']' if chars.peek() == Some(&'(') => out.push_str("\\]"),
             c => out.push(c),
         }
     }
@@ -503,13 +593,22 @@ pub fn to_markdown(elements: &[Element]) -> String {
 /// visible to anything reading the file, invisible in the rendered document,
 /// and not part of the prose.
 pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
+    to_markdown_with_options(elements, notes, &MarkdownOptions::default())
+}
+
+/// As [`to_markdown_with`], with the choices in `opts`.
+pub fn to_markdown_with_options(
+    elements: &[Element],
+    notes: &Notes,
+    opts: &MarkdownOptions,
+) -> String {
     let mut out = String::new();
     for (i, e) in elements.iter().enumerate() {
         match e.kind.as_str() {
-            "doco:Title" => out.push_str(&format!("\n# {}\n\n", md_linked(e))),
+            "doco:Title" => out.push_str(&format!("\n# {}\n\n", md_linked(e, opts))),
             "doco:SectionTitle" => {
                 let l = e.level.unwrap_or(1).clamp(1, 6);
-                out.push_str(&format!("\n{} {}\n\n", "#".repeat(l), md_linked(e)));
+                out.push_str(&format!("\n{} {}\n\n", "#".repeat(l), md_linked(e, opts)));
             }
             "doco:Table" => {
                 if let Some(rows) = &e.cells {
@@ -537,11 +636,11 @@ pub fn to_markdown_with(elements: &[Element], notes: &Notes) -> String {
                     out.push_str(&format!("\n{}\n\n", e.text));
                 }
             }
-            "doc:ListItem" => out.push_str(&format!("- {}\n", md_linked(e))),
+            "doc:ListItem" => out.push_str(&format!("- {}\n", md_linked(e, opts))),
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
                 (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
-                (None, None) => out.push_str(&format!("{}\n\n", md_linked(e))),
+                (None, None) => out.push_str(&format!("{}\n\n", md_linked(e, opts))),
             },
         }
     }
@@ -613,6 +712,76 @@ mod tests {
             vec![Link::uri("https://example.org/f").spanning(0, 21)],
         );
         assert_eq!(to_markdown(&[e]).trim(), "<https://example.org/f>");
+    }
+
+    #[test]
+    fn the_full_stop_after_an_address_stays_outside_its_autolink() {
+        // The link rectangle took in the sentence's full stop.
+        let e = para(
+            "see https://example.org/f.",
+            vec![Link::uri("https://example.org/f").spanning(4, 26)],
+        );
+        assert_eq!(to_markdown(&[e]).trim(), "see <https://example.org/f>.");
+    }
+
+    #[test]
+    fn an_address_without_a_scheme_is_not_an_autolink() {
+        // `<www.example.org>` renders as literal text, brackets and all.
+        let e = para(
+            "www.example.org",
+            vec![Link::uri("www.example.org").spanning(0, 15)],
+        );
+        assert_eq!(
+            to_markdown(&[e]).trim(),
+            "[www.example.org](www.example.org)"
+        );
+    }
+
+    #[test]
+    fn links_as_text_keep_the_words_and_drop_the_addresses() {
+        let e = para(
+            "see the filing at https://example.org/f.",
+            vec![
+                Link::uri("https://example.org/a").spanning(4, 14),
+                Link::uri("https://example.org/f").spanning(18, 40),
+            ],
+        );
+        let opts = MarkdownOptions {
+            links: MdLinks::Text,
+        };
+        assert_eq!(
+            to_markdown_with_options(&[e], &Notes::default(), &opts).trim(),
+            "see the filing at https://example.org/f."
+        );
+    }
+
+    #[test]
+    fn bracketed_mathematics_does_not_read_as_a_link() {
+        let e = para("Γ[w](t) = (t, w(t))", vec![]);
+        assert_eq!(to_markdown(&[e]).trim(), "Γ[w\\](t) = (t, w(t))");
+        let t = table("t", &[&["f", "g"], &["Γ[w](t)", "x"]], 1);
+        assert!(to_markdown(&[t]).contains("|Γ[w\\](t)|x|"));
+        // As text, the anchor's words get the same escape.
+        let e = para("Γ[w](t)", vec![Link::uri("https://e.org").spanning(4, 7)]);
+        let opts = MarkdownOptions {
+            links: MdLinks::Text,
+        };
+        assert_eq!(
+            to_markdown_with_options(&[e], &Notes::default(), &opts).trim(),
+            "Γ[w\\](t)"
+        );
+    }
+
+    #[test]
+    fn a_line_shaped_like_a_link_definition_is_kept() {
+        // A renderer shows a definition as nothing at all.
+        let e = para("[1]: Smith, 2019", vec![]);
+        assert_eq!(to_markdown(&[e]).trim(), "\\[1]: Smith, 2019");
+        // Only where it opens the block: mid-sentence it defines nothing.
+        let e = para("see [1]: Smith", vec![]);
+        assert_eq!(to_markdown(&[e]).trim(), "see [1]: Smith");
+        let e = para("[1] Smith, 2019", vec![]);
+        assert_eq!(to_markdown(&[e]).trim(), "[1] Smith, 2019");
     }
 
     #[test]
