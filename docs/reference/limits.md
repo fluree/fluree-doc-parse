@@ -20,7 +20,9 @@ bounds of their own, where they have any: XPS its pages and glyphs
 ([XPS](../inputs/xps.md#bounds)), an image its pixels
 ([Images](../inputs/images.md#size-and-coordinates)). A PDF spends the
 budget on its annotations alone; the transcript readers have no bound
-beyond their input's size.
+beyond their input's size. Of an e-mail, only an HTML body is on it: its
+MIME tree or compound file, and a plain-text body, are bounded by the
+message's size ([An e-mail's own layer](#an-e-mails-own-layer)).
 
 A budget is one document's. A message's attachments are converted within
 what the message leaves of its budget, one at a time
@@ -306,6 +308,28 @@ sheets, parts that are no longer held. The stream an `.xls`, a `.doc` or a
 `.ppt` is read from is bounded in the same way, 256 MiB: these files are
 not compressed, so it is about the file's own size.
 
+## An e-mail's own layer
+
+An e-mail's HTML body is read within the budget, as a page is. The rest
+of the message is not spent from it, and is bounded by the message's
+size and by bounds of its own:
+
+- an `.eml`'s MIME tree is followed 16 levels deep, each part decoded
+  whole from its transfer encoding (base64, quoted-printable) and its
+  charset, which takes about the message's size again;
+- a `.msg` is a compound file whose streams are each read whole; a
+  message attached in it, down to 8 levels, is written back as an `.eml`
+  of its own, its body and files in base64 at 76 characters a line, so
+  that it reaches its reader as a forwarded message does: what a message
+  nested 8 levels deep carries is written about twelve times its size
+  into the outermost one, (4/3 × 78/76)^8;
+- a plain-text body is read into its elements, its text, at its part's
+  size, with no budget.
+
+What this layer takes grows with the message's size, and for a `.msg`
+with how deep the messages in it nest, and the CLI sets no bound on an
+input's size.
+
 ## Files an e-mail carries
 
 `--parse-attachments` converts the files an e-mail carries while the
@@ -326,8 +350,12 @@ one whose body peaks at 1.3 GB on its own, was refused converting the
 attached one, and then made its body again on a whole budget of its own
 to follow its files, holding both at once: 1.73 GB. It now peaks at 1.4
 GB, the attached message refused within the share. The files taken out of
-attached messages wait in the walk until their turn, within its own bounds
-(64 MiB a file, 256 MiB in all), not spent from the budget.
+an attached message wait in the walk until their turn, not spent from the
+budget: they are taken out all at once, and the walk's bounds (64 MiB a
+file, 256 MiB in all) are checked as each one's turn comes. What waits is
+about the attached message's own size, which is within 64 MiB for it to
+be followed, and more for a `.msg` whose messages nest
+([An e-mail's own layer](#an-e-mails-own-layer)).
 
 ## Batches
 
