@@ -1385,6 +1385,7 @@ fn ocr_image(
         &mut a.elements,
         &page_text,
         &a.furniture,
+        &Default::default(),
     );
     fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
     let sizes = doc
@@ -1612,17 +1613,24 @@ fn convert_bytes(
         .iter()
         .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
         .collect();
-    common::apply_tiers(
-        cfg.tier_results.as_deref(),
-        cfg.structure_results.as_deref(),
-        stem,
-        &mut a.elements,
-        &page_text,
-        &a.furniture,
-    );
-    // A configured reader, in this same command. Sidecars win where both are
-    // present: `--tier-results` names readings someone already has, and
-    // paying to produce them again would be surprising.
+    // The regions a screen pasted into a page of text fills: a model's
+    // reading of one keeps the document's outline, as OCR's does.
+    let screens = common::pasted_regions(&a.elements, &doc.pages);
+    // The readings supplied (`--tier-results`, with `--structure-results`
+    // for the veto), else a configured reader's, in this same command.
+    // Sidecars win where both are present: `--tier-results` names readings
+    // someone already has, and paying to produce them again would be
+    // surprising. Both go through the one splice.
+    let supplied = cfg
+        .tier_results
+        .as_deref()
+        .map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()));
+    let structure = cfg
+        .structure_results
+        .as_deref()
+        .filter(|_| supplied.is_some())
+        .map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()));
+    let mut live = fluree_doc_pdf::escalate::Readings::default();
     if let Some(extracted) = &extracted {
         let hints = crate::escalate::jobs::hints(
             extracted,
@@ -1631,7 +1639,7 @@ fn convert_bytes(
             cfg.config.escalation.on_column_doubt,
         );
         let jobs = fluree_doc_pdf::escalate::plan(extracted, &ol, &opts, &hints);
-        let readings = crate::escalate::read_document(
+        live = crate::escalate::read_document(
             std::path::Path::new(stem),
             jobs,
             &hints,
@@ -1641,16 +1649,23 @@ fn convert_bytes(
             pages,
             cfg.verbose,
         )?;
-        if !readings.is_empty() {
-            fluree_doc_pdf::arbiter::splice_with_page(
-                &mut a.elements,
-                stem,
-                &readings,
-                None,
-                &page_text,
-            );
-            fluree_doc_pdf::arbiter::scrub_furniture(&mut a.elements, &a.furniture);
-        }
+    }
+    let readings: Option<&dyn fluree_doc_pdf::arbiter::TierBackend> = match &supplied {
+        Some(s) => Some(s),
+        None => (!live.is_empty()).then_some(&live),
+    };
+    if let Some(readings) = readings {
+        common::splice_readings(
+            &mut a.elements,
+            stem,
+            readings,
+            structure
+                .as_ref()
+                .map(|s| s as &dyn fluree_doc_pdf::arbiter::TierBackend),
+            &page_text,
+            &a.furniture,
+            &screens,
+        );
     }
     // After the tiers, which replace whole pages; before the links, which a
     // footer carries as often as the body does.

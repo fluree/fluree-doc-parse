@@ -20,12 +20,23 @@ Model readings are keyed by a **crop name**: `p{page}_{tag}`, where the tag is
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). A `full`
 reading replaces its page whatever the reason, so a reader that does not see
 structure should skip the crops asked for on a heading, figure or column
-doubt.
+doubt. An `r{i}` reading of a region under half its page, a screen pasted
+into a page of text, has its headings (`doc_title`, `paragraph_title`, a
+Markdown `#` line) read as paragraphs: they are the screen's, not the
+document's. A region that, with the images it abuts, covers half its page
+or more keeps them, as a page read whole does: a scan stored in strips is
+one picture. So does the `full` reading of a page near blank but for
+such a screen (one alone on its page with its caption), where OCR's reading
+demotes the headings whose words land in the screen: a model's reading has
+no positions, and its text cannot tell the screen's title from the page's
+own, a cover's title drawn in outlines (no text layer) or a caption that
+repeats the screen's name.
 
 An image a DOCX, an XLSX or an e-mail places in its flow has no page: its
 crop name is `m{n}` (`m{n}_{k}` for a figure's later images), the name
 `render-routed` gives its crop, `{stem}_m{n}.png`. Its reading is read as a
-whole page's is, and placed after the image's figure.
+whole page's is, its headings read as paragraphs as a pasted screen's are,
+and placed after the image's figure.
 
 ## 1. Layout boxes — `--layout-boxes`
 
@@ -200,7 +211,7 @@ looked up only for the page's unread regions. A word over a glyph the
 page already has is dropped, so a stamp the text layer carries is not read
 twice.
 
-Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`.
+Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`. A heading read in a region under half its page, on a page with a text layer of its own, is the title of a pasted screen, not a section of the document: it is read as a paragraph, as the text of a picture in a DOCX is, so the document's outline stays its own. So is one read on a page near blank but for such a picture (a screen alone on its page with its caption, read whole): its words land in the picture. A model's `full` reading of that page keeps its headings, having no positions to judge them by ([above](#crop-names)). A region that, with the images it abuts, covers half its page or more is not a pasted screen but the page's content (a scan under a stamped line or a fax header the text layer carries, whole or stored in strips, a strip each region), and keeps its headings, as a page read whole does. Each heading is judged by the region most of its words land in, as a model's reading is judged region by region, whether the reading is the region's `r{i}` or the page's `full`: a screen pasted on a page that also carries such a scan loses its headings, and the scan keeps its own.
 
 **What to read.** The `render-routed` manifest says why each crop exists
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine

@@ -323,6 +323,42 @@ build them.
   reading that is noise, and a reading with a score outside 0-1 has no
   confidence.
 
+### Pictures a document places
+
+- `fluree_doc_email::Email` gains `media`, and `AttachedFile` gains
+  `content_id`, which an `AttachedFile` literal needs.
+- `DocoOptions` and `Notes` gain `unread_images`, listed in the graph as
+  `doc:unreadImages`: `NotRead`, `Missing`, `UnsupportedFormat`,
+  `PastAllowance`, `Small`, `NotTexty` or `Failed`.
+- `escalate::CropReason` gains `SmallImage`, an image a document places
+  under the pixels a model is sent, which an OCR engine still reads.
+- New: `fluree_doc_xlsx::parse_with_ocr` and `parse_with_media`,
+  `fluree_doc_image::read_placed`, `texty`, `looks_like_text` and
+  `without_noise`, `ocr::is_noise`, `route::pasted` and `pasted_set`,
+  `route::IMAGE_DOMINANT_COVERAGE` (public, where it was private),
+  `fluree_doc_html::parse_message` and `cid_ids`, the probe's other rules
+  in `fluree_doc_vision::texty`.
+- New in this release, nothing to change from main; listed for a caller
+  of this work's earlier pull requests:
+  - The picture loop moves out of `fluree_doc_docx`, to be shared by a
+    DOCX, an XLSX and an e-mail: its types (`MediaSource`, `Media`,
+    `Picture`, `pictures`, `Allowance`, `Unread`, `PictureReader`,
+    `PictureReads`) to `fluree_doc_model::media`, and `read_pictures`,
+    `read_media` and `MAX_MEDIA_BYTES` to `fluree_doc_ooxml`.
+    `fluree_doc_docx` re-exports them all and `fluree_doc_xlsx` most, so a
+    path through either still resolves.
+  - `MediaSource` names an image as any of these files does, not only as a
+    package part: `Part` is also an e-mail's `cid:` URL or attachment
+    name, `Missing` a reference the file does not resolve, and `name()`
+    the name whatever it resolves to. `Unread::NotInPackage` says "not in
+    the file".
+  - `fluree_doc_docx::OcrParse::unread` is a list of
+    `fluree_doc_model::UnreadImage`, the graph's own entries, where it held
+    `(Picture, Unread)` pairs, and `OcrParse` gains `errors`.
+    `fluree_doc_image::ImageElements` gains `not_texty` and `noise`, and
+    `ocr::Injected` gains `pasted`, the regions it may read that cover less
+    of their page than `route::IMAGE_DOMINANT_COVERAGE`, half.
+
 ## Errors
 
 `extract_file` and `extract_bytes` return `Result<Document, ExtractError>`.

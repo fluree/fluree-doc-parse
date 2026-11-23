@@ -24,7 +24,7 @@ use crate::geom::BBox;
 /// Fraction of the page a single image (or the union of images) must cover
 /// before the page is image-dominated. Half the page: figures and photos in
 /// ordinary documents run 10-30%; scans run 90%+.
-const IMAGE_DOMINANT_COVERAGE: f64 = 0.5;
+pub const IMAGE_DOMINANT_COVERAGE: f64 = 0.5;
 
 /// Below this many text-bearing glyphs, an image-dominated page has no
 /// meaningful born-digital text layer. A caption under a full-page figure is
@@ -213,8 +213,283 @@ pub(crate) fn region_keys(page: &Page, regions: &[BBox]) -> Vec<Option<u64>> {
 }
 
 /// The share of the page a box covers.
-fn share(page: &Page, b: &BBox) -> f64 {
+pub(crate) fn share(page: &Page, b: &BBox) -> f64 {
     (b.x1 - b.x0) * (b.y1 - b.y0) / (page.width * page.height).max(1.0)
+}
+
+/// Widest gap, in PDF units, between two images the text layer leaves
+/// void for them to be drawn as one picture ([`pasted`]): a scanner or a
+/// producer that stores a scan in strips lays them edge to edge, give or
+/// take the rounding of their placement.
+const ABUTTING_GAP: f64 = 2.0;
+
+/// Whether a raster region of `page` (a box of its images, in the page's
+/// reading frame) is a screen pasted into it rather than the page's
+/// content: the picture it is part of covers under half the page
+/// ([`IMAGE_DOMINANT_COVERAGE`]). A heading read in a pasted region is the
+/// screen's, not the document's, whoever reads it: OCR
+/// ([`crate::ocr::Injected::pasted`]) or a model.
+///
+/// The picture is the region and every image the text layer leaves void
+/// that touches it, as the router judges a page image-dominated on the
+/// union of its images, not image by image: a scan stored in strips under
+/// a fax header the text layer carries is routed as one region a strip,
+/// each under half the page, and the scan they make is the page's content.
+/// An image the text layer covers (a letterhead drawn behind the page's
+/// text) is the page's background, and does not join a picture.
+///
+/// To judge several regions of one page, [`pasted_set`] measures the
+/// page's pictures once for all of them.
+pub fn pasted(page: &Page, b: &BBox) -> bool {
+    pasted_set(page, std::slice::from_ref(b))[0]
+}
+
+/// [`pasted`] for each of `boxes`, raster regions of one `page`, in their
+/// order. The page's pictures are measured once, whatever the number of
+/// regions: a capture a printer driver stores in thousands of strips one
+/// pixel high is thousands of regions, each part of one picture.
+pub fn pasted_set(page: &Page, boxes: &[BBox]) -> Vec<bool> {
+    let mut pictures = None;
+    boxes
+        .iter()
+        .map(|b| {
+            share(page, b) < IMAGE_DOMINANT_COVERAGE
+                && pictures
+                    .get_or_insert_with(|| Pictures::of(page))
+                    .under_half(page, b)
+        })
+        .collect()
+}
+
+/// Whether two boxes are no further apart than [`ABUTTING_GAP`].
+fn abut(a: &BBox, o: &BBox) -> bool {
+    a.x0 <= o.x1 + ABUTTING_GAP
+        && o.x0 <= a.x1 + ABUTTING_GAP
+        && a.y0 <= o.y1 + ABUTTING_GAP
+        && o.y0 <= a.y1 + ABUTTING_GAP
+}
+
+/// Cells a side of the grid [`Pictures`] files a page's images on.
+const PICTURE_BINS: usize = 64;
+
+/// The pictures of a page, for [`pasted_set`]: its images the text layer
+/// leaves void, joined where they abut ([`ABUTTING_GAP`]), each picture
+/// with the share of the page its union covers. Filed on a grid of the
+/// page, so that a region is measured against the images near it.
+struct Pictures {
+    /// Cell size, in PDF units.
+    cell: (f64, f64),
+    /// The void images' boxes.
+    boxes: Vec<BBox>,
+    /// The picture each void image's box is part of, by the box.
+    by_box: std::collections::HashMap<[u64; 4], usize>,
+    /// Each picture's boxes, by index into `boxes`.
+    members: Vec<Vec<usize>>,
+    /// The share of the page each picture's union covers.
+    covers: Vec<f64>,
+    /// Each cell's boxes, reached past their edge by the gap, by picture:
+    /// a capture stored in strips is one picture, which a region not part
+    /// of it is measured against once a cell, not once a strip.
+    grid: Vec<Vec<(usize, Vec<usize>)>>,
+}
+
+impl Pictures {
+    fn of(page: &Page) -> Self {
+        let text = TextLayer::of(page);
+        let boxes: Vec<BBox> = (page.images.iter())
+            .map(|p| p.bbox)
+            .filter(|b| text.void(b))
+            .collect();
+        let mut pictures = Pictures {
+            cell: (
+                page.width.max(1.0) / PICTURE_BINS as f64,
+                page.height.max(1.0) / PICTURE_BINS as f64,
+            ),
+            boxes,
+            by_box: std::collections::HashMap::new(),
+            members: Vec::new(),
+            covers: Vec::new(),
+            grid: vec![Vec::new(); PICTURE_BINS * PICTURE_BINS],
+        };
+        // Union-find over the boxes, each joined to the groups it abuts
+        // among those filed before it in the cells it reaches. A cell keeps
+        // its boxes by group, so that a box is not measured against the
+        // boxes of its own group: thousands of strips in one cell are one
+        // group, and a strip is measured against a few.
+        let mut parent: Vec<usize> = (0..pictures.boxes.len()).collect();
+        for i in 0..pictures.boxes.len() {
+            let b = pictures.boxes[i];
+            for c in pictures.cells(&b) {
+                let groups = &mut pictures.grid[c];
+                regroup(groups, &mut parent);
+                for (r, members) in groups.iter() {
+                    let own = root(&mut parent, i);
+                    if *r != own && members.iter().any(|&j| abut(&b, &pictures.boxes[j])) {
+                        parent[own] = *r;
+                    }
+                }
+                regroup(groups, &mut parent);
+                let own = root(&mut parent, i);
+                match groups.iter_mut().find(|(r, _)| *r == own) {
+                    Some((_, members)) => members.push(i),
+                    None => groups.push((own, vec![i])),
+                }
+            }
+        }
+        let mut id = std::collections::HashMap::new();
+        let mut picture = Vec::with_capacity(pictures.boxes.len());
+        for i in 0..pictures.boxes.len() {
+            let r = root(&mut parent, i);
+            let next = id.len();
+            let p = *id.entry(r).or_insert(next);
+            if p == pictures.members.len() {
+                pictures.members.push(Vec::new());
+            }
+            pictures.members[p].push(i);
+            picture.push(p);
+        }
+        for groups in pictures.grid.iter_mut() {
+            regroup(groups, &mut parent);
+            for (r, members) in groups.iter_mut() {
+                *r = picture[members[0]];
+            }
+        }
+        pictures.by_box = (pictures.boxes.iter().zip(&picture))
+            .map(|(b, &p)| (box_key(b), p))
+            .collect();
+        pictures.covers = (pictures.members.iter())
+            .map(|m| {
+                let boxes: Vec<BBox> = m.iter().map(|&i| pictures.boxes[i]).collect();
+                cover(page, &boxes)
+            })
+            .collect();
+        pictures
+    }
+
+    /// The cells a box reaches, past its edges by the gap.
+    fn cells(&self, b: &BBox) -> impl Iterator<Item = usize> {
+        let bin = |v: f64, size: f64| ((v / size).floor().max(0.0) as usize).min(PICTURE_BINS - 1);
+        let g = ABUTTING_GAP;
+        let cols = bin(b.x0 - g, self.cell.0)..=bin(b.x1 + g, self.cell.0);
+        let rows = bin(b.y0 - g, self.cell.1)..=bin(b.y1 + g, self.cell.1);
+        rows.flat_map(move |r| cols.clone().map(move |c| r * PICTURE_BINS + c))
+    }
+
+    /// Whether region `b` and the pictures it abuts cover under half the
+    /// page: the picture it is part of, or, for a region the text layer
+    /// does not leave void, every picture it touches.
+    fn under_half(&self, page: &Page, b: &BBox) -> bool {
+        // A void image's box is part of its picture, and every box it
+        // abuts is too: the picture's union is the region's.
+        if let Some(&p) = self.by_box.get(&box_key(b)) {
+            return self.covers[p] < IMAGE_DOMINANT_COVERAGE;
+        }
+        let mut touched: Vec<usize> = Vec::new();
+        for c in self.cells(b) {
+            for (p, members) in &self.grid[c] {
+                if !touched.contains(p) && members.iter().any(|&j| abut(b, &self.boxes[j])) {
+                    touched.push(*p);
+                }
+            }
+        }
+        // Bounds first: the union is at least its largest picture, and at
+        // most the region and the pictures' unions summed.
+        let largest = touched.iter().map(|&p| self.covers[p]).fold(0.0, f64::max);
+        if largest >= IMAGE_DOMINANT_COVERAGE {
+            return false;
+        }
+        let sum: f64 = share(page, b) + touched.iter().map(|&p| self.covers[p]).sum::<f64>();
+        if sum < IMAGE_DOMINANT_COVERAGE {
+            return true;
+        }
+        let picture: Vec<BBox> = std::iter::once(*b)
+            .chain(
+                touched
+                    .iter()
+                    .flat_map(|&p| self.members[p].iter().map(|&j| self.boxes[j])),
+            )
+            .collect();
+        union_share(page, &picture) < IMAGE_DOMINANT_COVERAGE
+    }
+}
+
+/// The root of `i` in a union-find, halving the path to it.
+fn root(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+    }
+    i
+}
+
+/// A cell's groups, each under its root now, those joined since merged:
+/// the smaller into the larger, so a box moves a few times at most.
+fn regroup(groups: &mut Vec<(usize, Vec<usize>)>, parent: &mut [usize]) {
+    for g in groups.iter_mut() {
+        g.0 = root(parent, g.0);
+    }
+    let mut i = 0;
+    while i < groups.len() {
+        match (0..i).find(|&k| groups[k].0 == groups[i].0) {
+            Some(k) => {
+                let (_, mut moved) = groups.swap_remove(i);
+                if moved.len() > groups[k].1.len() {
+                    std::mem::swap(&mut moved, &mut groups[k].1);
+                }
+                groups[k].1.append(&mut moved);
+            }
+            None => i += 1,
+        }
+    }
+}
+
+/// The share of the page `boxes` cover together: their areas summed while
+/// that is under half the page, which bounds their union's, else their
+/// union's exactly ([`union_share`]).
+fn cover(page: &Page, boxes: &[BBox]) -> f64 {
+    let sum: f64 = boxes.iter().map(|o| share(page, o)).sum();
+    if sum < IMAGE_DOMINANT_COVERAGE {
+        sum
+    } else {
+        union_share(page, boxes)
+    }
+}
+
+/// The share of the page the union of `boxes` covers, exactly: column by
+/// column between the boxes' vertical edges, the lengths of the merged
+/// spans of the boxes crossing it.
+fn union_share(page: &Page, boxes: &[BBox]) -> f64 {
+    let mut xs: Vec<f64> = boxes.iter().flat_map(|b| [b.x0, b.x1]).collect();
+    xs.sort_by(f64::total_cmp);
+    xs.dedup();
+    let mut area = 0.0;
+    for w in xs.windows(2) {
+        let (x0, x1) = (w[0], w[1]);
+        let mut spans: Vec<(f64, f64)> = boxes
+            .iter()
+            .filter(|b| b.x0 <= x0 && b.x1 >= x1)
+            .map(|b| (b.y0, b.y1))
+            .collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut covered = 0.0;
+        let mut open: Option<(f64, f64)> = None;
+        for (y0, y1) in spans {
+            match open {
+                Some((o0, o1)) if y0 <= o1 => open = Some((o0, o1.max(y1))),
+                _ => {
+                    if let Some((o0, o1)) = open {
+                        covered += o1 - o0;
+                    }
+                    open = Some((y0, y1));
+                }
+            }
+        }
+        if let Some((o0, o1)) = open {
+            covered += o1 - o0;
+        }
+        area += covered * (x1 - x0);
+    }
+    area / (page.width * page.height).max(1.0)
 }
 
 /// Cells a side of the grid [`TextLayer`] files glyphs on.
@@ -610,6 +885,148 @@ mod tests {
 
     fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
         BBox { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn a_scan_stored_in_strips_is_one_picture_not_pasted_screens() {
+        // A text page (its glyphs in the top corner) carrying a scan in two
+        // strips, each under half the page, laid a point's rounding apart:
+        // routed a region each, and together the page's content.
+        let top = b(40.0, 80.0, 572.0, 420.0);
+        let bottom = b(40.0, 421.0, 572.0, 760.0);
+        let p = page_with(1500, 0, vec![(top, true), (bottom, true)]);
+        assert!(share(&p, &top) < IMAGE_DOMINANT_COVERAGE);
+        assert!(matches!(decide(&p).0, Route::VlmRegions(r) if r.len() == 2));
+        assert!(!pasted(&p, &top) && !pasted(&p, &bottom));
+        // One strip alone, or two an inch apart, are two screens.
+        let alone = page_with(1500, 0, vec![(top, true)]);
+        assert!(pasted(&alone, &top));
+        let apart = b(40.0, 500.0, 572.0, 760.0);
+        let p = page_with(1500, 0, vec![(top, true), (apart, true)]);
+        assert!(pasted(&p, &top) && pasted(&p, &apart));
+        // A region covering half the page or more is never pasted.
+        let scan = b(40.0, 80.0, 572.0, 760.0);
+        assert!(!pasted(&page_with(1500, 0, vec![(scan, true)]), &scan));
+    }
+
+    #[test]
+    fn a_screen_on_a_letterhead_drawn_behind_the_text_is_pasted() {
+        // A letterhead image under the whole page, the page's text drawn on
+        // it, and a screenshot pasted on both: the letterhead is the page's
+        // background, not part of the screen's picture.
+        let letterhead = b(0.0, 0.0, 600.0, 800.0);
+        let shot = b(60.0, 300.0, 540.0, 400.0);
+        let p = page_with(1500, 0, vec![(letterhead, false), (shot, true)]);
+        assert!(pasted(&p, &shot));
+    }
+
+    /// [`pasted`] as a search from the region, image by image, which
+    /// [`pasted_set`] must agree with.
+    fn pasted_by_search(page: &Page, b: &BBox) -> bool {
+        if share(page, b) >= IMAGE_DOMINANT_COVERAGE {
+            return false;
+        }
+        let text = TextLayer::of(page);
+        let mut rest: Vec<BBox> = page.images.iter().map(|p| p.bbox).collect();
+        let mut picture = vec![*b];
+        let mut i = 0;
+        while i < picture.len() {
+            let at = picture[i];
+            let (near, far): (Vec<BBox>, Vec<BBox>) =
+                rest.into_iter().partition(|o| abut(&at, o) && text.void(o));
+            picture.extend(near);
+            rest = far;
+            i += 1;
+        }
+        union_share(page, &picture) < IMAGE_DOMINANT_COVERAGE
+    }
+
+    #[test]
+    fn pictures_measured_once_a_page_judge_as_a_search_from_each_region() {
+        // Pages of boxes laid at random, some abutting, some apart, some
+        // under a cluster of glyphs (not void, and joining no picture), and
+        // regions that are not an image's box: each judged as a search from
+        // it would.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: f64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 10_000) as f64 / 10_000.0 * n
+        };
+        let mut pasted_seen = (0, 0);
+        for _ in 0..300 {
+            let images: Vec<(BBox, bool)> = (0..2 + next(30.0) as usize)
+                .map(|_| {
+                    let (x, y) = (next(560.0), next(760.0));
+                    let (w, h) = (5.0 + next(300.0), 1.0 + next(300.0));
+                    (b(x, y, x + w, y + h), true)
+                })
+                .collect();
+            let mut p = page_with(0, 0, images);
+            let (gx, gy) = (next(500.0), next(700.0));
+            p.glyphs = (0..40)
+                .map(|i| Glyph {
+                    text: "a".into(),
+                    bbox: Some(b(gx + i as f64, gy, gx + i as f64 + 1.0, gy + 2.0)),
+                    page: 0,
+                    origin: (gx, gy),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: None,
+                    draw_index: i,
+                })
+                .collect();
+            let mut regions: Vec<BBox> = p.images.iter().map(|i| i.bbox).collect();
+            regions.push(b(gx - 5.0, gy - 5.0, gx + 60.0, gy + 30.0));
+            regions.push(b(next(500.0), next(700.0), 600.0, 800.0));
+            let got = pasted_set(&p, &regions);
+            for (r, got) in regions.iter().zip(got) {
+                assert_eq!(got, pasted_by_search(&p, r), "{r:?} on {:?}", p.images);
+                if got {
+                    pasted_seen.0 += 1;
+                } else {
+                    pasted_seen.1 += 1;
+                }
+            }
+        }
+        assert!(
+            pasted_seen.0 > 100 && pasted_seen.1 > 100,
+            "{pasted_seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_capture_stored_in_thousands_of_strips_is_judged_in_near_linear_time() {
+        // A 300 × 260 pt capture stored in strips one pixel row high, each a
+        // region of its own: every strip is part of one picture, measured
+        // once for all of them.
+        let time = |n: usize| {
+            let h = 260.0 / n as f64;
+            let strips: Vec<(BBox, bool)> = (0..n)
+                .map(|i| {
+                    let y = 300.0 + i as f64 * h;
+                    (b(150.0, y, 450.0, y + h), true)
+                })
+                .collect();
+            let p = page_with(1, 0, strips);
+            let regions: Vec<BBox> = p.images.iter().map(|i| i.bbox).collect();
+            let t = std::time::Instant::now();
+            let pasted = pasted_set(&p, &regions);
+            let took = t.elapsed().as_secs_f64();
+            assert!(
+                pasted.iter().all(|p| *p),
+                "a capture of a sixth of the page"
+            );
+            took
+        };
+        let (small, large) = (time(1_000), time(4_000));
+        assert!(
+            large < 8.0 * small.max(0.01),
+            "1k strips {small:.3}s, 4k {large:.3}s"
+        );
+        assert!(large < 1.0, "4k strips {large:.3}s");
     }
 
     #[test]
