@@ -116,7 +116,8 @@ paragraph's run-in head, not a heading: the paragraph starts at the label
 and reads whole. A line that runs to its column's edge was wrapped, not
 ended, so the next line goes on with the same paragraph whatever its
 weight, and bold names wrapped onto a line of their own stay in their
-sentence. A bullet at the head of a line (`•`, `■`) begins a list item,
+sentence. The next line goes on only from its column's left edge: a line
+starting well to the left of it belongs to another column. A bullet at the head of a line (`•`, `■`) begins a list item,
 even below a line that runs to the edge.
 
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
