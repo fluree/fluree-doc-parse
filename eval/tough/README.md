@@ -76,7 +76,7 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `cell` | some cell has this `value`, and the `column`, `row` and `section` names given |
 | `text` | the text projection contains this text, exactly `count` times where one is given |
 | `no_text` | the text projection does not contain this text anywhere |
-| `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence` |
+| `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence`; exactly `count` elements do where one is given, `0` for one that must be gone |
 | `section` | some section is headed by exactly this `title` and, where given, sits at this `level` and directly inside the section headed by `within` |
 | `no_section` | no section is headed by a title beginning with this text |
 

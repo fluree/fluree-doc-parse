@@ -168,14 +168,17 @@ def run_check(check, reading):
         # all, and where given, this evidence: what the text projection's
         # runs of whitespace cannot tell apart, a heading from the line under
         # it, or a header from the body.
+        # Where a count is given, exactly that many: zero for a reading that
+        # must be gone, such as a link cut short at a line break.
         want = check["element"]
-        ok = any(
+        hits = sum(
             n.get("@type") == want.get("type", n.get("@type"))
             and n.get("nif:isString", "") == want.get("text", n.get("nif:isString", ""))
             and n.get("doc:evidence") == want.get("evidence", n.get("doc:evidence"))
             for n in reading.nodes.values()
         )
-        return ok, None if ok else "no such element"
+        ok = hits == check["count"] if "count" in check else hits > 0
+        return ok, None if ok else f"{hits} such elements"
     if "no_column_header" in check:
         # Anywhere in the name: under a stacked header a row read as header
         # is one label in a path (`A / B / C`).
