@@ -42,11 +42,21 @@ structure already has its text, and a table crop asks about structure; both are
 left for a model. Given image files (PNG, JPEG, TIFF), it reads them all,
 decoded upright by their EXIF orientation; of a multi-page TIFF, the first page.
 
-An image taller than the detector takes at full size (2,000 px, or less for
-an image under 736 px wide, which it scales up) is read in strips that overlap
+The detector reads an image at most 2,000 px on its long side, and scales one
+under 736 px wide up to that first. An image so tall that strips of it are
+read at least 1.75 times larger than the whole is read in strips that overlap
 by a fifth, each line kept once, rather than shrunk: a 1,200 × 9,000 capture
-of 220 rows 13 px high read none of them shrunk, and all of them in strips. A
-wide image is still shrunk, since a cut across it would cut its lines.
+of 220 rows 13 px high read none of them shrunk, and all of them in strips.
+A strip of an image 2,000 px wide or more is as long as the image is wide, so
+the detector still shrinks it, less than the whole.
+
+A scanned page is never cut: Legal (8.5 × 14 in), the longest, is 1.65 times
+as tall as wide. Read in strips, a page took two detections for no line more,
+and lost a line running down it longer than the strips' overlap; read whole,
+a page at 300 dpi or more is shrunk, and its text still read. A tall capture
+is cut, so a sideways line in one longer than the overlap (400 px for strips
+of 2,000) is lost or cut short. A wide image is still shrunk, since a cut
+across it would cut its lines.
 
 ## Options
 

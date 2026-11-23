@@ -467,3 +467,68 @@ fn a_tall_capture_is_read_row_by_row() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_page_scanned_sideways_at_300_dpi_is_read_whole() {
+    // A landscape sheet scanned on a Letter page at 300 dpi, 2,550 × 3,300
+    // pixels: its 15 lines run down the page, from row 100 or so past row
+    // 2,600. Cut as a tall image would be, in strips 0-2,550 and 750-3,300,
+    // each line would reach a cut in both and be lost, or be kept twice.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let line = |i: usize| {
+        format!(
+            "Line {i:02} quarterly statement for account {} opening balance {}.{:02} closing balance due on payment of all fees this quarter",
+            4417 + 31 * i,
+            1200 + 17 * i,
+            i
+        )
+    };
+    let lines: String = (0..15)
+        .map(|i| {
+            // Turned a quarter clockwise: the text runs down the page.
+            format!(
+                "BT /F1 24 Tf 0 -1 1 0 {} 1600 Tm ({}) Tj ET\n",
+                1150 - 70 * i,
+                line(i)
+            )
+        })
+        .collect();
+    let bytes = pdf_sized(
+        1275,
+        1650,
+        &lines,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        None,
+    );
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let mut image = None;
+    fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+    let image = image.unwrap();
+    assert_eq!((image.width, image.height), (2550, 3300));
+    let reading = engine.read(&image).unwrap();
+    let read: Vec<String> = reading
+        .words
+        .iter()
+        .map(|w| w.text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    for w in &reading.words {
+        // Upright about its center, a line running down spans its length
+        // in rows.
+        let (cy, len) = ((w.bbox[1] + w.bbox[3]) / 2.0, w.bbox[2] - w.bbox[0]);
+        assert!(
+            cy - len / 2.0 < 740.0 && cy + len / 2.0 > 2560.0,
+            "{} spans rows {} to {}",
+            w.text,
+            cy - len / 2.0,
+            cy + len / 2.0
+        );
+    }
+    for i in 0..15 {
+        let n = read.iter().filter(|t| **t == line(i)).count();
+        assert_eq!(n, 1, "line {i} read {n} times: {read:?}");
+    }
+    assert_eq!(read.len(), 15, "{read:?}");
+}
