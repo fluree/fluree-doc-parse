@@ -33,7 +33,8 @@ fn scan_of(lines: &[&str]) -> Vec<u8> {
     fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| {
         w = c.pixels.width;
         h = c.pixels.height;
-        gray = c.pixels.rgba.chunks_exact(4).map(|p| p[0]).collect();
+        assert_eq!(c.pixels.layout, fluree_doc_vision::Layout::Rgba8);
+        gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
     });
     let image = [
         format!(
@@ -356,7 +357,13 @@ fn images_read_at_once_share_a_bounded_set_of_pipelines() {
     };
     let engine = OarEngine::open(&dir, &opts).unwrap();
     assert_eq!(engine.pipelines(), 1, "one built when it opens");
-    let image = fluree_doc_vision::Pixels::new(400, 120, vec![255; 400 * 120 * 4]).unwrap();
+    let image = fluree_doc_vision::Pixels::new(
+        400,
+        120,
+        fluree_doc_vision::Layout::Luma8,
+        vec![255; 400 * 120],
+    )
+    .unwrap();
     std::thread::scope(|s| {
         for _ in 0..6 {
             s.spawn(|| engine.read(&image).unwrap());

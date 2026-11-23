@@ -587,8 +587,9 @@ pub fn within_budget(doc: &Document, jobs: CropJobs, max_crops: usize) -> (CropJ
 pub fn render_crops(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
     let mut out = Vec::new();
     for_each_crop(pdf, jobs, |c| {
+        // Rendered crops are RGBA (see `for_each_crop`).
         if let Some(png) = encode(
-            &c.pixels.rgba,
+            &c.pixels.data,
             c.pixels.width as usize,
             0,
             0,
@@ -618,8 +619,10 @@ pub struct RawCrop {
 
 /// Render each job's crops and hand them over one at a time, so a long
 /// scan never holds more than one page's pixels. The same pixels
-/// [`render_crops`] encodes: same renderer, scale and margin.
+/// [`render_crops`] encodes: same renderer, scale and margin, and RGBA, as
+/// the renderer gives them.
 pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, mut f: impl FnMut(RawCrop)) {
+    use fluree_doc_vision::Layout;
     let pages = pdf.pages();
     let cache = RenderCache::new();
     let white: AlphaColor<Srgb> = AlphaColor::new([1.0, 1.0, 1.0, 1.0]);
@@ -647,7 +650,9 @@ pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, mut f: impl FnMut(RawCrop)) {
             .collect();
         match regions {
             None => {
-                if let Some(pixels) = fluree_doc_vision::Pixels::new(w as u32, h as u32, rgba) {
+                if let Some(pixels) =
+                    fluree_doc_vision::Pixels::new(w as u32, h as u32, Layout::Rgba8, rgba)
+                {
                     f(RawCrop {
                         name: format!("p{page_idx}_full"),
                         page: *page_idx,
@@ -671,9 +676,12 @@ pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, mut f: impl FnMut(RawCrop)) {
                         let s = (row * w + x0) * 4;
                         buf.extend_from_slice(&rgba[s..s + (x1 - x0) * 4]);
                     }
-                    if let Some(pixels) =
-                        fluree_doc_vision::Pixels::new((x1 - x0) as u32, (y1 - y0) as u32, buf)
-                    {
+                    if let Some(pixels) = fluree_doc_vision::Pixels::new(
+                        (x1 - x0) as u32,
+                        (y1 - y0) as u32,
+                        Layout::Rgba8,
+                        buf,
+                    ) {
                         f(RawCrop {
                             name: format!("p{page_idx}_{tag}"),
                             page: *page_idx,

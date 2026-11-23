@@ -12,7 +12,7 @@
 //! upright about its center, with the line's angle.
 
 use crate::assets::{Assets, Runtime};
-use crate::{Coords, OcrEngine, OcrWord, Pixels, WordReading};
+use crate::{Coords, Layout, OcrEngine, OcrWord, Pixels, WordReading};
 use oar_ocr::core::config::OrtSessionConfig;
 use oar_ocr::domain::tasks::TextDetectionConfig;
 use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
@@ -240,17 +240,9 @@ impl OcrEngine for OarEngine {
     }
 
     fn read(&self, image: &Pixels) -> Result<WordReading, String> {
-        // Composited over white: a crop's transparent pixels are paper.
-        let rgb: Vec<u8> = image
-            .rgba
-            .chunks_exact(4)
-            .flat_map(|p| {
-                let a = p[3] as u16;
-                let over = |c: u8| ((c as u16 * a + 255 * (255 - a)) / 255) as u8;
-                [over(p[0]), over(p[1]), over(p[2])]
-            })
-            .collect();
-        let img = image::RgbImage::from_raw(image.width, image.height, rgb)
+        // oar-ocr reads RGB: a grey image is spread to three channels, and
+        // a crop's transparent pixels are composited over white paper.
+        let img = image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
             .ok_or("the image's buffer does not match its size")?;
         let lease = self.pipes.take(|| self.pipeline())?;
         let result = lease.predict(vec![img]);
@@ -326,13 +318,22 @@ fn quad_box(p: [(f64, f64); 4]) -> ([f64; 4], f64) {
 /// PaddleOCR's).
 const TALL_LINE: f64 = 1.5;
 
-/// Decode an image file (PNG, JPEG, TIFF, …) into [`Pixels`].
+/// Decode an image file (PNG, JPEG, TIFF, …) into [`Pixels`], in the
+/// layout it holds: grey stays one byte a pixel, colour three, and only an
+/// image with transparency takes four.
 pub fn load_pixels(path: &Path) -> Result<Pixels, String> {
-    let img = image::open(path)
-        .map_err(|e| format!("{}: {e}", path.display()))?
-        .to_rgba8();
-    let (w, h) = img.dimensions();
-    Pixels::new(w, h, img.into_raw()).ok_or_else(|| format!("{}: empty image", path.display()))
+    let img = image::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (w, h) = (img.width(), img.height());
+    let color = img.color();
+    let (layout, data) = match img {
+        image::DynamicImage::ImageLuma8(b) => (Layout::Luma8, b.into_raw()),
+        image::DynamicImage::ImageRgb8(b) => (Layout::Rgb8, b.into_raw()),
+        image::DynamicImage::ImageRgba8(b) => (Layout::Rgba8, b.into_raw()),
+        other if color.has_alpha() => (Layout::Rgba8, other.into_rgba8().into_raw()),
+        other if color.has_color() => (Layout::Rgb8, other.into_rgb8().into_raw()),
+        other => (Layout::Luma8, other.into_luma8().into_raw()),
+    };
+    Pixels::new(w, h, layout, data).ok_or_else(|| format!("{}: empty image", path.display()))
 }
 
 #[cfg(test)]
@@ -370,6 +371,31 @@ mod tests {
         drop(pipes.take(|| Ok(1)).unwrap());
         assert_eq!(*pipes.take(|| Ok(2)).unwrap(), 1);
         assert_eq!(pipes.built(), 1);
+    }
+
+    #[test]
+    fn an_image_file_keeps_its_layout() {
+        let dir = std::env::temp_dir().join(format!("fdoc-load-pixels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let grey = dir.join("grey.png");
+        image::GrayImage::from_pixel(30, 10, image::Luma([200]))
+            .save(&grey)
+            .unwrap();
+        let colour = dir.join("colour.png");
+        image::RgbImage::from_pixel(30, 10, image::Rgb([1, 2, 3]))
+            .save(&colour)
+            .unwrap();
+        let clear = dir.join("clear.png");
+        image::GrayAlphaImage::from_pixel(30, 10, image::LumaA([0, 0]))
+            .save(&clear)
+            .unwrap();
+        let g = load_pixels(&grey).unwrap();
+        assert_eq!((g.layout, g.data.len()), (Layout::Luma8, 300));
+        assert_eq!(load_pixels(&colour).unwrap().layout, Layout::Rgb8);
+        let c = load_pixels(&clear).unwrap();
+        assert_eq!(c.layout, Layout::Rgba8, "transparency is kept");
+        assert_eq!(c.to_rgb()[..3], [255, 255, 255], "and reads as paper");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
