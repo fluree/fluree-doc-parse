@@ -271,7 +271,7 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
 
 /// Group one page's lines into blocks, given the document's modal leading.
 pub fn assemble(lines: &[Line], leading: f64) -> Vec<Block> {
-    assemble_with_marks(lines, leading, &[], &[])
+    assemble_with_marks(lines, leading, &[], &[], &[])
 }
 
 /// The fill a line sits in: the smallest one that spans it horizontally and
@@ -317,14 +317,48 @@ fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
     })
 }
 
+/// The centers of the inked characters an OCR reading added to a page,
+/// sorted by y: what block assembly keeps apart from the page's own lines.
+pub fn ocr_centers(page: &crate::extract::Page) -> Vec<(f64, f64)> {
+    if page.ocr.is_none() {
+        return Vec::new();
+    }
+    let mut v: Vec<(f64, f64)> = page
+        .glyphs
+        .iter()
+        .filter(|g| page.is_ocr(g) && !g.text.trim().is_empty())
+        .filter_map(|g| g.bbox)
+        .map(|b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5))
+        .collect();
+    v.sort_by(|a, b| a.1.total_cmp(&b.1));
+    v
+}
+
+/// Whether OCR read any of a line's characters: one of `ocr`, the centers of
+/// the characters a reading added sorted by y, lies in the line's box.
+fn read_by_ocr(l: &Line, ocr: &[(f64, f64)]) -> bool {
+    let from = ocr.partition_point(|c| c.1 < l.bbox.y0);
+    ocr[from..]
+        .iter()
+        .take_while(|c| c.1 <= l.bbox.y1)
+        .any(|c| l.bbox.contains(c.0, c.1))
+}
+
 /// Assemble blocks, treating each supplied checkbox as a list marker — the
 /// line it introduces starts its own block and carries the marker — and each
 /// supplied fill as a band no block crosses; see [`band_of`].
+///
+/// `ocr` holds the centers of the characters an OCR reading added to the
+/// page, sorted by y. A line OCR read never joins a line the page drew in a
+/// block, however the geometry reads: a screenshot pasted under a paragraph,
+/// set at its size and pitch, would otherwise continue it, and the element's
+/// provenance could then say only one of the two.
 pub fn assemble_with_marks(
     lines: &[Line],
     leading: f64,
     checkboxes: &[BBox],
     bands: &[BBox],
+    ocr: &[(f64, f64)],
 ) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
     let right_edge = lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
@@ -351,6 +385,7 @@ pub fn assemble_with_marks(
     // Lines a checkbox introduces, by index into `lines`.
     let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
+    let read: Vec<bool> = lines.iter().map(|l| read_by_ocr(l, ocr)).collect();
     let mut marked: Vec<usize> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
         if cur.is_empty() {
@@ -361,9 +396,11 @@ pub fn assemble_with_marks(
             continue;
         }
         // A checkbox always begins a new option, however the geometry reads,
-        // and a fill's edge is a row's edge.
+        // a fill's edge is a row's edge, and pixels read are not the page's
+        // own text.
         if !ticked[i]
             && band[i] == band[i - 1]
+            && read[i] == read[i - 1]
             && continues(cur.last().unwrap(), l, leading, right_edge, span)
         {
             cur.push(l.clone());
@@ -743,7 +780,7 @@ mod tests {
                 y1: i as f64 * 11.0 + 7.0,
             })
             .collect();
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], &[]);
         assert_eq!(b.len(), 3, "one block per option, got {b:?}");
         assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{2610}")));
     }
@@ -761,9 +798,24 @@ mod tests {
             x1: 407.0,
             y1: 7.0,
         }];
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], &[]);
         assert_eq!(b.len(), 1);
         assert!(b[0].marker.is_none());
+    }
+
+    #[test]
+    fn a_line_ocr_read_does_not_continue_the_pages_own() {
+        let lines = vec![
+            l("first line of", 10.0, 0.0, 10.0),
+            l("the paragraph", 10.0, 12.0, 10.0),
+            l("read from pixels", 10.0, 24.0, 10.0),
+        ];
+        let c = &lines[2].bbox;
+        let ocr = [((c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5)];
+        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &[], &[]).len(), 1);
+        let b = assemble_with_marks(&lines, 1.2, &[], &[], &ocr);
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert_eq!(b[1].text(), "read from pixels");
     }
 
     #[test]
@@ -956,7 +1008,7 @@ mod tests {
                 y1: 46.0,
             },
         ];
-        let b = assemble_with_marks(&lines, 1.48, &[], &bands);
+        let b = assemble_with_marks(&lines, 1.48, &[], &bands, &[]);
         assert_eq!(b.len(), 2, "one block per band, got {b:?}");
         assert!(b[0].text().starts_with("Q12") && b[0].text().ends_with("materials"));
         assert!(b[1].text().starts_with("Q13"));
@@ -974,7 +1026,7 @@ mod tests {
             x1: 400.0,
             y1: 30.0,
         }];
-        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands).len(), 1);
+        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands, &[]).len(), 1);
     }
 
     #[test]

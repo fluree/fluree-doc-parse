@@ -608,10 +608,12 @@ fn pipeline(pdf: &Path) -> Doc {
             body_lines += kept.len();
             // Per column: "was this line wrapped?" is judged against the
             // column's own right edge, not the page's. The page's fills mark
-            // checkboxes and row bands, as they do in the pipeline.
+            // checkboxes and row bands, and its OCR characters lines apart,
+            // as they do in the pipeline.
             let checkboxes = rule::checkboxes(&doc.pages[pi].fills);
+            let ocr = block::ocr_centers(&doc.pages[pi]);
             out.extend(
-                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi])
+                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi], &ocr)
                     .into_iter()
                     .flat_map(block::split_structural_prefix),
             );

@@ -1534,10 +1534,14 @@ fn quad_bounds(q: &[(f64, f64); 4]) -> ((f64, f64), (f64, f64)) {
 /// Mark the elements OCR words make up as `provenance: "ocr"`.
 ///
 /// Called on the final elements, after analysis has turned glyphs into
-/// paragraphs and tables. An element is OCR's when at least half of its
-/// characters lie on characters a reading added — so a scanned page's
-/// stamped header, which the text layer had, keeps its own provenance.
-/// Elements a model tier spliced in keep theirs.
+/// paragraphs and tables. An element is OCR's when any of its characters
+/// lies on a character a reading added: a character read from pixels is
+/// never presented as the PDF's own, so an element that holds both — a
+/// table whose rows mix them, a line set across both — is OCR's. Block
+/// assembly keeps an OCR line out of the page's own paragraphs, so the text
+/// layer's prose keeps its provenance, and a scanned page's stamped header,
+/// which the text layer had, keeps its own. Elements a model tier spliced in
+/// keep theirs.
 pub fn mark_provenance(elements: &mut [fluree_doc_model::Element], injected: &[Injected]) {
     use std::collections::HashMap;
     // Per page, character centers sorted by y: an element looks only at
@@ -1569,7 +1573,7 @@ pub fn mark_provenance(elements: &mut [fluree_doc_model::Element], injected: &[I
             .take_while(|c| c.1 <= b.y1)
             .filter(|c| b.contains(c.0, c.1))
             .count();
-        if ocr > 0 && ocr * 2 >= total {
+        if ocr > 0 {
             e.provenance = "ocr";
         }
     }
@@ -3530,7 +3534,84 @@ mod tests {
     }
 
     #[test]
-    fn elements_mostly_of_ocr_words_are_marked() {
+    fn ocr_lines_under_a_paragraph_do_not_join_it() {
+        // A text page with a screenshot pasted under its paragraph, the
+        // screenshot's lines read by OCR at the paragraph's size and pitch,
+        // one with an O/0 confusion. The PDF's own text stays the PDF's; the
+        // characters read from pixels are said to be.
+        let body = [
+            "The statement below records each transfer made from the old",
+            "account and the date on which it was booked, in the order of",
+            "the ledger, so that a reader can follow every entry through",
+            "the period it covers and up to its later reconciliation and",
+        ];
+        let mut glyphs = Vec::new();
+        for (row, line) in body.iter().enumerate() {
+            glyphs.extend(native(line, 72.0, 140.0 + row as f64 * 12.0));
+        }
+        for (i, g) in glyphs.iter_mut().enumerate() {
+            g.draw_index = i;
+        }
+        let shot = BBox {
+            x0: 66.0,
+            y0: 182.0,
+            x1: 540.0,
+            y1: 300.0,
+        };
+        let mut doc = Document {
+            pages: vec![page(
+                glyphs,
+                vec![ImagePlacement {
+                    bbox: shot,
+                    texty: true,
+                }],
+            )],
+        };
+        assert!(matches!(
+            route::decide(&doc.pages[0]).0,
+            Route::VlmRegions(_)
+        ));
+        // Detector boxes, 1.3 ems tall with the baseline 0.78 down: on the
+        // paragraph's next two baselines.
+        let line = |text: &str, baseline: f64| {
+            word(
+                text,
+                [
+                    72.0,
+                    baseline - 0.78 * 13.0,
+                    72.0 + text.len() as f64 * 6.0,
+                    baseline + 0.22 * 13.0,
+                ],
+            )
+        };
+        let reading = pdf_units(vec![
+            line(
+                "Balance on 15-0CT-1997 was 1,25O.00 in the account named",
+                188.0,
+            ),
+            line(
+                "above, carried forward to the next statement of the period",
+                200.0,
+            ),
+        ]);
+        let r = inject(&mut doc, &[(0, Crop::Region(0), reading)]);
+        assert_eq!(r[0].taken, 2, "{r:?}");
+        let els = analysed(&mut doc, &r);
+        let born = els
+            .iter()
+            .find(|e| e.text.contains("statement below"))
+            .expect("the PDF's paragraph");
+        assert_eq!(born.provenance, "rust", "{els:#?}");
+        assert!(!born.text.contains("15-0CT"), "{els:#?}");
+        let read = els
+            .iter()
+            .find(|e| e.text.contains("15-0CT-1997"))
+            .expect("the screenshot's lines");
+        assert_eq!(read.provenance, "ocr", "{els:#?}");
+    }
+
+    #[test]
+    fn elements_holding_any_ocr_character_are_marked() {
         use fluree_doc_model::Element;
         // "Account": seven characters, ten units each.
         let injected = vec![Injected {
@@ -3553,9 +3634,13 @@ mod tests {
             }),
             ..Element::new("doco:Paragraph", text, "rust", "layout")
         };
-        let mut els = vec![at(60.0, "Account"), at(300.0, "Elsewhere")];
+        // Over the same characters, most of its own from the text layer: a
+        // table row mixing both, say. Still read from pixels in part.
+        let mixed = at(60.0, "Account, then a long run of the page's own text");
+        let mut els = vec![at(60.0, "Account"), at(300.0, "Elsewhere"), mixed];
         mark_provenance(&mut els, &injected);
         assert_eq!(els[0].provenance, "ocr");
         assert_eq!(els[1].provenance, "rust");
+        assert_eq!(els[2].provenance, "ocr");
     }
 }
