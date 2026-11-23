@@ -78,6 +78,27 @@ project = "my-project"          # optional; read from the key when absent
 | `gemini.credentials` | path to the service-account JSON key |
 | `gemini.project` | overrides the project named in the key |
 
+## Limits
+
+What one document may take, where the defaults do not suit a deployment:
+
+```toml
+[limits]
+max_memory = 4096            # MiB (default 2560)
+max_work = 268435456         # steps (default)
+max_pages = 20000            # pages of a PDF or XPS read (default 10000)
+max_render_pixels = 64000000 # pixels a page is rendered with (default)
+```
+
+Each is overridden by its `FDOC_MAX_*` variable and its `--max-*` flag
+([Environment variables](../reference/env-vars.md#limits)). A key the
+table does not know (`max_memroy`) is warned about on every command and
+ignored, the rest of the file read: refused, a typo in a limit would make
+the whole file unreadable, and the escalation settings beside it with it.
+A zero is an error naming where it was set. `fdoc config show` prints the
+limits in effect. What each bounds, and what none does, is in
+[Limits](../reference/limits.md#setting-the-limits).
+
 ## OCR
 
 ```toml

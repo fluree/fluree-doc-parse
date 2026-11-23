@@ -69,7 +69,7 @@ pub enum DocError {
     /// A structure points outside its stream.
     Malformed(String),
     /// Past a bound.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for DocError {
@@ -88,11 +88,19 @@ impl std::fmt::Display for DocError {
     }
 }
 
-impl std::error::Error for DocError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for DocError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<TooLarge> for DocError {
     fn from(e: TooLarge) -> Self {
-        Self::TooLarge(e.to_string())
+        Self::TooLarge(e)
     }
 }
 
@@ -119,10 +127,10 @@ fn stream(
         .open_stream(name)
         .map_err(|e| DocError::Container(e.to_string()))?;
     if s.len() > max {
-        return Err(DocError::TooLarge(format!(
+        return Err(DocError::TooLarge(TooLarge::fixed(format!(
             "{name}: {} bytes, more than the {max} read",
             s.len()
-        )));
+        ))));
     }
     let mut v = Vec::new();
     s.take(max)
@@ -212,7 +220,9 @@ fn pieces(table: &[u8], (fc, lcb): (u32, u32)) -> Result<Vec<Piece>, DocError> {
         .ok_or_else(|| DocError::Malformed("the piece table is cut short".into()))?;
     let n = plc.len().saturating_sub(4) / 12;
     if n > MAX_PIECES {
-        return Err(DocError::TooLarge(format!("more than {MAX_PIECES} pieces")));
+        return Err(DocError::TooLarge(TooLarge::fixed(format!(
+            "more than {MAX_PIECES} pieces"
+        ))));
     }
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
@@ -333,9 +343,9 @@ fn para_props(
             out.push((f0, f1, props));
         }
         if out.len() > MAX_PARA_RUNS {
-            return Err(DocError::TooLarge(format!(
+            return Err(DocError::TooLarge(TooLarge::fixed(format!(
                 "more than {MAX_PARA_RUNS} paragraph property runs"
-            )));
+            ))));
         }
     }
     // Sorted by start, the earlier entry first among equal starts, as the
@@ -670,9 +680,9 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Element>, DocEr
     let pieces = pieces(&table, fib.clx)?;
     let total: u64 = fib.ccp.iter().map(|&c| u64::from(c)).sum();
     if total > MAX_CHARS {
-        return Err(DocError::TooLarge(format!(
+        return Err(DocError::TooLarge(TooLarge::fixed(format!(
             "{total} characters, more than the {MAX_CHARS} read"
-        )));
+        ))));
     }
     let props = para_props(&wd, &table, fib.bte_papx)?;
     // The stories, one after another in character positions.

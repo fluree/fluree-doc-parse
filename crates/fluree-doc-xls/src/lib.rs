@@ -35,6 +35,7 @@ mod xlsb;
 
 pub use xlsb::{is_xlsb, parse_xlsb};
 
+use fluree_doc_model::budget::TooLarge;
 use fluree_doc_model::{DocumentInfo, Element};
 use fluree_doc_xlsx::{GridCell, GridSheet};
 
@@ -67,7 +68,7 @@ pub enum XlsError {
     /// A compound file with no workbook stream: a Word or PowerPoint file.
     NoWorkbook,
     /// Past one of the bounds above.
-    TooLarge(String),
+    TooLarge(TooLarge),
     /// The workbook stream could not be read.
     Biff(String),
 }
@@ -87,7 +88,15 @@ impl std::fmt::Display for XlsError {
     }
 }
 
-impl std::error::Error for XlsError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for XlsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Whether `bytes` is an Excel 97-2003 workbook: a compound file with a
 /// `Workbook` stream (or `Book`, BIFF5's name for it) at its root.
@@ -111,7 +120,7 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Xls
 
 fn read(book: &[u8], scanned: Vec<scan::Sheet>) -> Result<(Vec<Element>, DocumentInfo), XlsError> {
     use calamine::{Reader, Xls};
-    let too_large = |e: fluree_doc_model::budget::TooLarge| XlsError::TooLarge(e.to_string());
+    let too_large = |e: TooLarge| XlsError::TooLarge(e);
     // What the workbook makes once calamine has read it: each cell, its
     // text, and what the layout makes of them.
     let mut budget = fluree_doc_model::budget::Budget::default();

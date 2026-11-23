@@ -34,7 +34,7 @@ pub enum DocxError {
     Xml(String),
     NoDocument,
     /// Past what one document may make ([`Budget`]), naming it.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for DocxError {
@@ -48,11 +48,19 @@ impl std::fmt::Display for DocxError {
     }
 }
 
-impl std::error::Error for DocxError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for DocxError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<TooLarge> for DocxError {
     fn from(e: TooLarge) -> Self {
-        Self::TooLarge(e.to_string())
+        Self::TooLarge(e)
     }
 }
 

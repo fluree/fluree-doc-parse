@@ -42,6 +42,7 @@ mod text;
 mod thread;
 
 pub use children::{parse_attachments, AttachmentLimits, Child, Outcome, ReadAttachment};
+use fluree_doc_model::budget::TooLarge;
 use fluree_doc_model::{
     Attachment, DocumentInfo, Element, Mailbox, Media, MediaSource, Message, Notes,
 };
@@ -185,7 +186,7 @@ pub enum EmailError {
     /// not be read.
     Msg(String),
     /// A body that makes more than one document may.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for EmailError {
@@ -198,7 +199,15 @@ impl std::fmt::Display for EmailError {
     }
 }
 
-impl std::error::Error for EmailError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for EmailError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Parse an email, `.eml` or `.msg`, by its content.
 pub fn parse(bytes: &[u8]) -> Result<Email, EmailError> {
@@ -302,8 +311,8 @@ fn assemble(mut read: Read) -> Result<Email, EmailError> {
             }
         }
         Body::Html(html) => {
-            let (els, depths, ids) = fluree_doc_html::parse_message(&html)
-                .map_err(|e| EmailError::TooLarge(e.to_string()))?;
+            let (els, depths, ids) =
+                fluree_doc_html::parse_message(&html).map_err(EmailError::TooLarge)?;
             read.shown.extend(ids);
             // A paragraph holding nothing but a zero-width character, as
             // Apple Mail and Outlook leave, is not text.

@@ -388,9 +388,38 @@ build them.
 ## Errors
 
 `extract_file` and `extract_bytes` return `Result<Document, ExtractError>`.
-`ExtractError`, `DocxError` and `PptxError` all implement
-`std::error::Error`, so they compose with `?`, `Box<dyn Error>` and `anyhow`.
+`ExtractError` and every reader's error implement `std::error::Error`, so
+they compose with `?`, `Box<dyn Error>` and `anyhow`.
 
 `fluree_doc_markdown::parse`, `fluree_doc_text::parse` and
-`fluree_doc_html::parse` read every byte sequence; they fail only past the
-document's budget, returning the `fluree_doc_model::budget::TooLarge` itself.
+`fluree_doc_html::parse` read every byte sequence; they fail only past a
+limit, returning the `fluree_doc_model::budget::TooLarge` itself.
+
+### Limits
+
+A document past what it may take ([Limits](../reference/limits.md)) is
+refused with a `TooLarge`: the readers' errors carry it in their
+`TooLarge` variant, and as their `source()`. It says which limit was
+passed, and its value:
+
+```rust
+use fluree_doc_model::budget::{limited_to, Limit, Limits, TooLarge};
+
+let mut limits = Limits::default();
+limits.memory = 512 << 20; // what one document may take, estimated bytes
+limits.pages = 500;        // a PDF or XPS read to its 500th page
+let read = limited_to(limits, || fluree_doc_docx::parse(&bytes));
+if let Err(fluree_doc_docx::DocxError::TooLarge(e)) = &read {
+    match e.limit() {
+        Limit::Memory => eprintln!("past {} bytes: {e}", e.max()),
+        Limit::Fixed => eprintln!("past a bound of the reader's own: {e}"),
+        _ => eprintln!("{e}"),
+    }
+}
+```
+
+`limited_to` holds every reader called inside it, on its thread, to those
+limits; outside it they are `Limits::default()`. A thread a caller spawns
+starts at the defaults: call `limited_to` in it too. A reader's own bounds
+(`Limit::Fixed`: a part read beside the document, the glyphs of an XPS
+page) are not among the limits a caller sets.

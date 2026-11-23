@@ -37,7 +37,7 @@
 //! its page, so no coordinate reaching the layout pipeline is beyond a
 //! page's reach.
 
-use fluree_doc_model::budget::scaled;
+use fluree_doc_model::budget::{scaled, TooLarge};
 use fluree_doc_model::DocumentInfo;
 use fluree_doc_ooxml::{attr, local, Package};
 use fluree_doc_pdf::geom::BBox;
@@ -89,7 +89,7 @@ pub enum XpsError {
     /// A package with no fixed document sequence: not an XPS document.
     NotXps,
     /// Past one of the bounds.
-    TooLarge(String),
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for XpsError {
@@ -105,7 +105,15 @@ impl std::fmt::Display for XpsError {
     }
 }
 
-impl std::error::Error for XpsError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for XpsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// A picture a page places, for an OCR engine or a model to read.
 #[derive(Debug, Clone, PartialEq)]
@@ -200,7 +208,9 @@ pub fn read_image(bytes: &[u8], part: &str) -> Result<Vec<u8>, String> {
 pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
     let mut pkg = Package::open(bytes).map_err(XpsError::Zip)?;
     if pkg.part_names().len() > MAX_PARTS {
-        return Err(XpsError::TooLarge(format!("more than {MAX_PARTS} parts")));
+        return Err(XpsError::TooLarge(TooLarge::fixed(format!(
+            "more than {MAX_PARTS} parts"
+        ))));
     }
     let seq = pkg.root("fixedrepresentation").ok_or(XpsError::NotXps)?;
     let mut budget = MAX_TOTAL_BYTES;
@@ -210,7 +220,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
                 budget -= b.len() as u64;
                 Ok(Some(decode(&b)))
             }
-            Err(e) if e.contains("more than") => Err(XpsError::TooLarge(e)),
+            Err(e) if e.contains("more than") => Err(XpsError::TooLarge(TooLarge::fixed(e))),
             Err(_) => Ok(None),
         }
     };
@@ -222,7 +232,9 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
         };
         page_parts.extend(sources(&doc_xml, "PageContent", &doc));
         if page_parts.len() > MAX_PAGES {
-            return Err(XpsError::TooLarge(format!("more than {MAX_PAGES} pages")));
+            return Err(XpsError::TooLarge(TooLarge::fixed(format!(
+                "more than {MAX_PAGES} pages"
+            ))));
         }
     }
     let mut pages = Vec::new();
@@ -402,9 +414,9 @@ fn page(
         };
         buf.clear();
         if stack.len() >= MAX_DEPTH {
-            return Err(XpsError::TooLarge(format!(
+            return Err(XpsError::TooLarge(TooLarge::fixed(format!(
                 "elements nested more than {MAX_DEPTH} deep"
-            )));
+            ))));
         }
         let name = local(e.name().as_ref()).to_string();
         let parent = stack.last().map_or(base, |f| f.matrix);
@@ -526,9 +538,9 @@ fn page(
 }
 
 fn too_many() -> XpsError {
-    XpsError::TooLarge(format!(
+    XpsError::TooLarge(TooLarge::fixed(format!(
         "more than {MAX_PAGE_GLYPHS} glyphs and pictures on a page, or {MAX_GLYPHS} in all"
-    ))
+    )))
 }
 
 fn clip(b: BBox, to: &BBox) -> BBox {

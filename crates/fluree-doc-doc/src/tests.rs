@@ -385,7 +385,7 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     );
     assert!(matches!(
         parse_within(&bytes, &mut budget(999)),
-        Err(DocError::TooLarge(ref m)) if m.contains("elements")
+        Err(DocError::TooLarge(ref m)) if m.to_string().contains("elements")
     ));
     // Empty paragraphs cost no element, and are not held.
     assert!(parse_within(&repeated(b"\r", 100_000), &mut budget(0)).is_ok());
@@ -458,7 +458,7 @@ fn the_labels_the_output_copies_of_a_table_are_spent() {
     assert!(within(4 << 20).is_ok());
     assert!(matches!(
         within(1 << 20),
-        Err(DocError::TooLarge(ref m)) if m.contains("copies")
+        Err(DocError::TooLarge(ref m)) if m.to_string().contains("copies")
     ));
     // Markdown and the text write each cell once, within the same budget.
     for output in [Output::Flat, Output::Text] {

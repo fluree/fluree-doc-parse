@@ -30,6 +30,46 @@ what the message leaves of its budget, one at a time
 documents at once than free memory holds budgets for
 ([Batches](#batches)).
 
+## Setting the limits
+
+The bounds a caller may set are gathered in one value,
+`fluree_doc_model::budget::Limits`, whose default is the constants below:
+
+| Limit | Default | Bounds | Flag, variable, config key |
+| --- | --- | --- | --- |
+| `memory` | 2.5 GiB | what one document's elements, cells, text and parts inflated are estimated to take ([Memory](#memory)) | `--max-memory` (MiB), `FDOC_MAX_MEMORY`, `max_memory` |
+| `work` | 2^28 steps | the layout passes and parsers' loops whose cost the file chooses ([Work](#work)) | `--max-work`, `FDOC_MAX_WORK`, `max_work` |
+| `pages` | 10,000 | the pages a PDF or an XPS document is read to ([Pages](#pages)) | `--max-pages`, `FDOC_MAX_PAGES`, `max_pages` |
+| `render_pixels` | 64 million | the pixels a page is rendered with ([Renders](#renders)) | `--max-render-pixels`, `FDOC_MAX_RENDER_PIXELS`, `max_render_pixels` |
+
+A library caller sets them for the readers it calls with
+`budget::limited_to(limits, || ...)`, on its thread, as `within` and
+`converting_to` are set; every budget made inside
+(`Budget::default()`) and every page cap and render follows them. `fdoc`
+resolves them once per command, each `--max-*` flag over its `FDOC_MAX_*`
+variable over the `[limits]` table of `.fdoc/config.toml`, and sets them
+for every document it reads, a batch's workers included; `-j` is sized
+from the memory limit in effect ([Batches](#batches)). Under the fuzz
+targets the defaults are the fuzz build's ([Under the fuzz
+targets](#under-the-fuzz-targets)).
+
+A reader's own bounds on what the budget does not count (a part read
+beside the document, an XPS page's glyphs, an image's pixels, the cells
+calamine allocates) are not among them: each is sized for the shipped
+budget and fixed, and stays so whatever memory limit is set.
+
+A limit passed is a `budget::TooLarge`, which says which limit
+(`TooLarge::limit()`: `Memory`, `Work`, or `Fixed` for a reader's own) and
+its value (`TooLarge::max()`). The page limit and the render pixels never
+refuse a document: past the first, it is read to it and the pages after
+listed unread ([Pages](#pages)); past the second, a page is drawn smaller
+([Renders](#renders)). Each
+reader's error carries it, in its `TooLarge` variant and as its
+`source()`, so a caller can tell a document past a limit it may raise from
+a broken one. `fdoc` names the flag that raises it: `table too large:
+cells past the 1 MiB of memory a document may take (raise it with
+--max-memory)`.
+
 ## Memory
 
 Three kinds of spending share one estimate of memory, 2.5 GiB a document:
@@ -411,9 +451,12 @@ The budget is a document's, and a batch (`fdoc convert DIR --out-dir OUT
 within their budget could together pass what the machine has, and one
 allocation refused would abort the whole batch, or the kernel kill it. So
 no more documents run at once than the memory free to the process holds at
-3.75 GiB each, a whole budget and half as much again for the document's
-input and a library's own copies (the 4 GB a document at its budget was
-measured to fit in), and at least one. The memory free is the least of
+a whole budget each, its input, held whole, and 1.25 GiB for what the
+readers' own bounds let a library take beside the budget (an image decoded
+within 1 GiB): 3.75 GiB and the largest input of the batch by default (the
+4 GB a document at its budget was measured to fit in), and at least one.
+The input and the 1.25 GiB do not shrink with `--max-memory`: under a
+budget of 1 MiB, 4 GiB free runs three documents at once, not 2,730. The memory free is the least of
 what the system has available (`MemAvailable` in `/proc/meminfo`), what
 the process's control groups leave it (a container's limit: cgroup v2's
 `memory.max` less `memory.current`, v1's `memory.limit_in_bytes` less
@@ -425,7 +468,7 @@ count a working set), and what its address
 space may grow to (`ulimit -v`). Where none is known (outside Linux), no
 more than one per core. A lowered `-j` is said on stderr, where the batch
 has more files than it runs at once (`note: -j 4 lowered to 1: 2860 MiB of
-memory free, 3840 MiB a document`). Six `.docx` that each make 300 MB of
+memory free, 3840 MiB a document`, for inputs of a few kilobytes). Six `.docx` that each make 300 MB of
 DoCO, converted with `-j 6` under a 4 GB address space, aborted the batch;
 they now convert one at a time. Three HTML tables that each peak at 1.5 GB,
 converted with `-j 3` in a group limited to 3 GB on a host with 23 GB

@@ -100,7 +100,15 @@ impl From<TooLarge> for XlsxError {
     }
 }
 
-impl std::error::Error for XlsxError {}
+/// A bound passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for XlsxError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 /// Parse a `.xlsx` file's bytes into elements, in sheet order.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, XlsxError> {

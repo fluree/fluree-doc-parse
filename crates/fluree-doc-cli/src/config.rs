@@ -34,6 +34,115 @@ pub struct Config {
     pub escalation: Escalation,
     #[serde(default)]
     pub ocr: Ocr,
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+/// What one document may take, where the built-in defaults do not suit
+/// (`docs/reference/limits.md`). The `--max-*` flags and the `FDOC_MAX_*`
+/// variables override each.
+///
+/// A key the table does not know is kept aside, to be warned about
+/// ([`Limits::unknown`]), not refused: refused, it made the whole file
+/// unreadable, and with it the escalation settings beside it, for a typo
+/// in a limit. The other tables accept keys a later build may add; this one
+/// says so, since a misspelt limit silently not applied is a document read
+/// within a bound its user thinks they raised.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+pub struct Limits {
+    /// Memory one document may take, in MiB.
+    pub max_memory: Option<u64>,
+    /// Steps of work one document may take.
+    pub max_work: Option<u64>,
+    /// Pages a paged document is read to.
+    pub max_pages: Option<usize>,
+    /// Pixels a page is rendered with.
+    pub max_render_pixels: Option<u64>,
+    /// The keys of the table this build does not know.
+    #[serde(flatten)]
+    other: std::collections::BTreeMap<String, toml::Value>,
+}
+
+impl Limits {
+    /// The keys of the table this build does not know, in order: each is
+    /// ignored, and worth a warning.
+    pub fn unknown(&self) -> impl Iterator<Item = &str> {
+        self.other.keys().map(String::as_str)
+    }
+
+    /// The limits in effect: each flag in `flags`, else its variable read
+    /// by `env`, else this, else the default. A variable read that is not a
+    /// number, or a limit of zero, is an error naming where it was set; a
+    /// variable a flag overrides is not read.
+    pub fn resolve(
+        &self,
+        flags: &crate::cli::LimitArgs,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> Result<fluree_doc_model::budget::Limits, String> {
+        /// One limit: its flag, its variable and its config key by name, the
+        /// value each holds, and the default.
+        fn pick<T: std::str::FromStr + PartialEq + Default + Copy>(
+            (flag, var, key): (&str, &str, &str),
+            given: Option<T>,
+            env: &impl Fn(&str) -> Option<String>,
+            config: Option<T>,
+            default: T,
+        ) -> Result<T, String> {
+            let (v, from) = if let Some(v) = given {
+                (v, flag.to_string())
+            } else if let Some(v) = env(var) {
+                let n = v
+                    .trim()
+                    .parse::<T>()
+                    .map_err(|_| format!("{var}: not a number: {v:?}"))?;
+                (n, var.to_string())
+            } else if let Some(v) = config {
+                (v, format!("[limits] {key}"))
+            } else {
+                return Ok(default);
+            };
+            if v == T::default() {
+                return Err(format!("{from}: a limit of zero reads nothing"));
+            }
+            Ok(v)
+        }
+        let default = fluree_doc_model::budget::Limits::default();
+        let mut l = default;
+        l.memory = pick(
+            ("--max-memory", "FDOC_MAX_MEMORY", "max_memory"),
+            flags.max_memory,
+            &env,
+            self.max_memory,
+            default.memory >> 20,
+        )?
+        .saturating_mul(1 << 20);
+        l.work = pick(
+            ("--max-work", "FDOC_MAX_WORK", "max_work"),
+            flags.max_work,
+            &env,
+            self.max_work,
+            default.work,
+        )?;
+        l.pages = pick(
+            ("--max-pages", "FDOC_MAX_PAGES", "max_pages"),
+            flags.max_pages,
+            &env,
+            self.max_pages,
+            default.pages,
+        )?;
+        l.render_pixels = pick(
+            (
+                "--max-render-pixels",
+                "FDOC_MAX_RENDER_PIXELS",
+                "max_render_pixels",
+            ),
+            flags.max_render_pixels,
+            &env,
+            self.max_render_pixels,
+            default.render_pixels,
+        )?;
+        Ok(l)
+    }
 }
 
 /// The built-in OCR engine. Unlike a model reader it reaches nothing outside
@@ -405,6 +514,15 @@ enabled = true
 
 # Read from the key file when absent, which is usually right.
 # project = "my-gcp-project"
+
+[limits]
+# What one document may take; past it the document is refused, or a paged
+# one read to its last page within the limit. The --max-* flags and the
+# FDOC_MAX_* variables override these. See docs/reference/limits.md.
+# max_memory = 2560          # MiB
+# max_work = 268435456       # steps
+# max_pages = 10000
+# max_render_pixels = 64000000
 "#;
 
 #[cfg(test)]
@@ -508,5 +626,76 @@ mod tests {
     fn the_template_parses_and_configures_nothing() {
         let c: Config = toml::from_str(TEMPLATE).unwrap();
         assert!(!c.reader_is_configured());
+        assert_eq!(c.limits, Limits::default());
+    }
+
+    #[test]
+    fn a_limit_is_a_flag_over_its_variable_over_the_config() {
+        use fluree_doc_model::budget::Limits as Bounds;
+        let c: Config = toml::from_str(
+            "[limits]\nmax_memory = 100\nmax_pages = 7\nmax_work = 9\nmax_render_pixels = 11\n",
+        )
+        .unwrap();
+        let none = |_: &str| None;
+        let got = c
+            .limits
+            .resolve(&crate::cli::LimitArgs::default(), none)
+            .unwrap();
+        assert_eq!(
+            (got.memory, got.work, got.pages, got.render_pixels),
+            (100 << 20, 9, 7, 11)
+        );
+        let env = |v: &str| (v == "FDOC_MAX_PAGES").then(|| " 20 ".to_string());
+        assert_eq!(
+            c.limits.resolve(&Default::default(), env).unwrap().pages,
+            20
+        );
+        let flags = crate::cli::LimitArgs {
+            max_pages: Some(30),
+            max_memory: Some(1),
+            ..Default::default()
+        };
+        let got = c.limits.resolve(&flags, env).unwrap();
+        assert_eq!((got.pages, got.memory, got.work), (30, 1 << 20, 9));
+        // Nothing set: the defaults.
+        assert_eq!(
+            Limits::default()
+                .resolve(&Default::default(), none)
+                .unwrap(),
+            Bounds::default()
+        );
+        // A variable that is not a number, or a zero, is said.
+        let bad = |v: &str| (v == "FDOC_MAX_WORK").then(|| "lots".to_string());
+        let e = Limits::default()
+            .resolve(&Default::default(), bad)
+            .unwrap_err();
+        assert!(e.contains("FDOC_MAX_WORK"), "{e}");
+        let zero = crate::cli::LimitArgs {
+            max_render_pixels: Some(0),
+            ..Default::default()
+        };
+        let e = Limits::default().resolve(&zero, none).unwrap_err();
+        assert!(e.starts_with("--max-render-pixels: "), "{e}");
+        // A zero is said where it was set, the variable's and the config's.
+        let zero = |v: &str| (v == "FDOC_MAX_PAGES").then(|| "0".to_string());
+        let e = Limits::default()
+            .resolve(&Default::default(), zero)
+            .unwrap_err();
+        assert!(e.starts_with("FDOC_MAX_PAGES: "), "{e}");
+        let c: Config = toml::from_str("[limits]\nmax_memory = 0\n").unwrap();
+        let e = c.limits.resolve(&Default::default(), none).unwrap_err();
+        assert!(e.starts_with("[limits] max_memory: "), "{e}");
+        // A flag set, its variable is not read, nor refused.
+        let bad = |v: &str| (v == "FDOC_MAX_MEMORY").then(|| "lots".to_string());
+        assert_eq!(c.limits.resolve(&flags, bad).unwrap().memory, 1 << 20);
+        // A key the table does not know is set aside, to be said, and the
+        // rest of the file read: a typo in a limit loses no other setting.
+        let c: Config = toml::from_str(
+            "[escalation]\nprovider = \"gemini\"\n[limits]\nmax_pagez = 3\nmax_pages = 4\n",
+        )
+        .unwrap();
+        assert_eq!(c.limits.unknown().collect::<Vec<_>>(), ["max_pagez"]);
+        assert_eq!(c.limits.max_pages, Some(4));
+        assert_eq!(c.escalation.provider.as_deref(), Some("gemini"));
     }
 }

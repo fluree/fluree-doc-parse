@@ -98,9 +98,9 @@ pub(crate) fn scan(bytes: &[u8]) -> Result<(Scanned, Option<Vec<u8>>), XlsError>
         .find(|n| cf.is_stream(n))
         .ok_or(XlsError::NoWorkbook)?;
     let data = read_stream(&mut cf, name, MAX_STREAM_BYTES)?.ok_or_else(|| {
-        XlsError::TooLarge(format!(
+        XlsError::TooLarge(TooLarge::fixed(format!(
             "a workbook stream of more than the {MAX_STREAM_BYTES} bytes read"
-        ))
+        )))
     })?;
     // Properties are a nicety: a summary that is too large or unreadable is
     // left out, not a reason to refuse the workbook.
@@ -166,7 +166,7 @@ fn malformed(what: &str) -> XlsError {
 }
 
 fn too_large(e: TooLarge) -> XlsError {
-    XlsError::TooLarge(e.to_string())
+    XlsError::TooLarge(e)
 }
 
 /// One record as calamine groups them: its type, its data, the data of the
@@ -204,9 +204,9 @@ fn record(stream: &[u8], at: usize) -> Result<Option<(Rec<'_>, usize)>, XlsError
             break;
         };
         if cont.len() == MAX_CONTINUES {
-            return Err(XlsError::TooLarge(format!(
+            return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                 "a record continued more than {MAX_CONTINUES} times"
-            )));
+            ))));
         }
         cont.push(d);
         next = end;
@@ -237,9 +237,9 @@ fn sst_lengths(r: &Rec<'_>, budget: &mut Meter) -> Result<Vec<u32>, XlsError> {
             }
         }
         if out.len() as u64 >= MAX_CELLS {
-            return Err(XlsError::TooLarge(format!(
+            return Err(XlsError::TooLarge(TooLarge::fixed(format!(
                 "more than {MAX_CELLS} shared strings"
-            )));
+            ))));
         }
         // An empty continuation is an empty string.
         if data.is_empty() {
@@ -559,7 +559,8 @@ pub(crate) fn walk(stream: &[u8]) -> Result<Scanned, XlsError> {
             order.push(pos);
         }
         let s = &read[&pos];
-        let hold = |e: TooLarge| XlsError::TooLarge(format!("its sheets hold {e}"));
+        let hold =
+            |e: TooLarge| XlsError::TooLarge(TooLarge::fixed(format!("its sheets hold {e}")));
         cells.spend(s.cells).map_err(hold)?;
         area.spend(s.area()).map_err(hold)?;
         merges.spend(s.merges).map_err(hold)?;
@@ -645,7 +646,7 @@ mod tests {
     }
 
     fn too_large(r: Result<Scanned, XlsError>, what: &str) -> bool {
-        matches!(r, Err(XlsError::TooLarge(ref m)) if m.contains(what))
+        matches!(r, Err(XlsError::TooLarge(ref m)) if m.to_string().contains(what))
     }
 
     #[test]
@@ -701,7 +702,7 @@ mod tests {
         let mut budget = Meter::new(10, "characters of text");
         assert!(matches!(
             sst_lengths(&r, &mut budget),
-            Err(XlsError::TooLarge(ref m)) if m.contains("characters")
+            Err(XlsError::TooLarge(ref m)) if m.to_string().contains("characters")
         ));
     }
 }

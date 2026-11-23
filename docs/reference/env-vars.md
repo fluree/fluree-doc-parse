@@ -18,6 +18,21 @@ tiers](../integration/escalation-tiers.md).
 | `FDOC_OCR_MODELS` | `--models` | the OCR assets directory |
 | `FDOC_HOME` | — | where the per-user [config](../cli/config.md) lives, overriding the platform default |
 
+## Limits
+
+What one document may take ([Limits](limits.md#setting-the-limits)). Each
+has a flag, which wins over it, and a key in the config's `[limits]`
+table, over which it wins. A value that is not a number, or zero, stops
+the command before it reads anything, naming the flag, the variable or the
+config key it was set by; a variable its flag overrides is not read.
+
+| variable | flag | config key | bounds | default |
+|---|---|---|---|---|
+| `FDOC_MAX_MEMORY` | `--max-memory` | `max_memory` | the memory one document's elements, cells, text and parts may take, in MiB | 2560 |
+| `FDOC_MAX_WORK` | `--max-work` | `max_work` | the steps of layout and parsing one document may take | 268435456 |
+| `FDOC_MAX_PAGES` | `--max-pages` | `max_pages` | the pages a PDF or XPS document is read to | 10000 |
+| `FDOC_MAX_RENDER_PIXELS` | `--max-render-pixels` | `max_render_pixels` | the pixels a page is rendered with | 64000000 |
+
 Presence is what counts for the boolean ones — any value, including an empty
 string, enables them.
 

@@ -807,7 +807,7 @@ fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
     );
     assert!(matches!(
         parse_within(&bytes, &mut budget(999)),
-        Err(PptError::TooLarge(ref m)) if m.contains("elements")
+        Err(PptError::TooLarge(ref m)) if m.to_string().contains("elements")
     ));
 }
 

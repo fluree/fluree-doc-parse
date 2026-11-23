@@ -14,7 +14,7 @@
 //! than what it holds. Four bytes of XML
 //! (`<a/>`) are a node, and 9 MB of `<a b=""/>` took 376 MB as a tree.
 
-use fluree_doc_model::budget::{Budget, CELL_BYTES};
+use fluree_doc_model::budget::{Budget, TooLarge, CELL_BYTES};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
@@ -73,11 +73,9 @@ fn local(q: &[u8]) -> String {
 /// XML it is made from (a tag's name and attributes, a text's escaped
 /// text), which is no shorter than what it holds: before any of it is
 /// copied out of the part.
-fn spend(budget: &mut Budget, attrs: u64, bytes: usize) -> Result<(), String> {
+fn spend(budget: &mut Budget, attrs: u64, bytes: usize) -> Result<(), TooLarge> {
     let attrs = (attrs + u64::from(attrs > 0)) * ATTR_CELLS;
-    budget
-        .spend_cells(NODE_CELLS + attrs + (bytes as u64).div_ceil(CELL_BYTES))
-        .map_err(|e| e.to_string())
+    budget.spend_cells(NODE_CELLS + attrs + (bytes as u64).div_ceil(CELL_BYTES))
 }
 
 impl Tree {
@@ -85,7 +83,7 @@ impl Tree {
     /// of it; `Err` past a bound, naming it. A part that stops parsing
     /// keeps what was read before it. Its events are read in place, not
     /// copied: a run of text can be as long as the part.
-    pub fn parse(xml: &str, budget: &mut Budget) -> Result<Tree, String> {
+    pub fn parse(xml: &str, budget: &mut Budget) -> Result<Tree, TooLarge> {
         let mut t = Tree {
             nodes: vec![Node::default()],
             ..Tree::default()
@@ -96,7 +94,7 @@ impl Tree {
         loop {
             let ev = r.read_event();
             if t.nodes.len() > MAX_NODES {
-                return Err(format!("more than {MAX_NODES} XML nodes"));
+                return Err(TooLarge::fixed(format!("more than {MAX_NODES} XML nodes")));
             }
             let parent = *stack.last().unwrap_or(&0);
             match ev {
@@ -124,7 +122,9 @@ impl Tree {
                     t.nodes[parent].children.push(id);
                     if !empty {
                         if stack.len() > MAX_DEPTH {
-                            return Err(format!("elements nested more than {MAX_DEPTH} deep"));
+                            return Err(TooLarge::fixed(format!(
+                                "elements nested more than {MAX_DEPTH} deep"
+                            )));
                         }
                         stack.push(id);
                     }

@@ -69,6 +69,21 @@ fn show() -> i32 {
     if let Some(p) = &e.gemini.project {
         println!("         project {p}");
     }
+    // What a document may take, the environment over the file.
+    match l
+        .config
+        .limits
+        .resolve(&crate::cli::LimitArgs::default(), |v| std::env::var(v).ok())
+    {
+        Ok(m) => println!(
+            "limits   {} MiB of memory, {} steps, {} pages, {} pixels a render",
+            m.memory >> 20,
+            m.work,
+            m.pages,
+            m.render_pixels
+        ),
+        Err(e) => println!("limits   {e}"),
+    }
     println!();
     match l.config.missing() {
         None => println!("escalation is ready — `fdoc convert <pdf>` will use it"),

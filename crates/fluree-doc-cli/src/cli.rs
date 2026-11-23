@@ -26,6 +26,36 @@ pub struct Cli {
     /// Disable colored output (also respects NO_COLOR env var)
     #[arg(long, global = true)]
     pub no_color: bool,
+
+    #[command(flatten)]
+    pub limits: LimitArgs,
+}
+
+/// What one document may take (`docs/reference/limits.md`). Each flag
+/// overrides its `FDOC_MAX_*` variable, which overrides `[limits]` in the
+/// config; unset, the built-in default holds.
+#[derive(Args, Debug, Clone, Default)]
+#[command(next_help_heading = "Limits")]
+pub struct LimitArgs {
+    /// Memory one document's elements, cells, text and parts may take, in
+    /// MiB (default 2560) [env: FDOC_MAX_MEMORY]
+    #[arg(long, global = true, value_name = "MIB")]
+    pub max_memory: Option<u64>,
+
+    /// Steps of the layout passes and parsers' loops one document may take
+    /// (default 268435456) [env: FDOC_MAX_WORK]
+    #[arg(long, global = true, value_name = "STEPS")]
+    pub max_work: Option<u64>,
+
+    /// Pages a PDF or XPS document is read to; those past it are listed
+    /// unread, `PastPageLimit` (default 10000) [env: FDOC_MAX_PAGES]
+    #[arg(long, global = true, value_name = "N")]
+    pub max_pages: Option<usize>,
+
+    /// Pixels a page is rendered with; a larger page is drawn at the scale
+    /// that fits (default 64000000) [env: FDOC_MAX_RENDER_PIXELS]
+    #[arg(long, global = true, value_name = "N")]
+    pub max_render_pixels: Option<u64>,
 }
 
 /// An OCR engine this build can run.

@@ -45,7 +45,14 @@
 //! A part a package inflates whole (an Office file's main part, its
 //! slides) is read within what is left of the memory budget and spent from
 //! it, two bytes for each ([`Budget::spend_bytes`]).
+//!
+//! The bounds a caller may set are gathered in [`Limits`]: the memory and
+//! the work above, the pages a paged document is read to, and the pixels a
+//! page is rendered with. [`limited_to`] sets them for every reader called
+//! inside it, on its thread; outside it, [`Limits::default`] holds. A
+//! bound passed is a [`TooLarge`] that says which ([`TooLarge::limit`]).
 
+use std::borrow::Cow;
 use std::cell::Cell;
 
 /// The memory budget as shipped, 2.5 GiB, whatever this build's is.
@@ -89,6 +96,80 @@ pub const MAX_WORK: u64 = 1 << 28;
 /// Built for the fuzz targets, a sixteenth of it, as [`MAX_MEMORY`] is.
 #[cfg(fuzzing)]
 pub const MAX_WORK: u64 = 1 << 24;
+
+/// The most pages a paged document (a PDF, an XPS document) is read to: ten
+/// thousand. The pages past it are listed unread (`PastPageLimit`), never
+/// dropped silently.
+pub const MAX_PAGES: usize = 10_000;
+
+/// The most pixels a page is rendered with, 64 million (256 MB of RGBA): a
+/// page the scale asked for would draw larger is drawn at the scale that
+/// fits, and the render says the scale it was drawn at.
+pub const MAX_RENDER_PIXELS: u64 = 64_000_000;
+
+/// The bounds one document is read within: what [`Budget::default`] holds,
+/// the pages read, the pixels of a render. [`Limits::default`] is the
+/// constants of this module (a sixteenth of the memory and work for the fuzz
+/// targets); a caller sets its own for the readers it calls with
+/// [`limited_to`].
+///
+/// A reader's own bounds on memory the budget does not count (a part read
+/// beside the document, an XPS document's glyphs, an image's pixels) are
+/// not among them: they are sized for the shipped budget ([`scaled`]) and
+/// fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Limits {
+    /// The estimated memory a document's elements, cells, text and parts
+    /// may take, in bytes ([`MAX_MEMORY`]).
+    pub memory: u64,
+    /// The steps of the layout passes and parsers' loops whose cost the
+    /// file chooses ([`MAX_WORK`]).
+    pub work: u64,
+    /// The most pages a paged document is read to ([`MAX_PAGES`]).
+    pub pages: usize,
+    /// The most pixels a page is rendered with ([`MAX_RENDER_PIXELS`]).
+    pub render_pixels: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            memory: MAX_MEMORY,
+            work: MAX_WORK,
+            pages: MAX_PAGES,
+            render_pixels: MAX_RENDER_PIXELS,
+        }
+    }
+}
+
+thread_local! {
+    static LIMITS: Cell<Option<Limits>> = const { Cell::new(None) };
+}
+
+/// Run `f` with every reader called in it, on this thread, held to
+/// `limits` rather than [`Limits::default`]: the budgets made meanwhile
+/// ([`Budget::default`]), the pages read, the pixels rendered. Nested, the
+/// inner call's hold, and the outer's again once it returns or unwinds.
+///
+/// A document read inside another (an e-mail's attachment) is still read
+/// [`within`] what the outer one leaves.
+pub fn limited_to<R>(limits: Limits, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Limits>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LIMITS.with(|l| l.set(self.0));
+        }
+    }
+    let _restore = Restore(LIMITS.with(|l| l.replace(Some(limits))));
+    f()
+}
+
+/// The limits readers on this thread are held to: those [`limited_to`]
+/// set, else [`Limits::default`].
+pub fn limits() -> Limits {
+    LIMITS.with(Cell::get).unwrap_or_default()
+}
 
 /// What one element, or one table cell that holds text, costs at most,
 /// from the reader's copy through the largest output (`doco`, where a
@@ -246,26 +327,92 @@ pub const TEXT_BYTES: u64 = 12;
 /// spaces peaked at 4.0 GB.
 pub const PART_BYTES: u64 = 2;
 
-/// A budget spent: what was being counted, and the bound.
+/// Which bound a document passed: the memory or the work of [`Limits`],
+/// which a caller may raise, or a reader's own. The other two never refuse
+/// a document: past the page limit it is read to it and the rest listed
+/// unread, and a page past the render pixels is drawn smaller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Limit {
+    /// [`Limits::memory`], in estimated bytes.
+    Memory,
+    /// [`Limits::work`], in steps.
+    Work,
+    /// A reader's own bound, fixed (a part read beside the document, the
+    /// cells calamine may allocate, how deep a page tree nests).
+    Fixed,
+}
+
+/// A bound passed: which ([`TooLarge::limit`]), its value
+/// ([`TooLarge::max`]), and what was being counted, for the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TooLarge {
-    what: &'static str,
+    limit: Limit,
     max: u64,
-    /// The bound is the shared memory budget, in estimated bytes.
-    memory: bool,
+    what: Cow<'static, str>,
+    /// `what` is the whole message, as a reader wrote it.
+    said: bool,
+    /// Where it was passed, before the message: "its sheets hold".
+    context: Option<Cow<'static, str>>,
+}
+
+impl TooLarge {
+    /// `what` counted past `max`, a bound of the kind `limit`.
+    pub fn new(limit: Limit, max: u64, what: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            limit,
+            max,
+            what: what.into(),
+            said: false,
+            context: None,
+        }
+    }
+
+    /// A reader's own bound passed, as its message says it
+    /// ("more than 10000 pieces").
+    pub fn fixed(message: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            said: true,
+            ..Self::new(Limit::Fixed, 0, message)
+        }
+    }
+
+    /// The same, said where it was passed: `context` comes first in the
+    /// message ("its sheets hold").
+    pub fn within(self, context: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            context: Some(context.into()),
+            ..self
+        }
+    }
+
+    /// Which bound was passed.
+    pub fn limit(&self) -> Limit {
+        self.limit
+    }
+
+    /// The bound's value, in its own unit (bytes for [`Limit::Memory`],
+    /// steps for [`Limit::Work`]); zero for a reader's own bound stated only
+    /// in its message.
+    pub fn max(&self) -> u64 {
+        self.max
+    }
 }
 
 impl std::fmt::Display for TooLarge {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.memory {
-            write!(
+        if let Some(c) = &self.context {
+            write!(f, "{c} ")?;
+        }
+        match self.limit {
+            _ if self.said => write!(f, "{}", self.what),
+            Limit::Memory => write!(
                 f,
                 "{} past the {} MiB of memory a document may take",
                 self.what,
                 self.max >> 20
-            )
-        } else {
-            write!(f, "more than {} {}", self.max, self.what)
+            ),
+            _ => write!(f, "more than {} {}", self.max, self.what),
         }
     }
 }
@@ -280,22 +427,30 @@ pub struct Meter {
     max: u64,
     /// What is counted, for the error: "bytes of text", "cells".
     what: &'static str,
+    limit: Limit,
 }
 
 impl Meter {
+    /// A reader's own bound ([`Limit::Fixed`]).
     pub fn new(max: u64, what: &'static str) -> Self {
-        Self { used: 0, max, what }
+        Self::of(Limit::Fixed, max, what)
+    }
+
+    /// A count against the bound `limit`.
+    pub fn of(limit: Limit, max: u64, what: &'static str) -> Self {
+        Self {
+            used: 0,
+            max,
+            what,
+            limit,
+        }
     }
 
     /// Count `n` more, or say why not: the error names the bound passed.
     pub fn spend(&mut self, n: u64) -> Result<(), TooLarge> {
         self.used = self.used.saturating_add(n);
         if self.used > self.max {
-            return Err(TooLarge {
-                what: self.what,
-                max: self.max,
-                memory: false,
-            });
+            return Err(TooLarge::new(self.limit, self.max, self.what));
         }
         Ok(())
     }
@@ -321,11 +476,13 @@ pub struct Budget {
 }
 
 impl Default for Budget {
-    /// [`MAX_MEMORY`] and [`MAX_WORK`], at the costs of the [`output`] the
-    /// document is converted to; inside [`within`], no more memory than it
-    /// gives.
+    /// The memory and work of the [`limits`] in effect ([`MAX_MEMORY`] and
+    /// [`MAX_WORK`] unless [`limited_to`] says otherwise), at the costs of
+    /// the [`output`] the document is converted to; inside [`within`], no
+    /// more memory than it gives.
     fn default() -> Self {
-        Self::new(MAX_MEMORY.min(SHARE.with(Cell::get)), MAX_WORK).for_output(output())
+        let limits = limits();
+        Self::new(limits.memory.min(SHARE.with(Cell::get)), limits.work).for_output(output())
     }
 }
 
@@ -362,7 +519,7 @@ impl Budget {
         Self {
             memory: 0,
             max_memory: memory,
-            work: Meter::new(work, "steps of layout"),
+            work: Meter::of(Limit::Work, work, "steps of layout"),
             output: Output::Doco,
         }
     }
@@ -375,11 +532,7 @@ impl Budget {
     fn spend_memory(&mut self, what: &'static str, n: u64, each: u64) -> Result<(), TooLarge> {
         self.memory = self.memory.saturating_add(n.saturating_mul(each));
         if self.memory > self.max_memory {
-            return Err(TooLarge {
-                what,
-                max: self.max_memory,
-                memory: true,
-            });
+            return Err(TooLarge::new(Limit::Memory, self.max_memory, what));
         }
         Ok(())
     }
@@ -755,6 +908,76 @@ mod tests {
         // This build's bounds follow this build's budget.
         assert_eq!(scaled(SHIPPED_MEMORY), MAX_MEMORY);
         assert_eq!(scaled(1 << 22), scaled_to(1 << 22, MAX_MEMORY));
+    }
+
+    #[test]
+    fn a_bound_passed_says_which_and_its_value() {
+        let e = Budget::new(1 << 20, 0).spend_elements(1 << 10).unwrap_err();
+        assert_eq!((e.limit(), e.max()), (Limit::Memory, 1 << 20));
+        let e = Budget::new(0, 7).spend_work(8).unwrap_err();
+        assert_eq!((e.limit(), e.max()), (Limit::Work, 7));
+        let e = Meter::new(3, "cells").spend(4).unwrap_err();
+        assert_eq!((e.limit(), e.max()), (Limit::Fixed, 3));
+        assert_eq!(
+            Meter::of(Limit::Work, 3, "steps")
+                .spend(4)
+                .unwrap_err()
+                .limit(),
+            Limit::Work
+        );
+        // A reader's own message, as written, and where it was passed.
+        let e = TooLarge::fixed("more than 9 pieces");
+        assert_eq!(
+            (e.limit(), e.to_string().as_str()),
+            (Limit::Fixed, "more than 9 pieces")
+        );
+        let e = Meter::new(3, "cells")
+            .spend(4)
+            .unwrap_err()
+            .within("its sheets hold");
+        assert_eq!(e.to_string(), "its sheets hold more than 3 cells");
+        assert_eq!(e.limit(), Limit::Fixed);
+    }
+
+    #[test]
+    fn limits_set_for_a_call_hold_the_budgets_made_in_it() {
+        assert_eq!(limits(), Limits::default());
+        let small = Limits {
+            memory: 1 << 20,
+            work: 5,
+            pages: 2,
+            render_pixels: 100,
+        };
+        let inner = limited_to(small, || {
+            let b = Budget::default();
+            let nested = limited_to(Limits::default(), || limits().pages);
+            // A share given inside still bounds it, and the other way round.
+            let shared = within(1 << 10, || Budget::default().memory_left());
+            (
+                b.memory_left(),
+                b.clone().spend_work(6).is_err(),
+                limits(),
+                nested,
+                shared,
+            )
+        });
+        assert_eq!(inner, (1 << 20, true, small, MAX_PAGES, 1 << 10));
+        assert_eq!(
+            within(1 << 40, || limited_to(small, || Budget::default()
+                .memory_left())),
+            1 << 20
+        );
+        // Put back when it returns, and when it unwinds; other threads'
+        // are their own.
+        assert_eq!(limits(), Limits::default());
+        assert!(std::panic::catch_unwind(|| limited_to(small, || panic!())).is_err());
+        assert_eq!(Budget::default().memory_left(), MAX_MEMORY);
+        limited_to(small, || {
+            assert_eq!(
+                std::thread::spawn(limits).join().unwrap(),
+                Limits::default()
+            );
+        });
     }
 
     #[test]

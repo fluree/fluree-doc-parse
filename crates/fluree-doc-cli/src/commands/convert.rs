@@ -2,7 +2,6 @@
 
 use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
-use fluree_doc_model::budget::MAX_MEMORY;
 use fluree_doc_pdf::document::Element;
 use fluree_doc_pdf::{extract_bytes, outline};
 use std::collections::HashMap;
@@ -215,7 +214,15 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let cores = std::thread::available_parallelism()
         .map(std::num::NonZero::get)
         .unwrap_or(1);
-    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory());
+    // The largest input, which a document holds whole beside its budget,
+    // whichever worker takes it.
+    let largest = files
+        .iter()
+        .filter_map(|f| std::fs::metadata(f).ok())
+        .map(|m| m.len())
+        .max()
+        .unwrap_or(0);
+    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory(), largest);
     // Lowered to no fewer than the files there are, it changes nothing.
     if let Some(why) = lowered.filter(|_| !quiet && jobs < files.len()) {
         eprintln!("note: {why}");
@@ -228,27 +235,35 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     let slots = slots(&files);
     let cursor = AtomicUsize::new(0);
     let failures = AtomicUsize::new(0);
+    // Each worker reads within the limits this command was given.
+    let limits = fluree_doc_model::budget::limits();
     std::thread::scope(|s| {
         for _ in 0..jobs {
-            s.spawn(|| loop {
-                let i = cursor.fetch_add(1, Ordering::Relaxed);
-                let Some(f) = files.get(i) else { break };
-                let t0 = std::time::Instant::now();
-                match convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet) {
-                    Ok(out) => {
-                        let dst = &out_dir.join(format!("{}.{}", slots[i], ext(args.format)));
-                        if let Err(e) = std::fs::write(dst, out) {
-                            eprintln!("error: writing {}: {e}", dst.display());
+            s.spawn(|| {
+                fluree_doc_model::budget::limited_to(limits, || loop {
+                    let i = cursor.fetch_add(1, Ordering::Relaxed);
+                    let Some(f) = files.get(i) else { break };
+                    let t0 = std::time::Instant::now();
+                    match convert_path(f, &slots[i], cfg, args, pages.as_deref(), quiet) {
+                        Ok(out) => {
+                            let dst = &out_dir.join(format!("{}.{}", slots[i], ext(args.format)));
+                            if let Err(e) = std::fs::write(dst, out) {
+                                eprintln!("error: writing {}: {e}", dst.display());
+                                failures.fetch_add(1, Ordering::Relaxed);
+                            } else if verbose {
+                                eprintln!(
+                                    "{}: {:.1}ms",
+                                    f.display(),
+                                    t0.elapsed().as_secs_f64() * 1e3
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("error: {}: {e}", f.display());
                             failures.fetch_add(1, Ordering::Relaxed);
-                        } else if verbose {
-                            eprintln!("{}: {:.1}ms", f.display(), t0.elapsed().as_secs_f64() * 1e3);
                         }
                     }
-                    Err(e) => {
-                        eprintln!("error: {}: {e}", f.display());
-                        failures.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                })
             });
         }
     });
@@ -268,31 +283,55 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     }
 }
 
-/// What one document of a batch may take at once: its whole budget
-/// (`MAX_MEMORY`), and half as much again for its input and a library's own
-/// copies, 3.75 GiB, the 4 GB a document at its budget was measured to fit in.
-const DOCUMENT_MEMORY: u64 = MAX_MEMORY + MAX_MEMORY / 2;
+/// What a document takes beside its budget and its input, whatever the
+/// budget: the readers' own bounds on what the budget does not count (an
+/// image decoded within 1 GiB, a part read beside the document) are fixed,
+/// sized for the shipped budget, and do not shrink with `--max-memory`.
+/// 1.25 GiB, half the shipped budget: a document at it was measured to fit
+/// in 4 GB.
+const LIBRARY_MEMORY: u64 = 5 << 28;
+
+/// What one document of a batch may take at once, its input `input` bytes:
+/// its whole budget (the memory of the limits in effect, `MAX_MEMORY`
+/// unless `--max-memory` says otherwise), its input, held whole, and
+/// [`LIBRARY_MEMORY`]: 3.75 GiB and the input by default. The last two do
+/// not shrink with the budget: a margin that did let a lowered
+/// `--max-memory` run more documents at once than the memory free holds.
+fn document_memory(input: u64) -> u64 {
+    fluree_doc_model::budget::limits()
+        .memory
+        .saturating_add(LIBRARY_MEMORY)
+        .saturating_add(input)
+}
 
 /// How many documents a batch converts at once, and why, where it is fewer
-/// than `requested` (`0`, one per core of `cores`).
+/// than `requested` (`0`, one per core of `cores`), its largest input
+/// `largest` bytes.
 ///
 /// Each document may take its whole budget and what goes with it
-/// ([`DOCUMENT_MEMORY`]) at once, so no more run together than `memory`, the
+/// ([`document_memory`], counted at the largest input, which any worker
+/// may take) at once, so no more run together than `memory`, the
 /// memory free to the process, holds, and at least one; where that is not
 /// known, no more than one per core. A document past its budget fails on its
 /// own, but documents within theirs that together pass what the machine has
 /// would abort the whole batch, or have it killed.
-fn batch_jobs(requested: usize, cores: usize, memory: Option<u64>) -> (usize, Option<String>) {
+fn batch_jobs(
+    requested: usize,
+    cores: usize,
+    memory: Option<u64>,
+    largest: u64,
+) -> (usize, Option<String>) {
     let asked = if requested == 0 { cores } else { requested };
+    let document = document_memory(largest);
     let (bound, why) = match memory {
         Some(free) => (
-            usize::try_from(free / DOCUMENT_MEMORY)
+            usize::try_from(free / document)
                 .unwrap_or(usize::MAX)
                 .max(1),
             format!(
                 "{} MiB of memory free, {} MiB a document",
                 free >> 20,
-                DOCUMENT_MEMORY >> 20
+                document >> 20
             ),
         ),
         None => (
@@ -521,7 +560,7 @@ fn read_source(
             let text = String::from_utf8(data).map_err(|e| format!("not UTF-8: {e}"))?;
             (
                 fluree_doc_markdown::parse(&text)
-                    .map_err(|e| format!("Markdown document too large: {e}"))?,
+                    .map_err(|e| format!("Markdown document too large: {}", common::refused(&e)))?,
                 fluree_doc_model::Notes::default(),
             )
         }
@@ -532,10 +571,10 @@ fn read_source(
             let text = fluree_doc_text::decode(data);
             let elements = if fluree_doc_text::is_markdown(&text) {
                 fluree_doc_markdown::parse(&text)
-                    .map_err(|e| format!("Markdown document too large: {e}"))?
+                    .map_err(|e| format!("Markdown document too large: {}", common::refused(&e)))?
             } else {
                 fluree_doc_text::parse(&text)
-                    .map_err(|e| format!("text document too large: {e}"))?
+                    .map_err(|e| format!("text document too large: {}", common::refused(&e)))?
             };
             (elements, fluree_doc_model::Notes::default())
         }
@@ -543,13 +582,13 @@ fn read_source(
             let text = fluree_doc_html::decode(&data);
             (
                 fluree_doc_html::parse(&text)
-                    .map_err(|e| format!("HTML document too large: {e}"))?,
+                    .map_err(|e| format!("HTML document too large: {}", common::refused(&e)))?,
                 declared(fluree_doc_html::info(&text)),
             )
         }
         SourceKind::Docx => {
             let (mut elements, info, media) =
-                fluree_doc_docx::parse_with_media(&data).map_err(|e| e.to_string())?;
+                fluree_doc_docx::parse_with_media(&data).map_err(|e| common::refused(&e))?;
             // The images placed in the flow: a pasted screenshot's text
             // follows its figure, read by OCR. Their bytes are only read
             // when something is there to read them.
@@ -593,7 +632,7 @@ fn read_source(
         }
         SourceKind::Pptx => {
             let (elements, info) =
-                fluree_doc_pptx::parse_with_info(&data).map_err(|e| e.to_string())?;
+                fluree_doc_pptx::parse_with_info(&data).map_err(|e| common::refused(&e))?;
             (elements, declared(info))
         }
         // A workbook: each sheet is a page, its islands of cells are tables.
@@ -601,7 +640,7 @@ fn read_source(
         // placed after its figure.
         SourceKind::Xlsx => {
             let (mut elements, info, media) =
-                fluree_doc_xlsx::parse_with_media(&data).map_err(|e| e.to_string())?;
+                fluree_doc_xlsx::parse_with_media(&data).map_err(|e| common::refused(&e))?;
             // Each image's first bytes are read from a package of their own,
             // so its format is told without decompressing the rest.
             let mut pkg = fluree_doc_xlsx::Package::open(&data)?;
@@ -631,32 +670,33 @@ fn read_source(
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("tsv"));
             let elements = fluree_doc_csv::parse_with(&data, tsv.then_some('\t'))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| common::refused(&e))?;
             (elements, fluree_doc_model::Notes::default())
         }
         // An OpenDocument text, spreadsheet or presentation, by its
         // `mimetype`.
         SourceKind::Odf => {
             let (elements, info, _) =
-                fluree_doc_odf::parse_with_info(&data).map_err(|e| e.to_string())?;
+                fluree_doc_odf::parse_with_info(&data).map_err(|e| common::refused(&e))?;
             (elements, declared(info))
         }
         // An Excel binary workbook, laid out as an XLSX one is.
         SourceKind::Xlsb => {
-            let (elements, info) = fluree_doc_xls::parse_xlsb(&data).map_err(|e| e.to_string())?;
+            let (elements, info) =
+                fluree_doc_xls::parse_xlsb(&data).map_err(|e| common::refused(&e))?;
             (elements, declared(info))
         }
         // A Rich Text Format document, mapped as a Word file is.
         SourceKind::Rtf => {
             let (elements, info) =
-                fluree_doc_rtf::parse_with_info(&data).map_err(|e| e.to_string())?;
+                fluree_doc_rtf::parse_with_info(&data).map_err(|e| common::refused(&e))?;
             (elements, declared(info))
         }
         // A PowerPoint 97-2003 deck, a slide a page. A picture on a slide is
         // read as a DOCX's is, its text placed after its figure.
         SourceKind::Ppt => {
             let (mut elements, media) =
-                fluree_doc_ppt::parse_with_media(&data).map_err(|e| e.to_string())?;
+                fluree_doc_ppt::parse_with_media(&data).map_err(|e| common::refused(&e))?;
             // The deck opened once, when the first picture is read. Each
             // picture's first bytes are copied alone to tell its format:
             // the entries of a deck's store may all point at one large
@@ -689,13 +729,13 @@ fn read_source(
         }
         // A Word 97-2003 document's text, through its piece table.
         SourceKind::Doc => (
-            fluree_doc_doc::parse(&data).map_err(|e| e.to_string())?,
+            fluree_doc_doc::parse(&data).map_err(|e| common::refused(&e))?,
             fluree_doc_model::Notes::default(),
         ),
         // An Excel 97-2003 workbook, laid out as an XLSX one is.
         SourceKind::Xls => {
             let (elements, info) =
-                fluree_doc_xls::parse_with_info(&data).map_err(|e| e.to_string())?;
+                fluree_doc_xls::parse_with_info(&data).map_err(|e| common::refused(&e))?;
             (elements, declared(info))
         }
         _ => return convert_bytes(data, src, cfg, args, pages, quiet),
@@ -714,7 +754,7 @@ fn convert_transcript(
     quiet: bool,
 ) -> Result<String, String> {
     let stem = src.stem;
-    let elements = fluree_doc_transcript::parse(data).map_err(|e| e.to_string())?;
+    let elements = fluree_doc_transcript::parse(data).map_err(|e| common::refused(&e))?;
     if elements.is_empty() && !quiet {
         eprintln!("note: {stem}: the transcript holds no cues, so the output is empty");
     }
@@ -741,7 +781,7 @@ fn convert_email(
     quiet: bool,
 ) -> Result<String, String> {
     let stem = src.stem;
-    let email = fluree_doc_email::parse(data).map_err(|e| e.to_string())?;
+    let email = fluree_doc_email::parse(data).map_err(|e| common::refused(&e))?;
     // The images the body shows: a pasted screenshot's text follows its
     // figure, read as a DOCX picture's is.
     let media = read_media(
@@ -2383,7 +2423,7 @@ fn convert_bytes(
     // within what one document may make.
     let mut budget = fluree_doc_model::budget::Budget::default();
     let annotations = fluree_doc_pdf::annot::annotations(&raw, &mut budget)
-        .map_err(|e| format!("PDF too large: its notes, {e}"))?;
+        .map_err(|e| format!("PDF too large: its notes, {}", common::refused(&e)))?;
     fluree_doc_pdf::annot::place(
         &mut a.elements,
         fluree_doc_pdf::annot::elements(&annotations),
@@ -2505,7 +2545,7 @@ fn convert_xps(
 ) -> Result<String, String> {
     use fluree_doc_pdf::ocr::{Crop, WordReading};
     let stem = src.stem;
-    let xps = fluree_doc_xps::parse(data).map_err(|e| e.to_string())?;
+    let xps = fluree_doc_xps::parse(data).map_err(|e| common::refused(&e))?;
     let mut doc = xps.doc.clone();
     let asked = |page: usize| pages.is_none_or(|keep| keep.contains(&page));
     // The pages that are pictures nothing else on them reads: the router
@@ -2912,25 +2952,47 @@ mod tests {
 
     #[test]
     fn a_batch_runs_no_more_documents_at_once_than_memory_holds() {
+        use fluree_doc_model::budget::MAX_MEMORY;
         // Room for three documents: -j 8 and one per core of 12 lowered.
-        let three = Some(3 * DOCUMENT_MEMORY + (DOCUMENT_MEMORY >> 1));
-        let (jobs, why) = batch_jobs(8, 12, three);
+        let doc = document_memory(0);
+        let three = Some(3 * doc + (doc >> 1));
+        let (jobs, why) = batch_jobs(8, 12, three, 0);
         assert_eq!(jobs, 3);
         assert!(why.unwrap().starts_with("-j 8 lowered to 3: "));
-        let (jobs, why) = batch_jobs(0, 12, three);
+        let (jobs, why) = batch_jobs(0, 12, three, 0);
         assert_eq!(jobs, 3);
         assert!(why.unwrap().starts_with("-j 0 (one per core) lowered to 3"));
         // Within it: as asked, unsaid.
-        assert_eq!(batch_jobs(2, 12, three), (2, None));
-        assert_eq!(batch_jobs(0, 2, three), (2, None));
+        assert_eq!(batch_jobs(2, 12, three, 0), (2, None));
+        assert_eq!(batch_jobs(0, 2, three, 0), (2, None));
         // A budget each is not room enough: what goes with it counts.
-        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY)).0, 2);
+        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY), 0).0, 2);
         // Less than one document's room: still one.
-        assert_eq!(batch_jobs(4, 12, Some(1 << 30)).0, 1);
-        assert_eq!(batch_jobs(1, 12, Some(0)), (1, None));
+        assert_eq!(batch_jobs(4, 12, Some(1 << 30), 0).0, 1);
+        // A smaller memory limit makes room for more.
+        let mut small = fluree_doc_model::budget::Limits::default();
+        small.memory = MAX_MEMORY / 4;
+        let more = fluree_doc_model::budget::limited_to(small, || batch_jobs(8, 12, three, 0));
+        assert_eq!(more.0, 7);
+        // But what goes with a budget does not shrink with it: under a
+        // budget of 1 MiB, 4 GiB free holds three documents, not 2,730.
+        let mut tiny = fluree_doc_model::budget::Limits::default();
+        tiny.memory = 1 << 20;
+        let four = Some(4u64 << 30);
+        let (jobs, why) =
+            fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 0));
+        assert_eq!(jobs, 3);
+        assert!(why
+            .unwrap()
+            .ends_with("4096 MiB of memory free, 1281 MiB a document"));
+        // And a document holds its input whole: 400 MiB inputs make it two.
+        let (jobs, _) =
+            fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 400 << 20));
+        assert_eq!(jobs, 2);
+        assert_eq!(batch_jobs(1, 12, Some(0), 0), (1, None));
         // Not known: one per core at most.
-        assert_eq!(batch_jobs(0, 6, None), (6, None));
-        assert_eq!(batch_jobs(16, 6, None).0, 6);
+        assert_eq!(batch_jobs(0, 6, None, 0), (6, None));
+        assert_eq!(batch_jobs(16, 6, None, 0).0, 6);
     }
 
     #[test]
@@ -3080,7 +3142,7 @@ mod tests {
         ]);
         let free = free_memory_in(&read);
         assert_eq!(free, Some(2_999_000_000));
-        let (jobs, why) = batch_jobs(4, 12, free);
+        let (jobs, why) = batch_jobs(4, 12, free, 0);
         assert_eq!(jobs, 1);
         assert!(why.unwrap().contains("2860 MiB of memory free"));
         // Under an address space smaller still, that.

@@ -290,22 +290,15 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
         n => n,
     }
     .min(images.len().max(1));
-    let next = std::sync::atomic::AtomicUsize::new(0);
     let failed = std::sync::atomic::AtomicUsize::new(0);
-    std::thread::scope(|s| {
-        for _ in 0..workers {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(path) = images.get(i) else { break };
-                match read_one(engine.as_ref(), path, &args.out) {
-                    Ok((name, words)) if verbose => eprintln!("{name}: {words} words"),
-                    Ok(_) => {}
-                    Err(e) => {
-                        failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        eprintln!("error: {e}");
-                    }
-                }
-            });
+    in_workers(workers, &images, |path| {
+        match read_one(engine.as_ref(), path, &args.out) {
+            Ok((name, words)) if verbose => eprintln!("{name}: {words} words"),
+            Ok(_) => {}
+            Err(e) => {
+                failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                eprintln!("error: {e}");
+            }
         }
     });
     let failed = failed.into_inner();
@@ -322,6 +315,26 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
         );
     }
     i32::from(failed > 0)
+}
+
+/// `each` of `items`, on `workers` threads taking the next one in turn,
+/// each within the limits the caller reads within
+/// ([`fluree_doc_model::budget::limited_to`]): a thread spawned starts
+/// with the defaults.
+fn in_workers<T: Sync>(workers: usize, items: &[T], each: impl Fn(&T) + Sync) {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let limits = fluree_doc_model::budget::limits();
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                fluree_doc_model::budget::limited_to(limits, || loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(item) = items.get(i) else { break };
+                    each(item);
+                })
+            });
+        }
+    });
 }
 
 #[cfg(feature = "ocr")]
@@ -360,6 +373,20 @@ fn read_one(_: &dyn OcrEngine, _: &Path, _: &Path) -> Result<(String, usize), St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn each_worker_reads_within_the_callers_limits() {
+        use fluree_doc_model::budget::{limited_to, limits, Limits};
+        let mut l = Limits::default();
+        l.pages = 7;
+        let seen = std::sync::Mutex::new(Vec::new());
+        limited_to(l, || {
+            super::in_workers(3, &[1, 2, 3, 4, 5], |_| {
+                seen.lock().unwrap().push(limits().pages);
+            })
+        });
+        assert_eq!(seen.into_inner().unwrap(), [7; 5]);
+    }
+
     use super::*;
 
     #[test]
