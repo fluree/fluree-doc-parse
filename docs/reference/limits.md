@@ -276,6 +276,17 @@ made, so no more than one file's conversion is held at a time. A 31 KB
 e-mail carrying 14 small `.docx`, each making 300 MB of DoCO, aborted
 holding all 14 outputs; it now converts all 14, peaking at 0.9 GB.
 
+A message attached is converted within that share like any file, and the
+walk then opens it again for its own files, within the same share, and
+without making its body: only its MIME tree or compound file is read, to
+take the files out. An e-mail whose HTML body peaks at 0.9 GB, carrying
+one whose body peaks at 1.3 GB on its own, was refused converting the
+attached one, and then made its body again on a whole budget of its own
+to follow its files, holding both at once: 1.73 GB. It now peaks at 1.4
+GB, the attached message refused within the share. The files taken out of
+attached messages wait in the walk until their turn, within its own bounds
+(64 MiB a file, 256 MiB in all), not spent from the budget.
+
 ## Batches
 
 The budget is a document's, and a batch (`fdoc convert DIR --out-dir OUT

@@ -52,15 +52,13 @@ pub fn convert_attachments(
         return;
     };
     let cfg = commands::common::TierConfig::default();
-    let convert =
-        commands::convert::carried_converter(email, &cfg, &args, Some(&[1, 2, 3, 4]), true);
     let mut read = |f: &fluree_doc_email::AttachedFile, _depth: usize| {
-        let out = convert(f)?;
+        let out = commands::convert::convert_carried(f, &cfg, &args, Some(&[1, 2, 3, 4]), true)?;
         let kept = out.as_ref().map(|_| ()).map_err(Clone::clone);
         each(out);
         Some(kept)
     };
-    fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
+    commands::convert::walk_carried(email, &mut read);
 }
 
 #[cfg(test)]

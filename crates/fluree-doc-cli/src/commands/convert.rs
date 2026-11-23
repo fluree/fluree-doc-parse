@@ -898,7 +898,6 @@ fn convert_attachments(
         parse_attachments: false,
         ..args.clone()
     };
-    let convert = carried_converter(email, cfg, &child_args, None, quiet);
     // A conversion that cannot be written stops the run, as the message's
     // own output would.
     let mut unwritten: Option<String> = None;
@@ -908,7 +907,7 @@ fn convert_attachments(
                 "not converted: an earlier output was not written".to_string()
             ));
         }
-        let out = convert(f)?;
+        let out = convert_carried(f, cfg, &child_args, None, quiet)?;
         Some(out.and_then(|out| {
             let path = dir.join(format!("{}.{}", f.info.sha256, ext(args.format)));
             std::fs::write(&path, out).map_err(|e| {
@@ -918,7 +917,7 @@ fn convert_attachments(
             })
         }))
     };
-    let children = fluree_doc_email::parse_attachments(email, &Default::default(), &mut read);
+    let children = walk_carried(email, &mut read);
     if let Some(e) = unwritten {
         return Err(e);
     }
@@ -953,19 +952,19 @@ fn convert_attachments(
     Ok(())
 }
 
-/// What converts each file `email` carries, as `--parse-attachments` does:
-/// [`convert_carried`], within what the message leaves of the budget
-/// ([`attachments_share`]), so a file is not read on a budget of its own
-/// beside the message it came in.
-pub(crate) fn carried_converter<'a>(
+/// Walk the files `email` carries with `read`, as `--parse-attachments`
+/// does (`fluree_doc_email::parse_attachments`, its default bounds),
+/// within what the message leaves of the budget ([`attachments_share`]):
+/// each file, and each attached message the walk opens to follow its
+/// files, is read within that share, not on a budget of its own beside
+/// the message it came in.
+pub(crate) fn walk_carried<T>(
     email: &fluree_doc_email::Email,
-    cfg: &'a TierConfig,
-    args: &'a ConvertArgs,
-    pages: Option<&'a [usize]>,
-    quiet: bool,
-) -> impl Fn(&fluree_doc_email::AttachedFile) -> Option<Result<String, String>> + 'a {
-    let share = attachments_share(email);
-    move |f| fluree_doc_model::budget::within(share, || convert_carried(f, cfg, args, pages, quiet))
+    read: &mut fluree_doc_email::ReadAttachment<'_, T>,
+) -> Vec<fluree_doc_email::Child<T>> {
+    fluree_doc_model::budget::within(attachments_share(email), || {
+        fluree_doc_email::parse_attachments(email, &Default::default(), read)
+    })
 }
 
 /// The memory each file an e-mail carries may be converted within: a
@@ -989,11 +988,12 @@ fn attachments_share(email: &fluree_doc_email::Email) -> u64 {
     }
 }
 
-/// Convert a file an e-mail carries, as `--parse-attachments` does, with
+/// Convert a file an e-mail carries, as `--parse-attachments` does (within
+/// what [`walk_carried`] leaves it), with
 /// `args` for a child (no attachments of its own saved), its pages `pages`;
 /// `None` where no reader takes it: a format with none, or an image no
 /// tier is configured to read (a signature's logo, drawn in the body, never).
-fn convert_carried(
+pub(crate) fn convert_carried(
     f: &fluree_doc_email::AttachedFile,
     cfg: &TierConfig,
     args: &ConvertArgs,
@@ -3114,6 +3114,14 @@ mod tests {
             fluree_doc_model::budget::within(held, || attachments_share(&email)),
             0
         );
+        // The walk reads each file within that share, and so opens an
+        // attached message within it too.
+        let mut left = Vec::new();
+        walk_carried(&email, &mut |_: &fluree_doc_email::AttachedFile, _| {
+            left.push(fluree_doc_model::budget::Budget::default().memory_left());
+            Some(Ok(()))
+        });
+        assert_eq!(left, [MAX_MEMORY - held]);
     }
 
     #[test]

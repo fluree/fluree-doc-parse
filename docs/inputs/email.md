@@ -269,7 +269,10 @@ not (`no reader`, its error, `TooLarge`, `TooMany`). Each output is written
 as soon as it is made, and each file is converted within what the message
 leaves of a document's memory budget, since the message is held while its
 files are read: a file the message leaves too little room for fails as too
-large, and the others still convert (see
+large, and the others still convert. A message attached is opened again
+for its own files within that share too, without its body being made a
+second time, so its files are followed even where it was too large to
+convert (see
 [Limits](../reference/limits.md#files-an-e-mail-carries)).
 
 ```bash

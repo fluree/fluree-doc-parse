@@ -219,6 +219,17 @@ pub fn parse_msg(bytes: &[u8]) -> Result<Email, EmailError> {
     assemble(msg::read(bytes)?)
 }
 
+/// The files a message carries, `.eml` or `.msg`, by its content: what
+/// [`parse`] would list, without making its body into elements.
+pub(crate) fn attachments_of(bytes: &[u8]) -> Result<Vec<AttachedFile>, EmailError> {
+    let read = if msg::is_compound(bytes) {
+        msg::read(bytes)?
+    } else {
+        eml::read(bytes)?
+    };
+    Ok(read.attachments)
+}
+
 /// A message as a reader found it, before it becomes elements.
 pub(crate) struct Read {
     pub own: Message,
