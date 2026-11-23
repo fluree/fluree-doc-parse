@@ -252,6 +252,18 @@ fn convert_path(
                 fluree_doc_model::Notes::default(),
             )
         }
+        // Plain text is read as lines, not as Markdown: an indented line
+        // is not code and a row of `=` makes no heading. Markdown saved
+        // under a text file's name is told by its markup and read as such.
+        Some(SourceKind::Text) => {
+            let text = fluree_doc_text::decode(&data);
+            let elements = if fluree_doc_text::is_markdown(&text) {
+                fluree_doc_markdown::parse(&text)
+            } else {
+                fluree_doc_text::parse(&text)
+            };
+            (elements, fluree_doc_model::Notes::default())
+        }
         Some(SourceKind::Html) => {
             let text = fluree_doc_html::decode(&data);
             (

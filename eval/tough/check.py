@@ -107,6 +107,15 @@ class Reading:
                 key = (first["@id"], c["doc:rowIndex"])
                 name = c.get("doc:columnHeader", f"#{c['doc:columnIndex']}")
                 self.rows[key][norm(name)] = norm(c["doc:cellValue"])
+        # Each section as (its title, its level, the title of the section
+        # directly holding it), titles exactly as their `nif:isString`.
+        title = lambda s: self.nodes.get(s.get("po:containsAsHeader"), {}).get("nif:isString")
+        sections = [n for n in graph if n.get("@type") == "doco:Section"]
+        held_by = {c: s for s in sections for c in s.get("po:contains", [])}
+        self.sections = [
+            (title(s), s.get("doc:sectionLevel"), title(held_by[s["@id"]]) if s["@id"] in held_by else None)
+            for s in sections
+        ]
 
     def offsets(self):
         """Elements whose string is not what their offsets cut."""
@@ -173,6 +182,26 @@ def run_check(check, reading):
         name = norm(check["no_column_header"])
         hits = [c["doc:columnHeader"] for c in reading.cells if name in norm(c.get("doc:columnHeader", ""))]
         return not hits, None if not hits else f"{len(hits)} cells, e.g. {hits[0]!r}"
+    if "section" in check:
+        # A section headed by exactly this title and, where given, at this
+        # level and directly inside the section with this title: the outline
+        # a document shows, which no single element states.
+        want = check["section"]
+        ok = any(
+            t == want["title"]
+            and level == want.get("level", level)
+            and within == want.get("within", within)
+            for t, level, within in reading.sections
+        )
+        if ok:
+            return True, None
+        near = [s for s in reading.sections if s[0] == want["title"]]
+        return False, f"as (title, level, within): {near[:2]}" if near else "no section has this title"
+    if "no_section" in check:
+        # No section headed by a title that begins with this: a line that
+        # must stay text, wherever and however often it occurs.
+        hits = [s[0] for s in reading.sections if (s[0] or "").startswith(check["no_section"])]
+        return not hits, None if not hits else f"{len(hits)} sections, e.g. {hits[0]!r}"
     raise SystemExit(f"unknown check kind in {check.get('id')}: {sorted(check)}")
 
 

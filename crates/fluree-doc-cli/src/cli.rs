@@ -32,9 +32,9 @@ pub struct Cli {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip
-    /// transcripts, and email (.eml, .msg). PDF structure is inferred from
-    /// layout; the others declare theirs and carry no geometry.
+    /// Reads PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, WebVTT and
+    /// SubRip transcripts, and email (.eml, .msg). PDF structure is inferred
+    /// from layout; the others declare theirs and carry no geometry.
     ///
     /// Examples:
     ///   fdoc convert report.pdf

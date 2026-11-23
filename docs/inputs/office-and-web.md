@@ -1,4 +1,4 @@
-# DOCX, PPTX, XLSX, HTML and Markdown
+# DOCX, PPTX, XLSX, HTML, Markdown and plain text
 
 Four of these **declare** their structure. A `w:pStyle` names the heading level;
 `<h1>` is a heading because it says so. So these readers map rather than
@@ -254,6 +254,37 @@ the lists set in columns by spaces alone. Only what is never drawn is dropped:
 the whitespace before the first character and after the last, and the spaces
 a line ends in.
 
+A page that declares no headings but shows them, as statutes and contracts do,
+has them read by their shape. The Official Journal sets a regulation's
+outline in classes of its own, and a filer sets a contract's in centred bold,
+with no `<h1>`–`<h6>` anywhere. A paragraph that is nothing but a structural
+keyword and its number becomes a section title: `CHAPTER IV`, `Section 1`,
+`Article 30`, `ARTICLE II`, `ANNEX III`, `§ 7002`. So does one that adds its
+own short title after a number closed by a full stop (`§ 7001.
+Definitions.`, `ARTICLE 1. GENERAL PROVISIONS`), and a code's section number
+alone (`1798.100.`). The keywords are Book, Part, Title, Division, Chapter,
+Article, Section, Annex, Appendix, Schedule and Exhibit, and their sub-
+forms. A short paragraph after a heading with no title of its own that
+reads as a title is joined to it (`Article 30 Records of processing
+activities`), and so is a title in capitals broken mid-phrase over two
+paragraphs. A title on the heading's line that stops short of its full stop
+takes the next paragraph when that one ends it. Such a heading carries the
+evidence `keyword`.
+
+The levels come from how the document nests its keywords, not from a fixed
+table. A regulation sets articles inside sections, and a contract sets
+sections inside articles. In each case the outer keyword is the rarer, so
+keywords rank by how often they occur, divisions (part, title, chapter) above
+units (article, section). An annex or schedule sits beside the outermost
+division, or above the articles where there are no divisions, so an
+agreement attached to another keeps its own articles. A label that comes
+before any of the body, such as the `Exhibit 10.1` a filing is made under,
+names the document and is left as it is.
+
+A heading set at the start of its own text (`Section 2.1 Closing. Unless this
+Agreement…`) stays a paragraph. A page that declares any heading keeps its
+headings as declared, and an email body is never read this way.
+
 A table used for **layout** is read as the containers its cells are, not as
 data. Email, and many older pages, are laid out in tables: a column of
 boxes, a logo beside a banner, tables nested to centre a column. Read as
@@ -291,6 +322,43 @@ a table states where its header ends. Where the PDF engine reports a
 reports a *fact*.
 
 Infallible, for the same reason as HTML.
+
+## Plain text
+
+```bash
+fdoc convert statute.txt -f doco
+```
+
+A text file (`.txt`, `.text`) declares nothing but its lines. A blank line
+ends a paragraph, and the line breaks inside one are kept. A line that starts
+with a list marker (`-`, `*`, `•`, `1.`, `2)`) is a list item, and the lines
+after it continue it until the next marker or a blank line. A bullet is
+dropped and a number kept, because a clause's number is how it is cited.
+
+It is not read as Markdown. An indented line is not code, a line underlined
+with `=` or `-` is not a heading, and `*`, `_` and `<…>` are characters.
+Plain text underlines labels, signatures and column headers, and Markdown
+would make a heading of each.
+
+Its headings are the ones it shows, read as for an [HTML](#html) page
+without heading markup: a line that is a structural keyword and its number,
+with or without its title (`CHAPTER IV`, `§ 7001. Definitions.`,
+`1798.100.`). Such a line at the top of a paragraph is set apart from the
+lines under it, so a heading with its title on the next line reads as a
+heading and its title rather than as one sentence wrapped over two lines.
+Further down a paragraph, such a line stays where it is: there it is more
+likely a reference wrapped onto a line of its own.
+
+Markdown is often saved as `.txt`, and a file that writes Markdown's markup
+is read as Markdown: two headings marked with `#`, the rule under a table's
+header (`|---|---|`), a fenced block, two phrases in `**bold**`, or a link
+written `[label](address)`.
+
+A file is decoded by its byte-order mark, then as UTF-8 when it is valid
+UTF-8, then as Windows-1252. Windows (CR LF) and classic Mac (CR) line ends
+are read as line ends.
+
+Infallible: any sequence of bytes is some text.
 
 ## Why convert Markdown at all
 

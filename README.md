@@ -2,8 +2,8 @@
 
 Adaptive document parsing: a deterministic Rust engine first, with
 model-arbitrated upgrade tiers a document walks through only as far as it
-needs. PDF, Markdown, HTML, DOCX, PPTX, XLSX, a raster image, a meeting
-transcript or an email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD
+needs. PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, a raster image, a
+meeting transcript or an email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD
 graph out.
 
 | tier | adds | overall¹ | typical cost/document |
@@ -114,7 +114,7 @@ measured and rejected are in [the scoreboard](docs/contributing/scoreboard.md).
 
 ## One element model, five outputs
 
-PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts, email and raster images all converge on one element
+PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, transcripts, email and raster images all converge on one element
 model, so every source produces the same DoCO graph. PDF is the geometric
 path — structure inferred from glyph and rule positions, with escalation to
 model tiers where the inference is weak. The others declare their structure,
@@ -145,6 +145,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 
 - `crates/fluree-doc-model` — element model and emitters, source-agnostic
 - `crates/fluree-doc-markdown` — Markdown reader
+- `crates/fluree-doc-text` — plain-text reader
 - `crates/fluree-doc-docx` — DOCX (OOXML) reader
 - `crates/fluree-doc-html` — HTML reader
 - `crates/fluree-doc-pptx` — PPTX (OOXML) reader
