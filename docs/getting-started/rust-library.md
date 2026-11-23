@@ -184,7 +184,7 @@ Reachability is not an offer of stability.
 | `forms::fields` | AcroForm values |
 | `outline::extract` | PDF bookmark tree |
 | `link::extract` / `link::attach` | link annotations and their anchors |
-| `image::as_document` | a raster image as a one-page document |
+| `image::page_of` | a raster image of a given size as a one-page document; `fluree_doc_image::header` reads the size upright |
 | `arbiter::TierBackend` / `arbiter::splice` | the model-tier contract |
 | `arbiter::scrub_furniture` | strip running headers from a model reading |
 | `ocr::inject` / `ocr::mark_provenance` / `ocr::WordReading` | OCR words as glyphs, before `analyze_with` |
