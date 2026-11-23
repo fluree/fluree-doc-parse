@@ -1657,9 +1657,8 @@ fn push_table(
     e.cells = Some(cells);
     e.merged_left = m_left.iter().any(|x| *x).then_some(m_left);
     e.merged_down = m_down.iter().any(|x| *x).then_some(m_down);
-    let filled = e.cells.iter().flatten().flatten().filter(|t| !t.is_empty());
-    budget.spend_elements(1 + filled.count() as u64)?;
-    budget.spend_chars(e.cells.iter().flatten().flatten().flat_map(|t| t.chars()))?;
+    budget.spend_elements(1)?;
+    budget.spend_cell_texts(e.cells.iter().flatten().flatten().map(String::as_str))?;
     budget.spend_copies(&e)?;
     out.push(e);
     Ok(())
@@ -3840,6 +3839,36 @@ mod tests {
         };
         let need = 100 * (ELEMENT_BYTES + 4 * TEXT_BYTES);
         assert_eq!(read(need).unwrap().len(), 100);
+        assert!(matches!(read(need - 1), Err(DocxError::TooLarge(_))));
+    }
+
+    #[test]
+    fn a_tables_cell_costs_what_a_sheets_does() {
+        use fluree_doc_model::budget::{
+            Output, CELL_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        };
+        let cell = |t: &str| format!("<w:tc><w:p><w:r><w:t>{t}</w:t></w:r></w:p></w:tc>");
+        let xml = doc(&format!(
+            "<w:tbl><w:tr>{}{}</w:tr><w:tr>{}{}</w:tr></w:tbl>",
+            cell("ab"),
+            cell("c"),
+            cell("d"),
+            "<w:tc><w:p/></w:tc>"
+        ));
+        let read = |memory: u64| {
+            let mut budget = Budget::new(memory, 0).for_output(Output::Flat);
+            parse_part(
+                &xml,
+                &HashSet::new(),
+                &HashSet::new(),
+                Numbering::default(),
+                &mut budget,
+            )
+        };
+        // Its grid, the table, and its three cells that hold text, each
+        // written once in its row.
+        let need = 4 * CELL_BYTES + FLAT_ELEMENT_BYTES + 3 * FLAT_CELL_BYTES + 4 * TEXT_BYTES;
+        assert_eq!(read(need).unwrap()[0].kind, "doco:Table");
         assert!(matches!(read(need - 1), Err(DocxError::TooLarge(_))));
     }
 }

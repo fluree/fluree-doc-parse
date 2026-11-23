@@ -613,9 +613,8 @@ fn keep(out: &mut Vec<Element>, e: Element, budget: &mut Budget) -> Result<(), T
 /// `budget` (its grid was, before it was made), and what DoCO copies of
 /// its cells.
 fn spend_table(e: &Element, budget: &mut Budget) -> Result<(), TooLarge> {
-    let filled = e.cells.iter().flatten().flatten().filter(|t| !t.is_empty());
-    budget.spend_elements(1 + filled.count() as u64)?;
-    budget.spend_chars(e.cells.iter().flatten().flatten().flat_map(|t| t.chars()))?;
+    budget.spend_elements(1)?;
+    budget.spend_cell_texts(e.cells.iter().flatten().flatten().map(String::as_str))?;
     budget.spend_copies(e)
 }
 
@@ -917,6 +916,25 @@ mod tests {
         let mut small = Budget::new(8_192 * fluree_doc_model::budget::CELL_BYTES, 0);
         assert!(parse_chart(&x, &mut small).is_err());
         assert!(parse_chart(&x, &mut Budget::default()).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_tables_cell_costs_what_a_sheets_does() {
+        use fluree_doc_model::budget::{
+            Output, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        };
+        let mut e = Element::new("doco:Table", String::new(), "pptx", "pptx");
+        e.cells = Some(vec![vec!["ab".into(), String::new()]]);
+        let spend =
+            |output, memory| spend_table(&e, &mut Budget::new(memory, 0).for_output(output));
+        // The table, and its cell that holds text written once in its row,
+        // or a node of its own in DoCO; its grid was spent as it was made.
+        let flat = FLAT_ELEMENT_BYTES + FLAT_CELL_BYTES + 2 * TEXT_BYTES;
+        assert!(spend(Output::Flat, flat).is_ok());
+        assert!(spend(Output::Flat, flat - 1).is_err());
+        let doco = 2 * ELEMENT_BYTES + 2 * TEXT_BYTES;
+        assert!(spend(Output::Doco, doco).is_ok());
+        assert!(spend(Output::Doco, doco - 1).is_err());
     }
 
     /// A stored package of `parts`.

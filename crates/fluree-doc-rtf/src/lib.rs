@@ -786,7 +786,7 @@ fn flush_table(f: &mut Flow, budget: &mut Budget, over: &mut Option<String>) {
     let spent = spend_element(budget, "")
         .and_then(|()| budget.spend_cells(size as u64))
         .and_then(|()| {
-            budget.spend_chars(rows.iter().flat_map(|(r, _)| r).flat_map(|c| c.chars()))
+            budget.spend_cell_texts(rows.iter().flat_map(|(r, _)| r).map(String::as_str))
         });
     if let Err(e) = spent {
         over.get_or_insert(e.to_string());

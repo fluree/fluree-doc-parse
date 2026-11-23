@@ -579,9 +579,10 @@ impl<'o> Layout<'o> {
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
-            // A cell that holds text is a node of the output of its own.
+            // A cell that holds text, at what the output makes of it, its
+            // text spent as it was decoded.
             if !cell.is_empty() {
-                budget.spend_elements(1)?;
+                budget.spend_text_cells(1)?;
             }
             self.row.push(cell);
             return Ok(());

@@ -284,12 +284,8 @@ impl Reader {
                     self.budget.spend_cells(1)?;
                     self.cells += 1;
                     let c = self.text.trim();
-                    // A cell that holds text is a node of the output of its
-                    // own.
-                    if !c.is_empty() {
-                        self.budget.spend_elements(1)?;
-                        self.budget.spend_text(c)?;
-                    }
+                    // A cell that holds text, at what the output makes of it.
+                    self.budget.spend_cell_texts([c])?;
                     let c = c.to_string();
                     self.text.clear();
                     if self.row.is_empty() {
@@ -359,7 +355,8 @@ mod tests {
     use super::*;
 
     use fluree_doc_model::budget::{
-        converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+        TEXT_BYTES,
     };
 
     fn parse(src: &str) -> Vec<Element> {
@@ -377,7 +374,7 @@ mod tests {
         // header's cells: 6 cells, 4 that hold text and the table, for
         // Markdown.
         let src = "| a | b | c |\n|---|---|---|\n| 1 |\n";
-        let need = 6 * CELL_BYTES + 5 * FLAT_ELEMENT_BYTES + 4 * TEXT_BYTES;
+        let need = 6 * CELL_BYTES + FLAT_ELEMENT_BYTES + 4 * (FLAT_CELL_BYTES + TEXT_BYTES);
         let within =
             |memory: u64| parse_within(src, Budget::new(memory, 0).for_output(Output::Flat));
         assert_eq!(within(need).unwrap()[0].cells.as_ref().unwrap()[1].len(), 3);

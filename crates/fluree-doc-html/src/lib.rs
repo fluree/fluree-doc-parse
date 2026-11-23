@@ -38,7 +38,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use fluree_doc_model::budget::{output, Budget, Output, TooLarge};
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::StrTendril;
@@ -2071,21 +2071,13 @@ fn emit_table(table: &Handle, out: &mut Out) {
     }
 }
 
-/// Spend the table `e`, its cells that hold text and their text, and what
-/// DoCO copies of them. DoCO makes a node of each cell that holds text; the
-/// other outputs write it once, so it costs a cell slot more than the
-/// grid's, with its text: about 510 bytes a cell were measured from the
-/// parser's tree to the Markdown written.
+/// Spend the table `e`, its cells that hold text and their text, as every
+/// reader spends a table's cells ([`Budget::spend_cell_texts`]), and what
+/// DoCO copies of them. About 510 bytes a cell were measured from the
+/// parser's tree to the Markdown written, the tree spent apart.
 fn spend_table(b: &mut Budget, e: &Element) -> Result<(), TooLarge> {
-    let cells = || e.cells.iter().flatten().flatten();
-    let held = cells().filter(|t| !t.is_empty()).count() as u64;
     b.spend_elements(1)?;
-    if output() == Output::Doco {
-        b.spend_elements(held)?;
-    } else {
-        b.spend_cells(held)?;
-    }
-    b.spend_chars(cells().flat_map(|t| t.chars()))?;
+    b.spend_cell_texts(e.cells.iter().flatten().flatten().map(String::as_str))?;
     b.spend_copies(e)
 }
 
@@ -2093,7 +2085,8 @@ fn spend_table(b: &mut Budget, e: &Element) -> Result<(), TooLarge> {
 mod tests {
     use super::*;
     use fluree_doc_model::budget::{
-        converting_to, CELL_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, MAX_WORK, TEXT_BYTES,
+        converting_to, output, Output, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, MAX_WORK,
+        TEXT_BYTES,
     };
 
     fn parse(src: &str) -> Vec<Element> {
@@ -3223,14 +3216,12 @@ mod tests {
         let read = |output| converting_to(output, || within(&page, 32 << 20));
         assert_eq!(read(Output::Flat).unwrap().len(), 1);
         assert!(read(Output::Doco).is_err());
-        // Written once, a cell that holds text is a slot beside the grid's.
+        // Written once, a cell that holds text costs what a sheet's does, at
+        // the output its budget counts at, whatever the thread converts to.
         let mut e = element("doco:Table", String::new(), None);
         e.cells = Some(vec![vec!["a".into(), String::new()]]);
-        let need = FLAT_ELEMENT_BYTES + CELL_BYTES + TEXT_BYTES;
-        let spend = |memory| {
-            let mut b = Budget::new(memory, 0).for_output(Output::Flat);
-            converting_to(Output::Flat, || spend_table(&mut b, &e))
-        };
+        let need = FLAT_ELEMENT_BYTES + FLAT_CELL_BYTES + TEXT_BYTES;
+        let spend = |memory| spend_table(&mut Budget::new(memory, 0).for_output(Output::Flat), &e);
         assert!(spend(need).is_ok());
         assert!(spend(need - 1).is_err());
     }

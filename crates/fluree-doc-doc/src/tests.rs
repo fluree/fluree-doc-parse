@@ -3,7 +3,8 @@
 
 use super::*;
 use fluree_doc_model::budget::{
-    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+    converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
+    TEXT_BYTES,
 };
 use std::io::Write;
 
@@ -411,11 +412,11 @@ fn a_tables_padding_is_spent_before_it_is_made() {
     );
     let table = parse(&bytes).unwrap().remove(0);
     assert_eq!(table.cells.as_ref().unwrap().len(), 8);
-    // The table and its 13 cells that hold text, each a node of the output,
-    // for an output that copies none of them (Markdown).
+    // The table and its 13 cells that hold text, each written once in its
+    // row, for an output that copies none of them (Markdown).
     let budget = |cells: u64| {
         Budget::new(
-            cells * CELL_BYTES + 14 * FLAT_ELEMENT_BYTES + 13 * TEXT_BYTES,
+            cells * CELL_BYTES + FLAT_ELEMENT_BYTES + 13 * (FLAT_CELL_BYTES + TEXT_BYTES),
             0,
         )
         .for_output(Output::Flat)

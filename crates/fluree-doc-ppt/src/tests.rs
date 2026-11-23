@@ -847,6 +847,61 @@ fn cells_that_overlap_across_the_grid_are_read_as_text() {
 }
 
 #[test]
+fn a_tables_cell_costs_what_a_sheets_does() {
+    use fluree_doc_model::budget::{Output, CELL_BYTES, FLAT_CELL_BYTES, TEXT_BYTES};
+    // A row of 100 cells of one digit: each written once in its row, at a
+    // sheet's cost for Markdown, its slot and text apart, where an element
+    // each (2 KiB) would not fit; a node of its own each (4 KiB) for DoCO.
+    let cells: Vec<Vec<u8>> = (0..100)
+        .map(|c| cell(c * 10, 0, c * 10 + 10, 10, "1"))
+        .collect();
+    let group = table_group(&cells);
+    let r = record(&group, 0).unwrap();
+    let memory = 100 * (CELL_BYTES + FLAT_CELL_BYTES + 16 * TEXT_BYTES);
+    let read = |output| {
+        table(
+            &group,
+            &r,
+            0,
+            &mut Budget::new(memory, 0).for_output(output),
+        )
+    };
+    let t = read(Output::Flat).unwrap().unwrap();
+    assert_eq!(t.rows[0].len(), 100);
+    assert!(read(Output::Doco).is_err());
+}
+
+#[test]
+fn an_empty_cell_costs_its_slot_only() {
+    use fluree_doc_model::budget::{Output, CELL_BYTES, FLAT_CELL_BYTES, TEXT_BYTES};
+    // A row of 100 cells, every other one empty: a cell that holds text
+    // each of the 50 others, as a `.doc` table's.
+    let cells: Vec<Vec<u8>> = (0..100)
+        .map(|c| {
+            cell(
+                c * 10,
+                0,
+                c * 10 + 10,
+                10,
+                if c % 2 == 0 { "1" } else { "" },
+            )
+        })
+        .collect();
+    let group = table_group(&cells);
+    let r = record(&group, 0).unwrap();
+    let memory = 100 * CELL_BYTES + 50 * (FLAT_CELL_BYTES + 16 * TEXT_BYTES);
+    let t = table(
+        &group,
+        &r,
+        0,
+        &mut Budget::new(memory, 0).for_output(Output::Flat),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(t.rows[0].iter().filter(|c| c.is_empty()).count(), 50);
+}
+
+#[test]
 fn a_group_that_is_no_table_is_read_once_however_deep() {
     // Sixteen groups, each inside a cell of the one above, each claiming to
     // be a table of 1,025 cells down a diagonal, a grid past the bound: a

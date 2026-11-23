@@ -34,7 +34,7 @@ Three kinds of spending share one estimate of memory, 2.5 GiB a document:
 
 | Unit | Cost | What it is |
 | --- | --- | --- |
-| element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own; a workbook's or an OpenDocument table's cell that holds text costs 512 B for the others, its slots and text counted apart |
+| element | 4 KiB for `-f doco`, 2 KiB for the others | an element made, or a table cell that holds text, which DoCO writes as a node of its own; for the others, a table's cell that holds text costs 512 B, whatever the format, its slot and text counted apart |
 | cell | 128 B | a cell slot allocated: read, each copy of a repeated one, each a merge covers, each a table is padded with, and each copy a layout keeps |
 | byte of text | 12 B | each byte the text may take in the worst output: a control character counts six (`\u0001` in JSON), `"` and `&` six, `<` and `>` four, a character Markdown escapes two |
 | link | an element and a cell (4.1 KiB) for `-f doco`, four cells (512 B) for the others, with its target's text | a hyperlink kept on an element (Markdown, HTML): DoCO writes each as a node of its own |
@@ -68,11 +68,25 @@ reads (`fluree_doc_model::budget::converting_to`), and a reader that is not
 told, a library caller's, counts at DoCO's costs, the largest. An element
 costs 2 KiB for Markdown, XHTML, JSON and the text: the reader's own copy is
 most of it, and the most measured is 1.25 KB a paragraph (`.odt`, its XML
-tree) and 750 B a cell (`.xlsx`). A cell that holds text of a sheet (`.xls`,
-`.xlsb`, `.xlsx`, `.ods`) or of an OpenDocument table, whose slots, each
-copy the reader and the layout keep, and text are spent apart, costs 512 B
-more for these outputs (`fluree_doc_model::budget::FLAT_CELL_BYTES`), not
-2 KiB: a one-digit cell of an `.xlsx`, 750 B in all, counts 980 B. Counted
+tree) and 750 B a cell (`.xlsx`). A table's cell that holds text costs the
+same in every format, a sheet's (`.xls`, `.xlsb`, `.xlsx`, `.ods`) as a
+`.csv` record's, a Markdown, HTML, Word, PowerPoint, RTF or OpenDocument
+table's: its slots, each copy the reader and the layout keep, and its text
+are spent apart, and the cell 512 B more for these outputs
+(`fluree_doc_model::budget::filled_cell_bytes`, which the fuzz targets'
+check counts with too), not 2 KiB: a one-digit cell of an `.xlsx`, 750 B in
+all, counts 980 B. The slots are not the same in every format: a sheet's
+layout copies its cells (into islands, then a table's grid), and a
+Markdown table's parser builds a tree, each spent, so a table may convert
+from one format and be refused from another. 50,000 rows by 12 columns
+convert to DoCO from a `.csv`, at 1.77 GB, and are refused as an `.xlsx`,
+`.xls`, `.ods` or Markdown table; as Markdown, JSON or the text, all five
+convert. Counted at an element's 2 KiB, a `.csv` of 100,000 rows
+by 12 columns (13 MB) was refused as Markdown where the same `.xlsx`
+converted; it now converts, at 144 MB, and 100,000 rows by 15 columns (1.5
+million cells) at 162 MB, about 110 B a cell, and 290 MB from a Markdown
+table. As DoCO, 2.9 KB a cell were measured
+(20,000 rows by 15 columns, 883 MB), so both are refused there. Counted
 at 2 KiB on top of its slots, each of an `.ods` sheet's cells spent twice,
 and its content bound to 64 MiB, a LibreOffice `.ods` of 50,000 rows by 12
 columns (2.2 MB, its content 77 MB) was refused as Markdown; it now
@@ -91,18 +105,17 @@ peaks at:
 
 It converts to every output but DoCO, whose 3 GB from the `.xlsx` is past
 what the budget allows; as DoCO it is refused before anything is written.
-At the other outputs' costs a budget holds about 1.2 million elements or
-cells that hold text, or about 2.7 million cells of a sheet; the most such
-a document was measured to take is 1.5 GB (1.2 million paragraphs of an `.odt`), against 0.25 GB for 1.2
-million cells of a `.csv` or a `.doc`, and 1.2 GB for as many paragraphs
-of a `.docx`.
+At the other outputs' costs a budget holds about 1.2 million elements, or
+about 4 million table cells of one digit, 3 million of 20 bytes; the most
+such a document was measured to take is 1.5 GB (1.2 million paragraphs of
+an `.odt`), against 0.25 GB for 1.2 million cells of a `.csv` or a `.doc`,
+and 1.2 GB for as many paragraphs of a `.docx`.
 
-An HTML table's cell that holds text costs a cell more than its slot in
-the grid, with its text, rather than an element, for the outputs that
-write it once: the page's tree, the most of what it takes, is counted on
-its own ([A web page's tree](#a-web-pages-tree)). 50,000 rows of 30 cells
-(1.5 million), refused as Markdown before, take 775 MB, and 50,000 of 60
-take 1.5 GB, about 510 B a cell, against about 880 B counted.
+An HTML table's cells cost the same, beside the page's tree, which is
+counted on its own ([A web page's tree](#a-web-pages-tree)). 50,000 rows of
+30 cells (1.5 million, 27 MB) take 760 MB as Markdown and convert; 50,000
+of 60 (54 MB) take 1.5 GB, about 500 B a cell, and are refused, counted at
+about 1.3 KB a cell, its tree's two nodes and the cell's own.
 
 ## Copies of a table's cells
 

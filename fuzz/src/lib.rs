@@ -6,7 +6,8 @@
 //! libFuzzer reports those itself (`-timeout`, `-rss_limit_mb`).
 
 use fluree_doc_model::budget::{
-    converting_to, output, text_cost, Output, CELL_BYTES, ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
+    converting_to, filled_cell_bytes, output, text_cost, Output, CELL_BYTES, ELEMENT_BYTES,
+    MAX_MEMORY, TEXT_BYTES,
 };
 use fluree_doc_model::doco::table_copies;
 use fluree_doc_model::{DocoOptions, Element, Notes};
@@ -35,14 +36,16 @@ pub fn reading<R>(data: &[u8], read: impl FnOnce() -> R) -> R {
 }
 
 /// The memory `elements` stand for at the budget's costs for `output`
-/// (`fluree_doc_model::budget`): an element, or a cell holding text, at
-/// the output's element cost, each cell slot at `CELL_BYTES`, each byte of
-/// text at `TEXT_BYTES` times what it may take in the worst output. A
-/// table's text is its cells' (the cost of a byte covers the copies made
-/// of it), so it is counted once, through its cells, and then the copies
-/// the output writes of them (`fluree_doc_model::doco::table_copies`):
-/// for DoCO, a merged value in each cell it covers, each cell's labels;
-/// for the text, a value merged down on each row; for the others, none.
+/// (`fluree_doc_model::budget`): an element at the output's element cost,
+/// each cell slot at `CELL_BYTES`, a cell that holds text at what every
+/// reader spends for one (`filled_cell_bytes`, its text included), each
+/// other byte of text at `TEXT_BYTES` times what it may take in the worst
+/// output. A table's text is its cells' (the cost of a byte covers the
+/// copies made of it), so it is counted once, through its cells, and then
+/// the copies the output writes of them
+/// (`fluree_doc_model::doco::table_copies`): for DoCO, a merged value in
+/// each cell it covers, each cell's labels; for the text, a value merged
+/// down on each row; for the others, none.
 pub fn estimated_memory(elements: &[Element], output: Output) -> u64 {
     let element = output.element_bytes();
     let mut cost = 0u64;
@@ -62,12 +65,9 @@ pub fn estimated_memory(elements: &[Element], output: Output) -> u64 {
         }
         for row in e.cells.iter().flatten() {
             for cell in row {
-                cost = cost.saturating_add(CELL_BYTES);
-                if !cell.is_empty() {
-                    cost = cost
-                        .saturating_add(element)
-                        .saturating_add(text_cost(cell).saturating_mul(TEXT_BYTES));
-                }
+                cost = cost
+                    .saturating_add(CELL_BYTES)
+                    .saturating_add(filled_cell_bytes(output, cell));
             }
         }
     }
@@ -114,5 +114,30 @@ where
     let pictures = fluree_doc_model::pictures(media.to_vec());
     for part in pictures.iter().filter_map(|p| p.source.part()).take(max) {
         let _ = read(part);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fluree_doc_model::budget::within;
+
+    #[test]
+    fn the_oracle_counts_a_table_as_its_reader_does() {
+        // 8,000 records of ten one-digit cells: what the CSV reader needs
+        // is what the oracle counts, at each output's costs, so a table a
+        // reader accepts never fails the check.
+        let csv = format!("{}\n", ["1"; 10].join(",")).repeat(8_000);
+        for output in [Output::Flat, Output::Text] {
+            let read = |memory| {
+                within(memory, || {
+                    converting_to(output, || fluree_doc_csv::parse(csv.as_bytes()))
+                })
+            };
+            let elements = read(MAX_MEMORY).unwrap();
+            let need = estimated_memory(&elements, output);
+            assert!(read(need).is_ok(), "{output:?}");
+            assert!(read(need - 1).is_err(), "{output:?}");
+        }
     }
 }

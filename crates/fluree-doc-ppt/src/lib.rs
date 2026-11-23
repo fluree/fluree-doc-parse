@@ -533,9 +533,7 @@ fn table(
     for ((_, s), (c0, c1, r0, r1)) in cells.iter().zip(spans) {
         let mut found = Vec::new();
         texts(d, s, depth + 1, (&mut 4, false), budget, &mut found)?;
-        // A cell that holds text is a node of the output of its own.
-        budget.spend_elements(1)?;
-        grid.rows[r0][c0] = found
+        let text = found
             .iter()
             .filter_map(|i| match i {
                 Item::Text(t) => Some(tidy(&t.text.replace('\r', " "))),
@@ -544,6 +542,12 @@ fn table(
             .filter(|t| !t.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
+        // A cell that holds text, at what the output makes of it, its text
+        // spent as it was decoded.
+        if !text.is_empty() {
+            budget.spend_text_cells(1)?;
+        }
+        grid.rows[r0][c0] = text;
         for row in r0..r1 {
             for col in c0..c1 {
                 if col > c0 {

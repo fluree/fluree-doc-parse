@@ -107,10 +107,13 @@ pub const FLAT_ELEMENT_BYTES: u64 = 2 << 10;
 /// What one table cell that holds text costs when the output writes it once,
 /// in its row (Markdown, XHTML, JSON, the text), beyond its slots
 /// ([`CELL_BYTES`]) and its text, which are counted apart
-/// ([`Budget::spend_text_cells`]); DoCO writes it as a node of its own, at
-/// [`ELEMENT_BYTES`]. A one-digit cell of an `.xlsx` sheet was measured at
-/// about 750 B in all, from the reader through Markdown, of which its slots
-/// and text count about 460 B: with this, 980 B.
+/// ([`Budget::spend_text_cells`], [`filled_cell_bytes`]), in every format;
+/// DoCO writes it as a node of its own, at [`ELEMENT_BYTES`]. A one-digit
+/// cell of an `.xlsx` sheet was measured at about 750 B in all, from the
+/// reader through Markdown, of which its slots and text count about 460 B:
+/// with this, 980 B. A `.csv` record's cell takes about 110 B, a Markdown
+/// table's 200 B with the parser's tree, an HTML table's 500 B with the
+/// page's.
 pub const FLAT_CELL_BYTES: u64 = 512;
 
 /// What a document is converted to, which sets what its elements cost and
@@ -137,13 +140,31 @@ impl Output {
         }
     }
 
-    /// What one table cell that holds text costs.
+    /// What one table cell that holds text costs, its slot and its text
+    /// apart.
     pub fn text_cell_bytes(self) -> u64 {
         match self {
             Output::Doco => ELEMENT_BYTES,
             Output::Text | Output::Flat => FLAT_CELL_BYTES,
         }
     }
+}
+
+/// What a table cell that holds `text` costs at `output` beyond its slot
+/// ([`CELL_BYTES`], spent with the table's grid): nothing when it is empty,
+/// else [`Output::text_cell_bytes`] and its text at [`text_cost`]. One cost
+/// for a cell of every format, whichever reader made it (a CSV record, a
+/// Markdown or HTML table, a Word or OpenDocument table, a sheet). The
+/// slots each reader keeps are spent apart and differ (a sheet's layout
+/// copies its cells, a Markdown table's parser builds a tree), so the same
+/// table may still be refused from one format and not from another.
+pub fn filled_cell_bytes(output: Output, text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+    output
+        .text_cell_bytes()
+        .saturating_add(text_cost(text).saturating_mul(TEXT_BYTES))
 }
 
 thread_local! {
@@ -337,6 +358,21 @@ impl Budget {
     /// are counted apart.
     pub fn spend_text_cells(&mut self, n: u64) -> Result<(), TooLarge> {
         self.spend_memory("elements", n, self.output.text_cell_bytes())
+    }
+
+    /// Count the table cells about to be made that hold `texts`, beyond
+    /// their slots, at [`filled_cell_bytes`]: an empty one costs nothing, one
+    /// that holds text a cell that holds text, and its text. For a reader
+    /// whose cells' text is not spent elsewhere.
+    pub fn spend_cell_texts<'a>(
+        &mut self,
+        texts: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), TooLarge> {
+        let output = self.output;
+        let n = texts
+            .into_iter()
+            .fold(0u64, |n, t| n.saturating_add(filled_cell_bytes(output, t)));
+        self.spend_memory("cells", n, 1)
     }
 
     /// Count `n` cell slots about to be allocated: cells read, each copy of
@@ -543,6 +579,19 @@ mod tests {
         assert_eq!(cells(Output::Doco), ELEMENT_BYTES);
         assert_eq!(cells(Output::Flat), FLAT_CELL_BYTES);
         assert_eq!(cells(Output::Text), FLAT_CELL_BYTES);
+        // The same, with their text, for a reader that spends it with them;
+        // an empty one costs nothing beyond its slot.
+        for output in [Output::Doco, Output::Flat, Output::Text] {
+            let cell = output.text_cell_bytes();
+            assert_eq!(filled_cell_bytes(output, "a&"), cell + 7 * TEXT_BYTES);
+            assert_eq!(filled_cell_bytes(output, ""), 0);
+            let need = 2 * cell + 13 * TEXT_BYTES;
+            let mut b = Budget::new(need, 0).for_output(output);
+            b.spend_cell_texts(["a&", "", "\u{1}"]).unwrap();
+            assert_eq!(b.memory_left(), 0);
+            assert!(b.spend_cell_texts([""]).is_ok());
+            assert!(b.spend_cell_texts(["y"]).is_err());
+        }
         // A value merged down: DoCO copies it into each row's cell and
         // labels the next cell with it, the text shows it on each row,
         // Markdown, XHTML and JSON write it once.
