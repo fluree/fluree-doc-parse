@@ -337,6 +337,11 @@ text that belongs to the word stays in it: a unit's power
 ordinal's ending (`1<sup>st</sup>`, `1st`) and a formula's index or power
 (`2<sup>p</sup>`, a raised letter after a single letter, a term of a formula
 set after `=`). PDFs follow the same rule for the raised glyphs they draw.
+A mark written as a link to a note on the same page, rather than in a
+`<sup>`, is read the same way: `governments<a href="#fn01"
+class="sd-tablefnref">1</a>` reads `governments 1`. The link has to say it
+is a note's, by `role="doc-noteref"` or a class, id, target or label naming
+a note (`fn`, `note`, `foot`); any other link's text reads as written.
 
 In Rust, `fluree_doc_html::parse_with_quote_depth` returns beside the
 elements how many cited quotations enclose each one: a `<blockquote>` with

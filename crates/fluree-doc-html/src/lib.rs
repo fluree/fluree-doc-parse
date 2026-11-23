@@ -367,7 +367,8 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
             if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
                 out.push(' ');
             }
-            if tag == "sup" && fluree_doc_model::marks::note_mark(out, &text_of(node).0) {
+            let raised = tag == "sup" || (tag == "a" && note_link(node));
+            if raised && fluree_doc_model::marks::note_mark(out, &text_of(node).0) {
                 out.push(' ');
             }
             // Recorded around the recursion: an anchor's text is whatever
@@ -382,6 +383,33 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
         }
         _ => {}
     }
+}
+
+/// A link to a note on the same page: a note's mark written as a link
+/// rather than in a `<sup>` (Statistics Canada's tables: `Provincial
+/// governments<a href="#fn01" class="sd-tablefnref">1</a>`). Its target is
+/// a fragment of the page, and the link says it is a note's: by its role
+/// (`doc-noteref`), or a class, id, target or label that names a note
+/// (`fn`, `note`, `foot`).
+fn note_link(node: &Handle) -> bool {
+    let Some(href) = attr_of(node, "href").filter(|h| h.trim_start().starts_with('#')) else {
+        return false;
+    };
+    if attr_of(node, "role").is_some_and(|r| r.eq_ignore_ascii_case("doc-noteref")) {
+        return true;
+    }
+    [
+        Some(href),
+        attr_of(node, "class"),
+        attr_of(node, "id"),
+        attr_of(node, "aria-label"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| {
+        let v = v.to_ascii_lowercase();
+        v.contains("fn") || v.contains("note") || v.contains("foot")
+    })
 }
 
 /// Elements that lay out as blocks. Everything else, text included, flows
@@ -1707,6 +1735,28 @@ mod tests {
         ] {
             assert_eq!(header(html).0, Some(0), "{html}");
         }
+    }
+
+    #[test]
+    fn a_note_mark_written_as_a_link_stands_apart() {
+        let t = |html: &str| parse(html)[0].text.clone();
+        assert_eq!(
+            t(
+                "<p>Provincial governments<a href=\"#fn01\" class=\"btn sd-tablefnref\" \
+               aria-label=\"Table note 1\" role=\"button\">1</a> rose</p>"
+            ),
+            "Provincial governments 1 rose"
+        );
+        assert_eq!(
+            t("<p>Revenue<a role=\"doc-noteref\" href=\"#n3\">3</a></p>"),
+            "Revenue 3"
+        );
+        // A link that is no note's, or goes elsewhere, is read as written.
+        assert_eq!(t("<p>Part<a href=\"#part2\">2</a></p>"), "Part2");
+        assert_eq!(
+            t("<p>Table<a href=\"https://example.org/fn\">5</a></p>"),
+            "Table5"
+        );
     }
 
     #[test]
