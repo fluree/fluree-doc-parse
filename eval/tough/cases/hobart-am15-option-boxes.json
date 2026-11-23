@@ -1,0 +1,39 @@
+{
+  "document": {
+    "file": "hobart-am15.pdf",
+    "url": "https://www.hobart.ca/wp-content/uploads/pdfs/warewash/AM15-F40078.pdf",
+    "sha256": "bc7d11759f34b0dbab4898e14dd4088c9fb9a2bb10be7c10bf81d3e776cbd138",
+    "about": "Hobart AM15 dishwasher specification sheet. Its model, options and accessories are lists of boxes to tick, each opening with ❑ (U+2751, a Zapf Dingbats box) set in the text run."
+  },
+  "notes": [
+    "❑ was not read as a bullet, so the options ran together as paragraphs, and the short bold ones were taken for headings: one section per accessory."
+  ],
+  "checks": [
+    {
+      "id": "accessory-is-a-list-item",
+      "found": "2026-11-23",
+      "issue": "#49: the accessory came out as a heading, ❑ Peg rack.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Peg rack",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "option-is-a-list-item",
+      "found": "2026-11-23",
+      "issue": "#49: the options ran together in one paragraph, each behind its box.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Gas heat",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "no-box-headings",
+      "found": "2026-11-23",
+      "issue": "#49: as above; no section opens on a box.",
+      "no_section": "❑"
+    }
+  ]
+}
