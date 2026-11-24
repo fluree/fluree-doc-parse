@@ -178,7 +178,14 @@ of adjacent columns over a stretch of the page. It is cut across first, at:
   run stand a line's space apart at the larger type's size: a display
   title's lines are more than a body line apart. A line set just over the
   run, at its size and nearer it than to the text above, is its label and
-  goes with it: `Notes:` in the left column over notes set across the page;
+  goes with it: `Notes:` in the left column over notes set across the page.
+  A run alone in its band that opens with a title reads that title first
+  and as one, whatever columns its lines start in: a right-aligned display
+  title whose first line lies wholly right of the gutter and whose second
+  crosses it. A title's lines are words at one size, set large or bold, one
+  to a row, and no longer than a heading set large may be (twenty words).
+  Lines side by side are columns, and a longer run is a caption, a lead
+  paragraph or body lines run together across a narrow gutter;
 - **a table across two of its columns or more**;
 - **a horizontal rule** across most of the region's width;
 - **a gap no line crosses**, at least twice the page's line height. A

@@ -56,7 +56,7 @@ const MAX_HEADING_WORDS: usize = 12;
 /// Most words of a heading that more than its shape vouches for
 /// ([`vouched_for`]). `3. Perspective of supply and demand
 /// balance of wood pellets and cost structure in Japan` is 15 words.
-const MAX_LONG_HEADING_WORDS: usize = 20;
+pub(crate) const MAX_LONG_HEADING_WORDS: usize = 20;
 const MAX_LONG_HEADING_CHARS: usize = 160;
 
 /// Size, against the body, of type set clearly larger than it.
