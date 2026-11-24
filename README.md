@@ -9,7 +9,7 @@ graph out.
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
 | 1 | deterministic extraction + layout | 0.901319 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.908607 | ~0.2 s (CPU) |
+| 2 | layout-detector arbitration (headings, table regions) | 0.908607 | ~0.2 s³ |
 | 3 | deep reading of pixels-only content and doubted structure | **0.940703** | ~1.5 s² |
 
 ¹ 200-document public evaluation corpus, measured 2026-11-23 — the standings
@@ -20,6 +20,11 @@ model-output caches with no GPU and no API key.
 1.7 s), the other 113 never leave tier 1 at 8 ms. Tiers 1 and 2 are CPU-only,
 so the deep reader is the sole reason to think about a GPU or an API key. The
 full timing accounting is on [the benchmarks page](docs/benchmarks/README.md).
+
+³ A page through the layout detector on a GPU host. It runs on CPU too, at
+about 0.8 s a page on an Apple M4 Max, whose GPU it cannot use. `fdoc` reads
+the detector's boxes rather than running it: see
+[Producing layout boxes](docs/integration/escalation-tiers.md#producing-layout-boxes).
 
 Two principles produced those numbers:
 

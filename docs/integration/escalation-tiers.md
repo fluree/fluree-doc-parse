@@ -59,6 +59,55 @@ fdoc convert report.pdf -f doco
 Each is independent: any subset works, and any missing sidecar simply means
 that tier does not run for that document.
 
+## Producing layout boxes
+
+Tier 2 reads boxes from a layout detector run over every page. `fdoc` does
+not run the detector itself and no provider supplies it: you run it, and
+pass its boxes in. The published scores use PaddleOCR's PP-DocLayoutV3, run
+alone, without OCR. Any detector that writes the [box
+format](sidecar-formats.md#1-layout-boxes----layout-boxes) with the same
+label names will do.
+
+```bash
+# 1. Every page to PNG at 2×, named {stem}_p{page}_page.png
+fdoc dev render-pages report.pdf ./pages
+
+# 2. Boxes for each page, as {stem}_p{page}_page.json
+python3 -m venv .venv          # tested with Python 3.12
+.venv/bin/pip install paddlepaddle==3.3.1 paddleocr==3.7.0
+.venv/bin/python layout_boxes.py ./pages ./layout
+
+# 3. Convert with them
+fdoc convert report.pdf -f doco --layout-boxes ./layout
+```
+
+`render-pages` takes a directory as well as a file, and names each image
+after its document and page, so one `./layout` serves a whole corpus.
+`layout_boxes.py`:
+
+```python
+"""Write fdoc layout-box sidecars: PP-DocLayoutV3 over each page PNG."""
+import json, pathlib, sys
+from paddleocr import LayoutDetection
+
+pages, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+out.mkdir(parents=True, exist_ok=True)
+model = LayoutDetection(model_name="PP-DocLayoutV3")
+for png in sorted(pages.glob("*_page.png")):
+    for res in model.predict(str(png), batch_size=1):
+        boxes = [{"label": b["label"], "score": round(float(b["score"]), 4),
+                  "box": [round(float(v), 1) for v in b["coordinate"]]}
+                 for b in res["boxes"]]
+    (out / f"{png.stem}.json").write_text(json.dumps(boxes))
+```
+
+The model downloads on first use. On a GPU it reads a page in about 0.2 s.
+`paddlepaddle` has no GPU support on a Mac, where it runs on CPU at about
+0.8 s a page. Write every box the detector returns: `fdoc` ignores those
+scored below 0.6 and the labels it has no use for. The boxes are in the
+render's pixels, which is why the pages must come from `render-pages`: `fdoc`
+halves the coordinates to reach PDF units.
+
 ## Producing the crops
 
 ```bash

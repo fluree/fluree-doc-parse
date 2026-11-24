@@ -55,7 +55,7 @@ By [tier](../getting-started/tiers.md):
 | tier | adds | overall | typical cost/document |
 |---|---|---|---|
 | 1 | deterministic extraction and layout | 0.901319 | 8 ms, CPU |
-| 2 | layout-detector arbitration | 0.908607 | ~0.2 s, CPU |
+| 2 | layout-detector arbitration | 0.908607 | ~0.2 s³ |
 | 3 | deep reading of pixels-only content | 0.940703 | ~1.5 s across the corpus¹ |
 
 ¹ The harness prints 0.012 s/document for the cascade, which is only the Rust
@@ -68,6 +68,13 @@ one process per document, so this is substantially process startup rather
 than parsing — an upper bound on the engine, not a profile of it. In one
 process, `fdoc convert <dir> -j 1` reads the same 200 documents at 7.7 ms
 each: the 8 ms in the tier table. A single timing is not a measurement.
+
+³ PP-DocLayoutV3 on a GPU host, 178 ms a page. It runs on CPU too, at
+0.82 s a page on an Apple M4 Max, whose GPU it cannot use. The committed
+layout cache is what
+[Producing layout boxes](../integration/escalation-tiers.md#producing-layout-boxes)
+writes: boxes made afresh that way for all 200 pages score tier 2 the same,
+0.908607.
 
 ## Reproducing it
 
