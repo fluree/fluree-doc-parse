@@ -1044,8 +1044,59 @@ fn drop_kickers(out: &mut Vec<Heading>, pages: &[Vec<Block>], title: Option<usiz
         {
             break;
         }
+        // A division's label over its title is the title's own, `Chapter
+        // 3` over `Numerical differentiation`: a heading at the title's
+        // level, not text.
+        if division_label(&b.text()) {
+            out[pos].evidence = Evidence::Title;
+            out[pos].level = 1;
+            continue;
+        }
         out.remove(pos);
     }
+}
+
+/// Words that name a division of a document, in the languages the corpus
+/// sets them in.
+const DIVISION_WORDS: &[&str] = &[
+    "chapter",
+    "part",
+    "section",
+    "unit",
+    "lesson",
+    "module",
+    "appendix",
+    "annex",
+    "book",
+    "volume",
+    "chapitre",
+    "partie",
+    "annexe",
+    "capítulo",
+    "capitulo",
+    "parte",
+    "sección",
+    "seccion",
+    "anexo",
+    "kapitel",
+    "teil",
+    "abschnitt",
+    "anhang",
+];
+
+/// A division's label alone: a division word and its number, a roman
+/// numeral or a single letter (`Chapter 3`, `PART II`, `Appendix B`).
+fn division_label(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let (Some(word), Some(number), None) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    let number = number.trim_end_matches(['.', ':']);
+    DIVISION_WORDS.contains(&word.to_lowercase().as_str())
+        && !number.is_empty()
+        && (number.chars().all(|c| c.is_ascii_digit()) && number.len() <= 3
+            || is_roman(&number.to_ascii_uppercase())
+            || (number.chars().count() == 1 && number.chars().all(|c| c.is_alphabetic())))
 }
 
 /// Visual style of a heading, for ranking depth.
@@ -1407,6 +1458,35 @@ mod tests {
         let hs = detect(&[page], &[]);
         let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
         assert_eq!(texts, ["Exos X16", "Best-Fit Applications"], "{hs:?}");
+    }
+
+    #[test]
+    fn a_divisions_label_over_its_title_stays_a_heading_at_its_level() {
+        let page = vec![
+            blk("Chapter 3", 14.0, 1),
+            blk("Numerical differentiation", 24.0, 1),
+            blk(
+                "Some body text that runs on for a while here and more.",
+                10.0,
+                3,
+            ),
+            blk("3.1 Introduction", 14.0, 1),
+            blk(
+                "Some body text that runs on for a while here and more.",
+                10.0,
+                3,
+            ),
+        ];
+        let hs = detect(&[page], &[]);
+        let got: Vec<(&str, usize)> = hs.iter().map(|h| (h.text.as_str(), h.level)).collect();
+        assert_eq!(got[0], ("Chapter 3", 1), "{hs:?}");
+        assert_eq!(got[1], ("Numerical differentiation", 1), "{hs:?}");
+        assert!(division_label("PART II"));
+        assert!(division_label("Appendix B"));
+        assert!(division_label("Capítulo 12"));
+        assert!(!division_label("Chapter 3 Numerical differentiation"));
+        assert!(!division_label("Scalable. Responsive."));
+        assert!(!division_label("Section"));
     }
 
     #[test]

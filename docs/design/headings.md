@@ -166,10 +166,14 @@ its publisher, a category or a tagline above the title in smaller type
 directly above the title with no text between them, is not a section of its
 own either. As a heading it ranked below the title, so it opened a deeper
 section that closed at the title with nothing in it. It is read as text,
-where the page sets it. The benchmark's ground truth keeps a few kickers as
-headings (`Chapter 3` over `Numerical differentiation`), and those pages
-score lower. Others, such as journal banners (`Open Access`, `RESEARCH
-ARTICLE`), it does not keep.
+where the page sets it. Journal banners (`Open Access`, `RESEARCH
+ARTICLE`) are kickers too.
+
+A division's label is not a kicker. A division word and its number, a
+roman numeral or a letter (`Chapter 3`, `PART II`, `Appendix B`) is a
+heading at the title's level. Joining it into the title as one heading was
+measured and read worse: the benchmark keeps `Chapter 3` and its title as
+two headings.
 
 ## Table of contents suppression
 
