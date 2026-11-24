@@ -1607,9 +1607,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // where a row across the page holds more than a label and its
         // value. Their cells hold the prose's glyphs, so they are pointed
         // at the page's.
-        let fields = timed(&mut timings.tables, || {
-            table::field_lists(&prose, p.index, &prose_cols)
+        let (fields, column_tables) = timed(&mut timings.tables, || {
+            let text = table::PageRows::new(&prose);
+            (
+                table::field_lists_in(&prose, p.index, &prose_cols, &text),
+                table::column_tables_in(&prose, p.index, &prose_cols, &text),
+            )
         });
+        let field_count = fields.len();
+        let fields: Vec<Grid> = fields.into_iter().chain(column_tables).collect();
+        // Whether a table was read within the page's columns: then its
+        // columns stand once it is taken out.
+        let mut in_columns = false;
         if !fields.is_empty() {
             let at: std::collections::HashMap<usize, usize> = p
                 .glyphs
@@ -1617,7 +1626,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .enumerate()
                 .map(|(i, g)| (g.draw_index, i))
                 .collect();
-            for mut f in fields {
+            for (fi, mut f) in fields.into_iter().enumerate() {
                 if grids
                     .iter()
                     .chain(aligned.iter())
@@ -1637,15 +1646,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     }
                 }
                 if mapped {
+                    in_columns |= fi >= field_count;
                     aligned.push(f);
                 }
             }
         }
         if !aligned.is_empty() {
             // Withhold their glyphs from prose too, and re-assemble what is left.
+            // A table read between the page's gutters leaves them where they
+            // were: found again without its rows, they can fall elsewhere, and
+            // the columns' lines would be read across each other.
             let remaining = glyphs_outside_grids(&prose, &aligned);
             cols = timed(&mut timings.columns, || {
-                line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                if in_columns {
+                    line::assemble_columns_in(&remaining, &p.rules, p.index, &prose_cols)
+                } else {
+                    line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                }
             });
             grid_sources.extend(std::iter::repeat_n(GridSource::Aligned, aligned.len()));
             grids.extend(aligned);

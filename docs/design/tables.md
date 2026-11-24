@@ -529,6 +529,41 @@ A row whose value is a word, over values that are quantities, names the
 columns (`Description | Units` over `Chafing dish | 12`): it is the
 list's header. Otherwise the list has none.
 
+### Tables of three columns or more in one column of a page
+
+A table set in one column of a page of several has the same trouble as a
+field list there. Across the page each of its rows shares a baseline with
+the other columns' lines, so the aligned reader never finds them a run. It
+is looked for between the gutters too, only on pages of more than one
+column:
+
+- It starts at a row whose first cell opens its page column, with three
+  cells or more before the next gutter.
+- It runs on down every row with as many cells, each set where the first
+  row's cell is: starting with it, ending with it, or centred under it. A
+  header is often centred over figures set right (`oz. per gallon:` over
+  `0-7` and `10-20`).
+- A header may sit a line further from the rows under it than they sit from
+  each other.
+
+To be read it needs:
+
+- at least three rows of short cells, few of them sentences;
+- either a header row or a column of quantities. A header row is labels each
+  ending in a colon, or a bold row over rows that are not, or a row naming
+  columns of quantities.
+
+A table wider than one column has wide gaps of its own between its label
+column and its figures, and they read as the page's gutters. So a run is not
+read here when, on half its rows or more, the cell just across a gutter is
+short: under a third of that page column's width. That is a table running on
+past the gutter, not a column of text beside it.
+
+Once such a table is taken out, the page's prose is read again within the
+gutters it was found between. Found afresh without the table's rows, a
+gutter can fall somewhere else, and the two columns' lines are then read
+across each other.
+
 ## Where a table goes in the reading order
 
 A table is placed after the last block above it that it overlaps across: the
