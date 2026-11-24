@@ -172,6 +172,28 @@ or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
 or a diamond is set before headings as often as before items (`❖ Gene` over
 a guideline's subsection), so there the heading pass decides.
 
+**Numbered lists.** A feature or safety list often sets each item's number
+in the item's own text, `2. PostureFit SL®`, with a line or two of
+description under it. Such a list is read as a list, each item's title and
+description one item, when:
+
+- the numbers count off from 1 at one left edge, at least three of them;
+- each has only a few short lines under it, none opening with a number of
+  its own;
+- the count stops with the list;
+- the list sits inside a section, below a heading other than the document's
+  title.
+
+A list carried on in the next column is the same list. The following stay
+headings, because they are the document's sections:
+
+- numbering that carries on to a later page;
+- numbering that has clauses numbered `1.1` under its numbers;
+- numbers set straight under the title (`1. SCOPE OF SERVICES`, `2. TERM`).
+
+So does a numbered line that the PDF's outline names. In Markdown such an item is written with
+its own number (`3. FAQ`), not after a bullet.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read

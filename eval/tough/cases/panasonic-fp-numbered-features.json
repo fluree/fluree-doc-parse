@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series PLC digest catalogue (28 pages). Its programming-software page sets a Features list of five items, each a bold title numbered in its own text over a line or two of description."
+  },
+  "notes": [
+    "2026-11-24 (#121): a numbered list whose numbers are set in the items' own text was read as numbered sections, most of them level 1, so the section above the list closed and the rest of the page nested under its last item."
+  ],
+  "checks": [
+    {
+      "id": "feature-items-not-sections",
+      "found": "2026-11-24",
+      "issue": "Items 2 and 3 of the Features list were level-1 sections, and items 1, 4 and 5 level-6 ones.",
+      "no_section": "2. Easy to reuse"
+    },
+    {
+      "id": "feature-item-with-its-description",
+      "found": "2026-11-24",
+      "issue": "As above: each item, its title and its description, is one list item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "3. Keep know-how from getting out By \"black boxing\" a part of a program, you can prevent know-how from leaking out and improve the program's maintainability.",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

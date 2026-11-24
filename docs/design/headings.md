@@ -69,6 +69,10 @@ Three tests keep them out, none of which touches `5.3.1`:
 
 A block that carries a list marker is a list's item, and its number counts
 off from the item before it, so numbering evidence is never read from one.
+The same holds for a numbered list whose numbers are set in the items' own
+text, which block assembly gathers into items before headings are read (see
+[Numbered lists](../inputs/pdf.md)). Such an item is never a heading on any
+evidence but the outline's.
 
 Two label shapes look like numbering and are words:
 
