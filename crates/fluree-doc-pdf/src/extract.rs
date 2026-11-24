@@ -49,6 +49,9 @@ pub struct Page {
     /// Larger filled areas — header shading and zebra striping, which mark row
     /// structure in tables drawn without vertical rules.
     pub fills: Vec<Fill>,
+    /// Small filled marks, under a checkbox's size: a dot or a square a
+    /// producer draws as a list's bullet rather than setting it as a glyph.
+    pub dots: Vec<BBox>,
     /// Page size in PDF units, in the frame the glyphs are in — the reading
     /// frame (see [`Page::rotation`]). Needed to express positions as a
     /// fraction of page height, which is how furniture detection compares
@@ -168,6 +171,7 @@ struct Collector {
     images: Vec<ImagePlacement>,
     rules: Vec<Rule>,
     fills: Vec<Fill>,
+    dots: Vec<BBox>,
     /// The page's visible area — the crop box in render space. Content outside
     /// it is collected by no viewer and must not be collected here either:
     /// a book-spread scan's crop box shows one 510pt page while the
@@ -392,7 +396,7 @@ impl<'a> Device<'a> for Collector {
         path: &kurbo::BezPath,
         transform: Affine,
         _paint: &hayro_interpret::Paint<'a>,
-        _d: &hayro_interpret::PathDrawMode,
+        mode: &hayro_interpret::PathDrawMode,
     ) {
         // Bounding box only. A table grid is axis-aligned rectangles and
         // segments; curve detail is irrelevant and expensive to keep.
@@ -401,6 +405,11 @@ impl<'a> Device<'a> for Collector {
         let drawn = crate::geom::from_kurbo(r);
         if !self.page_box.intersects(&drawn) {
             return;
+        }
+        if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) && rule::is_dot(&drawn) {
+            if let Some(seen) = self.visible(drawn) {
+                self.dots.push(seen);
+            }
         }
         // One path can carry many rules. A financial statement strokes every
         // underline on the page — a short rule under each figure, the double
@@ -1091,6 +1100,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             images: Vec::new(),
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             ink: Vec::new(),
             letters: std::mem::take(&mut letters),
             unread: Vec::new(),
@@ -1129,6 +1139,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             images: dev.images,
             rules: dev.rules,
             fills: dev.fills,
+            dots: dev.dots,
             width: w as f64,
             height: h as f64,
             rotation: 0,
@@ -1258,6 +1269,9 @@ fn read_upright(page: &mut Page) {
     }
     for f in page.fills.iter_mut() {
         f.bbox = rect(f.bbox);
+    }
+    for d in page.dots.iter_mut() {
+        *d = rect(*d);
     }
     for i in page.images.iter_mut() {
         i.bbox = rect(i.bbox);
@@ -1418,6 +1432,7 @@ mod tests {
             images: Vec::new(),
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             width: 600.0,
             height: 800.0,
             rotation: 0,
@@ -1519,6 +1534,7 @@ mod actual_text_tests {
             images: Vec::new(),
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -1552,6 +1568,7 @@ mod actual_text_tests {
             images: Vec::new(),
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
