@@ -136,7 +136,7 @@ impl Block {
 
 /// What a hyphen ending a line is, and so how the line joins the next.
 #[derive(Debug, PartialEq)]
-enum HyphenJoin {
+pub(crate) enum HyphenJoin {
     /// A break wrapping set inside a word (`microcom-` over `puter`):
     /// dropped, and the word read whole.
     Word,
@@ -159,7 +159,7 @@ impl HyphenJoin {
     /// (`e-mail`, `X-Forwarded`). An all-capital compound (`BY-PRODUCTS`)
     /// cannot be told from an all-capital word broken (`SO-LAR`), and is
     /// read as the word.
-    fn of(stem: &str, next: &str) -> HyphenJoin {
+    pub(crate) fn of(stem: &str, next: &str) -> HyphenJoin {
         let Some(before) = stem.chars().next_back().filter(|c| !c.is_whitespace()) else {
             return HyphenJoin::Dash;
         };
