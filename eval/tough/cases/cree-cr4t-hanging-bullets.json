@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "cree-cr4t-downlight.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet (Canada). Its features are bullets in 6.5 pt type, each wrapped line hung under the item's text."
+  },
+  "notes": [
+    "As for the Lutron submittal: the wrapped lines of a hanging-indent list were cut off their items. The warning's address is set further in than the item's text, three ems from its bullet."
+  ],
+  "checks": [
+    {
+      "id": "item-keeps-its-wrapped-line",
+      "found": "2026-11-23",
+      "issue": "#49: (triac) and reverse phase dimming only. was a paragraph of its own.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Dimming: Dimmable to 5% with select incandescent dimmers. Forward phase (triac) and reverse phase dimming only.",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "item-keeps-its-last-word",
+      "found": "2026-11-23",
+      "issue": "#49: emissions was a paragraph of its own.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Meets FCC Part 15, Subpart B, Class B limits for conducted and radiated emissions",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "warning-keeps-its-address",
+      "found": "2026-11-23",
+      "issue": "#49: the warning's web address was cut off it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "CA RESIDENTS WARNING: Cancer and Reproductive Harm – www.p65warnings.ca.gov",
+        "evidence": "bullet"
+      }
+    }
+  ]
+}

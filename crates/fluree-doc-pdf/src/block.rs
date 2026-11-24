@@ -449,6 +449,12 @@ pub fn assemble_with_marks(
 
     // Lines a checkbox introduces, by index into `lines`.
     let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
+    // Lines a marker pulled out above stands beside: each is an item of its
+    // own, not the wrapped text of the item above it (see [`hangs_under`]).
+    let led: Vec<bool> = lines
+        .iter()
+        .map(|l| markers.iter().any(|m| marker_beside(m, l)))
+        .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
     let mut marked: Vec<usize> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
@@ -461,7 +467,9 @@ pub fn assemble_with_marks(
         }
         // A checkbox always begins a new option, however the geometry reads,
         // and a fill's edge is a row's edge.
-        if !ticked[i] && band[i] == band[i - 1] && continues(cur.last().unwrap(), l, leading, &edge)
+        if !ticked[i]
+            && band[i] == band[i - 1]
+            && continues(cur.last().unwrap(), l, leading, &edge, !led[i])
         {
             cur.push(l.clone());
         } else {
@@ -532,7 +540,17 @@ pub fn assemble_with_marks(
     blocks
 }
 
-fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge) -> bool {
+/// `m`, a marker, stands just left of `l` on its row, as a bullet drawn
+/// apart from its item's text does.
+fn marker_beside(m: &Line, l: &Line) -> bool {
+    let fs = (l.font_size as f64).max(1.0);
+    let gap = l.bbox.x0 - m.bbox.x1;
+    m.bbox.y1 > l.bbox.y0 && m.bbox.y0 < l.bbox.y1 && gap > -fs * 0.5 && gap < fs * CHECKBOX_REACH
+}
+
+/// `hang`: whether `next` may go on as the wrapped line of a bulleted item
+/// above it, which a line with a marker of its own may not.
+fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge, hang: bool) -> bool {
     if prev.rotation_bucket != next.rotation_bucket {
         return false;
     }
@@ -597,11 +615,57 @@ fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge) -> bool {
     // full line ended because it ran out of room, so the next line continues
     // the same paragraph however its left edge moves.
     let indent = (next.bbox.x0 - prev.bbox.x0).abs() / fs;
-    if indent > INDENT_TOLERANCE && !prev_full {
+    if indent > INDENT_TOLERANCE && !prev_full && !(hang && hangs_under(prev, next, fs, edge)) {
         return false;
     }
 
     true
+}
+
+/// Farthest, in ems, a bulleted item's wrapped lines start right of its
+/// bullet: the bullet, and the space or tab after it.
+const HANGING_INDENT: f64 = 3.0;
+
+/// `next` is the wrapped line of the item `prev` opens with a bullet set in
+/// its text run: it starts right of the bullet, where the item's text does.
+///
+/// A list with a hanging indent sets each item's bullet out at the margin
+/// and every line of its text in from it, so a wrapped line starts an em or
+/// two right of the line it wraps from, and the bullet line is short of the
+/// edge more often than not. Read as an indent, it was cut off the item and
+/// came out a paragraph of its own: `Large tapswitch with a rocker-style
+/// dimmer for a` and `standard designer wallplate opening.`
+///
+/// Not a line that opens a list of its own under the item: one opening with
+/// a dash, or below a bullet line that ends on a colon (`UL Listed to
+/// control:` over `— Dimmable LEDs`). Nor the paragraph after the list,
+/// which a word processor often sets where the items' text is, or a
+/// first-line indent in from the bullets: below an item that ends a
+/// sentence short of the edge, a line that opens one goes on only if the
+/// item ran out of room for its first word.
+fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
+    let shift = (next.bbox.x0 - prev.bbox.x0) / fs;
+    let opens_list = next
+        .text
+        .trim_start()
+        .starts_with(['-', '\u{2013}', '\u{2014}']);
+    let ends_sentence = prev
+        .text
+        .trim_end()
+        .trim_end_matches(['"', '\'', '\u{201D}', '\u{2019}', ')'])
+        .ends_with(['.', '!', '?']);
+    let opens_sentence = next
+        .text
+        .trim_start()
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .is_some_and(|c| c.is_uppercase() || c.is_numeric());
+    strip_leading_bullet(&prev.text).is_some()
+        && !prev.text.trim_end().ends_with(':')
+        && !opens_list
+        && shift > 0.3
+        && shift <= HANGING_INDENT
+        && (!(ends_sentence && opens_sentence) || edge.ran_out_of_room(prev, next))
 }
 
 /// The right edge a column's text wraps at.
@@ -1234,6 +1298,113 @@ mod tests {
             l("• keep out of reach of children", 10.0, 24.0, 10.0),
         ];
         assert_eq!(assemble(&lines, 1.2).len(), 3);
+    }
+
+    #[test]
+    fn a_bulleted_items_wrapped_line_hangs_under_its_text() {
+        // A submittal's feature list: the bullet at the margin, each line
+        // of the item's text an em and a quarter in from it.
+        let at = |text: &str, x: f64, y: f64, x1: f64| {
+            let mut line = l(text, x, y, 11.0);
+            line.bbox.x1 = x1;
+            line
+        };
+        let lines = vec![
+            at(
+                "• Large tapswitch with a rocker-style dimmer for a",
+                31.3,
+                121.0,
+                250.0,
+            ),
+            at("standard designer wallplate opening.", 44.9, 135.0, 230.0),
+            at(
+                "• Advanced dimming technology designed for",
+                31.3,
+                153.0,
+                240.0,
+            ),
+            at(
+                "compatibility with a broader range of high efficacy bulbs.",
+                44.9,
+                167.0,
+                330.0,
+            ),
+            at("• UL Listed to control:", 31.3, 185.0, 150.0),
+            at("— Dimmable LEDs", 44.9, 199.0, 130.0),
+            at(
+                "• Coordinating Claro and stainless steel wallplates",
+                31.3,
+                217.0,
+                329.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.27);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert_eq!(
+            texts,
+            [
+                "• Large tapswitch with a rocker-style dimmer for a standard designer wallplate opening.",
+                "• Advanced dimming technology designed for compatibility with a broader range of high efficacy bulbs.",
+                "• UL Listed to control:",
+                "— Dimmable LEDs",
+                "• Coordinating Claro and stainless steel wallplates",
+            ]
+        );
+        // The paragraph after a list, set where the items' text is, below
+        // an item that ends a sentence with room to spare.
+        let lines = vec![
+            at("• Keep the unit dry.", 87.0, 634.8, 230.0),
+            at(
+                "• Store it upright when it is not in use.",
+                87.0,
+                657.7,
+                330.0,
+            ),
+            at(
+                "The parts listed below are sold separately and may include:",
+                108.4,
+                680.7,
+                520.0,
+            ),
+            at(
+                "filters, seals and the like, which are described in turn below.",
+                108.4,
+                703.7,
+                519.0,
+            ),
+        ];
+        assert_eq!(assemble(&lines, 1.9).len(), 3);
+        // The next item's bullet drawn apart from its text, on a lower
+        // baseline: the text is an item of its own.
+        let mut ring = at("\u{25CB}", 78.6, 216.0, 86.0);
+        ring.font_size = 12.9;
+        let lines = vec![
+            at(
+                "\u{25CB} Shipping to new regions: northern sites",
+                78.6,
+                197.8,
+                280.0,
+            ),
+            ring,
+            at("Faster service for existing sites", 104.5, 212.5, 300.0),
+            at("\u{25CB} Online ordering and tracking", 78.6, 227.3, 329.0),
+            at("\u{25CB} Online returns and refunds", 78.6, 242.1, 330.0),
+        ];
+        let b = assemble(&lines, 1.27);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        assert_eq!(b[1].marker.as_deref(), Some("\u{25CB}"));
+        // A paragraph indented far past the bullet is not the item's text.
+        let lines = vec![
+            at(
+                "• Large tapswitch with a rocker-style dimmer",
+                31.3,
+                121.0,
+                250.0,
+            ),
+            at("A note set well in from the list", 80.0, 135.0, 330.0),
+        ];
+        assert_eq!(assemble(&lines, 1.27).len(), 2);
     }
 
     #[test]
