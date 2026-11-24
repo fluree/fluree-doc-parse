@@ -45,6 +45,7 @@ impl Drop for Reading {
 }
 
 /// A warning from the engine, with the document this thread reads.
+#[cfg(feature = "ocr")]
 fn engine_warning(msg: &str) -> String {
     READING.with(|r| match &*r.borrow() {
         Some(doc) => format!("warning: {doc}: {msg}"),
@@ -53,12 +54,16 @@ fn engine_warning(msg: &str) -> String {
 }
 
 /// How the engine runs, as the command line, the environment and the config
-/// set it.
+/// set it. A build without the engine still checks the settings, so a bad
+/// value is refused alike, but keeps none of them.
 pub(crate) struct EngineSettings {
+    #[cfg(feature = "ocr")]
     pub threads: usize,
+    #[cfg(feature = "ocr")]
     pub sizing: fluree_doc_vision::sizing::OcrSizing,
     /// Bytes the passes read at once may take; the engine's default if
     /// none.
+    #[cfg(feature = "ocr")]
     pub memory: Option<u64>,
 }
 
@@ -89,10 +94,16 @@ impl EngineSettings {
                 .max_megapixels
                 .unwrap_or(fluree_doc_vision::sizing::DEFAULT_MAX_MEGAPIXELS),
         };
+        let sizing = fluree_doc_vision::sizing::OcrSizing::megapixels(mpx)
+            .map_err(|e| format!("ocr.max_megapixels: {e}"))?;
+        #[cfg(not(feature = "ocr"))]
+        let _ = sizing;
         Ok(EngineSettings {
+            #[cfg(feature = "ocr")]
             threads: config.threads.unwrap_or(1),
-            sizing: fluree_doc_vision::sizing::OcrSizing::megapixels(mpx)
-                .map_err(|e| format!("ocr.max_megapixels: {e}"))?,
+            #[cfg(feature = "ocr")]
+            sizing,
+            #[cfg(feature = "ocr")]
             memory: memory.map(|mib| mib.saturating_mul(1 << 20)),
         })
     }
@@ -363,6 +374,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "ocr")]
     fn an_engine_warning_names_the_document_its_thread_reads() {
         assert_eq!(engine_warning("shrunk"), "warning: shrunk");
         {
@@ -425,6 +437,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ocr")]
     fn the_pixel_cap_comes_from_the_flag_then_the_config() {
         if std::env::var_os("FDOC_OCR_MAX_MEGAPIXELS").is_some() {
             return;
@@ -446,6 +459,21 @@ mod tests {
             config.max_memory = Some(0);
             assert!(EngineSettings::of(None, &config).is_err());
         }
+    }
+
+    #[test]
+    fn a_build_without_the_engine_still_refuses_bad_settings() {
+        if std::env::var_os("FDOC_OCR_MAX_MEGAPIXELS").is_some()
+            || std::env::var_os("FDOC_OCR_MAX_MEMORY").is_some()
+        {
+            return;
+        }
+        let mut config = crate::config::Ocr::default();
+        assert!(EngineSettings::of(None, &config).is_ok());
+        let e = EngineSettings::of(Some(0.1), &config).err().unwrap();
+        assert!(e.starts_with("ocr.max_megapixels: "), "{e}");
+        config.max_memory = Some(0);
+        assert!(EngineSettings::of(None, &config).is_err());
     }
 
     #[test]

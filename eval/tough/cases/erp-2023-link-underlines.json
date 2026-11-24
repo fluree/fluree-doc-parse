@@ -28,6 +28,12 @@
       "issue": "As above, on another page: `U.S. Department of the` / `Treasury 2021).`",
       "element": {"type": "doco:Paragraph", "text": "Treasury 2021)."},
       "count": 0
+    },
+    {
+      "id": "underline-parts-no-paragraph",
+      "found": "2026-11-24",
+      "issue": "A guard: a link's underline across most of the measure, in the leading under its line, parted the paragraph.",
+      "text": "figure 1.2b). There is some evidence that people"
     }
   ]
 }

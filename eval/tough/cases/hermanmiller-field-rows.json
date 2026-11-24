@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hermanmiller-aeron.pdf",
+    "url": "https://www.hermanmiller.com/content/dam/hermanmiller/documents/product_literature/product_sheets/aeron_chairs_product_sheet.pdf",
+    "sha256": "7adcc6c3eb4b6217a894af9abea1558038cf8acf2c6b7e9eb5e83cf0add391f3",
+    "about": "Herman Miller Aeron chair product sheet (2 pages). Page 2 sets product photos with numbered callouts beside columns of side-headed text."
+  },
+  "notes": [
+    "Page 2’s Details list sets each value a tab from its label, under a sentence that runs on."
+  ],
+  "checks": [
+    {
+      "id": "values-stay-in-their-rows",
+      "found": "2026-11-24",
+      "issue": "A guard: read as two columns, the labels came out together and then the values.",
+      "text": "Maximum user weight size A 300 lb/136 kg Maximum user weight size B 350lbs"
+    }
+  ]
+}

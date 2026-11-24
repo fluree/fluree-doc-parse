@@ -1,0 +1,51 @@
+{
+  "document": {
+    "file": "sherwin-williams-emerald-pds.pdf",
+    "url": "https://www.sherwin-williams.com/document/PDS/en/790417048503/",
+    "sha256": "6b0b5a593bfb3075c36c8819e6450983f5b787daac3797fb92a22c617a469219",
+    "about": "Sherwin-Williams Emerald interior paint product data sheet (2 pages). Page 1 sets three columns of text; its CHARACTERISTICS column holds fields with colons and right-aligned values, and its COMPLIANCE column a list of standards beside Yes or No, with no colons."
+  },
+  "notes": [
+    "2026-11-24 (#163): a list of fields set without rules, label beside value row after row, was run together into one paragraph when its labels end in no colon or when it shares its baselines with another page column.",
+    "2026-11-24 (#163): the tinting grid, three columns set in the first of three page columns, was run together into two paragraphs."
+  ],
+  "checks": [
+    {
+      "id": "compliance-list",
+      "found": "2026-11-24",
+      "issue": "`OTC Yes OTC Phase II Yes S.C.A.Q.M.D. Yes …` was one paragraph.",
+      "cell": {
+        "value": "Yes",
+        "row": "OTC Phase II"
+      }
+    },
+    {
+      "id": "compliance-raised-mark",
+      "found": "2026-11-24",
+      "issue": "MPI's raised ® sits on a baseline of its own above the row.",
+      "cell": {
+        "value": "#142, 143",
+        "row": "MPI®"
+      }
+    },
+    {
+      "id": "right-aligned-colon-fields",
+      "found": "2026-11-24",
+      "issue": "`Volume Solids: 44 ±2% Weight Solids: 61 ±2% …` was one paragraph beside the next column.",
+      "cell": {
+        "value": "11.95 lbs",
+        "row": "Weight per Gallon:"
+      }
+    },
+    {
+      "id": "tinting-grid",
+      "found": "2026-11-24",
+      "issue": "`Base: oz. per gallon: Strength:` over `Ultrawhite 0-7 SherColor …` was two run-on paragraphs.",
+      "cell": {
+        "value": "10-20",
+        "column": "oz. per gallon:",
+        "row": "Ultradeep Base"
+      }
+    }
+  ]
+}

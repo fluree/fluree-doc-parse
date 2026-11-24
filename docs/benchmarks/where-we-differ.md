@@ -119,7 +119,8 @@ A narrow table column breaks a value at a hyphen the value already has.
 Joined back with a space, a product code printed as `FR-` over `15T` reads
 `FR- 15T`, which is not the code and matches it nowhere else in the document.
 So a cell's lines join with no space after a line-ending hyphen, and the
-hyphen stays.
+hyphen stays, unless the document prints the joined word whole elsewhere
+(`Bal-` over `lasts`, beside a cell reading `20 Ballasts`).
 
 The reference transcribes the space. Document 053:
 

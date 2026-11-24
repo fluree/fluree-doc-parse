@@ -74,6 +74,7 @@ pub(crate) mod marked;
 pub mod ocr;
 pub mod outline;
 pub mod overlay;
+pub(crate) mod region;
 
 /// The [`unread_pages`] reason of a page an OCR reading read whole that
 /// still holds next to no text.
@@ -328,6 +329,7 @@ mod tests {
                 .collect(),
             rules: Vec::new(),
             routing: None,
+            dots: Vec::new(),
             fills: Vec::new(),
             width: 600.0,
             height: 800.0,
