@@ -409,7 +409,11 @@ callout and not a section.
 
 **Grids inside drawings.** Labels a diagram sets in rows can line up as a
 table. A grid inside a drawing is emitted as that figure's text, not as a
-`doco:Table`.
+`doco:Table`. So is a grid whose text lines up with no rules of its own,
+when half of it lies on a drawing, and a ruled grid whose strokes stand at
+many more places than its rows and columns: the outlines of a unit's
+terminals, or a drawing's dimension and extension lines. A table drawn over
+a drawing, ruled at its rows and columns and mostly filled, stays a table.
 
 **Body text size.** The size headings are measured against is taken from the
 text outside drawings. A diagram's many small labels do not make every
