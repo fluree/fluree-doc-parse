@@ -321,7 +321,7 @@ const SMALL_TEXT: f64 = 10.0;
 /// so what decides is whether strips could see what the whole reading did
 /// not. Measured on synthetic captures where no line was counted (5 to 8 px
 /// text): 736 to 1,400 px wide and 2,600 to 5,000 tall, read 1.3 to 2.5
-/// times larger, the strips read up to 437 lines where the whole reading
+/// times larger, the strips read up to 452 lines where the whole reading
 /// read none (156 of 259 in a 736 × 2,600 capture of 6 px text, 271 of 272
 /// in a 1,000 × 3,000 one of 7 px); 2,200 to 2,400 tall, 1.1 to 1.2 times
 /// larger, they read none either. A blank page 2,550 × 3,300, or a 3,024 ×
@@ -341,10 +341,11 @@ const NO_LINE_GAIN: f64 = 1.25;
 /// box 1,000 thick, and a photo gives the same. Where no line is counted,
 /// the image is read in strips only where they are detected at full size,
 /// the image under [`DET_LONG_SIDE`] wide, and at least [`NO_LINE_GAIN`]
-/// times larger than the whole. A strip of a wider image is shrunk too: of
-/// 20 captures 2,000 px wide where no line was counted, strips read 3 lines
-/// more at most, and on a blank page or a photo, nothing, for three times
-/// the time of the whole reading.
+/// times larger than the whole. A strip of an image 2,000 px wide or more is
+/// as long as the image is wide, and shrunk past 2,000: of 17 captures 2,000
+/// px wide where no line was counted, strips read 3 lines more at most, and
+/// on a blank page or a photo nothing, for three times the time of the whole
+/// reading.
 ///
 /// A second reading costs a whole one, detection and recognition: oar-ocr
 /// does not recognize the lines of boxes it is given.

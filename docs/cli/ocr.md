@@ -60,7 +60,7 @@ Where no line is found, the text is too small to be seen, or there is none,
 and the reading cannot tell which. The image is read again in strips only when
 they are detected at full size, the image under 2,000 px wide, and at least
 1.25 times larger than the whole: captures 736 to 1,400 px wide of 5 to 8 px
-text, read whole with no line found, gave up to 437 lines in strips. A blank
+text, read whole with no line found, gave up to 452 lines in strips. A blank
 scanned page, or a phone photo 3,024 × 4,032, is read whole, once; cut, it took
 three times as long and gave nothing more. A narrower photo is cut (one 1,200 ×
 2,600 is read again for nothing).
