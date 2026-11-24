@@ -136,6 +136,12 @@ class Reading:
         # Each page's printed number, by its place in the file from 1.
         pages = next((n["doc:pages"]["@value"] for n in graph if "doc:pages" in n), [])
         self.folios = {p["pageIndex"] + 1: p.get("folio") for p in pages}
+        # The lines read as running text: heads and feet the pages repeat,
+        # kept out of the body and listed once on the document.
+        running = next((n["doc:runningText"] for n in graph if "doc:runningText" in n), [])
+        if isinstance(running, dict):
+            running = running.get("@value", [])
+        self.running = [norm(t) for t in running]
 
     def offsets(self):
         """Elements whose string is not what their offsets cut."""
@@ -174,6 +180,12 @@ def run_check(check, reading):
         want = {keys[k]: norm(v) for k, v in check["cell"].items()}
         ok = any(all(norm(c.get(k, "")) == v for k, v in want.items()) for c in reading.cells)
         return ok, None if ok else "no such cell"
+    if "running" in check:
+        # A line read as running text, exactly `count` times where one is
+        # given: `0` for a body line that must not be taken.
+        hits = reading.running.count(norm(check["running"]))
+        ok = hits == check["count"] if "count" in check else hits > 0
+        return ok, None if ok else f"running text: {reading.running}"
     if "text" in check:
         # Where a count is given, exactly that many times: a line kept once
         # fails as surely by coming back on every page as by going.
