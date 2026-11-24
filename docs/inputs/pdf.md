@@ -131,7 +131,12 @@ ended, so the next line goes on with the same paragraph whatever its
 weight, and bold names wrapped onto a line of their own stay in their
 sentence. The next line goes on only from its column's left edge: a line
 starting well to the left of it belongs to another column. A bullet at the head of a line (`•`, `■`) begins a list item,
-even below a line that runs to the edge.
+even below a line that runs to the edge. A list with a hanging indent sets
+its bullets at the margin and each line of an item's text in from them, so
+an item's wrapped line starts an em or two right of the bullet line above
+it: up to three ems, it goes on with that item rather than starting a
+paragraph. A line that opens with a dash, or follows an item ending on a
+colon, starts a list of its own under the item.
 
 **Bullets.** The typographic bullets and geometric shapes are read as
 bullets, and so are the arrows and boxes the dingbat fonts set as them
