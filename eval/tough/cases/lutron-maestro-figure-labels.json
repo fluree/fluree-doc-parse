@@ -74,6 +74,16 @@
         "text": "Hot B\tlac\tk\t\tBlack\t\t\tHot\t\tBlack\t\t\t\tBlack\n120 V~\t\tGreen\t\tBlack\tGreen\tLighting\t120\tV~\tGreen\t\t\t\tGreen"
       },
       "count": 0
+    },
+    {
+      "id": "page-5-wiring-labels-not-a-table",
+      "found": "2026-11-24",
+      "issue": "#106: page 5's wiring labels and the side note beside them lined up into a table, half of it on the drawing.",
+      "element": {
+        "type": "doco:Table",
+        "text": "Brass Blue\tBrass Blue line side, load side, or in the\n\tmiddle of the circuit.\nBlack\tBlack\nGreen\tGreen"
+      },
+      "count": 0
     }
   ]
 }

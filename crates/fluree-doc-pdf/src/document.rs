@@ -768,6 +768,49 @@ const FURNITURE_ROW_SLACK: f64 = 0.005;
 /// paragraph brushing the drawing's margin stays prose.
 const FIGURE_CONTAINMENT: f64 = 0.6;
 
+/// Fraction of a grid inferred from its text's alignment, and corroborated by
+/// drawn geometry, that must lie on a drawing for its alignment to be the
+/// drawing's.
+const ALIGNED_IN_DRAWING: f64 = 0.5;
+
+/// How many times its own boundaries the distinct places the strokes inside
+/// a ruled grid stand at may run to, each way, before they are a drawing's.
+const LINE_ART_STROKES: usize = 2;
+
+/// Are the rules inside `g` a drawing's? Its vertical strokes stand at more
+/// than [`LINE_ART_STROKES`] times its column boundaries' count of places
+/// across it, and its horizontal ones at more than as many times its row
+/// boundaries' down it. Places are counted to the point, so a rule drawn in
+/// dashes, or cell by cell, is one.
+fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
+    let inside = |r: &&crate::rule::Rule| {
+        r.bbox.x0 >= g.bbox.x0 - 3.0
+            && r.bbox.x1 <= g.bbox.x1 + 3.0
+            && r.bbox.y0 >= g.bbox.y0 - 3.0
+            && r.bbox.y1 <= g.bbox.y1 + 3.0
+    };
+    let places = |vertical: bool| {
+        let mut at: Vec<i64> = rules
+            .iter()
+            .filter(inside)
+            .filter(|r| matches!(r.orientation, crate::rule::Orientation::Vertical) == vertical)
+            .map(|r| {
+                let mid = if vertical {
+                    (r.bbox.x0 + r.bbox.x1) * 0.5
+                } else {
+                    (r.bbox.y0 + r.bbox.y1) * 0.5
+                };
+                mid.round() as i64
+            })
+            .collect();
+        at.sort_unstable();
+        at.dedup_by(|a, b| (*a - *b).abs() <= 1);
+        at.len()
+    };
+    places(true) > LINE_ART_STROKES * (g.cols() + 1)
+        && places(false) > LINE_ART_STROKES * (g.rows() + 1)
+}
+
 /// Does a heading give way to the figure it is in? Relative typography does
 /// wherever the figure took it: chart titles, legends and axis labels are
 /// set larger or bolder than body text. A number or a place in a sequence
@@ -2309,16 +2352,30 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // row and every column, and at least half of it filled. Wires
             // and dimension lines rule a few of a label grid's boundaries,
             // or rule it everywhere and leave most of it empty.
-            let drawn_as_table = layout.grid_sources[gi] == GridSource::Ruled && {
+            let ruled = layout.grid_sources[gi] == GridSource::Ruled;
+            // Line art: the strokes inside a grid stand at many more places
+            // than its own boundaries, the outlines of a unit's terminals or
+            // a drawing's dimension and extension lines. A table is ruled at
+            // its boundaries, however many pieces each rule is drawn in.
+            let line_art = ruled && line_art(g, &raw.pages[pi].rules);
+            let drawn_as_table = ruled && !line_art && {
                 let (occ, vertical, horizontal) =
                     table_confidence_signals(g, &raw.pages[pi].glyphs, &raw.pages[pi].rules);
                 occ >= RULED_TABLE_FILL && horizontal > g.rows() && vertical > g.cols()
             };
+            // A grid inferred from its text's alignment is kept only where
+            // drawn geometry corroborates it: half of it on a drawing, and
+            // that geometry is the drawing's, its labels lining up.
+            let containment = if layout.grid_sources[gi] == GridSource::Aligned {
+                ALIGNED_IN_DRAWING
+            } else {
+                FIGURE_CONTAINMENT
+            };
             let drawn_in = figures
                 .iter()
-                .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= FIGURE_CONTAINMENT)
+                .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= containment)
                 .filter(|_| !drawn_as_table);
-            if layout.demoted_tables[gi] || drawn_in.is_some() {
+            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
                 let text = (0..g.rows())
@@ -2337,6 +2394,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         page: pi,
                         bbox: Some(g.bbox),
                         figure: Some(format!("figure-{pi}-{fi}")),
+                        ..Element::new("doco:Figure", text, "rust", "fills")
+                    },
+                    None if line_art => Element {
+                        page: pi,
+                        bbox: Some(g.bbox),
                         ..Element::new("doco:Figure", text, "rust", "fills")
                     },
                     None => Element {
@@ -3550,6 +3612,48 @@ mod tests {
     fn a_number_inside_a_drawing_is_a_callout() {
         assert!(heading_yields_to_figure(Evidence::Numbering, true, true));
         assert!(heading_yields_to_figure(Evidence::Sequence, true, true));
+    }
+
+    #[test]
+    fn a_grid_inside_line_art_is_the_drawings() {
+        use crate::rule::{Orientation, Rule};
+        // A 3 x 3 grid, 90pt square.
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 30.0, 60.0, 90.0],
+            ys: vec![0.0, 30.0, 60.0, 90.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 90.0,
+                y1: 90.0,
+            },
+        };
+        let rule = |x0: f64, y0: f64, x1: f64, y1: f64, o: Orientation| Rule {
+            bbox: BBox { x0, y0, x1, y1 },
+            orientation: o,
+            page: 0,
+        };
+        // A table: its four boundaries each way, each drawn cell by cell.
+        let mut table = Vec::new();
+        for k in 0..4 {
+            let at = 30.0 * k as f64;
+            for c in 0..3 {
+                let from = 30.0 * c as f64;
+                table.push(rule(at, from, at, from + 30.0, Orientation::Vertical));
+                table.push(rule(from, at, from + 30.0, at, Orientation::Horizontal));
+            }
+        }
+        assert!(!line_art(&grid, &table));
+        // A unit's front panel: a terminal's outline every 4pt each way.
+        let mut panel = table.clone();
+        for k in 0..20 {
+            let at = 2.0 + 4.0 * k as f64;
+            panel.push(rule(at, 40.0, at, 46.0, Orientation::Vertical));
+            panel.push(rule(40.0, at, 46.0, at, Orientation::Horizontal));
+        }
+        assert!(line_art(&grid, &panel));
     }
 
     #[test]
