@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "hoshizaki-km515maj.pdf",
+    "url": "https://www.wasserstrom.com/wcsstore/WasserstromCatalogAssetStore/Attachment/HoshizakiKM515MAJspec.pdf",
+    "sha256": "f4aa4be1311eccce138c4ff4bcfd7c8bde18497a9abbb6a1e58b17e025e8dcb1",
+    "about": "Hoshizaki KM-515MAJ ice machine spec sheet (2 pages), as a dealer hosts it. Some of its dimensions set the whole fraction small and raised after the whole number, with no space between them."
+  },
+  "notes": [
+    "2026-11-23: a mixed number set this way read as one number, 2113/16 for 21 13/16 (#46)."
+  ],
+  "checks": [
+    {
+      "id": "raised-fraction-parts",
+      "found": "2026-11-23",
+      "issue": "The condenser's width read 2113/16.",
+      "text": "(W x D x H) 21 13/16 x 14 1/16 x 32 13/16"
+    },
+    {
+      "id": "dimensions-part",
+      "found": "2026-11-23",
+      "issue": "The unit's dimensions read 22\" x 273/8\" x 305/16\".",
+      "text": "22\" x 27 3/8\" x 30 5/16\""
+    },
+    {
+      "id": "shipping-dimensions-part",
+      "found": "2026-11-23",
+      "issue": "Its shipping dimensions read 251/4”.",
+      "text": "Shipping Dimensions 25 1/4” x 33” x 36”"
+    }
+  ]
+}

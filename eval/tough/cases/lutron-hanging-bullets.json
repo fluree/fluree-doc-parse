@@ -1,0 +1,53 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
+  },
+  "notes": [
+    "A wrapped line starts right of the line it wraps from, and the bullet line is short of the column's edge, so the shift was read as a new paragraph: in DoCO each item lost its wrapped lines to a paragraph of their own. Markdown hid it, setting the paragraph on the line under the item, where a renderer joins the two."
+  ],
+  "checks": [
+    {
+      "id": "item-keeps-its-wrapped-line",
+      "found": "2026-11-23",
+      "issue": "#49: standard designer wallplate opening. was a paragraph of its own after the item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Large tapswitch with a rocker-style dimmer for a standard designer wallplate opening.",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "second-item-keeps-its-wrapped-line",
+      "found": "2026-11-23",
+      "issue": "#49: as above, for compatibility with a broader range of high efficacy bulbs.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Advanced dimming technology designed for compatibility with a broader range of high efficacy bulbs.",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "item-keeps-its-link",
+      "found": "2026-11-23",
+      "issue": "#49: as above; the address the item points to was cut off it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "For a complete list of approved LEDs visit www.lutron.com/LEDfinder",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "sub-list-stays-apart",
+      "found": "2026-11-23",
+      "issue": "A guard: an item that ends on a colon introduces the dashed list under it, which is not its wrapped text.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "UL Listed to control:",
+        "evidence": "bullet"
+      }
+    }
+  ]
+}

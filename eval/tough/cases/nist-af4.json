@@ -59,6 +59,12 @@
       "found": "2026-11-17",
       "issue": "On page 7 the list item `c)` names a column.",
       "no_column_header": "c)"
+    },
+    {
+      "id": "page-range-kept",
+      "found": "2026-11-23",
+      "issue": "A citation's page range broken at its hyphen read as one number: 194857.",
+      "text": "2021;110(5):1948-57."
     }
   ]
 }

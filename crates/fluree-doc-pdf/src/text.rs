@@ -4,28 +4,41 @@
 //!
 //! * **raw** — one entry per char emitted by the font's ToUnicode mapping.
 //!   Resolves to a glyph, and therefore to a bounding box.
-//! * **normalized** — NFKC-applied text. What NER, embedding and gazetteer
-//!   matching consume.
+//! * **normalized** — the text as read: NFC, with the forms a PDF draws
+//!   rather than writes read as the letters they stand for (see [`fold`]).
+//!   What NER, embedding and gazetteer matching consume.
 //!
-//! NFKC changes length (`ﬁ` → `fi`), so a normalized offset cannot index the raw
-//! string. `PageText` keeps the map both ways so an entity span found in the
-//! normalized text still resolves to exact rectangles on the page.
+//! Reading a form can change length (`ﬁ` → `fi`), so a normalized offset
+//! cannot index the raw string. `PageText` keeps the map both ways so an
+//! entity span found in the normalized text still resolves to exact
+//! rectangles on the page.
 
 use unicode_normalization::UnicodeNormalization;
 
-/// A superscript or subscript code point, which NFKC would fold to its plain
-/// digit or letter. The unit in "m³/h" is a cubic metre; folded it reads
-/// "m3/h", a different string from the one printed and from the one every
-/// other reader of the same document emits. Ligatures, wide forms and the rest
-/// of NFKC's compatibility mappings stay folded.
+/// A code point that records how a glyph was drawn rather than what it says,
+/// so that no other format would carry it for the same text.
 ///
-/// The spacing ring above (U+02DA) is kept too. NFKC decomposes it into a
-/// space and a combining ring, so a `˚` the [`degrees`] pass did not read as
-/// a degree would leave a stray mark on whatever follows.
-fn keeps_form(c: char) -> bool {
+/// - The presentation forms: Latin ligatures (`ﬁ`), Hebrew and Arabic
+///   contextual and ligature forms, and the vertical and small variants of
+///   CJK punctuation. A typesetter substitutes them for the letters it
+///   shapes, and a font's ToUnicode maps the substituted glyph back to the
+///   form instead of to the letters: `ﬁnal` searched for `final` is not found.
+/// - The Kangxi radicals. A CJK font draws a radical and the ideograph it
+///   looks like with one glyph, and a ToUnicode map built from the font's
+///   cmap can name the radical for it (`⾊` for `色`).
+///
+/// Everything else keeps the character the PDF gives, as the other formats
+/// keep theirs: `µm`, `½`, `™`, `２`, `（` and `²` are what was printed, and
+/// NFKC would change each into another character or into other characters
+/// (`ExampleTM`, `21⁄2` for `2½`).
+fn drawn_form(c: char) -> bool {
     matches!(
         c,
-        '\u{00B2}' | '\u{00B3}' | '\u{00B9}' | '\u{02DA}' | '\u{2070}'..='\u{209F}'
+        '\u{FB00}'..='\u{FDFF}'
+            | '\u{FE10}'..='\u{FE1F}'
+            | '\u{FE30}'..='\u{FE6F}'
+            | '\u{FE70}'..='\u{FEFE}'
+            | '\u{2F00}'..='\u{2FD5}'
     )
 }
 
@@ -41,12 +54,11 @@ fn looks_like_degree(c: char) -> bool {
 
 /// Each degree look-alike in `chars` that reads as a degree, as `°`.
 ///
-/// NFKC folds `º` to the letter `o`, so `25 ºC` read `25 oC`, and turns `˚`
-/// into a space and a combining ring; neither is the temperature printed, and
-/// a search for `°C` finds neither. A look-alike reads as a degree before a
-/// temperature's unit (`ºC`, `˚F`, `(⁰C)`), and the ring and the ring
-/// operator also after a number (`45˚`). An ordinal stays one: `1º` and `Nº`
-/// are not degrees, and NFKC goes on folding them as before.
+/// A PDF sets `25 ºC` with the masculine ordinal, or `25˚C` with the spacing
+/// ring; neither is the temperature printed, and a search for `°C` finds
+/// neither. A look-alike reads as a degree before a temperature's unit
+/// (`ºC`, `˚F`, `(⁰C)`), and the ring and the ring operator also after a
+/// number (`45˚`). An ordinal stays one: `1º` and `Nº` are not degrees.
 ///
 /// Neighbours are the nearest characters that are not whitespace, and the
 /// replacement is one for one. So the pass reads the same over line text,
@@ -70,41 +82,56 @@ pub(crate) fn degrees(chars: &mut [char]) {
     }
 }
 
-/// NFKC-normalise one character, keeping super- and subscripts as printed
-/// (see [`keeps_form`]). The one normalisation line text, page text and span
-/// lookup all share, so the three always spell a character the same way.
+/// Read one character: a [`drawn_form`] as the letters it stands for (its
+/// NFKC form), anything else as its NFC form, which is the same character
+/// for all but a few canonical singletons (`Ω` OHM SIGN is `Ω`). The one
+/// normalisation line text, page text and span lookup all share, so the
+/// three always spell a character the same way.
 pub(crate) fn fold(c: char) -> impl Iterator<Item = char> {
-    let out: Vec<char> = if keeps_form(c) {
-        vec![c]
-    } else {
+    let out: Vec<char> = if drawn_form(c) {
         c.to_string().nfkc().collect()
+    } else {
+        c.to_string().nfc().collect()
     };
     out.into_iter()
 }
 
-/// [`fold`] over a string. Runs between kept characters are normalised whole,
-/// so a base letter and its combining mark still compose.
+/// One character as the span lookup compares it: [`fold`], then NFKC, so a
+/// needle matches the glyphs that draw any compatibility-equivalent spelling
+/// of it (`μm` the glyphs of `µm`, `fi` a ligature). Looser than [`fold`] on
+/// purpose: a needle may come from a consumer that normalised the text
+/// itself, and the lookup only decides which glyphs it covers.
+pub(crate) fn match_key(c: char) -> impl Iterator<Item = char> {
+    let out: Vec<char> = fold(c)
+        .flat_map(|f| f.to_string().nfkc().collect::<Vec<_>>())
+        .collect();
+    out.into_iter()
+}
+
+/// [`fold`] over a string, then NFC over the whole, so a base letter and the
+/// combining mark a PDF draws after it compose (`e` + U+0301 is `é`).
 pub(crate) fn normalize(s: &str) -> String {
     let mut chars: Vec<char> = s.chars().collect();
     degrees(&mut chars);
-    let s: String = chars.into_iter().collect();
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s.as_str();
-    while let Some(i) = rest.find(keeps_form) {
-        out.extend(rest[..i].nfkc());
-        let c = rest[i..].chars().next().unwrap_or_default();
-        out.push(c);
-        rest = &rest[i + c.len_utf8()..];
-    }
-    out.extend(rest.nfkc());
-    out
+    let read: String = chars
+        .into_iter()
+        .flat_map(|c| {
+            let out: Vec<char> = if drawn_form(c) {
+                c.to_string().nfkc().collect()
+            } else {
+                vec![c]
+            };
+            out
+        })
+        .collect();
+    read.nfc().collect()
 }
 
 #[derive(Debug, Default)]
 pub struct PageText {
     /// Raw concatenation of glyph text.
     pub raw: String,
-    /// NFKC-normalized text — the string NER should see.
+    /// Normalized text (see [`fold`]) — the string NER should see.
     pub normalized: String,
     /// raw char offset -> glyph index
     raw_to_glyph: Vec<usize>,
@@ -205,6 +232,34 @@ mod tests {
     }
 
     #[test]
+    fn printed_characters_are_kept() {
+        // What every other format keeps for the same text: wide forms, the
+        // micro sign, fractions, trade marks, primes, the ellipsis.
+        let printed = "（台号 ３７）：23 µm, ½ pallet, Example™ Example℠, 2½″, wait…";
+        assert_eq!(normalize(printed), printed);
+        let g: Vec<String> = printed.chars().map(|c| c.to_string()).collect();
+        assert_eq!(PageText::build(&g).normalized, printed);
+    }
+
+    #[test]
+    fn drawn_forms_read_as_their_letters() {
+        // Ligatures, an Arabic contextual form, a vertical comma, a Kangxi
+        // radical: glyph substitutions, not characters anyone wrote.
+        assert_eq!(normalize("\u{FB01}nal o\u{FB00}er"), "final offer");
+        assert_eq!(normalize("\u{FE8D}"), "\u{0627}");
+        assert_eq!(normalize("\u{FE10}"), ",");
+        assert_eq!(normalize("颜\u{2F8A}"), "颜色");
+    }
+
+    #[test]
+    fn a_combining_mark_drawn_after_its_letter_composes() {
+        assert_eq!(normalize("cafe\u{0301}"), "café");
+        // One character for one: a canonical singleton reads as its
+        // equivalent.
+        assert_eq!(normalize("5 \u{2126}"), "5 \u{03A9}");
+    }
+
+    #[test]
     fn degree_look_alikes_read_as_degrees() {
         // Before a temperature's unit, with or without a space.
         assert_eq!(normalize("25 ºC, 25ºC, (ºC)"), "25 °C, 25°C, (°C)");
@@ -214,12 +269,12 @@ mod tests {
         );
         // The ring and the ring operator after a number are angles.
         assert_eq!(normalize("45˚ and 90∘"), "45° and 90°");
-        // An ordinal stays one, folded as NFKC always folded it; an exponent
-        // stays an exponent; a ring with no degree to read keeps its form
-        // instead of leaving a combining mark.
+        // An ordinal stays one, an exponent stays an exponent, and a ring
+        // with no degree to read keeps its form instead of leaving a
+        // combining mark.
         assert_eq!(
             normalize("1º lugar, Nº 5, 10⁰, x˚y"),
-            "1o lugar, No 5, 10⁰, x˚y"
+            "1º lugar, Nº 5, 10⁰, x˚y"
         );
         assert!(!normalize("x˚y").contains('\u{030A}'));
     }

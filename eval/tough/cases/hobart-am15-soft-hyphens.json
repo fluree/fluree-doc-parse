@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "hobart-am15-dealer.pdf",
+    "url": "https://www.mclhospitality.com/wp-content/uploads/am15.pdf",
+    "sha256": "79c0bf9bcf3950a8ae8a135623024721c1e9b99551e8dbe28ed7ce0ef972c796",
+    "about": "Hobart AM15 dishwasher specification sheet (8 pages), a dealer's stamped copy. Its fonts map the hyphen a line break sets, drawn with ink, to U+00AD SOFT HYPHEN. Hobart's own copy of the sheet maps the same hyphens to `-`."
+  },
+  "notes": [
+    "The soft hyphen stayed in the text and a space followed it, so every word broken at a line's end read in two: `microcom\u00ad puter`."
+  ],
+  "checks": [
+    {
+      "id": "broken-word-whole",
+      "found": "2026-11-23",
+      "issue": "microcom\u00ad / puter read as two words, the soft hyphen kept between them.",
+      "text": "If the microcomputer is interrupted"
+    },
+    {
+      "id": "compound-broken-at-its-end-whole",
+      "found": "2026-11-23",
+      "issue": "As above, for a word broken after a compound's own hyphen: self-flush\u00ad / ing.",
+      "text": "exclusive self-flushing, easily removable"
+    },
+    {
+      "id": "suffix-of-two-letters-whole",
+      "found": "2026-11-23",
+      "issue": "As above, with two letters carried to the next line: accidental\u00ad / ly.",
+      "text": "If tank is accidentally drained"
+    },
+    {
+      "id": "no-soft-hyphen-left",
+      "found": "2026-11-23",
+      "issue": "Soft hyphens were kept in the text, where a reader shows nothing for them.",
+      "no_text": "\u00ad"
+    }
+  ]
+}

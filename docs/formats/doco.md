@@ -163,7 +163,9 @@ Every running line is kept here, including those the text leaves out: a
 running head that starts partway through the document has no place in the
 text that would not split two pages' content. Page numbers are excluded, bare
 or as `Page 3 of 15`: a folio identifies nothing about the document. It
-identifies a page, and is kept on that page's entry in `doc:pages`.
+identifies a page, and is kept on that page's entry in `doc:pages`. A line
+the same on every page is no page number, and is kept however it reads: a
+telephone number, a revision year.
 
 ## Pages nothing read
 
@@ -278,6 +280,19 @@ Each cell is addressable, with its headers denormalized onto it:
 This is what lets a query ask for "the Supply voltage row of the LM358B
 column" without the consumer reconstructing the grid. Merged cells are
 denormalized first, so every cell stands on its own.
+
+A table with no header row has no `doc:columnHeader` on its cells, and
+`doc:rowIndex` counts from its first row. A list of fields set `Label |
+value` is one: each value's `doc:rowHeader` is its label. See [a list of
+fields](../design/tables.md#a-list-of-fields-has-no-header-row).
+
+A list wrapped to fill the page sets its columns again side by side:
+`Competitor | Part no. | Competitor | Part no.`, each copy a record of its
+own. Where the copies' value columns are named alike and each copy opens
+with a key column named apart from them, a cell's `doc:rowHeader` is the
+key of its own copy, not the row's first cell. `doc:rowIndex` and
+`doc:columnIndex` stay the position on the page, so the cells sharing a
+`doc:rowIndex` there are several records, one per copy.
 
 A cell's offsets slice the projection to its `doc:cellValue`, which is its
 text, so it carries no `nif:isString` repeating it. A value copied into a cell

@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "statcan-t001b-fra.htm",
+    "url": "https://www150.statcan.gc.ca/n1/daily-quotidien/261120/t001b-fra.htm",
+    "sha256": "483a4d3b36788411233595be7027c6b01f05b4213289f631e241dcabb8fae665",
+    "about": "Statistics Canada, Le Quotidien, 20 November 2026, tableau 1, the French edition of statcan-note-links (Licence ouverte de Statistique Canada). Its table notes are links, not <sup>."
+  },
+  "notes": [],
+  "checks": [
+    {
+      "id": "row-label-mark-apart",
+      "found": "2026-11-23",
+      "issue": "The note link was read into the row label: Administrations publiques provinciales1.",
+      "text": "Administrations publiques provinciales 1"
+    },
+    {
+      "id": "no-glued-label",
+      "found": "2026-11-23",
+      "issue": "As above, in the text projection.",
+      "no_text": "provinciales1"
+    }
+  ]
+}

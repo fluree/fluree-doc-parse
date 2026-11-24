@@ -64,8 +64,10 @@ pub(crate) mod glyph;
 pub mod heading;
 pub mod image;
 pub mod info;
+pub(crate) mod ligature;
 pub mod line;
 pub mod link;
+pub(crate) mod marked;
 pub mod ocr;
 pub mod outline;
 pub mod overlay;
@@ -133,6 +135,7 @@ pub mod table;
 pub mod text;
 pub mod textart;
 pub mod textgrid;
+pub mod watermark;
 
 pub use block::Block;
 pub use extract::{extract_bytes, extract_file, Document, ExtractError, Page};

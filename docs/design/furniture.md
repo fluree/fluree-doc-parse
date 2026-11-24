@@ -31,11 +31,72 @@ across twenty pages is unambiguous.
 So furniture is only identifiable **in aggregate**, which is why detection
 takes the whole document rather than working page by page.
 
+## Short documents
+
+Repetition alone needs at least three pages, and three is too many for the
+most common short document there is: a two-page data sheet whose letterhead
+heads both pages, or a three-page one whose running head sits over the two
+pages after its title page. Left in, the second copy opened a new section
+halfway down the sheet, and everything after it was nested under a duplicate
+of the title.
+
+So a short document's running line is read from how exactly its copies
+agree. It must be on every page, or every page but one, in the top or bottom
+band, and its copies must match as only a template's do: the same text, size
+and weight, at the same place to a tenth of their size. Body text that
+happens to repeat on two pages does not land on the same point. A page
+number may differ between the copies if it counts the pages and the line
+says nothing else (`Page 1 of 2`); `Table 1` over one page and `Table 2`
+over the next are headings.
+
+A title page that sets the running head's words as its own title, larger
+and in its own place, keeps its title. The copies at the running head's
+place are furniture; the title is not. Nor are the same words elsewhere on
+the page: a short document's running line was found as a line of its own on
+every page it is taken from, so none of its copies merged into a block or a
+table, and it is not scrubbed from them. A safety data sheet runs its
+product code over its inner pages and prints it in its tables too.
+
+The scrub that catches a header merged into a block on one page also leaves
+a block alone that is all of the running text at another size, whatever the
+document's length: a report's cover title is the running head of every page
+after it.
+
 ```bash
 fdoc dev furniture report.pdf
 ```
 
 Measured on the regression document: 738 lines → 679 body lines, 59 removed.
+
+## Watermarks
+
+Away from the top and bottom of the page, repetition is not enough. A
+templated document (a data-sheet family, a catalogue, an install guide that
+repeats its figure in each language) sets real text at the same place on
+page after page: a spec table's labels, a box's heading, the close of a
+standard sentence. Taken for watermarks, these were deleted from every page,
+leaving values without their labels and sentences without their ends.
+
+A watermark also looks like one, and that is what is checked:
+
+- **Laid over the text.** A `DRAFT`, a diagonal `CONFIDENTIAL` or an
+  `Uncontrolled copy` stamp is drawn over (or under) the page's text, and
+  the text beneath it changes from page to page. It is set apart from that
+  text as a layer of its own: turned, much larger, or drawn before or after
+  all of it.
+- **Beside the text.** A note in a side margin (`For internal use only`, a
+  `Downloaded from …` line turned up the edge, a catalogue's thumb index)
+  shares no width with the page's other text.
+
+A watermark laid over the text is taken out before lines are assembled, as
+the run of glyphs it was drawn as. Left in, it shares the baseline of every
+line it crosses, and its letters are sorted in among that line's words:
+`imDpeller flangeR impeller gasAket`.
+
+Template text does neither: it sits among the page's lines, at their size,
+and nothing lies on it. A figure that repeats and overlaps its own labels
+does so the same way on every page, and is drawn among the page's text, so
+it is kept as well.
 
 ## Matching inside table cells
 
@@ -51,6 +112,15 @@ cells, and the match has to tolerate how the same text varies:
 An independent VLM labelling of the same page agrees with these deterministic
 furniture decisions line for line.
 
+A match is cut from a cell only as whole words: no letter or digit may run
+on into it, nor a number through a decimal or grouping mark. A short string
+(three characters or fewer, or nothing but numbers, such as a figure's
+callouts `1` to `7`) is cut only where it is the whole cell. Matched as a
+substring, a callout taken for furniture took its digit out of every cell
+that held it: `Serrer les vis à 30 po-lb (3,3 Nm)` read `0 po-lb ( , Nm)`,
+and an OCR'd newspaper whose stray letters were furniture lost every `r`
+and `e` from its table.
+
 Paragraphs are scrubbed too, for a header or footer that merged into a line of
 its own block on one page. There the match is held to where such a leak can
 be: the start or end of a block that reaches into the page's top or bottom
@@ -60,13 +130,20 @@ Committee` lost the committee's name from every sentence that named it.
 
 ## What is not furniture
 
-Two false positives worth knowing about, both fixed by tightening rather than
-by adding signals:
+False positives worth knowing about, all fixed by tightening rather than by
+adding signals:
 
 - **A bare page number that prefixes a figure caption** is part of the
   caption, not furniture.
 - **A short repeated string that is not marker-shaped** — a marker has to look
   like a marker, not merely be short.
+- **A number alone that does not count the pages.** An install guide's step
+  numbers, a figure's callouts and a chart's axis labels sit at one place on
+  page after page, near the top or the foot, just as a folio does. A line that
+  is nothing but a number is a page number only if it is printed once on a
+  page and goes up from one page to the next by as many pages as lie between,
+  on most of them: a guide in three languages numbers each from 1, and an
+  unnumbered insert skips one.
 
 ## Where it goes
 
@@ -124,7 +201,9 @@ text. Placed where it is first printed, it would stand between two pages'
 text, and the document's first page usually says the same thing in its own
 title. It is in the running text with the rest. Lines that name nothing are
 left out of both: a folio identifies nothing about the document, and neither
-does `Page 3 of 15`.
+does `Page 3 of 15`. Only a line whose number changes from page to page can
+be one of those. A line the same on every page is kept however it reads: a
+telephone number, a revision year or a form number is the document's own.
 
 ## The folio identifies the page
 
@@ -140,7 +219,9 @@ that change on nearly every page are the folio; the MRN and account number
 beside them, which never change, are not, and a flow sheet's `16:00` row
 label — which repeats at a stable position on hundreds of pages and takes six
 values between them — is a clock. The page-number line that covers the most
-pages supplies it.
+pages supplies it. A page it leaves without one takes its folio from another
+page-number line that counts the pages: a guide in three languages words its
+`1 of 3` three ways.
 
 The folio is read from the page's edges over *every* glyph, not from the
 lines left after grids took theirs. A form's key/value grid that runs down

@@ -1,0 +1,63 @@
+{
+  "document": {
+    "file": "cree-noctura-install.pdf",
+    "url": "https://cree.widen.net/content/9yzz8vhx6p/original/Noctura-Series-B-Wall-Mount-Install-Guide---Small_LPN00628X0001A1_A.pdf?u=wk1zzb&download=true",
+    "sha256": "e2f1f1f18974f51e54a258713f2185e037bdd5e39353c79adcd59be79086d482",
+    "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables. Each language numbers its three pages from 1, in its own words, and sets its step numbers at the top of its second and third pages."
+  },
+  "notes": [
+    "Taking the callouts for furniture is #42. Here the check is that furniture never takes characters out of a cell's text: a short string only as the whole cell, a longer one only as whole words.",
+    "The step numbers 3, 4 and 5 sit at one place at the top of six pages, as a folio does, and were stripped as page numbers, which also made them the pages' folios. A number alone is now a page number only if it counts the pages."
+  ],
+  "checks": [
+    {
+      "id": "torque-kept",
+      "found": "2026-11-23",
+      "issue": "The callout 3 was cut out of the torque specification: Serrer les vis à 0 po-lb ( , Nm).",
+      "text": "Serrer les vis à 30 po-lb"
+    },
+    {
+      "id": "torque-in-newton-metres-kept",
+      "found": "2026-11-23",
+      "issue": "As above, for 3,3 Nm: the paragraph and the table cell each print it.",
+      "text": "(3,3 Nm)",
+      "count": 2
+    },
+    {
+      "id": "step-numbers-kept",
+      "found": "2026-11-23",
+      "issue": "The step numbers were cut out of their headings: STEP :.",
+      "no_text": "STEP :"
+    },
+    {
+      "id": "step-number-kept",
+      "found": "2026-11-23",
+      "issue": "The step number 3 over Aircraft Cables was stripped as a page number.",
+      "text": "3 Aircraft Cables"
+    },
+    {
+      "id": "step-number-kept-es",
+      "found": "2026-11-23",
+      "issue": "As above, in Spanish.",
+      "text": "3 Cables galvanizados"
+    },
+    {
+      "id": "folio-is-the-page-number",
+      "found": "2026-11-23",
+      "issue": "The second page's folio was its step number, 3; it prints 2 of 3.",
+      "folio": {
+        "page": 2,
+        "value": "2"
+      }
+    },
+    {
+      "id": "folio-in-each-language",
+      "found": "2026-11-23",
+      "issue": "As above for the Spanish pages, whose folio was 5 on their third page; it prints 3 de 3.",
+      "folio": {
+        "page": 6,
+        "value": "3"
+      }
+    }
+  ]
+}

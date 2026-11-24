@@ -7,6 +7,7 @@ fluree-doc-cli          the fdoc binary
       │      └── fluree-doc-vision  reading pixels: the OCR word format
       ├── fluree-doc-image    bare images: decoded upright, read by OCR (uses the PDF layout)
       ├── fluree-doc-markdown  Markdown reader
+      ├── fluree-doc-text      plain-text reader
       ├── fluree-doc-html      HTML reader
       ├── fluree-doc-docx      DOCX reader ─┐
       ├── fluree-doc-pptx      PPTX reader ─┼── fluree-doc-ooxml  the package layer they share
@@ -27,8 +28,9 @@ a PDF engine.**
 
 | crate | contains |
 |---|---|
-| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization |
+| `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization, `outline::infer_headings` (headings shown by keyword and number) |
 | `fluree-doc-markdown` | `parse(&str) -> Vec<Element>` |
+| `fluree-doc-text` | `parse(&str) -> Vec<Element>`; `decode(&[u8])`; `is_markdown` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening |
@@ -83,7 +85,7 @@ library](../getting-started/rust-library.md#what-is-a-compatibility-surface).
 | encoding_rs | email charsets | (MIT OR Apache-2.0) AND BSD-3-Clause |
 | clap | CLI | MIT OR Apache-2.0 |
 | serde, serde_json | serialization | MIT OR Apache-2.0 |
-| unicode-normalization | NFKC | MIT OR Apache-2.0 |
+| unicode-normalization | NFC, reading PDF presentation forms | MIT OR Apache-2.0 |
 
 No copyleft anywhere in the tree — run `cargo tree` to verify. This is a
 release constraint rather than a preference: the engine is meant to be

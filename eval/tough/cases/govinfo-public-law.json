@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "PLAW-118publ1.htm",
+    "url": "https://www.govinfo.gov/content/pkg/PLAW-118publ1/html/PLAW-118publ1.htm",
+    "sha256": "7dd81b49559e4b942681b4233b87b4a1d285147be47c66bfc9536b08d8bbf8f8",
+    "about": "Public Law 118-1 as the Government Publishing Office serves it in HTML: the whole law one <pre> block, its title centred and its legislative history indented by spaces alone, as every govinfo hearing and public law is published."
+  },
+  "notes": [
+    "A <pre> was once read like a <p>, its whitespace collapsed, so the law came out as one line. The element check is the only kind that sees line breaks and spacing; text checks compare with whitespace collapsed."
+  ],
+  "checks": [
+    {
+      "id": "pre-kept-as-written",
+      "found": "2026-11-23",
+      "issue": "The law's lines, blank lines and centring spaces were collapsed into one line of text.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "[118th Congress Public Law 1]\n[From the U.S. Government Publishing Office]\n\n\n\n[[Page 137 STAT. 3]]\n\nPublic Law 118-1\n118th Congress\n\n                            Joint Resolution\n\n\n\nDisapproving the action of the District of Columbia Council in approving\n the Revised Criminal Code Act of 2022. <<NOTE: Mar. 20, 2023 -  [H.J.\n                               Res. 26]>>\n\n    Resolved by the Senate and House of Representatives of the United\nStates of America in Congress assembled, That the Congress disapproves\nof the action of the District of Columbia Council described as follows:\nThe Revised Criminal Code Act of 2022 (D.C. Act 24-789), enacted by the\nCouncil of the District of Columbia on January 17, 2023, and transmitted\nto Congress pursuant to section 602(c)(1) of the District of Columbia\nHome Rule Act on January 27, 2023.\n\n    Approved March 20, 2023.\n\nLEGISLATIVE HISTORY--H.J. Res. 26:\n---------------------------------------------------------------------------\n\nCONGRESSIONAL RECORD, Vol. 169 (2023):\n            Feb. 9, considered and passed House.\n            Mar. 8, considered and passed Senate.\n\n                                  <all>",
+        "evidence": "html"
+      }
+    }
+  ]
+}

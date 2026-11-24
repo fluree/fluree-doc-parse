@@ -1,0 +1,50 @@
+{
+  "document": {
+    "file": "multiplastics-7500.pdf",
+    "url": "https://multi-plastics.com/wp-content/uploads/2016/07/Sell_Sheet_7500.pdf",
+    "sha256": "ba567968030a0029552e911c79ec47e6977829ba0834066eea4dad47957159c5",
+    "about": "Multi-Plastics 7500 PLA film product information sheet (2 pages, Word 2013). The letterhead, a revision year beside it, and an address footer are set identically on both pages."
+  },
+  "notes": [
+    "Furniture was read only from documents of three pages or more, so a two-page sheet kept its letterhead on both pages, and the second copy opened a level-1 section with everything after it nested under a duplicate of the title. A short document's running lines are now read from exact copies: the same text, size and weight at the same place on every page, or every page but one."
+  ],
+  "checks": [
+    {
+      "id": "letterhead-kept-once",
+      "found": "2026-11-23",
+      "issue": "#44: the letterhead was in the text twice, once a page.",
+      "text": "Flexible Packaging Films",
+      "count": 1
+    },
+    {
+      "id": "letterhead-is-the-header",
+      "found": "2026-11-23",
+      "issue": "#44: as above; kept once, as the document's header.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Flexible Packaging Films",
+        "evidence": "header"
+      }
+    },
+    {
+      "id": "letterhead-opens-no-section",
+      "found": "2026-11-23",
+      "issue": "#44: the second page's copy opened a section of its own.",
+      "no_section": "Flexible Packaging Films"
+    },
+    {
+      "id": "revision-year-kept-once",
+      "found": "2026-11-23",
+      "issue": "#44: the year beside the letterhead came out on both pages. A running line the same on every page is kept once, though it is only a number.",
+      "text": "2016",
+      "count": 1
+    },
+    {
+      "id": "address-footer-kept-once",
+      "found": "2026-11-23",
+      "issue": "#44: the address footer came out on both pages.",
+      "text": "7770 North Central Drive",
+      "count": 1
+    }
+  ]
+}

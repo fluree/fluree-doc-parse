@@ -178,12 +178,13 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
         .map(|p| (p.element, p.begin))
 }
 
-/// Fold one character the way [`crate::line`] normalises
-/// line text (NFKC, keeping super- and subscripts).
+/// One character as the span lookup compares it (see
+/// [`crate::text::match_key`]).
 ///
-/// Line text is normalised on the way into the projection; glyph text keeps
-/// whatever the font's ToUnicode said. So the two spell the same character
-/// differently — a font emitting MICRO SIGN (U+00B5) against a projection
+/// Glyph text keeps whatever the font's ToUnicode said, line text is read
+/// on the way into the projection, and a needle may have been normalised
+/// again by whoever holds it. So the three can spell the same character
+/// differently — a font emitting MICRO SIGN (U+00B5) against a needle
 /// carrying GREEK SMALL LETTER MU (U+03BC), or a ﬁ ligature glyph standing
 /// for the two letters it draws. Comparing raw, every such span failed to
 /// resolve and the caller drew no highlight at all.
@@ -192,14 +193,14 @@ fn element_at(elements: &[Element], offset: usize) -> Option<(&Element, usize)> 
 /// string maps position→glyph, and a whole-string normalisation could compose
 /// across a glyph boundary and desynchronise that mapping.
 fn fold(c: char) -> impl Iterator<Item = char> {
-    crate::text::fold(c)
+    crate::text::match_key(c)
 }
 
 /// Locate a string among a page's glyphs, preferring a match inside `within`.
 ///
 /// Glyph text carries no synthetic spaces, so the needle is compared with
 /// whitespace removed — the same reason link anchors are matched that way —
-/// and NFKC-folded so it meets the projection's normalisation (see [`fold`]).
+/// and folded so it meets the projection's normalisation (see [`fold`]).
 ///
 /// Kept as the reference implementation — rebuild the index, search it —
 /// against which the differential test holds [`SpanResolver`]'s cached form.
@@ -216,7 +217,7 @@ fn glyph_range_for(page: &Page, needle: &str, within: BBox) -> Option<(usize, us
 /// is why [`SpanResolver`] holds one per page rather than letting every span
 /// rebuild it. Depends only on the page, so caching it changes no result.
 pub struct PageIndex {
-    /// Every non-whitespace glyph character, NFKC-folded, concatenated.
+    /// Every non-whitespace glyph character, folded, concatenated.
     flat: String,
     /// `flat` character position → the glyph index that drew it.
     owner: Vec<usize>,
@@ -261,7 +262,28 @@ fn squeeze(chars: impl IntoIterator<Item = char>) -> String {
 
 /// Where `needle` occurs in `hay`, as character positions, overlapping
 /// occurrences included.
-fn occurrences<'s>(hay: &'s str, needle: &'s str) -> impl Iterator<Item = usize> + 's {
+///
+/// A degree sign in the needle also meets the raised `o` or `0` a page
+/// draws for one, which line assembly reads as a degree (`~ 145°`, `5°C`;
+/// see `fluree_doc_model::marks::degree`): the glyphs keep the character
+/// they were drawn as.
+fn occurrences<'s>(hay: &'s str, needle: &'s str) -> Box<dyn Iterator<Item = usize> + 's> {
+    if !needle.contains('\u{00B0}') {
+        return Box::new(exact_occurrences(hay, needle));
+    }
+    let hay: Vec<char> = hay.chars().collect();
+    let needle: Vec<char> = needle.chars().collect();
+    let meets = |h: char, n: char| h == n || (n == '\u{00B0}' && matches!(h, 'o' | '0'));
+    let last = hay.len().checked_sub(needle.len());
+    let found: Vec<usize> = last
+        .map_or(0..0, |l| 0..l + 1)
+        .filter(|&p| needle.iter().zip(&hay[p..]).all(|(&n, &h)| meets(h, n)))
+        .collect();
+    Box::new(found.into_iter())
+}
+
+/// [`occurrences`] of a needle compared character for character.
+fn exact_occurrences<'s>(hay: &'s str, needle: &'s str) -> impl Iterator<Item = usize> + 's {
     let mut from = 0usize;
     let mut chars_before = 0usize;
     std::iter::from_fn(move || {
@@ -387,6 +409,15 @@ pub fn rects_for_glyph_range(glyphs: &[Glyph], start: usize, end_inclusive: usiz
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_degree_meets_the_raised_letter_drawn_for_it() {
+        // Line text reads `~ 145°` and `5°C` where the glyphs are `o` and `0`.
+        assert_eq!(occurrences("angle~145o", "~145°").collect::<Vec<_>>(), [5]);
+        assert_eq!(occurrences("5°C,50C", "5°C").collect::<Vec<_>>(), [0, 4]);
+        assert_eq!(occurrences("45", "145°").count(), 0);
+        assert_eq!(occurrences("aµbµ", "µ").collect::<Vec<_>>(), [1, 3]);
+    }
+
     fn g(x: f64, y: f64) -> Glyph {
         Glyph {
             text: "a".into(),
@@ -415,12 +446,12 @@ mod tests {
         assert_eq!(r[0].x1, 10.0);
     }
 
-    /// A font's ToUnicode and the text projection legitimately spell the
-    /// same character differently — the projection is NFKC-normalised on
-    /// the way in, glyph text is not. Comparing raw, "0.22 μm" (GREEK MU,
-    /// as the projection carries it) never located the glyphs drawing
-    /// "0.22 µm" (MICRO SIGN, as the font emits it), so the span resolved
-    /// to no highlight at all and a reviewer saw an unannotated page.
+    /// A font's ToUnicode and a needle legitimately spell the same
+    /// character differently — a needle normalised by whoever holds it,
+    /// glyph text as the font gave it. Comparing raw, "0.22 μm" (GREEK MU)
+    /// never located the glyphs drawing "0.22 µm" (MICRO SIGN, as the font
+    /// emits it), so the span resolved to no highlight at all and a
+    /// reviewer saw an unannotated page.
     #[test]
     fn micro_sign_glyphs_match_a_greek_mu_needle() {
         let within = BBox {
@@ -631,6 +662,27 @@ mod tests {
                 "edge span {s}..{e} resolved differently"
             );
         }
+    }
+
+    #[test]
+    fn a_degree_read_from_a_raised_letter_resolves_to_its_glyphs() {
+        let bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 200.0,
+            y1: 10.0,
+        };
+        // The page draws `145o`; line assembly reads the raised `o` as `°`.
+        let elements = vec![para("Angle ~ 145° wide", bbox)];
+        let pages = vec![page_of(&[
+            ("Angle", 0.0, 0.0),
+            ("~", 30.0, 0.0),
+            ("145o", 40.0, 0.0),
+            ("wide", 70.0, 0.0),
+        ])];
+        let found = |b: usize, e: usize| highlight(&elements, &pages, b, e).map(|h| h.text);
+        assert_eq!(found(8, 12), Some("145°".into()));
+        assert_eq!(found(13, 17), Some("wide".into()));
     }
 
     #[test]

@@ -95,7 +95,7 @@ Rationale for T0.2: hayro is pre-1.0. A panic on real input is a release blocker
 | T1.1 | Unicode resolution rate, Latin corpus | ≥ 99.9% | 99.970% (bench 200) |
 | T1.2 | Unicode resolution rate, CJK corpus | ≥ 99.5% | 99.732% |
 | T1.3 | replacement chars, `jp_stat` / `cn_gov` | **0** | 0 / 0 |
-| T1.4 | **NFKC applied** — no ligature codepoints U+FB00-06 in output | **0** | ✅ 0 (glyph + line text) |
+| T1.4 | **ligatures read as letters** — no ligature codepoints U+FB00-06 in output | **0** | ✅ 0 (glyph + line text) |
 | T1.5 | faux-bold dedup — no doubled CJK runs (`検検討討`) | 0 | ✅ 3518 removed on corpus |
 | T1.6 | offset→bbox round-trip: every char offset resolves to a rect or a known-empty (whitespace) | 100% | ✅ prototyped |
 | T1.7 | raw↔normalized offset map is bijective over non-normalized chars | 100% | ✅ unit-tested |

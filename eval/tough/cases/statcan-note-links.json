@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "statcan-t001b-eng.htm",
+    "url": "https://www150.statcan.gc.ca/n1/daily-quotidien/261120/t001b-eng.htm",
+    "sha256": "0c1f1f49bc48b9eb5de7af6e37980a1ab6239335a9d3749aa2f01074ae65c397",
+    "about": "Statistics Canada, The Daily, 20 November 2026, table 1 (Statistics Canada Open Licence). Its table notes are written as links to the notes below the table, not as <sup>: Provincial governments<a href=\"#fn01\" class=\"btn sd-tablefnref\">1</a>."
+  },
+  "notes": [
+    "The French edition, t001b-fra.htm, is checked by the case statcan-note-links-fra."
+  ],
+  "checks": [
+    {
+      "id": "row-label-mark-apart",
+      "found": "2026-11-23",
+      "issue": "The note link was read into the row label: Provincial governments1.",
+      "cell": {"value": "16.4", "column": "GDP – 2022 / %", "row": "Provincial governments 1"}
+    },
+    {
+      "id": "no-glued-label",
+      "found": "2026-11-23",
+      "issue": "As above, in the text projection.",
+      "no_text": "governments1"
+    }
+  ]
+}

@@ -20,7 +20,7 @@ readers:
 | `section-rows` | full-width bands labelling the rows beneath them |
 | `plain` | generic entity tables under their own header words |
 
-`probe-*` files are hand-written cases for a single behaviour (a `<caption>`,
+`probe-*` files are hand-written cases for a single behaviour (a `<caption>`, a currency sign set after its figure,
 a `<th colspan>` band). The PDF probes for tables drawn without column rules
 (`probe-statement`, `probe-statement-far`, `probe-booktabs`: dot leaders,
 underlines under figures, banners, centred unit lines, wrapped labels) are
