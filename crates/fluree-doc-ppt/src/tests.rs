@@ -657,6 +657,12 @@ fn pictures_are_figures_whose_bytes_the_store_gives() {
     assert_eq!(read_media(&bytes, "Pictures#2").unwrap(), other);
     assert!(read_media(&bytes, "Pictures#9").is_err());
     assert!(read_media(&bytes, "word/media/x.png").is_err());
+    // Its first bytes alone, from the store in the stream or the entry.
+    let deck = MediaReader::open(&bytes).unwrap();
+    assert_eq!(deck.head("Pictures#1", 8).unwrap(), png[..8]);
+    assert_eq!(deck.head("Pictures#2", 8).unwrap(), other[..8]);
+    assert_eq!(deck.head("Pictures#1", 1 << 20).unwrap(), png);
+    assert!(deck.head("Pictures#9", 8).is_err());
 }
 
 /// A deck whose slide list is `list`, with slides `slides`, each object id

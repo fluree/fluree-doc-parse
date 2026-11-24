@@ -1092,6 +1092,13 @@ fn an_rtf_document_reads_in_every_output_whatever_its_name() {
 /// picture shape showing the store's first entry, its PNG in the
 /// `Pictures` stream.
 fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
+    ppt_with_pictures(png, 1)
+}
+
+/// A deck of one slide showing `n` pictures, each its own entry of the
+/// store, every entry pointing at the one picture `png` in the `Pictures`
+/// stream.
+fn ppt_with_pictures(png: &[u8], n: u32) -> Vec<u8> {
     use std::io::Write;
     let rec = |container: bool, inst: u16, typ: u16, data: &[u8]| {
         let mut v = ((inst << 4) | if container { 0x0F } else { 0 })
@@ -1114,7 +1121,12 @@ fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
             true,
             0,
             0xF000,
-            &rec(true, 0, 0xF001, &rec(false, 6, 0xF007, &fbse)),
+            &rec(
+                true,
+                0,
+                0xF001,
+                &rec(false, 6, 0xF007, &fbse).repeat(n as usize),
+            ),
         ),
     );
     let persist = rec(
@@ -1147,15 +1159,19 @@ fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
         ]
         .concat(),
     );
-    let mut opt = (0x0104u16 | 0x4000).to_le_bytes().to_vec();
-    opt.extend(1u32.to_le_bytes());
-    let picture = rec(
-        true,
-        0,
-        0xF004,
-        &[rec(false, 75, 0xF00A, &[0; 8]), rec(false, 1, 0xF00B, &opt)].concat(),
-    );
-    let slide = rec(true, 0, 0x03EE, &[title, picture].concat());
+    let pictures: Vec<u8> = (1..=n)
+        .flat_map(|pib| {
+            let mut opt = (0x0104u16 | 0x4000).to_le_bytes().to_vec();
+            opt.extend(pib.to_le_bytes());
+            rec(
+                true,
+                0,
+                0xF004,
+                &[rec(false, 75, 0xF00A, &[0; 8]), rec(false, 1, 0xF00B, &opt)].concat(),
+            )
+        })
+        .collect();
+    let slide = rec(true, 0, 0x03EE, &[title, pictures].concat());
     let mut s = document.clone();
     let slide_at = s.len() as u32;
     s.extend(&slide);
@@ -1192,6 +1208,27 @@ fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
     }
     cf.flush().unwrap();
     cf.into_inner().into_inner()
+}
+
+#[test]
+fn a_ppt_whose_store_points_many_times_at_one_large_picture_converts_at_once() {
+    // 4,000 entries of a deck's store, each shown on the slide, all at one
+    // 32 MB picture: each picture's format is told from its first bytes,
+    // not from a copy of the whole picture (128 GB copied, half a minute).
+    let dir = scratch("ppt-aliased");
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &vec![0u8; 32 << 20]].concat();
+    let input = dir.join("deck.ppt");
+    std::fs::write(&input, ppt_with_pictures(&png, 4000)).unwrap();
+    let t0 = std::time::Instant::now();
+    let o = convert(&dir, &input, "md", &[]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("Screens"));
+    assert!(
+        t0.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        t0.elapsed()
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

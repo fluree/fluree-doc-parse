@@ -657,19 +657,23 @@ fn read_source(
         SourceKind::Ppt => {
             let (mut elements, media) =
                 fluree_doc_ppt::parse_with_media(&data).map_err(|e| e.to_string())?;
-            // The deck opened once, when the first picture is read.
+            // The deck opened once, when the first picture is read. Each
+            // picture's first bytes are copied alone to tell its format:
+            // the entries of a deck's store may all point at one large
+            // picture, and each is looked at.
             let deck = std::cell::OnceCell::new();
-            let media = read_media(
+            let opened = || {
+                deck.get_or_init(|| {
+                    fluree_doc_ppt::MediaReader::open(&data).map_err(|e| e.to_string())
+                })
+                .as_ref()
+                .map_err(Clone::clone)
+            };
+            let media = read_media_with(
                 src.stem,
                 media,
-                &|part| {
-                    deck.get_or_init(|| {
-                        fluree_doc_ppt::MediaReader::open(&data).map_err(|e| e.to_string())
-                    })
-                    .as_ref()
-                    .map_err(Clone::clone)?
-                    .read(part)
-                },
+                &mut |part| opened()?.head(part, fluree_doc_pdf::image::Format::SNIFFED),
+                &mut |part| opened()?.read(part),
                 cfg,
                 quiet,
             );

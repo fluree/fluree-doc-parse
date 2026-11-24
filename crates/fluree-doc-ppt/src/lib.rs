@@ -765,7 +765,7 @@ fn picture_store(doc: &[u8], document: &Record) -> Vec<Option<Stored>> {
 /// A picture record's image: its bytes past the record's own header, its
 /// unique ids and its tag. A drawing (EMF, WMF, PICT) is returned as stored,
 /// compressed, and is no image a reader decodes.
-fn blip(d: &[u8], at: usize) -> Result<Vec<u8>, String> {
+fn blip(d: &[u8], at: usize) -> Result<&[u8], String> {
     let r = record(d, at).ok_or("the picture is not where its entry says")?;
     if (r.data.1 - r.data.0) as u64 > MAX_MEDIA_BYTES {
         return Err(format!("a picture of more than {MAX_MEDIA_BYTES} bytes"));
@@ -779,7 +779,6 @@ fn blip(d: &[u8], at: usize) -> Result<Vec<u8>, String> {
         _ => return Err(format!("not a picture record ({:#06x})", r.typ)),
     };
     d.get(r.data.0 + skip..r.data.1)
-        .map(<[u8]>::to_vec)
         .ok_or_else(|| "the picture record is cut short".into())
 }
 
@@ -822,6 +821,18 @@ impl MediaReader {
 
     /// The bytes of the picture `part` names, as [`read_media`] reads them.
     pub fn read(&self, part: &str) -> Result<Vec<u8>, String> {
+        self.picture(part).map(<[u8]>::to_vec)
+    }
+
+    /// The first `n` bytes of the picture `part` names, at most: enough to
+    /// tell its format without copying the rest. Several entries of a
+    /// deck's store may point at one large picture, and each is looked at.
+    pub fn head(&self, part: &str, n: usize) -> Result<Vec<u8>, String> {
+        self.picture(part).map(|p| p[..n.min(p.len())].to_vec())
+    }
+
+    /// The picture `part` names, where the deck holds it.
+    fn picture(&self, part: &str) -> Result<&[u8], String> {
         let pib: usize = part
             .strip_prefix("Pictures#")
             .and_then(|n| n.parse().ok())
