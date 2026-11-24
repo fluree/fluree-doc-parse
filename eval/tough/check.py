@@ -222,12 +222,14 @@ def run_check(check, reading):
         return False, f"as (title, level, within): {near[:2]}" if near else "no section has this title"
     if "under" in check:
         # An element with exactly this string in the section with this
-        # title: what a reader takes the text to be about.
+        # title: what a reader takes the text to be about. A table cell is
+        # matched by its value, and is in its table's section.
         want = check["under"]
         found = [
             reading.section_of(i)
             for i, n in reading.nodes.items()
-            if n.get("nif:isString") == want["text"] and n.get("@type") != "doco:SectionTitle"
+            if n.get("nif:isString", n.get("doc:cellValue")) == want["text"]
+            and n.get("@type") != "doco:SectionTitle"
         ]
         ok = want["section"] in found
         return ok, None if ok else f"in sections {found[:3]}" if found else "no element has this string"
