@@ -197,6 +197,13 @@ pub fn output() -> Output {
 /// spent), and the separators every output writes for it.
 pub const CELL_BYTES: u64 = 128;
 
+/// What one image a figure names by relationship id costs, beyond the id's
+/// text: the reader's copies of the id (its list and the set that keeps it
+/// once), then the media entry the caller lists, read or not. One `.docx`
+/// picture naming a million images, each its own id, was measured to peak
+/// at 566 MB in all.
+pub const MEDIA_BYTES: u64 = 512;
+
 /// What one byte of text costs at most, counted at [`text_cost`]: the
 /// copies a reader and a layout make (a cell's text, a table's text, its
 /// rows), then the output.
@@ -380,6 +387,13 @@ impl Budget {
     /// with.
     pub fn spend_cells(&mut self, n: u64) -> Result<(), TooLarge> {
         self.spend_memory("cells", n, CELL_BYTES)
+    }
+
+    /// Count an image a figure names by `id`, about to be kept, at
+    /// [`MEDIA_BYTES`] and the id's text: a picture may name millions.
+    pub fn spend_media(&mut self, id: &str) -> Result<(), TooLarge> {
+        self.spend_memory("images", 1, MEDIA_BYTES)?;
+        self.spend_text(id)
     }
 
     /// Count a copy of `s` about to be made, at [`text_cost`].

@@ -749,11 +749,16 @@ struct Pic {
 }
 
 impl Pic {
-    /// Name an image of it, once however often it is named.
-    fn name_image(&mut self, rid: String) {
-        if self.named.insert(rid.clone()) {
-            self.embed.push(rid);
+    /// Name an image of it, once however often it is named, spent from
+    /// `budget` first: one picture may name millions, each its own id.
+    fn name_image(&mut self, rid: String, budget: &mut Budget) -> Result<(), TooLarge> {
+        if self.named.contains(&rid) {
+            return Ok(());
         }
+        budget.spend_media(&rid)?;
+        self.named.insert(rid.clone());
+        self.embed.push(rid);
+        Ok(())
     }
 
     /// What the figure says in words: its alternative text, or its title,
@@ -1002,13 +1007,13 @@ fn parse_body(
                         // names it by `r:link`: listed, so it is counted
                         // among those not read.
                         if let Some(rid) = attr(&e, "embed").or_else(|| attr(&e, "link")) {
-                            pic.name_image(rid);
+                            pic.name_image(rid, budget)?;
                         }
                     }
                     "imagedata" if pic_depth > 0 && deleted == 0 => {
                         pic.image = true;
                         if let Some(rid) = attr(&e, "id") {
-                            pic.name_image(rid);
+                            pic.name_image(rid, budget)?;
                         }
                         if pic.title.is_empty() {
                             pic.title = attr(&e, "title").unwrap_or_default();
@@ -2259,6 +2264,56 @@ mod tests {
             fluree_doc_model::MediaSource::Missing("rIdXXXXXXX".into())
         );
         assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn a_pictures_images_are_each_kept_once_in_one_lookup() {
+        // One picture of 100,000 images, each its own id, and the first
+        // named again: a scan of those kept for each took 6.4 s in a
+        // release build.
+        let blips: String = (0..100_000)
+            .map(|i| format!("<a:blip r:embed=\"rId{i:07}\"/>"))
+            .collect();
+        let body = format!(
+            "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/><a:graphic><a:graphicData>\
+             <pic:pic>{blips}<a:blip r:embed=\"rId0000000\"/></pic:pic>\
+             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+        );
+        let docx = package(&body, &[], &[]);
+        let start = std::time::Instant::now();
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        let took = start.elapsed();
+        assert_eq!(media.len(), 100_000);
+        assert_eq!(media[99_999].index, 99_999);
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn each_image_a_picture_names_is_spent_before_it_is_kept() {
+        // One picture naming a million images, each its own id: unspent, a
+        // 21 MB .docx of eight million aborted the process at 4 GB.
+        let blips: String = (0..1_000_000)
+            .map(|i| format!("<a:blip r:embed=\"r{i}\"/>"))
+            .collect();
+        let body = format!(
+            "<w:body><w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/><a:graphic>\
+             <a:graphicData><pic:pic>{blips}</pic:pic></a:graphicData></a:graphic></wp:inline>\
+             </w:drawing></w:r></w:p></w:body>"
+        );
+        let read = |budget: &mut Budget| {
+            parse_body(
+                &body,
+                &HashSet::new(),
+                &HashSet::new(),
+                Numbering::default(),
+                budget,
+            )
+        };
+        let err = read(&mut Budget::new(64 << 20, 0)).unwrap_err();
+        assert!(matches!(err, DocxError::TooLarge(_)), "{err}");
+        // An ordinary budget keeps them all.
+        let (_, media) = read(&mut Budget::default()).unwrap();
+        assert_eq!(media.len(), 1_000_000);
     }
 
     #[test]
