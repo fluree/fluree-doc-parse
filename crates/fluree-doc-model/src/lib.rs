@@ -13,6 +13,7 @@ pub mod marks;
 pub mod merges;
 pub mod message;
 pub mod outline;
+pub mod symbols;
 
 pub use doco::{to_doco, to_text, DocoOptions};
 pub use element::{

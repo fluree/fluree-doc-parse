@@ -1,0 +1,46 @@
+{
+  "document": {
+    "path": "../fixtures/word-symbol-fonts.pdf",
+    "sha256": "cad34e16a7b09337eac5d8a5503c21070e36432b956e5b811d8530aedeccf14b",
+    "about": "Invented lines printed to PDF by headless Chrome on macOS (fixtures/word-symbol-fonts.html), setting characters in Symbol and Wingdings by their private-use codes, as a PDF made from Word does: Symbol and Wingdings-Regular as CID TrueType, whose text maps give U+F0xx. Operators, a Greek letter, an arrow, and three bullets: Symbol's, a Wingdings square and a Wingdings box."
+  },
+  "notes": [
+    "Reprint with: Chrome --headless --no-pdf-header-footer --print-to-pdf=word-symbol-fonts.pdf word-symbol-fonts.html, then update the sha256.",
+    "Chrome gives the first Symbol glyph on the page no text at all, so the page opens with a Symbol space that stands for nothing.",
+    "2026-11-23 (#86): the private-use codes were kept as the text. A glyph drawn in Symbol or Wingdings now reads as the character the font shows, by the table the DOCX reader uses."
+  ],
+  "checks": [
+    {
+      "id": "symbol-operators-and-letters",
+      "found": "2026-11-23",
+      "issue": "Symbol's ±, ≥ and β read as U+F0B1, U+F0B3 and U+F062.",
+      "text": "The yield was 13.28 ± 0.61 g, at a dose ≥ 5 mg of β-cyclodextrin."
+    },
+    {
+      "id": "equation-and-wingdings-arrow",
+      "found": "2026-11-23",
+      "issue": "An equation's = and ∑ read as U+F03D and U+F0E5, and the Wingdings arrow as U+F0E0.",
+      "text": "The hazard index is HIi =∑HQij, and the transition 74 amu → 44 amu."
+    },
+    {
+      "id": "wingdings-box-is-a-bullet",
+      "found": "2026-11-23",
+      "issue": "A Wingdings box set as a bullet stayed in the text as U+F071, which in Symbol is θ, so the line was no list item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Gas heat",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "symbol-bullet-still-a-bullet",
+      "found": "2026-11-23",
+      "issue": "A guard: Symbol's bullet, read as •, still opens a list item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Heat sealable on both sides",
+        "evidence": "bullet"
+      }
+    }
+  ]
+}

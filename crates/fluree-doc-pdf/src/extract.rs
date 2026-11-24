@@ -8,6 +8,7 @@
 use crate::geom::BBox;
 use crate::glyph::Glyph;
 use crate::rule::{self, Fill, Rule};
+use fluree_doc_model::symbols;
 use hayro_interpret::font::Glyph as HGlyph;
 use hayro_interpret::hayro_syntax::Pdf;
 use hayro_interpret::util::TransformExt;
@@ -191,6 +192,11 @@ struct Collector {
     /// The marked content open now, innermost last: the outermost one that
     /// states ActualText carries it, with the glyphs drawn inside it.
     open: Vec<Option<Spoken>>,
+    /// The symbol font each font the page draws with is, if any, by font,
+    /// and whether the font program's own name was asked.
+    symbol_fonts: std::collections::HashMap<u128, (Option<&'static str>, bool)>,
+    /// Glyphs drawn in a symbol font, by index into `glyphs`, with the font.
+    symbols: Vec<(usize, &'static str)>,
 }
 
 /// Marked content whose ActualText stands for the glyphs drawn inside it.
@@ -246,6 +252,32 @@ fn is_punctuation(c: char) -> bool {
 }
 
 impl Collector {
+    /// Read the glyphs drawn in Symbol or Wingdings as the characters the
+    /// font shows.
+    ///
+    /// Word gives such a glyph the font's own code plus 0xF000 as its text,
+    /// a private-use character, and every reader of the text layer gets that
+    /// code: `μmole` reads U+F06D `mole`, an equation's `=` U+F03D. Read once
+    /// the page is drawn, because a span's ActualText may state the code
+    /// after its glyphs are drawn.
+    fn read_symbols(&mut self) {
+        for &(i, font) in &self.symbols {
+            let g = &mut self.glyphs[i];
+            if g.text.chars().any(symbol_code) {
+                g.text = g
+                    .text
+                    .chars()
+                    .map(|c| {
+                        symbol_code(c)
+                            .then(|| symbols::char_for(font, c as u32))
+                            .flatten()
+                            .unwrap_or(c)
+                    })
+                    .collect();
+            }
+        }
+    }
+
     /// Give the glyphs a span drew the text its ActualText states for them.
     ///
     /// Taken only where it corrects the glyphs' own text: when the span inks
@@ -441,6 +473,33 @@ impl<'a> Device<'a> for Collector {
             None => String::new(),
         };
 
+        // Drawn in Symbol or Wingdings: its text is read as that font's
+        // characters once it is final (see `read_symbols`). The font is
+        // known by the name the PDF gives it, or, where a producer renamed
+        // its fonts (`CIDFont+F4`) and the glyph says a symbol font's code,
+        // by the name inside the font program.
+        let symbol_font = match glyph {
+            HGlyph::Outline(o) => {
+                let (font, asked) =
+                    self.symbol_fonts
+                        .entry(o.font_cache_key())
+                        .or_insert_with(|| {
+                            let named = o.font_data().and_then(|f| f.postscript_name);
+                            (named.as_deref().and_then(symbols::pdf_font), false)
+                        });
+                if font.is_none() && !*asked && text.chars().any(symbol_code) {
+                    *asked = true;
+                    *font = o
+                        .font_data()
+                        .and_then(|f| program_name((*f.data).as_ref()))
+                        .as_deref()
+                        .and_then(symbols::pdf_font);
+                }
+                *font
+            }
+            _ => None,
+        };
+
         // Cross-examine suspicious decodes against the drawn shape. A known
         // academic-publisher toolchain family subsets
         // TeX math fonts with the symbol glyphs renamed after Latin lookalikes
@@ -588,6 +647,9 @@ impl<'a> Device<'a> for Collector {
         if text.contains('\u{AD}') {
             text = text.replace('\u{AD}', if inks { "-" } else { "" });
         }
+        if let Some(font) = symbol_font {
+            self.symbols.push((draw_index, font));
+        }
         self.ink.push(ink);
         self.glyphs.push(Glyph {
             text,
@@ -729,6 +791,24 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
         );
     }
     frac >= MIN_TEXTY_ROW_FRACTION
+}
+
+/// A private-use character Word gives a glyph set in one of its symbol
+/// fonts: the font's own code, `0x20`–`0xFF`, plus `0xF000`.
+fn symbol_code(c: char) -> bool {
+    ('\u{F020}'..='\u{F0FF}').contains(&c)
+}
+
+/// The PostScript name a TrueType or OpenType font program gives itself.
+fn program_name(data: &[u8]) -> Option<String> {
+    use read_fonts::{types::NameId, FontRef, TableProvider};
+    let font = FontRef::new(data).ok()?;
+    let name = font.name().ok()?;
+    name.name_record()
+        .iter()
+        .filter(|r| r.name_id() == NameId::POSTSCRIPT_NAME)
+        .find_map(|r| r.string(name.string_data()).ok())
+        .map(|s| s.chars().collect())
 }
 
 /// Repair a TeX-lookalike misdecode by interrogating the outline itself.
@@ -965,6 +1045,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             unread: Vec::new(),
             marks: crate::marked::Marks::read(page),
             open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -986,6 +1068,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
                 dev.speak(span);
             }
         }
+        dev.read_symbols();
         letters = std::mem::take(&mut dev.letters);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let mut page = Page {
@@ -1385,6 +1468,8 @@ mod actual_text_tests {
             unread: Vec::new(),
             marks: crate::marked::Marks::default(),
             open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
         };
         c.speak(Spoken {
             text: said.into(),

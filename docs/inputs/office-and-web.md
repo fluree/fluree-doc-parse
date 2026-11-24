@@ -77,7 +77,8 @@ a list of contents under it are a heading and the paragraphs after it.
 **Symbol fonts.** A character from Symbol or Wingdings is stored as the font's
 own code for it, which in any other font is nothing. It is read as the
 character it shows: `°`, `±` and `μ` from Symbol, arrows, check marks and
-boxes (`→`, `✔`, `☐`, `☑`) from Wingdings and Wingdings 2.
+boxes (`→`, `✔`, `☐`, `☑`) from Wingdings and Wingdings 2. A PDF made from
+Word is read by the same table.
 
 **Pictures and embedded objects** — an image, a chart, an object embedded
 from another program — are each a `doco:Figure` where they stand, its text
