@@ -6,7 +6,8 @@
     "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Its field angle sets the degree sign as a small raised letter o after the number."
   },
   "notes": [
-    "2026-11-23 (#77): a raised letter after a number of three figures was read as a note's letter. A raised o, 0 or º after a number that cannot take it as an ordinal ending is a degree."
+    "2026-11-23 (#77): a raised letter after a number of three figures was read as a note's letter. A raised o, 0 or º after a number that cannot take it as an ordinal ending is a degree.",
+    "2026-11-24 (#101): the Accessories table's edge falls inside the warranty footnote's line. The glyphs centred inside it were withheld from the prose while the words they belong to stayed out of the cell, so the line read `† S htt //` and its letters ran on as figures (`rr nt t rm`). The table still takes `warranty`, a separate fault."
   ],
   "checks": [
     {
@@ -20,6 +21,18 @@
       "found": "2026-11-23",
       "issue": "As above.",
       "no_text": "145 o"
+    },
+    {
+      "id": "footnote-address-whole",
+      "found": "2026-11-24",
+      "issue": "The footnote lost every letter the table's edge passed through.",
+      "text": "† See https://www.creelighting.com/resources/warranties/ for"
+    },
+    {
+      "id": "no-footnote-fragments",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "no_text": "S htt //"
     }
   ]
 }

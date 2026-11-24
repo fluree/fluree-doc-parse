@@ -1,0 +1,80 @@
+{
+  "document": {
+    "path": "../fixtures/field-list-colons.pdf",
+    "sha256": "5de60751711d9747c758516330840dd876b5e09a4583d25911bd3fa95c10abbd",
+    "about": "One invented page (fixtures/field-list-colons.py): a report's header block of bold labels over plain values; a product's fields in one plain face, every other value set 0.02 pt above its label; and two things that are no field list, a chart's NOTE and SOURCE and paragraphs that open on a label and wrap under it."
+  },
+  "notes": [
+    "Remake with: python3 eval/tough/fixtures/field-list-colons.py, then update the sha256.",
+    "2026-11-24: the header block came out as a table of its first two rows, the two with figures, then `Prepared by:` and `Status:` as headings and `J. Example` as a heading of its own. The product's labels and values were read as two columns of text, every label apart from its value (#9)."
+  ],
+  "checks": [
+    {
+      "id": "header-block-is-one-list",
+      "found": "2026-11-24",
+      "issue": "The rows without figures fell out of the table, label and value each a paragraph.",
+      "row": {
+        "#0": "Prepared by:",
+        "#1": "J. Example"
+      }
+    },
+    {
+      "id": "value-is-no-heading",
+      "found": "2026-11-24",
+      "issue": "`J. Example`, an initial and a name, was taken for a lettered heading.",
+      "no_section": "J. Example"
+    },
+    {
+      "id": "plain-fields-pair",
+      "found": "2026-11-24",
+      "issue": "A value set a hair above its label was read ahead of it, the row as one cell, and the list as two columns of text.",
+      "row": {
+        "#0": "Neck Diameter:",
+        "#1": "38 mm"
+      }
+    },
+    {
+      "id": "plain-fields-last-row",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "row": {
+        "#0": "Supplied with cap fitted:",
+        "#1": "Yes"
+      }
+    },
+    {
+      "id": "first-field-names-no-column",
+      "found": "2026-11-24",
+      "issue": "Read as a table, the first field was its header: every value under `Polypropylene`.",
+      "no_column_header": "Polypropylene"
+    },
+    {
+      "id": "chart-note-is-no-list",
+      "found": "2026-11-24",
+      "issue": "A NOTE and SOURCE whose values are sentences is a caption.",
+      "no_row": {
+        "#0": "NOTE:"
+      }
+    },
+    {
+      "id": "chart-note-names-no-column",
+      "found": "2026-11-24",
+      "issue": "As above, read with the NOTE as its header row.",
+      "no_column_header": "NOTE:"
+    },
+    {
+      "id": "run-in-labels-are-paragraphs",
+      "found": "2026-11-24",
+      "issue": "Paragraphs opening on a label whose last value wraps under the labels are no field list.",
+      "no_row": {
+        "#0": "Change Note:"
+      }
+    },
+    {
+      "id": "run-in-labels-name-no-column",
+      "found": "2026-11-24",
+      "issue": "As above, read with the first as its header row.",
+      "no_column_header": "Change Note:"
+    }
+  ]
+}

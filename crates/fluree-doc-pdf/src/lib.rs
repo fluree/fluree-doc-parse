@@ -71,6 +71,7 @@ pub(crate) mod marked;
 pub mod ocr;
 pub mod outline;
 pub mod overlay;
+pub(crate) mod region;
 
 /// The [`unread_pages`] reason of a page an OCR reading read whole that
 /// still holds next to no text.

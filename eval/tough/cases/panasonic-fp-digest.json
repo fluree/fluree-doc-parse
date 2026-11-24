@@ -1,0 +1,45 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series PLC digest catalogue (28 pages): feature lists numbered in the item's own text, dimension drawings with hole callouts, and a date and web address on the cover and the back page. Page 20's product table gives each control unit's number of I/O points (`10`, `14`, `16`, `32`), a figure alone in its cell."
+  },
+  "notes": [
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#129): a number hyphenated into the word after it was read as a section number.",
+    "2026-11-24 (#99): every one- and two-digit cell was taken for a page number and emptied, so the I/O points column had no value in any row. The checks read the text projection, since the table's first row is still taken for its header (`Number 10`), a separate fault."
+  ],
+  "checks": [
+    {
+      "id": "hole-callout-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The drawing's `4-M4` hole callout was a level-1 section, and the rest of the page nested under it.",
+      "no_section": "4-M4"
+    },
+    {
+      "id": "web-address-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The web address on the cover and the back page was a level-6 heading.",
+      "no_section": "panasonic.net"
+    },
+    {
+      "id": "dated-web-address-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "As above, after the cover's date.",
+      "no_section": "2016.02"
+    },
+    {
+      "id": "fourteen-io-points",
+      "found": "2026-11-24",
+      "issue": "The I/O points `14` was emptied as a page number.",
+      "text": "FP0R-C14 Control Unit with RS232C port Flash EEPROM (16 k steps) 14 Input: 8"
+    },
+    {
+      "id": "thirty-two-io-points",
+      "found": "2026-11-24",
+      "issue": "As above, `32`.",
+      "text": "FP0R-C32 Control Unit with RS485 port Flash EEPROM (32 k steps) 32 Input: 16"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "document": {
+    "file": "owenscorning-procat-es.pdf",
+    "url": "https://www.owenscorning.com/dms/10022387",
+    "sha256": "345e63875e3423784ec67db4a0151241ad2215787bf5b0c9ead46925f3fc977f",
+    "about": "Owens Corning ProCat insulation data sheet, in Spanish. Its coverage and technical-data tables sit in the left page column, a separator rule in the right."
+  },
+  "notes": [
+    "The right column's separator cut the PAREDES header in two, and the technical-data table lost its header and last rows to the page's ruling."
+  ],
+  "checks": [
+    {
+      "id": "paredes-header-whole",
+      "found": "2026-11-24",
+      "issue": "#102: the header read `CANTIDADA MÍNIMA DE` over a data row of its second lines.",
+      "cell": {
+        "value": "11.3",
+        "column": "CANTIDADA MÍNIMA DE BOLSAS POR CADA 1000 PIES²",
+        "row": "14"
+      }
+    },
+    {
+      "id": "datos-tecnicos-last-row",
+      "found": "2026-11-24",
+      "issue": "#102: the last row was read as figures.",
+      "cell": {
+        "value": "ASTM C1338",
+        "column": "PRUEBA",
+        "row": "Resistencia a hongos"
+      }
+    },
+    {
+      "id": "datos-tecnicos-header",
+      "found": "2026-11-24",
+      "issue": "#102: the first data row was every column's header.",
+      "no_column_header": "Resistencia térmica"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "owenscorning-procat-fact-sheet.pdf",
+    "url": "https://www.owenscorning.com/dms/10019591",
+    "sha256": "99f387dbfca3e313b36411edcb1f9d03c28c59f91d784d5d32a7beb8ce64e999",
+    "about": "Owens Corning ProCat manufacturer's fact sheet. Its coverage tables open with header bands whose labels wrap over four or five lines, ruled through by the tables' column rules."
+  },
+  "notes": [
+    "The CLOSED CAVITY header band, 54.8pt against 14pt rows, was cut off as the gap before the table; its labels fell to a paragraph and two headings, and the rows had no column headers."
+  ],
+  "checks": [
+    {
+      "id": "closed-cavity-header",
+      "found": "2026-11-24",
+      "issue": "#110: the rows had no `doc:columnHeader`.",
+      "cell": {
+        "value": "11.3",
+        "column": "BAGS PER 1000 SQ. FT.",
+        "row": "14"
+      }
+    },
+    {
+      "id": "closed-cavity-coverage",
+      "found": "2026-11-24",
+      "issue": "#110: as above.",
+      "cell": {
+        "value": "88.4",
+        "column": "MAXIMUM COVERAGE PER BAG IN SQ. FT.",
+        "row": "14"
+      }
+    }
+  ]
+}
