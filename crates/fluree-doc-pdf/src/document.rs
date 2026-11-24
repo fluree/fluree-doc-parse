@@ -1986,6 +1986,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             {
                 header_rows = 2;
             }
+            // Under a title read out above the table, the row the title
+            // leaves on top must earn the header.
+            if titled.is_some() {
+                let page = &raw.pages[pi];
+                if !g.heads_its_rows(header_rows, &rows, &page.glyphs, &page.rules, &page.fills) {
+                    header_rows = 0;
+                }
+            }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
             // centred header across the row boundary under it (`time` above,

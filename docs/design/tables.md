@@ -305,8 +305,33 @@ The first row of a ruled or aligned grid is the table's title when:
 - it is short (12 words or fewer) and is not a number.
 
 The title is read out as a paragraph just above the table, and the table is
-read from the row under it, header included: the hex-screw table's four rows
-of column names give paths such as `E / Body Diameter / Min`.
+read from the row under it.
+
+The row under the title is not presumed the header: it earns it. A table
+whose title band sits over a block of fields (`Form Factor | SFF (2.5”) |
+Carrier | …`) or a list of parts has no header at all. Its first row is a
+field or a part like the rest, and taken as the header it named every value
+below it. So the row under a title heads the table only when it is set apart
+from the rows below in one of these ways:
+
+- it is bold, over a row that is not;
+- it is shaded, over a bare row, and is not one stripe of many;
+- it is ruled off more heavily than the rows below are from each other, or
+  ruled off where they are not;
+- it is the top of a stacked header (the hex-screw table's four rows of
+  column names, giving paths such as `E / Body Diameter / Min`);
+- it puts words over quantities. In most of the columns whose cells below
+  are numbers, it names the column instead (`Zone | Lumens` over
+  `0-30 | 298`, `M17 Series` over `17,000 xg`). It must also not be set
+  like the row under it: not of one type (quantity or words) and one
+  weight in most of the columns where both rows hold text. A field list
+  passes the first test whenever its values are figures, and fails this
+  one, as its rows are set alike all the way down.
+
+A header set just like its data, with nothing but its words to tell it
+apart (`Name | Value` over `Colour | Grey`), is read as a row of data under
+a title. A field or a part read as a header names every value under it,
+which is worse than a header read as one more row.
 
 Labels set apart within their columns, each under one ruled cell across the
 table (`Area | Competence`), are the columns' own. So is a group label over

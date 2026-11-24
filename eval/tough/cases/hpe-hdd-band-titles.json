@@ -6,7 +6,8 @@
     "about": "HPE hard disk drives QuickSpecs. Its drive pages set a green band (Mission Critical (10K rpm), Business Critical (7.2K rpm)) over each block of fields and SKU tables."
   },
   "notes": [
-    "2026-11-24 (#109): a title band or caption in a table's first row was taken as its column header, naming every column, and the rows that do name the columns read as data."
+    "2026-11-24 (#109): a title band or caption in a table's first row was taken as its column header, naming every column, and the rows that do name the columns read as data.",
+    "2026-11-24 (#109): with the band read out as a title, the field block's first field (Form Factor | SFF (2.5”) | Carrier | …) was presumed the header and named the fields under it. A row under a title must be set apart from the rows below to head them."
   ],
   "checks": [
     {
@@ -14,6 +15,12 @@
       "found": "2026-11-24",
       "issue": "All 73 cells on page 10 carried the band as their column header.",
       "no_column_header": "Mission Critical (10K rpm)"
+    },
+    {
+      "id": "first-field-names-no-column",
+      "found": "2026-11-24",
+      "issue": "Form Factor | SFF (2.5”), the first field under the band, was the column header of every field below it on pages 9 to 18. (Form Factor itself is a real column name in the SKU tables on pages 4 to 6.)",
+      "no_column_header": "SFF (2.5"
     }
   ]
 }
