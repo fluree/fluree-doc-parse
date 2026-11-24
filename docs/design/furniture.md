@@ -98,6 +98,11 @@ and nothing lies on it. A figure that repeats and overlaps its own labels
 does so the same way on every page, and is drawn among the page's text, so
 it is kept as well.
 
+A line OCR read is never a watermark, as it is never furniture: on a scan
+the same text repeats for its own reasons, such as a form copied per
+applicant with the same note down the margin of every copy. Its words still
+count as the text beneath a watermark the PDF draws over the scan.
+
 ## Matching inside table cells
 
 Removing furniture from prose is not enough — it also has to be scrubbed from

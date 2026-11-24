@@ -15,6 +15,12 @@
 //! watermark when it also lies on other text, or beside all of it in a
 //! margin. Template text does neither: it sits in the page's text, between
 //! other lines, never on them.
+//!
+//! A line OCR read is never one, as it is never furniture: a scan repeats
+//! its content for its own reasons (a form copied per applicant, its note
+//! down the margin of every copy), and a watermark printed on the paper is
+//! read with the rest of what the page says. Its words still count as the
+//! text a watermark drawn over the scan lies on.
 
 use crate::extract::Page;
 use crate::furniture::EDGE_BAND;
@@ -186,7 +192,11 @@ pub fn strip_overlaid(pages: &mut [Page]) -> Vec<String> {
     type Key = (String, i32, i64);
     let mut groups: HashMap<Key, Vec<(usize, usize)>> = HashMap::new();
     for (pi, rs) in page_runs.iter().enumerate() {
+        let page = &pages[pi];
         for (ri, r) in rs.iter().enumerate() {
+            if r.glyphs.iter().any(|&i| page.is_ocr(&page.glyphs[i])) {
+                continue;
+            }
             let text = r.text.split_whitespace().collect::<Vec<_>>().join(" ");
             if text.chars().filter(|c| c.is_alphanumeric()).count() < MIN_CHARS {
                 continue;
@@ -348,6 +358,21 @@ mod tests {
             .collect()
     }
 
+    /// `pages` as OCR read them: every glyph added by the reading, after
+    /// the ones the pages drew.
+    fn read(pages: &mut [Page], drawn: usize) {
+        for p in pages {
+            for (i, g) in p.glyphs.iter_mut().enumerate() {
+                g.draw_index = i;
+            }
+            p.ocr = Some(crate::extract::OcrRead {
+                first_glyph: drawn,
+                whole: true,
+                regions: Vec::new(),
+            });
+        }
+    }
+
     fn text(p: &Page) -> String {
         p.glyphs.iter().map(|g| g.text.as_str()).collect()
     }
@@ -369,6 +394,26 @@ mod tests {
         let mut found = strip_overlaid(&mut pages);
         found.sort();
         assert_eq!(found, ["For internal use only", "Uncontrolled copy"]);
+    }
+
+    #[test]
+    fn a_margin_note_ocr_read_stays() {
+        let mut pages = doc(
+            |_| set("For internal use only", 540.0, 300.0, 6.0),
+            |_| Vec::new(),
+        );
+        read(&mut pages, 0);
+        assert!(strip_overlaid(&mut pages).is_empty());
+        assert!(text(&pages[3]).contains("For internal use only"));
+    }
+
+    #[test]
+    fn a_draft_drawn_over_a_scan_s_reading_is_taken_out() {
+        // The page draws the stamp; OCR reads the scan beneath it.
+        let mut pages = doc(|_| set("DRAFT", 150.0, 420.0, 80.0), |_| Vec::new());
+        read(&mut pages, "DRAFT".len());
+        assert_eq!(strip_overlaid(&mut pages), ["DRAFT"]);
+        assert!(text(&pages[2]).contains("body line 3 of page 2"));
     }
 
     #[test]
