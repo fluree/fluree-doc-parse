@@ -1182,7 +1182,15 @@ pub(crate) fn render_routed(
         if let Some(crops) = crops {
             match crops(&bytes, stem, outdir) {
                 Ok(recs) => {
-                    n_media += recs.len();
+                    // An XPS page's crops are pages and regions, as a
+                    // PDF's are; the rest are images placed in a flow.
+                    for rec in &recs {
+                        match rec["kind"].as_str() {
+                            Some("page") => n_pages += 1,
+                            Some("region") => n_crops += 1,
+                            _ => n_media += 1,
+                        }
+                    }
                     for rec in recs {
                         writeln!(manifest, "{rec}").unwrap();
                     }
@@ -1623,36 +1631,38 @@ fn write_png(path: &Path, pixels: &mut fluree_doc_vision::Pixels) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
-/// An XPS document's crops: each page that is only a picture (a screen
-/// printed to XPS), the picture decoded upright at its own resolution, as
-/// `<stem>_p<N>_full.png`, the name a reading of the page is looked up by.
+/// An XPS document's crops (`common::xps_crops`): each page that is only a
+/// picture (a screen printed to XPS), the picture decoded upright at its own
+/// resolution, as `<stem>_p<N>_full.png`; and on a page of text, the part
+/// of a picture under each raster region, as `<stem>_p<N>_r<i>.png`. The
+/// names its words and readings are looked up by. Each is written as it is
+/// cut, a page's pictures at a time, and its record carries the box on the
+/// page it shows, whole picture or part: a picture rarely fills its page.
 fn xps_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
     let xps = fluree_doc_xps::parse(bytes).map_err(|e| e.to_string())?;
+    let plans = crate::commands::common::xps_crop_plans(&xps, None);
     let mut out = Vec::new();
-    for p in &xps.doc.pages {
-        let fluree_doc_pdf::route::Route::Vlm(r) = fluree_doc_pdf::route::decide(p).0 else {
-            continue;
+    let mut written = Ok(());
+    let failed = crate::commands::common::xps_crops(bytes, &plans, &mut |mut c| {
+        if written.is_err() {
+            return;
+        }
+        let name = format!("{stem}_p{}_{}.png", c.page, c.crop.tag());
+        written = write_png(&outdir.join(&name), &mut c.pixels);
+        let b = c.bbox;
+        let kind = match c.crop {
+            fluree_doc_pdf::ocr::Crop::Page => "page",
+            fluree_doc_pdf::ocr::Crop::Region(_) => "region",
         };
-        let Some(img) = xps.page_image(p.index) else {
-            continue;
-        };
-        let read =
-            fluree_doc_xps::read_image(bytes, &img.part).and_then(|b| fluree_doc_image::decode(&b));
-        let mut image = match read {
-            Ok(image) => image,
-            Err(e) => {
-                eprintln!("warning: {stem}_p{}_full: {e}", p.index);
-                continue;
-            }
-        };
-        let name = format!("{stem}_p{}_full.png", p.index);
-        write_png(&outdir.join(&name), &mut image.pixels)?;
         out.push(serde_json::json!({
-            "doc": stem, "page": p.index, "kind": "page", "png": name,
-            "reason": fluree_doc_pdf::escalate::CropReason::from(r).as_str(), "scale": 1.0,
-            "part": img.part,
+            "doc": stem, "page": c.page, "kind": kind, "png": name,
+            "bbox": [b.x0, b.y0, b.x1, b.y1], "reason": c.reason, "scale": 1.0,
         }));
+    });
+    for e in failed {
+        eprintln!("warning: {stem}: {e}");
     }
+    written?;
     Ok(out)
 }
 

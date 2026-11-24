@@ -570,6 +570,140 @@ fn an_xps_document_reads_as_a_pdf_does_and_its_pictured_page_as_a_scan() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An XPS document of one portrait page holding only a picture of
+/// `width` × `height` pixels, drawn in the box `(x0, y0, x1, y1)` (XPS
+/// units), as a screen printed to XPS is.
+fn xps_picture(width: u32, height: u32, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> Vec<u8> {
+    use std::io::Write;
+    let ns = "http://schemas.microsoft.com/xps/2005/06";
+    let mut png = Vec::new();
+    image::GrayImage::from_pixel(width, height, image::Luma([255u8]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let parts: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "_rels/.rels",
+            format!(
+                "<Relationships><Relationship Id=\"R0\" Type=\"{ns}/fixedrepresentation\" Target=\"/seq.fdseq\"/></Relationships>"
+            )
+            .into_bytes(),
+        ),
+        (
+            "seq.fdseq",
+            "<FixedDocumentSequence><DocumentReference Source=\"/doc.fdoc\"/></FixedDocumentSequence>".into(),
+        ),
+        (
+            "doc.fdoc",
+            "<FixedDocument><PageContent Source=\"/p0.fpage\"/></FixedDocument>".into(),
+        ),
+        (
+            "p0.fpage",
+            format!(
+                "<FixedPage Width=\"816\" Height=\"1056\"><Path Data=\"M {x0},{y0} L {x1},{y0} {x1},{y1} {x0},{y1} Z\">\
+                 <Path.Fill><ImageBrush ImageSource=\"/img.png\" Viewport=\"{x0},{y0},{},{}\" ViewportUnits=\"Absolute\" \
+                 Viewbox=\"0,0,{width},{height}\" ViewboxUnits=\"Absolute\"/></Path.Fill></Path></FixedPage>",
+                x1 - x0,
+                y1 - y0
+            )
+            .into_bytes(),
+        ),
+        ("img.png", png),
+    ];
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut z = zip::ZipWriter::new(&mut buf);
+    for (name, body) in &parts {
+        z.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        z.write_all(body).unwrap();
+    }
+    z.finish().unwrap();
+    buf.into_inner()
+}
+
+#[test]
+fn words_read_from_an_xps_pictures_crop_land_where_it_is_drawn() {
+    // The three steps: render-routed writes the picture as it is, an
+    // engine reads that image, `--ocr-words` places its words. They land
+    // where `--ocr` lays them: in the box the picture is drawn in.
+    let dir = scratch("xps-words");
+    for (name, (w, h), drawn, at) in [
+        // A portrait picture drawn inside the page's margins.
+        (
+            "inset",
+            (612, 792),
+            (96.0, 96.0, 708.0, 888.0),
+            (72.0, 72.0),
+        ),
+        // A landscape screenshot printed on a portrait page.
+        (
+            "landscape",
+            (624, 464),
+            (0.0, 0.0, 816.0, 606.8),
+            (0.0, 0.0),
+        ),
+    ] {
+        let input = dir.join(format!("{name}.xps"));
+        std::fs::write(&input, xps_picture(w, h, drawn)).unwrap();
+        let crops = dir.join(format!("{name}-crops"));
+        let o = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+            .args(["dev", "render-routed"])
+            .arg(&input)
+            .arg(&crops)
+            .env("HOME", dir.join("home"))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let png = image::open(crops.join(format!("{name}_p0_full.png"))).unwrap();
+        assert_eq!((png.width(), png.height()), (w, h));
+        // The manifest says where the crop is on its page.
+        let manifest = std::fs::read_to_string(crops.join("manifest.jsonl")).unwrap();
+        let record: serde_json::Value =
+            serde_json::from_str(manifest.lines().next().unwrap()).unwrap();
+        assert_eq!(record["bbox"][0].as_f64(), Some(drawn.0 * 0.75), "{record}");
+        let words = dir.join(format!("{name}-words"));
+        std::fs::create_dir_all(&words).unwrap();
+        let reading = serde_json::json!({
+            "coords": "px", "width": w, "height": h,
+            "words": [{"text": "HELLO", "box": [0, 0, w / 2, 40], "conf": 0.98}]
+        });
+        std::fs::write(
+            words.join(format!("{name}_p0_full.json")),
+            reading.to_string(),
+        )
+        .unwrap();
+        let o = convert(
+            &dir,
+            &input,
+            "json",
+            &["--ocr-words", words.to_str().unwrap()],
+        );
+        let out = String::from_utf8_lossy(&o.stdout).into_owned();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let hello = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["text"] == "HELLO")
+            .unwrap_or_else(|| panic!("{name}: {out} {}", String::from_utf8_lossy(&o.stderr)));
+        // Its left edge where the word's is, its line within the word's
+        // box: 40 pixels high, in the picture's scale on the page. A line
+        // is sized by its letters, not by the box the engine gave, so it
+        // may run a point or so past it.
+        let tall = 40.0 * (drawn.3 - drawn.1) * 0.75 / f64::from(h);
+        let b = &hello["bbox"];
+        let (x0, y0, y1) = (
+            b["x0"].as_f64().unwrap(),
+            b["y0"].as_f64().unwrap(),
+            b["y1"].as_f64().unwrap(),
+        );
+        assert!(
+            (x0 - at.0).abs() < 1.0 && y0 >= at.1 - 2.0 && y1 <= at.1 + tall + 2.0,
+            "{name}: {b}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A Word 97 document of `paragraphs`, its text one Windows-1252 piece
 /// after the file information block, in a version 3 compound file.
 fn word97(paragraphs: &[&str]) -> Vec<u8> {

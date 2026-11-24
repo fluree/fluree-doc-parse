@@ -189,7 +189,7 @@ fn an_engines_words_land_where_the_picture_is_drawn() {
             y1: 250.0,
         },
     };
-    let placed = reading_on_page(reading, &image, 200, 100);
+    let placed = reading_on_page(reading, &image.bbox, 200, 100);
     assert_eq!(placed.coords, Coords::Page);
     assert_eq!(placed.words[0].bbox, [140.0, 70.0, 220.0, 110.0]);
     assert_eq!((placed.width, placed.height), (None, None));

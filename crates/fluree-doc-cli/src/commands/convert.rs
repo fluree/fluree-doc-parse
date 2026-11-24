@@ -2226,28 +2226,35 @@ fn convert_xps(
         .filter_map(|p| Some((p.index, xps.page_image(p.index)?)))
         .collect();
     let image = |img: &fluree_doc_xps::PageImage| fluree_doc_xps::read_image(data, &img.part);
+    let plans = common::xps_crop_plans(&xps, pages);
     let injected = if let Some(engine) = &cfg.ocr {
-        // The picture's own pixels, its words placed where it is drawn.
+        // The picture's own pixels, whole for a page that is a picture, in
+        // part under each raster region of a page of text, its words placed
+        // where it is drawn; each crop read as it is cut, a page's pictures
+        // at a time.
         let mut readings = Vec::new();
-        for (page, img) in &pictured {
-            let read = image(img)
-                .and_then(|b| fluree_doc_image::decode(&b))
-                .and_then(|im| {
-                    engine
-                        .0
-                        .read(&im.pixels)
-                        .map(|r| (r, im.pixels.width, im.pixels.height))
-                });
-            match read {
-                Ok((r, w, h)) => {
-                    let r = fluree_doc_xps::reading_on_page(r, img, w, h);
-                    readings.push((*page, Crop::Page, r));
+        let failed = common::xps_crops(data, &plans, &mut |c| {
+            let name = format!("{stem}_p{}_{}", c.page, c.crop.tag());
+            match engine.0.read(&c.pixels) {
+                Ok(r) => {
+                    let r = fluree_doc_xps::reading_on_page(
+                        r,
+                        &c.bbox,
+                        c.pixels.width,
+                        c.pixels.height,
+                    );
+                    readings.push((c.page, c.crop, r));
                 }
                 Err(e) => {
                     if !quiet {
-                        eprintln!("warning: --ocr: {stem}_p{page}_full: {e}");
+                        eprintln!("warning: --ocr: {name}: {e}");
                     }
                 }
+            }
+        });
+        for e in failed {
+            if !quiet {
+                eprintln!("warning: --ocr: {stem}: {e}");
             }
         }
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
@@ -2257,6 +2264,35 @@ fn convert_xps(
         let mut readings: Vec<(usize, Crop, WordReading)> =
             common::ocr_readings(dir, stem, &doc, quiet);
         readings.retain(|(page, _, _)| asked(*page));
+        // A crop is of the picture's own pixels, not of the page: its words
+        // are placed by the box it shows, as `--ocr` places them, so the
+        // three steps read what `--ocr` reads. A reading of no crop this
+        // document has is placed as a PDF page's is.
+        let readings: Vec<(usize, Crop, WordReading)> = readings
+            .into_iter()
+            .map(|(page, crop, reading)| {
+                let plan = plans.iter().find(|p| p.page == page && p.crop == crop);
+                let (Some(plan), Some(w), Some(h)) = (plan, reading.width, reading.height) else {
+                    return (page, crop, reading);
+                };
+                match plan.bbox(data) {
+                    Ok(b) => {
+                        let (w, h) = (w.round() as u32, h.round() as u32);
+                        (
+                            page,
+                            crop,
+                            fluree_doc_xps::reading_on_page(reading, &b, w, h),
+                        )
+                    }
+                    Err(e) => {
+                        if !quiet {
+                            eprintln!("warning: --ocr-words: {stem}_p{page}_{}: {e}", crop.tag());
+                        }
+                        (page, crop, reading)
+                    }
+                }
+            })
+            .collect();
         let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
         report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
         injected

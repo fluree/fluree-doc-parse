@@ -292,6 +292,294 @@ pub(crate) fn input_kind(path: &Path, data: &[u8]) -> SourceKind {
     }
 }
 
+/// What an XPS page is read through by OCR: the picture of a page that is
+/// only a picture, whole, or the part of a picture under each raster region
+/// the router lists on a page of text, its pixels decoded upright, and the
+/// box on the page they show. The crop is named as a PDF's is (`p<N>_full`,
+/// `p<N>_r<i>`), so its words and its readings go by the same names.
+pub(crate) struct XpsCrop {
+    pub page: usize,
+    pub crop: fluree_doc_pdf::ocr::Crop,
+    pub pixels: fluree_doc_vision::Pixels,
+    pub bbox: fluree_doc_pdf::geom::BBox,
+    /// The manifest's reason: why the router sends it to a reader.
+    pub reason: &'static str,
+}
+
+/// A crop of an XPS page before its picture is decoded: the picture, and
+/// the region of it the crop shows (`None`: all of it).
+pub(crate) struct XpsCropPlan<'x> {
+    pub page: usize,
+    pub crop: fluree_doc_pdf::ocr::Crop,
+    pub image: &'x fluree_doc_xps::PageImage,
+    region: Option<fluree_doc_pdf::geom::BBox>,
+    pub reason: &'static str,
+}
+
+impl XpsCropPlan<'_> {
+    /// The pixels of its picture, `width` × `height` upright, the crop
+    /// shows (`[x0, y0, x1, y1)`), and the box on the page they show.
+    pub(crate) fn rect(
+        &self,
+        width: u32,
+        height: u32,
+    ) -> Option<([u32; 4], fluree_doc_pdf::geom::BBox)> {
+        match &self.region {
+            None => (width > 0 && height > 0).then_some(([0, 0, width, height], self.image.bbox)),
+            Some(region) => crop_rect(width, height, &self.image.bbox, region),
+        }
+    }
+
+    /// The box on the page the crop shows, by its picture's size alone:
+    /// what words read from its pixels are placed by.
+    pub(crate) fn bbox(&self, data: &[u8]) -> Result<fluree_doc_pdf::geom::BBox, String> {
+        let bytes = fluree_doc_xps::read_image(data, &self.image.part)?;
+        let (w, h) = fluree_doc_image::upright_size(&bytes)?;
+        self.rect(w, h)
+            .map(|(_, b)| b)
+            .ok_or_else(|| format!("{}: shows nothing of its picture", self.image.part))
+    }
+}
+
+/// The crops of an XPS document's pages (all, or those `pages` keeps), in
+/// page order, before any picture is decoded.
+pub(crate) fn xps_crop_plans<'x>(
+    xps: &'x fluree_doc_xps::Xps,
+    pages: Option<&[usize]>,
+) -> Vec<XpsCropPlan<'x>> {
+    use fluree_doc_pdf::escalate::CropReason;
+    use fluree_doc_pdf::ocr::Crop;
+    use fluree_doc_pdf::route::{decide, ocr_regions, Route};
+    let mut out = Vec::new();
+    for p in &xps.doc.pages {
+        if pages.is_some_and(|keep| !keep.contains(&p.index)) {
+            continue;
+        }
+        match decide(p).0 {
+            Route::Vlm(reason) => {
+                if let Some(image) = xps.page_image(p.index) {
+                    out.push(XpsCropPlan {
+                        page: p.index,
+                        crop: Crop::Page,
+                        image,
+                        region: None,
+                        reason: CropReason::from(reason).as_str(),
+                    });
+                }
+            }
+            Route::VlmRegions(routed) => {
+                for (i, region) in ocr_regions(p).into_iter().enumerate() {
+                    let area = |b: &fluree_doc_pdf::geom::BBox| {
+                        (b.x1.min(region.x1) - b.x0.max(region.x0)).max(0.0)
+                            * (b.y1.min(region.y1) - b.y0.max(region.y0)).max(0.0)
+                    };
+                    let Some(image) = xps
+                        .images
+                        .iter()
+                        .filter(|im| im.page == p.index && area(&im.bbox) > 0.0)
+                        .max_by(|a, b| area(&a.bbox).total_cmp(&area(&b.bbox)))
+                    else {
+                        continue;
+                    };
+                    out.push(XpsCropPlan {
+                        page: p.index,
+                        crop: Crop::Region(i),
+                        image,
+                        region: Some(region),
+                        reason: if i < routed.len() {
+                            CropReason::Region.as_str()
+                        } else {
+                            CropReason::SmallRegion.as_str()
+                        },
+                    });
+                }
+            }
+            Route::Deterministic => {}
+        }
+    }
+    out
+}
+
+/// The most pixels the pictures an XPS document's crops are cut from may
+/// hold in all, decoded: 512 million, two gigabytes of RGBA, read one page's
+/// pictures at a time.
+pub(crate) const MAX_XPS_CROP_PIXELS: u64 = 1 << 29;
+
+/// The crops `plans` lists, each handed to `each` as soon as it is cut: a
+/// page's pictures are decoded when it is reached and let go when the next
+/// is, so a document's pictures are never held at once. Each picture's size
+/// is checked against what is left of [`MAX_XPS_CROP_PIXELS`] before it is
+/// decoded; past it, no more are. Returns a message for each picture that
+/// does not decode, and one for those past the budget.
+pub(crate) fn xps_crops(
+    data: &[u8],
+    plans: &[XpsCropPlan<'_>],
+    each: &mut dyn FnMut(XpsCrop),
+) -> Vec<String> {
+    xps_crops_within(data, plans, MAX_XPS_CROP_PIXELS, each)
+}
+
+fn xps_crops_within(
+    data: &[u8],
+    plans: &[XpsCropPlan<'_>],
+    max_pixels: u64,
+    each: &mut dyn FnMut(XpsCrop),
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    let mut left = max_pixels;
+    // The first picture past the budget, and how many more were not read.
+    let mut past: Option<(&str, usize)> = None;
+    // This page's pictures, decoded: a page may cut several regions from
+    // one.
+    let mut page = None;
+    let mut decoded: std::collections::HashMap<
+        &str,
+        Option<std::rc::Rc<fluree_doc_vision::Pixels>>,
+    > = Default::default();
+    for plan in plans {
+        if page != Some(plan.page) {
+            decoded.clear();
+            page = Some(plan.page);
+        }
+        let part = plan.image.part.as_str();
+        let pixels = match decoded.get(part) {
+            Some(p) => p.clone(),
+            None if past.is_some() => {
+                if let Some((_, more)) = past.as_mut() {
+                    *more += 1;
+                }
+                continue;
+            }
+            None => {
+                let mut over = false;
+                let read = fluree_doc_xps::read_image(data, part).and_then(|bytes| {
+                    let (w, h) = fluree_doc_image::upright_size(&bytes)?;
+                    let n = u64::from(w) * u64::from(h);
+                    if n > left {
+                        over = true;
+                        return Err(String::new());
+                    }
+                    left -= n;
+                    fluree_doc_image::decode(&bytes).map(|d| d.pixels)
+                });
+                let p = match read {
+                    Ok(p) => Some(std::rc::Rc::new(p)),
+                    Err(_) if over => {
+                        past = Some((part, 0));
+                        continue;
+                    }
+                    Err(e) => {
+                        failed.push(format!("{part}: {e}"));
+                        None
+                    }
+                };
+                decoded.insert(part, p.clone());
+                p
+            }
+        };
+        let Some(pixels) = pixels else {
+            continue;
+        };
+        let Some((rect, bbox)) = plan.rect(pixels.width, pixels.height) else {
+            continue;
+        };
+        let pixels = if rect == [0, 0, pixels.width, pixels.height] {
+            // The whole picture: handed over, not copied, where nothing
+            // else on the page is cut from it.
+            drop(decoded.remove(part));
+            std::rc::Rc::try_unwrap(pixels).unwrap_or_else(|p| (*p).clone())
+        } else {
+            let Some(p) = cut(&pixels, rect) else {
+                continue;
+            };
+            p
+        };
+        each(XpsCrop {
+            page: plan.page,
+            crop: plan.crop,
+            pixels,
+            bbox,
+            reason: plan.reason,
+        });
+    }
+    if let Some((part, more)) = past {
+        let and = match more {
+            0 => String::new(),
+            1 => " and the crop after it".into(),
+            n => format!(" and the {n} crops after it"),
+        };
+        failed.push(format!(
+            "{part}{and}: not read, past the {max_pixels} pixels a document's pictures are read to"
+        ));
+    }
+    failed
+}
+
+/// The part of a picture `width` × `height` drawn at `drawn` that `region`
+/// covers: its pixels (`[x0, y0, x1, y1)`), and the box on the page they
+/// show.
+fn crop_rect(
+    width: u32,
+    height: u32,
+    drawn: &fluree_doc_pdf::geom::BBox,
+    region: &fluree_doc_pdf::geom::BBox,
+) -> Option<([u32; 4], fluree_doc_pdf::geom::BBox)> {
+    let (w, h) = (f64::from(width), f64::from(height));
+    let (sx, sy) = (w / drawn.width(), h / drawn.height());
+    if !(sx.is_finite() && sy.is_finite()) {
+        return None;
+    }
+    let x0 = ((region.x0.max(drawn.x0) - drawn.x0) * sx)
+        .floor()
+        .clamp(0.0, w) as u32;
+    let y0 = ((region.y0.max(drawn.y0) - drawn.y0) * sy)
+        .floor()
+        .clamp(0.0, h) as u32;
+    let x1 = ((region.x1.min(drawn.x1) - drawn.x0) * sx)
+        .ceil()
+        .clamp(0.0, w) as u32;
+    let y1 = ((region.y1.min(drawn.y1) - drawn.y0) * sy)
+        .ceil()
+        .clamp(0.0, h) as u32;
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let bbox = fluree_doc_pdf::geom::BBox {
+        x0: drawn.x0 + f64::from(x0) / sx,
+        y0: drawn.y0 + f64::from(y0) / sy,
+        x1: drawn.x0 + f64::from(x1) / sx,
+        y1: drawn.y0 + f64::from(y1) / sy,
+    };
+    Some(([x0, y0, x1, y1], bbox))
+}
+
+/// The pixels `[x0, y0, x1, y1)` of a picture.
+fn cut(
+    pixels: &fluree_doc_vision::Pixels,
+    [x0, y0, x1, y1]: [u32; 4],
+) -> Option<fluree_doc_vision::Pixels> {
+    let (cw, ch) = (x1 - x0, y1 - y0);
+    let n = pixels.layout.channels();
+    let mut data = Vec::with_capacity(cw as usize * ch as usize * n);
+    for y in y0..y1 {
+        let row = (y as usize * pixels.width as usize + x0 as usize) * n;
+        data.extend_from_slice(pixels.data.get(row..row + cw as usize * n)?);
+    }
+    fluree_doc_vision::Pixels::new(cw, ch, pixels.layout, data)
+}
+
+/// The part of a picture drawn at `drawn` that `region` covers: its pixels,
+/// and the box on the page they show.
+#[cfg(test)]
+fn crop_pixels(
+    pixels: &fluree_doc_vision::Pixels,
+    drawn: &fluree_doc_pdf::geom::BBox,
+    region: &fluree_doc_pdf::geom::BBox,
+) -> Option<(fluree_doc_vision::Pixels, fluree_doc_pdf::geom::BBox)> {
+    let (rect, bbox) = crop_rect(pixels.width, pixels.height, drawn, region)?;
+    Some((cut(pixels, rect)?, bbox))
+}
+
 /// The files in a directory `convert` reads, in name order.
 pub(crate) fn sources_in(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<_> = std::fs::read_dir(dir)
@@ -896,6 +1184,111 @@ mod tests {
         splice_readings(&mut elements, "doc", &Titled, None, &[], &[], &screens);
         let texts: Vec<&str> = elements.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["Balance of p0_r0", "# Balance of p0_r1"]);
+    }
+
+    #[test]
+    fn an_xps_documents_pictures_are_read_within_a_pixel_budget() {
+        use std::io::Write;
+        // Three pages, each only a picture of 10 × 10 pixels.
+        let mut png = Vec::new();
+        image::GrayImage::from_pixel(10, 10, image::Luma([255u8]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let page = |n: usize| {
+            format!(
+                "<FixedPage Width=\"816\" Height=\"1056\"><Path Data=\"M 0,0 L 816,0 816,1056 0,1056 Z\">\
+                 <Path.Fill><ImageBrush ImageSource=\"/i{n}.png\" Viewport=\"0,0,816,1056\"/></Path.Fill></Path></FixedPage>"
+            )
+        };
+        let mut parts: Vec<(String, Vec<u8>)> = vec![
+            (
+                "_rels/.rels".into(),
+                b"<Relationships><Relationship Id=\"R0\" Type=\"http://schemas.microsoft.com/xps/2005/06/fixedrepresentation\" Target=\"/s.fdseq\"/></Relationships>".to_vec(),
+            ),
+            (
+                "s.fdseq".into(),
+                b"<FixedDocumentSequence><DocumentReference Source=\"/d.fdoc\"/></FixedDocumentSequence>".to_vec(),
+            ),
+            (
+                "d.fdoc".into(),
+                b"<FixedDocument><PageContent Source=\"/p0.fpage\"/><PageContent Source=\"/p1.fpage\"/><PageContent Source=\"/p2.fpage\"/></FixedDocument>".to_vec(),
+            ),
+        ];
+        for n in 0..3 {
+            parts.push((format!("p{n}.fpage"), page(n).into_bytes()));
+            parts.push((format!("i{n}.png"), png.clone()));
+        }
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, body) in &parts {
+            z.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(body).unwrap();
+        }
+        z.finish().unwrap();
+        let data = buf.into_inner();
+        let xps = fluree_doc_xps::parse(&data).unwrap();
+        let plans = xps_crop_plans(&xps, None);
+        assert_eq!(plans.len(), 3);
+        // Room for two pictures' pixels: the third is not decoded.
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, 250, &mut |c| read.push(c.page));
+        assert_eq!(read, [0, 1]);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(
+            failed[0].starts_with("i2.png: not read, past"),
+            "{failed:?}"
+        );
+        let mut read = Vec::new();
+        let failed = xps_crops_within(&data, &plans, 150, &mut |c| read.push(c.page));
+        assert_eq!(read, [0]);
+        assert!(
+            failed[0].starts_with("i1.png and the crop after it: not read"),
+            "{failed:?}"
+        );
+        // A page crop records the box its picture is drawn in.
+        let b = plans[0].bbox(&data).unwrap();
+        assert_eq!((b.x0, b.y0, b.x1, b.y1), (0.0, 0.0, 612.0, 792.0));
+    }
+
+    #[test]
+    fn a_region_crops_the_part_of_the_picture_under_it() {
+        use fluree_doc_pdf::geom::BBox;
+        // 4 × 2 pixels drawn over 40 × 20 units, each pixel its own value.
+        let rgba: Vec<u8> = (0u8..8).flat_map(|v| [v, v, v, 255]).collect();
+        let pixels =
+            fluree_doc_vision::Pixels::new(4, 2, fluree_doc_vision::Layout::Rgba8, rgba).unwrap();
+        let drawn = BBox {
+            x0: 100.0,
+            y0: 50.0,
+            x1: 140.0,
+            y1: 70.0,
+        };
+        // The region runs past the picture's right edge: cut to it.
+        let region = BBox {
+            x0: 110.0,
+            y0: 50.0,
+            x1: 160.0,
+            y1: 60.0,
+        };
+        let (crop, bbox) = crop_pixels(&pixels, &drawn, &region).unwrap();
+        assert_eq!((crop.width, crop.height), (3, 1));
+        assert_eq!(
+            crop.data.chunks_exact(4).map(|p| p[0]).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            (bbox.x0, bbox.y0, bbox.x1, bbox.y1),
+            (110.0, 50.0, 140.0, 60.0)
+        );
+        // A region beside the picture covers none of it.
+        let beside = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 50.0,
+            y1: 50.0,
+        };
+        assert!(crop_pixels(&pixels, &drawn, &beside).is_none());
     }
 
     #[test]

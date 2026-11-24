@@ -145,14 +145,15 @@ fn area(b: &BBox) -> f64 {
     b.width().max(0.0) * b.height().max(0.0)
 }
 
-/// An OCR engine's reading of a picture, in its pixels, as words on the
-/// page where the picture is drawn ([`fluree_doc_pdf::ocr::Coords::Page`]):
-/// what `fluree_doc_pdf::ocr::inject` takes for the page. `width` and
+/// An OCR engine's reading of a picture, or of part of one, in its pixels,
+/// as words on the page where it is drawn (`drawn`)
+/// ([`fluree_doc_pdf::ocr::Coords::Page`]): what
+/// `fluree_doc_pdf::ocr::inject` takes for the page. `width` and
 /// `height` are the size of the image read; a reading already in page
 /// units is returned as it is.
 pub fn reading_on_page(
     mut reading: fluree_doc_pdf::ocr::WordReading,
-    image: &PageImage,
+    drawn: &BBox,
     width: u32,
     height: u32,
 ) -> fluree_doc_pdf::ocr::WordReading {
@@ -160,7 +161,7 @@ pub fn reading_on_page(
     if reading.coords == Coords::Page || width == 0 || height == 0 {
         return reading;
     }
-    let b = image.bbox;
+    let b = *drawn;
     let (sx, sy) = (b.width() / f64::from(width), b.height() / f64::from(height));
     for w in &mut reading.words {
         let [x0, y0, x1, y1] = w.bbox;
