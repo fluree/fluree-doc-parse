@@ -37,7 +37,7 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-/// A CSV of 3,000 cells of ten letters: about 2 MiB at Markdown's costs.
+/// A CSV of 3,000 cells of ten letters: about 1.1 MiB at Markdown's costs.
 fn table(dir: &Path) -> PathBuf {
     let row = ["abcdefghij"; 10].join(",");
     let csv: String = (0..300).map(|_| format!("{row}\n")).collect();
@@ -141,6 +141,35 @@ fn the_configs_limits_hold_under_the_variables_and_flags() {
         "{e}"
     );
     assert!(e.contains("(raise it with --max-memory)"), "{e}");
+    // `config show`, run to check the file, says it too.
+    let o = fdoc(&dir, &["config", "show"], &[]);
+    let e = stderr(&o);
+    assert!(e.contains("[limits] has no key \"max_memroy\""), "{e}");
+    // A value of the wrong type loses its limit alone, said, the others
+    // held; a variable set empty is unset.
+    std::fs::write(
+        dir.join(".fdoc/config.toml"),
+        "[limits]\nmax_pages = \"12\"\nmax_memory = 1\n",
+    )
+    .unwrap();
+    for args in [vec!["convert", csv], vec!["config", "show"]] {
+        let o = fdoc(&dir, &args, &[("FDOC_MAX_MEMORY", "")]);
+        let e = stderr(&o);
+        assert_eq!(
+            e.matches("[limits] max_pages = \"12\" is not a whole number")
+                .count(),
+            1,
+            "{e}"
+        );
+        if args[0] == "convert" {
+            assert_eq!(o.status.code(), Some(1), "{e}");
+            assert!(e.contains("(raise it with --max-memory)"), "{e}");
+        } else {
+            let out = String::from_utf8_lossy(&o.stdout);
+            assert!(out.contains("limits   1 MiB of memory"), "{out}");
+            assert!(out.contains(" 10000 pages"), "{out}");
+        }
+    }
 }
 
 #[test]
@@ -154,4 +183,7 @@ fn a_limit_that_does_not_read_stops_before_any_document() {
     let o = fdoc(&dir, &["convert", csv, "--max-work", "0"], &[]);
     assert_eq!(o.status.code(), Some(2));
     assert!(o.stdout.is_empty());
+    // Set empty, a variable is unset, not a number that does not read.
+    let o = fdoc(&dir, &["completions", "bash"], &[("FDOC_MAX_MEMORY", "")]);
+    assert!(o.status.success(), "{}", stderr(&o));
 }

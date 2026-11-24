@@ -22,9 +22,12 @@ tiers](../integration/escalation-tiers.md).
 
 What one document may take ([Limits](limits.md#setting-the-limits)). Each
 has a flag, which wins over it, and a key in the config's `[limits]`
-table, over which it wins. A value that is not a number, or zero, stops
-the command before it reads anything, naming the flag, the variable or the
-config key it was set by; a variable its flag overrides is not read.
+table, over which it wins. A flag or variable that is not a number, or a
+zero anywhere, stops the command before it reads anything, naming the
+flag, the variable or the config key it was set by; a variable its flag
+overrides is not read, and one set empty (`FDOC_MAX_MEMORY=`) is unset. A
+config value that is not a whole number is warned about and ignored
+([config](../cli/config.md#limits)).
 
 | variable | flag | config key | bounds | default |
 |---|---|---|---|---|

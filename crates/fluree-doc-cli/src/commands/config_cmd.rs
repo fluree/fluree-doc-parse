@@ -69,7 +69,11 @@ fn show() -> i32 {
     if let Some(p) = &e.gemini.project {
         println!("         project {p}");
     }
-    // What a document may take, the environment over the file.
+    // What a document may take, the environment over the file; what of
+    // the file's `[limits]` is not taken, said as every command says it.
+    for w in l.config.limits.warnings() {
+        eprintln!("warning: {}: {w}", l.path.display());
+    }
     match l
         .config
         .limits

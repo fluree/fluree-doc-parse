@@ -31,15 +31,13 @@ pub fn run(cli: Cli) -> i32 {
 
 /// The limits `flags` set, over the environment, over the config file. A
 /// config that does not read is warned about, and its limits not taken; a
-/// key its `[limits]` does not know, warned about and ignored.
+/// key its `[limits]` does not know, or a value of the wrong type, warned
+/// about and ignored.
 fn limits(flags: &crate::cli::LimitArgs) -> Result<fluree_doc_model::budget::Limits, String> {
     let config = match crate::config::load() {
         Ok(l) => {
-            for key in l.config.limits.unknown() {
-                eprintln!(
-                    "warning: {}: [limits] has no key {key:?}; it is ignored",
-                    l.path.display()
-                );
+            for w in l.config.limits.warnings() {
+                eprintln!("warning: {}: {w}", l.path.display());
             }
             l.config.limits
         }

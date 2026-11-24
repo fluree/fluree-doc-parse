@@ -92,10 +92,12 @@ max_render_pixels = 64000000 # pixels a page is rendered with (default)
 
 Each is overridden by its `FDOC_MAX_*` variable and its `--max-*` flag
 ([Environment variables](../reference/env-vars.md#limits)). A key the
-table does not know (`max_memroy`) is warned about on every command and
-ignored, the rest of the file read: refused, a typo in a limit would make
-the whole file unreadable, and the escalation settings beside it with it.
-A zero is an error naming where it was set. `fdoc config show` prints the
+table does not know (`max_memroy`), and a value that is not a whole number
+(`max_memory = "64"`, `-1`), are warned about on every command, `fdoc
+config show` included, and ignored, that limit alone, the rest of the file
+read: refused, a typo in a limit would make the whole file unreadable, and
+the escalation settings beside it with it. A zero is an error naming where
+it was set. `fdoc config show` prints the
 limits in effect. What each bounds, and what none does, is in
 [Limits](../reference/limits.md#setting-the-limits).
 

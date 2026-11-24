@@ -13,6 +13,7 @@
 //! names a credential path and may hold an API key, so it is created
 //! owner-only.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -42,13 +43,14 @@ pub struct Config {
 /// (`docs/reference/limits.md`). The `--max-*` flags and the `FDOC_MAX_*`
 /// variables override each.
 ///
-/// A key the table does not know is kept aside, to be warned about
-/// ([`Limits::unknown`]), not refused: refused, it made the whole file
-/// unreadable, and with it the escalation settings beside it, for a typo
-/// in a limit. The other tables accept keys a later build may add; this one
-/// says so, since a misspelt limit silently not applied is a document read
-/// within a bound its user thinks they raised.
-#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+/// A key the table does not know, and a value of the wrong type (`"64"`,
+/// `-1`, `2.5`), are set aside, to be warned about ([`Limits::warnings`]),
+/// not refused: refused, either made the whole file unreadable, and with it
+/// the escalation settings beside it, for a typo in a limit. The other
+/// tables accept keys a later build may add; this one says so, since a
+/// misspelt limit silently not applied is a document read within a bound
+/// its user thinks they raised.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Limits {
     /// Memory one document may take, in MiB.
     pub max_memory: Option<u64>,
@@ -59,8 +61,39 @@ pub struct Limits {
     /// Pixels a page is rendered with.
     pub max_render_pixels: Option<u64>,
     /// The keys of the table this build does not know.
-    #[serde(flatten)]
-    other: std::collections::BTreeMap<String, toml::Value>,
+    other: BTreeMap<String, toml::Value>,
+    /// The known keys whose value is no whole number the limit holds, with
+    /// the value as written.
+    invalid: BTreeMap<String, String>,
+}
+
+/// Each known key read on its own, so a value of the wrong type loses that
+/// limit alone.
+impl<'de> serde::Deserialize<'de> for Limits {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut table = BTreeMap::<String, toml::Value>::deserialize(d)?;
+        let mut invalid = BTreeMap::new();
+        let mut take = |key: &str| -> Option<i64> {
+            let v = table.remove(key)?;
+            let n = v.as_integer().filter(|n| *n >= 0);
+            if n.is_none() {
+                invalid.insert(key.to_string(), v.to_string());
+            }
+            n
+        };
+        let max_memory = take("max_memory").map(|n| n as u64);
+        let max_work = take("max_work").map(|n| n as u64);
+        let max_pages = take("max_pages").map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+        let max_render_pixels = take("max_render_pixels").map(|n| n as u64);
+        Ok(Self {
+            max_memory,
+            max_work,
+            max_pages,
+            max_render_pixels,
+            other: table,
+            invalid,
+        })
+    }
 }
 
 impl Limits {
@@ -70,10 +103,24 @@ impl Limits {
         self.other.keys().map(String::as_str)
     }
 
+    /// What is wrong with the table, a line each, to be warned about: a key
+    /// it does not know, a value that is no whole number of zero or more.
+    /// Each is ignored, the rest of the table taken.
+    pub fn warnings(&self) -> Vec<String> {
+        let unknown = self
+            .unknown()
+            .map(|key| format!("[limits] has no key {key:?}; it is ignored"));
+        let invalid = self
+            .invalid
+            .iter()
+            .map(|(key, v)| format!("[limits] {key} = {v} is not a whole number; it is ignored"));
+        unknown.chain(invalid).collect()
+    }
+
     /// The limits in effect: each flag in `flags`, else its variable read
     /// by `env`, else this, else the default. A variable read that is not a
     /// number, or a limit of zero, is an error naming where it was set; a
-    /// variable a flag overrides is not read.
+    /// variable a flag overrides is not read, and one set empty is unset.
     pub fn resolve(
         &self,
         flags: &crate::cli::LimitArgs,
@@ -90,7 +137,8 @@ impl Limits {
         ) -> Result<T, String> {
             let (v, from) = if let Some(v) = given {
                 (v, flag.to_string())
-            } else if let Some(v) = env(var) {
+            } else if let Some(v) = env(var).filter(|v| !v.trim().is_empty()) {
+                // Set but empty is unset, as a shell's `VAR=` often means.
                 let n = v
                     .trim()
                     .parse::<T>()
@@ -697,5 +745,47 @@ mod tests {
         assert_eq!(c.limits.unknown().collect::<Vec<_>>(), ["max_pagez"]);
         assert_eq!(c.limits.max_pages, Some(4));
         assert_eq!(c.escalation.provider.as_deref(), Some("gemini"));
+        assert_eq!(
+            c.limits.warnings(),
+            ["[limits] has no key \"max_pagez\"; it is ignored"]
+        );
+        // A variable set empty is unset: the config's value holds.
+        let empty = |v: &str| (v == "FDOC_MAX_PAGES").then(|| " ".to_string());
+        assert_eq!(
+            c.limits.resolve(&Default::default(), empty).unwrap().pages,
+            4
+        );
+    }
+
+    #[test]
+    fn a_limit_of_the_wrong_type_loses_that_limit_alone() {
+        let c: Config = toml::from_str(
+            "[escalation]\nprovider = \"gemini\"\n[limits]\nmax_memory = \"64\"\n\
+             max_work = -1\nmax_pages = 2.5\nmax_render_pixels = 9\n",
+        )
+        .unwrap();
+        assert_eq!(c.escalation.provider.as_deref(), Some("gemini"));
+        let l = &c.limits;
+        assert_eq!(
+            (l.max_memory, l.max_work, l.max_pages, l.max_render_pixels),
+            (None, None, None, Some(9))
+        );
+        assert_eq!(
+            l.warnings(),
+            [
+                "[limits] max_memory = \"64\" is not a whole number; it is ignored",
+                "[limits] max_pages = 2.5 is not a whole number; it is ignored",
+                "[limits] max_work = -1 is not a whole number; it is ignored",
+            ]
+        );
+        assert_eq!(
+            l.resolve(&Default::default(), |_| None)
+                .unwrap()
+                .render_pixels,
+            9
+        );
+        // A table that holds them right warns about nothing.
+        let c: Config = toml::from_str("[limits]\nmax_pages = 4\n").unwrap();
+        assert!(c.limits.warnings().is_empty());
     }
 }
