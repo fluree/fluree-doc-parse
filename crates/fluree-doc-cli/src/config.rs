@@ -57,6 +57,15 @@ pub struct Ocr {
     /// scan unread, and a crop costs a fraction of a second of this
     /// machine's time rather than a paid call.
     pub max_crops: Option<usize>,
+    /// Most megapixels the engine's detector reads in one pass (default
+    /// 12.5: a page scanned at 300 dpi, or a 12 Mpx photo). A larger image
+    /// is read in overlapping strips, or, too wide for them, shrunk. What
+    /// bounds a reading's memory, about 230 bytes a pixel.
+    pub max_megapixels: Option<f64>,
+    /// The memory, in MiB, the passes the engine reads at once may take
+    /// (default 8192), each counted at about 230 bytes a pixel: a pass
+    /// that does not fit waits for others to finish.
+    pub max_memory: Option<u64>,
 }
 
 /// Default for `ocr.max_crops`: enough for a thousand-page scan read whole.
@@ -293,6 +302,7 @@ pub fn set(path: &Path, key: &str, value: Value) -> Result<(), String> {
         Value::Str(s) => toml_edit::value(s),
         Value::Bool(b) => toml_edit::value(b),
         Value::Int(i) => toml_edit::value(i),
+        Value::Float(f) => toml_edit::value(f),
     };
     write(path, &doc.to_string())
 }
@@ -302,21 +312,23 @@ pub enum Value {
     Str(String),
     Bool(bool),
     Int(i64),
+    Float(f64),
 }
 
 impl Value {
     /// Parse a command-line value, preferring the type the key implies.
     ///
-    /// `true`/`false` and bare integers become their own types; everything
-    /// else is a string. A path that happens to be `42` is not a real risk,
+    /// `true`/`false`, bare integers and decimals (`12.5`) become their own
+    /// types; everything else is a string. A path that happens to be `42` is not a real risk,
     /// and a boolean written as a string silently disables a setting.
     pub fn parse(raw: &str) -> Value {
         match raw {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
-            _ => match raw.parse::<i64>() {
-                Ok(i) => Value::Int(i),
-                Err(_) => Value::Str(raw.to_string()),
+            _ => match (raw.parse::<i64>(), raw.parse::<f64>()) {
+                (Ok(i), _) => Value::Int(i),
+                (_, Ok(f)) if f.is_finite() && raw.contains('.') => Value::Float(f),
+                _ => Value::Str(raw.to_string()),
             },
         }
     }

@@ -85,6 +85,8 @@ project = "my-project"          # optional; read from the key when absent
 engine = "oar-ocr"
 models = "/opt/fluree/assets/ocr"
 threads = 1
+max_megapixels = 12.5
+max_memory = 8192
 ```
 
 | key | means |
@@ -92,10 +94,12 @@ threads = 1
 | `engine` | the built-in engine `convert` reads pixels with; `oar-ocr` is the one this build has |
 | `models` | the OCR assets directory (models and ONNX Runtime) |
 | `threads` | ONNX Runtime threads per crop read (default 1: a batch runs one per worker) |
+| `max_megapixels` | most megapixels the engine reads in one pass (default 12.5, from 1 to 128): a page scanned at 300 dpi or a 12 Mpx photo is read whole, a larger image in overlapping strips, one too wide for them shrunk with a warning. A pass costs about 230 bytes a pixel while it is read ([how an image is sized](ocr.md#how-an-image-is-sized)) |
+| `max_memory` | the memory, in MiB, the passes the engine reads at once may take, each counted at about 230 bytes a pixel (default 8192); a pass that does not fit waits for others to end, one larger than all of it is read alone ([memory and speed](ocr.md#memory-and-speed)). Env: `FDOC_OCR_MAX_MEMORY` |
 | `max_crops` | most crops the engine reads in one document; past it pages read whole come first, then routed regions, then small ones, and a note names how many were left (default 1000, `0` for no limit). Separate from `escalation.max_crops`: a scanned page is one crop, and a model's 200 would leave page 201 of a long scan unread |
 
-`--ocr` and `--models` override these per run, and `FDOC_OCR` and
-`FDOC_OCR_MODELS` override the file. Unlike the model reader, OCR runs on the
+`--ocr`, `--models` and `--ocr-max-megapixels` override these per run, and
+`FDOC_OCR`, `FDOC_OCR_MODELS` and `FDOC_OCR_MAX_MEGAPIXELS` override the file. Unlike the model reader, OCR runs on the
 machine and calls nothing outside it.
 
 ## Pages that read across their panels

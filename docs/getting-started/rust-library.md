@@ -140,6 +140,13 @@ crop at a time, and a crop the engine cannot read is reported in
 across threads. Any other engine plugs in by implementing
 `fluree_doc_vision::OcrEngine`.
 
+`OarOptions` sets how images are sized (`sizing`: at most 12.5 Mpx a pass by
+default, `OcrSizing::megapixels` for another cap), the memory the passes read
+at once may take (`memory`, 8 GiB by default, counted at
+`oar::BYTES_PER_PIXEL`), and whom the engine tells of an image it shrank
+(`notices`; nobody by default). `OarEngine::memory_held` says what the passes
+being read hold now.
+
 ## Read a non-PDF source
 
 Each reader returns the same `Vec<Element>`:

@@ -250,6 +250,15 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "DIR")]
     pub models: Option<PathBuf>,
 
+    /// Most megapixels the OCR engine reads in one pass (default 12.5); a
+    /// larger image is read in overlapping strips [env:
+    /// FDOC_OCR_MAX_MEGAPIXELS]
+    ///
+    /// Overrides `ocr.max_megapixels` in the config. A pass costs about 230
+    /// bytes a pixel while it is read.
+    #[arg(long, value_name = "MPX")]
+    pub ocr_max_megapixels: Option<f64>,
+
     /// Emit [[VLM:...]] anchor tokens where escalated crops belong, for an
     /// external tier to fill [env: FDOC_VLM_ANCHORS]
     #[arg(long)]
@@ -311,6 +320,12 @@ pub struct OcrArgs {
     /// Where to write the word files
     #[arg(long, value_name = "DIR")]
     pub out: PathBuf,
+
+    /// Most megapixels the engine reads in one pass (default 12.5); a
+    /// larger image is read in overlapping strips [env:
+    /// FDOC_OCR_MAX_MEGAPIXELS]
+    #[arg(long, value_name = "MPX")]
+    pub max_megapixels: Option<f64>,
 
     /// Images read at once, each on one thread (0 = one per core)
     #[arg(long, short = 'j', default_value_t = 0, value_name = "N")]

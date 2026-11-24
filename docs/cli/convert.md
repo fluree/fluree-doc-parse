@@ -39,6 +39,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--ocr-words <DIR>` | OCR word readings, read as text on the pages and regions the router sends a reader. See [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words). Env: `FDOC_OCR_WORDS`, which an explicit `--ocr` overrides |
 | `--ocr <ENGINE>` | read those pages and regions with the built-in OCR engine, in this run: `oar-ocr`. Needs `--models`. Conflicts with `--ocr-words`. Env: `FDOC_OCR` |
 | `--models <DIR>` | the OCR assets directory: the models and ONNX Runtime. Env: `FDOC_OCR_MODELS` |
+| `--ocr-max-megapixels <MPX>` | most megapixels the OCR engine reads in one pass (default 12.5); a larger image is read in overlapping strips ([how an image is sized](ocr.md#how-an-image-is-sized)). Env: `FDOC_OCR_MAX_MEGAPIXELS`; config: `ocr.max_megapixels` |
 | `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. Env: `FDOC_VLM_ANCHORS` |
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
