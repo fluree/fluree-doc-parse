@@ -166,7 +166,13 @@ impl Grid {
         }
         buckets
             .iter()
-            .map(|gs| join_cell_lines(crate::line::assemble(gs).iter().map(|l| l.text.as_str())))
+            .map(|gs| {
+                join_cell_lines(
+                    turned_in_order(crate::line::assemble(gs))
+                        .iter()
+                        .map(|l| l.text.as_str()),
+                )
+            })
             .collect()
     }
 
@@ -179,8 +185,8 @@ impl Grid {
     /// its centre of mass inside, its letters outside were in the prose as
     /// well (`WARNING!` in the cell, `WAR` in the paragraph); with it
     /// outside, its letters inside were in neither (`See` read `S`). A
-    /// glyph a cell never considers, turned or without ink, still goes by
-    /// where its own centre is.
+    /// glyph a cell never considers, without ink, still goes by where its
+    /// own centre is; a turned glyph no cell reads stays in the prose.
     pub(crate) fn takes(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<bool> {
         glyphs
             .iter()
@@ -188,6 +194,11 @@ impl Grid {
             .map(|(g, home)| {
                 if home.is_some() {
                     return true;
+                }
+                // A turned glyph no cell reads stays in the prose: a label
+                // set on its side across the grid is still text.
+                if g.bbox.is_some() && !g.text.trim().is_empty() && !g.is_horizontal() {
+                    return false;
                 }
                 let read = g.bbox.is_some() && !g.text.trim().is_empty() && g.is_horizontal();
                 let (x, y) = g
@@ -393,6 +404,106 @@ impl Grid {
             if let Some((r, c)) = self.cell_at(cx, cy) {
                 for &i in run.iter() {
                     home[i] = Some(r * cols + c);
+                }
+            }
+        }
+        // A label set on its side in a cell of its own (a column's name
+        // turned up a tall header row) is that cell's text: its line lies
+        // whole inside one cell, and the cell holds no level text. A sidebar
+        // or watermark drawn over a table runs through several cells, or
+        // across text, and stays out of them.
+        {
+            let occupied: std::collections::HashSet<usize> =
+                home.iter().flatten().copied().collect();
+            let mut turned: Vec<usize> = (0..glyphs.len())
+                .filter(|&i| {
+                    let g = &glyphs[i];
+                    g.bbox.is_some()
+                        && !g.text.trim().is_empty()
+                        && matches!(g.rotation_bucket().rem_euclid(360), 90 | 270)
+                })
+                .collect();
+            turned.sort_by(|&a, &b| {
+                let (ga, gb) = (&glyphs[a], &glyphs[b]);
+                ga.origin
+                    .0
+                    .total_cmp(&gb.origin.0)
+                    .then(ga.origin.1.total_cmp(&gb.origin.1))
+            });
+            // Lines up the page: glyphs on one vertical, no gap along it
+            // wider than a size and a half.
+            let mut lines: Vec<Vec<usize>> = Vec::new();
+            for &i in &turned {
+                let g = &glyphs[i];
+                let fs = g.font_size.max(1.0) as f64;
+                match lines.last_mut() {
+                    Some(line)
+                        if {
+                            let p = &glyphs[*line.last().unwrap()];
+                            (g.origin.0 - p.origin.0).abs() < fs * 0.3
+                                && g.bbox.unwrap().y0 - p.bbox.unwrap().y1 < fs * 1.5
+                        } =>
+                    {
+                        line.push(i)
+                    }
+                    _ => lines.push(vec![i]),
+                }
+            }
+            // Labels turned in a table set level, not a table set on its
+            // side: there the grid's rows are the table's columns, and its
+            // text is read with the page's prose instead. Fewer cells of
+            // level text than turned lines in the grid is a table on its
+            // side.
+            let in_grid = |line: &Vec<usize>| {
+                line.iter().any(|&i| {
+                    let b = glyphs[i].bbox.unwrap();
+                    self.cell_at((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5)
+                        .is_some()
+                })
+            };
+            if occupied.len() < lines.iter().filter(|l| in_grid(l)).count() {
+                lines.clear();
+            }
+            for line in lines {
+                let at: Vec<Option<(usize, usize)>> = line
+                    .iter()
+                    .map(|&i| {
+                        let b = glyphs[i].bbox.unwrap();
+                        self.cell_at((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5)
+                    })
+                    .collect();
+                // Every cell it touches free of level text. Down one column,
+                // a group label set beside the rows it groups: the topmost
+                // cell. In one row, a label straddling a boundary its row
+                // never draws: the cell holding most of it.
+                let Some(Some((row, col))) = at.first() else {
+                    continue;
+                };
+                if at
+                    .iter()
+                    .any(|a| a.is_none_or(|(r, c)| occupied.contains(&(r * cols + c))))
+                {
+                    continue;
+                }
+                if at.iter().flatten().all(|(_, c)| c == col) {
+                    let top = at.iter().flatten().map(|(r, _)| *r).min().unwrap_or(*row);
+                    let cell = top * cols + col;
+                    line.iter().for_each(|&i| home[i] = Some(cell));
+                    continue;
+                }
+                if at.iter().flatten().any(|(r, _)| r != row) {
+                    continue;
+                }
+                let mut count: std::collections::BTreeMap<usize, usize> = Default::default();
+                for (_, c) in at.iter().flatten() {
+                    *count.entry(*c).or_default() += 1;
+                }
+                if let Some((&c, _)) = count
+                    .iter()
+                    .max_by_key(|(c, n)| (**n, std::cmp::Reverse(**c)))
+                {
+                    let cell = row * cols + c;
+                    line.iter().for_each(|&i| home[i] = Some(cell));
                 }
             }
         }
@@ -1453,6 +1564,25 @@ fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
         out.push_str(l);
     }
     out
+}
+
+/// A cell's lines in reading order where they are all set on their side:
+/// across the page, left to right for text reading up (90°), right to left
+/// for text reading down (270°). Level lines keep the order they come in.
+fn turned_in_order(mut lines: Vec<crate::line::Line>) -> Vec<crate::line::Line> {
+    let turn = |l: &crate::line::Line| l.rotation_bucket.rem_euclid(360);
+    if lines.len() > 1 && lines.iter().all(|l| matches!(turn(l), 90 | 270)) {
+        let down = lines.iter().all(|l| turn(l) == 270);
+        lines.sort_by(|a, b| {
+            let o = a.bbox.x0.total_cmp(&b.bbox.x0);
+            if down {
+                o.reverse()
+            } else {
+                o
+            }
+        });
+    }
+    lines
 }
 
 /// A hyphen ending one of a cell's lines inside what may be one word broken
@@ -2878,6 +3008,160 @@ fn reads_as_table(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
     let held = cells.iter().filter(|c| !c.trim().is_empty()).count();
     held * 2 >= cells.len()
 }
+
+/// A grid whose columns are prose set side by side, or a box laid out
+/// around paragraphs: not a table.
+///
+/// Prose runs on from one line into the next, and a table's cells rarely
+/// do: two or three columns of body text, cut into one row per line, give
+/// cells that end mid-sentence (`built into the`, `un-`) over cells that
+/// carry on in lowercase (`AM Select dishwasher`, `restricted openings`).
+/// A column runs on where its cells are lines of words and a third of them
+/// carry on into the next (a feature list starts as many items as it
+/// carries lines on), and a grid is prose where
+/// half the columns holding text run on: a table's figures and codes do
+/// not, whatever its one description column does. A ruled box whose one
+/// row under its labels holds paragraphs side by side is a page laid out
+/// in columns.
+pub fn reads_as_prose(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    let cells = g.cell_texts(glyphs);
+    let (rows, cols) = (g.rows(), g.cols());
+    if rows == 0 || cols == 0 {
+        return false;
+    }
+    let cell = |r: usize, c: usize| cells[r * cols + c].trim();
+    let runs_on = |upper: &str, lower: &str| {
+        let ends_open = upper
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_lowercase() || ch == ',')
+            || upper
+                .strip_suffix('-')
+                .and_then(|s| s.chars().next_back())
+                .is_some_and(char::is_alphabetic);
+        // A lowercase word carries on; a list's `a)` or `ii.` starts an item.
+        let word = lower.split_whitespace().next().unwrap_or("");
+        let letters = word.trim_end_matches([',', ';', ':', '.']);
+        ends_open
+            && letters.chars().count() >= 2
+            && letters.chars().all(char::is_alphabetic)
+            && letters.chars().next().is_some_and(char::is_lowercase)
+    };
+    // Rows a line each: a ruled table's cells wrap inside themselves, and
+    // what one row says of the next is nothing about prose.
+    let homes = g.glyph_cells(glyphs);
+    let mut bases: Vec<Vec<f64>> = vec![Vec::new(); rows * cols];
+    for (gl, home) in glyphs.iter().zip(&homes) {
+        if let Some(i) = home {
+            if gl.bbox.is_some() && !gl.text.trim().is_empty() {
+                bases[*i].push(gl.origin.1);
+            }
+        }
+    }
+    let lines_in = |b: &Vec<f64>| {
+        let mut b = b.clone();
+        b.sort_by(|p, q| p.total_cmp(q));
+        coalesce(b, 2.0).len()
+    };
+    let filled: Vec<usize> = bases
+        .iter()
+        .filter(|b| !b.is_empty())
+        .map(lines_in)
+        .collect();
+    let one_line = filled.iter().filter(|n| **n == 1).count() * 5 >= filled.len() * 4;
+    let mut held = 0;
+    let mut prose = 0;
+    for c in 0..cols {
+        if !(0..rows).any(|r| !cell(r, c).is_empty()) {
+            continue;
+        }
+        held += 1;
+        let pairs: Vec<bool> = (0..rows.saturating_sub(1))
+            .filter(|&r| !cell(r, c).is_empty() && !cell(r + 1, c).is_empty())
+            .map(|r| runs_on(cell(r, c), cell(r + 1, c)))
+            .collect();
+        // Words to a cell: prose fills its line, a table's values are a
+        // word or two.
+        let texts: Vec<&str> = (0..rows)
+            .map(|r| cell(r, c))
+            .filter(|t| !t.is_empty())
+            .collect();
+        let words = texts
+            .iter()
+            .map(|t| t.split_whitespace().count())
+            .sum::<usize>() as f64
+            / texts.len().max(1) as f64;
+        if pairs.len() >= 3
+            && words >= PROSE_WORDS
+            && pairs.iter().filter(|p| **p).count() * 3 >= pairs.len()
+        {
+            prose += 1;
+        }
+    }
+    if one_line && held > 0 && prose * 2 >= held && prose >= 1 {
+        return true;
+    }
+    // A box laid out around paragraphs: one row under its labels, and in
+    // it paragraphs side by side. One long cell beside a label is a table's
+    // row whose value runs long (a list of recommendations).
+    rows <= 2
+        && (0..cols)
+            .filter(|&c| cell(rows - 1, c).split_whitespace().count() >= PAGE_LAYOUT_WORDS)
+            .count()
+            >= 2
+}
+
+/// Columns read from alignment that cut words: a boundary between two
+/// letters set a hair apart on one line, in two rows or more and a quarter
+/// of them. Justified prose lines its words up into columns of its own
+/// (`Only h | osted con | ferenc`); a table's columns part values, not
+/// words.
+pub fn cuts_words(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    if g.cols() < 2 || g.rows() == 0 {
+        return false;
+    }
+    let inner = &g.xs[1..g.xs.len() - 1];
+    let mut cut_rows = 0;
+    for w in g.ys.windows(2) {
+        let row: Vec<&crate::glyph::Glyph> = glyphs
+            .iter()
+            .filter(|gl| {
+                gl.bbox.is_some()
+                    && gl.is_horizontal()
+                    && gl.text.chars().all(char::is_alphanumeric)
+                    && !gl.text.is_empty()
+                    && gl.origin.1 > w[0]
+                    && gl.origin.1 <= w[1]
+                    && gl.origin.0 >= g.bbox.x0
+                    && gl.origin.0 <= g.bbox.x1
+            })
+            .collect();
+        let cut = inner.iter().any(|&x| {
+            row.iter().any(|a| {
+                let ab = a.bbox.unwrap_or_default();
+                ab.x0 < x
+                    && row.iter().any(|b| {
+                        let bb = b.bbox.unwrap_or_default();
+                        bb.x1 > x
+                            && bb.x0 >= ab.x1 - 0.5
+                            && bb.x0 - ab.x1 < 0.15 * a.font_size as f64
+                            && (b.origin.1 - a.origin.1).abs() < 0.2 * a.font_size as f64
+                            && (ab.x1 > x || bb.x0 < x || (ab.x1 <= x && bb.x0 >= x))
+                    })
+            })
+        });
+        if cut {
+            cut_rows += 1;
+        }
+    }
+    cut_rows >= 2 && cut_rows * 4 >= g.rows()
+}
+
+/// Words a cell holds that make it a page's paragraph, not a table's value.
+const PAGE_LAYOUT_WORDS: usize = 60;
+
+/// Words a column's cells hold on average when they are lines of prose.
+const PROSE_WORDS: f64 = 4.0;
 
 /// Two boxes share some area.
 fn overlaps(a: &BBox, b: &BBox) -> bool {
@@ -5464,6 +5748,97 @@ mod header_tests {
     }
 
     #[test]
+    fn a_label_turned_up_its_header_cell_is_read_into_it() {
+        // A header row 60pt tall, its second column's name set on its side.
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 100.0, 200.0],
+            ys: vec![0.0, 60.0, 75.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 200.0,
+                y1: 75.0,
+            },
+        };
+        let mut gl = vec![gly(10.0, 30.0, 30.0, "SKU")];
+        let turned = |y: f64, t: &str| {
+            let mut c = gly(150.0, y, 6.0, t);
+            c.rotation_deg = 90.0;
+            c.bbox = Some(BBox {
+                x0: 144.0,
+                y0: y - 6.0,
+                x1: 150.0,
+                y1: y,
+            });
+            c.origin = (150.0, y);
+            c
+        };
+        // Reading up the page: `I`, `O`, `P`, `s`.
+        for (k, t) in ["I", "O", "P", "s"].into_iter().enumerate() {
+            gl.push(turned(50.0 - 7.0 * k as f64, t));
+        }
+        gl.push(gly(10.0, 70.0, 30.0, "A-1"));
+        gl.push(gly(110.0, 70.0, 20.0, "12"));
+        let cells = g.cell_texts(&gl);
+        assert_eq!(cells[1], "IOPs", "got {cells:?}");
+        // A sidebar running down through both rows is no cell's.
+        let mut side = gl.clone();
+        side.retain(|c| c.is_horizontal());
+        for k in 0..10 {
+            let mut c = turned(70.0 - 7.0 * k as f64, "x");
+            c.bbox = Some(BBox {
+                x0: 194.0,
+                y0: 70.0 - 7.0 * k as f64 - 6.0,
+                x1: 199.0,
+                y1: 70.0 - 7.0 * k as f64,
+            });
+            c.origin = (199.0, 70.0 - 7.0 * k as f64);
+            side.push(c);
+        }
+        let cells = g.cell_texts(&side);
+        assert!(!cells.iter().any(|c| c.contains('x')), "got {cells:?}");
+    }
+
+    #[test]
+    fn a_table_set_on_its_side_is_not_read_into_its_cells() {
+        // A landscape table on a portrait page: every cell's text turned, its
+        // rows running down the page. Read across the page's grid it would
+        // come out transposed; its text is left to the prose.
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 20.0, 40.0, 60.0],
+            ys: vec![0.0, 60.0, 120.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 60.0,
+                y1: 120.0,
+            },
+        };
+        let mut gl = Vec::new();
+        for (c, x) in [12.0, 32.0, 52.0].into_iter().enumerate() {
+            for (r, y) in [50.0, 110.0].into_iter().enumerate() {
+                let t = ["P", "0", "1", "N", "2", "3"][c * 2 + r];
+                let mut glyph = gly(x, y, 6.0, t);
+                glyph.rotation_deg = 90.0;
+                glyph.bbox = Some(BBox {
+                    x0: x - 6.0,
+                    y0: y - 6.0,
+                    x1: x,
+                    y1: y,
+                });
+                glyph.origin = (x, y);
+                gl.push(glyph);
+            }
+        }
+        let cells = g.cell_texts(&gl);
+        assert!(cells.iter().all(|c| c.is_empty()), "got {cells:?}");
+    }
+
+    #[test]
     fn a_column_rule_drawn_in_some_rows_is_a_column() {
         let ys: Vec<f64> = (0..=10).map(|k| k as f64 * 20.0).collect();
         let mut rules = ruled(&[0.0, 100.0, 200.0, 300.0], &ys);
@@ -6733,6 +7108,106 @@ mod tests {
             m.continues_left[r * g.cols() + c] = true;
         }
         m
+    }
+
+    #[test]
+    fn columns_of_prose_are_not_a_table() {
+        // Two columns of body text cut into one row a line.
+        let g = grid(&[0.0, 300.0, 600.0], &[0.0, 14.0, 28.0, 42.0, 56.0]);
+        let mut gl = Vec::new();
+        for (r, (a, b)) in [
+            (
+                "The control system is built into the",
+                "Revolving wash arms with un-",
+            ),
+            (
+                "dishwasher and is available in standard",
+                "restricted openings above and below",
+            ),
+            (
+                "electrical specifications for every site,",
+                "provide thorough distribution of water",
+            ),
+            (
+                "and it monitors every wash cycle.",
+                "jets to all of the dishware surfaces.",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = 10.0 + 14.0 * r as f64;
+            gl.extend(set(a, 5.0, y));
+            gl.extend(set(b, 305.0, y));
+        }
+        assert!(reads_as_prose(&g, &gl));
+        // A table whose one description column wraps: its codes and figures
+        // do not run on.
+        let g = grid(&[0.0, 100.0, 400.0, 500.0], &[0.0, 14.0, 28.0, 42.0, 56.0]);
+        let mut gl = Vec::new();
+        for (r, (code, text, qty)) in [
+            ("A-100", "Stainless steel wash arm with an", "12"),
+            ("", "extended reach for tall racks", ""),
+            ("A-200", "Rinse arm for the upper rack and", "4"),
+            ("", "the lower rack of the machine", ""),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = 10.0 + 14.0 * r as f64;
+            gl.extend(set(code, 5.0, y));
+            gl.extend(set(text, 105.0, y));
+            gl.extend(set(qty, 405.0, y));
+        }
+        assert!(!reads_as_prose(&g, &gl));
+    }
+
+    #[test]
+    fn columns_that_cut_words_are_not_a_table() {
+        // Justified prose: its columns fall inside words.
+        let g = grid(&[0.0, 22.0, 60.0, 200.0], &[0.0, 14.0, 28.0, 42.0]);
+        let mut gl = Vec::new();
+        for (r, line) in [
+            "Only hosted conference calls",
+            "for outgoing faxes only",
+            "Discounted rate on research",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            gl.extend(set(line, 2.0, 10.0 + 14.0 * r as f64));
+        }
+        assert!(cuts_words(&g, &gl));
+        // Values in their columns: nothing is cut.
+        let g = grid(&[0.0, 40.0, 100.0, 200.0], &[0.0, 14.0, 28.0, 42.0]);
+        let mut gl = Vec::new();
+        for (r, (a, b)) in [("Fax", "1.00"), ("Scan", "0.20"), ("Copy", "0.10")]
+            .into_iter()
+            .enumerate()
+        {
+            let y = 10.0 + 14.0 * r as f64;
+            gl.extend(set(a, 2.0, y));
+            gl.extend(set(b, 65.0, y));
+        }
+        assert!(!cuts_words(&g, &gl));
+    }
+
+    #[test]
+    fn a_box_round_paragraphs_is_not_a_table() {
+        let g = grid(&[0.0, 300.0, 600.0], &[0.0, 14.0, 300.0]);
+        let mut gl = set("CHARACTERISTICS", 5.0, 10.0);
+        gl.extend(set("COMPLIANCE", 305.0, 10.0));
+        let para = "word ".repeat(12);
+        for k in 0..6 {
+            gl.extend(set(&para, 5.0, 30.0 + 14.0 * k as f64));
+        }
+        gl.extend(set("Yes", 305.0, 30.0));
+        // One paragraph beside a short value is a table's long row.
+        assert!(!reads_as_prose(&g, &gl));
+        for k in 0..6 {
+            gl.extend(set(&para, 305.0, 44.0 + 14.0 * k as f64));
+        }
+        assert!(reads_as_prose(&g, &gl));
     }
 
     #[test]

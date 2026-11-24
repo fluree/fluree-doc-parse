@@ -150,6 +150,59 @@ The band a table opens with, its rules running on through it into the rows
 below, is its header row however tall: column labels wrap over as many lines
 as they need.
 
+## Labels set on their side
+
+A table's column names can be turned up a tall header row. A cell's text is
+read in the table's own direction, and turned glyphs crossing a grid are
+usually a sidebar or watermark drawn over it, kept out of the cells. A
+turned line lying whole inside one cell that holds no level text is that
+cell's label, read in its own direction: left to right across the cell for
+text reading up, right to left for text reading down. Where its row never
+draws a boundary it straddles, it goes to the cell holding most of it. One
+running down a column of cells, a group label beside the rows it groups,
+goes to the topmost of them. A turned glyph no cell reads stays in the
+page's prose.
+
+A table set on its side, a landscape table on a portrait page, is another
+matter: there the grid's rows are the table's columns. Its cells hold turned
+text and next to no level text, so where the grid has fewer cells of level
+text than turned lines, none are read into it, and its text is left to the
+prose rather than read out transposed.
+
+## What is not a table
+
+Rules and alignment find grids in things that are not tables: columns of
+body text, a box laid out around paragraphs, a drawing's labels.
+
+- **Columns of prose.** Prose runs on from one line into the next, and a
+  table's cells rarely do. Two or three columns of body text cut into one
+  row a line give cells that end mid-sentence (`built into the`, `un-`)
+  over cells that carry on in lowercase. A column runs on where its cells
+  are lines of words (four or more to a cell) and a third of them carry on
+  into the next; a grid is prose where half the columns holding text run
+  on. A table's figures and codes do not, whatever its one description
+  column does. Such a grid is dropped before the page's prose is read, so
+  its text is read column by column.
+- **A box round paragraphs.** A ruled box whose one row under its labels
+  holds a paragraph (sixty words or more in a cell) is a page laid out in
+  columns, not a table.
+- **A band with no columns of its own** is not a table: the page-wide
+  boundaries belong to the tables they were read from, and imposed on a band
+  ruled by two link underlines and a rule beside them they cut its words.
+- **Columns that cut words.** Justified prose lines its words up into
+  columns of its own. A reading from alignment or from horizontal bands
+  whose boundaries fall inside words, between letters set a hair apart on
+  one line, in two rows or more, is not a table, and neither it nor a
+  reading of prose is preferred over a ruled table. A ruled table whose cell
+  holds a paragraph would otherwise lose to the paragraph's own justified
+  columns.
+- **Figures across a divider.** A run of figures read from its text takes in
+  its label column on the left, but not across a rule standing between them
+  that runs well past them (twice the run's height or more): what lies past
+  a page's column divider is the next column's prose. A table's own column
+  rules stand between its labels and its figures too, and run no further
+  than the table.
+
 ## Tables drawn with characters
 
 A line printer, and the systems that still print like one, has no ruling. It
