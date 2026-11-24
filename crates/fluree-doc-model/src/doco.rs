@@ -1136,21 +1136,41 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // A table wrapped into side-by-side copies of its columns
                     // holds one record per copy on each row.
                     let width = record_width(&header).unwrap_or(ncols).max(1);
+                    // A band labels the rows beneath it: no data row follows
+                    // the last band, or the band is a row of its own.
+                    let data_after = |s: usize| (s + 1..rows.len()).any(|r| !subs.contains(&r));
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
                         // `doc:sectionLabel` so every cell entity carries
-                        // the section it belongs to.
-                        if subs.contains(&r) {
+                        // the section it belongs to. A band no data row
+                        // follows labels nothing, and is a cell of its own:
+                        // a table's closing notes.
+                        if subs.contains(&r) && data_after(r) {
                             continue;
                         }
-                        let section = subs
-                            .iter()
-                            .filter(|s| **s < r)
-                            .max()
-                            .and_then(|s| rows[*s].first())
-                            .map(|t| t.trim())
+                        // The bands over a row: the nearest above it, and
+                        // each band set directly over that one, a group over
+                        // its sub-group (`Power Management` over `Average
+                        // power requirements (W)`), joined from the top down
+                        // as a stacked header's labels are.
+                        let section = (!subs.contains(&r))
+                            .then(|| subs.iter().filter(|s| **s < r && **s >= n_header).max())
+                            .flatten()
+                            .map(|&s| {
+                                let mut top = s;
+                                while top > n_header && subs.contains(&(top - 1)) {
+                                    top -= 1;
+                                }
+                                (top..=s)
+                                    .filter_map(|b| rows[b].first())
+                                    .map(|t| t.trim())
+                                    .filter(|t| !t.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            })
                             .filter(|t| !t.is_empty());
+                        let section = section.as_deref();
                         for (c, cell) in row.iter().enumerate() {
                             let first = c - c % width;
                             let row_header = row.get(first).map(|t| t.trim()).unwrap_or("");
@@ -1523,6 +1543,45 @@ mod tests {
             .into_iter()
             .cloned()
             .collect()
+    }
+
+    #[test]
+    fn a_band_over_a_band_or_closing_the_table_reaches_a_cell() {
+        // A group band over its sub-band over the rows they label, and a
+        // notes band no data row follows.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Model", "26TB", "24TB"],
+                ["Power Management", "", ""],
+                ["Average power requirements (W)", "", ""],
+                ["Read/Write", "8.4", "8.0"],
+                ["Idle", "5.8", "5.6"],
+                ["Notes: helium drive.", "", ""],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        t.sub_headers = Some(vec![1, 2, 5]);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let idle = cells.iter().find(|c| c["doc:cellValue"] == "5.8").unwrap();
+        assert_eq!(
+            idle["doc:sectionLabel"],
+            "Power Management / Average power requirements (W)"
+        );
+        let notes = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Notes: helium drive.")
+            .expect("the closing band is a cell");
+        assert_eq!(notes["doc:columnIndex"], json!(0));
+        assert!(notes.get("doc:sectionLabel").is_none());
+        // A band with data under it is no cell of its own.
+        assert!(!cells
+            .iter()
+            .any(|c| c["doc:cellValue"] == "Power Management"));
     }
 
     fn row_header_of<'a>(cells: &'a [Value], value: &str) -> &'a Value {
