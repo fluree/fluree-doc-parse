@@ -19,6 +19,37 @@ pub(crate) const OCR_REASONS: [&str; 5] = [
     "small_region",
 ];
 
+thread_local! {
+    /// The document this thread reads, for the engine's warnings: one engine
+    /// serves every document of a run, and reads each on its caller's
+    /// thread.
+    static READING: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// While it lives, what the engine says about a reading on this thread
+/// names `doc`. Dropped, the thread names what it named before.
+pub(crate) struct Reading(Option<String>);
+
+impl Reading {
+    pub(crate) fn of(doc: &Path) -> Reading {
+        Reading(READING.with(|r| r.replace(Some(doc.display().to_string()))))
+    }
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        READING.with(|r| *r.borrow_mut() = self.0.take());
+    }
+}
+
+/// A warning from the engine, with the document this thread reads.
+fn engine_warning(msg: &str) -> String {
+    READING.with(|r| match &*r.borrow() {
+        Some(doc) => format!("warning: {doc}: {msg}"),
+        None => format!("warning: {msg}"),
+    })
+}
+
 /// How the engine runs, as the command line, the environment and the config
 /// set it.
 pub(crate) struct EngineSettings {
@@ -80,7 +111,7 @@ pub(crate) fn open_engine(
                 threads: settings.threads,
                 sizing: settings.sizing,
                 memory: settings.memory.unwrap_or(defaults.memory),
-                notices: Some(Arc::new(|msg: &str| eprintln!("warning: {msg}"))),
+                notices: Some(Arc::new(|msg: &str| eprintln!("{}", engine_warning(msg)))),
                 ..defaults
             };
             let engine = fluree_doc_vision::oar::OarEngine::open(models, &opts)?;
@@ -286,6 +317,7 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
 
 #[cfg(feature = "ocr")]
 fn read_one(engine: &dyn OcrEngine, path: &Path, out: &Path) -> Result<(String, usize), String> {
+    let _doc = Reading::of(path);
     let pixels = fluree_doc_vision::oar::load_pixels(path)?;
     let reading = engine
         .read(&pixels)
@@ -307,6 +339,27 @@ fn read_one(_: &dyn OcrEngine, _: &Path, _: &Path) -> Result<(String, usize), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_engine_warning_names_the_document_its_thread_reads() {
+        assert_eq!(engine_warning("shrunk"), "warning: shrunk");
+        {
+            let _a = Reading::of(Path::new("a.pdf"));
+            assert_eq!(engine_warning("shrunk"), "warning: a.pdf: shrunk");
+            {
+                // An attachment read inside its message names itself, and
+                // the message again once it is done.
+                let _b = Reading::of(Path::new("b.png"));
+                assert_eq!(engine_warning("shrunk"), "warning: b.png: shrunk");
+            }
+            assert_eq!(engine_warning("shrunk"), "warning: a.pdf: shrunk");
+            // Another thread reads another document.
+            std::thread::scope(|s| {
+                s.spawn(|| assert_eq!(engine_warning("x"), "warning: x"));
+            });
+        }
+        assert_eq!(engine_warning("shrunk"), "warning: shrunk");
+    }
 
     #[test]
     fn a_crops_directory_is_read_through_its_reasons() {
