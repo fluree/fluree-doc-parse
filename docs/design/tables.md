@@ -351,8 +351,22 @@ which is worse than a header read as one more row.
 
 Labels set apart within their columns, each under one ruled cell across the
 table (`Area | Competence`), are the columns' own. So is a group label over
-some of the columns (`Dates` over `Start | Next review`). A table read from
-its text keeps the header its reading found.
+some of the columns (`Dates` over `Start | Next review`).
+
+A table read from its text takes a title band the same way, under stricter
+conditions:
+
+- the band is read whole across the row;
+- it is set as a title: opening on a capital or a figure, with no colon;
+- it sits at the table's left edge or is centred on it;
+- the reading took it for the whole header, not for a banner over column
+  names (`December 31, 2017` over `2017 | 2016`).
+
+A catalogue's band (`ENGINE BEARINGS` over `Rod Bearing | 2001-2002 | …`)
+opens such a table where the page cut its list at the band. The table goes
+on from the row under it, with its spans and row bands moved up a row. The
+looser test the ruled grids use took, in tables read from text, lines
+wrapped from the header above, cut-off values and field lines for titles.
 
 
 ## Two-row headers and row groups
