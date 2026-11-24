@@ -122,7 +122,7 @@ pub enum Commands {
     },
 
     // Hidden single-file compatibility forms of `convert` (equivalent to
-    // `convert <pdf> --format <fmt>`); benchmark adapters shell these.
+    // `convert <pdf> --format <fmt> --no-escalate`); scripts shell these.
     #[command(hide = true)]
     Md { pdf: PathBuf },
     #[command(hide = true)]

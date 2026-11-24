@@ -86,6 +86,28 @@ x-axis and looks for a band that stays empty over vertical extent. That is a
 different measurement from any single gap, and it is why the pass runs before
 lines rather than trying to repair them after.
 
+## Columns a rank of rules states
+
+Decks, brochures and datasheets set panels side by side under a rule each,
+below a full-width title. The title fills the gutters for enough rows that the
+projection cannot see the panels. The rules show exactly where they are,
+though, so a rank of them across the measure states the columns, over the
+rows around it where its gaps stay clear. A rank is held to strict tests,
+because many things draw that shape:
+
+- **Segment length:** tick marks and legend swatches are too short.
+- **Even gaps:** decoration is uneven.
+- **Width:** an equation's fraction bars stop short of the measure.
+- **The line above runs on through the gaps:** a report that underlines its
+  links draws three rules under a line citing three sources,
+  `(Ma and Pender 2022b; Baum, Payea, and Steele 2009; Protopsaltis and`. The
+  rules are as long and as evenly spaced as a heading rank, and read as one
+  they cut a page of prose in three, and its paragraph in two. But that line
+  runs on through every gap: its `; ` stands there, with its words within a
+  space on either side. A gutter has nothing of the kind. A chart's panels
+  can set a tick label in the gap between their rules, but that label stands
+  a panel's width from the next, not a space, and the rank stays a ruler.
+
 ## Missing spaces
 
 PDFs position words rather than emitting space characters. A gap wider than a

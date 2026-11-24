@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "google-2024-environmental-report.pdf",
+    "url": "https://www.gstatic.com/gumdrop/sustainability/google-2024-environmental-report.pdf",
+    "sha256": "29ade2be2f75e33b94e88fc676a31aaaab205e4ae7f146bc284c57d93d858645",
+    "about": "Google 2024 Environmental Report (86 pages, InDesign). Figure 17 on page 34 draws its bars as vector shapes over a raster image of the chart, and sets its legend, years and percentages as text around and on it."
+  },
+  "notes": [
+    "2026-11-24 (#81): a guard. A drawing over a picture is a photograph's callouts only when all it says is callout marks; a chart drawn over a picture sets values and years in it, and keeps reaching for its legend and axis labels as charts do."
+  ],
+  "checks": [
+    {
+      "id": "chart-title-in-figure",
+      "found": "2026-11-24",
+      "issue": "A guard: the chart's title stays its label.",
+      "element": {"type": "doco:Figure", "text": "Renewable energy purchasing compared with total electricity"}
+    },
+    {
+      "id": "legend-entry-in-figure",
+      "found": "2026-11-24",
+      "issue": "A guard: a legend entry set beside the chart stays its label.",
+      "element": {"type": "doco:Figure", "text": "Total electricity consumption"}
+    },
+    {
+      "id": "axis-year-in-figure",
+      "found": "2026-11-24",
+      "issue": "A guard: a year under the axis stays the chart's label.",
+      "element": {"type": "doco:Figure", "text": "2011"}
+    },
+    {
+      "id": "value-in-figure",
+      "found": "2026-11-24",
+      "issue": "A guard: a value on the bars stays the chart's label.",
+      "element": {"type": "doco:Figure", "text": "37%"}
+    }
+  ]
+}

@@ -12,7 +12,7 @@
 //! carries no evidence; furniture is only identifiable in aggregate.
 
 use crate::line::Line;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Fraction of page height from the top/bottom edge within which a line is
 /// eligible to be furniture. Wide enough for multi-line headers and for a
@@ -70,10 +70,10 @@ fn signature(text: &str) -> String {
 }
 
 /// Classify lines across a whole document. Returns, per page, the indices of
-/// lines that are furniture and what kind.
+/// lines that are furniture and what kind, in the page's line order.
 ///
 /// `pages` is one Vec<Line> per page, each paired with that page's height.
-pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<HashMap<usize, Furniture>> {
+pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<BTreeMap<usize, Furniture>> {
     detect_all(pages).0
 }
 
@@ -87,7 +87,7 @@ pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<HashMap<usize, Furniture>> {
 pub fn detect_with_exact(
     pages: &[(Vec<Line>, f64)],
 ) -> (
-    Vec<HashMap<usize, Furniture>>,
+    Vec<BTreeMap<usize, Furniture>>,
     Vec<std::collections::HashSet<usize>>,
 ) {
     let (marks, _, exact) = detect_all(pages);
@@ -115,7 +115,7 @@ const FOLIO_DISTINCT_SHARE: f64 = 0.25;
 /// is absent or the document has no page-number line.
 pub fn detect_with_folios(
     pages: &[(Vec<Line>, f64)],
-) -> (Vec<HashMap<usize, Furniture>>, Vec<Option<String>>) {
+) -> (Vec<BTreeMap<usize, Furniture>>, Vec<Option<String>>) {
     let (marks, folios, _) = detect_all(pages);
     (marks, folios)
 }
@@ -125,12 +125,12 @@ pub fn detect_with_folios(
 fn detect_all(
     pages: &[(Vec<Line>, f64)],
 ) -> (
-    Vec<HashMap<usize, Furniture>>,
+    Vec<BTreeMap<usize, Furniture>>,
     Vec<Option<String>>,
     Vec<std::collections::HashSet<usize>>,
 ) {
     let n_pages = pages.len();
-    let mut out: Vec<HashMap<usize, Furniture>> = vec![HashMap::new(); n_pages];
+    let mut out: Vec<BTreeMap<usize, Furniture>> = vec![BTreeMap::new(); n_pages];
     let mut folios: Vec<Option<String>> = vec![None; n_pages];
     let mut exact: Vec<std::collections::HashSet<usize>> = vec![Default::default(); n_pages];
     if n_pages < 2 {
@@ -1238,6 +1238,15 @@ fn whole(out: &str, i: usize, j: usize) -> bool {
 
 /// `ends_only`: remove a match only where nothing but whitespace stands
 /// before it or after it.
+///
+/// What one pattern takes off can bring another to the text's end, or leave
+/// it the whole of the text: a block can open with two running lines, a
+/// title over a document number, and the number is at the start only once
+/// the title is gone. So the patterns are tried again until none takes
+/// anything more. Where two overlap, the longer is tried first: of a title
+/// block's `DATE:` and `DATE`, a cell `DATE: -` loses `DATE:`, and the `-`
+/// left is a pattern of its own. What is left does not depend on the order
+/// the patterns were found in.
 fn scrub_with(
     cell: &str,
     furniture: &[(String, bool)],
@@ -1248,113 +1257,123 @@ fn scrub_with(
     let at_end = |out: &str, start: usize, end: usize| {
         !ends_only || out[..start].trim().is_empty() || out[end..].trim().is_empty()
     };
-    for (pat, digits_vary) in furniture {
-        if pat.is_empty() {
-            continue;
-        }
-        if !*digits_vary {
-            // A figure's callout (`1`), a short mark (`FCC`) or a run of
-            // numbers (`4, 5`) is furniture in a cell only as the whole of
-            // it: cut from inside the cell's text, `3` took the digit out of
-            // `30 po-lb` and `3,3 Nm`.
-            let p = pat.trim();
-            let short = p.chars().filter(|c| !c.is_whitespace()).count() <= SHORT_FURNITURE
-                || !p.chars().any(char::is_alphabetic);
-            if short {
-                if out.trim() == p {
-                    out.clear();
+    let mut furniture: Vec<&(String, bool)> = furniture.iter().collect();
+    furniture.sort_by_key(|(pat, _)| std::cmp::Reverse(pat.chars().count()));
+    loop {
+        let before = out.clone();
+        for &(pat, digits_vary) in &furniture {
+            if pat.is_empty() {
+                continue;
+            }
+            if !*digits_vary {
+                // A figure's callout (`1`), a short mark (`FCC`) or a run of
+                // numbers (`4, 5`) is furniture in a cell only as the whole of
+                // it: cut from inside the cell's text, `3` took the digit out of
+                // `30 po-lb` and `3,3 Nm`.
+                let p = pat.trim();
+                let short = p.chars().filter(|c| !c.is_whitespace()).count() <= SHORT_FURNITURE
+                    || !p.chars().any(char::is_alphabetic);
+                if short {
+                    if out.trim() == p {
+                        out.clear();
+                    }
+                    continue;
+                }
+                let mut from = 0;
+                while let Some(k) = out[from..].find(pat.as_str()) {
+                    let i = from + k;
+                    if at_end(&out, i, i + pat.len()) && whole(&out, i, i + pat.len()) {
+                        out.replace_range(i..i + pat.len(), " ");
+                        from = 0;
+                    } else {
+                        from = i + pat.len();
+                    }
+                }
+                continue;
+            }
+            // Segment the pattern at digit runs; match literal segments with any
+            // digit run between them.
+            let mut segs: Vec<&str> = Vec::new();
+            let mut rest = pat.as_str();
+            while let Some(d0) = rest.find(|c: char| c.is_ascii_digit()) {
+                segs.push(&rest[..d0]);
+                let after = rest[d0..]
+                    .find(|c: char| !c.is_ascii_digit())
+                    .map(|k| d0 + k)
+                    .unwrap_or(rest.len());
+                rest = &rest[after..];
+            }
+            segs.push(rest);
+            if segs.len() < 2 {
+                continue;
+            }
+            // A pattern that is nothing but digits — a bare page number — has no
+            // literal text to anchor on, so digit-insensitive matching would
+            // strip the leading digit run out of *any* cell it is applied to: a
+            // financial statement's `85,159` became `,159`, silently changing
+            // the figure. With nothing to anchor, the only safe reading is that
+            // the whole cell is that page number.
+            //
+            // "All digits" alone is not enough to conclude that. Patterns are
+            // deduplicated by digit *shape*, so this list holds one representative
+            // per page-number width (`1`, `10`, `100`) rather than every value —
+            // and matching on shape alone deleted every all-digit block in the
+            // document. A bar chart's `2024` and `2023` axis labels went that way,
+            // leaving four figures with no years attached. Width is the evidence
+            // the pattern actually carries: a four-digit label is not a
+            // three-digit page number.
+            if segs.iter().all(|s| s.is_empty()) {
+                if !bare_number_is_furniture {
+                    continue;
+                }
+                let t = out.trim();
+                let width = pat.chars().filter(char::is_ascii_digit).count();
+                if !t.is_empty()
+                    && t.chars().all(|c| c.is_ascii_digit())
+                    && t.chars().count() == width
+                {
+                    out = String::new();
                 }
                 continue;
             }
             let mut from = 0;
-            while let Some(k) = out[from..].find(pat.as_str()) {
-                let i = from + k;
-                if at_end(&out, i, i + pat.len()) && whole(&out, i, i + pat.len()) {
-                    out.replace_range(i..i + pat.len(), " ");
-                    from = 0;
+            #[allow(clippy::while_let_loop)] // labeled break from a nested match reads clearer here
+            'scan: loop {
+                let Some(start) = (if segs[0].is_empty() {
+                    (from == 0).then_some(0)
                 } else {
-                    from = i + pat.len();
+                    out.get(from..)
+                        .and_then(|rest| rest.find(segs[0]))
+                        .map(|k| from + k)
+                }) else {
+                    break;
+                };
+                let mut pos = start + segs[0].len();
+                for seg in &segs[1..] {
+                    let digit_end = out[pos..]
+                        .find(|c: char| !c.is_ascii_digit())
+                        .map(|k| pos + k)
+                        .unwrap_or(out.len());
+                    if digit_end == pos {
+                        break 'scan; // expected a digit run, none present
+                    }
+                    if !out[digit_end..].starts_with(seg) {
+                        break 'scan;
+                    }
+                    pos = digit_end + seg.len();
+                }
+                if at_end(&out, start, pos) && whole(&out, start, pos) {
+                    out.replace_range(start..pos, " ");
+                    from = 0;
+                } else if segs[0].is_empty() {
+                    break;
+                } else {
+                    from = start + segs[0].len();
                 }
             }
-            continue;
         }
-        // Segment the pattern at digit runs; match literal segments with any
-        // digit run between them.
-        let mut segs: Vec<&str> = Vec::new();
-        let mut rest = pat.as_str();
-        while let Some(d0) = rest.find(|c: char| c.is_ascii_digit()) {
-            segs.push(&rest[..d0]);
-            let after = rest[d0..]
-                .find(|c: char| !c.is_ascii_digit())
-                .map(|k| d0 + k)
-                .unwrap_or(rest.len());
-            rest = &rest[after..];
-        }
-        segs.push(rest);
-        if segs.len() < 2 {
-            continue;
-        }
-        // A pattern that is nothing but digits — a bare page number — has no
-        // literal text to anchor on, so digit-insensitive matching would
-        // strip the leading digit run out of *any* cell it is applied to: a
-        // financial statement's `85,159` became `,159`, silently changing
-        // the figure. With nothing to anchor, the only safe reading is that
-        // the whole cell is that page number.
-        //
-        // "All digits" alone is not enough to conclude that. Patterns are
-        // deduplicated by digit *shape*, so this list holds one representative
-        // per page-number width (`1`, `10`, `100`) rather than every value —
-        // and matching on shape alone deleted every all-digit block in the
-        // document. A bar chart's `2024` and `2023` axis labels went that way,
-        // leaving four figures with no years attached. Width is the evidence
-        // the pattern actually carries: a four-digit label is not a
-        // three-digit page number.
-        if segs.iter().all(|s| s.is_empty()) {
-            if !bare_number_is_furniture {
-                continue;
-            }
-            let t = out.trim();
-            let width = pat.chars().filter(char::is_ascii_digit).count();
-            if !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()) && t.chars().count() == width
-            {
-                out = String::new();
-            }
-            continue;
-        }
-        let mut from = 0;
-        #[allow(clippy::while_let_loop)] // labeled break from a nested match reads clearer here
-        'scan: loop {
-            let Some(start) = (if segs[0].is_empty() {
-                (from == 0).then_some(0)
-            } else {
-                out.get(from..)
-                    .and_then(|rest| rest.find(segs[0]))
-                    .map(|k| from + k)
-            }) else {
-                break;
-            };
-            let mut pos = start + segs[0].len();
-            for seg in &segs[1..] {
-                let digit_end = out[pos..]
-                    .find(|c: char| !c.is_ascii_digit())
-                    .map(|k| pos + k)
-                    .unwrap_or(out.len());
-                if digit_end == pos {
-                    break 'scan; // expected a digit run, none present
-                }
-                if !out[digit_end..].starts_with(seg) {
-                    break 'scan;
-                }
-                pos = digit_end + seg.len();
-            }
-            if at_end(&out, start, pos) && whole(&out, start, pos) {
-                out.replace_range(start..pos, " ");
-                from = 0;
-            } else if segs[0].is_empty() {
-                break;
-            } else {
-                from = start + segs[0].len();
-            }
+        if out == before {
+            break;
         }
     }
     // A line that is a long prefix of a known furniture text is that
@@ -1425,6 +1444,40 @@ mod scrub_tests {
             scrub_block("see Page 12 of 15 below", &p),
             "see Page 12 of 15 below"
         );
+    }
+
+    #[test]
+    fn running_lines_stacked_at_a_block_end_all_go_in_either_order() {
+        let lines = ["Annual Report 2024", "Northwind Holdings Ltd"];
+        for order in [[0, 1], [1, 0]] {
+            let f: Vec<(String, bool)> = order
+                .iter()
+                .map(|&i| (lines[i].to_string(), false))
+                .collect();
+            assert_eq!(
+                scrub_block(
+                    "The fund closed the year ahead. Northwind Holdings Ltd Annual Report 2024",
+                    &f
+                ),
+                "The fund closed the year ahead."
+            );
+            assert_eq!(
+                scrub_block(
+                    "Annual Report 2024 Northwind Holdings Ltd The fund closed the year ahead.",
+                    &f
+                ),
+                "The fund closed the year ahead."
+            );
+        }
+    }
+
+    #[test]
+    fn of_two_overlapping_furniture_texts_the_longer_goes_first() {
+        // A title block's `DATE` over `DATE:` and a `-` left blank.
+        for f in [["DATE", "DATE:", "-"], ["DATE:", "DATE", "-"]] {
+            let f: Vec<(String, bool)> = f.iter().map(|p| (p.to_string(), false)).collect();
+            assert_eq!(scrub_cell("DATE: -", &f), "");
+        }
     }
 
     #[test]

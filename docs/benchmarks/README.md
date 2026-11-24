@@ -21,13 +21,16 @@ The headline `overall` is the mean of those three per document.
 
 ## Where we stand
 
-Measured 2026-10-07 on the full 200 documents.
+Measured 2026-11-23 on the full 200 documents. The reference writes a link as
+its words alone, so our scores are taken with
+[`--md-links text`](../formats/markdown.md#links-as-plain-text), which does
+the same.
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.934448** | 0.9484 | 0.9420 | 0.8814 | ~1.5¹ |
+| 1 | **fluree-doc-parse** (cascade) | **0.940703** | 0.9512 | 0.9420 | 0.9012 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.894673** | 0.9238 | 0.8616 | 0.8172 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.901319** | 0.9264 | 0.8616 | 0.8402 | **~0.011**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -43,25 +46,35 @@ Measured 2026-10-07 on the full 200 documents.
 | 16 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
 | 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
-The deterministic engine — no model, no GPU, no API key — places third, and
-the cascade places first by 0.028.
+The deterministic engine — no model, no GPU, no API key — places third. The
+layout detector, still CPU only, would lift it to second, and the cascade
+places first by 0.034.
 
 By [tier](../getting-started/tiers.md):
 
 | tier | adds | overall | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction and layout | 0.894673 | 8 ms, CPU |
-| 2 | layout-detector arbitration | 0.902501 | ~0.2 s, CPU |
-| 3 | deep reading of pixels-only content | 0.934448 | ~1.5 s across the corpus¹ |
+| 1 | deterministic extraction and layout | 0.901319 | 8 ms, CPU |
+| 2 | layout-detector arbitration | 0.908607 | ~0.2 s³ |
+| 3 | deep reading of pixels-only content | 0.940703 | ~1.5 s across the corpus¹ |
 
-¹ The harness prints 0.010 s/document for the cascade, which is only the Rust
+¹ The harness prints 0.012 s/document for the cascade, which is only the Rust
 pass reading cached model output. Honestly: 87 of 200 documents escalate and
 113 never leave tier 1; the median escalated document costs 1.7 s and the
 worst 18.9 s.
 
-² Warm, median of five. The harness spawns one process per document, so this
-is substantially process startup rather than parsing — an upper bound on the
-engine, not a profile of it. A single timing is not a measurement.
+² Warm, median of five, which ranged from 11.2 to 11.8 ms. The harness spawns
+one process per document, so this is substantially process startup rather
+than parsing — an upper bound on the engine, not a profile of it. In one
+process, `fdoc convert <dir> -j 1` reads the same 200 documents at 7.7 ms
+each: the 8 ms in the tier table. A single timing is not a measurement.
+
+³ PP-DocLayoutV3 on a GPU host, 178 ms a page. It runs on CPU too, at
+0.82 s a page on an Apple M4 Max, whose GPU it cannot use. The committed
+layout cache is what
+[Producing layout boxes](../integration/escalation-tiers.md#producing-layout-boxes)
+writes: boxes made afresh that way for all 200 pages score tier 2 the same,
+0.908607.
 
 ## Reproducing it
 
@@ -84,6 +97,13 @@ _ENGINE_MODULES = { ..., "fluree-doc-parse": "pdf_parser_fluree",
                          "fluree-doc-parse-cascade": "pdf_parser_fluree" }
 ```
 
+The adapter runs `fdoc convert <pdf> --format md --md-links text
+--no-escalate` on each document, so links are written as their words, as the
+reference writes them, and no model is called: tiers 2 and 3 read the
+committed caches named below.
+Set `FLUREE_DOC_MD_LINKS=inline` to score the default Markdown, links and
+all.
+
 Then:
 
 ```bash
@@ -93,12 +113,20 @@ cargo build --release --manifest-path <repo>/Cargo.toml
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
   uv run python src/run.py --engine fluree-doc-parse --force
 
+# tier 2 — the layout detector, from the committed cache
+FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
+FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
+  uv run python src/run.py --engine fluree-doc-parse-cascade --force
+
 # tier 3 — the full cascade, from the committed caches
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
 FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
 FDOC_TIER_RESULTS=<repo>/eval/cascade-cache \
   uv run python src/run.py --engine fluree-doc-parse-cascade --force
 ```
+
+Tiers 2 and 3 share an engine name and so an output directory: run them one
+after the other, and keep tier 2's `evaluation.json` before running tier 3.
 
 `--force` re-parses; without it the harness re-scores the Markdown already on
 disk. Per-document scores land in `prediction/<engine>/evaluation.json` under
@@ -128,8 +156,9 @@ State these whenever the scores are quoted.
 - **Some of the deficit is the engine being right.** Where our reading carries
   something the ground truth does not, the metric scores the difference as
   error. See [Where our output differs from the
-  reference](where-we-differ.md) — that accounts for 0.0019 of tier 1's
-  overall today.
+  reference](where-we-differ.md). The largest such difference, links, is
+  left out of these scores by `--md-links text`; the default Markdown scores
+  0.0020 lower on tier 1.
 
 ## Two rungs that were retired, with their numbers
 

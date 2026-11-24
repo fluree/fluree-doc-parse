@@ -28,6 +28,8 @@ doubt.
 
 One file per page. An array of detector boxes over the **2× page render**, so
 coordinates are in pixels at twice PDF units (`fdoc` halves them on read).
+[Producing layout boxes](escalation-tiers.md#producing-layout-boxes) renders
+the pages and runs a detector over them.
 
 ```json
 [
