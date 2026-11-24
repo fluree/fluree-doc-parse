@@ -256,6 +256,6 @@ report, so malformed files fail as errors you can catch.
 
 ## Performance
 
-~7 ms per document for the deterministic tier, ~2.4 ms per page for parsing
+~8 ms per document for the deterministic tier, ~2.4 ms per page for parsing
 alone, ~420 pages/s. There is no model to load, so the first document costs
 what the thousandth does.

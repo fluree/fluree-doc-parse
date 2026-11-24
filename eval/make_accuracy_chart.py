@@ -22,16 +22,17 @@ import os
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "docs", "assets", "accuracy-vs-speed.svg")
 
-MEASURED = "2026-10-07"
+MEASURED = "2026-11-23"
 
-# (label, overall, seconds per page). Other engines' timings are the harness's
-# own. Ours: tier 1 is the warm median, as the harness spawns one process per
+# (label, overall, seconds per page). Ours are scored with `--md-links text`,
+# as bench-adapter/pdf_parser_fluree.py runs them. Other engines' timings are
+# the harness's own. Ours: tier 1 is the warm median, as the harness spawns one process per
 # document; tiers 2 and 3 are the corpus average including model time, since
 # the harness only times the replay of cached model output.
 TIERS = [
-    ("Tier 1 · deterministic", 0.894673, 0.009),
-    ("Tier 2 · layout detector", 0.902501, 0.2),
-    ("Tier 3 · cascade", 0.934448, 1.5),
+    ("Tier 1 · deterministic", 0.901319, 0.0114),
+    ("Tier 2 · layout detector", 0.908607, 0.2),
+    ("Tier 3 · cascade", 0.940703, 1.5),
 ]
 ENGINES = [
     ("opendataloader-hybrid", 0.906572, 0.4627),

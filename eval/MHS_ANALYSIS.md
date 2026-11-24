@@ -28,13 +28,14 @@ Everything below is reproducible. Commands assume `opendataloader-bench` cloned 
 benchmark's, and we score against it unmodified.
 
 ```bash
-FLUREE_PDF_BINARY=/path/to/fdoc uv run python src/pdf_parser.py --engine fluree-doc-parse
-uv run python src/evaluator.py --engine fluree-doc-parse
+FLUREE_DOC_BINARY=/path/to/fdoc uv run python src/run.py --engine fluree-doc-parse --force
 # -> prediction/fluree-doc-parse/evaluation.json
 ```
 
 Our adapter is `bench-adapter/pdf_parser_fluree.py` (copy into the bench's `src/`, and add a
-`fluree-doc-parse` entry to `ENGINES` and `_ENGINE_MODULES` in its `engine_registry.py`).
+`fluree-doc-parse` entry to `ENGINES` and `_ENGINE_MODULES` in its `engine_registry.py`). It runs
+`fdoc convert --format md --md-links text --no-escalate`; see
+[the benchmarks page](../docs/benchmarks/README.md#reproducing-it).
 
 ## 2. What MHS actually measures — read this before optimising
 

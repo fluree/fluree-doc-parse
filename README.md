@@ -8,11 +8,11 @@ graph out.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.894673 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.902501 | ~0.2 s (CPU) |
-| 3 | deep reading of pixels-only content and doubted structure | **0.934448** | ~1.5 s² |
+| 1 | deterministic extraction + layout | 0.901319 | **8 ms** (CPU) |
+| 2 | layout-detector arbitration (headings, table regions) | 0.908607 | ~0.2 s (CPU) |
+| 3 | deep reading of pixels-only content and doubted structure | **0.940703** | ~1.5 s² |
 
-¹ 200-document public evaluation corpus, measured 2026-10-07 — the standings
+¹ 200-document public evaluation corpus, measured 2026-11-23 — the standings
 [below](#where-it-stands). Every rung reproduces from the committed
 model-output caches with no GPU and no API key.
 
@@ -72,21 +72,23 @@ yourself — see [`fdoc config`](docs/cli/config.md).
 
 ## Where it stands
 
-Measured 2026-10-07 on
+Measured 2026-11-23 on
 [opendataloader-bench](https://github.com/opendataloader-project/opendataloader-bench):
 200 public PDFs with hand-checked ground truth, scored by a harness neither
 written nor tuned by this project. NID scores reading order and text, TEDS
 table structure, MHS heading structure; `overall` is their per-document mean.
+The reference writes a link as its words alone, so our scores are taken with
+[`--md-links text`](docs/formats/markdown.md#links-as-plain-text), which does the same.
 
-![Overall score against seconds per page for 17 engines on opendataloader-bench: fluree-doc-parse tier 1 scores 0.895 at 9 ms per page and tier 3 scores 0.934 at about 1.5 s; markitdown and liteparse, below 0.65, are listed in a note](docs/assets/accuracy-vs-speed.svg)
+![Overall score against seconds per page for 17 engines on opendataloader-bench: fluree-doc-parse tier 1 scores 0.901 at 11 ms per page, tier 2 scores 0.909 at 0.2 s and tier 3 scores 0.941 at about 1.5 s; markitdown and liteparse, below 0.65, are listed in a note](docs/assets/accuracy-vs-speed.svg)
 
 All 17 engines scored:
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.934448** | 0.9484 | 0.9420 | 0.8814 | ~1.5 |
+| 1 | **fluree-doc-parse** (cascade) | **0.940703** | 0.9512 | 0.9420 | 0.9012 | ~1.5 |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.894673** | 0.9238 | 0.8616 | 0.8172 | **~0.009** |
+| 3 | **fluree-doc-parse** (deterministic) | **0.901319** | 0.9264 | 0.8616 | 0.8402 | **~0.011** |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -103,7 +105,8 @@ All 17 engines scored:
 | 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
 The deterministic engine, which uses no model, GPU or API key, places third
-on its own. The full cascade places first, 0.028 ahead of the next engine.
+on its own. With the layout detector, still on CPU alone, it would place
+second. The full cascade places first, 0.034 ahead of the next engine.
 
 Notes on how both `s/doc` figures were timed, and the caveats that apply to
 these scores, are on [the benchmarks page](docs/benchmarks/README.md). That

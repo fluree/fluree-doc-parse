@@ -5,13 +5,13 @@ tier 1.
 
 | tier | adds | overall¹ | typical cost/document |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.894673 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.902501 | ~0.2 s (CPU) |
-| 3 | deep reading of pixels-only content and doubted structure | **0.934448** | ~1.5 s/doc² |
+| 1 | deterministic extraction + layout | 0.901319 | **8 ms** (CPU) |
+| 2 | layout-detector arbitration (headings, table regions) | 0.908607 | ~0.2 s (CPU) |
+| 3 | deep reading of pixels-only content and doubted structure | **0.940703** | ~1.5 s/doc² |
 
-¹ 200-document public evaluation corpus, measured 2026-10-07. Tier 3 places
-first among the 17 engines scored, including ML and AI-routed systems; tier 1
-alone would place third. See [the benchmarks](../benchmarks/README.md).
+¹ 200-document public evaluation corpus, measured 2026-11-23. Tier 3 places
+first among the 17 engines scored, including ML and AI-routed systems; tier 2
+alone would place second, and tier 1 third. See [the benchmarks](../benchmarks/README.md).
 
 ² Averaged over the corpus. 87 of 200 documents escalate; the other 113 stay
 at tier 1's 8 ms. Median escalated document 1.7 s, worst 18.9 s. Tiers 1–2

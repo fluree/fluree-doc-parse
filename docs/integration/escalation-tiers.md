@@ -163,6 +163,6 @@ GPU.
 - **Per-crop timeouts are mandatory.** A VLM under load can fall into a
   repetition loop and run several times its normal latency. A crop that will
   not terminate must be abandoned, not waited on.
-- **Latency is ~6–11 s/page** for a VLM, against ~7 ms for the deterministic
+- **Latency is ~6–11 s/page** for a VLM, against ~8 ms for the deterministic
   tier. Table content is generated autoregressively, so dense pages cost most.
   This is why escalation is per-region rather than per-document.
