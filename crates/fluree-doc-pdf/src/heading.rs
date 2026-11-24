@@ -547,8 +547,16 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             .enumerate()
             .filter(|(i, b)| {
                 let text = b.text();
+                // At most three lines, or a few words to a line, as a cover
+                // stacks its title: `PROCAT / SISTEMA DE / AISLAMIENTO
+                // SUELTO / PROFESIONAL`.
+                // Of words: a badge's text layer stacks `a1111111111`.
+                let words = text.split_whitespace().count();
+                let inked: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+                let letters = inked.iter().filter(|c| c.is_alphabetic()).count();
+                let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
                 if b.marker.is_some()
-                    || b.lines.len() > 3
+                    || (b.lines.len() > 3 && !stacked)
                     || !title_like(&text)
                     || (numbering_depth(&text).is_some()
                         && repeated_numbered.contains(&norm(&text)))
@@ -1316,6 +1324,51 @@ mod tests {
         assert_eq!(h[0].level, 1);
         assert_eq!(h[1].level, 2);
         assert_eq!(h[0].evidence, Evidence::Title);
+    }
+
+    #[test]
+    fn a_cover_title_stacked_a_word_or_two_to_a_line_is_the_title() {
+        // Six words on four lines, at nearly three times the body size.
+        let stacked = |rows: &[&str]| {
+            let mut b = blk(rows[0], 28.0, 1);
+            b.lines = rows
+                .iter()
+                .map(|r| {
+                    let mut l = b.lines[0].clone();
+                    l.text = (*r).into();
+                    l
+                })
+                .collect();
+            b
+        };
+        let pages = vec![vec![
+            stacked(&["PROCAT", "SISTEMA DE", "AISLAMIENTO SUELTO", "PROFESIONAL"]),
+            blk("body text", 10.0, 20),
+        ]];
+        let h = detect(&pages, &[]);
+        assert_eq!(h.len(), 1, "{h:?}");
+        assert_eq!(h[0].evidence, Evidence::Title);
+        // Four lines of ordinary length are not stacked.
+        let pages = vec![vec![
+            stacked(&[
+                "Regional Economy Report",
+                "for the Northern",
+                "and Western",
+                "Districts Today",
+            ]),
+            blk("body text", 10.0, 20),
+        ]];
+        assert!(detect(&pages, &[])
+            .iter()
+            .all(|h| h.evidence != Evidence::Title));
+        // Nor a badge's text layer, stacked, if it is hardly letters.
+        let pages = vec![vec![
+            stacked(&["a1111111111", "a1111111111", "a1111111111", "a1111111111"]),
+            blk("body text", 10.0, 20),
+        ]];
+        assert!(detect(&pages, &[])
+            .iter()
+            .all(|h| h.evidence != Evidence::Title));
     }
 
     #[test]
