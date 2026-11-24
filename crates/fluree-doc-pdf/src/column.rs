@@ -364,12 +364,13 @@ pub struct Ruler {
 /// segments are tick marks and legend swatches, uneven gaps are decoration,
 /// and a rank that does not span the measure is an equation's fraction bars.
 pub fn ruler(rules: &[crate::rule::Rule], page: usize, text: (f64, f64)) -> Option<Ruler> {
-    use std::collections::HashMap;
     let text_width = text.1 - text.0;
     if text_width <= 0.0 {
         return None;
     }
-    let mut ranks: HashMap<i64, (f64, Vec<(f64, f64)>)> = HashMap::new();
+    // Top to bottom, so of two ranks that state as many columns the higher
+    // one is the ruler, on every run.
+    let mut ranks: std::collections::BTreeMap<i64, (f64, Vec<(f64, f64)>)> = Default::default();
     for r in rules
         .iter()
         .filter(|r| r.page == page && r.orientation == crate::rule::Orientation::Horizontal)
@@ -881,6 +882,19 @@ mod tests {
         assert_eq!(r.cuts.len(), 4, "four gutters between five columns");
         assert_eq!(r.gutters.len(), 4);
         assert!((r.axis - 309.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn of_two_ranks_stating_as_many_columns_the_higher_is_the_ruler() {
+        let spans = [(48.0, 131.0), (145.0, 227.0), (241.0, 324.0)];
+        let rules: Vec<_> = [600.0, 309.0]
+            .iter()
+            .flat_map(|y| spans.iter().map(move |(a, b)| hrule(*a, *b, *y)))
+            .collect();
+        for _ in 0..8 {
+            let r = ruler(&rules, 0, (48.0, 340.0)).expect("a column ruler");
+            assert!((r.axis - 309.0).abs() < 1.0);
+        }
     }
 
     #[test]
