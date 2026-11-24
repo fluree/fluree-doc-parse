@@ -31,6 +31,25 @@ A row of short blocks side by side was tried as a third test, as a table's
 header cells (`TYPE`, `NAME`, `DESCRIPTION`), and dropped: a slide's card
 titles stand side by side the same way (`Our Purpose`, `Our Mission`).
 
+A heading holds at most 12 words. The limit rises to 20 words, on at most
+two lines, in two cases where more than its shape vouches for it:
+
+- a numbered title set larger than the body: `3. Perspective of supply and
+  demand balance of wood pellets and cost structure in Japan`, 13 pt over
+  11 pt;
+- a line set at one and a half times the body or more: a slide's statement
+  or a page's display title.
+
+A long numbered line at the body size is a list's item or a note's, and a
+long bold line is a sentence, so both keep the 12-word limit. Even when
+large, a long line must also be shaped as a title. These are not:
+
+- a line ending in `.`, `?` or `!`;
+- a line holding two or more commas, such as an author list;
+- a bare-number label, such as a form's `12 Did you explain…`;
+- a formula holding `=`;
+- a line that opens with a bullet.
+
 ## The body size
 
 "Larger than body" is measured against one body size per document: the size
