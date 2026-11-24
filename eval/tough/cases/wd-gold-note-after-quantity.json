@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-23 (#79): a raised number after a quantity stayed in it, so 26TB with note 1 read 26TB1. After a quantity it is a note, unless it squares or cubes a unit of length.",
-    "2026-11-24 (#100): each page's first capacity in its spec table, `26TB`, `16TB`, `8TB`, was taken for its folio. The sheet prints no page numbers."
+    "2026-11-24 (#100): each page's first capacity in its spec table, `26TB`, `16TB`, `8TB`, was taken for its folio. The sheet prints no page numbers.",
+    "2026-11-24 (#147): the spec table's `Power Management` band stands directly over its `Average power requirements (W)` band, and each data row took only the nearest band as its `doc:sectionLabel`, so `Power Management` was on no cell. A row carries the bands set directly over each other, joined from the top down."
   ],
   "checks": [
     {
@@ -54,6 +55,15 @@
       "folio": {
         "page": 4,
         "value": null
+      }
+    },
+    {
+      "id": "power-rows-carry-both-bands",
+      "found": "2026-11-24",
+      "issue": "The power rows' cells carried only `Average power requirements (W)`; `Power Management` reached no cell.",
+      "cell": {
+        "value": "6.7W",
+        "section": "Power Management / Average power requirements (W)"
       }
     }
   ]
