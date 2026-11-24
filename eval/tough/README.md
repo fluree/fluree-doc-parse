@@ -79,7 +79,7 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence`; exactly `count` elements do where one is given, `0` for one that must be gone |
 | `section` | some section is headed by exactly this `title` and, where given, sits at this `level` and directly inside the section headed by `within` |
 | `no_section` | no section is headed by a title beginning with this text |
-| `under` | an element with exactly this string (`text`) falls in the section headed by `section` |
+| `under` | an element with exactly this string (`text`), or a table cell with this value, falls in the section headed by `section` |
 | `folio` | the `page` (its place in the file, from 1) carries this printed `value` in `doc:pages`, or none where it is `null` |
 | `same_every_run` | this many more conversions give the same DoCO, byte for byte |
 

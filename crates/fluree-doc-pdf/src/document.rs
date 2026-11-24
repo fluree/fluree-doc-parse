@@ -602,6 +602,33 @@ fn demote_empty_bold_heads(elements: &mut [Element]) {
     }
 }
 
+/// How many of its own line heights above a table's top a heading set
+/// beside it, to its left, may stand and still head it.
+const BESIDE_HEADING_LINES: f64 = 3.0;
+
+/// The heading a table sits under, by its index in `content`: the nearest
+/// heading above the table's top that is in its lane (overlapping it across)
+/// or set beside it, to its left, level with its top: within
+/// [`BESIDE_HEADING_LINES`] of its own height above it.
+fn own_heading(content: &[Element], table: &Element) -> Option<usize> {
+    let t = table.rect();
+    content
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == "doco:SectionTitle" && e.page == table.page)
+        .filter(|(_, e)| {
+            let h = e.rect();
+            if h.y1 > t.y0 + 1.0 {
+                return false;
+            }
+            let lane = h.x1.min(t.x1) > h.x0.max(t.x0);
+            let beside = h.x1 <= t.x0 && t.y0 - h.y1 <= BESIDE_HEADING_LINES * (h.y1 - h.y0);
+            lane || beside
+        })
+        .max_by(|(_, a), (_, b)| a.rect().y1.total_cmp(&b.rect().y1))
+        .map(|(i, _)| i)
+}
+
 /// Insert tables into the existing prose reading stream without reordering
 /// blocks. Horizontal overlap selects the relevant column; within that lane a
 /// table follows only elements that are entirely above its top edge. Blocks
@@ -636,7 +663,7 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
                 first_after = Some(i);
             }
         }
-        let insertion = last_before
+        let mut insertion = last_before
             .map(|i| i + 1)
             .or(first_after)
             .unwrap_or_else(|| {
@@ -645,6 +672,22 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
                     .position(|e| e.rect().y0 >= table.rect().y1)
                     .unwrap_or(content.len())
             });
+        // A table is in the section of the heading it sits under, or beside:
+        // never ahead of it. A catalogue sets each product's heading at the
+        // left over its photo and its table to the right, the heading level
+        // with the table's top; the table overlaps no block of its own
+        // section above it, only the last product's, and went there.
+        if let Some(h) = own_heading(&content, &table).filter(|&h| insertion <= h) {
+            insertion = h + 1;
+            // Past what is set under the heading above the table's top too:
+            // its note (`UPS option`) beside the table's first rows.
+            while insertion < content.len()
+                && content[insertion].kind != "doco:SectionTitle"
+                && content[insertion].rect().y1 <= table.rect().y0
+            {
+                insertion += 1;
+            }
+        }
         content.insert(insertion, table);
     }
     content
@@ -3369,6 +3412,58 @@ mod tests {
         assert_eq!(
             ordered.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
             vec!["before", "table", "after"]
+        );
+    }
+
+    #[test]
+    fn a_table_follows_the_heading_set_beside_it() {
+        // A catalogue: each product's heading at the left over its photo,
+        // its table to the right, level with the heading. The first
+        // product's table runs a little under the second's.
+        let heading = |text: &str, y0: f64| Element {
+            level: Some(4),
+            ..Element {
+                kind: "doco:SectionTitle".into(),
+                ..element(text, 30.0, y0, 200.0, y0 + 9.0, false)
+            }
+        };
+        let content = vec![
+            heading("Sill Gasket", 30.0),
+            element(
+                "Sill Gasket seals the gap",
+                30.0,
+                429.0,
+                290.0,
+                445.0,
+                false,
+            ),
+            heading("Framing Gasket", 507.0),
+            element("UPS option", 30.0, 512.0, 68.0, 520.0, false),
+            element(
+                "Framing Gasket seals the gap",
+                361.0,
+                675.0,
+                572.0,
+                691.0,
+                false,
+            ),
+        ];
+        let tables = vec![
+            element("sill table", 30.0, 59.0, 369.0, 404.0, true),
+            element("framing table", 360.0, 520.0, 569.0, 664.0, true),
+        ];
+        let ordered = interleave_tables(content, tables);
+        assert_eq!(
+            ordered.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Sill Gasket",
+                "sill table",
+                "Sill Gasket seals the gap",
+                "Framing Gasket",
+                "UPS option",
+                "framing table",
+                "Framing Gasket seals the gap",
+            ]
         );
     }
 

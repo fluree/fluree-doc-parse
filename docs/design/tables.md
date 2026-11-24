@@ -529,13 +529,24 @@ A row whose value is a word, over values that are quantities, names the
 columns (`Description | Units` over `Chafing dish | 12`): it is the
 list's header. Otherwise the list has none.
 
-A table placed in reading order follows the last block above it that it
-overlaps across. A value that runs out under the next column's text can
-therefore put the list after that column's blocks. This happens in the Aeron
-sheet's Details, whose `1st–99th percentile` reaches the column of numbered
-features beside it. Asking for a fuller overlap fixed that page, but it
-moved tables on a hundred others, as often for the worse, so it was left
-out.
+## Where a table goes in the reading order
+
+A table is placed after the last block above it that it overlaps across: the
+block it follows in its own column.
+
+A table is also never placed ahead of its own heading. That heading is the
+nearest one above the table's top, either in its lane, or to its left and
+level with its top (within three of its line heights). A catalogue sets each
+product's heading at the left over its photo and the product's table to the
+right. The table overlaps no block of its own section above it, only the
+previous product's table, which runs a little under it, so it went into the
+previous product's section. Moved past its heading, it also goes past
+whatever is set under the heading above the table's top, such as a note
+(`UPS option`) beside its first rows.
+
+A stricter lane was tried first: a block had to overlap a quarter of the
+narrower of the two to count. It fixed one page but moved tables on a hundred
+others, as often for the worse, so the section, not the overlap, decides.
 
 ## Merges
 
