@@ -91,7 +91,9 @@ above, and runs each for 15 seconds over its seeds, one after the other,
 with the same limits: about five minutes of fuzzing after the build. Every
 target runs whatever an earlier one found, and the job fails at the end,
 naming the targets that failed, if any did: stopped at the first, a
-failure would hide whether the targets after it still hold. It
+failure would hide whether the targets after it still hold. A target list
+that fails, or names none, fails the job: the loop would run nothing and
+pass. It
 is a smoke test, not a campaign: it catches a target that no longer
 builds, or a reader that fails on an input a few mutations from a seed.
 What it finds is kept as the job's `fuzz-artifacts`. The same, locally:
@@ -99,8 +101,9 @@ What it finds is kept as the job's `fuzz-artifacts`. The same, locally:
 ```sh
 cd fuzz
 cargo +nightly fuzz build -O -a -s none
+targets=$(cargo +nightly fuzz list) && [ -n "$targets" ] || { echo "no target"; false; }
 failed=""
-for t in $(cargo +nightly fuzz list); do
+for t in $targets; do
   mkdir -p corpus/$t
   cargo +nightly fuzz run $t corpus/$t seeds/$t -O -a -s none -- \
     -rss_limit_mb=320 -timeout=10 -max_len=262144 -max_total_time=15 \

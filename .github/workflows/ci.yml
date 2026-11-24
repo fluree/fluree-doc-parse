@@ -64,8 +64,15 @@ jobs:
       - name: Run each target
         working-directory: fuzz
         run: |
+          # Run apart from the loop, so that a list that fails, or names
+          # nothing, fails the job rather than running no target.
+          targets=$(cargo fuzz list)
+          if [ -z "$targets" ]; then
+            echo "::error::cargo fuzz list named no target"
+            exit 1
+          fi
           failed=""
-          for t in $(cargo fuzz list); do
+          for t in $targets; do
             mkdir -p corpus/$t
             echo "::group::$t"
             cargo fuzz run "$t" corpus/$t seeds/$t -O -a -s none -- \
