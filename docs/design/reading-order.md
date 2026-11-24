@@ -157,3 +157,19 @@ look like spanning fragments, the page is in columns and none of them are.
 That one catches *justified* two-column text, where every line reaches the
 gutter. Ragged-right text defeats it, because only some lines do — which is
 how this survived until a field report.
+
+## A line across more than one cut, or on a page of columns
+
+Two refinements keep the rejoin working where the page's gutters fall across
+full-width lines above or below its columns:
+
+- **A line can cross more than one cut.** A disclaimer under a three-column
+  page is cut twice. At the first cut its middle part moves back into the
+  column it began in, so at the second cut its last part is matched against
+  the lines of every column to its left, not only the next one.
+- **The quarter guard holds back on a page of short columns.** A centred
+  address block or a few full-width lines can be more than a quarter of the
+  rows beside them. Where a cut falls inside a word, the halves sit closer
+  than a space (`Toll F` | `ree`, `FP7 s` | `eries`), and two columns are
+  always held apart by more than that. Over the guard, those halves are still
+  rejoined; halves cut at a space stay apart.

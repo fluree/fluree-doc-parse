@@ -44,7 +44,12 @@
       "id": "initials-not-numbering",
       "found": "2026-11-24",
       "issue": "`U.S.A.` was read as section numbering three deep, so the letterhead line was a level-3 heading.",
-      "no_section": "U.S.A."
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "U.S.A. FOODSERVICE DIVISION",
+        "evidence": "numbering"
+      },
+      "count": 0
     }
   ]
 }

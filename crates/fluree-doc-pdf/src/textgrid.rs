@@ -745,6 +745,21 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
     // The region's lines, the label column taken in on the left: the chunk
     // nearest the region on each of its lines, where those agree.
     let in_band = |l: &Line| l.base >= region.y0 - fs * 0.3 && l.y0 <= region.y1 + fs * 0.3;
+    // A rule standing between a chunk and the figures, running far past
+    // them both ways, divides them: the page's column divider. What lies
+    // across it is the next column's text, not these figures' labels. A
+    // table's own column rules stand between its labels and its figures
+    // too, but run no further than the table.
+    let divided = |l: &Line, c: &Chunk, right: f64| {
+        rules.iter().any(|r| {
+            r.orientation == crate::rule::Orientation::Vertical
+                && r.axis_pos() > c.x1
+                && r.axis_pos() < right
+                && r.bbox.y0 <= l.y0
+                && r.bbox.y1 >= l.base
+                && r.bbox.y1 - r.bbox.y0 >= 2.0 * (region.y1 - region.y0)
+        })
+    };
     let mut lefts: Vec<f64> = all
         .iter()
         .filter(|l| in_band(l))
@@ -752,6 +767,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             l.chunks
                 .iter()
                 .filter(|c| c.x1 <= region.x0 + fs && c.x0 < region.x0 - fs)
+                .filter(|c| !divided(l, c, region.x0))
                 .max_by(|a, b| a.x1.total_cmp(&b.x1))
                 // A statement sets its labels at the margin and its figures
                 // at the far side of the page, with or without leaders.
@@ -791,6 +807,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                     l.chunks
                         .iter()
                         .filter(|c| c.x1 <= x0 + 0.5 && x0 - c.x1 < fs * 8.0)
+                        .filter(|c| !divided(l, c, region.x0))
                         .max_by(|a, b| a.x1.total_cmp(&b.x1))
                         .map(|c| c.x0)
                 })
@@ -2137,6 +2154,7 @@ pub fn strip_leaders(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rule::Rule;
 
     #[test]
     fn figures_are_dressed_digits_or_a_dash() {
@@ -2191,6 +2209,42 @@ mod tests {
             .iter()
             .map(|c| c.text.clone())
             .collect()
+    }
+
+    #[test]
+    fn labels_across_a_divider_are_not_the_figures_labels() {
+        // A run of figures right of a page's column divider, and the left
+        // column's prose on the same lines.
+        let mut gl = Vec::new();
+        for (i, y) in [50.0, 64.0, 78.0, 92.0, 106.0].into_iter().enumerate() {
+            gl.extend(set(&format!("prose line {i}"), 20.0, y));
+            gl.extend(set(&format!("{}", 10 + i), 200.0, y));
+            gl.extend(set(&format!("{}", 50 + i), 250.0, y));
+        }
+        let ls = lines(&gl);
+        let region = BBox {
+            x0: 195.0,
+            y0: 40.0,
+            x1: 265.0,
+            y1: 110.0,
+        };
+        let divider = Rule {
+            bbox: BBox {
+                x0: 150.0,
+                y0: 0.0,
+                x1: 150.6,
+                y1: 200.0,
+            },
+            orientation: crate::rule::Orientation::Vertical,
+            page: 0,
+        };
+        let open = read(&ls, &[], region, 0);
+        let parted = read(&ls, &[divider], region, 0);
+        assert!(
+            open.iter().any(|g| g.bbox.x0 < 100.0),
+            "without the rule the labels are taken in: {open:?}"
+        );
+        assert!(parted.iter().all(|g| g.bbox.x0 > 150.0), "got {parted:?}");
     }
 
     #[test]

@@ -359,10 +359,14 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
 
     for i in 0..per_col.len().saturating_sub(1) {
         let cut = cols[i].x1;
-        // Snapshot the left column's line geometry so the retain closure below
-        // does not borrow `per_col` while it is being mutated.
-        let left_edges: Vec<(f64, f64, f64, i32)> = per_col[i]
+        // Snapshot the geometry of the lines left of the cut so the retain
+        // closure below does not borrow `per_col` while it is being mutated.
+        // A line crossing two cuts was rejoined at the first into the column
+        // it began in, so every column to the left is looked at, not just
+        // the next one.
+        let left_edges: Vec<(f64, f64, f64, i32)> = per_col[..=i]
             .iter()
+            .flatten()
             .map(|l| {
                 (
                     l.bbox.x1,
@@ -372,48 +376,47 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
                 )
             })
             .collect();
+        // The gap from a line on the far side of the cut, flush against it,
+        // back to a line ending flush on the near side at its height.
+        let gap_back = |r: &Line| -> Option<f64> {
+            let fs = r.font_size.max(1.0) as f64;
+            if (r.bbox.x0 - cut).abs() > fs * FLUSH {
+                return None;
+            }
+            left_edges
+                .iter()
+                .filter(|(x1, y0, _, rot)| {
+                    (x1 - cut).abs() < fs * FLUSH
+                        && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
+                        && (y0 - r.bbox.y0).abs() < fs * 0.5
+                        && *rot == r.rotation_bucket
+                })
+                .map(|(x1, ..)| r.bbox.x0 - x1)
+                .reduce(f64::min)
+        };
+        // A cut that falls inside a word, where the halves sit closer than a
+        // space, split one line: two columns are held apart by more.
+        let in_a_word = |r: &Line, gap: f64| gap <= r.font_size.max(1.0) as f64 * SPACE_GAP_RATIO;
         // Count first: if most rows look like spanning fragments, this is a
-        // two-column layout and none of them are.
+        // two-column layout and only the words the cut fell inside are one.
         let candidates = per_col[i + 1]
             .iter()
-            .filter(|r| {
-                let fs = r.font_size.max(1.0) as f64;
-                (r.bbox.x0 - cut).abs() <= fs * FLUSH
-                    && left_edges.iter().any(|(x1, y0, _, rot)| {
-                        (x1 - cut).abs() < fs * FLUSH
-                            && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
-                            && (y0 - r.bbox.y0).abs() < fs * 0.5
-                            && *rot == r.rotation_bucket
-                    })
-            })
+            .filter(|r| gap_back(r).is_some())
             .count();
         let limit = (per_col[i + 1].len().max(per_col[i].len()) as f64 * MAX_SPANNING_FRACTION)
             .ceil() as usize;
-        if candidates > limit {
-            continue;
-        }
+        let only_words = candidates > limit;
 
         let mut moved: Vec<Line> = Vec::new();
-        per_col[i + 1].retain(|r| {
-            let fs = r.font_size.max(1.0) as f64;
-            if (r.bbox.x0 - cut).abs() > fs * FLUSH {
-                return true;
-            }
-            let matches = left_edges.iter().any(|(x1, y0, _, rot)| {
-                (x1 - cut).abs() < fs * FLUSH
-                    && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
-                    && (y0 - r.bbox.y0).abs() < fs * 0.5
-                    && *rot == r.rotation_bucket
-            });
-            if matches {
+        per_col[i + 1].retain(|r| match gap_back(r) {
+            Some(gap) if !only_words || in_a_word(r, gap) => {
                 moved.push(r.clone());
                 false
-            } else {
-                true
             }
+            _ => true,
         });
         for m in moved {
-            if let Some(l) = per_col[i].iter_mut().find(|l| {
+            if let Some(l) = per_col[..=i].iter_mut().rev().flatten().find(|l| {
                 let fs = l.font_size.max(1.0) as f64;
                 (l.bbox.x1 - cut).abs() < fs * FLUSH && (l.bbox.y0 - m.bbox.y0).abs() < fs * 0.5
             }) {
@@ -2873,5 +2876,64 @@ mod tests {
         ];
         rejoin_spanning_lines(&mut v, &cols);
         assert_eq!(v[1].len(), 0);
+    }
+
+    fn cols_at(cuts: &[f64]) -> Vec<crate::column::Column> {
+        let mut out = Vec::new();
+        let mut left = 20.0;
+        for &c in cuts {
+            out.push(crate::column::Column { x0: left, x1: c });
+            left = c;
+        }
+        out.push(crate::column::Column {
+            x0: left,
+            x1: 590.0,
+        });
+        out
+    }
+
+    #[test]
+    fn a_line_across_two_cuts_rejoins_whole() {
+        // A disclaimer under a three-column page: its middle part goes back
+        // to the first column at the first cut, and its last part must find
+        // it there at the second.
+        let cols = cols_at(&[214.0, 396.0]);
+        let mut v = vec![
+            vec![ln("The information … by or on", 36.0, 213.5, 700.0, 7.0)],
+            vec![ln("beh", 214.2, 395.6, 700.0, 7.0)],
+            vec![ln("alf of The Sherwin-Williams", 396.1, 578.0, 700.0, 7.0)],
+        ];
+        rejoin_spanning_lines(&mut v, &cols);
+        assert_eq!(v[1].len() + v[2].len(), 0, "{v:?}");
+        assert_eq!(
+            v[0][0].text,
+            "The information … by or onbehalf of The Sherwin-Williams"
+        );
+    }
+
+    #[test]
+    fn a_word_the_cut_fell_inside_rejoins_on_a_page_of_columns() {
+        // Short columns beside a centred address block: the block's rows are
+        // more than a quarter of the rows, so the guard holds back. A row cut
+        // inside a word (`Toll F|ree`, 0.9pt on 7pt) is still one line; one
+        // cut at a space stays apart.
+        let cols = cols_at(&[166.0]);
+        let mut v = vec![
+            vec![
+                ln("Fax (636)272-2408 • Toll F", 80.0, 165.4, 80.0, 7.0),
+                ln("2001 East Terra Lane •", 80.0, 165.0, 90.0, 7.0),
+                ln("Parts Dept.", 80.0, 165.2, 100.0, 7.0),
+                ln("Phone", 120.0, 165.1, 110.0, 7.0),
+            ],
+            vec![
+                ln("ree (800)325-6152", 166.3, 320.0, 80.0, 7.0),
+                ln("O'Fallon, Missouri", 167.5, 320.0, 90.0, 7.0),
+                ln("(800)424-TRUE", 167.6, 320.0, 100.0, 7.0),
+                ln("(636)240-2400", 167.4, 320.0, 110.0, 7.0),
+            ],
+        ];
+        rejoin_spanning_lines(&mut v, &cols);
+        assert_eq!(v[0][0].text, "Fax (636)272-2408 • Toll Free (800)325-6152");
+        assert_eq!(v[1].len(), 3, "rows cut at a space stay apart: {v:?}");
     }
 }

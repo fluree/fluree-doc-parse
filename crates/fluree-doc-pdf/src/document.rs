@@ -979,9 +979,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
-        let aligned_full = timed(&mut timings.tables, || {
+        let mut aligned_full = timed(&mut timings.tables, || {
             table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
         });
+        // Justified prose lines its words up into columns; it is no reading
+        // to prefer over a ruled table holding a paragraph in a cell.
+        aligned_full.retain(|g| !table::reads_as_prose(g, &p.glyphs));
         let aligned_preferred = prefer_aligned_over_ruled(&grids, &aligned_full, &p.glyphs);
         // Tables ruled with horizontals only, or by nothing but the rules
         // under their figures, are read from their text: their bands are
@@ -1116,8 +1119,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grids = aligned_full;
             grid_sources = vec![GridSource::Aligned; grids.len()];
         } else {
-            let horizontal_bands = timed(&mut timings.tables, || {
+            let mut horizontal_bands = timed(&mut timings.tables, || {
                 table::detect_horizontal_bands(&p.glyphs, &p.rules, p.index)
+            });
+            // Nor a reading that cuts a ruled table's paragraph into words.
+            horizontal_bands.retain(|g| {
+                !table::reads_as_prose(g, &p.glyphs) && !table::cuts_words(g, &p.glyphs)
             });
             if prefer_horizontal_bands(&grids, &horizontal_bands, &p.glyphs) {
                 grids = horizontal_bands;
@@ -1135,6 +1142,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
 
+        // Columns of prose and boxes laid out around paragraphs are not
+        // tables: their glyphs go back to the prose, read column by column.
+        {
+            let keep: Vec<bool> = grids
+                .iter()
+                .map(|g| !table::reads_as_prose(g, &p.glyphs))
+                .collect();
+            let mut k = keep.iter();
+            grids.retain(|_| *k.next().unwrap_or(&true));
+            let mut k = keep.iter();
+            grid_sources.retain(|_| *k.next().unwrap_or(&true));
+        }
         let prose = timed(&mut timings.columns, || {
             glyphs_outside_grids(&p.glyphs, &grids)
         });
@@ -1158,6 +1177,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             g.rows() >= 2
                 && g.cols() >= 2
                 && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
+                && !table::reads_as_prose(g, &prose)
         });
         if !aligned.is_empty() {
             // Withhold their glyphs from prose too, and re-assemble what is left.
@@ -1841,6 +1861,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // (`Crucible | Logistics`).
             let rcount = rows.len();
             let mut taken = vec![false; rcount * cols];
+            // Cells read row by row out of a block that could not be read
+            // whole: they no longer carry on the cell above.
+            let mut unspanned: Vec<usize> = Vec::new();
             // A table read from its text joined its spans as it read them.
             if explicit.is_some() {
                 taken.iter_mut().for_each(|t| *t = true);
@@ -1877,13 +1900,67 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
                             Some(t) => unfolio(furniture::scrub_cell(&t, &scrub_texts), r, r_end),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
-                            None => continue,
+                            None => {
+                                // A block across rows and columns that reads
+                                // whole neither way is two spans crossing: a
+                                // group label down its column, and each row's
+                                // label across the columns beside it. Each
+                                // row is read across the columns its own
+                                // ruling leaves open, past the block's edge
+                                // where a rule parting the block's top row
+                                // stops short of it: `Self-diagnostic
+                                // function` under a sub-column `Memory
+                                // backup` rules.
+                                if r_end - r > 1 && c_end - c > 1 {
+                                    let glyphs = &raw.pages[pi].glyphs;
+                                    for (i, row) in rows.iter_mut().enumerate().take(r_end).skip(r)
+                                    {
+                                        let open = |k: usize| {
+                                            merges.continues_left[i * cols + k]
+                                                && (k < c_end
+                                                    || (!taken[i * cols + k]
+                                                        && !merges.continues_above[i * cols + k]))
+                                        };
+                                        let mut ce = c + 1;
+                                        while ce < cols && open(ce) {
+                                            ce += 1;
+                                        }
+                                        if ce - c < 2 {
+                                            continue;
+                                        }
+                                        let read = |ce: usize| {
+                                            g.region_text(glyphs, &merges, i..i + 1, c..ce)
+                                                .map(|t| (t, ce))
+                                        };
+                                        let inside = ce.min(c_end);
+                                        let Some((t, ce)) = read(ce).or_else(|| {
+                                            (ce > inside && inside - c >= 2)
+                                                .then(|| read(inside))
+                                                .flatten()
+                                        }) else {
+                                            continue;
+                                        };
+                                        row[c..ce].iter_mut().for_each(String::clear);
+                                        row[c] = unfolio(
+                                            furniture::scrub_cell(&t, &scrub_texts),
+                                            i,
+                                            i + 1,
+                                        );
+                                        (c..ce).for_each(|k| taken[i * cols + k] = true);
+                                        unspanned.extend((c..ce).map(|k| i * cols + k));
+                                    }
+                                }
+                                continue;
+                            }
                         };
                     for row in rows.iter_mut().take(r_end).skip(r) {
                         row[c..c_end].iter_mut().for_each(String::clear);
                     }
                     rows[r][c] = text;
                 }
+            }
+            for k in unspanned {
+                merges.continues_above[k] = false;
             }
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
