@@ -616,6 +616,7 @@ fn pipeline(pdf: &Path) -> Doc {
                     &kept,
                     leading,
                     &checkboxes,
+                    &block::marking_dots(&kept, &doc.pages[pi].dots),
                     &fills_per_page[pi],
                     page_body,
                 )
@@ -810,10 +811,17 @@ pub(crate) fn rules(pdf: &Path, page: Option<usize>) {
         f += p.fills.len();
         if page == Some(p.index) {
             println!(
-                "page {}: {ph} horizontal, {pv} vertical rules, {} fills",
+                "page {}: {ph} horizontal, {pv} vertical rules, {} fills, {} dots",
                 p.index,
-                p.fills.len()
+                p.fills.len(),
+                p.dots.len()
             );
+            for d in &p.dots {
+                println!(
+                    "   Dot bbox=({:.1},{:.1})-({:.1},{:.1})",
+                    d.x0, d.y0, d.x1, d.y1
+                );
+            }
             let mut rs: Vec<_> = p.rules.iter().collect();
             rs.sort_by(|a, b| a.axis_pos().partial_cmp(&b.axis_pos()).unwrap());
             for r in rs.iter().take(14) {

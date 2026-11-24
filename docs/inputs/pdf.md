@@ -172,6 +172,23 @@ or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
 or a diamond is set before headings as often as before items (`❖ Gene` over
 a guideline's subsection), so there the heading pass decides.
 
+**Drawn bullets.** Some producers draw a list's bullets as small filled dots
+or squares and leave no bullet in the text. A filled mark under a checkbox's
+size, set just left of a line and level with it, opens a list item, as long
+as another such mark at the same place opens another line. A list draws a
+bullet for each item, in a column. A seal's ring of dots or a chart's
+scatter is level with a line of text only by chance.
+The item's marker is `•`. Each item starts where its bullet is, however
+closely the items are spaced.
+
+**Dashes and arrows.** A line opening with a dash or an arrow and a space
+(`—`, `–`, `-`, `→`) is a list item when another line nearby opens with the
+same mark at the same place. The lines between two such lines must hang
+under the item's text or be a word or two (`or`). The mark is the item's
+marker, as a bullet is, and wrapped lines hang under the item's text. A lone
+line so opening, among lines of prose at the same place, is a range, a minus
+or a dialogue's dash, and stays as it reads.
+
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of
 description under it. Such a list is read as a list, each item's title and

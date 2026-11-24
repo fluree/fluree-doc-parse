@@ -385,7 +385,7 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
 
 /// Group one page's lines into blocks, given the document's modal leading.
 pub fn assemble(lines: &[Line], leading: f64) -> Vec<Block> {
-    assemble_with_marks(lines, leading, &[], &[], 0.0)
+    assemble_with_marks(lines, leading, &[], &[], &[], 0.0)
 }
 
 /// The fill a line sits in: the smallest one that spans it horizontally and
@@ -431,9 +431,97 @@ fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
     })
 }
 
-/// Assemble blocks, treating each supplied checkbox as a list marker — the
-/// line it introduces starts its own block and carries the marker — and each
-/// supplied fill as a band no block crosses; see [`band_of`].
+/// Is a drawn bullet set beside this line: level with it, and just left of
+/// where its text starts?
+fn dot_for(l: &Line, dots: &[BBox]) -> bool {
+    let fs = (l.font_size as f64).max(1.0);
+    dots.iter().any(|d| {
+        let middle = (d.y0 + d.y1) * 0.5;
+        let gap = l.bbox.x0 - d.x1;
+        middle > l.bbox.y0 && middle < l.bbox.y1 && gap > 0.0 && gap < fs * DOT_REACH
+    })
+}
+
+/// How far apart, in points, the marks of one dash-led list may start.
+const RUN_ALIGN: f64 = 1.5;
+
+/// The dots that mark a list's items on a page: each stands beside one of
+/// `lines`, and another dot set at the same place stands beside another.
+/// A list draws a bullet for each item, in a column; a seal or a chart
+/// draws its dots in rings and scatters, and only by chance is one level
+/// with a line of text.
+pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
+    let marks: Vec<(BBox, usize)> = dots
+        .iter()
+        .filter_map(|d| {
+            lines
+                .iter()
+                .position(|l| dot_for(l, std::slice::from_ref(d)))
+                .map(|i| (*d, i))
+        })
+        .collect();
+    marks
+        .iter()
+        .filter(|(d, i)| {
+            marks
+                .iter()
+                .any(|(o, j)| j != i && (o.x0 - d.x0).abs() <= 1.0 && (o.x1 - d.x1).abs() <= 1.0)
+        })
+        .map(|(d, _)| *d)
+        .collect()
+}
+
+/// Furthest a drawn bullet stands left of its line's text, in the line's
+/// size: a bullet's own width and the space after it.
+const DOT_REACH: f64 = 2.0;
+
+/// Marks a list opens its items with in the text itself, where a dash or an
+/// arrow alone could as well be a range, a minus or a dialogue's dash: a
+/// run of lines each opening with one of them makes them a list's.
+const RUN_LEADS: &[char] = &[
+    '-', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2192}', '\u{2794}', '\u{27F6}',
+];
+
+/// The dash or arrow a line opens with, followed by a space and words.
+fn run_lead(l: &Line) -> Option<char> {
+    let t = l.text.trim_start();
+    let mut chars = t.chars();
+    let c = chars.next()?;
+    let rest = chars.as_str();
+    (RUN_LEADS.contains(&c)
+        && rest.starts_with([' ', '\u{00A0}', '\t'])
+        && rest.chars().any(char::is_alphanumeric))
+    .then_some(c)
+}
+
+/// Lines apart, at most, two items of one dash-led list may stand: an item
+/// wrapped over several lines, or a short line between (`or`). The lines
+/// between hang under the item's text or say a word or two; a line of
+/// prose set where the marks are ends the run.
+const RUN_REACH: usize = 6;
+
+/// Most words a line between two items may say and not end their list.
+const RUN_SEPARATOR_WORDS: usize = 3;
+
+/// A block's text without the dash or arrow it was marked by, when it
+/// opens with it.
+pub fn strip_run_lead<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+    let mut m = marker.chars();
+    let lead = m
+        .next()
+        .filter(|c| RUN_LEADS.contains(c) && m.next().is_none())?;
+    let rest = text.trim_start().strip_prefix(lead)?;
+    let rest = rest.strip_prefix([' ', '\u{00A0}', '\t'])?.trim_start();
+    (!rest.is_empty()).then_some(rest)
+}
+
+/// The marker a block opened by a drawn bullet carries: `•`.
+pub(crate) const BULLET_MARKER: &str = "\u{2022}";
+
+/// Assemble blocks, treating each supplied checkbox and drawn bullet as a
+/// list marker — the line it introduces starts its own block and carries
+/// the marker — and each supplied fill as a band no block crosses; see
+/// [`band_of`].
 ///
 /// `body` is the page's body size ([`body_size`]), the measure display type
 /// is told by; zero takes the column's own.
@@ -441,6 +529,7 @@ pub fn assemble_with_marks(
     lines: &[Line],
     leading: f64,
     checkboxes: &[BBox],
+    dots: &[BBox],
     bands: &[BBox],
     body: f64,
 ) -> Vec<Block> {
@@ -465,8 +554,42 @@ pub fn assemble_with_marks(
     let mut blocks: Vec<Block> = Vec::new();
     let mut cur: Vec<Line> = Vec::new();
 
-    // Lines a checkbox introduces, by index into `lines`.
+    // Lines a checkbox introduces, by index into `lines`, and lines a drawn
+    // bullet does. A producer that draws its bullets leaves no bullet in the
+    // text, and its items split only where their spacing happened to read
+    // as a paragraph's.
     let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
+    let dotted: Vec<bool> = lines
+        .iter()
+        .zip(&ticked)
+        .map(|(l, &t)| !t && dot_for(l, dots))
+        .collect();
+    // Lines that open a dash- or arrow-led item: another line near it opens
+    // with the same mark at the same place. A lone line so opening is a
+    // range, a minus or a dialogue's dash, and keeps reading as it did.
+    let leads: Vec<Option<char>> = lines.iter().map(run_lead).collect();
+    let runs: Vec<Option<char>> = (0..lines.len())
+        .map(|i| {
+            let c = leads[i]?;
+            let lo = i.saturating_sub(RUN_REACH);
+            let hi = (i + RUN_REACH).min(lines.len() - 1);
+            let x = lines[i].bbox.x0;
+            let between = |a: usize, b: usize| {
+                (a + 1..b).all(|k| {
+                    lines[k].bbox.x0 > x + RUN_ALIGN
+                        || lines[k].text.split_whitespace().count() <= RUN_SEPARATOR_WORDS
+                })
+            };
+            (lo..=hi)
+                .any(|j| {
+                    j != i
+                        && leads[j] == Some(c)
+                        && (lines[j].bbox.x0 - x).abs() <= RUN_ALIGN
+                        && between(i.min(j), i.max(j))
+                })
+                .then_some(c)
+        })
+        .collect();
     // Lines a marker pulled out above stands beside: each is an item of its
     // own, not the wrapped text of the item above it (see [`hangs_under`]).
     let led: Vec<bool> = lines
@@ -474,26 +597,35 @@ pub fn assemble_with_marks(
         .map(|l| markers.iter().any(|m| marker_beside(m, l)))
         .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
-    let mut marked: Vec<usize> = Vec::new();
+    let mut marked: Vec<(usize, String)> = Vec::new();
+    let mark = |i: usize| {
+        if ticked[i] {
+            Some(CHECKBOX_MARKER.to_string())
+        } else if dotted[i] {
+            Some(BULLET_MARKER.to_string())
+        } else {
+            runs[i].map(String::from)
+        }
+    };
     for (i, l) in lines.iter().enumerate() {
         if cur.is_empty() {
-            if ticked[i] {
-                marked.push(blocks.len());
+            if let Some(m) = mark(i) {
+                marked.push((blocks.len(), m));
             }
             cur.push(l.clone());
             continue;
         }
-        // A checkbox always begins a new option, however the geometry reads,
-        // and a fill's edge is a row's edge.
-        if !ticked[i]
+        // A checkbox or a drawn bullet always begins a new item, however
+        // the geometry reads, and a fill's edge is a row's edge.
+        if mark(i).is_none()
             && band[i] == band[i - 1]
             && continues(cur.last().unwrap(), l, leading, &edge, !led[i])
         {
             cur.push(l.clone());
         } else {
             blocks.extend(split_hard_breaks(build(std::mem::take(&mut cur))));
-            if ticked[i] {
-                marked.push(blocks.len());
+            if let Some(m) = mark(i) {
+                marked.push((blocks.len(), m));
             }
             cur.push(l.clone());
         }
@@ -501,9 +633,9 @@ pub fn assemble_with_marks(
     if !cur.is_empty() {
         blocks.extend(split_hard_breaks(build(cur)));
     }
-    for i in marked {
+    for (i, m) in marked {
         if let Some(b) = blocks.get_mut(i) {
-            b.marker = Some(CHECKBOX_MARKER.into());
+            b.marker = Some(m);
         }
     }
 
@@ -761,6 +893,9 @@ const HANGING_INDENT: f64 = 3.0;
 /// came out a paragraph of its own: `Large tapswitch with a rocker-style
 /// dimmer for a` and `standard designer wallplate opening.`
 ///
+/// An item opened by a dash or an arrow hangs its wrapped lines as one
+/// opened by a bullet does.
+///
 /// Not a line that opens a list of its own under the item: one opening with
 /// a dash, or below a bullet line that ends on a colon (`UL Listed to
 /// control:` over `— Dimmable LEDs`). Nor the paragraph after the list,
@@ -785,7 +920,7 @@ fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
         .chars()
         .find(|c| c.is_alphanumeric())
         .is_some_and(|c| c.is_uppercase() || c.is_numeric());
-    strip_leading_bullet(&prev.text).is_some()
+    (strip_leading_bullet(&prev.text).is_some() || run_lead(prev).is_some())
         && !prev.text.trim_end().ends_with(':')
         && !opens_list
         && shift > 0.3
@@ -1507,9 +1642,100 @@ mod tests {
                 y1: i as f64 * 11.0 + 7.0,
             })
             .collect();
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], 0.0);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], &[], 0.0);
         assert_eq!(b.len(), 3, "one block per option, got {b:?}");
         assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{2610}")));
+    }
+
+    #[test]
+    fn drawn_bullets_start_their_items() {
+        // Four items, each led by a 1.5pt square the producer drew, and
+        // spaced barely more than their lines: two pairs fused.
+        let lines = vec![
+            l(
+                "Sweep spray features specially angled nozzles",
+                52.0,
+                0.0,
+                9.0,
+            ),
+            l("Boost technology increases the flow rate", 52.0, 12.0, 9.0),
+            l(
+                "High-arch swivel spout offers superior clearance",
+                52.0,
+                24.0,
+                9.0,
+            ),
+            l("1.5 gpm maximum flow rate at 60 psi", 52.0, 36.0, 9.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 1, "no bullets: one paragraph");
+        let dots: Vec<BBox> = (0..4)
+            .map(|i| BBox {
+                x0: 43.5,
+                y0: i as f64 * 12.0 + 4.0,
+                x1: 45.0,
+                y1: i as f64 * 12.0 + 5.5,
+            })
+            .collect();
+        let dots = marking_dots(&lines, &dots);
+        let b = assemble_with_marks(&lines, 1.2, &[], &dots, &[], 0.0);
+        assert_eq!(b.len(), 4, "one item per bullet, got {b:?}");
+        assert!(b.iter().all(|x| x.marker.as_deref() == Some(BULLET_MARKER)));
+    }
+
+    #[test]
+    fn a_dot_alone_is_no_bullet() {
+        let dot = |y: f64| BBox {
+            x0: 155.0,
+            y0: y,
+            x1: 158.0,
+            y1: y + 3.0,
+        };
+        let lines = vec![l("Boston", 184.0, 117.7, 23.9)];
+        // A seal's ring of dots: one level with a heading's second line,
+        // another at the same place above it, beside nothing.
+        assert!(marking_dots(&lines, &[dot(127.9), dot(60.0)]).is_empty());
+        // Drawn twice in one place, it is still alone.
+        assert!(marking_dots(&lines, &[dot(127.9), dot(127.9)]).is_empty());
+    }
+
+    #[test]
+    fn dash_led_lines_in_a_run_are_items() {
+        // Sub-items under a bullet, each opening with an em dash at one x;
+        // the second wraps under its text.
+        let lines = vec![
+            l("\u{2014} Dimmable LEDs", 46.0, 0.0, 9.0),
+            l(
+                "\u{2014} Dimmable compact fluorescent lamps with",
+                46.0,
+                12.0,
+                9.0,
+            ),
+            l("integrated ballast", 59.3, 24.0, 9.0),
+            l("\u{2014} Halogen", 46.0, 36.0, 9.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 3, "{b:?}");
+        assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{2014}")));
+        assert_eq!(
+            strip_run_lead(&b[1].text(), "\u{2014}"),
+            Some("Dimmable compact fluorescent lamps with integrated ballast")
+        );
+    }
+
+    #[test]
+    fn a_lone_dash_line_is_not_an_item() {
+        // A range, a minus, a dialogue's dash: one line so opening, among
+        // lines of prose at the same place.
+        let lines = vec![
+            l("the readings fell over the year from", 46.0, 0.0, 9.0),
+            l("- 2.0% in March to a low in the autumn", 46.0, 12.0, 9.0),
+            l("and recovered by the end of December", 46.0, 24.0, 9.0),
+            l("- as the report had expected it would", 46.0, 36.0, 9.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert!(b.iter().all(|x| x.marker.is_none()), "{b:?}");
+        // A minus run into its number opens no item either.
+        assert_eq!(run_lead(&l("-2.0%", 46.0, 0.0, 9.0)), None);
     }
 
     #[test]
@@ -1525,7 +1751,7 @@ mod tests {
             x1: 407.0,
             y1: 7.0,
         }];
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], 0.0);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], &[], 0.0);
         assert_eq!(b.len(), 1);
         assert!(b[0].marker.is_none());
     }
@@ -2260,7 +2486,7 @@ mod tests {
                 y1: 46.0,
             },
         ];
-        let b = assemble_with_marks(&lines, 1.48, &[], &bands, 0.0);
+        let b = assemble_with_marks(&lines, 1.48, &[], &[], &bands, 0.0);
         assert_eq!(b.len(), 2, "one block per band, got {b:?}");
         assert!(b[0].text().starts_with("Q12") && b[0].text().ends_with("materials"));
         assert!(b[1].text().starts_with("Q13"));
@@ -2278,7 +2504,10 @@ mod tests {
             x1: 400.0,
             y1: 30.0,
         }];
-        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands, 0.0).len(), 1);
+        assert_eq!(
+            assemble_with_marks(&lines, 1.2, &[], &[], &bands, 0.0).len(),
+            1
+        );
     }
 
     #[test]
@@ -2377,7 +2606,7 @@ mod tests {
             body(310.0),
             body(320.0),
         ];
-        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], 8.0);
+        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], &[], 8.0);
         assert_eq!(
             blocks[0].text(),
             "PROCAT\u{00AE} PROFESSIONAL INSULATION SYSTEM"
@@ -2389,7 +2618,7 @@ mod tests {
             body(200.0),
             body(210.0),
         ];
-        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], 8.0);
+        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], &[], 8.0);
         assert_eq!(blocks[0].text(), "Author's Note to the 2021 Edition");
         // Body-size lines sharing a centre are lines ended by hand.
         let lines = vec![
@@ -2398,7 +2627,7 @@ mod tests {
             body(200.0),
             body(210.0),
         ];
-        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], 8.0);
+        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], &[], 8.0);
         assert_eq!(blocks[0].text(), "Acme Corporation");
     }
 

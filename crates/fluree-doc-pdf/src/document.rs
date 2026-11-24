@@ -1413,12 +1413,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
         let contents_layout = is_contents_layout(&kept_columns);
         let checkboxes = crate::rule::checkboxes(&raw.pages[pi].fills);
+        let dots = block::marking_dots(
+            &kept_columns.iter().flatten().cloned().collect::<Vec<_>>(),
+            &raw.pages[pi].dots,
+        );
         let bands: Vec<crate::geom::BBox> = raw.pages[pi].fills.iter().map(|f| f.bbox).collect();
         let body = block::body_size(kept_columns.iter().flatten());
         let block_columns: Vec<Vec<Block>> = timed(&mut timings.blocks, || {
             kept_columns
                 .iter()
-                .map(|col| block::assemble_with_marks(col, leading, &checkboxes, &bands, body))
+                .map(|col| {
+                    block::assemble_with_marks(col, leading, &checkboxes, &dots, &bands, body)
+                })
                 .collect()
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();
@@ -1637,10 +1643,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // A bullet is a list's mark wherever its block ends up: a list
             // item set inside a drawing is the drawing's, and its bullet is
             // no part of what it says.
-            let text = match block::strip_leading_bullet(&scrubbed) {
-                Some(without) if matches!(kind, "doc:ListItem" | "doco:Figure") => {
+            let lead = b
+                .marker
+                .as_deref()
+                .and_then(|m| block::strip_run_lead(&scrubbed, m));
+            let text = match (block::strip_leading_bullet(&scrubbed), lead) {
+                (Some(without), _) if matches!(kind, "doc:ListItem" | "doco:Figure") => {
                     without.to_string()
                 }
+                // A dash or an arrow that marked a list's item is its marker,
+                // as a bullet is.
+                (_, Some(without)) if kind == "doc:ListItem" => without.to_string(),
                 _ => scrubbed,
             };
             page_elements.push(Element {
