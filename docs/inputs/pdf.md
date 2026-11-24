@@ -323,6 +323,15 @@ goes with the sign: `Comfortboard® 80`, not `Comfortboard 80` with a `®`
 heading the header line beside it. A sign alone on a line is never taken
 for a list's bullet.
 
+The line goes on past the sign from the word the sign marks. A 32pt
+title's `®` raised 19pt, to the cap height, is far above the baseline its
+title's next word is set on, and the title broke there: `PROCAT®` and
+`PROFESSIONAL`, two lines on one baseline. A sign is measured by its own
+size, not by the space set after it: a `™` with a space at the 17pt title's
+size behind it is the title's sign, `Emerald® Symmetry™`, not a run of text
+as large as the title. The same holds in running text: `Truebeam® 2.0
+linear accelerator` is one line.
+
 **Display titles over several lines.** A title set in display type and
 broken over several lines, each line centred or right-aligned, is one
 block: `PROCAT® PROFESSIONAL INSULATION SYSTEM`, not four headings. Such

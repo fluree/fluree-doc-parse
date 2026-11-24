@@ -544,6 +544,19 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 .find(|&j| !glyphs[j].text.trim().is_empty())
                 .filter(|&j| glyphs[prev].text.trim().is_empty() && is_sign(&glyphs[j].text))
                 .unwrap_or(prev);
+            // Past a raised sign, the line goes on from the word it marks: a
+            // display title's `®`, raised to the cap height of 32pt type, sits
+            // far above the baseline the title's next word and the space
+            // before it are set on (`PROCAT®` `PROFESSIONAL`).
+            let marked = is_sign(&glyphs[inked].text)
+                .then(|| {
+                    cur.iter()
+                        .rev()
+                        .copied()
+                        .find(|&j| !glyphs[j].text.trim().is_empty() && !is_sign(&glyphs[j].text))
+                })
+                .flatten()
+                .unwrap_or(inked);
             // Between display type and body text the gutter is measured in
             // the body text's size, as the baseline is ([`shares_baseline`]):
             // a margin title's last letter stood 40pt from the column beside
@@ -571,7 +584,8 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
             // below.
             if (caps.contains(&prev)
                 || joins_line(&glyphs[prev], &glyphs[i], vertical, adv)
-                || joins_line(&glyphs[inked], &glyphs[i], vertical, adv))
+                || joins_line(&glyphs[inked], &glyphs[i], vertical, adv)
+                || joins_line(&glyphs[marked], &glyphs[i], vertical, adv))
                 && !block_gap(&glyphs[prev], &glyphs[i], adv)
                 && !display_gap
             {
@@ -1012,11 +1026,18 @@ fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool,
         if clusters[s].is_empty() {
             continue;
         }
-        let small = size_of(&clusters[s]) as f64;
-        let min_ratio = if inked(&clusters[s])
+        let signs_alone = inked(&clusters[s])
             .iter()
-            .all(|&i| is_sign(&glyphs[i].text))
-        {
+            .all(|&i| is_sign(&glyphs[i].text));
+        // A sign is measured in its ink: a `™` and the space after it, set
+        // at the title's size, is a sign of the title's, not a run as large
+        // as it.
+        let small = if signs_alone {
+            size_of(&inked(&clusters[s]))
+        } else {
+            size_of(&clusters[s])
+        } as f64;
+        let min_ratio = if signs_alone {
             SIGN_MIN_RATIO
         } else {
             SCRIPT_MIN_RATIO
@@ -2420,6 +2441,32 @@ mod tests {
             "{:?}",
             lines[0].text
         );
+    }
+
+    #[test]
+    fn a_display_title_goes_on_past_its_raised_sign() {
+        let space = |x: f64, baseline: f64, size: f32| Glyph {
+            bbox: None,
+            ..sized(" ", x, baseline, size)
+        };
+        // A 9.6pt `®` raised 19pt, to the cap height of 32pt type, then a
+        // space on the title's baseline and the title's next word.
+        let mut v = sized_word("PROCAT", 277.0, 55.61, 32.0);
+        v.push(sized("\u{00AE}", 374.0, 36.61, 9.6));
+        v.push(space(382.0, 55.61, 14.4));
+        v.extend(sized_word("PROFESSIONAL", 390.0, 55.61, 32.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["PROCAT\u{00AE} PROFESSIONAL"]);
+        // A `™` at the end of a 17pt title, with a space after it at the
+        // title's size, on a baseline of its own between the two.
+        let mut v = sized_word("Symmetry", 116.0, 110.4, 16.98);
+        v.push(sized("\u{2122}", 185.0, 104.4, 10.98));
+        v.push(space(196.0, 102.9, 16.98));
+        let texts: Vec<String> = assemble(&v)
+            .into_iter()
+            .map(|l| l.text.trim().to_string())
+            .collect();
+        assert_eq!(texts, ["Symmetry\u{2122}"]);
     }
 
     #[test]
