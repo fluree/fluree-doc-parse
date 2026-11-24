@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series programmable controller digest (28 pages). Page 28 sets five dimension drawings, drawn with artwork past the page's edge and a background larger than the page."
+  },
+  "notes": [
+    "#116/#117: the page's shapes were measured unclipped, and one background larger than the page joined every shape into a group too large to be a drawing. The page had no region: its dimension labels were paragraphs, list items and tables."
+  ],
+  "checks": [
+    {
+      "id": "callout-in-the-drawing",
+      "found": "2026-11-24",
+      "issue": "The hole callout `4-M4 M0.16` was read as body text (an h1, before #140).",
+      "element": {
+        "type": "doco:Figure",
+        "text": "4-M4 M0.16"
+      }
+    }
+  ]
+}

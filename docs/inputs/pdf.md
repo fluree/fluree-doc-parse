@@ -268,6 +268,65 @@ Measured Unicode resolution: **99.97%** on a 200-document Latin corpus,
 **99.73%** on CJK, with **zero** replacement characters on Japanese and
 Chinese government documents.
 
+## Charts and diagrams
+
+A chart's text extracts perfectly and still means the wrong thing read in
+page order: a donut's region names and percentages interleave by position,
+and half the pairings a reader would make are wrong. So the text of a drawn
+chart or diagram comes out as `doco:Figure` elements, each carrying its
+figure's identifier, with evidence `fills`. Nothing is moved or dropped; the
+elements say these fragments belong together, here.
+
+**What a drawing is.** Drawings are found from the shapes a page draws, not
+from its text:
+
+- A filled shape is measured by what can be seen of it. A polar chart that
+  strokes whole circles and clips them to a quarter, or artwork drawn past
+  the page edge, counts only where it shows.
+- A shape with text set on it to be read is that text's background, not part
+  of a drawing. That covers a panel behind a paragraph, a band behind a
+  specification row, a callout box, a side tab, a form's boxes and a table's
+  shaded cells, along with the strips along a panel's edges. A table's cells
+  go together: a cell holding a number, or nothing, that abuts one holding
+  words in its row or its column is a cell too, and shading set as cells in
+  rows and columns is a table's, however it is grouped. A plot's background,
+  holding the bars and scattered labels, is part of its chart. A diagram's
+  boxes hold labels set well under the page's text, and are part of the
+  diagram.
+- A background as large as the page joins nothing. Drawings set close
+  together are found as separate drawings, rather than lost as one shape too
+  large to be a drawing.
+
+**What a figure's text is.** A figure holds the text set inside its drawing,
+and the labels around it:
+
+- text beside, above or below the drawing and near it, or set smaller than
+  the page's prose and near it or near another label;
+- never further from the drawing than the drawing's own size.
+
+A list item, a sentence of more than fifteen words, and a block too wide to be
+a label stay the page's, however close they are set. So does a line that runs
+on, at the same size and left edge, from text the figure did not take, such
+as the last of a column of notes or the first bullets of a list. The rectangle
+around a drawing and its labels is not part of the figure. A paragraph or
+heading inside it that was not taken as a label keeps its type.
+
+**Headings near drawings.** A heading set larger than the body that the
+figure took as a label keeps its type when the document sets headings at
+that size and weight away from any drawing: `Operation` over a drawing of the
+control it describes is the document's heading. A caption (`Figure 3: …`) is
+the figure's, and so is a title set in bold at the body's size, which is how
+charts set theirs. Inside the drawing, a numbered line such as `4-M4` is a
+callout and not a section.
+
+**Grids inside drawings.** Labels a diagram sets in rows can line up as a
+table. A grid inside a drawing is emitted as that figure's text, not as a
+`doco:Table`.
+
+**Body text size.** The size headings are measured against is taken from the
+text outside drawings. A diagram's many small labels do not make every
+caption beside it "larger than body".
+
 ## When PDF is hard
 
 Two failure modes, both detected rather than guessed:

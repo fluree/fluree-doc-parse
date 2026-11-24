@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// body prose runs 9-10pt, so a bare "larger than modal" test promoted 320
 /// paragraph fragments to headings. Font size only counts alongside the length
 /// and line-count limits below.
-const HEADING_SIZE_MARGIN: f64 = 0.15;
+pub(crate) const HEADING_SIZE_MARGIN: f64 = 0.15;
 
 /// Shortest word that can end a sentence inside a heading candidate. Below this
 /// the dot is abbreviating (`vs.`, `Sec.`, `Fig.`), not terminating.
@@ -501,10 +501,9 @@ fn runs_into_prose(text: &str) -> bool {
 /// **Not wired into heading detection.** Measured twice (all evidence paths,
 /// then bold-only): −0.0004 overall both times, because this corpus' ground
 /// truth blesses prominent captions as headings often enough that MHS's
-/// recall bias punishes the exclusion. Kept for the DoCO emitter, where
-/// doco:Caption is simply the truth regardless of the benchmark's taste.
-#[allow(dead_code)]
-fn is_caption(text: &str) -> bool {
+/// recall bias punishes the exclusion. Used where a figure has taken a
+/// caption as its label: a caption is the figure's, whatever its style.
+pub(crate) fn is_caption(text: &str) -> bool {
     let mut words = text.split_whitespace();
     let Some(first) = words.next() else {
         return false;
@@ -595,11 +594,25 @@ fn style_of(b: &Block) -> Style {
 /// Weighting by lines rather than blocks stops a page of one-line captions
 /// from redefining what "body" means.
 pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
+    body_font_size_outside(pages, &[])
+}
+
+/// The body size, over the blocks `drawn` does not mark: the text of
+/// drawings, by page and block, is set aside. A diagram is many one-line
+/// labels, and 64 of them outweighed a 25-line column of prose. With
+/// nothing left once drawings are set aside, every block counts.
+pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
+    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
     let mut hist: HashMap<i32, usize> = HashMap::new();
-    for blocks in pages {
-        for b in blocks {
-            *hist.entry((b.font_size * 4.0).round() as i32).or_default() += b.lines.len();
+    for (p, blocks) in pages.iter().enumerate() {
+        for (i, b) in blocks.iter().enumerate() {
+            if !is_drawn(p, i) {
+                *hist.entry((b.font_size * 4.0).round() as i32).or_default() += b.lines.len();
+            }
         }
+    }
+    if hist.is_empty() && !drawn.is_empty() {
+        return body_font_size(pages);
     }
     hist.iter()
         .max_by(|(size_a, count_a), (size_b, count_b)| {
@@ -646,7 +659,11 @@ fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
 
 /// Detect headings across a document.
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
-    let body = body_font_size(pages);
+    detect_with_body(pages, outline, body_font_size(pages))
+}
+
+/// Detect headings across a document whose body size is known.
+pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32) -> Vec<Heading> {
     // Numbered lines that recur, by their text; see the check in the loop
     // below. Counted as occurrences rather than pages: a form answers
     // several items on one page with the same code. A contents entry does
