@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-23: both lists' first rows were read as headers, so every value was named after the grade's description (#51). A bold label column with nothing else bold already read as fields; here the shaded labels and the watermark read as shaded rows, and the bold phrases in the grade 8 values as bold cells.",
-    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it."
   ],
   "checks": [
     {
@@ -33,6 +34,15 @@
       "found": "2026-11-24",
       "issue": "The e-mail address in the contact band was a level-4 heading on both pages.",
       "no_section": "sales@"
+    },
+    {
+      "id": "category-line-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The 15pt category line above the 23pt title banner was an empty level-3 section ahead of it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "CAP SCREWS & BOLTS"
+      }
     }
   ]
 }

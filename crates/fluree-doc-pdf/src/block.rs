@@ -361,6 +361,11 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     if n == 0 || n > MAX_MARKER_CHARS {
         return false;
     }
+    // A registered or trade mark sign standing alone is a word's, set
+    // beside a display title it did not join: never a bullet.
+    if l.text.split_whitespace().all(crate::line::is_sign) {
+        return false;
+    }
     if !marker_shaped(&l.text) {
         return false;
     }
@@ -380,7 +385,7 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
 
 /// Group one page's lines into blocks, given the document's modal leading.
 pub fn assemble(lines: &[Line], leading: f64) -> Vec<Block> {
-    assemble_with_marks(lines, leading, &[], &[])
+    assemble_with_marks(lines, leading, &[], &[], 0.0)
 }
 
 /// The fill a line sits in: the smallest one that spans it horizontally and
@@ -429,14 +434,18 @@ fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
 /// Assemble blocks, treating each supplied checkbox as a list marker — the
 /// line it introduces starts its own block and carries the marker — and each
 /// supplied fill as a band no block crosses; see [`band_of`].
+///
+/// `body` is the page's body size ([`body_size`]), the measure display type
+/// is told by; zero takes the column's own.
 pub fn assemble_with_marks(
     lines: &[Line],
     leading: f64,
     checkboxes: &[BBox],
     bands: &[BBox],
+    body: f64,
 ) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
-    let edge = Edge::of(lines);
+    let edge = Edge::of(lines, body);
     let left_edge = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
     // Separate markers first so they cannot act as block boundaries.
     let mut content: Vec<Line> = Vec::new();
@@ -681,11 +690,61 @@ fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge, hang: bool) ->
     // full line ended because it ran out of room, so the next line continues
     // the same paragraph however its left edge moves.
     let indent = (next.bbox.x0 - prev.bbox.x0).abs() / fs;
-    if indent > INDENT_TOLERANCE && !prev_full && !(hang && hangs_under(prev, next, fs, edge)) {
+    if indent > INDENT_TOLERANCE
+        && !prev_full
+        && !(hang && hangs_under(prev, next, fs, edge))
+        && !display_aligned(prev, next, fs, edge)
+    {
         return false;
     }
 
     true
+}
+
+/// The size most of a page's prose lines are set in, across all its
+/// columns: the measure display type is told by. One column can be all
+/// display type once a table's rows leave it, so a column's own lines are
+/// no measure, and a page's tables, set small and many to the page, are
+/// none either.
+pub fn body_size<'a>(lines: impl IntoIterator<Item = &'a Line>) -> f64 {
+    let mut sizes: Vec<i64> = lines
+        .into_iter()
+        .map(|l| (l.font_size as f64 * 4.0).round() as i64)
+        .collect();
+    sizes.sort_unstable();
+    sizes
+        .chunk_by(|a, b| a == b)
+        .max_by(|a, b| a.len().cmp(&b.len()).then(b[0].cmp(&a[0])))
+        .map_or(0.0, |run| run[0] as f64 / 4.0)
+}
+
+/// Smallest size, against the page's body, of a display line.
+const DISPLAY_LINE_RATIO: f64 = 1.3;
+
+/// `prev` and `next` are lines of one display title set centred or
+/// right-aligned: they start where their length puts them, so their left
+/// edges differ by design, and neither reaches the column's edge, which the
+/// body text sets. `PROCAT®` / `PROFESSIONAL` / `INSULATION` / `SYSTEM`
+/// right-aligned at 28pt, or `Author's Note to the` / `2021 Edition`
+/// centred at 24pt, are each one title, not a heading per line.
+///
+/// Display type only: body lines that happen to share a centre are a list
+/// or an address ended by hand. And short lines only: a line that runs to
+/// the column's edge is text wrapping there, which shares its right edge
+/// with every line of a justified paragraph. A line that opens with a list
+/// number is a slide's next item, not the title's next line.
+fn display_aligned(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
+    if ordinal_prefix(&next.text).is_some() {
+        return false;
+    }
+    let display = |l: &Line| l.font_size as f64 >= edge.body * DISPLAY_LINE_RATIO;
+    let short = |l: &Line| l.bbox.x1 < edge.right - fs;
+    let centre = |l: &Line| (l.bbox.x0 + l.bbox.x1) / 2.0;
+    display(prev)
+        && display(next)
+        && short(next)
+        && ((centre(prev) - centre(next)).abs() <= fs * 0.5
+            || (prev.bbox.x1 - next.bbox.x1).abs() <= fs * 0.5)
 }
 
 /// Farthest, in ems, a bulleted item's wrapped lines start right of its
@@ -736,6 +795,8 @@ fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
 
 /// The right edge a column's text wraps at.
 struct Edge {
+    /// The page's body size, or the column's where none is given.
+    body: f64,
     right: f64,
     /// From the column's left edge to `right`.
     span: f64,
@@ -750,7 +811,7 @@ impl Edge {
     /// out past the rest (a centred notice under two columns, kept with the
     /// first) is not the measure, and taking it made no line of the column
     /// full. Where no two long lines agree, the widest line is.
-    fn of(lines: &[Line]) -> Edge {
+    fn of(lines: &[Line], body: f64) -> Edge {
         let left = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
         let mut ends: Vec<(f64, f64)> = lines
             .iter()
@@ -764,7 +825,18 @@ impl Edge {
             .find(|w| w[1].0 >= half && w[0].0 - w[1].0 <= w[0].1.max(w[1].1))
             .map(|w| w[0].0);
         let right = agreed.unwrap_or(widest);
+        let mut sizes: Vec<i64> = lines
+            .iter()
+            .map(|l| (l.font_size as f64 * 4.0).round() as i64)
+            .collect();
+        sizes.sort_unstable();
+        let own = sizes
+            .chunk_by(|a, b| a == b)
+            .max_by(|a, b| a.len().cmp(&b.len()).then(b[0].cmp(&a[0])))
+            .map_or(0.0, |run| run[0] as f64 / 4.0);
+        let body = if body > 0.0 { body } else { own };
         Edge {
+            body,
             right,
             span: (right - left).max(1.0),
             agreed: agreed.is_some(),
@@ -1435,7 +1507,7 @@ mod tests {
                 y1: i as f64 * 11.0 + 7.0,
             })
             .collect();
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], 0.0);
         assert_eq!(b.len(), 3, "one block per option, got {b:?}");
         assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{2610}")));
     }
@@ -1453,7 +1525,7 @@ mod tests {
             x1: 407.0,
             y1: 7.0,
         }];
-        let b = assemble_with_marks(&lines, 1.2, &boxes, &[]);
+        let b = assemble_with_marks(&lines, 1.2, &boxes, &[], 0.0);
         assert_eq!(b.len(), 1);
         assert!(b[0].marker.is_none());
     }
@@ -1870,7 +1942,7 @@ mod tests {
         let mut notice = l("As continued improvement is a policy", 80.0, 60.0, 10.0);
         notice.bbox.x1 = 500.0;
         lines.push(notice);
-        let edge = Edge::of(&lines);
+        let edge = Edge::of(&lines, 0.0);
         assert!(edge.agreed);
         assert_eq!(edge.right, 310.0);
     }
@@ -2188,7 +2260,7 @@ mod tests {
                 y1: 46.0,
             },
         ];
-        let b = assemble_with_marks(&lines, 1.48, &[], &bands);
+        let b = assemble_with_marks(&lines, 1.48, &[], &bands, 0.0);
         assert_eq!(b.len(), 2, "one block per band, got {b:?}");
         assert!(b[0].text().starts_with("Q12") && b[0].text().ends_with("materials"));
         assert!(b[1].text().starts_with("Q13"));
@@ -2206,7 +2278,7 @@ mod tests {
             x1: 400.0,
             y1: 30.0,
         }];
-        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands).len(), 1);
+        assert_eq!(assemble_with_marks(&lines, 1.2, &[], &bands, 0.0).len(), 1);
     }
 
     #[test]
@@ -2276,6 +2348,70 @@ mod tests {
             line.bbox.x1 = line.bbox.x0 + line.text.chars().count() as f64 * 8.0;
         }
         assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn a_display_title_set_right_aligned_or_centred_is_one_block() {
+        let at = |text: &str, x0: f64, x1: f64, y: f64, fs: f32| {
+            let mut line = l(text, x0, y, fs);
+            line.bbox.x1 = x1;
+            line
+        };
+        let body = |y: f64| {
+            at(
+                "Body text runs the full measure of the column here",
+                55.0,
+                400.0,
+                y,
+                8.0,
+            )
+        };
+        // Four 28pt lines right-aligned, over 8pt body text that sets the
+        // column's edge.
+        let lines = vec![
+            at("PROCAT\u{00AE}", 159.0, 252.0, 126.0, 28.0),
+            at("PROFESSIONAL", 82.0, 247.0, 159.0, 28.0),
+            at("INSULATION", 117.0, 246.0, 192.0, 28.0),
+            at("SYSTEM", 163.0, 246.0, 225.0, 28.0),
+            body(300.0),
+            body(310.0),
+            body(320.0),
+        ];
+        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], 8.0);
+        assert_eq!(
+            blocks[0].text(),
+            "PROCAT\u{00AE} PROFESSIONAL INSULATION SYSTEM"
+        );
+        // Centred.
+        let lines = vec![
+            at("Author's Note to the", 111.0, 351.0, 100.0, 24.0),
+            at("2021 Edition", 147.0, 315.0, 129.0, 24.0),
+            body(200.0),
+            body(210.0),
+        ];
+        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], 8.0);
+        assert_eq!(blocks[0].text(), "Author's Note to the 2021 Edition");
+        // Body-size lines sharing a centre are lines ended by hand.
+        let lines = vec![
+            at("Acme Corporation", 150.0, 250.0, 100.0, 8.0),
+            at("12 Main Street", 160.0, 240.0, 110.0, 8.0),
+            body(200.0),
+            body(210.0),
+        ];
+        let blocks = assemble_with_marks(&lines, 1.2, &[], &[], 8.0);
+        assert_eq!(blocks[0].text(), "Acme Corporation");
+    }
+
+    #[test]
+    fn a_sign_alone_on_its_line_is_not_a_list_marker() {
+        let sign = l("\u{00AE}", 247.0, 127.0, 16.0);
+        let title = l("PROCAT", 159.0, 126.0, 28.0);
+        assert!(!is_marker(&sign, Some(&title), 159.0));
+        assert!(is_marker(
+            &l("\u{2022}", 150.0, 126.0, 8.0),
+            Some(&title),
+            150.0
+        ));
     }
 
     #[test]

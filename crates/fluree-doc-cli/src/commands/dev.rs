@@ -597,6 +597,7 @@ fn pipeline(pdf: &Path) -> Doc {
         // the columns in the same order to line the indices up.
         let mut idx = 0usize;
         let mut out = Vec::new();
+        let page_body = block::body_size(cols.iter().flatten());
         for col in cols {
             let kept: Vec<fluree_doc_pdf::Line> = col
                 .iter()
@@ -611,9 +612,15 @@ fn pipeline(pdf: &Path) -> Doc {
             // checkboxes and row bands, as they do in the pipeline.
             let checkboxes = rule::checkboxes(&doc.pages[pi].fills);
             out.extend(
-                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi])
-                    .into_iter()
-                    .flat_map(block::split_structural_prefix),
+                block::assemble_with_marks(
+                    &kept,
+                    leading,
+                    &checkboxes,
+                    &fills_per_page[pi],
+                    page_body,
+                )
+                .into_iter()
+                .flat_map(block::split_structural_prefix),
             );
         }
         pages.push(out);

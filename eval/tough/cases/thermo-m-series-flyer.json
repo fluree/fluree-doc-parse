@@ -6,7 +6,8 @@
     "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
   },
   "notes": [
-    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it."
   ],
   "checks": [
     {
@@ -14,6 +15,15 @@
       "found": "2026-11-24",
       "issue": "The closing link line was a level-5 heading.",
       "no_section": "Learn more at"
+    },
+    {
+      "id": "category-tag-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The 12pt category tag above the 28pt title was an empty level-5 section ahead of it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Centrifugation"
+      }
     }
   ]
 }

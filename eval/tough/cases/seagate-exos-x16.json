@@ -6,7 +6,8 @@
     "about": "Seagate Exos X16 hard drive data sheet (3 pages). The cover sets a 12.7 pt tagline over the 20.2 pt product name, and the back page sets the site name at 10.5 pt above 6 pt legal text."
   },
   "notes": [
-    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#128): a kicker or tagline set in smaller type directly above the title opened an empty, deeper section ahead of it."
   ],
   "checks": [
     {
@@ -14,6 +15,15 @@
       "found": "2026-11-24",
       "issue": "The site name over the legal text was a level-3 heading, with the legal paragraph under it.",
       "no_section": "seagate.com"
+    },
+    {
+      "id": "tagline-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The 12.7pt tagline above the 20.2pt product name was an empty level-2 section ahead of the title.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Scalable. Responsive. Innovative."
+      }
     }
   ]
 }

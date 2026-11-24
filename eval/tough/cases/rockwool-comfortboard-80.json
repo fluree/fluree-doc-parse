@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
-    "2026-11-24 (#136): a degree set as a raised `o` read as the letter after a number and a space (`75 oF`)."
+    "2026-11-24 (#136): a degree set as a raised `o` read as the letter after a number and a space (`75 oF`).",
+    "2026-11-24 (#126): a raised ® beside a display title was dropped or joined a smaller line beside it, because the space glyph the producer set after it decided which line it was."
   ],
   "checks": [
     {
@@ -27,6 +28,32 @@
       "found": "2026-11-24",
       "issue": "`@ 24 °C` read `@ 24 oC`.",
       "text": "@ 24 °C"
+    },
+    {
+      "id": "cover-title-sign-kept",
+      "found": "2026-11-24",
+      "issue": "The cover title's raised ®, followed by a space glyph at its own size, stood alone and was read as a list marker and dropped.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Comfortboard® 80",
+        "evidence": "title"
+      }
+    },
+    {
+      "id": "page-2-title-sign-kept",
+      "found": "2026-11-24",
+      "issue": "On page 2 the ® was followed by a space glyph on the header line's baseline, and went to that line.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Comfortboard® 80",
+        "evidence": "font-size"
+      }
+    },
+    {
+      "id": "header-without-the-sign",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "no_text": "® Technical Data Sheet"
     }
   ]
 }

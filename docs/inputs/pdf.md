@@ -246,6 +246,21 @@ defines`, not `T` on its own, nor `T of those stories` two lines down.
 **Registered and trademark signs.** `®`, `™`, `©`, `℠` and `℗` belong to
 the word before them at any size: a 28pt title's `®` at 8.4pt, or a 3.5pt
 `®` after a 10pt `ProCat`, which came out `ProCat .` with the sign lost.
+Producers often set a space glyph after the sign, at the sign's size, at
+the next word's, or on the baseline of a smaller line beside the title. A
+space draws nothing, so it never decides which line a sign is on, and it
+goes with the sign: `Comfortboard® 80`, not `Comfortboard 80` with a `®`
+heading the header line beside it. A sign alone on a line is never taken
+for a list's bullet.
+
+**Display titles over several lines.** A title set in display type and
+broken over several lines, each line centred or right-aligned, is one
+block: `PROCAT® PROFESSIONAL INSULATION SYSTEM`, not four headings. Such
+lines start where their length puts them, so their left edges differ by
+design. Display type means larger than the body text of the page's prose,
+measured without the page's tables. Lines set at body size that share a
+centre, an address ended by hand, stay apart, and so does a line opening
+with a list's number.
 
 **Text the producer states.** Where a PDF wraps what it draws in marked
 content with `/ActualText`, that text stands for the glyphs inside: a browser

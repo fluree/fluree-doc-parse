@@ -160,6 +160,17 @@ begins and requiring prominence, vertical isolation or a contents label.
 Worth **+0.048 MHS**, recovering eight zero-or-low-scoring documents with no
 regressions.
 
+The title is the largest of those blocks, not the first: a cover often sets
+its publisher, a category or a tagline above the title in smaller type
+(`Scalable. Responsive. Innovative.` over `Exos X16`). Such a kicker, set
+directly above the title with no text between them, is not a section of its
+own either. As a heading it ranked below the title, so it opened a deeper
+section that closed at the title with nothing in it. It is read as text,
+where the page sets it. The benchmark's ground truth keeps a few kickers as
+headings (`Chapter 3` over `Numerical differentiation`), and those pages
+score lower. Others, such as journal banners (`Open Access`, `RESEARCH
+ARTICLE`), it does not keep.
+
 ## Table of contents suppression
 
 Headings after a contents marker on the same page are suppressed — the entries
