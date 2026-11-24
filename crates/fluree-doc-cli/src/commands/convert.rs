@@ -257,6 +257,8 @@ fn convert_path(
     quiet: bool,
 ) -> Result<String, String> {
     use common::SourceKind;
+    // What the OCR engine says about an image it reads names this file.
+    let _doc = super::ocr::Reading::of(path);
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let src = Source::file(path, slot, &data, args);
     let kind = common::source_kind(path);
