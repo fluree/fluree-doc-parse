@@ -133,6 +133,15 @@ fn numbering_depth(text: &str) -> Option<usize> {
     if rest.is_empty() || !rest.chars().next().is_some_and(|c| c.is_alphabetic()) {
         return None;
     }
+    // A number hyphenated to the word after it is part of that word, not a
+    // label: `3-Way Wiring`, `2-Pole`, a drawing's `4-M4` hole callout. The
+    // dash separators above are set with a space after them.
+    let mut after = text[head.len()..].chars();
+    if matches!(after.next(), Some('-' | '\u{2010}' | '\u{2011}'))
+        && after.next().is_some_and(|c| !c.is_whitespace())
+    {
+        return None;
+    }
     // Section labels introduce titles, not sentence continuations. Applying
     // this to every numbering form (not only bare integers) rejects OCR
     // fragments such as `III. his report defines` and chart prose such as
@@ -159,6 +168,17 @@ fn numbering_depth(text: &str) -> Option<usize> {
     if parts.is_empty() || parts.len() > MAX_LEVEL {
         return None;
     }
+    // Initials, not a section number: `U.S.A. FOODSERVICE DIVISION`, `U.S.
+    // Department of…`. Lettered numbering sets a letter at its first level
+    // only (`B.1`, `A.2.3`), so a label of single letters alone is an
+    // abbreviation, unless it opens with a roman numeral an outline counts
+    // with (`I.A`, `V.C`).
+    if parts.len() >= 2
+        && parts.iter().all(|p| single_letter(p))
+        && !matches!(parts[0], "I" | "V" | "X")
+    {
+        return None;
+    }
 
     // Each component is a decimal section number, a roman numeral, or a single
     // letter (appendix style: `B.1 Large Language Models`). Mixed forms are
@@ -171,7 +191,7 @@ fn numbering_depth(text: &str) -> Option<usize> {
             }
             continue;
         }
-        if is_roman(p) || (p.len() == 1 && p.chars().all(|c| c.is_ascii_uppercase())) {
+        if is_roman(p) || single_letter(p) {
             saw_alpha = true;
             continue;
         }
@@ -198,6 +218,25 @@ fn numbering_depth(text: &str) -> Option<usize> {
         return None;
     }
     Some(parts.len())
+}
+
+fn single_letter(p: &str) -> bool {
+    p.len() == 1 && p.chars().all(|c| c.is_ascii_uppercase())
+}
+
+/// The letter a block opens with as a label, `B.` followed by a space.
+fn letter_label(text: &str) -> Option<char> {
+    let mut head = text.split_whitespace().next()?.chars();
+    match (head.next(), head.next(), head.next()) {
+        (Some(c), Some('.'), None) if c.is_ascii_uppercase() => Some(c),
+        _ => None,
+    }
+}
+
+/// The letter of a lettered section label, `B. Related Works`, or of an
+/// initial set the same way, `J. Example`; the caller tells them apart.
+fn single_letter_label(text: &str) -> Option<char> {
+    letter_label(text).filter(|_| numbering_depth(text).is_some())
 }
 
 /// Uppercase roman numeral, used for appendix and front-matter sections
@@ -299,7 +338,100 @@ fn title_like(text: &str) -> bool {
     if runs_into_prose(t) {
         return false;
     }
+    // Where to look, write or call, set bold or large at the foot of a
+    // data sheet: `seagate.com`, `Learn more at thermofisher.com/centrifuges`,
+    // `For technical service call: 1-800-248-9606`. No section is titled
+    // with an address.
+    if ends_with_contact(t) {
+        return false;
+    }
     !starts_like_list_item(t)
+}
+
+/// The line closes with a web address, a domain, an e-mail address or a
+/// phone number, alone or after a few words leading in to it.
+fn ends_with_contact(text: &str) -> bool {
+    let tokens: Vec<&str> = text
+        .split_whitespace()
+        .map(|w| w.trim_end_matches(['.', ',', ';', ':', ')', '\u{AE}', '\u{2122}']))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let Some(last) = tokens.last() else {
+        return false;
+    };
+    web_address(last) || phone_number(&tokens)
+}
+
+/// Common top-level domains. A bare domain must end in one of them, so a
+/// product name with a dot in it (`Node.js`) is not an address.
+const TOP_LEVEL_DOMAINS: &[&str] = &[
+    "com", "org", "net", "gov", "edu", "mil", "int", "info", "biz", "io", "co", "us", "uk", "ca",
+    "de", "fr", "eu", "es", "it", "nl", "be", "ch", "at", "se", "dk", "fi", "no", "ie", "pl", "pt",
+    "cz", "jp", "cn", "kr", "in", "au", "nz", "br", "mx",
+];
+
+/// `https://…`, `www.…`, `name@host.tld`, or a lowercase host with a known
+/// top-level domain and an optional path (`hermanmiller.com/aeron-chair`).
+/// Lowercase, because a capitalised `ASP.NET` is a name.
+fn web_address(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("www.") {
+        return true;
+    }
+    let (user, host) = match token.split_once('@') {
+        Some((user, host)) => (Some(user), host),
+        None => (None, token),
+    };
+    if user.is_some_and(str::is_empty) {
+        return false;
+    }
+    let host = host.split('/').next().unwrap_or("");
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+        && labels[labels.len() - 2].chars().count() >= 2
+        && TOP_LEVEL_DOMAINS.contains(labels.last().unwrap_or(&""))
+}
+
+/// A phone number closing the line: `1-800-248-9606`, `(636)272-2408`,
+/// `800.424.8783`, a vanity `1-800-GET-PINK`, or an international number
+/// opening with `+`. North American numbers end in a group of three and a
+/// group of four, which a date (`2019-07-25`), a standard's year
+/// (`2043-2013`) or a count (`COVID-19`) does not.
+fn phone_number(tokens: &[&str]) -> bool {
+    let phoneish = |t: &str| {
+        t.chars().any(|c| c.is_ascii_digit())
+            && t.chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase() || "()+-./".contains(c))
+    };
+    let run = tokens.iter().rev().take_while(|t| phoneish(t)).count();
+    if run == 0 {
+        return false;
+    }
+    let run = &tokens[tokens.len() - run..];
+    let groups: Vec<&str> = run
+        .iter()
+        .flat_map(|t| t.split(['(', ')', '+', '-', '.', '/']))
+        .filter(|g| !g.is_empty())
+        .collect();
+    let digit_group = |g: &str| g.chars().all(|c| c.is_ascii_digit());
+    let letter_group = |g: &str| g.chars().all(|c| c.is_ascii_uppercase());
+    if !groups.iter().all(|g| digit_group(g) || letter_group(g)) || !digit_group(groups[0]) {
+        return false;
+    }
+    let digits: usize = groups.iter().map(|g| g.len()).sum();
+    if run[0].starts_with('+') {
+        return digits >= 8;
+    }
+    // Two groups must come from one token, `272-2408`: two numbers set
+    // apart by a space are not a phone number.
+    let joined = groups.len() >= 3 || run.len() == 1;
+    let n = groups.len();
+    joined && n >= 2 && digits >= 7 && groups[n - 1].len() == 4 && groups[n - 2].len() == 3
 }
 
 /// A bold run-in lead-in, not a heading: `**Filtered task names.** We present
@@ -528,6 +660,27 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             .map(|(label, _)| label)
             .collect()
     };
+    // Letters that open a block as a label somewhere in the document, a
+    // heading's or a run-in paragraph's (`A. COMMON STOCK. The
+    // Corporation…`). A lettered section has a neighbour in its sequence,
+    // `A.` before `B.`; an initial, `J. Example`, has none. I, V and X stand
+    // alone as roman numerals often enough (`I. Introduction`) to keep their
+    // reading.
+    let letter_labels: std::collections::HashSet<char> = pages
+        .iter()
+        .flatten()
+        .filter_map(|b| letter_label(&b.text()))
+        .collect();
+    let initial = |text: &str| -> bool {
+        single_letter_label(text).is_some_and(|c| {
+            let near = |d: i32| char::from_u32((c as i32 + d) as u32);
+            !matches!(c, 'I' | 'V' | 'X')
+                && ![near(-1), near(1)]
+                    .iter()
+                    .flatten()
+                    .any(|n| letter_labels.contains(n))
+        })
+    };
     let coded = |text: &str| -> bool {
         has_bare_number_label(text)
             && text
@@ -740,7 +893,7 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             }
             // 3. Numbering states its own depth — unless the block is a
             // list's item, whose number counts off from the item before it.
-            if let Some(depth) = numbering_depth(&text) {
+            if let Some(depth) = numbering_depth(&text).filter(|_| !initial(&text)) {
                 if b.marker.is_some()
                     || !bare_numbering_is_corroborated(&text, b, body)
                     || coded(&text)
@@ -1088,6 +1241,96 @@ mod tests {
         );
         // A bare capital with no dot is too weak to be a section label.
         assert_eq!(numbering_depth("A test of the system"), None);
+    }
+
+    #[test]
+    fn a_number_hyphenated_into_a_word_is_not_a_label() {
+        assert_eq!(
+            numbering_depth("3-Way Wiring (Using 3-Way Mechanical Switch)"),
+            None
+        );
+        assert_eq!(numbering_depth("4-M4 M0.16"), None);
+        assert_eq!(numbering_depth("2-Pole Breakers"), None);
+        // A dash set off by a space still separates the label.
+        assert_eq!(numbering_depth("02- Prepare Your Content"), Some(1));
+        assert_eq!(
+            numbering_depth("01 - Find Open Educational Resources"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn initials_are_not_lettered_numbering() {
+        assert_eq!(numbering_depth("U.S.A. FOODSERVICE DIVISION"), None);
+        assert_eq!(numbering_depth("U.S. Department of Energy"), None);
+        assert_eq!(numbering_depth("E.U. Regulation"), None);
+        // A letter after a roman numeral, or a number after a letter, is an
+        // outline.
+        assert_eq!(numbering_depth("I.A. Purpose"), Some(2));
+        assert_eq!(numbering_depth("B.1 Large Language Models"), Some(2));
+        assert_eq!(single_letter_label("J. Example"), Some('J'));
+        assert_eq!(single_letter_label("B. Related Works"), Some('B'));
+        assert_eq!(single_letter_label("B.1 Large Language Models"), None);
+        assert_eq!(single_letter_label("Results"), None);
+    }
+
+    #[test]
+    fn a_lone_initial_is_not_a_section_but_a_lettered_sequence_is() {
+        let page = vec![
+            blk("Prepared by:", 10.0, 1),
+            blk("J. Example", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+        ];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().all(|h| h.text != "J. Example"), "{hs:?}");
+        let page = vec![
+            blk("A. Purpose", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+            blk("B. Scope", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+        ];
+        let hs = detect(&[page], &[]);
+        assert_eq!(
+            hs.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(),
+            ["A. Purpose", "B. Scope"]
+        );
+        let page = vec![
+            blk("I. Introduction", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+        ];
+        assert_eq!(detect(&[page], &[]).len(), 1);
+    }
+
+    #[test]
+    fn contact_lines_are_not_title_like() {
+        for t in [
+            "seagate.com",
+            "hermanmiller.com/aeron-chair",
+            "Learn more at thermofisher.com/centrifuges",
+            "Your local distributor: www.eppendorf.com/contact",
+            "2016.02 panasonic.net/id/pidsx/global",
+            "sales@example.com",
+            "For technical service call: 1-800-248-9606",
+            "Customer Service 1-800-346-1272 | Help Line 1-800-GET-PINK\u{AE}",
+            "Fax (636) 272-2408",
+            "Phone 800.424.8783",
+            "Telefon +49 40 538 01-0",
+            "https://example.org/report",
+        ] {
+            assert!(!title_like(t), "{t}");
+        }
+        for t in [
+            "Introduction to ASP.NET",
+            "Node.js Guide",
+            "Meeting Minutes 2019-07-25",
+            "UL 2043-2013 Compliance",
+            "COVID-19",
+            "Highlights 2023 2024",
+            "Route 101 2024",
+            "T-49-HC",
+        ] {
+            assert!(title_like(t), "{t}");
+        }
     }
 
     #[test]

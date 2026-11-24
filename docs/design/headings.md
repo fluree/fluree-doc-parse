@@ -70,6 +70,34 @@ Three tests keep them out, none of which touches `5.3.1`:
 A block that carries a list marker is a list's item, and its number counts
 off from the item before it, so numbering evidence is never read from one.
 
+Two label shapes look like numbering and are words:
+
+- **A number hyphenated into a word**: `3-Way Wiring`, `2-Pole`, a
+  drawing's `4-M4` hole callout. A dash separates a label from its title only
+  with a space after it (`02- Prepare Your Content`).
+- **Initials**: `U.S.A. FOODSERVICE DIVISION`, `U.S. Department of…`.
+  Lettered numbering puts a letter at its first level only (`B.1`,
+  `A.2.3`), so a label made of single letters is an abbreviation, unless it
+  opens with a roman numeral (`I.A`). A lone letter with a dot, `B. Scope`,
+  is a section only where a neighbour in its sequence, `A.` or `C.`, opens
+  another block in the document. Otherwise it is an initial (`J. Example`).
+  `I.`, `V.` and `X.` keep their roman reading alone.
+
+## Addresses are not titles
+
+A line that ends in a web address, a domain, an e-mail address or a phone
+number is never a heading, however it is set. Examples: `seagate.com`,
+`Learn more at thermofisher.com/centrifuges`, `For technical service call:
+1-800-248-9606`. Data sheets set these bold or large at the foot of a page,
+and as headings they open a section that the legal text or the order table
+below falls into.
+
+A bare domain needs a lowercase host and a common top-level domain, so a
+name such as `ASP.NET` is not one. A phone number ends in a group of three
+digits and a group of four, or opens with `+`. A date, a standard's year
+(`2043-2013`) or a count (`COVID-19`) fails that test. An outline entry can
+still name such a line as a heading.
+
 ## The outline tree
 
 **The signal no benchmarked engine uses.** A PDF's outline (bookmark) tree is

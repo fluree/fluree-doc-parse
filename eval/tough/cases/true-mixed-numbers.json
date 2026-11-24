@@ -6,7 +6,8 @@
     "about": "True Manufacturing T-49-HC reach-in refrigerator spec sheet (2 pages). Its dimensions are mixed numbers typeset with no space before the fraction, three ways: the font's own fraction figures in the text and the table, a numerator set smaller and raised in the drawing, and halves the font draws whole."
   },
   "notes": [
-    "2026-11-23: each mixed number read as one number, its fraction joined to the whole number: 223/8\"D for 22 3/8\"D (#46). The drawing's raised numerators read as powers: 78⁵/16\"."
+    "2026-11-23: each mixed number read as one number, its fraction joined to the whole number: 223/8\"D for 22 3/8\"D (#46). The drawing's raised numerators read as powers: 78⁵/16\".",
+    "2026-11-24 (#127): capital initials, each with a dot, were read as lettered section numbering."
   ],
   "checks": [
     {
@@ -38,6 +39,12 @@
       "found": "2026-11-23",
       "issue": "No whole number takes its fraction's numerator.",
       "no_text": "223/8"
+    },
+    {
+      "id": "initials-not-numbering",
+      "found": "2026-11-24",
+      "issue": "`U.S.A.` was read as section numbering three deep, so the letterhead line was a level-3 heading.",
+      "no_section": "U.S.A."
     }
   ]
 }

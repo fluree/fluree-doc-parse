@@ -6,7 +6,8 @@
     "about": "Owens Corning ProCat insulation data sheet, Spanish (2 pages). The cover sets a 28 pt title, PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL, at the left of a three-line 10 pt description, and its body text marks the product name with a 3.5 pt ®."
   },
   "notes": [
-    "The title's size set the baseline and gutter tolerances for the description beside it, so the description's middle line was read into the title's line: PROCAT suelto que no es adherible… SISTEMA DE, the description cut in three. The title's ® was then read as a list marker, and the small ® in the text was lost (ProCat .)."
+    "The title's size set the baseline and gutter tolerances for the description beside it, so the description's middle line was read into the title's line: PROCAT suelto que no es adherible… SISTEMA DE, the description cut in three. The title's ® was then read as a list marker, and the small ® in the text was lost (ProCat .).",
+    "2026-11-24 (#122, #123): a contact line no longer counts as a bold heading candidate, so the five bold heads on page 1 no longer push the document past its bold cap."
   ],
   "checks": [
     {
@@ -39,6 +40,24 @@
       "found": "2026-11-23",
       "issue": "#88: a 3.5 pt ® after the product name was lost from its word.",
       "no_text": "ProCat ."
+    },
+    {
+      "id": "bold-heads-kept",
+      "found": "2026-11-24",
+      "issue": "The bold section heads were paragraphs: the contact lines counted toward the document's cap on bold headings and bold was switched off.",
+      "section": {
+        "title": "Funciones",
+        "within": "PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL"
+      }
+    },
+    {
+      "id": "page-2-bold-head-kept",
+      "found": "2026-11-24",
+      "issue": "As above, on page 2.",
+      "section": {
+        "title": "Fibra de vidrio y formación de moho",
+        "within": "PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL"
+      }
     }
   ]
 }

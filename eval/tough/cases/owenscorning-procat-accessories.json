@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "owenscorning-procat-accessories.pdf",
+    "url": "https://www.owenscorning.com/dms/10015771",
+    "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
+    "about": "Owens Corning ProCat professional insulation system accessory list (9 pages). The cover sets a four-line right-aligned 28 pt title with a 5.7 pt raised ® after PROCAT, and the last page closes on a bold contact line above the order table."
+  },
+  "notes": [
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+  ],
+  "checks": [
+    {
+      "id": "contact-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The bold contact line was a level-6 heading, with the order table nested under it.",
+      "no_section": "Owens Corning Customer Service"
+    }
+  ]
+}

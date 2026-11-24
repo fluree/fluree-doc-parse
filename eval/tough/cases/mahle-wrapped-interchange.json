@@ -6,7 +6,8 @@
     "about": "MAHLE aftermarket catalogue AP-90-12. Its interchange lists wrap each competitor number and its MAHLE Clevite number into side-by-side copies of the same columns, two or three to a record, across the page."
   },
   "notes": [
-    "2026-11-23: every cell's doc:rowHeader was the row's first cell, the first copy's key, so a MAHLE number in a later copy was paired with a competitor number it has nothing to do with (#52)."
+    "2026-11-23: every cell's doc:rowHeader was the row's first cell, the first copy's key, so a MAHLE number in a later copy was paired with a competitor number it has nothing to do with (#52).",
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
   ],
   "checks": [
     {
@@ -20,6 +21,18 @@
       "found": "2026-11-23",
       "issue": "In a list wrapped three columns to a record, the second copy's competitor (IHC, for 1811191-C3) was keyed by the first copy's number, 14079426.",
       "cell": {"value": "IHC", "column": "COMPETITOR", "row": "1811191-C3"}
+    },
+    {
+      "id": "service-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The service phone line was a level-1 heading.",
+      "no_section": "For technical service call"
+    },
+    {
+      "id": "french-service-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "As above, in French.",
+      "no_section": "Pour joindre le service technique"
     }
   ]
 }

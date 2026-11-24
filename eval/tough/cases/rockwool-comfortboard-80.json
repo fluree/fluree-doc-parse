@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "rockwool-comfortboard-80.pdf",
+    "url": "https://www.rockwool.com/siteassets/o2-rockwool/documentation/technical-data-sheets/residential/comfortboard-80-non-structural-sheathing-continuous-insulation-techdata.pdf",
+    "sha256": "fd44762c3241aa494fe7124c1b96dd839b7f8bbbcba31b29d03029074fed84bb",
+    "about": "ROCKWOOL Comfortboard 80 technical data sheet (2 pages). Its 36 pt and 26 pt titles carry a small raised ®, and page 2 ends a paragraph on a bold web address."
+  },
+  "notes": [
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+  ],
+  "checks": [
+    {
+      "id": "url-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The bold web address ending the certifications paragraph was a level-5 heading.",
+      "no_section": "rockwool.com"
+    }
+  ]
+}
