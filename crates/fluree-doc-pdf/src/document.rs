@@ -252,18 +252,22 @@ fn header_spans(continues_left: &[bool]) -> Vec<(usize, usize)> {
 /// `Change`, as sparse as it is. Not a label wrapped onto the next row
 /// either (`Median in` over `months (95% CI)`): a first cell below that
 /// starts lowercase or with a bracket carries this one on. And not in a
-/// two-column list, where a field left empty looks the same.
+/// two-column list, where a field left empty looks the same. A label over
+/// another group label is a group too, over its sub-group.
 fn group_label(rows: &[Vec<String>], r: usize) -> bool {
     let (Some(row), Some(next)) = (rows.get(r), rows.get(r + 1)) else {
         return false;
     };
     let label = row[0].trim();
     let below = next[0].trim();
+    // Over a full row, or over a group of its own: a group over its
+    // sub-group (`Power Management` over `Average power requirements (W)`
+    // over `Operational | 6.7W | …`).
     row.len() >= 3
         && !label.is_empty()
         && !table::is_numeric_cell(label)
         && row[1..].iter().all(|t| t.trim().is_empty())
-        && next.iter().all(|t| !t.trim().is_empty())
+        && (next.iter().all(|t| !t.trim().is_empty()) || group_label(rows, r + 1))
         && !below.starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
 }
 
@@ -1462,7 +1466,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut read: Vec<Grid> = Vec::new();
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
-                for i in crate::textgrid::unruled_grids(&grids, &p.rules, &lines) {
+                for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
                         let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
                         if debug {
@@ -3344,6 +3348,22 @@ mod tests {
         // A field left empty in a two-column list is not a label.
         let list = grid(&[&["Name", "Value"], &["Notes", ""], &["Lot", "A12"]]);
         assert!(!group_label(&list, 1));
+        // A group over its sub-group, both over the rows they label.
+        let stacked = grid(&[
+            &["Model", "A", "B"],
+            &["Power Management", "", ""],
+            &["Average power requirements (W)", "", ""],
+            &["Operational", "6.7W", "6.7W"],
+        ]);
+        assert!(group_label(&stacked, 1));
+        assert!(group_label(&stacked, 2));
+        // Not a label over a row left empty at the table's end.
+        let dangling = grid(&[
+            &["Model", "A", "B"],
+            &["Notes", "", ""],
+            &["See below", "", ""],
+        ]);
+        assert!(!group_label(&dangling, 1));
     }
 
     #[test]

@@ -506,6 +506,25 @@ impl<'a> Device<'a> for Collector {
         // whole, and a table broken by the page foot draws its next row's
         // rules on under the clip. A filled shape is measured by what shows
         // of it; see [`Collector::visible`].
+        // A path filling several rectangles apart, a table's shaded cells
+        // drawn as one, is a fill each: read whole, its box covered the
+        // table, and the bands it shades were none.
+        if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
+            if let Some(boxes) = subpath_fills(&path) {
+                for b in boxes {
+                    match rule::classify(b, self.page) {
+                        Some(rule::Shape::Rule(x)) => self.rules.push(x),
+                        Some(rule::Shape::Fill(x)) => {
+                            if let Some(bbox) = self.visible(x.bbox) {
+                                self.fills.push(rule::Fill { bbox, ..x });
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                return;
+            }
+        }
         match rule::classify(drawn, self.page) {
             Some(rule::Shape::Rule(x)) => self.rules.push(x),
             Some(rule::Shape::Fill(x)) => {
@@ -867,6 +886,96 @@ fn subpath_rules(path: &kurbo::BezPath, page: usize) -> Option<Vec<Rule>> {
             _ => None,
         })
         .collect()
+}
+
+/// The cells a filled path of several straight subpaths draws, one per
+/// subpath, when every subpath is an upright rectangle too thick to be a
+/// rule, set beside another on its line touching it, none lies inside
+/// another, and the bands they make lie rows apart (a table's sections);
+/// `None` otherwise (one subpath, a curve, a glyph's outline, bars, a
+/// chart's columns, stripes down a table, a frame drawn as a rectangle
+/// inside a rectangle), read whole as before.
+fn subpath_fills(path: &kurbo::BezPath) -> Option<Vec<crate::geom::BBox>> {
+    let mut subpaths: Vec<Vec<kurbo::Point>> = Vec::new();
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => subpaths.push(vec![p]),
+            kurbo::PathEl::LineTo(p) => subpaths.last_mut()?.push(p),
+            kurbo::PathEl::ClosePath => {}
+            kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => return None,
+        }
+    }
+    if subpaths.len() < 2 {
+        return None;
+    }
+    let mut boxes: Vec<Rect> = Vec::with_capacity(subpaths.len());
+    for pts in &subpaths {
+        if !(4..=5).contains(&pts.len()) {
+            return None;
+        }
+        let r = pts
+            .iter()
+            .fold(Rect::from_points(pts[0], pts[0]), |r, &p| r.union_pt(p));
+        // Each point a corner of its box: an upright rectangle.
+        let corner = |p: &kurbo::Point| {
+            ((p.x - r.x0).abs() < 0.5 || (p.x - r.x1).abs() < 0.5)
+                && ((p.y - r.y0).abs() < 0.5 || (p.y - r.y1).abs() < 0.5)
+        };
+        // A cell's shading, too thick either way to be a rule: bars drawn
+        // as one path (a glyph's `=` outlined) are read whole, as before.
+        if !pts.iter().all(corner)
+            || r.width() <= rule::MAX_RULE_THICKNESS
+            || r.height() <= rule::MAX_RULE_THICKNESS
+        {
+            return None;
+        }
+        boxes.push(r);
+    }
+    let inside = |a: &Rect, b: &Rect| {
+        a.x0 >= b.x0 - 0.5 && a.x1 <= b.x1 + 0.5 && a.y0 >= b.y0 - 0.5 && a.y1 <= b.y1 + 0.5
+    };
+    let nested = boxes.iter().enumerate().any(|(i, a)| {
+        boxes
+            .iter()
+            .enumerate()
+            .any(|(j, b)| i != j && inside(a, b))
+    });
+    // Cells: each rectangle side by side with another on its line, touching
+    // it. A chart's bars stand apart, and a table's stripes are one a line;
+    // both are read whole, as before.
+    let beside = |a: &Rect, b: &Rect| {
+        (a.y0 - b.y0).abs() <= 1.0
+            && (a.y1 - b.y1).abs() <= 1.0
+            && ((a.x1 - b.x0).abs() <= 2.0 || (b.x1 - a.x0).abs() <= 2.0)
+    };
+    let cells = boxes.iter().enumerate().all(|(i, a)| {
+        boxes
+            .iter()
+            .enumerate()
+            .any(|(j, b)| i != j && beside(a, b))
+    });
+    if nested || !cells {
+        return None;
+    }
+    // Bands set rows apart, a section's or a header's; not stripes a row
+    // or so apart down a table, which are read whole, as before.
+    let mut bands: Vec<(f64, f64)> = Vec::new();
+    for b in &boxes {
+        if !bands
+            .iter()
+            .any(|(y0, y1)| (y0 - b.y0).abs() <= 1.0 && (y1 - b.y1).abs() <= 1.0)
+        {
+            bands.push((b.y0, b.y1));
+        }
+    }
+    bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    if bands
+        .windows(2)
+        .any(|w| w[1].0 - w[0].1 <= 1.5 * (w[0].1 - w[0].0).max(w[1].1 - w[1].0))
+    {
+        return None;
+    }
+    Some(boxes.into_iter().map(crate::geom::from_kurbo).collect())
 }
 
 fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
@@ -1840,6 +1949,66 @@ mod actual_text_tests {
         }
         assert_eq!(spoken("fi").as_deref(), Some("fi"));
         assert_eq!(spoken("x\ty").as_deref(), Some("x y"));
+    }
+}
+
+#[cfg(test)]
+mod subpath_fill_tests {
+    use super::subpath_fills;
+    use kurbo::BezPath;
+
+    fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+        format!("M{x0},{y0} L{x1},{y0} L{x1},{y1} L{x0},{y1} Z ")
+    }
+
+    #[test]
+    fn a_path_shading_cells_apart_is_a_fill_each() {
+        // A table's bands drawn as one path, a cell at a time, two bands
+        // apart: read whole, its box covered the table.
+        let p = BezPath::from_svg(
+            &(rect(36., 107., 169., 121.)
+                + &rect(169., 107., 250., 121.)
+                + &rect(36., 226., 169., 240.)
+                + &rect(169., 226., 250., 240.)),
+        )
+        .unwrap();
+        let boxes = subpath_fills(&p).unwrap();
+        assert_eq!(boxes.len(), 4);
+        assert!((boxes[2].y0 - 226.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn frames_bars_and_curves_are_read_whole() {
+        // A frame: a rectangle inside a rectangle.
+        let frame =
+            BezPath::from_svg(&(rect(0., 0., 100., 100.) + &rect(10., 10., 90., 90.))).unwrap();
+        assert!(subpath_fills(&frame).is_none());
+        // Two flat bars, a glyph's `=` outlined.
+        let bars = BezPath::from_svg(&(rect(0., 0., 60., 1.) + &rect(0., 4., 60., 5.))).unwrap();
+        assert!(subpath_fills(&bars).is_none());
+        // A chart's columns, apart, and a table's stripes, one a line.
+        let columns =
+            BezPath::from_svg(&(rect(0., 50., 20., 100.) + &rect(40., 30., 60., 100.))).unwrap();
+        assert!(subpath_fills(&columns).is_none());
+        let stripes =
+            BezPath::from_svg(&(rect(0., 0., 300., 12.) + &rect(0., 24., 300., 36.))).unwrap();
+        assert!(subpath_fills(&stripes).is_none());
+        // Stripes drawn a cell at a time, a row apart.
+        let cells = BezPath::from_svg(
+            &(rect(0., 0., 100., 12.)
+                + &rect(100., 0., 200., 12.)
+                + &rect(0., 24., 100., 36.)
+                + &rect(100., 24., 200., 36.)),
+        )
+        .unwrap();
+        assert!(subpath_fills(&cells).is_none());
+        // A curve.
+        let curve =
+            BezPath::from_svg(&(rect(0., 0., 20., 20.) + "M30,0 Q40,10 50,0 L50,20 L30,20 Z"))
+                .unwrap();
+        assert!(subpath_fills(&curve).is_none());
+        // One rectangle alone.
+        assert!(subpath_fills(&BezPath::from_svg(&rect(0., 0., 20., 20.)).unwrap()).is_none());
     }
 }
 

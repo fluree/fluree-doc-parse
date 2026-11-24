@@ -923,7 +923,7 @@ impl Grid {
             // its sides on column edges; not a highlight set inside a cell
             // behind a line of its text.
             let on_edge = |x: f64| self.xs.iter().any(|e| (e - x).abs() <= EDGE_TOLERANCE);
-            let striped = shaded_bands(fills, &self.xs, &self.ys).len() > 1;
+            let striped = striped(&shaded_bands(fills, &self.xs, &self.ys));
             at_y.extend(
                 fills
                     .iter()
@@ -1968,6 +1968,7 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
     });
 
     let mut out: Vec<GridLine> = Vec::new();
+    let mut pieces: Vec<Vec<(f64, f64)>> = Vec::new();
     for r in sorted {
         let (lo, hi) = match r.orientation {
             Orientation::Horizontal => (r.bbox.x0, r.bbox.x1),
@@ -1979,14 +1980,57 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
                 g.hi = g.hi.max(hi);
                 g.ends.push(lo);
                 g.ends.push(hi);
+                pieces.last_mut().unwrap().push((lo, hi));
             }
-            _ => out.push(GridLine {
-                axis: r.axis_pos(),
-                lo,
-                hi,
-                ends: vec![lo, hi],
-            }),
+            _ => {
+                out.push(GridLine {
+                    axis: r.axis_pos(),
+                    lo,
+                    hi,
+                    ends: vec![lo, hi],
+                });
+                pieces.push(vec![(lo, hi)]);
+            }
         }
+    }
+    // A row's rule drawn a cell at a time, each cell's piece run on past its
+    // edge into the next, overlaps its neighbours: the two ends inside an
+    // overlap are one column's edge, at its middle, not two edges a few
+    // points or a column's padding apart (an empty column between every
+    // pair). Pieces that meet end to end keep their ends, and so do pieces a
+    // longer rule is drawn over whole (group underlines under a rule across
+    // all of them).
+    // Only along a row's rule, where the ends are columns' edges: a column's
+    // rule drawn in overlapping pieces still parts its rows where it breaks.
+    let horizontal = rules
+        .first()
+        .is_some_and(|r| r.orientation == Orientation::Horizontal);
+    let t = EDGE_TOLERANCE;
+    for (g, parts) in out.iter_mut().zip(&pieces).filter(|_| horizontal) {
+        let mut middles = Vec::new();
+        for (i, &(a, b)) in parts.iter().enumerate() {
+            for &(c, d) in &parts[i + 1..] {
+                let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
+                let (lo, hi) = (a.max(c), b.min(d));
+                if hi - lo > t && !nested {
+                    middles.push((lo + hi) / 2.0);
+                }
+            }
+        }
+        g.ends.retain(|&e| {
+            let own: Vec<&(f64, f64)> = parts
+                .iter()
+                .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01)
+                .collect();
+            !own.iter().any(|&&(a, b)| {
+                parts.iter().any(|&(c, d)| {
+                    let contains = c <= a + t && d >= b - t;
+                    let overlaps = c < b - t && d > a + t;
+                    overlaps && !contains && c < e - t && d > e + t
+                })
+            })
+        });
+        g.ends.extend(middles);
     }
     out
 }
@@ -2409,13 +2453,29 @@ fn detect_group(
     // heading text above the table becomes "row 0". A band genuinely inside
     // the table lies within its border box, so some vertical crosses it;
     // a band outside the box has none. Only applies when the grid has
-    // verticals at all — tables ruled purely with horizontals carry no such
-    // evidence in either direction and are left whole.
+    // verticals among its rows at all — tables ruled purely with horizontals
+    // carry no such evidence in either direction and are left whole. A
+    // vertical far off the grid (a logo's strokes at the page foot, the
+    // page-wide reading taking in every rule) is no evidence about its rows:
+    // only verticals within a row's height of them count.
     let mut ys = ys;
-    if !vs.is_empty() {
+    let (top, bottom) = (ys[0], ys[ys.len() - 1]);
+    let row = {
+        let mut gaps: Vec<f64> = ys.windows(2).map(|w| w[1] - w[0]).collect();
+        gaps.sort_by(f64::total_cmp);
+        gaps[gaps.len() / 2]
+    };
+    let among: Vec<&&Rule> = vs
+        .iter()
+        .filter(|r| r.bbox.y1 > top - row && r.bbox.y0 < bottom + row)
+        .collect();
+    let boxed = vs
+        .iter()
+        .any(|r| r.bbox.y1 > top + EDGE_TOLERANCE && r.bbox.y0 < bottom - EDGE_TOLERANCE);
+    if !among.is_empty() {
         let crossed = |lo: f64, hi: f64| {
             let mid = (lo + hi) / 2.0;
-            vs.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
+            among.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
         };
         while ys.len() > MIN_GRID_LINES && !crossed(ys[0], ys[1]) {
             ys.remove(0);
@@ -2429,7 +2489,8 @@ fn detect_group(
     // border rule sitting alongside a cell edge, which produced a spurious
     // empty first column on one such table.
     // The rules make the table; a shaded band's edge only parts its rows.
-    let ys = with_fill_edges(ys, &xs, fills, glyphs);
+    let verticals: Vec<BBox> = vs.iter().map(|r| r.bbox).collect();
+    let ys = with_fill_edges(ys, &xs, fills, glyphs, !boxed, &verticals);
     split_row_bands(xs, ys, rules, page, frames, glyphs)
 }
 
@@ -3238,7 +3299,29 @@ pub fn detect_framed(
             .filter(|(r, used)| !**used && within(r))
             .map(|(r, _)| *r)
             .collect();
-        for g in detect_group(&rest, fills, glyphs, page, frames) {
+        for mut g in detect_group(&rest, fills, glyphs, page, frames) {
+            // Its rows lying inside a box already read are that box's: a
+            // shaded header ruled into cells of its own, the band the rows
+            // under it took for their top.
+            let in_a_box = |g: &Grid, lo: f64, hi: f64| {
+                let band = BBox {
+                    x0: g.bbox.x0,
+                    y0: lo,
+                    x1: g.bbox.x1,
+                    y1: hi,
+                };
+                out.iter().any(|b| overlaps(&b.bbox, &band))
+            };
+            while g.ys.len() > MIN_GRID_LINES && in_a_box(&g, g.ys[0], g.ys[1]) {
+                g.ys.remove(0);
+            }
+            while g.ys.len() > MIN_GRID_LINES
+                && in_a_box(&g, g.ys[g.ys.len() - 2], g.ys[g.ys.len() - 1])
+            {
+                g.ys.pop();
+            }
+            g.bbox.y0 = g.ys[0];
+            g.bbox.y1 = g.ys[g.ys.len() - 1];
             if !out.iter().any(|b| overlaps(&b.bbox, &g.bbox)) {
                 out.push(g);
             }
@@ -3925,16 +4008,18 @@ fn detect_components(
 ///
 /// A shaded header band, or a shaded row, can be the only thing parting a
 /// row from the next: no rule is drawn under it, and the shading's edge is
-/// the line. In a grid of two rows and two columns or more, the one fill
-/// across nine tenths of the table's width, hanging from one of the table's
-/// lines, whose other edge falls between two boundaries, a cell's height
-/// from each and through no line of text, is a row boundary too. A table
-/// striped row by row has many, and is left to its rules.
+/// the line. In a grid of two rows and two columns or more, a band across
+/// nine tenths of the table's width, from one of its edges to the other or
+/// hanging from one of its lines, whose edge falls between two boundaries,
+/// a cell's height from each and through no line of text, is a row boundary
+/// too. A table striped row by row is left to its rules.
 fn with_fill_edges(
     mut ys: Vec<f64>,
     xs: &[f64],
     fills: &[crate::rule::Fill],
     glyphs: &[crate::glyph::Glyph],
+    open_sides: bool,
+    verticals: &[BBox],
 ) -> Vec<f64> {
     // A table's rows and columns, already: a box the rules draw as one cell
     // (a chart's frame, its title band shaded) is not parted into rows by
@@ -3957,21 +4042,130 @@ fn with_fill_edges(
     };
     let lines = ys.clone();
     let on_line = |y: f64| lines.iter().any(|&o| (o - y).abs() <= EDGE_TOLERANCE);
-    // One band across the table: a header shaded apart from its rows.
     // Bands down a table, alternate rows striped, are no header's, and
     // their edges are no rules.
     let bands = shaded_bands(fills, xs, &ys);
-    if bands.len() != 1 {
+    if striped(&bands) {
         return ys;
     }
-    for f in bands {
+    // A band from the table's one edge to the other set just over its first
+    // rule, a row at most between them, naming two of its columns or more,
+    // is the table's top: its header shaded, its rules drawn only under the
+    // rows below (`Model Number | WD261KRYZ | …` over `Formatted capacity`).
+    // A title band over a table sets one label, and stays its title. Only
+    // a table whose sides are open, ruled with horizontals alone: a box its
+    // verticals draw is bounded by them, and a band outside it is not its
+    // own. Nor a header ruled into cells of its own, its verticals parting
+    // its names: that is a box of its own, read as one.
+    let row = ys
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .fold(f64::MAX, f64::min)
+        .max(MIN_CELL_EXTENT);
+    // The columns a band names: its runs of text, set apart by more than a
+    // word space, each inside one column. A header names two or more; a
+    // title band over the table is one run, however many columns its words
+    // fall across (`Technical data`).
+    let named_columns = |b: &crate::geom::BBox| {
+        let mut inside: Vec<&crate::glyph::Glyph> = glyphs
+            .iter()
+            .filter(|g| !g.text.trim().is_empty())
+            .filter(|g| {
+                g.bbox.is_some_and(|gb| {
+                    let (cx, cy) = ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0);
+                    cy > b.y0 && cy < b.y1 && cx > b.x0 && cx < b.x1
+                })
+            })
+            .collect();
+        inside.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        for g in inside {
+            let gb = g.bbox.unwrap();
+            let space = g.font_size.max(1.0) as f64 * 0.8;
+            match runs.last_mut() {
+                Some(r) if gb.x0 - r.1 <= space => r.1 = r.1.max(gb.x1),
+                _ => runs.push((gb.x0, gb.x1)),
+            }
+        }
+        let interior = &xs[1..xs.len() - 1];
+        if runs
+            .iter()
+            .any(|(a, b)| interior.iter().any(|&e| *a < e - 1.0 && *b > e + 1.0))
+        {
+            return 0;
+        }
+        let cols: std::collections::HashSet<usize> = runs
+            .iter()
+            .filter_map(|(a, b)| {
+                let cx = (a + b) / 2.0;
+                xs.windows(2).position(|w| cx >= w[0] && cx < w[1])
+            })
+            .collect();
+        cols.len()
+    };
+    if let Some(head) = join_bands(fills)
+        .into_iter()
+        .filter(|_| open_sides)
+        .find(|f| {
+            let b = f.bbox;
+            (b.x0 - x0).abs() <= EDGE_TOLERANCE * 2.0
+                && (b.x1 - x1).abs() <= EDGE_TOLERANCE * 2.0
+                && b.y1 <= top + EDGE_TOLERANCE
+                && top - b.y1 <= row * 1.5
+                && b.height() >= MIN_CELL_EXTENT
+                && b.height() <= row * 3.0
+                && named_columns(&b) >= 2
+                && !verticals.iter().any(|v| {
+                    v.y0 < b.y1 - EDGE_TOLERANCE
+                        && v.y1 > b.y0 + EDGE_TOLERANCE
+                        && v.x0 > x0 + EDGE_TOLERANCE
+                        && v.x1 < x1 - EDGE_TOLERANCE
+                })
+        })
+    {
+        let b = head.bbox;
+        if top - b.y1 >= MIN_CELL_EXTENT && !straddled(b.y1) {
+            ys.insert(0, b.y1);
+        }
+        ys.insert(0, b.y0);
+    }
+    let top = ys[0];
+    // A band from the table's one edge to the other is the table's own: a
+    // section's band drawn a cell at a time, with no rule over or under it.
+    let edge_to_edge = |b: &crate::geom::BBox| {
+        (b.x0 - x0).abs() <= EDGE_TOLERANCE * 2.0 && (b.x1 - x1).abs() <= EDGE_TOLERANCE * 2.0
+    };
+    // Text between `y` and the next line on the far side from `other`: a
+    // row the band's edge parts from it.
+    let text_beyond = |ys: &[f64], y: f64, other: f64| {
+        let (lo, hi) = if other > y {
+            (ys.iter().copied().filter(|&o| o < y).fold(top, f64::max), y)
+        } else {
+            (
+                y,
+                ys.iter().copied().filter(|&o| o > y).fold(bottom, f64::min),
+            )
+        };
+        glyphs.iter().any(|g| {
+            !g.text.trim().is_empty()
+                && g.bbox.is_some_and(|gb| {
+                    let (cx, cy) = ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0);
+                    cx > x0 && cx < x1 && cy > lo && cy < hi
+                })
+        })
+    };
+    for f in &bands {
         let b = f.bbox;
-        // A table's shading hangs from one of its lines: a header band from
-        // the top rule, a shaded row from the rule above it. Its other edge
-        // parts the row it falls in. A box laid over a chart starts on none.
+        // Else a table's shading hangs from one of its lines: a header band
+        // from the top rule, a shaded row from the rule above it. Its other
+        // edge parts the row it falls in. A box laid over a chart does
+        // neither. A band from edge to edge, hanging from no line, parts a
+        // row from it only where the row holds text: one set in the blank
+        // between two tables (a heading's band between two field lists)
+        // parts nothing, and the blank stays the gap between them.
         for (y, other) in [(b.y0, b.y1), (b.y1, b.y0)] {
-            if !on_line(other)
-                || !shading_ends(fills, f, y)
+            if !(on_line(other) || edge_to_edge(&b) && text_beyond(&ys, y, other))
+                || !shading_ends(&bands, f, y)
                 || y - top < MIN_CELL_EXTENT
                 || bottom - y < MIN_CELL_EXTENT
                 || ys.iter().any(|&o| (o - y).abs() < MIN_CELL_EXTENT)
@@ -4007,30 +4201,79 @@ fn shading_ends(fills: &[crate::rule::Fill], f: &crate::rule::Fill, y: f64) -> b
 
 /// The fills laid across a table as bands: nine tenths of its width, under
 /// half its height (a background under the whole table is no band), their
-/// middles inside it. One is a header or a row shaded apart; more are rows
-/// striped, whose edges are no rules.
-fn shaded_bands<'a>(
-    fills: &'a [crate::rule::Fill],
-    xs: &[f64],
-    ys: &[f64],
-) -> Vec<&'a crate::rule::Fill> {
+/// middles inside it. A band drawn a cell at a time, one fill a column on
+/// one line, is one band.
+fn shaded_bands(fills: &[crate::rule::Fill], xs: &[f64], ys: &[f64]) -> Vec<crate::rule::Fill> {
     let (Some(&x0), Some(&x1), Some(&top), Some(&bottom)) =
         (xs.first(), xs.last(), ys.first(), ys.last())
     else {
         return Vec::new();
     };
     let (w, h) = (x1 - x0, bottom - top);
-    fills
-        .iter()
+    join_bands(fills)
+        .into_iter()
         .filter(|f| {
-            let b = f.bbox;
-            let mid = (b.y0 + b.y1) / 2.0;
-            b.x1.min(x1) - b.x0.max(x0) >= w * FILL_ROW_COVERAGE
-                && b.y1 - b.y0 < h / 2.0
-                && mid > top
+            let mid = (f.bbox.y0 + f.bbox.y1) / 2.0;
+            mid > top
                 && mid < bottom
+                && f.bbox.height() < h / 2.0
+                && f.bbox.x1.min(x1) - f.bbox.x0.max(x0) >= w * FILL_ROW_COVERAGE
         })
         .collect()
+}
+
+/// Fills on one line side by side, joined: a band drawn a cell at a time.
+fn join_bands(fills: &[crate::rule::Fill]) -> Vec<crate::rule::Fill> {
+    let mut sorted: Vec<&crate::rule::Fill> = fills.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .total_cmp(&b.bbox.y0)
+            .then(a.bbox.y1.total_cmp(&b.bbox.y1))
+            .then(a.bbox.x0.total_cmp(&b.bbox.x0))
+    });
+    let mut joined: Vec<crate::rule::Fill> = Vec::new();
+    for f in sorted {
+        match joined.last_mut() {
+            Some(j)
+                if (j.bbox.y0 - f.bbox.y0).abs() <= 1.0
+                    && (j.bbox.y1 - f.bbox.y1).abs() <= 1.0
+                    && f.bbox.x0 <= j.bbox.x1 + 2.0
+                    && f.bbox.x1 >= j.bbox.x0 - 2.0 =>
+            {
+                j.bbox = j.bbox.union(&f.bbox);
+            }
+            _ => joined.push(*f),
+        }
+    }
+    joined
+}
+
+/// The bands shaded across a table, edge to edge, that are lines of its
+/// own: none where they stripe it row by row.
+pub(crate) fn section_bands(
+    fills: &[crate::rule::Fill],
+    xs: &[f64],
+    ys: &[f64],
+) -> Vec<crate::rule::Fill> {
+    let bands = shaded_bands(fills, xs, ys);
+    if striped(&bands) {
+        Vec::new()
+    } else {
+        bands
+    }
+}
+
+/// Bands striping a table row by row: two or more, each a row's height or
+/// so from the next. Their edges are no rules. Section bands set rows apart
+/// are not stripes.
+fn striped(bands: &[crate::rule::Fill]) -> bool {
+    let mut ys: Vec<(f64, f64)> = bands.iter().map(|f| (f.bbox.y0, f.bbox.y1)).collect();
+    ys.sort_by(|a, b| a.0.total_cmp(&b.0));
+    bands.len() >= 2
+        && ys
+            .windows(2)
+            .any(|w| w[1].0 - w[0].1 <= 1.5 * (w[0].1 - w[0].0).max(w[1].1 - w[1].0))
 }
 
 /// Share of a table's width a fill must cover for its edge to part rows.
@@ -7132,20 +7375,167 @@ mod header_tests {
     }
 
     #[test]
+    fn a_rule_drawn_in_overlapping_pieces_has_one_column_edge_per_overlap() {
+        let ends = |pieces: &[(f64, f64)]| {
+            let rules: Vec<Rule> = pieces.iter().map(|&(a, b)| h(a, b, 100.0)).collect();
+            let refs: Vec<&Rule> = rules.iter().collect();
+            let mut e = cluster(&refs)[0].ends.clone();
+            e.sort_by(f64::total_cmp);
+            e.dedup();
+            e
+        };
+        // Each cell's piece run on into the next: one edge, mid-overlap,
+        // whether they overlap by a few points or by a column's padding.
+        assert_eq!(
+            ends(&[(0.0, 104.0), (100.0, 204.0), (200.0, 300.0)]),
+            vec![0.0, 102.0, 202.0, 300.0]
+        );
+        assert_eq!(
+            ends(&[(0.0, 200.0), (150.0, 300.0)]),
+            vec![0.0, 175.0, 300.0]
+        );
+        // Drawn a cell at a time, pieces meeting end to end: columns.
+        assert_eq!(
+            ends(&[(0.0, 100.0), (100.0, 200.0)]),
+            vec![0.0, 100.0, 200.0]
+        );
+        // Group underlines under a rule drawn across all of them keep theirs.
+        assert_eq!(
+            ends(&[(0.0, 300.0), (10.0, 140.0), (160.0, 290.0)]),
+            vec![0.0, 10.0, 140.0, 160.0, 290.0, 300.0]
+        );
+    }
+
+    #[test]
+    fn a_vertical_elsewhere_on_the_page_trims_no_rows() {
+        // A table ruled with horizontals alone, each drawn a column at a
+        // time, and a logo's strokes at the page foot: the page-wide reading
+        // takes in every rule, and the logo's verticals cross none of the
+        // table's rows.
+        let mut rules = Vec::new();
+        for k in 0..7 {
+            let y = 100.0 + 20.0 * k as f64;
+            for x in [0.0, 100.0, 200.0] {
+                rules.push(h(x, x + 100.0, y));
+            }
+        }
+        for x in [10.0, 14.0, 18.0] {
+            rules.push(v(700.0, 715.0, x));
+        }
+        let grids = detect_group(&rules, &[], &[], 0, &[]);
+        assert!(
+            grids.iter().any(|g| g.rows() == 6 && g.cols() == 3),
+            "got {:?}",
+            grids
+                .iter()
+                .map(|g| (g.rows(), g.cols()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn section_bands_part_rows_but_stripes_do_not() {
+        let xs = [0.0, 100.0, 200.0, 300.0];
+        let ys = vec![0.0, 30.0, 90.0, 120.0, 180.0];
+        // Two bands rows apart, each across the table, drawn a cell at a
+        // time with no rule over or under them.
+        let mut cells = Vec::new();
+        for (y0, y1) in [(50.0, 64.0), (140.0, 154.0)] {
+            for x in [0.0, 100.0, 200.0] {
+                cells.push(fill(x, y0, x + 100.0, y1));
+            }
+        }
+        // A row over each band and a row under it.
+        let rows: Vec<_> = [45.0, 80.0, 135.0, 170.0]
+            .into_iter()
+            .map(|y| gly(5.0, y, 40.0, "Weight"))
+            .collect();
+        let parted = with_fill_edges(ys.clone(), &xs, &cells, &rows, true, &[]);
+        for y in [50.0, 64.0, 140.0, 154.0] {
+            assert!(parted.contains(&y), "{y} in {parted:?}");
+        }
+        // A band set in the blank between two field lists, a heading's,
+        // parts no rows: the blank stays the gap between them.
+        let lists = vec![0.0, 12.0, 24.0, 36.0, 84.0, 96.0, 108.0];
+        let heading = [fill(0.0, 49.0, 300.0, 71.0)];
+        let text: Vec<_> = [10.0, 22.0, 34.0, 94.0, 106.0]
+            .into_iter()
+            .map(|y| gly(5.0, y, 40.0, "Length"))
+            .chain([gly(5.0, 63.0, 60.0, "Dimensions")])
+            .collect();
+        assert_eq!(
+            with_fill_edges(lists.clone(), &xs, &heading, &text, true, &[]),
+            lists
+        );
+        // Stripes a row apart are no rules.
+        let stripes = [
+            fill(0.0, 34.0, 300.0, 46.0),
+            fill(0.0, 58.0, 300.0, 70.0),
+            fill(0.0, 82.0, 300.0, 89.0),
+        ];
+        assert_eq!(
+            with_fill_edges(ys.clone(), &xs, &stripes, &[], true, &[]),
+            ys
+        );
+    }
+
+    #[test]
+    fn a_band_over_the_first_rule_is_the_tables_top() {
+        // The header shaded across the table a row over its first rule,
+        // its rules drawn only under the rows below.
+        let xs = [0.0, 100.0, 200.0, 300.0];
+        let ys = vec![100.0, 120.0, 140.0, 160.0];
+        let band = [fill(0.0, 72.0, 300.0, 86.0)];
+        let names = [
+            gly(5.0, 82.0, 40.0, "Model"),
+            gly(105.0, 82.0, 40.0, "WD261"),
+            gly(205.0, 82.0, 40.0, "WD242"),
+        ];
+        let topped = with_fill_edges(ys.clone(), &xs, &band, &names, true, &[]);
+        assert_eq!(&topped[..3], &[72.0, 86.0, 100.0]);
+        // A title band over the table, one label, stays its title.
+        let title = [gly(105.0, 82.0, 60.0, "Specifications")];
+        assert_eq!(
+            with_fill_edges(ys.clone(), &xs, &band, &title, true, &[]),
+            ys
+        );
+        // Nor a header ruled into cells of its own, verticals between its
+        // names: a box of its own, read as one.
+        let ruled = [v(72.0, 86.0, 100.0).bbox, v(72.0, 86.0, 200.0).bbox];
+        assert_eq!(
+            with_fill_edges(ys.clone(), &xs, &band, &names, true, &ruled),
+            ys
+        );
+        // Not a box set well above it.
+        let apart = [fill(0.0, 20.0, 300.0, 34.0)];
+        assert_eq!(
+            with_fill_edges(ys.clone(), &xs, &apart, &names, true, &[]),
+            ys
+        );
+    }
+
+    #[test]
     fn a_shaded_header_band_parts_its_first_row() {
         // A header shaded down to y 10 over a first row with no rule between.
         let xs = [0.0, 100.0, 200.0];
         let ys = vec![0.0, 20.0, 40.0];
         let band = fill(0.0, 0.0, 200.0, 10.0);
-        let parted = with_fill_edges(ys.clone(), &xs, std::slice::from_ref(&band), &[]);
+        let parted = with_fill_edges(ys.clone(), &xs, std::slice::from_ref(&band), &[], true, &[]);
         assert_eq!(parted, vec![0.0, 10.0, 20.0, 40.0]);
         // Not through a line of text set across the edge.
         let across = gly(20.0, 14.0, 30.0, "Name");
-        let kept = with_fill_edges(ys.clone(), &xs, std::slice::from_ref(&band), &[across]);
+        let kept = with_fill_edges(
+            ys.clone(),
+            &xs,
+            std::slice::from_ref(&band),
+            &[across],
+            true,
+            &[],
+        );
         assert_eq!(kept, ys);
         // Nor at the seam of a column shaded as one block, a fill a row.
         let next = fill(0.0, 10.0, 200.0, 20.0);
-        let seam = with_fill_edges(ys.clone(), &xs, &[band, next], &[]);
+        let seam = with_fill_edges(ys.clone(), &xs, &[band, next], &[], true, &[]);
         assert_eq!(seam, ys);
     }
 
