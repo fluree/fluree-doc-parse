@@ -441,6 +441,67 @@ chart axes became tables than corroboration turned away. That cost 0.0018
 overall on the benchmark (six documents, one by 0.23), and it shows on real
 reports too.
 
+### Within a page column, and without colons
+
+Rows grouped across the whole page miss two kinds of field list:
+
+- **A list set in one column of several.** Its row across the page is
+  three cells or more: `OTC | Yes` with a line of prose on each side.
+- **A list with no colon after its labels.** `CP | Polished Chrome` and
+  `Maximum user weight size A | 300 lb/136 kg` have nothing in their text to
+  show they are fields.
+
+So field lists are looked for again between the page's gutters. A list
+starts at a row whose label opens its column and whose value is the last
+cell before the next gutter. It runs on down every row that puts a label
+where the first did and a value where the first value starts, or, for
+values set right (`Yes`, `#142, 143`), where it ends.
+
+Three kinds of row do not end the run:
+
+- **A row with nothing between those gutters** belongs to another column
+  and is passed over.
+- **A raised mark set smaller on a baseline of its own** (`MPI®`'s `®`)
+  joins the row below, whose line it marks.
+- **A row whose value is set closer to a long label than the gap that
+  parts cells** is parted where the list's values start
+  (`Adjustable PostureFit SL Support Optional`).
+
+A list whose labels end in colons is held to the rules above. Without
+colons, alignment is all the text has, and two columns of prose, two lists
+side by side, or two addresses side by side align as well. So a list
+without colons needs at least three rows. Its labels must be short and not
+prose. That means:
+
+- no more than a quarter of them open in lowercase, as a line running on
+  from the one above does;
+- fewer than half are a list's enumerators (`(a)`, `iv)`, `10. FIFA`);
+- the values do not crowd the right edge the way a column of prose fills
+  its width.
+
+It must also not be a contents page: page numbers that never go back down.
+
+The two columns must also be of two kinds, as a label and its value are.
+At least one of these holds:
+
+- bold labels beside plain values;
+- values that are mostly quantities;
+- labels that are all codes, one short word (`CP`, `2MB`, `CIO`);
+- values drawn from a short list, at least half of them repeats (`Yes`,
+  `No`; `Optional`).
+
+A row whose value is a word, over values that are quantities, names the
+columns (`Description | Units` over `Chafing dish | 12`): it is the
+list's header. Otherwise the list has none.
+
+A table placed in reading order follows the last block above it that it
+overlaps across. A value that runs out under the next column's text can
+therefore put the list after that column's blocks. This happens in the Aeron
+sheet's Details, whose `1st–99th percentile` reaches the column of numbered
+features beside it. Asking for a fuller overlap fixed that page, but it
+moved tables on a hundred others, as often for the worse, so it was left
+out.
+
 ## Merges
 
 Spanning cells are detected from which boundaries are *not* drawn across a

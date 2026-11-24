@@ -4621,6 +4621,488 @@ fn colon_field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
     out
 }
 
+/// Fewest fields a list whose labels end in no colon is read from. Two rows
+/// that happen to break at one place are common; three are a list.
+const MIN_PLAIN_FIELDS: usize = 3;
+
+/// Most words a field's value holds: a word, a figure or a phrase.
+const MAX_FIELD_VALUE_WORDS: usize = 12;
+
+/// Farthest apart, in font sizes, two fields of one list set their
+/// baselines. A list's rows sit a line apart; a blank line between two
+/// rows parts two lists, or a list from what follows it.
+const MAX_FIELD_PITCH: f64 = 2.2;
+
+/// How far, in font sizes, a field's label or value may start (or, set
+/// right, end) from where the list's others do.
+const FIELD_ALIGN_TOLERANCE: f64 = 0.6;
+
+/// Largest share of the list's size a mark set on its own baseline above a
+/// field may have: a raised `®` set smaller, beside the label below it.
+const RAISED_MARK_SIZE: f64 = 0.8;
+
+/// A field of a list found by [`field_lists`]: its row, then the glyphs of
+/// its label and of its value.
+type Field = (usize, Vec<usize>, Vec<usize>);
+
+/// Lists of fields set without rules, `Label | value` row after row, found
+/// within the page's columns.
+///
+/// [`colon_field_lists`] reads rows across the whole page, so a list set
+/// in one of three page columns (`OTC | Yes` beside a column of prose on
+/// either side) never makes a row of two cells, and a list that sets no
+/// colon after its labels (`CP | Polished Chrome`) has nothing there to
+/// show it is one. Here a list is looked for between the page's gutters
+/// ([`crate::column::detect`]): it starts at a row whose label opens its
+/// column, the value beside it reaching to the next gutter, and goes on
+/// down every row that puts a label where it did and a value where its
+/// first value starts or ends (values set right, `Yes` and `#142, 143`).
+/// A row with nothing between those gutters is another column's, and is
+/// passed over. A value set closer to a long label than the gap that parts
+/// cells is parted from it where the list's values start.
+///
+/// A list whose labels end in colons is held to [`colon_fields`]. One
+/// without them is held to [`plain_fields`]: three rows at least, short
+/// labels that are not prose's lines.
+///
+/// The table comes out read: each cell holds its own glyphs (indices into
+/// `glyphs`) and it has no header, since its first row is a field like the
+/// others.
+pub fn field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
+    struct Seg {
+        x0: f64,
+        x1: f64,
+        ids: Vec<usize>,
+    }
+    let bb = |i: usize| glyphs[i].bbox.unwrap();
+    let mut ids: Vec<usize> = (0..glyphs.len())
+        .filter(|&i| {
+            let g = &glyphs[i];
+            g.bbox.is_some() && g.is_horizontal() && !g.text.trim().is_empty()
+        })
+        .collect();
+    if ids.len() < MIN_PLAIN_FIELDS * 2 {
+        return Vec::new();
+    }
+    ids.sort_by(|&a, &b| {
+        glyphs[a]
+            .origin
+            .1
+            .total_cmp(&glyphs[b].origin.1)
+            .then(glyphs[a].origin.0.total_cmp(&glyphs[b].origin.0))
+    });
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for i in ids {
+        let g = &glyphs[i];
+        let fs = g.font_size.max(1.0) as f64;
+        match rows.last_mut() {
+            Some(r) if (glyphs[r[0]].origin.1 - g.origin.1).abs() < fs * ROW_BASELINE_TOLERANCE => {
+                r.push(i)
+            }
+            _ => rows.push(vec![i]),
+        }
+    }
+    let segs: Vec<Vec<Seg>> = rows
+        .iter_mut()
+        .map(|r| {
+            r.sort_by(|&a, &b| bb(a).x0.total_cmp(&bb(b).x0));
+            let mut out: Vec<Seg> = Vec::new();
+            for &i in r.iter() {
+                let fs = glyphs[i].font_size.max(1.0) as f64;
+                match out.last_mut() {
+                    Some(s) if bb(i).x0 - s.x1 <= fs * TABLE_CELL_GAP => {
+                        s.x1 = s.x1.max(bb(i).x1);
+                        s.ids.push(i);
+                    }
+                    _ => out.push(Seg {
+                        x0: bb(i).x0,
+                        x1: bb(i).x1,
+                        ids: vec![i],
+                    }),
+                }
+            }
+            out
+        })
+        .collect();
+    let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
+    let cuts: Vec<f64> = crate::column::detect(glyphs)
+        .iter()
+        .skip(1)
+        .map(|c| c.x0)
+        .collect();
+    let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
+    let mut out = Vec::new();
+    for i in 0..rows.len() {
+        for k in 0..segs[i].len().saturating_sub(1) {
+            if used[i][k] {
+                continue;
+            }
+            let (label, value) = (&segs[i][k], &segs[i][k + 1]);
+            // The label opens its column, and the value is the last cell
+            // before the next gutter.
+            let lo = cuts
+                .iter()
+                .rev()
+                .find(|&&c| c <= label.x0 + 0.5)
+                .copied()
+                .unwrap_or(f64::MIN);
+            let hi = cuts
+                .iter()
+                .find(|&&c| c > value.x0)
+                .copied()
+                .unwrap_or(f64::MAX);
+            if (k > 0 && segs[i][k - 1].x1 > lo) || segs[i].get(k + 2).is_some_and(|n| n.x0 < hi) {
+                continue;
+            }
+            let fs = glyphs[label.ids[0]].font_size.max(1.0) as f64;
+            let tol = fs * FIELD_ALIGN_TOLERANCE;
+            let (lx, vx0, vx1) = (label.x0, value.x0, value.x1);
+            let mut fields: Vec<Field> = vec![(i, label.ids.clone(), value.ids.clone())];
+            let mut taken: Vec<(usize, Vec<usize>)> = vec![(i, vec![k, k + 1])];
+            let mut marks: Vec<usize> = Vec::new();
+            let mut last = baseline(i);
+            for (j, row) in segs.iter().enumerate().skip(i + 1) {
+                if baseline(j) - last > fs * MAX_FIELD_PITCH {
+                    break;
+                }
+                let inside: Vec<usize> = (0..row.len())
+                    .filter(|&s| row[s].x0 < hi && row[s].x1 > lo)
+                    .collect();
+                if inside.is_empty() {
+                    continue;
+                }
+                let small = |s: usize| {
+                    row[s]
+                        .ids
+                        .iter()
+                        .all(|&g| (glyphs[g].font_size as f64) < fs * RAISED_MARK_SIZE)
+                };
+                if inside.iter().all(|&s| small(s)) {
+                    marks.extend(inside.iter().flat_map(|&s| row[s].ids.iter().copied()));
+                    continue;
+                }
+                let at_label = |s: &Seg| (s.x0 - lx).abs() <= tol;
+                let found = match inside[..] {
+                    [a, b]
+                        if at_label(&row[a])
+                            && ((row[b].x0 - vx0).abs() <= tol
+                                || (row[b].x1 - vx1).abs() <= tol) =>
+                    {
+                        Some((row[a].ids.clone(), row[b].ids.clone()))
+                    }
+                    // A value set closer to its label than cells are parted:
+                    // part them where the list's values start.
+                    [a] if at_label(&row[a]) => {
+                        let g = &row[a].ids;
+                        (1..g.len())
+                            .find(|&m| {
+                                (bb(g[m]).x0 - vx0).abs() <= tol
+                                    && bb(g[m]).x0 - bb(g[m - 1]).x1 >= fs * 0.15
+                            })
+                            .map(|m| (g[..m].to_vec(), g[m..].to_vec()))
+                    }
+                    _ => None,
+                };
+                let Some((mut l, mut v)) = found else {
+                    break;
+                };
+                // A raised mark is its own line's, set above its baseline.
+                let split = (bb(*l.last().unwrap()).x1 + bb(v[0]).x0) / 2.0;
+                for m in marks.drain(..) {
+                    if bb(m).x0 < split {
+                        l.push(m);
+                    } else {
+                        v.push(m);
+                    }
+                }
+                fields.push((j, l, v));
+                taken.push((j, inside.clone()));
+                last = baseline(j);
+            }
+            if let Some(g) = field_grid(glyphs, &fields, page) {
+                let texts = g.layout.as_ref().unwrap().texts(glyphs, 2);
+                let n = fields.len();
+                // Labels on both sides (`Conf: | Conf:`) are two blocks of
+                // fields side by side, not one.
+                let paired = texts
+                    .chunks(2)
+                    .filter(|c| label_colon(c[1].trim()) == Some(true))
+                    .count()
+                    * 2
+                    >= n;
+                let colon = n >= 2 && !paired && colon_fields(&texts);
+                let plain =
+                    n >= MIN_PLAIN_FIELDS && !paired && plain_fields(glyphs, &fields, &texts);
+                if (colon || plain) && !wraps_under_labels(&g, glyphs) {
+                    let mut g = g;
+                    if plain && !colon && names_its_columns(&texts) {
+                        if let Some(lay) = g.layout.as_mut() {
+                            std::sync::Arc::make_mut(lay).header_rows = 1;
+                        }
+                    }
+                    for (j, ss) in taken {
+                        for s in ss {
+                            used[j][s] = true;
+                        }
+                    }
+                    out.push(g);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The grid of a field list found by [`field_lists`]: two columns parted
+/// between the labels' right edge and the values' left, a row per field,
+/// and the cells read from the glyphs each field holds.
+fn field_grid(glyphs: &[crate::glyph::Glyph], fields: &[Field], page: usize) -> Option<Grid> {
+    let bb = |i: usize| glyphs[i].bbox.unwrap();
+    let span = |ids: &[usize]| {
+        ids.iter().fold((f64::MAX, f64::MIN), |(a, b), &i| {
+            (a.min(bb(i).x0), b.max(bb(i).x1))
+        })
+    };
+    let labels: Vec<(f64, f64)> = fields.iter().map(|f| span(&f.1)).collect();
+    let values: Vec<(f64, f64)> = fields.iter().map(|f| span(&f.2)).collect();
+    let label_x1 = labels.iter().map(|s| s.1).fold(f64::MIN, f64::max);
+    let value_x0 = values.iter().map(|s| s.0).fold(f64::MAX, f64::min);
+    if fields.len() < 2 || label_x1 >= value_x0 {
+        return None;
+    }
+    let xs = vec![
+        labels.iter().map(|s| s.0).fold(f64::MAX, f64::min) - 0.5,
+        (label_x1 + value_x0) / 2.0,
+        values.iter().map(|s| s.1).fold(f64::MIN, f64::max) + 0.5,
+    ];
+    let mut ys: Vec<f64> = Vec::with_capacity(fields.len() + 1);
+    for f in fields {
+        let top =
+            f.1.iter()
+                .chain(&f.2)
+                .map(|&i| bb(i).y0)
+                .fold(f64::MAX, f64::min)
+                - 1.0;
+        let floor = ys.last().map_or(f64::MIN, |y| y + 0.1);
+        ys.push(top.max(floor));
+    }
+    let bottom = fields
+        .last()?
+        .1
+        .iter()
+        .chain(&fields.last()?.2)
+        .map(|&i| bb(i).y1)
+        .fold(f64::MIN, f64::max)
+        + 1.0;
+    ys.push(bottom.max(ys[ys.len() - 1] + 0.1));
+    // The spaces between a cell's words are its own: on its baseline,
+    // within its ink.
+    // A space is often drawn with no box, where its pen position says
+    // where it is.
+    let spaces: Vec<usize> = (0..glyphs.len())
+        .filter(|&i| glyphs[i].text.trim().is_empty())
+        .collect();
+    let centre = |i: usize| match glyphs[i].bbox {
+        Some(b) => (b.x0 + b.x1) / 2.0,
+        None => glyphs[i].origin.0 + glyphs[i].advance.unwrap_or(0.0) / 2.0,
+    };
+    let with_spaces = |ids: &Vec<usize>| {
+        let (x0, x1) = span(ids);
+        let g0 = &glyphs[ids[0]];
+        let tol = g0.font_size.max(1.0) as f64 * ROW_BASELINE_TOLERANCE;
+        let mut out = ids.clone();
+        out.extend(spaces.iter().copied().filter(|&i| {
+            let c = centre(i);
+            (glyphs[i].origin.1 - g0.origin.1).abs() < tol && c > x0 && c < x1
+        }));
+        out
+    };
+    let cells: Vec<Vec<usize>> = fields
+        .iter()
+        .flat_map(|f| [with_spaces(&f.1), with_spaces(&f.2)])
+        .collect();
+    let mut claimed: Vec<usize> = cells
+        .iter()
+        .flatten()
+        .map(|&i| glyphs[i].draw_index)
+        .collect();
+    claimed.sort_unstable();
+    claimed.dedup();
+    Some(Grid {
+        page,
+        bbox: BBox {
+            x0: xs[0],
+            y0: ys[0],
+            x1: xs[2],
+            y1: ys[ys.len() - 1],
+        },
+        xs,
+        ys,
+        layout: Some(std::sync::Arc::new(TableLayout {
+            header_rows: 0,
+            spans: Vec::new(),
+            downs: Vec::new(),
+            sub_headers: Vec::new(),
+            cells,
+            claimed,
+        })),
+    })
+}
+
+/// A list of fields whose labels end in no colon: `CP | Polished Chrome`,
+/// `Maximum user weight size A | 300 lb/136 kg`.
+///
+/// Alignment is all it has, and two columns of prose align too, as do two
+/// lists or two addresses set side by side. So each label is short (at most
+/// [`MAX_COLON_LABEL_WORDS`] words), holds a letter and opens on no bullet.
+/// Each value is a word, a figure or a phrase (at most
+/// [`MAX_FIELD_VALUE_WORDS`] words), and few are sentences. Labels open as
+/// names do: at most a quarter on a lowercase letter, where prose's lines
+/// run on from the line above, and fewer than half are a list's
+/// enumerators (`(a)`, `iv)`, `10. FIFA`), whose items are no fields. The
+/// labels or the values end where they will. Prose fills its columns, so
+/// its lines' ends crowd at the right edge; a field list's labels end where
+/// each label does, its values where each value does. Values that crowd
+/// there and run on in lowercase are a column of prose beside a list. And
+/// values that are all page numbers, never going back, are a contents
+/// page's.
+///
+/// And the two columns are of two kinds, as a label and its value are and
+/// two lists side by side are not. At least one of these holds:
+///
+/// - the labels are set bold and the values are not;
+/// - most values are quantities (`300 lb/136 kg`, `1st–99th percentile`);
+/// - every label is a code, one short word (`CP`, `2MB`, `CIO`);
+/// - the values come from a short list, half of them repeats of another
+///   (`Yes`, `No`; `Optional`).
+fn plain_fields(glyphs: &[crate::glyph::Glyph], fields: &[Field], texts: &[String]) -> bool {
+    let n = fields.len();
+    if texts.len() != n * 2 {
+        return false;
+    }
+    let (mut lower, mut sentences) = (0usize, 0usize);
+    for r in 0..n {
+        let (label, value) = (texts[r * 2].trim(), texts[r * 2 + 1].trim());
+        let words = value.split_whitespace().count();
+        let Some(first) = label.chars().next() else {
+            return false;
+        };
+        if value.is_empty()
+            || words > MAX_FIELD_VALUE_WORDS
+            || label.split_whitespace().count() > MAX_COLON_LABEL_WORDS
+            || !label.chars().any(char::is_alphabetic)
+            || matches!(
+                first,
+                '•' | '●'
+                    | '○'
+                    | '■'
+                    | '□'
+                    | '▪'
+                    | '◦'
+                    | '·'
+                    | '-'
+                    | '–'
+                    | '—'
+                    | '*'
+                    | '>'
+            )
+        {
+            return false;
+        }
+        lower += usize::from(first.is_lowercase());
+        sentences += usize::from(value.ends_with('.') && words > MAX_COLON_LABEL_WORDS);
+    }
+    let bb = |i: usize| glyphs[i].bbox.unwrap();
+    let fs = glyphs[fields[0].1[0]].font_size.max(1.0) as f64;
+    let crowded = |ends: Vec<f64>| {
+        let right = ends.iter().copied().fold(f64::MIN, f64::max);
+        ends.iter().filter(|&&e| e >= right - fs * 2.0).count() * 5 >= n * 3
+    };
+    let ends = |pick: fn(&Field) -> &Vec<usize>| {
+        fields
+            .iter()
+            .map(|f| pick(f).iter().map(|&i| bb(i).x1).fold(f64::MIN, f64::max))
+            .collect::<Vec<f64>>()
+    };
+    let labels: Vec<&str> = (0..n).map(|r| texts[r * 2].trim()).collect();
+    let values: Vec<&str> = (0..n).map(|r| texts[r * 2 + 1].trim()).collect();
+    let values_run_on = values
+        .iter()
+        .filter(|v| v.starts_with(|c: char| c.is_lowercase()))
+        .count()
+        * 2
+        > n;
+    let value_ends_crowd = crowded(ends(|f| &f.2));
+    let prose = value_ends_crowd && (values_run_on || crowded(ends(|f| &f.1)));
+    let enumerators = labels
+        .iter()
+        .filter(|l| l.split_whitespace().next().is_some_and(enumerator))
+        .count();
+    // Page numbers that never go back: a contents page's entries.
+    let pages: Vec<u32> = values
+        .iter()
+        .filter(|v| v.len() <= 4 && !v.starts_with('0'))
+        .filter_map(|v| v.parse::<u32>().ok())
+        .collect();
+    let contents = n >= 3 && pages.len() == n && pages.windows(2).all(|w| w[0] <= w[1]);
+    if lower * 4 > n || sentences * 2 > n || prose || enumerators * 2 >= n || contents {
+        return false;
+    }
+    let heavy = |ids: &[usize]| {
+        let weighted: Vec<u32> = ids.iter().filter_map(|&i| glyphs[i].weight).collect();
+        !weighted.is_empty() && weighted.iter().filter(|&&w| w >= 600).count() * 2 > weighted.len()
+    };
+    let bold = fields.iter().all(|f| heavy(&f.1) && !heavy(&f.2));
+    let quantities = values.iter().filter(|v| reads_as_quantity(v)).count() * 2 > n;
+    let codes = labels.iter().all(|l| {
+        !l.contains(char::is_whitespace)
+            && l.chars().count() <= 5
+            && l.chars().any(|c| c.is_uppercase() || c.is_ascii_digit())
+    });
+    let mut distinct: Vec<&str> = values.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    let closed = distinct.len() * 2 <= n;
+    bold || quantities || codes || closed
+}
+
+/// A list of two columns whose first row names them: a word over values
+/// that are quantities (`Description | Units` over `Chafing dish | 12`).
+/// A field's value is a quantity like the rest, or the values are words
+/// throughout, and the first row is one more field.
+fn names_its_columns(texts: &[String]) -> bool {
+    let n = texts.len() / 2;
+    if n < MIN_PLAIN_FIELDS {
+        return false;
+    }
+    let value = |r: usize| texts[r * 2 + 1].trim();
+    let label = |r: usize| texts[r * 2].trim();
+    let quantities = (1..n).filter(|&r| reads_as_quantity(value(r))).count();
+    !reads_as_quantity(value(0))
+        && !reads_as_quantity(label(0))
+        && value(0).chars().any(char::is_alphabetic)
+        && quantities * 4 >= (n - 1) * 3
+}
+
+/// A list's enumerator standing for a label: `(a)`, `b.`, `iv)`, `26a.`,
+/// a number or one letter, or a roman numeral, in brackets or ended by a
+/// stop. `No.` and `Ref.` are words.
+fn enumerator(label: &str) -> bool {
+    let inner = label.trim_start_matches('(').trim_end_matches(['.', ')']);
+    if inner.is_empty() || inner.len() == label.len() {
+        return false;
+    }
+    let digits = inner.trim_end_matches(|c: char| c.is_ascii_lowercase());
+    let numbered = !digits.is_empty()
+        && digits.chars().all(|c| c.is_ascii_digit())
+        && inner.len() - digits.len() <= 1;
+    let lettered = inner.chars().count() == 1 && inner.chars().all(char::is_alphabetic);
+    let roman = inner.len() <= 5
+        && (inner.chars().all(|c| "ivxlcdm".contains(c))
+            || inner.chars().all(|c| "IVXLCDM".contains(c)));
+    numbered || lettered || roman
+}
+
 /// Whether a field list's last value wraps back under its labels: the line
 /// set just under it starts where the labels do and runs on across the
 /// values, and is no label itself. Those are paragraphs that open on a
@@ -6921,6 +7403,108 @@ mod tests {
         // Without their colons the same rows are alignment alone.
         let bare: Vec<&str> = labels.iter().map(|l| l.trim_end_matches(':')).collect();
         assert!(detect_aligned(&spec_fields(&bare, 0.02), &[], &[], 0).is_empty());
+    }
+
+    fn field_texts(g: &Grid, gl: &[crate::glyph::Glyph]) -> Vec<String> {
+        g.layout
+            .as_ref()
+            .expect("a field list is read")
+            .texts(gl, g.cols())
+    }
+
+    #[test]
+    fn a_field_list_without_colons_is_read_with_its_values_set_right() {
+        let mut gl = Vec::new();
+        for (r, (label, value)) in [
+            ("OTC", "Yes"),
+            ("OTC Phase II", "Yes"),
+            ("CARB SCM 2007", "Yes"),
+            ("MIR-Manufacturer Inventory", "No"),
+            ("MPI", "#142, 143"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            gl.push(word(50.0, r, label, Some(700)));
+            gl.push(word(
+                300.0 - 5.0 * value.chars().count() as f64,
+                r,
+                value,
+                Some(400),
+            ));
+        }
+        let lists = field_lists(&gl, 0);
+        assert_eq!(lists.len(), 1, "got {lists:?}");
+        assert_eq!((lists[0].rows(), lists[0].cols()), (5, 2));
+        assert_eq!(lists[0].layout.as_ref().unwrap().header_rows, 0);
+        let cells = field_texts(&lists[0], &gl);
+        assert_eq!(
+            &cells[6..10],
+            ["MIR-Manufacturer Inventory", "No", "MPI", "#142, 143"]
+        );
+    }
+
+    #[test]
+    fn a_field_list_is_read_beside_a_column_of_prose() {
+        // Rows of the list share their baselines with a column of prose on
+        // their left: across the page each row is three cells.
+        let mut gl = Vec::new();
+        for r in 0..10 {
+            gl.push(word(50.0, r, "Prose set in its own column here", None));
+        }
+        // The list's own column runs on above it and below it.
+        for r in [0, 1, 2, 7, 8, 9] {
+            gl.push(word(260.0, r, "Finishes shown are samples", None));
+        }
+        for (r, (label, value)) in [
+            ("CP", "Polished Chrome"),
+            ("VS", "Vibrant Stainless"),
+            ("BL", "Matte Black"),
+            ("2MB", "Vibrant Brushed Brass"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            gl.push(word(260.0, r + 3, label, None));
+            gl.push(word(290.0, r + 3, value, None));
+        }
+        let lists = field_lists(&gl, 0);
+        assert_eq!(lists.len(), 1, "got {lists:?}");
+        let cells = field_texts(&lists[0], &gl);
+        assert_eq!(
+            &cells[..4],
+            ["CP", "Polished Chrome", "VS", "Vibrant Stainless"]
+        );
+        assert_eq!(&cells[6..8], ["2MB", "Vibrant Brushed Brass"]);
+    }
+
+    #[test]
+    fn two_columns_of_short_lines_are_not_a_field_list() {
+        // Both columns filled to their right edge, as prose fills them.
+        let mut gl = Vec::new();
+        for (r, (left, right)) in [
+            ("Results came back early", "Then the team went on"),
+            ("And were better than hoped", "To plan the second round"),
+            ("For every one of the sites", "With the same partners as"),
+            ("Measured over the season", "Before and in the same way"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = |x1: f64, t: &str| word(x1 - 5.0 * t.chars().count() as f64, r, t, None);
+            gl.push(at(190.0, left));
+            gl.push(at(360.0, right));
+        }
+        // Set flush left as well: one start for every line of each column.
+        for g in gl.iter_mut() {
+            let b = g.bbox.as_mut().unwrap();
+            let x0 = if b.x0 < 200.0 { 50.0 } else { 220.0 };
+            let w = b.x1 - b.x0;
+            b.x0 = x0;
+            b.x1 = x0 + w;
+            g.origin.0 = x0;
+        }
+        assert!(field_lists(&gl, 0).is_empty());
     }
 
     #[test]

@@ -1280,6 +1280,42 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
                 && !table::reads_as_prose(g, &prose)
         });
+        // Field lists set without rules, found between the page's gutters
+        // where a row across the page holds more than a label and its
+        // value. Their cells hold the prose's glyphs, so they are pointed
+        // at the page's.
+        let fields = timed(&mut timings.tables, || table::field_lists(&prose, p.index));
+        if !fields.is_empty() {
+            let at: std::collections::HashMap<usize, usize> = p
+                .glyphs
+                .iter()
+                .enumerate()
+                .map(|(i, g)| (g.draw_index, i))
+                .collect();
+            for mut f in fields {
+                if grids
+                    .iter()
+                    .chain(aligned.iter())
+                    .any(|o| overlap_area(&o.bbox, &f.bbox) > 0.0)
+                {
+                    continue;
+                }
+                let Some(lay) = f.layout.as_mut() else {
+                    continue;
+                };
+                let lay = std::sync::Arc::make_mut(lay);
+                let mut mapped = true;
+                for i in lay.cells.iter_mut().flatten() {
+                    match at.get(&prose[*i].draw_index) {
+                        Some(&k) => *i = k,
+                        None => mapped = false,
+                    }
+                }
+                if mapped {
+                    aligned.push(f);
+                }
+            }
+        }
         if !aligned.is_empty() {
             // Withhold their glyphs from prose too, and re-assemble what is left.
             let remaining = glyphs_outside_grids(&prose, &aligned);
