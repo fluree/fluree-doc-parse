@@ -321,6 +321,31 @@ pub const MEDIA_BYTES: u64 = 512;
 /// rows), then the output.
 pub const TEXT_BYTES: u64 = 12;
 
+/// What one glyph a PDF page draws costs, kept from the interpreter's
+/// callback through the layout (its box, origin, size and text, its ink
+/// measure, the lines' copies): 224 bytes. Text PDFs of 2,100 and 5,000
+/// pages of fifty lines of words, 3,350 glyphs a page, peaked at 217 bytes
+/// a glyph (1.47 and 3.64 GB). What a line or a crowded page costs beyond
+/// that is spent apart: [`LINE_BYTES`], [`PAGE_GLYPH_BYTES`].
+pub const GLYPH_BYTES: u64 = 224;
+
+/// What a line of glyphs costs beyond its glyphs: 48 bytes, spent for each
+/// glyph that does not follow the one before it on its baseline. Two
+/// million glyphs each on a line of its own, over a thousand pages, peaked
+/// at 251 bytes a glyph, where lines of words take 217.
+pub const LINE_BYTES: u64 = 48;
+
+/// What a glyph on the page that holds the most costs beyond its own: 192
+/// bytes, spent once, for the largest page. A page is laid out with its
+/// glyphs all at hand, and the passes over it take memory in proportion
+/// to them, beside what the document keeps: two million glyphs in lines of
+/// words on one page peaked at 374 bytes a glyph, on two pages at 278, on
+/// ten at 211; on a line each, on one page, at 412. Counted at 384 a
+/// glyph, whatever the page, a text PDF of 2,100 pages was refused; counted
+/// at 192, 12 million glyphs on one page, a line each, were within the
+/// budget and aborted the process under a 4 GB address space.
+pub const PAGE_GLYPH_BYTES: u64 = 192;
+
 /// What one byte of a part inflated whole costs: the part's own, and the
 /// copy a reader's event buffer makes of an event as long as the part (a
 /// run of text between two tags). A `.docx` whose main part is 1.9 GB of
@@ -654,6 +679,31 @@ impl Budget {
             }
         }
         Ok(())
+    }
+
+    /// Count `n` glyphs a PDF page draws, about to be kept, at
+    /// [`GLYPH_BYTES`] each.
+    pub fn spend_glyphs(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("glyphs", n, GLYPH_BYTES)
+    }
+
+    /// Count `n` lines the glyphs kept start, at [`LINE_BYTES`] each.
+    pub fn spend_lines(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("glyphs", n, LINE_BYTES)
+    }
+
+    /// Count `n` glyphs the largest page holds past what the largest page
+    /// before it held, at [`PAGE_GLYPH_BYTES`] each.
+    pub fn spend_page_glyphs(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("glyphs", n, PAGE_GLYPH_BYTES)
+    }
+
+    /// Count `n` bytes a PDF reader keeps beside a glyph to read it by
+    /// its shape once the document is read: the outline of a glyph whose
+    /// characters the document left unknown, or of a letter a ligature
+    /// is compared with. Its size is the font's to choose.
+    pub fn spend_outline(&mut self, n: u64) -> Result<(), TooLarge> {
+        self.spend_memory("glyph outlines", n, 1)
     }
 
     /// Count `n` steps of a layout pass about to be taken.

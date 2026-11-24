@@ -2293,7 +2293,7 @@ fn convert_bytes(
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
-    let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
+    let mut doc = extract_bytes(data).map_err(|e| format!("extract: {}", common::refused(&e)))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.

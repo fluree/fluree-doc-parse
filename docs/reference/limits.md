@@ -20,10 +20,12 @@ bounds of their own, where they have any: XPS the pages it lists (250,000,
 read or past the page limit) and the glyphs it reads
 ([XPS](../inputs/xps.md#bounds)), an image its pixels
 ([Images](../inputs/images.md#size-and-coordinates)). A PDF spends the
-budget on its annotations alone; the transcript readers have no bound
-beyond their input's size. Of an e-mail, only an HTML body is on it: its
-MIME tree or compound file, and a plain-text body, are bounded by the
-message's size ([An e-mail's own layer](#an-e-mails-own-layer)).
+budget on what its pages draw, as they are interpreted ([A PDF's
+content](#a-pdfs-content)), and on its annotations; the transcript readers
+have no bound beyond their input's size. Of an e-mail, only an HTML body
+is on it: its MIME tree or compound file, and a plain-text body, are
+bounded by the message's size ([An e-mail's own
+layer](#an-e-mails-own-layer)).
 
 A budget is one document's. A message's attachments are converted within
 what the message leaves of its budget, one at a time
@@ -221,8 +223,13 @@ nothing is copied, so both files convert.
 
 Layout passes whose cost the file chooses (islands of cells compared
 pairwise to mend a block a missing cell split, a table's rows read across
-its range) spend a count of steps of their own, at most 2^28 a document: a
-few seconds.
+its range), and a PDF's interpreter for each thing a page draws ([A PDF's
+content](#a-pdfs-content)), spend a count of steps of their own, at most
+2^28 a document. A step is not a fixed time: a layout pass's takes
+nanoseconds, but a glyph the PDF interpreter draws, even off the page, 2
+to 3.5 µs (4 million off the page took 14 s), so a PDF may take 8 to 15
+minutes before its steps run out. The work bounds what a file can make a
+reader do, not how long it takes ([Time](#time)).
 
 A package's parts name each other by relationship id (a `.docx`'s
 headers, footers and images, an `.xlsx`'s sheets and the pictures of its
@@ -506,6 +513,48 @@ past the limit still cost their entry in it. Slides (`.pptx`, `.ppt`,
 each element made of it, is spent from the memory budget, which bounds
 them already, and a deck has no page a reader routes.
 
+## A PDF's content
+
+A page's content stream is interpreted by hayro, which calls back into the
+reader for each thing the page draws, and has no bound of its own: a
+page of 31 KB drawing 20 million glyphs peaked at 4.1 GB and took 37 s, and
+aborted under a 4 GB address space. So each call spends the document's
+budget (`Budget::default`, one for all its pages) before what it drew is
+kept: a step of work for each glyph, a step for each segment of a path,
+4,096 for each image (its probe is decoded at 256 x 256), and, kept, a
+glyph 224 bytes with its text where a mapping gives it more than four
+bytes, 48 more where it starts a line (it does not follow the glyph before
+it along its baseline), 192 more for each glyph of the page that holds
+the most, once, and a rule, a fill or an image placement a cell slot.
+Text PDFs of fifty lines of words a page peaked at 217 bytes a glyph:
+1.47 GB for 2,100 pages, 3.64 GB for 5,000. A page is laid out with its
+glyphs all at hand, so a crowded page costs more: two million glyphs in
+lines of words peaked at 374 bytes each on one page, 278 on two, 211 on
+ten; a line each, at 412 on one page and 251 over a thousand. Counted at
+384 bytes a glyph, whatever the page, the 2,100 pages were refused; they
+convert now, as do 3,500 (2.4 GB), and 5,000, past the budget by what
+they take, are refused at 2.5 GB in 32 s (`--max-memory 4000` converts
+them). Counted at 192 bytes, 12 million glyphs a line each on one page (an
+88 KB file) were within the budget and aborted under a 4 GB address
+space; they are refused now, at 1.2 GB. Past the budget the page is
+stopped where it is (where the build unwinds; built to abort on a panic,
+the interpreter runs the page to its end with nothing more kept), and the
+document is refused: `extract: PDF too large: glyphs past the 2560 MiB of
+memory a document may take (raise it with --max-memory)`
+(`ExtractError::TooLarge`). 20 million glyphs on lines of words on one
+page are refused at 1.3 GB, in 17 s, 3 s and 0.3 GB under `--max-memory
+512`; 3 million, 1.1 GB, convert as before, as do two million rules (0.14
+GB).
+
+What the interpreter does between two calls is not counted: decoding a
+content stream, the operators that draw nothing (a million `q` or `cm`),
+building a path before handing it over, a glyph's outline, a shading. Its
+memory is bounded by the content stream's own size, its time by none:
+there is no deadline ([Time](#time)). The layout passes after
+extraction spend the work budget where their cost is the file's choice;
+their memory follows the glyphs kept. The notes left on the pages are read
+on a budget of their own, after the pages.
+
 ## Renders
 
 A page is rendered whole, for `fdoc render` and for the crops a model or
@@ -537,6 +586,17 @@ within it and peaks at 300 MB, as before; under `--max-render-pixels
 A 6,000 pt page peaked at 1.17 GB; drawn at 1.33x, 64 million pixels, it
 peaks at 530 MB. What a page's content costs to draw, beyond its pixels,
 is not bounded here ([A PDF's content](#a-pdfs-content)).
+
+## Time
+
+There is no deadline on a document, nor a time limit among the
+[limits](#setting-the-limits): work inside a library's loop (hayro's
+interpreter between two calls, html5ever's tree builder, a decoder) cannot
+be stopped from the thread running it, and a deadline checked only where
+the reader gets control back bounds nothing in between. What the limits
+bound is what a document may make and the steps whose cost the file
+chooses; a caller that needs a wall-clock bound runs the reader in a
+process it can kill (issue #23).
 
 ## Coordinates
 

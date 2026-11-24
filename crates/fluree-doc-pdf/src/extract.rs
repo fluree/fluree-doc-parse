@@ -8,6 +8,7 @@
 use crate::geom::BBox;
 use crate::glyph::Glyph;
 use crate::rule::{self, Fill, Rule};
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::symbols;
 use hayro_interpret::font::Glyph as HGlyph;
 use hayro_interpret::hayro_syntax::Pdf;
@@ -246,12 +247,21 @@ impl Document {
     }
 }
 
-struct Collector {
+struct Collector<'b> {
+    /// The document's budget, spent before each thing the page draws is
+    /// kept, and a step of work for each call the interpreter makes.
+    budget: &'b mut Budget,
+    /// The limit passed, once spent: nothing more is kept, and the page is
+    /// stopped where the build can unwind ([`Collector::spend`]).
+    over: Option<TooLarge>,
     page: usize,
     glyphs: Vec<Glyph>,
     images: Vec<ImagePlacement>,
     rules: Vec<Rule>,
     fills: Vec<Fill>,
+    /// The most glyphs a page read so far kept, this one included: what
+    /// the largest page's layout is spent ([`Budget::spend_page_glyphs`]).
+    largest_page: u64,
     /// The page's visible area — the crop box in render space. Content outside
     /// it is collected by no viewer and must not be collected here either:
     /// a book-spread scan's crop box shows one 510pt page while the
@@ -343,7 +353,7 @@ fn is_punctuation(c: char) -> bool {
     )
 }
 
-impl Collector {
+impl Collector<'_> {
     /// Read the glyphs drawn in Symbol or Wingdings as the characters the
     /// font shows.
     ///
@@ -451,7 +461,70 @@ impl Collector {
     }
 }
 
-impl<'a> Device<'a> for Collector {
+impl Collector<'_> {
+    /// Whether a glyph at `origin` starts a line: it does not follow the
+    /// glyph kept before it on the page along the same baseline (the same
+    /// direction, its origin no further off the baseline than a tenth of
+    /// its size, and no further along it than two sizes past it, nor half
+    /// a size behind). Counted from the drawing order, as a bound on the
+    /// lines the layout makes, not as them.
+    fn starts_line(&self, origin: (f64, f64), rotation_deg: f32, font_size: f32) -> bool {
+        let Some(prev) = self.glyphs.last() else {
+            return true;
+        };
+        if (prev.rotation_deg - rotation_deg).abs() > 1.0 {
+            return true;
+        }
+        let size = f64::from(font_size.max(prev.font_size));
+        let (sin, cos) = f64::from(rotation_deg).to_radians().sin_cos();
+        let (dx, dy) = (origin.0 - prev.origin.0, origin.1 - prev.origin.1);
+        // Along the baseline, which runs (cos, -sin) in the device's frame
+        // (`rotation_deg` is measured against its y axis, pointing down),
+        // and across it. Anything not finite starts one.
+        let along = dx * cos - dy * sin;
+        let across = (dx * sin + dy * cos).abs();
+        !(across <= 0.1 * size && along >= -0.5 * size && along <= 2.0 * size)
+    }
+}
+
+/// Unwound out of the interpreter by a [`Collector`] whose budget is spent:
+/// the page stops there, rather than at the end of its content.
+struct Spent;
+
+impl Collector<'_> {
+    /// Spend from the budget before keeping what the page drew: `false`,
+    /// and nothing kept, once a limit is passed. The interpreter has no way
+    /// to be stopped, so where the build unwinds the page is left there
+    /// ([`Spent`], caught by [`extract_bytes`]); where it aborts on a
+    /// panic, the interpreter runs the page to its end with nothing more
+    /// kept, its memory bounded and its time not.
+    fn spend(&mut self, f: impl FnOnce(&mut Budget) -> Result<(), TooLarge>) -> bool {
+        if self.over.is_some() {
+            return false;
+        }
+        match f(self.budget) {
+            Ok(()) => true,
+            Err(e) => {
+                self.over = Some(e);
+                #[cfg(panic = "unwind")]
+                std::panic::resume_unwind(Box::new(Spent));
+                #[cfg(not(panic = "unwind"))]
+                false
+            }
+        }
+    }
+}
+
+/// What an outline kept takes: its path's elements.
+fn outline_bytes(path: &kurbo::BezPath) -> u64 {
+    (std::mem::size_of_val(path.elements()) as u64).saturating_add(64)
+}
+
+/// Steps of work for one image's probe: decoded at most
+/// [`PROBE_DIM`] pixels square, a step for each sixteen.
+const PROBE_STEPS: u64 = (PROBE_DIM as u64 * PROBE_DIM as u64) / 16;
+
+impl<'a> Device<'a> for Collector<'_> {
     fn set_soft_mask(&mut self, _m: Option<hayro_interpret::SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _b: hayro_interpret::BlendMode) {}
     fn draw_path(
@@ -461,6 +534,11 @@ impl<'a> Device<'a> for Collector {
         _paint: &hayro_interpret::Paint<'a>,
         _d: &hayro_interpret::PathDrawMode,
     ) {
+        // A step for each segment: the copy below, and its walks.
+        let segments = path.elements().len() as u64;
+        if !self.spend(|b| b.spend_work(segments.max(1))) {
+            return;
+        }
         // Bounding box only. A table grid is axis-aligned rectangles and
         // segments; curve detail is irrelevant and expensive to keep.
         let path = transform * path.clone();
@@ -476,17 +554,19 @@ impl<'a> Device<'a> for Collector {
         // whole it was one fill, and the page had no rules. Where every
         // subpath is a rule on its own, each is pushed as one.
         if let Some(rules) = subpath_rules(&path, self.page) {
-            self.rules.extend(
-                rules
-                    .into_iter()
-                    .filter(|x| self.page_box.intersects(&x.bbox)),
-            );
+            let rules: Vec<Rule> = rules
+                .into_iter()
+                .filter(|x| self.page_box.intersects(&x.bbox))
+                .collect();
+            if self.spend(|b| b.spend_cells(rules.len() as u64)) {
+                self.rules.extend(rules);
+            }
             return;
         }
         match rule::classify(crate::geom::from_kurbo(r), self.page) {
-            Some(rule::Shape::Rule(x)) => self.rules.push(x),
-            Some(rule::Shape::Fill(x)) => self.fills.push(x),
-            None => {}
+            Some(rule::Shape::Rule(x)) if self.spend(|b| b.spend_cells(1)) => self.rules.push(x),
+            Some(rule::Shape::Fill(x)) if self.spend(|b| b.spend_cells(1)) => self.fills.push(x),
+            _ => {}
         }
     }
     fn push_clip_path(&mut self, c: &hayro_interpret::ClipPath) {
@@ -508,6 +588,10 @@ impl<'a> Device<'a> for Collector {
     ) {
     }
     fn draw_image(&mut self, i: hayro_interpret::Image<'a, '_>, t: Affine) {
+        // Its probe, and its placement kept.
+        if !self.spend(|b| b.spend_work(PROBE_STEPS).and_then(|()| b.spend_cells(1))) {
+            return;
+        }
         // The transform maps the image's *pixel* space onto the page.
         let grid = (i.width(), i.height());
         let (w, h) = (grid.0 as f64, grid.1 as f64);
@@ -611,6 +695,9 @@ impl<'a> Device<'a> for Collector {
         _paint: &hayro_interpret::Paint<'a>,
         _mode: &hayro_interpret::GlyphDrawMode,
     ) {
+        if !self.spend(|b| b.spend_work(1)) {
+            return;
+        }
         let mut text = match glyph.as_unicode() {
             Some(hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(hayro_interpret::hayro_cmap::BfString::String(s)) => s,
@@ -679,7 +766,12 @@ impl<'a> Device<'a> for Collector {
                         .filter(|c| self.letters.wants(&family, *c))
                     {
                         let advance = o.advance_width().unwrap_or(0.0) as f64;
-                        self.letters.keep(family, c, o.outline(), advance);
+                        let outline = o.outline();
+                        let bytes = family.len() as u64 + outline_bytes(&outline);
+                        if !self.spend(|b| b.spend_outline(bytes)) {
+                            return;
+                        }
+                        self.letters.keep(family, c, outline, advance);
                     }
                 }
             }
@@ -767,6 +859,30 @@ impl<'a> Device<'a> for Collector {
         if !visible {
             return;
         }
+        // Its text beyond what a glyph holds inline: a mapping can give one
+        // glyph a long string.
+        let long = (text.len() > 4).then_some(text.as_str());
+        // And the outline kept to read it by, where its text is unknown.
+        let outline = unread
+            .as_ref()
+            .map_or(0, |(family, o)| family.len() as u64 + outline_bytes(o));
+        // A line it starts, and the page grown past the largest one yet:
+        // both cost more than its glyphs.
+        let line = self.starts_line(origin, rotation_deg, font_size);
+        let on_page = self.glyphs.len() as u64 + 1;
+        let crowding = on_page.saturating_sub(self.largest_page);
+        if !self.spend(|b| {
+            b.spend_glyphs(1)?;
+            if line {
+                b.spend_lines(1)?;
+            }
+            b.spend_page_glyphs(crowding)?;
+            b.spend_outline(outline)?;
+            long.map_or(Ok(()), |t| b.spend_text(t))
+        }) {
+            return;
+        }
+        self.largest_page = self.largest_page.max(on_page);
         let draw_index = self.glyphs.len();
         if let Some((family, outline)) = unread {
             self.unread.push((draw_index, family, outline));
@@ -1303,6 +1419,9 @@ fn infer_weights(pages: &mut [Page], ink: &[Vec<Option<(u128, f64)>>]) {
 pub enum ExtractError {
     Io(String),
     Parse(String),
+    /// Past a limit the document is read within
+    /// ([`fluree_doc_model::budget::Limits`]): which, in the error.
+    TooLarge(TooLarge),
 }
 
 impl std::fmt::Display for ExtractError {
@@ -1310,11 +1429,20 @@ impl std::fmt::Display for ExtractError {
         match self {
             ExtractError::Io(e) => write!(f, "io: {e}"),
             ExtractError::Parse(e) => write!(f, "parse: {e}"),
+            ExtractError::TooLarge(e) => write!(f, "PDF too large: {e}"),
         }
     }
 }
 
-impl std::error::Error for ExtractError {}
+/// A limit passed is the error's source: [`TooLarge::limit`] says which.
+impl std::error::Error for ExtractError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let pdf = Pdf::new(Arc::new(data)).map_err(|e| ExtractError::Parse(format!("{e:?}")))?;
@@ -1333,9 +1461,13 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         },
         ..InterpreterSettings::default()
     };
+    // One budget for the document's pages: what each draws is spent from
+    // it as it is kept, and each call the interpreter makes is a step.
+    let mut budget = Budget::default();
     let mut pages = Vec::new();
     let mut ink: Vec<Vec<Option<(u128, f64)>>> = Vec::new();
     let mut letters = crate::ligature::Letters::default();
+    let mut largest_page = 0;
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
 
     // Past the page limit, the pages are not read, and said to be.
@@ -1344,6 +1476,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     for (index, page) in all.iter().take(read).enumerate() {
         let (w, h) = page.render_dimensions();
         let mut dev = Collector {
+            budget: &mut budget,
+            over: None,
             page: index,
             glyphs: Vec::new(),
             images: Vec::new(),
@@ -1351,6 +1485,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             fills: Vec::new(),
             ink: Vec::new(),
             letters: std::mem::take(&mut letters),
+            largest_page,
             unread: Vec::new(),
             marks: crate::marked::Marks::read(page),
             open: Vec::new(),
@@ -1372,7 +1507,19 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             page.xref(),
             settings.clone(),
         );
-        interpret_page(page, &mut ctx, &mut dev);
+        // Stopped by the collector once the budget is spent, the page is
+        // left where it stopped, and the document refused.
+        let interpreted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            interpret_page(page, &mut ctx, &mut dev)
+        }));
+        if let Err(p) = interpreted {
+            if !p.is::<Spent>() {
+                std::panic::resume_unwind(p);
+            }
+        }
+        if let Some(e) = dev.over.take() {
+            return Err(ExtractError::TooLarge(e));
+        }
         // A span the page left open still covers what it drew.
         while let Some(open) = dev.open.pop() {
             if let Some(span) = open {
@@ -1381,6 +1528,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         }
         dev.read_symbols();
         letters = std::mem::take(&mut dev.letters);
+        largest_page = dev.largest_page;
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let painted = std::mem::take(&mut dev.painted);
         let warnings = heard
@@ -1902,6 +2050,7 @@ mod actual_text_tests {
         let inked = (0..glyphs.len())
             .filter(|&i| glyphs[i].bbox.is_some())
             .collect();
+        let mut budget = Budget::default();
         let mut c = Collector {
             page: 0,
             glyphs,
@@ -1916,6 +2065,7 @@ mod actual_text_tests {
             },
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
+            largest_page: 0,
             unread: Vec::new(),
             marks: crate::marked::Marks::default(),
             open: Vec::new(),
@@ -1923,6 +2073,8 @@ mod actual_text_tests {
             symbols: Vec::new(),
             clips: Vec::new(),
             painted: Vec::new(),
+            budget: &mut budget,
+            over: None,
         };
         c.speak(Spoken {
             text: said.into(),
@@ -2049,5 +2201,202 @@ mod lookalike_tests {
         // Tall (0.6 aspect) single contour — thorn-like proportions.
         let p = BezPath::from_svg("M0,0 L400,0 L400,660 L0,660 Z").unwrap();
         assert_eq!(lookalike_repair("þ", &p), None);
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use fluree_doc_model::budget::{
+        limited_to, Limit, Limits, GLYPH_BYTES, LINE_BYTES, PAGE_GLYPH_BYTES,
+    };
+
+    /// A one-page PDF drawing `content` in Helvetica.
+    fn page_of(content: &str) -> Vec<u8> {
+        pages_of(1, content)
+    }
+
+    /// A PDF of `n` pages, each drawing `content` in Helvetica.
+    fn pages_of(n: usize, content: &str) -> Vec<u8> {
+        let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 5 + i)).collect();
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!("<< /Type /Pages /Kids [{}] /Count {n} >>", kids.join(" ")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+            format!(
+                "<< /Length {} >>\nstream\n{content}\nendstream",
+                content.len()
+            ),
+        ];
+        for _ in 0..n {
+            objects.push(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R \
+                 /Resources << /Font << /F1 3 0 R >> >> >>"
+                    .to_string(),
+            );
+        }
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+        }
+        let xref = out.len();
+        let size = objects.len() + 1;
+        out.extend(format!("xref\n0 {size}\n0000000000 65535 f \n").bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        out.extend(
+            format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").bytes(),
+        );
+        out
+    }
+
+    /// A hundred lines of ten letters, a thousand glyphs, on each of `n`
+    /// pages.
+    fn letters_on(n: usize) -> Vec<u8> {
+        let lines: String = (0..100)
+            .map(|i| format!("1 0 0 1 72 {} Tm (abcdefghij) Tj ", 750 - 7 * i))
+            .collect();
+        pages_of(n, &format!("BT /F1 6 Tf {lines}ET"))
+    }
+
+    /// A thousand glyphs: a hundred lines of ten letters.
+    fn letters() -> Vec<u8> {
+        letters_on(1)
+    }
+
+    fn within(memory: u64, work: u64, pdf: Vec<u8>) -> Result<Document, ExtractError> {
+        let mut l = Limits::default();
+        l.memory = memory;
+        l.work = work;
+        limited_to(l, || extract_bytes(pdf))
+    }
+
+    /// What `pages` pages of [`letters_on`] are spent: each glyph, each
+    /// line, and the glyphs of the largest page once.
+    fn letters_cost(pages: u64) -> u64 {
+        pages * (1000 * GLYPH_BYTES + 100 * LINE_BYTES) + 1000 * PAGE_GLYPH_BYTES
+    }
+
+    #[test]
+    fn the_glyphs_a_page_draws_are_spent_from_the_documents_budget() {
+        let doc = within(1 << 20, 1 << 20, letters()).unwrap();
+        assert_eq!(doc.glyph_count(), 1000);
+        // Not room for them all: refused, saying which limit.
+        let need = letters_cost(1);
+        match within(need - 1, 1 << 20, letters()) {
+            Err(ExtractError::TooLarge(e)) => {
+                assert_eq!((e.limit(), e.max()), (Limit::Memory, need - 1));
+                assert!(e.to_string().starts_with("glyphs past"), "{e}");
+            }
+            other => panic!("{:?}", other.map(|d| d.glyph_count())),
+        }
+        assert!(within(need, 1 << 20, letters()).is_ok());
+        // Each line spent once, not each glyph, and the largest page's
+        // glyphs once, not each page's.
+        let need = letters_cost(5);
+        assert!(within(need, 1 << 20, letters_on(5)).is_ok());
+        assert!(within(need - 1, 1 << 20, letters_on(5)).is_err());
+    }
+
+    #[test]
+    fn a_line_is_a_glyph_off_the_baseline_of_the_one_before() {
+        let doc = within(1 << 20, 1 << 20, letters()).unwrap();
+        let g = &doc.pages[0].glyphs;
+        let starts =
+            |c: &Collector<'_>, g: &Glyph| c.starts_line(g.origin, g.rotation_deg, g.font_size);
+        let mut budget = Budget::default();
+        let mut c = Collector {
+            page: 0,
+            glyphs: Vec::new(),
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            page_box: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 612.0,
+                y1: 792.0,
+            },
+            ink: Vec::new(),
+            letters: crate::ligature::Letters::default(),
+            largest_page: 0,
+            unread: Vec::new(),
+            marks: crate::marked::Marks::default(),
+            open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
+            clips: Vec::new(),
+            painted: Vec::new(),
+            budget: &mut budget,
+            over: None,
+        };
+        let mut lines = 0;
+        for glyph in g {
+            lines += usize::from(starts(&c, glyph));
+            c.glyphs.push(glyph.clone());
+        }
+        assert_eq!(lines, 100);
+        // Turned a quarter, a line down the page: the next glyph below
+        // follows, one beside it does not; nor one far along the line,
+        // nor one behind.
+        let mut turned = g[0].clone();
+        turned.rotation_deg = 90.0;
+        turned.origin = (100.0, 100.0);
+        c.glyphs.push(turned);
+        assert!(!c.starts_line((100.0, 95.0), 90.0, 6.0));
+        assert!(c.starts_line((106.0, 100.0), 90.0, 6.0));
+        assert!(c.starts_line((100.0, 80.0), 90.0, 6.0));
+        assert!(c.starts_line((100.0, 104.0), 90.0, 6.0));
+        assert!(c.starts_line((100.0, 95.0), 0.0, 6.0));
+        assert!(c.starts_line((f64::NAN, 95.0), 90.0, 6.0));
+    }
+
+    #[test]
+    fn a_glyph_costs_what_one_on_a_line_of_its_own_takes() {
+        // 200,000 glyphs, each on a line of its own (the font a third of
+        // the leading): measured at 372 B a glyph at the peak, 74 MB, so
+        // held to 64 MiB the page is refused rather than converted past it.
+        let n = 200_000;
+        let lead = 600.0 / n as f64;
+        let pdf = page_of(&format!(
+            "BT /F1 {:.9} Tf 72 700 Td {lead:.9} TL {}ET",
+            lead * 0.4,
+            "(a)' ".repeat(n)
+        ));
+        match within(64 << 20, 1 << 30, pdf) {
+            Err(ExtractError::TooLarge(e)) => assert_eq!(e.limit(), Limit::Memory),
+            other => panic!("{:?}", other.map(|d| d.glyph_count())),
+        }
+    }
+
+    #[test]
+    fn each_call_the_interpreter_makes_is_a_step_of_work() {
+        match within(1 << 20, 999, letters()) {
+            Err(ExtractError::TooLarge(e)) => assert_eq!(e.limit(), Limit::Work),
+            other => panic!("{:?}", other.map(|d| d.glyph_count())),
+        }
+        assert!(within(1 << 20, 1000, letters()).is_ok());
+        // A path, a step a segment: a hundred rectangles of five.
+        let rules: String = (0..100).map(|i| format!("0 {i} 600 0.3 re f ")).collect();
+        assert!(within(1 << 20, 500, page_of(&rules)).is_ok());
+        assert!(within(1 << 20, 499, page_of(&rules)).is_err());
+    }
+
+    #[test]
+    fn the_rules_a_page_draws_are_spent_as_cells() {
+        let rules: String = (0..100)
+            .map(|i| format!("0 {} 600 0.3 re f ", 5 * i))
+            .collect();
+        let doc = within(1 << 20, 1 << 20, page_of(&rules)).unwrap();
+        assert_eq!(doc.pages[0].rules.len(), 100);
+        let cells = 100 * fluree_doc_model::budget::CELL_BYTES;
+        assert!(within(cells, 1 << 20, page_of(&rules)).is_ok());
+        match within(cells - 1, 1 << 20, page_of(&rules)) {
+            Err(ExtractError::TooLarge(e)) => assert_eq!(e.limit(), Limit::Memory),
+            other => panic!("{:?}", other.map(|d| d.pages[0].rules.len())),
+        }
     }
 }
