@@ -338,6 +338,13 @@ fn batch_jobs(
                     free >> 20,
                     document >> 20
                 )
+            } else if beside >= free {
+                format!(
+                    "{} MiB of memory free, less than the {} MiB OCR sets aside, {} MiB a document",
+                    free >> 20,
+                    beside >> 20,
+                    document >> 20
+                )
             } else {
                 format!(
                     "{} MiB of memory free, {} MiB of it for OCR, {} MiB a document",
@@ -370,7 +377,7 @@ fn batch_jobs(
 /// available (`MemAvailable`), what its control groups leave it (a
 /// container's limit), and what its address space may grow to; `None` where
 /// none is known (outside Linux).
-fn free_memory() -> Option<u64> {
+pub(crate) fn free_memory() -> Option<u64> {
     free_memory_in(|path| std::fs::read_to_string(path).ok())
 }
 
@@ -3042,8 +3049,16 @@ mod tests {
             "MiB of memory free, {} MiB of it for OCR",
             doc >> 20
         )));
-        // An engine that may take all of it still leaves one.
-        assert_eq!(batch_jobs(8, 12, free, 0, u64::MAX).0, 1);
+        // An engine that may take more than is free still leaves one, and
+        // the note does not say it takes more than there is.
+        let (jobs, why) = batch_jobs(8, 12, Some(doc), 0, 2 * doc);
+        assert_eq!(jobs, 1);
+        assert!(why.unwrap().ends_with(&format!(
+            "{} MiB of memory free, less than the {} MiB OCR sets aside, {} MiB a document",
+            doc >> 20,
+            (2 * doc) >> 20,
+            doc >> 20
+        )));
         // Free memory not known: one per core, whatever the engine.
         assert_eq!(batch_jobs(0, 6, None, 0, doc), (6, None));
     }

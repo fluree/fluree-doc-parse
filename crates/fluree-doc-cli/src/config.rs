@@ -220,8 +220,9 @@ pub struct Ocr {
     /// bounds a reading's memory, about 230 bytes a pixel.
     pub max_megapixels: Option<f64>,
     /// The memory, in MiB, the passes the engine reads at once may take
-    /// (default 8192), each counted at about 230 bytes a pixel: a pass
-    /// that does not fit waits for others to finish.
+    /// (default a third of the memory free, at most 8192), each counted at
+    /// about 230 bytes a pixel: a pass that does not fit waits for others
+    /// to finish.
     pub max_memory: Option<u64>,
 }
 
