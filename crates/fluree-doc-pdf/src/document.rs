@@ -321,6 +321,24 @@ fn layout_boxes(
     )
 }
 
+/// The size most of a page's text is set in: its prose, against which a
+/// drawing's labels are set smaller.
+fn prose_size(blocks: &[Block]) -> f32 {
+    let mut by_size: Vec<(f32, usize)> = Vec::new();
+    for b in blocks {
+        let size = (b.font_size * 2.0).round() / 2.0;
+        let chars: usize = b.lines.iter().map(|l| l.text.chars().count()).sum();
+        match by_size.iter_mut().find(|(s, _)| *s == size) {
+            Some((_, n)) => *n += chars,
+            None => by_size.push((size, chars)),
+        }
+    }
+    by_size
+        .into_iter()
+        .max_by_key(|&(_, n)| n)
+        .map_or(0.0, |(s, _)| s)
+}
+
 /// Fraction of a block that must lie inside a figure's box for the block to
 /// belong to it. High enough that a paragraph brushing the drawing's margin
 /// stays prose, low enough that a caption tucked under the axis comes along.
@@ -705,10 +723,19 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let mut layouts: Vec<PageLayout> = Vec::new();
     let mut flat_lines: Vec<(Vec<Line>, f64)> = Vec::new();
 
+    // Glyphs drawn twice first: a copy laid on its own original is not a
+    // watermark laid over text.
     for p in raw.pages.iter_mut() {
         timed(&mut timings.dedup, || {
             dedup::remove_faux_bold(&mut p.glyphs, 8)
         });
+    }
+    // A watermark laid over the text, before it is read into the lines it
+    // crosses.
+    timed(&mut timings.furniture, || {
+        crate::watermark::strip_overlaid(&mut raw.pages)
+    });
+    for p in raw.pages.iter_mut() {
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
         // consumer of `rules` — grids, column rulers, row banding — would
@@ -960,6 +987,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             }
         }
 
+        // The labels a ruled table sets over the rules that group its
+        // columns are its top row. Taken in once the readings above are
+        // chosen: to them the rules under the labels are the table's top
+        // edge, not a boundary between its rows ruled short.
+        for (g, source) in grids.iter_mut().zip(&grid_sources) {
+            if *source == GridSource::Ruled {
+                g.take_group_labels(&p.rules, &p.glyphs);
+            }
+        }
+
         let prose = timed(&mut timings.columns, || {
             glyphs_outside_grids(&p.glyphs, &grids)
         });
@@ -1101,7 +1138,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let mut marks = timed(&mut timings.furniture, || furniture::detect(&flat_lines));
+    let (mut marks, exact) = timed(&mut timings.furniture, || {
+        furniture::detect_with_exact(&flat_lines)
+    });
     // A line OCR read is never furniture. Repetition is furniture's only
     // evidence, and on a scan the same content repeats for its own reasons: a
     // fax that sends one ID card on every page, a form copied per applicant.
@@ -1190,20 +1229,53 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             for (li, kind) in page_marks {
                 let text = flat_lines[pi].0[*li].text.trim().to_string();
                 let digits_vary = matches!(kind, furniture::Furniture::PageNumber);
-                let key: String = if digits_vary {
-                    text.chars()
-                        .map(|c| if c.is_ascii_digit() { '#' } else { c })
-                        .collect()
-                } else {
-                    text.clone()
-                };
-                if !text.is_empty() && seen.insert(key) {
+                if !text.is_empty() && seen.insert(furniture_key(&text, digits_vary)) {
                     v.push((text, digits_vary));
                 }
             }
         }
         v
     };
+    // The texts scrubbed from cells and blocks: those read by repetition.
+    // A short document's exact copies were each found as a line of their
+    // own, and the same words elsewhere are content (see
+    // `furniture::detect_with_exact`).
+    let scrub_texts: Vec<(String, bool)> = {
+        let repeated: std::collections::HashSet<String> = marks
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, page_marks)| {
+                let exact = &exact[pi];
+                let lines = &flat_lines[pi].0;
+                page_marks
+                    .iter()
+                    .filter(move |(li, _)| !exact.contains(li))
+                    .map(move |(li, kind)| {
+                        furniture_key(
+                            lines[*li].text.trim(),
+                            matches!(kind, furniture::Furniture::PageNumber),
+                        )
+                    })
+            })
+            .collect();
+        furniture_texts
+            .iter()
+            .filter(|(t, vary)| repeated.contains(&furniture_key(t, *vary)))
+            .cloned()
+            .collect()
+    };
+    // The sizes each furniture text is printed at, to tell a running head
+    // from a title page that sets the same words as its title.
+    let mut furniture_sizes: std::collections::HashMap<String, Vec<f32>> = Default::default();
+    for (pi, page_marks) in marks.iter().enumerate() {
+        for li in page_marks.keys() {
+            let l = &flat_lines[pi].0[*li];
+            furniture_sizes
+                .entry(l.text.trim().to_string())
+                .or_default()
+                .push(l.font_size);
+        }
+    }
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
 
@@ -1335,9 +1407,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut figures = figure::detect(&page.fills, &page.rules, pi, (page.width, page.height));
         // The drawing does not contain its own labels; grow each region to
         // reach them before deciding which blocks belong to it.
-        let block_boxes: Vec<(crate::geom::BBox, usize)> =
-            blocks.iter().map(|b| (b.bbox, b.lines.len())).collect();
-        figure::attach(&mut figures, &block_boxes, (page.width, page.height));
+        let block_boxes: Vec<(crate::geom::BBox, f32)> =
+            blocks.iter().map(|b| (b.bbox, b.font_size)).collect();
+        figure::attach(
+            &mut figures,
+            &block_boxes,
+            (page.width, page.height),
+            prose_size(blocks),
+        );
         // Which figure each block falls in, if any. A block counts as inside
         // when most of it is: a caption sitting just below the drawing is
         // part of the figure, a paragraph merely overlapping its margin is
@@ -1397,10 +1474,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // known furniture texts are stripped as substrings instead,
             // from a block that reaches the band headers and footers are
             // set in. A block in the middle of the page holds none.
+            //
+            // A block that is all of a running line, at another size, is
+            // no leak: it is a title page setting the words the later
+            // pages run over their heads (`Guild® | K-R33912` large on the
+            // first page, small at the top of the rest).
             let height = raw.pages[pi].height;
             let band = height * furniture::EDGE_BAND;
-            let scrubbed = if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
-                furniture::scrub_block(&text, &furniture_texts)
+            let retitled = furniture_sizes.get(text.trim()).is_some_and(|sizes| {
+                sizes
+                    .iter()
+                    .all(|s| (b.font_size - s).abs() > 0.15 * s.max(b.font_size))
+            });
+            let scrubbed = if retitled {
+                text.clone()
+            } else if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
+                furniture::scrub_block(&text, &scrub_texts)
             } else {
                 text.clone()
             };
@@ -1436,7 +1525,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 None => g.cell_texts(&raw.pages[pi].glyphs),
             }
             .into_iter()
-            .map(|c| furniture::scrub_cell(&c, &furniture_texts))
+            .map(|c| furniture::scrub_cell(&c, &scrub_texts))
             .collect();
             if layout.demoted_tables[gi] {
                 // Judged non-table by the layout arbiter: same reading
@@ -1473,6 +1562,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     let page = &raw.pages[pi];
                     let mut m = g.merges(&page.rules, &page.fills);
                     g.text_merges(&page.glyphs, &page.rules, &mut m);
+                    g.group_label_merges(&page.glyphs, &page.rules, &mut m);
                     m
                 }
             };
@@ -1484,7 +1574,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             let mut rows = rows;
             for &r in &layout.spanning_rows[gi] {
                 rows[r][0] =
-                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &furniture_texts);
+                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts);
                 for (c, cell) in rows[r].iter_mut().enumerate().skip(1) {
                     cell.clear();
                     merges.continues_left[r * cols + c] = true;
@@ -1498,8 +1588,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     lay.header_rows
                 }
                 None => {
-                    let h = g.header_rows(&rows, &raw.pages[pi].glyphs, &raw.pages[pi].fills);
-                    g.stacked_header_rows(h, &rows, &merges, &raw.pages[pi].rules)
+                    let page = &raw.pages[pi];
+                    let h = g.header_rows(&rows, &page.glyphs, &page.rules, &page.fills);
+                    g.stacked_header_rows(h, &rows, &merges, &page.rules)
                 }
             };
             // An unruled table read by alignment has no rules to say a header
@@ -1583,7 +1674,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => furniture::scrub_cell(&t, &furniture_texts),
+                            Some(t) => furniture::scrub_cell(&t, &scrub_texts),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
                             None => continue,
                         };
@@ -1837,6 +1928,18 @@ pub fn column_doubt(page: &Page, analysis: &Analysis) -> Option<crate::column::D
         .cloned()
         .collect();
     crate::column::doubt(&prose)
+}
+
+/// A furniture text as the scrub list tells copies apart: a page number by
+/// its words, its digits any.
+fn furniture_key(text: &str, digits_vary: bool) -> String {
+    if digits_vary {
+        text.chars()
+            .map(|c| if c.is_ascii_digit() { '#' } else { c })
+            .collect()
+    } else {
+        text.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -2145,6 +2248,7 @@ mod tests {
             font_size: 10.0,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         }
     }
 

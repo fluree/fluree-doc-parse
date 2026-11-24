@@ -95,6 +95,24 @@ every row it means, so a band between its rules is one row, a step whose
 instructions fill the page. A band as tall in a table ruled with lines is as
 often a body whose rows were never ruled, and is left for the text to read.
 
+## Currency signs
+
+A cell's text is read word by word, and a currency sign set apart from its
+figure is a word of its own that must go to the right cell. A financial
+statement pins its `$` at the column's left edge and sets the figure to the
+right, several ems away, so a lone sign is read with the figure after it.
+Invoices in French and other languages set the sign after the figure,
+`4,85 €`, and read the same way, every sign but the last moved to the next
+column's figure: `4,85 | € 19,40 €`.
+
+The line says which convention it follows. A sign a word space after a
+figure that prices no figure after it (the line's last, or one before a
+label) means the line sets its signs after its figures, and then every sign
+a word space after a figure is that figure's. On a line whose figures are
+all bare, a sign is still the next figure's. In a drawn grid the sign must
+also stand in its figure's column: a `$` pinned past a cut is the next
+column's.
+
 ## A one-column grid reads its columns from its text
 
 A key/value list ruled with horizontals only — a billing summary's `MS-DRG …
@@ -139,6 +157,20 @@ beneath (`Monotherapy` over `Adult patients with …`) as a header over the
 column names (`Establishment` over `Name | Address | ID/FEI`), so the labels
 under it must be short, as column names are.
 
+A table ruled with horizontals only groups its columns another way. Each
+group's label (`2024`, `2023`, `Percent Change`) is set over a rule drawn
+under that group's columns alone, and the rules part where the groups do.
+The grid begins at those rules, so the line of labels over them is taken in
+as the table's top row, each label spanning the columns its rule runs
+under, and every column beneath is named by both (`2024 / Underground`).
+Only one kind of line is taken: within a line of the rules, every mark on it
+over a rule, each group's label one run of text. A line that also stands
+over a column no rule runs under, such as a label over the row labels, says
+the header above is more than one line of group labels. Taking part of it
+would leave a fragment, so none of it is taken. A rule across the whole
+table is the table's top edge, and what stands over it is its title. A table
+that draws its columns bounds its header's cells itself and is left alone.
+
 A row that holds only a label in its first column, drawn as cells of the
 table rather than a band across it, labels the rows beneath it when the row
 below fills every column. The full row is what tells a group from a row whose
@@ -146,6 +178,36 @@ values are missing: a receipt's `TOTAL` with no amount sits over `Cash` and
 `Change`, as sparse as it is. A label wrapped onto the next row (`Median in`
 over `months (95% CI)`) is carried on, not a group, and a two-column list is
 left alone, since a field left empty there looks the same.
+
+## A list of fields has no header row
+
+A spec sheet sets its data as fields, `Label | value` down two columns and
+ruled between rows, with no header row. A table's first row is presumed to be
+its header, and taken for one, a field list's first field named every value
+under it (`1 µL – 50,000 µL` was a `Positive displacement dispenser`) and was
+lost as a field.
+
+A header is set apart from the rows under it, and a field's row is not. Two
+columns are read as fields, with no header row, when:
+
+- every row is ruled off from the next across both columns, and the rule
+  under the first is no heavier than the others;
+- the first row is shaded like some row under it, or bare like one, so the
+  first band of a striped table is no header;
+- in each column, the first row is set in the size and weight of the rows
+  under it. A label column set bold beside plain values is a field list, and
+  so is one whose values set a phrase bold here and there;
+- a label stands in the first column of every row.
+
+A header set no differently from its rows still names its column, and in
+fewer words than any value under it. `Settings | Recommendations` over
+sentences of advice keeps its header row. A field's value is one more value:
+`Positive displacement dispenser` beside `1` and `No`.
+
+The cells of a field list carry no column header. Each label is the row
+header of its value, and the first field is a row like the rest. Markdown
+has no table without a header row, so it still prints the first field
+there.
 
 ## Merges
 

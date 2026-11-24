@@ -1,0 +1,52 @@
+{
+  "document": {
+    "file": "eurlex-32024R1689.html",
+    "url": "https://publications.europa.eu/resource/cellar/dc8116a1-3fe6-11ef-865a-01aa75ed71a1.0006.03/DOC_1",
+    "sha256": "8f0b656302f9864cc87e040c371f209a9d65ae1a6cecc25ca5eb737e872d721a",
+    "about": "The Artificial Intelligence Act, (EU) 2024/1689, as the Publications Office serves it in XHTML: 13 chapters with sections and 113 articles, then 13 annexes, two of them with sections of their own; no h1 to h6 anywhere."
+  },
+  "notes": [
+    "The Official Journal's XHTML declares no headings: its outline is in classes and identifiers of its own. Headings are read by their shape, a keyword and a number in a paragraph of their own with the title in the paragraph after it, and nested by how often each keyword occurs. An annex sits beside the chapters, not inside the last of them."
+  ],
+  "checks": [
+    {
+      "id": "article-in-its-section",
+      "found": "2026-11-23",
+      "issue": "Article 6 was a paragraph, with no section holding it.",
+      "section": {
+        "title": "Article 6 Classification rules for high-risk AI systems",
+        "level": 3,
+        "within": "SECTION 1 Classification of AI systems as high-risk"
+      }
+    },
+    {
+      "id": "section-in-its-chapter",
+      "found": "2026-11-23",
+      "issue": "As above, for the section above it; the act writes SECTION in capitals here.",
+      "section": {
+        "title": "SECTION 1 Classification of AI systems as high-risk",
+        "level": 2,
+        "within": "CHAPTER III HIGH-RISK AI SYSTEMS"
+      }
+    },
+    {
+      "id": "annex-beside-the-chapters",
+      "found": "2026-11-23",
+      "issue": "An annex is attached to the act, at the level of its chapters, not inside Chapter XIII.",
+      "section": {
+        "title": "ANNEX III High-risk AI systems referred to in Article 6(2)",
+        "level": 1
+      }
+    },
+    {
+      "id": "section-in-an-annex",
+      "found": "2026-11-23",
+      "issue": "Annex XI's sections are its own.",
+      "section": {
+        "title": "Section 1 Information to be provided by all providers of general-purpose AI models",
+        "level": 2,
+        "within": "ANNEX XI Technical documentation referred to in Article 53(1), point (a) — technical documentation for providers of general-purpose AI models"
+      }
+    }
+  ]
+}

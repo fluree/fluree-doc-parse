@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Its field angle sets the degree sign as a small raised letter o after the number."
+  },
+  "notes": [
+    "2026-11-23 (#77): a raised letter after a number of three figures was read as a note's letter. A raised o, 0 or º after a number that cannot take it as an ordinal ending is a degree."
+  ],
+  "checks": [
+    {
+      "id": "field-angle-degree",
+      "found": "2026-11-23",
+      "issue": "The degree read as a note's letter: ~ 145 o.",
+      "text": "intensity): ~ 145°"
+    },
+    {
+      "id": "no-note-letter",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "no_text": "145 o"
+    }
+  ]
+}

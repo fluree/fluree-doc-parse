@@ -35,6 +35,10 @@ const CELL_GAP: f64 = 0.9;
 /// Gap, in font sizes, above which two glyphs are separate words.
 const WORD_GAP: f64 = 0.2;
 
+/// Widest gap, in font sizes, between a figure and a currency sign set
+/// after it as its own: a word space, breaking or not.
+const SIGN_SPACE: f64 = 0.6;
+
 /// Baseline agreement, in font sizes, for two glyphs to be on one line.
 const BASELINE_TOLERANCE: f64 = 0.5;
 
@@ -313,15 +317,35 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                 words,
             });
         }
+        // A sign a word space after a figure is that figure's where the row
+        // sets its signs after its figures (`4,85 €`), as a sign that
+        // prices no figure after it says. Elsewhere it is the next figure's.
+        let after_figure = |i: usize| {
+            i > 0
+                && is_currency(&chunks[i].text)
+                && is_figure(&chunks[i - 1].text)
+                && chunks[i].x0 - chunks[i - 1].x1 <= fs * SIGN_SPACE
+        };
+        let prices_next = |i: usize| {
+            chunks
+                .get(i + 1)
+                .is_some_and(|n| is_figure(&n.text) && n.x0 - chunks[i].x1 <= fs * 6.0)
+        };
+        let suffixed = (0..chunks.len()).any(|i| after_figure(i) && !prices_next(i));
+        let suffix: Vec<bool> = (0..chunks.len())
+            .map(|i| suffixed && after_figure(i))
+            .collect();
         // `$` set apart from its figure is the figure's: `$ 10,441`.
         let mut merged: Vec<Chunk> = Vec::new();
-        for c in chunks {
+        for (i, c) in chunks.into_iter().enumerate() {
             if let Some(prev) = merged.last_mut() {
-                let joins =
-                    (is_currency(&prev.text) && is_figure(&c.text) && c.x0 - prev.x1 <= fs * 6.0)
-                        || (c.text.trim() == "%"
-                            && is_figure(&prev.text)
-                            && c.x0 - prev.x1 <= fs * 2.0);
+                let joins = suffix[i]
+                    || (is_currency(&prev.text)
+                        && is_figure(&c.text)
+                        && c.x0 - prev.x1 <= fs * 6.0)
+                    || (c.text.trim() == "%"
+                        && is_figure(&prev.text)
+                        && c.x0 - prev.x1 <= fs * 2.0);
                 if joins {
                     prev.text = format!("{} {}", prev.text, c.text);
                     prev.glyphs.extend(c.glyphs);
@@ -2132,5 +2156,70 @@ mod tests {
         assert_eq!(strip_leaders("Diluted ........"), "Diluted");
         assert_eq!(strip_leaders("U.S."), "U.S.");
         assert_eq!(strip_leaders("..."), "...");
+    }
+
+    /// `text` set from `x` on baseline `y` at 10pt, 5.5pt a character,
+    /// spaces as outline-less glyphs.
+    fn set(text: &str, x: f64, y: f64) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, ch)| {
+                let cx = x + 5.5 * i as f64;
+                Glyph {
+                    text: ch.to_string(),
+                    bbox: (ch != ' ').then_some(BBox {
+                        x0: cx,
+                        y0: y - 8.0,
+                        x1: cx + 5.0,
+                        y1: y + 2.0,
+                    }),
+                    page: 0,
+                    origin: (cx, y),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(5.5),
+                    draw_index: 0,
+                }
+            })
+            .collect()
+    }
+
+    fn chunks(glyphs: &[Glyph]) -> Vec<String> {
+        lines(glyphs)[0]
+            .chunks
+            .iter()
+            .map(|c| c.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_sign_set_after_its_figure_stays_with_it() {
+        // `4,85 €` then `19,40 €`: the last sign prices nothing after it,
+        // so the line sets its signs after its figures.
+        let mut gl = set("4", 100.0, 50.0);
+        gl.extend(set("4,85", 160.0, 50.0));
+        gl.extend(set("€", 185.0, 50.0));
+        gl.extend(set("19,40", 240.0, 50.0));
+        gl.extend(set("€", 270.5, 50.0));
+        assert_eq!(chunks(&gl), ["4", "4,85 €", "19,40 €"]);
+        // Before a bare quantity as well.
+        let mut gl = set("4,85", 100.0, 50.0);
+        gl.extend(set("€", 125.0, 50.0));
+        gl.extend(set("4", 180.0, 50.0));
+        gl.extend(set("19,40", 240.0, 50.0));
+        gl.extend(set("€", 270.5, 50.0));
+        assert_eq!(chunks(&gl), ["4,85 €", "4", "19,40 €"]);
+    }
+
+    #[test]
+    fn a_sign_before_its_figure_stays_with_that_one() {
+        // A statement's `$` pinned at the column's left edge, a word space
+        // after the figure before it: every figure on the line is bare, so
+        // each sign is the next figure's.
+        let mut gl = set("1,234", 100.0, 50.0);
+        gl.extend(set("$", 131.0, 50.0));
+        gl.extend(set("5,678", 190.0, 50.0));
+        assert_eq!(chunks(&gl), ["1,234", "$ 5,678"]);
     }
 }

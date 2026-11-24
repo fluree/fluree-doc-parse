@@ -70,7 +70,7 @@ pub(crate) fn probe(dir: &Path) {
         100.0 * boxed as f64 / glyphs.max(1) as f64
     );
     println!("T1.4 ligatures raw    : {lig_raw}");
-    println!("T1.4 ligatures NFKC   : {lig_norm}   <- must be 0");
+    println!("T1.4 ligatures read   : {lig_norm}   <- must be 0");
     println!("T1.5 faux-bold removed: {deduped}");
     for e in &errors {
         println!("  ERROR {e}");

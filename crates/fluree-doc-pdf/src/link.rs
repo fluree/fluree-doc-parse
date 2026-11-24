@@ -37,12 +37,11 @@ pub struct Link {
 /// an arbitrary object graph, and a hostile file may make it enormous.
 const MAX_LINKS: usize = 20_000;
 
-/// How much of the annotation rectangle an element must cover to own the link.
+/// How much of a link's text an element must cover to own the link.
 ///
-/// Link rectangles are drawn generously — a viewer wants a target big enough
-/// to hit — so an exact containment test loses most of them. Half is enough to
-/// pick the right element out of a page while still rejecting a rectangle that
-/// merely brushes a neighbour.
+/// Measured against the ink the rectangle sits over (see [`ink_box`]), not
+/// the rectangle itself. Half is enough to pick the right element out of a
+/// page while still rejecting a rectangle that merely brushes a neighbour.
 const MIN_COVERAGE: f64 = 0.5;
 
 /// Every link annotation in the document whose target can be resolved, in
@@ -195,27 +194,21 @@ pub fn attach(elements: &mut [Element], links: &[Link], pages: &[Page]) {
     });
 
     for link in ordered {
-        let Some(owner) = owner_of(elements, link) else {
+        let under = pages
+            .get(link.page)
+            .map(|p| glyphs_under(p, link.bbox))
+            .unwrap_or_default();
+        let anchor = anchor_of(&under);
+        let area = ink_box(&under).unwrap_or(link.bbox);
+        let Some((owner, span)) = owner_of(elements, link.page, area, &anchor) else {
             continue;
         };
-        let anchor = pages
-            .get(link.page)
-            .map(|p| anchor_text(p, link.bbox))
-            .unwrap_or_default();
-        // Resume after the last anchor already placed, so a page of identical
-        // link texts ("here", "here", "here") does not resolve them all onto
-        // the first occurrence.
-        let from = elements[owner]
-            .links
-            .as_ref()
-            .and_then(|ls| ls.last().and_then(|l| l.end))
-            .unwrap_or(0);
         let new = ElementLink {
             target: link.target.clone(),
             begin: None,
             end: None,
         };
-        let new = match locate(&elements[owner].text, &anchor, from) {
+        let new = match span {
             Some((b, e)) => new.spanning(b, e),
             None => new,
         };
@@ -274,22 +267,78 @@ fn merge_wrapped(links: &mut Vec<ElementLink>, text: &[char]) {
     }
 }
 
-/// The element covering most of a link's rectangle.
-fn owner_of(elements: &[Element], link: &Link) -> Option<usize> {
+/// The element on `page` that owns a link over `area`, and where its anchor
+/// sits in that element's text.
+///
+/// Of the elements covering at least [`MIN_COVERAGE`] of the area, the one
+/// whose text holds the anchor wins, then the one covering most, then the
+/// smallest. Measured against ink, every element whose box holds the text
+/// covers all of it, so overlapping boxes tie: a table read out of a
+/// paragraph's tail sits inside the paragraph's box, and only the table has
+/// the words.
+fn owner_of(
+    elements: &[Element],
+    page: usize,
+    area: BBox,
+    anchor: &str,
+) -> Option<(usize, Option<(usize, usize)>)> {
     elements
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.page == link.page && !e.text.is_empty())
+        .filter(|(_, e)| e.page == page && !e.text.is_empty())
         .filter_map(|(i, e)| {
             let b = e.bbox?;
-            let w = (b.x1.min(link.bbox.x1) - b.x0.max(link.bbox.x0)).max(0.0);
-            let h = (b.y1.min(link.bbox.y1) - b.y0.max(link.bbox.y0)).max(0.0);
-            let area = (link.bbox.width() * link.bbox.height()).max(1e-9);
-            let coverage = w * h / area;
-            (coverage >= MIN_COVERAGE).then_some((i, coverage))
+            let w = (b.x1.min(area.x1) - b.x0.max(area.x0)).max(0.0);
+            let h = (b.y1.min(area.y1) - b.y0.max(area.y0)).max(0.0);
+            let coverage = w * h / (area.width() * area.height()).max(1e-9);
+            if coverage < MIN_COVERAGE {
+                return None;
+            }
+            // Resume after the last anchor already placed, so a page of
+            // identical link texts ("here", "here", "here") does not resolve
+            // them all onto the first occurrence.
+            let from = e
+                .links
+                .as_ref()
+                .and_then(|ls| ls.last().and_then(|l| l.end))
+                .unwrap_or(0);
+            let span = locate(&e.text, anchor, from);
+            Some((i, span, coverage, b.width() * b.height()))
         })
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(i, _)| i)
+        .max_by(|a, b| {
+            (a.1.is_some().cmp(&b.1.is_some()))
+                .then(a.2.total_cmp(&b.2))
+                .then(b.3.total_cmp(&a.3))
+        })
+        .map(|(i, span, ..)| (i, span))
+}
+
+/// The glyphs a link's rectangle sits over: those whose centre it contains.
+fn glyphs_under(page: &Page, rect: BBox) -> Vec<crate::glyph::Glyph> {
+    page.glyphs
+        .iter()
+        .filter(|g| {
+            let (x, y) = g.center();
+            rect.contains(x, y)
+        })
+        .cloned()
+        .collect()
+}
+
+/// The box around the ink under a link: what ownership is measured against.
+///
+/// Link rectangles are drawn generously, since a viewer wants a target big
+/// enough to hit. A rectangle twice the height of its line, around a short
+/// run like the `SEVS.` that ends a wrapped URL, has more padding than text,
+/// so it covers less than half of its owner's tight box and would be dropped.
+/// The glyphs are what the link marks. `None` when no glyph is under the
+/// rectangle, and the caller falls back to the rectangle itself.
+fn ink_box(glyphs: &[crate::glyph::Glyph]) -> Option<BBox> {
+    glyphs
+        .iter()
+        .filter_map(|g| g.bbox)
+        .reduce(|a, b| a.union(&b))
+        .filter(|b| !b.is_empty())
 }
 
 /// The text a link's rectangle sits over, read from the page's own glyphs.
@@ -302,19 +351,15 @@ fn owner_of(elements: &[Element], link: &Link) -> Option<usize> {
 /// address, and it is looking at pixels: the anchor is the only handle it has
 /// on a link it cannot otherwise see.
 pub fn anchor_text(page: &Page, rect: BBox) -> String {
-    let inside: Vec<crate::glyph::Glyph> = page
-        .glyphs
-        .iter()
-        .filter(|g| {
-            let (x, y) = g.center();
-            rect.contains(x, y)
-        })
-        .cloned()
-        .collect();
+    anchor_of(&glyphs_under(page, rect))
+}
+
+/// [`anchor_text`] over glyphs already gathered.
+fn anchor_of(inside: &[crate::glyph::Glyph]) -> String {
     if inside.is_empty() {
         return String::new();
     }
-    crate::line::assemble(&inside)
+    crate::line::assemble(inside)
         .iter()
         .map(|l| l.text.trim())
         .filter(|t| !t.is_empty())
@@ -454,6 +499,99 @@ mod tests {
         ];
         attach(&mut elements, &links, &[]);
         assert_eq!(elements[0].links.as_ref().map(Vec::len), Some(1));
+    }
+
+    /// One glyph per character, 5 wide and 10 tall, from `x` on a line whose
+    /// top is `y`; a space is an advance with no glyph.
+    fn glyphs(s: &str, x: f64, y: f64) -> Vec<crate::glyph::Glyph> {
+        s.chars()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .map(|(i, c)| {
+                let x = x + 5.0 * i as f64;
+                crate::glyph::Glyph {
+                    text: c.to_string(),
+                    bbox: Some(bbox(x, y, x + 5.0, y + 10.0)),
+                    page: 0,
+                    origin: (x, y + 8.0),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    advance: Some(5.0),
+                    draw_index: i,
+                }
+            })
+            .collect()
+    }
+
+    fn page_of(glyphs: Vec<crate::glyph::Glyph>) -> Page {
+        Page {
+            index: 0,
+            glyphs,
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            width: 600.0,
+            height: 800.0,
+            rotation: 0,
+            ocr: None,
+        }
+    }
+
+    #[test]
+    fn a_wrapped_link_keeps_its_short_second_line() {
+        // A URL wrapped after its own hyphen. The second rectangle is drawn
+        // twice the line's height around `cd.`, so by area the paragraph
+        // covers under half of it (170 of 342). Its glyphs are all inside the
+        // paragraph, and they are what the link marks.
+        let mut g = glyphs("see https://x.org/ab-", 0.0, 0.0);
+        g.extend(glyphs("cd.", 0.0, 12.0));
+        let pages = vec![page_of(g)];
+        let mut elements = vec![el("see https://x.org/ab-cd.", bbox(0.0, 0.0, 105.0, 22.0))];
+        let target = uri("https://x.org/ab-cd");
+        let links = vec![
+            Link {
+                page: 0,
+                target: target.clone(),
+                bbox: bbox(19.0, -1.0, 106.0, 11.0),
+            },
+            Link {
+                page: 0,
+                target: target.clone(),
+                bbox: bbox(-2.0, 12.0, 17.0, 30.0),
+            },
+        ];
+        attach(&mut elements, &links, &pages);
+        assert_eq!(
+            elements[0].links.as_deref(),
+            Some(&[ElementLink::uri("https://x.org/ab-cd").spanning(4, 24)][..])
+        );
+    }
+
+    #[test]
+    fn overlapping_boxes_go_to_the_element_holding_the_words() {
+        // A table read out of a paragraph's last lines sits inside the
+        // paragraph's box. Both cover all of the ink; only the table has the
+        // anchor, and the paragraph comes later, so it would win a bare tie.
+        let pages = vec![page_of(glyphs("Smith 2015", 0.0, 40.0))];
+        let mut elements = vec![
+            el("Smith 2015 | other", bbox(0.0, 40.0, 100.0, 50.0)),
+            el(
+                "A paragraph whose box runs over the table.",
+                bbox(0.0, 0.0, 300.0, 50.0),
+            ),
+        ];
+        let links = vec![Link {
+            page: 0,
+            target: uri("https://example.org/smith"),
+            bbox: bbox(-1.0, 38.0, 51.0, 52.0),
+        }];
+        attach(&mut elements, &links, &pages);
+        assert_eq!(
+            elements[0].links.as_deref(),
+            Some(&[ElementLink::uri("https://example.org/smith").spanning(0, 10)][..])
+        );
+        assert!(elements[1].links.is_none());
     }
 
     #[test]

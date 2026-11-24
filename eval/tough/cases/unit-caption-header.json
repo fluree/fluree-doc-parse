@@ -1,0 +1,41 @@
+{
+  "document": {
+    "path": "../fixtures/unit-caption-header.html",
+    "about": "Three invented tables set as a filing sets its statements: a plain units caption in the label cell beside a bold, ruled head over a column pair; a blank label cell under one head; year heads ruled at half a point beside a plain caption."
+  },
+  "notes": [
+    "Written by hand; edit the HTML and the checks together."
+  ],
+  "checks": [
+    {
+      "id": "plain-caption-beside-the-head",
+      "found": "2026-11-23",
+      "issue": "A label cell in plain text made the header row read as data.",
+      "cell": {
+        "value": "1,240",
+        "column": "Annual Output",
+        "row": "North plant"
+      }
+    },
+    {
+      "id": "one-head-over-a-blank-corner",
+      "found": "2026-11-23",
+      "issue": "A row of one head, its label cell blank, was a band.",
+      "cell": {
+        "value": "1,875",
+        "column": "Annual Intake",
+        "row": "West depot"
+      }
+    },
+    {
+      "id": "half-point-rules-are-rules",
+      "found": "2026-11-23",
+      "issue": "A border width starting with 0 (0.5pt) was read as no border.",
+      "cell": {
+        "value": "131",
+        "column": "2024",
+        "row": "Lakeside Gas"
+      }
+    }
+  ]
+}

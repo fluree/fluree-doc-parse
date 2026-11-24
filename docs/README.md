@@ -4,7 +4,7 @@ Adaptive document parsing: a deterministic Rust engine first, with
 model-arbitrated upgrade tiers a document walks through only as far as it
 needs.
 
-PDF, Markdown, HTML, DOCX, PPTX, XLSX, transcripts and email all converge on **one element model**, so
+PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, transcripts and email all converge on **one element model**, so
 every source produces the same output — the same Markdown, the same DoCO
 graph, the same character offsets. PDF is the geometric path, where structure
 is inferred from where glyphs and ruling lines actually sit. The others

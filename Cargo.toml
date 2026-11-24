@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/fluree-doc-model",
     "crates/fluree-doc-markdown",
+    "crates/fluree-doc-text",
     "crates/fluree-doc-docx",
     "crates/fluree-doc-html",
     "crates/fluree-doc-pptx",
@@ -27,6 +28,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 fluree-doc-model = { path = "crates/fluree-doc-model" }
 fluree-doc-markdown = { path = "crates/fluree-doc-markdown" }
+fluree-doc-text = { path = "crates/fluree-doc-text" }
 fluree-doc-docx = { path = "crates/fluree-doc-docx" }
 fluree-doc-html = { path = "crates/fluree-doc-html" }
 fluree-doc-pptx = { path = "crates/fluree-doc-pptx" }
@@ -42,6 +44,7 @@ hayro = "0.7"
 hayro-syntax = "0.7"
 hayro-interpret = "0.7"
 kurbo = "0.13"
+read-fonts = { version = "0.39", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -49,3 +52,15 @@ unicode-normalization = "0.1"
 
 [profile.release]
 opt-level = 3
+# No symbol table in the binary: a fifth of its size (`fdoc` 20.2 -> 15.8 MB,
+# measured 2026-11-23) for no cost in build time or speed. This workspace's
+# code is built without debug info, and cargo's release default,
+# `strip = "debuginfo"`, already drops the standard library's, so the names
+# are all that is left to strip; `strip = false` is therefore not the inverse
+# of this setting but a larger binary (26.2 MB) carrying std's debug info. A
+# panic still names its file and line; only a backtrace loses its function
+# names (see docs/getting-started/install.md for a build that keeps them).
+# Link-time optimisation was measured too: thin LTO saves 0.2 MB more
+# and triples the rebuild after a one-line edit (12 -> 35 s), fat LTO 3 MB
+# more for a sevenfold rebuild (88 s), neither faster at run time.
+strip = true

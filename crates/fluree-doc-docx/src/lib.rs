@@ -18,9 +18,8 @@
 //!   structure is not a hypothesis.
 
 mod numbering;
-mod symbols;
 
-use fluree_doc_model::{DocumentInfo, Element};
+use fluree_doc_model::{symbols, DocumentInfo, Element};
 use fluree_doc_ooxml::{attr, local};
 use numbering::Numbering;
 use quick_xml::events::Event;

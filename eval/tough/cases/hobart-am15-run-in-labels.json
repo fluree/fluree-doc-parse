@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "hobart-am15.pdf",
+    "url": "https://www.hobart.ca/wp-content/uploads/pdfs/warewash/AM15-F40078.pdf",
+    "sha256": "bc7d11759f34b0dbab4898e14dd4088c9fb9a2bb10be7c10bf81d3e776cbd138",
+    "about": "Hobart AM15 dishwasher specification sheet (8 pages). Page 8 sets its specifications as run-in paragraphs, each opening on a bold label (PUMP:, MOTOR:), with little space between them. Only the bold face declares a weight; the regular face declares none."
+  },
+  "notes": [
+    "Counting only the glyphs that declare a weight made a run-in label most of its line, so the first line of every paragraph was bold, became a section, and the rest of the paragraph followed apart from it."
+  ],
+  "checks": [
+    {
+      "id": "run-in-label-is-no-section",
+      "found": "2026-11-23",
+      "issue": "The first line of the PUMP paragraph, its bold label and the plain text after it, was a level-5 section.",
+      "no_section": "PUMP:"
+    },
+    {
+      "id": "label-filling-its-line-is-no-section",
+      "found": "2026-11-23",
+      "issue": "A label long enough to fill most of its line (MICROCOMPUTER CONTROL SYSTEM: Hobart) was a section by any majority of its glyphs.",
+      "no_section": "MICROCOMPUTER CONTROL SYSTEM"
+    },
+    {
+      "id": "label-ending-on-a-figure-is-no-section",
+      "found": "2026-11-23",
+      "issue": "A bold line ending on a plain figure (… 57 seconds: 38) that runs on to the next line was a section.",
+      "no_section": "Hot Water Sanitizing"
+    },
+    {
+      "id": "run-in-paragraph-reads-whole",
+      "found": "2026-11-23",
+      "issue": "The PUMP paragraph was cut after its first line.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "PUMP: With stainless steel pump and impeller, integral with motor assures alignment and quiet operation. Pump shaft seal with stainless steel parts and a carbon ceramic sealing interface. Easily removable impeller housing permits ease of inspection. Capacity 160 GPM. Pump is completely self-draining."
+      }
+    },
+    {
+      "id": "long-label-paragraph-reads-whole",
+      "found": "2026-11-23",
+      "issue": "As above, for the paragraph whose label fills most of its first line.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "MICROCOMPUTER CONTROL SYSTEM: Hobart microcomputer controls, assembled within water-resistant enclosure, provide built-in performance and reliability. The microcomputer control, relays and contactors are housed behind a stainless steel enclosure, hinged to provide easy access for servicing. The line voltage electrical components are completely wired with 105°C, 600V thermoplastic insulated wire with stranded conductors and routed through listed electrical conduit. Electrical components are wired with type ST cord. Line disconnect switch NOT furnished."
+      }
+    }
+  ]
+}

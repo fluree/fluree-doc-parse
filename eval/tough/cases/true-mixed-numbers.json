@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "true-t49-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-49-HC.pdf",
+    "sha256": "2d7a6c5a42bc79311b0ffc2fc3978af63272b935e234afe61c2fd35290235b62",
+    "about": "True Manufacturing T-49-HC reach-in refrigerator spec sheet (2 pages). Its dimensions are mixed numbers typeset with no space before the fraction, three ways: the font's own fraction figures in the text and the table, a numerator set smaller and raised in the drawing, and halves the font draws whole."
+  },
+  "notes": [
+    "2026-11-23: each mixed number read as one number, its fraction joined to the whole number: 223/8\"D for 22 3/8\"D (#46). The drawing's raised numerators read as powers: 78⁵/16\"."
+  ],
+  "checks": [
+    {
+      "id": "fraction-figures-in-text",
+      "found": "2026-11-23",
+      "issue": "The font's fraction figures, the same size as the text, joined the whole number: 249/16\"L x 223/8\"D.",
+      "text": "shelves 24 9/16\"L x 22 3/8\"D (624 mm x 569 mm)"
+    },
+    {
+      "id": "fraction-figures-in-the-table",
+      "found": "2026-11-23",
+      "issue": "As above, in the dimensions table: 541/8 1375.",
+      "text": "54 1/8 1375"
+    },
+    {
+      "id": "raised-numerator-is-no-power",
+      "found": "2026-11-23",
+      "issue": "The drawing sets each numerator smaller and raised, and it read as a power: 78⁵/16\".",
+      "text": "78 5/16\""
+    },
+    {
+      "id": "half-drawn-whole",
+      "found": "2026-11-23",
+      "issue": "The font draws ½ as one glyph whose text is 1/2, and it joined the 2 before it: 21/2” stem castors.",
+      "text": "2 1/2” (64mm) stem castors"
+    },
+    {
+      "id": "no-joined-fraction",
+      "found": "2026-11-23",
+      "issue": "No whole number takes its fraction's numerator.",
+      "no_text": "223/8"
+    }
+  ]
+}

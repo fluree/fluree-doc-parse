@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "multiplastics-7500.pdf",
+    "url": "https://multi-plastics.com/wp-content/uploads/2016/07/Sell_Sheet_7500.pdf",
+    "sha256": "ba567968030a0029552e911c79ec47e6977829ba0834066eea4dad47957159c5",
+    "about": "Multi-Plastics 7500 PLA film product information sheet (2 pages, Word 2013). Its properties and applications are Word bulleted lists, whose bullet the PDF maps to U+F0B7, the Symbol font's place for •."
+  },
+  "notes": [
+    "U+F0B7 was not read as a bullet, so it stayed at the head of each item's text and no list was formed. pdftotext gives the same code: the file says it."
+  ],
+  "checks": [
+    {
+      "id": "symbol-bullet-item",
+      "found": "2026-11-23",
+      "issue": "#49: the item read  High stiffness, a paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "High stiffness",
+        "evidence": "bullet"
+      }
+    },
+    {
+      "id": "symbol-bullet-dropped",
+      "found": "2026-11-23",
+      "issue": "#49: as above; the bullet is not text.",
+      "no_text": " High stiffness"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+ "family": "line-table",
+ "formats": [
+  "html",
+  "pdf"
+ ],
+ "blocks": [
+  {
+   "text": "Facture F-2026-0412"
+  },
+  {
+   "text": "Quincaillerie du Port · 14 mars 2026"
+  },
+  {
+   "table": {
+    "columns": [
+     "Désignation",
+     "Qté",
+     "Prix unit.",
+     "Montant"
+    ],
+    "all_cells": true,
+    "rows": [
+     {
+      "cells": [
+       "Seau de maçon 12 L",
+       "4",
+       "4,85 €",
+       "19,40 €"
+      ]
+     },
+     {
+      "cells": [
+       "Rail métallique 48 mm, 3 m",
+       "3",
+       "5,20 €",
+       "15,60 €"
+      ]
+     },
+     {
+      "cells": [
+       "Vis à bois 4x40 (boîte de 200)",
+       "2",
+       "7,90 €",
+       "15,80 €"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "text": "Avoir A-2026-0088"
+  },
+  {
+   "table": {
+    "columns": [
+     "Désignation",
+     "Prix unit.",
+     "Qté",
+     "Montant"
+    ],
+    "all_cells": true,
+    "rows": [
+     {
+      "cells": [
+       "Cheville nylon 8 mm (sachet)",
+       "2,35 €",
+       "5",
+       "11,75 €"
+      ]
+     },
+     {
+      "cells": [
+       "Mastic acrylique blanc",
+       "6,10 €",
+       "1",
+       "6,10 €"
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "parts": []
+}

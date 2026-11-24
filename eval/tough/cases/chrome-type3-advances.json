@@ -1,0 +1,30 @@
+{
+  "document": {
+    "path": "../fixtures/chrome-type3-advances.pdf",
+    "sha256": "f8b9dfbb563fa874f40b6c2f893fa3efd9ab5d2ccb803a68eec306bc92d4efb5",
+    "about": "Two invented lines printed to PDF by headless Chrome on macOS (fixtures/chrome-type3-advances.html): Helvetica as CID TrueType, the ﬃ ligature and the CJK name in PingFang SC as Type 3 fonts. The second paragraph is set narrow so the name wraps after its first character."
+  },
+  "notes": [
+    "Reprint with: Chrome --headless --no-pdf-header-footer --print-to-pdf=chrome-type3-advances.pdf chrome-type3-advances.html, then update the sha256."
+  ],
+  "checks": [
+    {
+      "id": "ligature-reads-whole",
+      "found": "2026-11-23",
+      "issue": "The Type 3 ﬃ was given a guessed width, measured to the next Type 3 glyph only, and the rest of its advance read as a space: offi ce.",
+      "text": "The office confirmed the order for 青松纸业有限公司."
+    },
+    {
+      "id": "name-wrapped-mid-word-reads-whole",
+      "found": "2026-11-23",
+      "issue": "The CJK name wrapped after its first character was joined with a space, 青 松纸业有限公司, and the full stop set apart.",
+      "text": "deliver the office chairs to 青松纸业有限公司."
+    },
+    {
+      "id": "no-split-ligature",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "no_text": "offi ce"
+    }
+  ]
+}
