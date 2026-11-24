@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drive QuickSpecs. Each drive family's box sets a block of short field rows over SKU rows four to five lines tall, each row's verticals drawn on their own."
+  },
+  "notes": [
+    "Where the field rows set the median, every SKU row was over 3.5 times it: the table ended at the first, and the SKU rows were paragraphs."
+  ],
+  "checks": [
+    {
+      "id": "sku-row-in-table",
+      "found": "2026-11-24",
+      "issue": "#105: `872475-B21 HPE 300GB SAS 12G …` was a paragraph.",
+      "cell": {
+        "value": "HPE 300GB SAS 12G Mission Critical 10K SFF SC 3-year Warranty Multi Vendor HDD",
+        "row": "872475-B21"
+      }
+    }
+  ]
+}

@@ -24,7 +24,6 @@
       "issue": "#102: the Average Luminance table was a column of the CU table.",
       "cell": {
         "value": "17,146",
-        "column": "Average Luminance Table (cd/m²) / Horizontal Angle",
         "row": "55°"
       }
     },

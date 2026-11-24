@@ -124,6 +124,32 @@ boundary. Where a table's first and last rules end together, that is its
 edge. This is read from one table's rules only: across a whole page, the
 first and last rules are as often its running head and foot.
 
+## Tall rows
+
+A band more than 3.5 times the median row height is taken for the gap
+between two tables: the table ends before it. (The ratio was tuned on the
+benchmark's table scores.) Height alone also ends a table at its first tall
+row, a label beside a paragraph of value or a SKU beside a three-line
+description, and the rows from there fall out as loose text. So a tall band
+stays a row where the table's structure runs on through it and its text is
+one row's:
+
+- **The structure runs on.** Two of the table's rules cross the band and the
+  band beside it, whether one stroke or each row's own: its sides, or two of
+  its column rules. One long rule is as often the page's divider. In a table
+  ruled with horizontals alone, the rules over and under the band have one
+  extent and break at the same columns, as its rows' rules do.
+- **The text is one row's.** The first column holding text sets one line or
+  two (a label, wrapped at most once), and another column holds text beside
+  it. A heading set between two tables holds one column, and a body whose
+  rows were never ruled names a row on every line. In a table ruled with
+  horizontals alone, no line runs across a column's edge either, as a
+  paragraph set between two tables would.
+
+The band a table opens with, its rules running on through it into the rows
+below, is its header row however tall: column labels wrap over as many lines
+as they need.
+
 ## Tables drawn with characters
 
 A line printer, and the systems that still print like one, has no ruling. It

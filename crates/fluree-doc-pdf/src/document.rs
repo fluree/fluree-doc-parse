@@ -1841,6 +1841,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // (`Crucible | Logistics`).
             let rcount = rows.len();
             let mut taken = vec![false; rcount * cols];
+            // Cells read row by row out of a block that could not be read
+            // whole: they no longer carry on the cell above.
+            let mut unspanned: Vec<usize> = Vec::new();
             // A table read from its text joined its spans as it read them.
             if explicit.is_some() {
                 taken.iter_mut().for_each(|t| *t = true);
@@ -1877,13 +1880,47 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
                             Some(t) => unfolio(furniture::scrub_cell(&t, &scrub_texts), r, r_end),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
-                            None => continue,
+                            None => {
+                                // A block across rows and columns that reads
+                                // whole neither way is two spans crossing: a
+                                // group label down its column, and each row's
+                                // label across the columns beside it. Each
+                                // row is read across the columns its own
+                                // ruling leaves open.
+                                if r_end - r > 1 && c_end - c > 1 {
+                                    let glyphs = &raw.pages[pi].glyphs;
+                                    for i in r..r_end {
+                                        let mut ce = c + 1;
+                                        while ce < c_end && merges.continues_left[i * cols + ce] {
+                                            ce += 1;
+                                        }
+                                        if ce - c < 2 {
+                                            continue;
+                                        }
+                                        if let Some(t) =
+                                            g.region_text(glyphs, &merges, i..i + 1, c..ce)
+                                        {
+                                            rows[i][c..ce].iter_mut().for_each(String::clear);
+                                            rows[i][c] = unfolio(
+                                                furniture::scrub_cell(&t, &scrub_texts),
+                                                i,
+                                                i + 1,
+                                            );
+                                            unspanned.extend((c..ce).map(|k| i * cols + k));
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
                         };
                     for row in rows.iter_mut().take(r_end).skip(r) {
                         row[c..c_end].iter_mut().for_each(String::clear);
                     }
                     rows[r][c] = text;
                 }
+            }
+            for k in unspanned {
+                merges.continues_above[k] = false;
             }
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
