@@ -649,3 +649,101 @@ fn fdoc_ocr_names_the_image_it_shrinks() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_page_scanned_askew_and_read_in_strips_keeps_every_line() {
+    // A Letter page scanned at 400 dpi, 3,400 × 4,400 px, turned 3°: 75
+    // lines of about 2,800 px every 55 px. Read in two strips; at the seam,
+    // each line's rows overlap its neighbours'. Compared on those rows, the
+    // strips' copies of row 37 were each taken for a neighbour's, and it
+    // was lost; every line is kept once.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let (sin, cos) = 3f64.to_radians().sin_cos();
+    let (cx, cy) = (850.0, 1100.0);
+    let mut content = format!(
+        "q {cos:.6} {sin:.6} {:.6} {cos:.6} {:.3} {:.3} cm\n",
+        -sin,
+        cx - cos * cx + sin * cy,
+        cy - sin * cx - cos * cy
+    );
+    for i in 0..75 {
+        content.push_str(&format!(
+            "BT /F1 18 Tf 150 {} Td (Row {i:03} account {} statement of the transfer pending {}.{:02} reference {} cleared on the quarterly close) Tj ET\n",
+            2130.0 - 27.5 * f64::from(i),
+            4417 + 7 * i,
+            120 + 13 * i,
+            i % 100,
+            88310 + 29 * i
+        ));
+    }
+    content.push('Q');
+    let bytes = pdf_sized(
+        1700,
+        2200,
+        &content,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        None,
+    );
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let mut image = None;
+    fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+    let image = image.unwrap();
+    assert_eq!((image.width, image.height), (3400, 4400));
+    assert_eq!(
+        engine.sizing().plan(3400, 4400).passes.len(),
+        2,
+        "read in two strips"
+    );
+    rows_read_once(&engine.read(&image).unwrap(), 75);
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_reading_waits_while_the_memory_budget_is_held() {
+    // A budget of one byte: every pass is larger, and is read alone. Two
+    // pipelines, two threads: a small image asked for while a page is read
+    // waits for the page, though a pipeline is free for it.
+    use fluree_doc_vision::{Layout, OcrEngine, Pixels};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let opts = OarOptions {
+        pipelines: 2,
+        memory: 1,
+        ..OarOptions::default()
+    };
+    let engine = OarEngine::open(&dir, &opts).unwrap();
+    let image = |w: u32, h: u32| {
+        let mut data = vec![255u8; (w * h) as usize];
+        for y in (40..h.saturating_sub(40)).step_by(60) {
+            for row in y..y + 12 {
+                let at = (row * w) as usize;
+                data[at + 40..at + (w as usize - 40)].fill(0);
+            }
+        }
+        Pixels::new(w, h, Layout::Luma8, data).unwrap()
+    };
+    let (page, small) = (image(2550, 3300), image(300, 120));
+    let page_done = AtomicBool::new(false);
+    std::thread::scope(|s| {
+        let reader = s.spawn(|| {
+            engine.read(&page).unwrap();
+            page_done.store(true, Ordering::SeqCst);
+        });
+        while engine.memory_held() == 0 {
+            assert!(
+                !reader.is_finished(),
+                "the page was read before it was seen held"
+            );
+            std::thread::yield_now();
+        }
+        engine.read(&small).unwrap();
+        assert!(
+            page_done.load(Ordering::SeqCst),
+            "the small image was read beside the page, past the budget"
+        );
+        reader.join().unwrap();
+    });
+}

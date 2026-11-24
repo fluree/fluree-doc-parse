@@ -637,8 +637,9 @@ type Words = Vec<(OcrWord, Bounds)>;
 /// A word reaching a strip's cut edge is cut, and dropped: the strips
 /// overlap by more than a line, so the next one holds it whole. A line in
 /// an overlap is read by both strips, its boxes a pixel or two apart: of two
-/// boxes from different strips covering each other at least half, the one
-/// further inside its strip is kept. A rule by the overlap's middle would
+/// boxes from different strips covering each other at least half, compared
+/// along their baseline ([`same_line`]), the one further inside its strip is
+/// kept. A rule by the overlap's middle would
 /// lose a line read astride it, its center on the far side in both strips.
 ///
 /// A line running down the image is tested on the rows it spans, so its
@@ -676,7 +677,7 @@ fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
     for i in order {
         let twice = kept
             .iter()
-            .any(|&k| cands[k].0 != cands[i].0 && covers_half(&cands[k].4, &cands[i].4));
+            .any(|&k| cands[k].0 != cands[i].0 && same_line(&cands[k], &cands[i]));
         if !twice {
             kept.push(i);
         }
@@ -684,6 +685,55 @@ fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
     kept.sort_unstable();
     let mut out: Vec<Option<OcrWord>> = cands.into_iter().map(|c| Some(c.3)).collect();
     kept.into_iter().filter_map(|i| out[i].take()).collect()
+}
+
+/// Whether two words, each with its quad's [`Bounds`], from two strips are
+/// one line read twice.
+///
+/// Two words running the same way are compared along it: each one's box,
+/// set upright about its center ([`quad_box`]), seen in the first's
+/// direction, and one line if they share at least half of the smaller. On a
+/// page a little askew the rows a long line spans overlap its neighbours'
+/// (2,800 px at 2° spans 130 rows, over two lines 55 px apart either side),
+/// and compared on those, a line kept from one strip took the next one's
+/// copy in the other for itself: one line lost at each seam. Words not
+/// running the same way are compared on the rows and columns their quads
+/// span.
+fn same_line(
+    a: &(usize, f64, usize, OcrWord, Bounds),
+    b: &(usize, f64, usize, OcrWord, Bounds),
+) -> bool {
+    let (wa, wb) = (&a.3, &b.3);
+    match (wa.angle, wb.angle) {
+        (Some(x), Some(y)) if ((x - y + 180.0).rem_euclid(360.0) - 180.0).abs() < SAME_WAY => {
+            covers_half_along(&wa.bbox, &wb.bbox, x)
+        }
+        _ => covers_half(&a.4, &b.4),
+    }
+}
+
+/// Most degrees apart two words' baselines may run to be compared along
+/// them ([`same_line`]).
+const SAME_WAY: f64 = 10.0;
+
+/// Whether two upright boxes, `a` turned `deg` degrees about its center and
+/// `b` turned as much about its own, share at least half of the smaller:
+/// `b`'s center is taken into `a`'s frame, where both are level.
+fn covers_half_along(a: &[f64; 4], b: &[f64; 4], deg: f64) -> bool {
+    let (sin, cos) = deg.to_radians().sin_cos();
+    let center = |r: &[f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let ((ax, ay), (bx, by)) = (center(a), center(b));
+    let (dx, dy) = (bx - ax, by - ay);
+    // Along the baseline (up is -y) and across it.
+    let (along, across) = (dx * cos - dy * sin, dx * sin + dy * cos);
+    let (la, ta) = (a[2] - a[0], a[3] - a[1]);
+    let (lb, tb) = (b[2] - b[0], b[3] - b[1]);
+    let meet = |half_a: f64, at: f64, half_b: f64| {
+        ((half_a).min(at + half_b) - (-half_a).max(at - half_b)).max(0.0)
+    };
+    let w = meet(la / 2.0, along, lb / 2.0);
+    let h = meet(ta / 2.0, across, tb / 2.0);
+    w * h >= 0.5 * (la * ta).min(lb * tb)
 }
 
 /// Whether two boxes share at least half of the smaller one.
@@ -1000,6 +1050,75 @@ mod tests {
         // Two lines one above the other in one strip are both kept.
         let read = vec![(0, 2000, vec![w("a", 100.0, 120.0), w("b", 110.0, 130.0)])];
         assert_eq!(texts(merge_strips(read, 2000)), ["a", "b"]);
+    }
+
+    /// A line `len` long and `thick` thick about `(cx, cy)`, its baseline
+    /// rising `deg` degrees, as the detector draws it.
+    fn skewed(text: &str, cx: f64, cy: f64, len: f64, thick: f64, deg: f64) -> (OcrWord, Bounds) {
+        let (sin, cos) = deg.to_radians().sin_cos();
+        let (u, n) = ((cos, -sin), (sin, cos));
+        let at = |a: f64, b: f64| (cx + u.0 * a + n.0 * b, cy + u.1 * a + n.1 * b);
+        let (l, t) = (len / 2.0, thick / 2.0);
+        let quad = [at(-l, -t), at(l, -t), at(l, t), at(-l, t)];
+        let (bbox, angle) = quad_box(quad);
+        let word = OcrWord {
+            text: text.into(),
+            bbox,
+            angle: Some(angle),
+            conf: None,
+        };
+        (word, bounds(&quad))
+    }
+
+    #[test]
+    fn a_skewed_page_read_in_strips_keeps_every_line_once() {
+        // A Letter page scanned at 400 dpi, 3,400 × 4,400, a little askew:
+        // 75 lines 2,800 px long every 55 px. Read in two strips, each
+        // reads the lines it holds whole, the second a pixel off. At 2° a
+        // line's rows span 130 px, over two lines either side: the strips'
+        // copies must still be told from their neighbours.
+        let plan = crate::sizing::OcrSizing::default().plan(3400, 4400);
+        assert_eq!(plan.passes.len(), 2, "{plan:?}");
+        for deg in [0.0, 1.0, 2.0, 3.0, -2.5] {
+            let read: Vec<StripReading> = plan
+                .passes
+                .iter()
+                .enumerate()
+                .map(|(si, p)| {
+                    let (top, bottom) = (f64::from(p.top), f64::from(p.bottom));
+                    let words = (0..75)
+                        .map(|i| {
+                            let jitter = si as f64;
+                            let cy = 100.0 + 55.0 * i as f64 + jitter;
+                            skewed(&format!("line {i}"), 1700.0 + jitter, cy, 2800.0, 40.0, deg)
+                        })
+                        .filter(|(_, b)| {
+                            (p.top == 0 || b[1] > top + CUT_EDGE)
+                                && (p.bottom == 4400 || b[3] < bottom - CUT_EDGE)
+                        })
+                        .collect();
+                    (p.top, p.bottom, words)
+                })
+                .collect();
+            let got: Vec<String> = merge_strips(read, 4400)
+                .into_iter()
+                .map(|w| w.text)
+                .collect();
+            let want: Vec<String> = (0..75).map(|i| format!("line {i}")).collect();
+            assert_eq!(got, want, "at {deg}°");
+        }
+        // A line one strip reads whole and the other in two pieces, askew:
+        // kept once, from the strip it lies further inside.
+        let rise = 700.0 * 2f64.to_radians().sin();
+        let whole = skewed("one two", 1700.0, 1990.0, 2800.0, 40.0, 2.0);
+        let one = skewed("one", 1000.0, 1990.0 + rise, 1400.0, 40.0, 2.0);
+        let two = skewed("two", 2400.0, 1990.0 - rise, 1400.0, 40.0, 2.0);
+        let read = vec![(0, 2100, vec![whole]), (1800, 4400, vec![one, two])];
+        let got: Vec<String> = merge_strips(read, 4400)
+            .into_iter()
+            .map(|w| w.text)
+            .collect();
+        assert_eq!(got, ["one", "two"]);
     }
 
     #[test]
