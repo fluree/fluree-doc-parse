@@ -6,7 +6,8 @@
     "about": "Sherwin-Williams Emerald interior paint product data sheet (2 pages). Page 1 sets three columns of text; its CHARACTERISTICS column holds fields with colons and right-aligned values, and its COMPLIANCE column a list of standards beside Yes or No, with no colons."
   },
   "notes": [
-    "2026-11-24 (#163): a list of fields set without rules, label beside value row after row, was run together into one paragraph when its labels end in no colon or when it shares its baselines with another page column."
+    "2026-11-24 (#163): a list of fields set without rules, label beside value row after row, was run together into one paragraph when its labels end in no colon or when it shares its baselines with another page column.",
+    "2026-11-24 (#163): the tinting grid, three columns set in the first of three page columns, was run together into two paragraphs."
   ],
   "checks": [
     {
@@ -34,6 +35,16 @@
       "cell": {
         "value": "11.95 lbs",
         "row": "Weight per Gallon:"
+      }
+    },
+    {
+      "id": "tinting-grid",
+      "found": "2026-11-24",
+      "issue": "`Base: oz. per gallon: Strength:` over `Ultrawhite 0-7 SherColor …` was two run-on paragraphs.",
+      "cell": {
+        "value": "10-20",
+        "column": "oz. per gallon:",
+        "row": "Ultradeep Base"
       }
     }
   ]

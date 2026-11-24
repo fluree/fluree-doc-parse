@@ -4923,43 +4923,18 @@ const FIELD_ALIGN_TOLERANCE: f64 = 0.6;
 /// field may have: a raised `®` set smaller, beside the label below it.
 const RAISED_MARK_SIZE: f64 = 0.8;
 
-/// A field of a list found by [`field_lists`]: its row, then the glyphs of
-/// its label and of its value.
-type Field = (usize, Vec<usize>, Vec<usize>);
+/// A run of glyphs on one baseline that the gap parting cells leaves
+/// whole: a cell's text on its row.
+struct Seg {
+    x0: f64,
+    x1: f64,
+    ids: Vec<usize>,
+}
 
-/// Lists of fields set without rules, `Label | value` row after row, found
-/// within the page's columns.
-///
-/// [`colon_field_lists`] reads rows across the whole page, so a list set
-/// in one of three page columns (`OTC | Yes` beside a column of prose on
-/// either side) never makes a row of two cells, and a list that sets no
-/// colon after its labels (`CP | Polished Chrome`) has nothing there to
-/// show it is one. Here a list is looked for between the page's gutters
-/// (`columns`, as [`crate::column::detect`] finds them on `glyphs`): it starts at a row whose label opens its
-/// column, the value beside it reaching to the next gutter, and goes on
-/// down every row that puts a label where it did and a value where its
-/// first value starts or ends (values set right, `Yes` and `#142, 143`).
-/// A row with nothing between those gutters is another column's, and is
-/// passed over. A value set closer to a long label than the gap that parts
-/// cells is parted from it where the list's values start.
-///
-/// A list whose labels end in colons is held to [`colon_fields`]. One
-/// without them is held to [`plain_fields`]: three rows at least, short
-/// labels that are not prose's lines.
-///
-/// The table comes out read: each cell holds its own glyphs (indices into
-/// `glyphs`) and it has no header, since its first row is a field like the
-/// others.
-pub fn field_lists(
-    glyphs: &[crate::glyph::Glyph],
-    page: usize,
-    columns: &[crate::column::Column],
-) -> Vec<Grid> {
-    struct Seg {
-        x0: f64,
-        x1: f64,
-        ids: Vec<usize>,
-    }
+/// The page's glyphs as rows by baseline, by their indices in x order, and
+/// each row parted into cells at gaps wider than [`TABLE_CELL_GAP`]. Empty
+/// where the page has too little text to hold a list.
+fn segment_rows(glyphs: &[crate::glyph::Glyph]) -> (Vec<Vec<usize>>, Vec<Vec<Seg>>) {
     let bb = |i: usize| glyphs[i].bbox.unwrap();
     let mut ids: Vec<usize> = (0..glyphs.len())
         .filter(|&i| {
@@ -4968,7 +4943,7 @@ pub fn field_lists(
         })
         .collect();
     if ids.len() < MIN_PLAIN_FIELDS * 2 {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     ids.sort_by(|&a, &b| {
         glyphs[a]
@@ -5010,9 +4985,77 @@ pub fn field_lists(
             out
         })
         .collect();
+    (rows, segs)
+}
+
+/// A page's text read once for [`field_lists_in`] and [`column_tables_in`]:
+/// its rows by baseline, each parted into cells, and its spaces.
+pub struct PageRows {
+    rows: Vec<Vec<usize>>,
+    segs: Vec<Vec<Seg>>,
+    spaces: Spaces,
+}
+
+impl PageRows {
+    pub fn new(glyphs: &[crate::glyph::Glyph]) -> Self {
+        let (rows, segs) = segment_rows(glyphs);
+        PageRows {
+            rows,
+            segs,
+            spaces: Spaces::new(glyphs),
+        }
+    }
+}
+
+/// A field of a list found by [`field_lists`]: its row, then the glyphs of
+/// its label and of its value.
+type Field = (usize, Vec<usize>, Vec<usize>);
+
+/// Lists of fields set without rules, `Label | value` row after row, found
+/// within the page's columns.
+///
+/// [`colon_field_lists`] reads rows across the whole page, so a list set
+/// in one of three page columns (`OTC | Yes` beside a column of prose on
+/// either side) never makes a row of two cells, and a list that sets no
+/// colon after its labels (`CP | Polished Chrome`) has nothing there to
+/// show it is one. Here a list is looked for between the page's gutters
+/// (`columns`, as [`crate::column::detect`] finds them on `glyphs`): it starts at a row whose label opens its
+/// column, the value beside it reaching to the next gutter, and goes on
+/// down every row that puts a label where it did and a value where its
+/// first value starts or ends (values set right, `Yes` and `#142, 143`).
+/// A row with nothing between those gutters is another column's, and is
+/// passed over. A value set closer to a long label than the gap that parts
+/// cells is parted from it where the list's values start.
+///
+/// A list whose labels end in colons is held to [`colon_fields`]. One
+/// without them is held to [`plain_fields`]: three rows at least, short
+/// labels that are not prose's lines.
+///
+/// The table comes out read: each cell holds its own glyphs (indices into
+/// `glyphs`) and it has no header, since its first row is a field like the
+/// others.
+pub fn field_lists(
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    columns: &[crate::column::Column],
+) -> Vec<Grid> {
+    field_lists_in(glyphs, page, columns, &PageRows::new(glyphs))
+}
+
+/// As [`field_lists`], from the page's rows read already.
+pub fn field_lists_in(
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    columns: &[crate::column::Column],
+    text: &PageRows,
+) -> Vec<Grid> {
+    let bb = |i: usize| glyphs[i].bbox.unwrap();
+    let (rows, segs, spaces) = (&text.rows, &text.segs, &text.spaces);
+    if rows.is_empty() {
+        return Vec::new();
+    }
     let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
     let cuts: Vec<f64> = columns.iter().skip(1).map(|c| c.x0).collect();
-    let spaces = Spaces::new(glyphs);
     // Runs that share rows share their cells: each cell's text is read once.
     let mut read: std::collections::HashMap<Vec<usize>, String> = Default::default();
     let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
@@ -5114,7 +5157,7 @@ pub fn field_lists(
             {
                 continue;
             }
-            if let Some(g) = field_grid(glyphs, &fields, page, &spaces) {
+            if let Some(g) = field_grid(glyphs, &fields, page, spaces) {
                 let texts: Vec<String> = g
                     .layout
                     .as_ref()
@@ -5156,6 +5199,310 @@ pub fn field_lists(
         }
     }
     out
+}
+
+/// Widest share of its page column a line across a gutter from a table may
+/// take and still be one of the table's cells, not the next column's text.
+const CELL_ACROSS_GUTTER: f64 = 0.35;
+
+/// Fewest columns a table read by [`column_tables`] has; two are a field
+/// list's, which [`field_lists`] reads.
+const MIN_COLUMN_TABLE_COLUMNS: usize = 3;
+
+/// Tables of three columns or more set without rules in one column of a page
+/// of several: a paint data sheet's `Base | oz. per gallon | Strength` over
+/// its bases, in the first of three page columns.
+///
+/// Across the page each of their rows shares its baseline with the other
+/// columns' lines, so the aligned reader never finds them a run. Here, as in
+/// [`field_lists`], rows are read between the page's gutters. A table starts
+/// at a row whose first cell opens its page column, three cells or more
+/// before the next gutter, and runs on down every row with as many cells,
+/// each set where the first row's is: starting, ending or centred with it,
+/// since a header is often centred over figures set right
+/// (`oz. per gallon:` over `0-7` and `10-20`). A row with nothing in that
+/// column is another column's, and passed over.
+///
+/// A table wider than one column has gutters of its own, wide gaps between
+/// its label column and its figures, and they read as the page's. So a run
+/// that has short cells just across a gutter on half its rows or more runs
+/// on past it, and is not read here.
+///
+/// It is held to what a table shows and prose in a column does not: at
+/// least three rows of short cells, few of them sentences, and a header row
+/// (labels each ending in a colon, or bold over rows that are not, or
+/// naming columns of quantities) or a column of quantities.
+///
+/// Only on pages of several columns: on a page of one, the aligned reader
+/// already reads each row whole.
+pub fn column_tables(
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    columns: &[crate::column::Column],
+) -> Vec<Grid> {
+    column_tables_in(glyphs, page, columns, &PageRows::new(glyphs))
+}
+
+/// As [`column_tables`], from the page's rows read already.
+pub fn column_tables_in(
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    columns: &[crate::column::Column],
+    text: &PageRows,
+) -> Vec<Grid> {
+    if columns.len() < 2 {
+        return Vec::new();
+    }
+    let (rows, segs, spaces) = (&text.rows, &text.segs, &text.spaces);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
+    let cuts: Vec<f64> = columns.iter().skip(1).map(|c| c.x0).collect();
+    let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
+    let mut out = Vec::new();
+    for i in 0..rows.len() {
+        let mut k = 0;
+        while k < segs[i].len() {
+            if used[i][k] {
+                k += 1;
+                continue;
+            }
+            let first = &segs[i][k];
+            let lo = cuts
+                .iter()
+                .rev()
+                .find(|&&c| c <= first.x0 + 0.5)
+                .copied()
+                .unwrap_or(f64::MIN);
+            let hi = cuts
+                .iter()
+                .find(|&&c| c > first.x0)
+                .copied()
+                .unwrap_or(f64::MAX);
+            let w = segs[i][k..].iter().take_while(|s| s.x0 < hi).count();
+            if (k > 0 && segs[i][k - 1].x1 > lo) || w < MIN_COLUMN_TABLE_COLUMNS {
+                k += 1;
+                continue;
+            }
+            let fs = glyphs[first.ids[0]].font_size.max(1.0) as f64;
+            let tol = fs * FIELD_ALIGN_TOLERANCE;
+            let refs: Vec<(f64, f64)> = segs[i][k..k + w].iter().map(|s| (s.x0, s.x1)).collect();
+            let aligned = |s: &Seg, m: usize| {
+                let (a, b) = refs[m];
+                (s.x0 - a).abs() <= tol
+                    || (s.x1 - b).abs() <= tol
+                    || ((s.x0 + s.x1) - (a + b)).abs() / 2.0 <= tol
+            };
+            let mut table: Vec<Vec<Vec<usize>>> =
+                vec![segs[i][k..k + w].iter().map(|s| s.ids.clone()).collect()];
+            let mut taken: Vec<(usize, Vec<usize>)> = vec![(i, (k..k + w).collect())];
+            let mut last = baseline(i);
+            for (j, row) in segs.iter().enumerate().skip(i + 1) {
+                // A header is often set a line further from the rows under it.
+                let pitch = MAX_FIELD_PITCH + if table.len() == 1 { 1.0 } else { 0.0 };
+                if baseline(j) - last > fs * pitch {
+                    break;
+                }
+                let inside: Vec<usize> = (0..row.len())
+                    .filter(|&s| row[s].x0 < hi && row[s].x1 > lo)
+                    .collect();
+                if inside.is_empty() {
+                    continue;
+                }
+                if inside.len() != w
+                    || !inside.iter().enumerate().all(|(m, &s)| aligned(&row[s], m))
+                {
+                    break;
+                }
+                table.push(inside.iter().map(|&s| row[s].ids.clone()).collect());
+                taken.push((j, inside));
+                last = baseline(j);
+            }
+            // Short cells set across a gutter on the same rows: the table runs
+            // on past it, and its gutter is the table's own.
+            let width_at = |x: f64| {
+                columns
+                    .iter()
+                    .find(|c| x >= c.x0 && x < c.x1)
+                    .map_or(f64::MAX, |c| c.x1 - c.x0)
+            };
+            let short = |s: &Seg| s.x1 - s.x0 < width_at(s.x0) * CELL_ACROSS_GUTTER;
+            let runs_on = taken
+                .iter()
+                .filter(|(j, _)| {
+                    let row = &segs[*j];
+                    let right = row.iter().find(|s| s.x0 >= hi);
+                    let left = row.iter().rev().find(|s| s.x1 <= lo);
+                    right.is_some_and(short) || left.is_some_and(short)
+                })
+                .count();
+            let accepted = (table.len() >= MIN_PLAIN_FIELDS && runs_on * 2 < table.len())
+                .then(|| column_table_header(glyphs, &table))
+                .flatten()
+                .and_then(|header| layout_grid(glyphs, &table, page, spaces, header));
+            match accepted {
+                Some(g) => {
+                    for (j, ss) in taken {
+                        for s in ss {
+                            used[j][s] = true;
+                        }
+                    }
+                    out.push(g);
+                    k += w;
+                }
+                _ => k += 1,
+            }
+        }
+    }
+    out
+}
+
+/// Whether a run of rows read by [`column_tables`] is a table, and if so
+/// how many header rows it has: `None` where it is not one.
+///
+/// Its cells are short, a word, a figure or a phrase, and few are
+/// sentences. Its first row is a header when each of its cells is a label
+/// ending in a colon, when it is bold over a second row that is not, or when
+/// it names columns whose cells are quantities. Without a header it must
+/// hold a column of quantities.
+fn column_table_header(glyphs: &[crate::glyph::Glyph], table: &[Vec<Vec<usize>>]) -> Option<usize> {
+    let texts: Vec<Vec<String>> = table
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|ids| cell_text(glyphs, ids).trim().to_string())
+                .collect()
+        })
+        .collect();
+    let cells = texts.iter().flatten().count();
+    let sentences = texts
+        .iter()
+        .flatten()
+        .filter(|t| t.ends_with('.') && t.split_whitespace().count() > MAX_COLON_LABEL_WORDS)
+        .count();
+    if texts
+        .iter()
+        .flatten()
+        .any(|t| t.split_whitespace().count() > MAX_FIELD_VALUE_WORDS)
+        || sentences * 4 > cells
+    {
+        return None;
+    }
+    let w = texts[0].len();
+    let heavy = |ids: &[usize]| {
+        let weighted: Vec<u32> = ids.iter().filter_map(|&i| glyphs[i].weight).collect();
+        !weighted.is_empty() && weighted.iter().filter(|&&x| x >= 600).count() * 2 > weighted.len()
+    };
+    // Columns, below the first row, whose cells are mostly quantities.
+    let quantity_columns: Vec<usize> = (0..w)
+        .filter(|&c| {
+            let below: Vec<&String> = texts[1..].iter().map(|r| &r[c]).collect();
+            below.iter().filter(|t| reads_as_quantity(t)).count() * 2 > below.len()
+        })
+        .collect();
+    let colons = texts[0].iter().all(|t| t.ends_with(':'))
+        && texts[1..].iter().flatten().all(|t| !t.ends_with(':'));
+    let bold = table[0].iter().all(|ids| heavy(ids)) && !table[1].iter().all(|ids| heavy(ids));
+    let names = !quantity_columns.is_empty()
+        && quantity_columns
+            .iter()
+            .all(|&c| !texts[0][c].is_empty() && !reads_as_quantity(&texts[0][c]));
+    if colons || bold || names {
+        Some(1)
+    } else if !quantity_columns.is_empty() {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+/// The grid of a table read cell by cell from its glyphs, row by row: its
+/// columns parted halfway between one column's widest cell and the next
+/// one's leftmost, its cells holding their glyphs and the spaces between.
+fn layout_grid(
+    glyphs: &[crate::glyph::Glyph],
+    table: &[Vec<Vec<usize>>],
+    page: usize,
+    spaces: &Spaces,
+    header_rows: usize,
+) -> Option<Grid> {
+    let bb = |i: usize| glyphs[i].bbox.unwrap();
+    let span = |ids: &[usize]| {
+        ids.iter().fold((f64::MAX, f64::MIN), |(a, b), &i| {
+            (a.min(bb(i).x0), b.max(bb(i).x1))
+        })
+    };
+    let w = table.first()?.len();
+    let column = |c: usize| -> (f64, f64) {
+        table
+            .iter()
+            .map(|r| span(&r[c]))
+            .fold((f64::MAX, f64::MIN), |(a, b), (x0, x1)| {
+                (a.min(x0), b.max(x1))
+            })
+    };
+    let mut xs = vec![column(0).0 - 0.5];
+    for c in 1..w {
+        let cut = (column(c - 1).1 + column(c).0) / 2.0;
+        xs.push(cut.max(xs[xs.len() - 1] + 0.1));
+    }
+    let right = (column(w - 1).1 + 0.5).max(xs[xs.len() - 1] + 0.1);
+    xs.push(right);
+    let mut ys: Vec<f64> = Vec::with_capacity(table.len() + 1);
+    for r in table {
+        let top = r
+            .iter()
+            .flatten()
+            .map(|&i| bb(i).y0)
+            .fold(f64::MAX, f64::min)
+            - 1.0;
+        let floor = ys.last().map_or(f64::MIN, |y| y + 0.1);
+        ys.push(top.max(floor));
+    }
+    let bottom = table
+        .last()?
+        .iter()
+        .flatten()
+        .map(|&i| bb(i).y1)
+        .fold(f64::MIN, f64::max)
+        + 1.0;
+    ys.push(bottom.max(ys[ys.len() - 1] + 0.1));
+    let cells: Vec<Vec<usize>> = table
+        .iter()
+        .flatten()
+        .map(|ids| {
+            let mut out = ids.clone();
+            out.extend(spaces.within(glyphs, ids[0], span(ids)));
+            out
+        })
+        .collect();
+    let mut claimed: Vec<usize> = cells
+        .iter()
+        .flatten()
+        .map(|&i| glyphs[i].draw_index)
+        .collect();
+    claimed.sort_unstable();
+    claimed.dedup();
+    Some(Grid {
+        page,
+        bbox: BBox {
+            x0: xs[0],
+            y0: ys[0],
+            x1: xs[w],
+            y1: ys[ys.len() - 1],
+        },
+        xs,
+        ys,
+        layout: Some(std::sync::Arc::new(TableLayout {
+            header_rows,
+            spans: Vec::new(),
+            downs: Vec::new(),
+            sub_headers: Vec::new(),
+            cells,
+            claimed,
+        })),
+    })
 }
 
 /// The grid of a field list found by [`field_lists`]: two columns parted
@@ -7989,6 +8336,46 @@ mod tests {
             ["CP", "Polished Chrome", "VS", "Vibrant Stainless"]
         );
         assert_eq!(&cells[6..8], ["2MB", "Vibrant Brushed Brass"]);
+    }
+
+    #[test]
+    fn a_table_in_one_column_of_several_is_read_whole() {
+        // A paint sheet's tinting grid in the first of two page columns; each
+        // of its rows shares a baseline with the second column's prose.
+        let mut gl = Vec::new();
+        let rows = [
+            ("Base:", "oz. per gallon:", "Strength:"),
+            ("Ultrawhite", "0-7", "SherColor"),
+            ("Extra White", "0-7", "SherColor"),
+            ("Deep Base", "4-14", "SherColor"),
+            ("Ultradeep Base", "10-20", "SherColor"),
+        ];
+        for (r, (base, oz, strength)) in rows.into_iter().enumerate() {
+            gl.push(word(40.0, r, base, None));
+            // Centred over its column.
+            gl.push(word(140.0 - 2.5 * oz.chars().count() as f64, r, oz, None));
+            gl.push(word(190.0, r, strength, None));
+        }
+        // The grid's own column runs on under it.
+        for r in 5..10 {
+            gl.push(word(
+                40.0,
+                r,
+                "Text under the grid, filling its column",
+                None,
+            ));
+        }
+        for r in 0..10 {
+            gl.push(word(260.0, r, "Prose set in the next column", None));
+        }
+        let lists = column_tables(&gl, 0, &crate::column::detect(&gl));
+        assert_eq!(lists.len(), 1, "got {lists:?}");
+        assert_eq!((lists[0].rows(), lists[0].cols()), (5, 3));
+        let lay = lists[0].layout.as_ref().unwrap();
+        assert_eq!(lay.header_rows, 1);
+        let cells = lay.texts(&gl, 3);
+        assert_eq!(&cells[..3], ["Base:", "oz. per gallon:", "Strength:"]);
+        assert_eq!(&cells[12..], ["Ultradeep Base", "10-20", "SherColor"]);
     }
 
     #[test]
