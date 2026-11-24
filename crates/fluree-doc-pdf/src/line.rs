@@ -1176,6 +1176,7 @@ fn raised_mark(
     idxs: &[usize],
     k: usize,
     adv: Advance,
+    degrees: &[usize],
 ) -> Option<(String, Option<char>)> {
     if adv.vertical() {
         return None;
@@ -1195,13 +1196,14 @@ fn raised_mark(
         return None;
     }
     // A word that holds a script of its own is a formula's term (`cₚhᵖ`),
-    // and what is raised after it is an index or a power.
+    // and what is raised after it is an index or a power. A degree read
+    // already is no script: `20°C/min→250°C` sets its second like its first.
     let word = idxs[..k]
         .iter()
         .rev()
-        .map(|&i| &glyphs[i])
-        .take_while(|p| p.bbox.is_some() && !p.text.trim().is_empty());
-    let scripted = word.into_iter().any(|p| {
+        .take_while(|&&i| glyphs[i].bbox.is_some() && !glyphs[i].text.trim().is_empty());
+    let scripted = word.filter(|i| !degrees.contains(i)).any(|&i| {
+        let p = &glyphs[i];
         (p.font_size as f64) <= size * SCRIPT_SIZE_RATIO
             || (p.origin.1 - base.origin.1).abs() >= size * MARK_RAISE
     });
@@ -1226,6 +1228,41 @@ fn raised_mark(
         .flat_map(|&i| glyphs[i].text.chars())
         .find(|c| !c.is_whitespace());
     Some((mark, next))
+}
+
+/// Whether `idxs[k]`, with nothing inked before it on its line, is a
+/// degree set as a raised `o`, `0` or `º` before the `C` or `F` of its unit:
+/// a units column's `°C`. With no figure before it to measure against, it
+/// is measured against the capital after it, and the capital ends the word.
+fn leading_degree(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool {
+    let g = &glyphs[idxs[k]];
+    if adv.vertical()
+        || !matches!(g.text.trim(), "o" | "0" | "º")
+        || idxs[..k].iter().any(|&i| glyphs[i].bbox.is_some())
+    {
+        return false;
+    }
+    let mut after = idxs[k + 1..]
+        .iter()
+        .map(|&i| &glyphs[i])
+        .filter(|p| p.bbox.is_some());
+    let Some(unit) = after.next() else {
+        return false;
+    };
+    let size = unit.font_size.max(1.0) as f64;
+    let ratio = g.font_size as f64 / size;
+    matches!(unit.text.trim(), "C" | "F")
+        && (SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio)
+        && unit.origin.1 - g.origin.1 >= size * MARK_RAISE
+        && after.next().is_none_or(|p| {
+            !p.text.starts_with(char::is_alphabetic) || {
+                // The word ends where the next glyph stands apart.
+                let end = unit
+                    .advance
+                    .map_or(unit.bbox.unwrap().x1, |a| adv.at(unit.origin) + a);
+                adv.start(&p.bbox.unwrap()) - end > size * 0.2
+            }
+        })
 }
 
 /// The fraction `idxs[k]` begins, set against the whole number before it:
@@ -1485,6 +1522,8 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut exponent: Option<(f32, f64)> = None;
     // The last glyph of a mixed number's fraction being read.
     let mut fraction: Option<usize> = None;
+    // The glyphs read as degree signs so far.
+    let mut degrees: Vec<usize> = Vec::new();
     let mut words: Vec<Word> = Vec::new();
     // A drop cap at the head of the line ([`drop_caps`]) is its first
     // word's first letter, set apart from the rest by the cap's indent
@@ -1548,16 +1587,28 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 }
                 let in_fraction = fraction.is_some_and(|end| k <= end);
                 // A note's mark raised after a word parts from it:
-                // `Acrylonitrile` and its `a`, not `Acrylonitrilea`.
-                let raised = if text.ends_with(' ') || in_fraction {
+                // `Acrylonitrile` and its `a`, not `Acrylonitrilea`. After a
+                // space, a raised mark is read only as a degree before its
+                // unit, the space kept as printed: `75 °F`.
+                let spaced = text.ends_with(' ');
+                let raised = if in_fraction {
                     None
                 } else {
-                    raised_mark(glyphs, idxs, k, adv)
+                    raised_mark(glyphs, idxs, k, adv, &degrees).filter(|(m, next)| {
+                        !spaced
+                            || (matches!(next, Some('C' | 'F'))
+                                && marks::degree(text.trim_end(), m, *next))
+                    })
                 };
-                // A degree set as a raised `o` or `0` reads as one: `145°`.
+                // A degree set as a raised `o` or `0` reads as one: `145°`,
+                // and a units column's `°C` with nothing before it.
                 let degree = raised
                     .as_ref()
-                    .is_some_and(|(m, next)| marks::degree(&text, m, *next));
+                    .is_some_and(|(m, next)| marks::degree(text.trim_end(), m, *next))
+                    || (text.trim().is_empty() && leading_degree(glyphs, idxs, k, adv));
+                if degree {
+                    degrees.push(i);
+                }
                 let raised = raised.filter(|_| !degree).map(|(m, _)| m);
                 if raised
                     .as_deref()
@@ -2450,6 +2501,34 @@ mod tests {
             v.extend(word(after, 5.0 * base.len() as f64 + 3.0, false));
             assert_eq!(assemble(&v)[0].text, want);
         }
+    }
+
+    #[test]
+    fn a_degree_reads_as_one_after_a_space_alone_or_after_another() {
+        // After a number and a space, before its unit: the space as printed.
+        let mut v = word("75", 0.0, false);
+        v.extend(word("o", 14.0, true));
+        v.extend(word("F", 17.0, false));
+        assert_eq!(assemble(&v)[0].text, "75 °F");
+        // After a space with no unit it stays as it was.
+        let mut v = word("45", 0.0, false);
+        v.extend(word("o", 14.0, true));
+        assert_eq!(assemble(&v)[0].text, "45 o");
+        // Alone at the head of a units cell, measured against its capital.
+        let mut v = word("o", 0.0, true);
+        v.extend(word("C", 3.0, false));
+        assert_eq!(assemble(&v)[0].text, "°C");
+        // A capital that runs on into a word is no unit.
+        let mut v = word("o", 0.0, true);
+        v.extend(word("Cat", 3.0, false));
+        assert_eq!(assemble(&v)[0].text, "oCat");
+        // A second degree in one run, after the first.
+        let mut v = word("20", 0.0, false);
+        v.extend(word("o", 10.0, true));
+        v.extend(word("C/min→250", 13.0, false));
+        v.extend(word("o", 58.0, true));
+        v.extend(word("C", 61.0, false));
+        assert_eq!(assemble(&v)[0].text, "20°C/min→250°C");
     }
 
     #[test]
