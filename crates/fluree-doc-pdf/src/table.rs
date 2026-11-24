@@ -1348,6 +1348,92 @@ impl Grid {
             || (run >= 2 && run < self.rows())
     }
 
+    /// Whether the `header` rows measured over a table whose title was read
+    /// out above it head its rows.
+    ///
+    /// With the title gone, whatever row opens the table is presumed its
+    /// header, and that presumption is what read a parts list's first
+    /// product, or a spec sheet's first field (`Form Factor | SFF (2.5")`),
+    /// as the name of every value under it. Here the row has to earn it, by
+    /// being set apart from the rows under it in one of these ways:
+    ///
+    /// - bold over the first row under the header, which is not;
+    /// - shaded over that row, which is bare, and not one stripe of many;
+    /// - ruled off more heavily than the rows under it are from each other,
+    ///   or ruled off where they are not;
+    /// - a stacked header, more than one row deep;
+    /// - words over quantities: in most of the columns whose cells below
+    ///   are numbers, the first row names the column instead (`Zone |
+    ///   Lumens` over `0-30 | 298`), and it is not set like the row under
+    ///   it. In most of the columns both fill, that would mean one type
+    ///   (quantities or words) and one weight, as a field list's rows are,
+    ///   whose values are figures in some fields and words in others.
+    pub(crate) fn heads_its_rows(
+        &self,
+        header: usize,
+        rows: &[Vec<String>],
+        glyphs: &[crate::glyph::Glyph],
+        rules: &[Rule],
+        fills: &[crate::rule::Fill],
+    ) -> bool {
+        let n = rows.len().min(self.rows());
+        if header == 0 || header >= n {
+            return false;
+        }
+        let cols = self.cols();
+        let text = |r: usize, c: usize| rows[r].get(c).map_or("", |t| t.trim());
+        let bold = self.cells_are_bold(glyphs, 0) && !self.row_is_bold(glyphs, header);
+        let shaded = self.band_has_fill(fills, 0)
+            && !self.band_has_fill(fills, header)
+            && !(header + 1 < n && self.band_has_fill(fills, header + 1));
+        let under = self.rule_between(rules, header);
+        let below: Vec<Option<f64>> = (header + 1..n)
+            .map(|r| self.rule_between(rules, r))
+            .collect();
+        let others = below.iter().flatten().copied().fold(0.0, f64::max);
+        let ruled = under.is_some_and(|u| {
+            (others > 0.0 && u > others * HEAVIER_RULE)
+                || (!below.is_empty() && below.iter().all(Option::is_none))
+        });
+        let stacked = header > 1;
+        let (mut typed, mut named) = (0usize, 0usize);
+        for c in 0..cols {
+            let cells: Vec<&str> = (header..n)
+                .map(|r| text(r, c))
+                .filter(|t| !t.is_empty())
+                .collect();
+            if cells.is_empty()
+                || cells.iter().filter(|t| reads_as_quantity(t)).count() * 2 <= cells.len()
+            {
+                continue;
+            }
+            typed += 1;
+            let head = text(0, c);
+            if head.chars().any(char::is_alphanumeric) && !reads_as_quantity(head) {
+                named += 1;
+            }
+        }
+        let contrast = typed > 0 && named * 2 > typed;
+        let weights0 = self.cell_weights(glyphs, 0);
+        let weights1 = self.cell_weights(glyphs, header);
+        let heavy = |(w, h): (usize, usize)| w > 0 && h * 2 > w;
+        let (mut compared, mut alike) = (0usize, 0usize);
+        for c in 0..cols {
+            let (a, b) = (text(0, c), text(header, c));
+            if a.is_empty() || b.is_empty() {
+                continue;
+            }
+            compared += 1;
+            if reads_as_quantity(a) == reads_as_quantity(b)
+                && heavy(weights0[c]) == heavy(weights1[c])
+            {
+                alike += 1;
+            }
+        }
+        let same_kind = compared > 0 && alike * 2 > compared;
+        bold || shaded || ruled || stacked || (contrast && !same_kind)
+    }
+
     /// The first row's cells are set bold, whatever the row below is.
     pub fn opens_bold(&self, glyphs: &[crate::glyph::Glyph]) -> bool {
         self.cells_are_bold(glyphs, 0)
@@ -1663,6 +1749,20 @@ fn decide_header_rows(rows: &[Vec<String>], styled: bool) -> usize {
     } else {
         1
     }
+}
+
+/// A cell that opens on a number, units and all: `17,000 xg`, `0-30`,
+/// `4' on Center`, as well as every [`is_numeric_cell`]. A year is a
+/// label, as there. A dash with a space after it is a bullet's, not a sign.
+fn reads_as_quantity(s: &str) -> bool {
+    if is_numeric_cell(s) {
+        return true;
+    }
+    let digits = s.trim_start_matches([
+        '$', '€', '£', '¥', '±', '~', '<', '>', '≤', '≥', '+', '-', '\u{2212}', '.',
+    ]);
+    digits.starts_with(|c: char| c.is_ascii_digit())
+        && !(s.len() == 4 && s.parse::<u32>().is_ok_and(|y| (1900..2100).contains(&y)))
 }
 
 /// A cell that reads as a quantity: digits with currency/percent/grouping
@@ -6084,6 +6184,31 @@ mod header_tests {
         }
         for t in ["2023", "1999", "Q1 2024", "Revenue", "", "Note 3"] {
             assert!(!is_numeric_cell(t), "{t} should not be numeric");
+        }
+    }
+
+    #[test]
+    fn quantity_cells_open_on_a_number() {
+        for n in [
+            "17,000 xg",
+            "0-30",
+            "4' on Center",
+            "10000 rpm",
+            "$40",
+            "≤6 in.",
+            "6,785",
+        ] {
+            assert!(reads_as_quantity(n), "{n} should read as a quantity");
+        }
+        for t in [
+            "2023",
+            "M17 Series",
+            "SFF (2.5”)",
+            "- 4\" (102mm) Trim",
+            "Zone",
+            "",
+        ] {
+            assert!(!reads_as_quantity(t), "{t} should not read as a quantity");
         }
     }
 }

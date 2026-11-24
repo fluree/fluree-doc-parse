@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree CR4T downlight spec sheet (Canada). Its accessory and photometry tables sit under shaded title bands (Trims, Zonal Lumen Summary)."
+  },
+  "notes": [
+    "2026-11-24 (#109): a table whose title is read out above it presumed the row under the title its header. On page 1 the Trims table's first products named the products under them; the title row must earn the header, as the Zonal Lumen Summary's Zone | Lumens does over its figures."
+  ],
+  "checks": [
+    {
+      "id": "first-product-names-no-column",
+      "found": "2026-11-24",
+      "issue": "The Trims table's first row of products was its column header.",
+      "no_column_header": "CR4T-TRMBRAN-1"
+    },
+    {
+      "id": "zonal-header-kept",
+      "found": "2026-11-24",
+      "issue": "Zone | Lumens | % Lamp | Luminaire, set plain over the figures, must still head them.",
+      "cell": {
+        "value": "298",
+        "column": "Lumens",
+        "row": "0-30"
+      }
+    }
+  ]
+}
