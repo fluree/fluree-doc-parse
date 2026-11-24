@@ -88,7 +88,10 @@ def convert(fdoc, path, fmt):
 class Reading:
     """A document's DoCO graph and text projection, indexed for the checks."""
 
-    def __init__(self, graph, text):
+    def __init__(self, doco, text, again=None):
+        graph = json.loads(doco)["@graph"]
+        self.doco = doco
+        self.again = again
         self.text = text
         self.nodes = {n["@id"]: n for n in graph}
         self.cells = [n for n in graph if n.get("@type") == "doc:TableCell"]
@@ -215,6 +218,13 @@ def run_check(check, reading):
         # must stay text, wherever and however often it occurs.
         hits = [s[0] for s in reading.sections if (s[0] or "").startswith(check["no_section"])]
         return not hits, None if not hits else f"{len(hits)} sections, e.g. {hits[0]!r}"
+    if "same_every_run" in check:
+        # The same DoCO, byte for byte, from this many more runs of one
+        # binary: what a build gives for a document is all a diff between
+        # two builds can rest on.
+        runs = [reading.again() for _ in range(check["same_every_run"])]
+        differ = sum(r != reading.doco for r in runs)
+        return differ == 0, None if differ == 0 else f"{differ} of {len(runs)} runs differ from the first"
     raise SystemExit(f"unknown check kind in {check.get('id')}: {sorted(check)}")
 
 
@@ -247,7 +257,8 @@ def main():
             continue
         if doc.get("sha256") and sha256(path) != doc["sha256"]:
             print(f"note    {case['_id']}: {path.name} differs from the copy these checks were written on")
-        reading = Reading(json.loads(convert(args.fdoc, path, "doco"))["@graph"], convert(args.fdoc, path, "text"))
+        again = lambda: convert(args.fdoc, path, "doco")
+        reading = Reading(again(), convert(args.fdoc, path, "text"), again)
 
         results = []
         bad = reading.offsets()

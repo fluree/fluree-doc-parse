@@ -128,6 +128,15 @@ band. A running header is often a phrase the document's sentences use, and
 stripped wherever it occurred, a set of minutes headed `Federal Open Market
 Committee` lost the committee's name from every sentence that named it.
 
+Two running lines can merge into one block together, a chapter title over
+its number, and the inner one stands at the block's end only once the outer
+one is gone; a cell can hold a title block's `DATE: -`, where the `-` is a
+pattern too, left whole only once `DATE:` is cut. So the patterns are tried
+until none takes anything more, the longer first where two overlap (`DATE:`
+before `DATE`). What is left does not depend on the order the patterns were
+found in. Tried once each in an arbitrary order, the same document read
+differently from one run to the next.
+
 ## What is not furniture
 
 False positives worth knowing about, all fixed by tightening rather than by
