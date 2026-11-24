@@ -122,3 +122,19 @@ the local corpus (`--local`), not to the repository.
    committing the fuzzer's file: the test then says what the file is,
    and survives a change of format details the bytes would not.
 5. Run the target again over its corpus to see it pass.
+
+## Known upstream
+
+Failures in a dependency, not fixed here, that a run may meet again:
+
+* `image`: `attempt to multiply with overflow` in zune-jpeg 0.5.15
+  (`src/bitstream.rs:400`, a block's DC prediction times its quantization
+  table entry, in `i32`), on a JPEG whose DC differences add up past it.
+  Only under debug assertions (`-a`): a release build wraps, as the fix
+  does, and decodes a wrong pixel at worst. Two inputs of the fuzzer's,
+  `crash-5ec121a7…` and `crash-d79b431c…` (768 and 765 bytes), each panic
+  in 0.04 s at 35-40 MB. Upstream writes it `wrapping_mul` from
+  0.5.16-rc3; the last release, 0.5.15, has it, and a pre-release is not
+  one `cargo update` takes, so it waits for 0.5.16. Then: `cargo update -p
+  zune-jpeg` here and at the root, run the two inputs again, and drop this
+  entry.
