@@ -818,7 +818,20 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                 let inked: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
                 let letters = inked.iter().filter(|c| c.is_alphabetic()).count();
                 let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
+                // A title stands alone on its row. One of two one-line
+                // groups set across a row, a course's name at the left and
+                // its code at the right, is a running head's part. A cover
+                // title stacked beside its description is not.
+                let shares_row = b.lines.len() == 1
+                    && blocks.iter().any(|o| {
+                        !std::ptr::eq(o, *b)
+                            && o.lines.len() == 1
+                            && o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0)
+                                > o.bbox.height().min(b.bbox.height()) * 0.5
+                            && (o.bbox.x1 <= b.bbox.x0 || b.bbox.x1 <= o.bbox.x0)
+                    });
                 if b.marker.is_some()
+                    || shares_row
                     || (b.lines.len() > 3 && !stacked)
                     || !title_like_within(&text, word_limit(&text, b, body))
                     || (numbering_depth(&text).is_some()
@@ -1890,6 +1903,29 @@ mod tests {
         assert!(!runs_into_prose("Results vs. Baseline Methods"));
         assert!(!runs_into_prose("See Fig. 3 for details"));
         assert!(!runs_into_prose("Method of Doe et al. Revisited"));
+    }
+
+    #[test]
+    fn one_group_of_a_row_is_not_the_title() {
+        // A running head set as two groups across the page's top row: the
+        // college at the left, the course's code larger at the right.
+        let at = |mut b: Block, x0: f64, y0: f64, x1: f64| {
+            let h = b.bbox.height();
+            b.bbox = BBox {
+                x0,
+                y0,
+                x1,
+                y1: y0 + h,
+            };
+            b
+        };
+        let pages = vec![vec![
+            at(blk("MOHAVE COMMUNITY COLLEGE", 9.8, 1), 72.0, 39.0, 200.0),
+            at(blk("BIO181", 12.0, 1), 489.0, 41.0, 530.0),
+            at(blk("body text", 10.0, 20), 72.0, 74.0, 530.0),
+        ]];
+        let h = detect(&pages, &[]);
+        assert!(h.iter().all(|h| h.evidence != Evidence::Title), "{h:?}");
     }
 
     #[test]

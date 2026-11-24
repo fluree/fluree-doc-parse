@@ -595,15 +595,21 @@ fn folio_run(occ: &[(usize, &str)]) -> Option<(usize, Vec<(usize, String)>)> {
 
 /// Line `li` of a page shows itself as a watermark rather than as text
 /// that repeats: it is turned, it lies on another line, or it stands
-/// beside every other line, sharing none of their width, as a margin note
-/// does.
+/// beside every other line, sharing none of their width, out in a margin
+/// as a note is. In a margin, past the page's other lines to the left or
+/// the right: a page title over a table, whose cells are no lines here,
+/// shares no line's width either, and is set between the running head's
+/// and the footer's ends.
 fn watermark_shown(lines: &[Line], li: usize) -> bool {
     let l = &lines[li];
     if l.rotation_bucket != 0 {
         return true;
     }
     let others = lines.iter().enumerate().filter(|(j, _)| *j != li);
-    let mut beside = true;
+    let (left, right) = others.clone().fold((f64::MAX, f64::MIN), |(a, b), (_, o)| {
+        (a.min(o.bbox.x0), b.max(o.bbox.x1))
+    });
+    let mut beside = left > right || l.bbox.x1 <= left || l.bbox.x0 >= right;
     for (_, o) in others {
         let w = l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0);
         if w > 0.0 {
@@ -1208,6 +1214,29 @@ mod tests {
         let r = detect(&pages);
         assert_eq!(r[0].get(&1), Some(&Furniture::Watermark));
         assert_eq!(r[0].get(&2), Some(&Furniture::Watermark));
+    }
+
+    #[test]
+    fn a_title_over_a_table_is_no_margin_note() {
+        // A page title repeated on every page over a table whose cells are no
+        // lines here: a running head at the top right, a footer's note at the
+        // left and page number at the right, and the title between them.
+        let pages = doc(3, |i| {
+            let mut head = line("www.example.com", 30.0);
+            head.bbox.x0 = 600.0;
+            head.bbox.x1 = 745.0;
+            let mut note = line("NOTE: ALL DIMENSIONS ARE IN INCHES", 960.0);
+            note.bbox.x0 = 50.0;
+            note.bbox.x1 = 250.0;
+            let mut folio = line(&format!("Page {} of 3", i + 1), 960.0);
+            folio.bbox.x0 = 680.0;
+            folio.bbox.x1 = 745.0;
+            let mut title = line("Dimensions of Socket Head Cap Screws", 300.0);
+            title.bbox.x0 = 263.0;
+            title.bbox.x1 = 540.0;
+            vec![head, title, note, folio]
+        });
+        assert!(detect(&pages).iter().all(|m| m.get(&1).is_none()));
     }
 
     #[test]

@@ -41,7 +41,6 @@
     {
       "id": "folio-on-page-3",
       "found": "2026-11-24",
-      "status": "open",
       "issue": "#130: the page number is read in one line with the note beside it, joined by a run of spaces, and no folio comes of it.",
       "folio": {
         "page": 3,

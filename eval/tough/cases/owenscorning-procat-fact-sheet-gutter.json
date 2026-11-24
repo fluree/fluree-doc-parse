@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "owenscorning-procat-fact-sheet.pdf",
+    "url": "https://www.owenscorning.com/dms/10019591",
+    "sha256": "99f387dbfca3e313b36411edcb1f9d03c28c59f91d784d5d32a7beb8ce64e999",
+    "about": "Owens Corning ProCat manufacturer's fact sheet (2 pages). Page 1 ends on a Disclaimer box at the left and publication and trademark lines at the right."
+  },
+  "notes": [
+    "#130: the Disclaimer's lines ended in space glyphs, and each ran on into the publication and trademark lines across the page."
+  ],
+  "checks": [
+    {
+      "id": "disclaimer-not-run-into-publication-line",
+      "found": "2026-11-24",
+      "issue": "The disclaimer read `Because conditions of use may Pub. No. 10019591-C.`",
+      "no_text": "conditions of use may Pub. No."
+    },
+    {
+      "id": "disclaimer-heading-kept",
+      "found": "2026-11-24",
+      "issue": "A guard: with the gap past a space glyph measured, the bold pieces of page 1's table header read apart, as prose, passed the bold cap (#151), and bold was dropped for the document. Read as the table's header, they leave Disclaimer of Liability a heading.",
+      "element": {"type": "doco:SectionTitle", "text": "Disclaimer of Liability"}
+    }
+  ]
+}

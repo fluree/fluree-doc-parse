@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "google-2024-environmental-report.pdf",
+    "url": "https://www.gstatic.com/gumdrop/sustainability/google-2024-environmental-report.pdf",
+    "sha256": "29ade2be2f75e33b94e88fc676a31aaaab205e4ae7f146bc284c57d93d858645",
+    "about": "Google 2024 Environmental Report (86 pages, InDesign). Figure 17 on page 34 draws its bars as vector shapes over a raster image of the chart, and sets its legend, years and percentages as text around and on it."
+  },
+  "notes": [
+    "#131, #132: page 34 sets two text columns where the page-wide pass sees one, and its rows were read across both, line by line. A space glyph closed each row, and each run-together row's ragged end reached into the gap of the next, so the rows were taken for justified text."
+  ],
+  "checks": [
+    {
+      "id": "left-column-sentence-whole",
+      "found": "2026-11-24",
+      "issue": "A sentence in the left of two columns read `we achieved a 63% projects becoming operational`, the right column’s line run into it.",
+      "text": "we achieved a 63% reduction in the emissions from our electricity"
+    },
+    {
+      "id": "right-column-sentence-whole",
+      "found": "2026-11-24",
+      "issue": "As above, for the right column.",
+      "text": "projects becoming operational, and the current mismatch between our approach"
+    },
+    {
+      "id": "paragraph-not-taken-for-a-label",
+      "found": "2026-11-24",
+      "issue": "With its rows parted, a paragraph broken by the run-together lines left a short piece near the chart, which was taken for the chart’s label.",
+      "text": "To optimize energy consumption at our data centers, we strive to build"
+    },
+    {
+      "id": "caption-over-two-columns-leaves-the-paragraph-beside-it",
+      "found": "2026-11-24",
+      "issue": "A guard: a figure caption over two of four columns on page 20 parted the paragraph in the first.",
+      "text": "We’ve used AI to provide detailed rooftop solar potential data"
+    },
+    {
+      "id": "table-in-two-columns-leaves-the-others",
+      "found": "2026-11-24",
+      "issue": "A guard: a table set in two of five columns on page 39 parted the paragraphs of the other three at its top and foot.",
+      "text": "In 2023, our total Scope 3 emissions were approximately 10.8 million tCO2e, representing 75% of our total carbon footprint."
+    }
+  ]
+}
