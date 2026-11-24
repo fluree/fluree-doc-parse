@@ -56,7 +56,7 @@
 use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{Datum, DocumentInfo, Element};
 pub use fluree_doc_ooxml::Package;
-use fluree_doc_ooxml::{attr, local, PartNames};
+use fluree_doc_ooxml::{attr, local, PartNames, Relations};
 
 /// A picture anchored to a sheet's cells: the figure it is drawn as and
 /// where each of its images is. Its bytes are read on demand, each image
@@ -201,10 +201,7 @@ pub fn parse_with_media(
     // Each sheet's part by its relationship id, the first internal one
     // that has it: found in one lookup per sheet listed, where a scan of
     // every relationship for each made the listing's cost its square.
-    let mut targets: HashMap<&str, &str> = HashMap::new();
-    for r in rels.iter().filter(|r| !r.external) {
-        targets.entry(r.id.as_str()).or_insert(r.target.as_str());
-    }
+    let targets = Relations::new(&rels);
     // A sheet part is read once, at its first listing: listed again, under
     // any name, its part, its drawing and their relationships would be
     // read and laid out again for each.
@@ -214,7 +211,7 @@ pub fn parse_with_media(
     let mut media = Vec::new();
     let mut figure_count = 0usize;
     for (page, sheet_ref) in sheets.iter().enumerate() {
-        let Some(&target) = targets.get(sheet_ref.rid.as_str()) else {
+        let Some(target) = targets.part(&sheet_ref.rid) else {
             continue;
         };
         if !read.insert(target) {
@@ -244,7 +241,7 @@ pub fn parse_with_media(
             };
             if let Some((xml, part)) = xml.zip(drawing) {
                 let drawing_rels = pkg.relationships(&part);
-                let by_id = fluree_doc_ooxml::by_id(&drawing_rels);
+                let drawing_rels = Relations::new(&drawing_rels);
                 for pic in pictures(&xml) {
                     budget.spend_elements(1)?;
                     budget.spend_text(&pic.alt)?;
@@ -253,7 +250,7 @@ pub fn parse_with_media(
                     for (index, rid) in pic.rids.iter().enumerate() {
                         media.push(Media {
                             figure: id.clone(),
-                            source: names.resolve(&by_id, rid),
+                            source: names.resolve(&drawing_rels, rid),
                             index,
                         });
                     }

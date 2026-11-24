@@ -112,6 +112,41 @@ pub fn alt_text(descr: &str, title: &str) -> String {
         .join(" ")
 }
 
+/// A part's relationships by id, each found in one lookup: a reader that
+/// scanned them all for each id a part names spent their count times the
+/// names', and an id no relationship has cost the whole scan for nothing.
+/// Where several relationships share an id, the first is the one found, as
+/// a scan in order found it.
+pub struct Relations<'r> {
+    first: HashMap<&'r str, &'r Relationship>,
+    internal: HashMap<&'r str, &'r str>,
+}
+
+impl<'r> Relations<'r> {
+    pub fn new(rels: &'r [Relationship]) -> Self {
+        let mut first = HashMap::new();
+        let mut internal = HashMap::new();
+        for r in rels {
+            first.entry(r.id.as_str()).or_insert(r);
+            if !r.external {
+                internal.entry(r.id.as_str()).or_insert(r.target.as_str());
+            }
+        }
+        Relations { first, internal }
+    }
+
+    /// The first relationship of id `rid`, within the package or not.
+    pub fn get(&self, rid: &str) -> Option<&'r Relationship> {
+        self.first.get(rid).copied()
+    }
+
+    /// The part the first relationship of id `rid` within the package
+    /// names: one outside it (`TargetMode="External"`) is passed over.
+    pub fn part(&self, rid: &str) -> Option<&'r str> {
+        self.internal.get(rid).copied()
+    }
+}
+
 /// A package's part names, to find the part a relationship names as the
 /// package format finds it: exactly, or else ignoring case, a target written
 /// with backslashes, as some writers do, read with slashes.
@@ -133,12 +168,12 @@ impl PartNames {
     }
 
     /// Where the image of the relationship `rid` is, among a part's
-    /// relationships `by_id` ([`by_id`]). A link to a file outside the
-    /// package, or an id no relationship has, is still named, by what it was
-    /// given, for a reader to say which image it could not read; a part
-    /// that is not there is named as given, and fails to read.
-    pub fn resolve(&self, by_id: &HashMap<&str, &Relationship>, rid: &str) -> MediaSource {
-        match by_id.get(rid) {
+    /// relationships `rels`. A link to a file outside the package, or an id
+    /// no relationship has, is still named, by what it was given, for a
+    /// reader to say which image it could not read; a part that is not
+    /// there is named as given, and fails to read.
+    pub fn resolve(&self, rels: &Relations<'_>, rid: &str) -> MediaSource {
+        match rels.get(rid) {
             Some(r) if !r.external => MediaSource::Part(if self.exact.contains(&r.target) {
                 r.target.clone()
             } else {
@@ -150,17 +185,6 @@ impl PartNames {
             None => MediaSource::Missing(rid.to_string()),
         }
     }
-}
-
-/// A part's relationships by id, so a document naming many images resolves
-/// each in one lookup; the first definition of an id wins, as a scan would
-/// have it.
-pub fn by_id(rels: &[Relationship]) -> HashMap<&str, &Relationship> {
-    let mut out: HashMap<&str, &Relationship> = HashMap::new();
-    for r in rels {
-        out.entry(r.id.as_str()).or_insert(r);
-    }
-    out
 }
 
 impl<'a> Package<'a> {
@@ -608,6 +632,36 @@ mod tests {
                 "word/media/image2.png",
                 "word/media/image3.png"
             ]
+        );
+    }
+
+    #[test]
+    fn an_id_is_found_as_a_scan_in_order_found_it() {
+        let rels = format!(
+            "<Relationships><Relationship Id=\"a\" Target=\"https://example.org/\" TargetMode=\"External\"/>\
+             <Relationship Id=\"a\" Type=\"{REL}/image\" Target=\"media/one.png\"/>\
+             <Relationship Id=\"a\" Type=\"{REL}/image\" Target=\"media/two.png\"/>\
+             <Relationship Id=\"b\" Type=\"{REL}/image\" Target=\"media/Three.png\"/></Relationships>"
+        );
+        let rels = relationships(&rels, "word/document.xml");
+        let by_id = Relations::new(&rels);
+        // The first of an id, whichever it is; its first within the package.
+        assert!(by_id.get("a").unwrap().external);
+        assert_eq!(by_id.part("a"), Some("word/media/one.png"));
+        assert_eq!(by_id.part("c"), None);
+        let bytes = package(&[("word/media/three.png", "")]);
+        let names = PartNames::new(&Package::open(&bytes).unwrap());
+        assert_eq!(
+            names.resolve(&by_id, "a"),
+            MediaSource::External("https://example.org/".to_string())
+        );
+        assert_eq!(
+            names.resolve(&by_id, "b"),
+            MediaSource::Part("word/media/three.png".to_string())
+        );
+        assert_eq!(
+            names.resolve(&by_id, "c"),
+            MediaSource::Missing("c".to_string())
         );
     }
 

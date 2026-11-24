@@ -42,7 +42,7 @@ PDF layout.
 | `fluree-doc-markdown` | `parse(&str) -> Result<Vec<Element>, TooLarge>` |
 | `fluree-doc-text` | `parse(&str) -> Vec<Element>`; `decode(&[u8])`; `is_markdown` |
 | `fluree-doc-html` | `parse(&str) -> Result<Vec<Element>, TooLarge>`, via html5ever; `parse_with_quote_depth`, a message's body, its own images (`cid:`) as figures; `cid_ids`, the content ids its HTML shows; `parse_message`, both from one parse |
-| `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them, a part read whole within the document's budget (`read_within`) or a bound (`read_capped`); `PartNames` (a relationship's image, found as the format finds it), `read_media` (an image part of an opened `Package`, capped), `read_pictures` (each image once within a per-document `Allowance`), `alt_text` |
+| `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them, a part read whole within the document's budget (`read_within`) or a bound (`read_capped`); `Relations` (a part's relationships by id, each found in one lookup), `PartNames` (a relationship's image, found as the format finds it), `read_media` (an image part of an opened `Package`, capped), `read_pictures` (each image once within a per-document `Allowance`), `alt_text` |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info`; `grid_elements`, sheets another workbook format's reader read, laid out as an XLSX sheet; `parse_with_media` the pictures anchored to its cells, `read_media` one image's bytes; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
@@ -78,6 +78,9 @@ own, so they are listed here.
 - `fluree_doc_ooxml::Package::read` is gone: a part read whole goes
   through `Package::read_within(part, &mut Budget)`, spent from the
   document's budget, or `Package::read_capped(part, max)`.
+- `fluree_doc_ooxml::PartNames::resolve` takes the part's relationships
+  as a `Relations` (new: `Relations::new(&rels)`), which finds an id in
+  one lookup; it replaces `fluree_doc_ooxml::by_id`, which is gone.
 - `fluree_doc_xls::XlsError` has a new variant, `Package`, for an `.xlsb`
   that is no readable zip; the enum is not `#[non_exhaustive]`, so an
   exhaustive `match` on it needs the arm.

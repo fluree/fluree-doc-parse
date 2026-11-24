@@ -180,6 +180,9 @@ pub fn parse_with_media(
         .as_deref()
         .is_some_and(|x| toggled_on(x, "evenAndOddHeaders"));
     let rels = pkg.relationships(&main);
+    // Each header, footer and image the document names found in one lookup
+    // among its relationships, not a scan of them all for each.
+    let relations = fluree_doc_ooxml::Relations::new(&rels);
     let mut read_parts = |kind: &str,
                           evidence: &'static str,
                           budget: &mut Budget|
@@ -191,10 +194,10 @@ pub fn parse_with_media(
         let hashes = std::collections::hash_map::RandomState::new();
         let mut seen: HashMap<u64, Vec<usize>> = HashMap::new();
         for rid in shown_parts(&xml, kind, even_odd) {
-            let Some(part) = rels.iter().find(|r| r.id == rid && !r.external) else {
+            let Some(part) = relations.part(&rid) else {
                 continue;
             };
-            let Some(part_xml) = pkg.read_within(&part.target, budget)? else {
+            let Some(part_xml) = pkg.read_within(part, budget)? else {
                 continue;
             };
             let found = match parse_part(
@@ -271,11 +274,10 @@ pub fn parse_with_media(
     // is counted among those not read; a part that is not there is listed
     // under the name it was given, and fails to read.
     let names = fluree_doc_ooxml::PartNames::new(&pkg);
-    let by_id = fluree_doc_ooxml::by_id(&rels);
     let media = figure_rids
         .into_iter()
         .map(|(figure, rid, index)| {
-            let source = names.resolve(&by_id, &rid);
+            let source = names.resolve(&relations, &rid);
             Media {
                 figure,
                 source,
@@ -543,11 +545,17 @@ fn shown_parts(document_xml: &str, kind: &str, even_odd: bool) -> Vec<String> {
     let mut buf = Vec::new();
     let want = format!("{kind}Reference");
     let mut out: Vec<String> = Vec::new();
+    // The ids already in `out`: a scan of it for each reference made a
+    // document's cost the square of the references it names.
+    let mut listed: HashSet<String> = HashSet::new();
     // The section being read: its references by type, and its title page.
     let mut refs: Vec<(String, String)> = Vec::new();
     let mut title_page = false;
     let mut in_sect = false;
-    let flush = |refs: &mut Vec<(String, String)>, title_page: bool, out: &mut Vec<String>| {
+    let flush = |refs: &mut Vec<(String, String)>,
+                 title_page: bool,
+                 out: &mut Vec<String>,
+                 listed: &mut HashSet<String>| {
         for want_type in ["first", "default", "even"] {
             let shown = match want_type {
                 "first" => title_page,
@@ -558,7 +566,7 @@ fn shown_parts(document_xml: &str, kind: &str, even_odd: bool) -> Vec<String> {
                 continue;
             }
             for (t, id) in refs.iter() {
-                if t == want_type && !out.contains(id) {
+                if t == want_type && listed.insert(id.clone()) {
                     out.push(id.clone());
                 }
             }
@@ -585,7 +593,7 @@ fn shown_parts(document_xml: &str, kind: &str, even_odd: bool) -> Vec<String> {
             },
             Ok(Event::End(e)) if local(e.name().as_ref()) == "sectPr" => {
                 in_sect = false;
-                flush(&mut refs, title_page, &mut out);
+                flush(&mut refs, title_page, &mut out, &mut listed);
             }
             _ => {}
         }
@@ -2214,6 +2222,60 @@ mod tests {
              <pic:pic><pic:blipFill><a:blip r:embed=\"{rid}\"/></pic:blipFill></pic:pic>\
              </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
         )
+    }
+
+    #[test]
+    fn headers_and_images_are_found_among_the_relationships_in_one_lookup() {
+        // 100,000 header references and 10,000 pictures, each naming an id
+        // none of 30,000 relationships has: a scan of them all for each,
+        // and of the references listed for each reference, took 17 s in a
+        // release build.
+        let rels: String = (0..30_000)
+            .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
+            .collect();
+        let refs: String = (0..100_000)
+            .map(|i| format!("<w:headerReference w:type=\"default\" r:id=\"hX{i:08}\"/>"))
+            .collect();
+        let body = format!(
+            "{}<w:sectPr>{refs}</w:sectPr>",
+            picture("rIdXXXXXXX").repeat(10_000)
+        );
+        let docx = zipped(&[
+            (
+                "word/document.xml".to_string(),
+                format!("<w:document><w:body>{body}</w:body></w:document>").into_bytes(),
+            ),
+            (
+                "word/_rels/document.xml.rels".to_string(),
+                format!("<Relationships>{rels}</Relationships>").into_bytes(),
+            ),
+        ]);
+        let start = std::time::Instant::now();
+        let (_, _, media) = parse_with_media(&docx).unwrap();
+        let took = start.elapsed();
+        assert_eq!(media.len(), 10_000);
+        assert_eq!(
+            media[0].source,
+            fluree_doc_model::MediaSource::Missing("rIdXXXXXXX".into())
+        );
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
+    fn a_header_named_again_is_listed_in_one_lookup() {
+        // 100,000 header references, each its own id and none of them a
+        // relationship: a scan of those listed for each took 7.6 s in a
+        // release build. Named again, a header is listed once.
+        let refs: String = (0..100_000)
+            .map(|i| format!("<w:headerReference w:type=\"default\" r:id=\"hX{i:08}\"/>"))
+            .collect();
+        let body = format!("<w:sectPr>{refs}</w:sectPr>");
+        let start = std::time::Instant::now();
+        let shown = shown_parts(&format!("<w:body>{body}{body}</w:body>"), "header", false);
+        let took = start.elapsed();
+        assert_eq!(shown.len(), 100_000);
+        assert_eq!(shown[99_999], "hX00099999");
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]

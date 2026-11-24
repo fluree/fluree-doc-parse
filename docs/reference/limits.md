@@ -153,6 +153,14 @@ pairwise to mend a block a missing cell split, a table's rows read across
 its range) spend a count of steps of their own, at most 2^28 a document: a
 few seconds.
 
+A package's parts name each other by relationship id (a `.docx`'s
+headers, footers and images, an `.xlsx`'s sheets and the pictures of its
+drawings), and each id is found among the part's relationships in one
+lookup, not a scan of them all: a scan for each id costs the product of
+the two, and an id no relationship has costs the whole scan and spends
+nothing. A 338 KB `.docx` of 100,000 header references and 10,000
+pictures naming no relationship among 30,000 took 17 s; it takes 0.27 s.
+
 ## A web page's tree
 
 An HTML page, or an e-mail's HTML body, is parsed by html5ever into a tree
