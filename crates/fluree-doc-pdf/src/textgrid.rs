@@ -1944,6 +1944,11 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             }
         }
     }
+    let downs = [
+        downs,
+        body_downs(&all_rows, &cells, rules, &xs, header_rows, &sub_headers),
+    ]
+    .concat();
     Some(Grid {
         page,
         bbox: BBox {
@@ -1963,6 +1968,87 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             claimed: Vec::new(),
         })),
     })
+}
+
+/// Body cells that span rows, read from the groups the ruling draws:
+/// `(first row, column, end row)`.
+///
+/// A table read here takes each line as a row. One that rules its rows off
+/// in groups, a rule across the whole table under each, sets some columns
+/// once per group, on its first line, and others line by line: a tip size
+/// and its colour over the four volumes tested with it, each volume with
+/// its own errors. A column with a value on a group's first line and none
+/// on its others, where another column fills every line, is one cell over
+/// the group, as [`Grid::text_merges`] reads it in a ruled grid.
+///
+/// Claimed only for groups closed by rules across the table above and
+/// below, and only where two groups or more show it. A table ruled under
+/// its header and at its foot is one group, and a sparse column in it is
+/// values missing from some rows, not a span.
+fn body_downs(
+    rows: &[Vec<&Line>],
+    cells: &[Vec<usize>],
+    rules: &[Rule],
+    xs: &[f64],
+    header_rows: usize,
+    sections: &[usize],
+) -> Vec<(usize, usize, usize)> {
+    let ncols = xs.len().saturating_sub(1);
+    let n = rows.len();
+    if ncols < 2 || n < header_rows + 4 {
+        return Vec::new();
+    }
+    let (left, right) = (xs[0], xs[ncols]);
+    let flat: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    // A rule across the whole table between row `r - 1` and row `r`, or
+    // under the last row where `r` is `n`.
+    let across = |r: usize| -> bool {
+        let Some(upper) = rows.get(r.wrapping_sub(1)) else {
+            return false;
+        };
+        let base = upper.iter().map(|l| l.base).fold(f64::MIN, f64::max);
+        let fs = upper.iter().map(|l| l.fs).fold(1.0, f64::max);
+        let hi = match rows
+            .get(r)
+            .and_then(|ls| ls.iter().min_by(|a, b| a.base.total_cmp(&b.base)))
+        {
+            Some(lower) => lower.base - lower.fs * 0.5,
+            None => base + fs * 1.5,
+        };
+        let cover: f64 = flat
+            .iter()
+            .filter(|h| h.bbox.y0 >= base - fs * 0.2 && h.bbox.y0 <= hi)
+            .map(|h| (h.bbox.x1.min(right) - h.bbox.x0.max(left)).max(0.0))
+            .sum();
+        cover >= 0.9 * (right - left)
+    };
+    let cuts: Vec<usize> = (header_rows..=n)
+        .filter(|&r| sections.contains(&r) || across(r))
+        .collect();
+    let empty = |r: usize, k: usize| cells[r * ncols + k].is_empty();
+    let mut downs = Vec::new();
+    let mut groups = 0;
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if b - a < 2 || (a..b).any(|r| sections.contains(&r)) || !across(a) || !across(b) {
+            continue;
+        }
+        let full = (0..ncols).any(|k| (a..b).all(|r| !empty(r, k)));
+        let once: Vec<usize> = (0..ncols)
+            .filter(|&k| !empty(a, k) && (a + 1..b).all(|r| empty(r, k)))
+            .collect();
+        if full && !once.is_empty() {
+            groups += 1;
+            downs.extend(once.into_iter().map(|k| (a, k, b)));
+        }
+    }
+    if groups < 2 {
+        return Vec::new();
+    }
+    downs
 }
 
 /// Record on a table read here the glyphs its cells take from the page.
@@ -2245,6 +2331,79 @@ mod tests {
             "without the rule the labels are taken in: {open:?}"
         );
         assert!(parted.iter().all(|g| g.bbox.x0 > 150.0), "got {parted:?}");
+    }
+
+    /// A table of three groups, a size and its colour set once over three
+    /// volumes, each with its error; `ruled` rules each group off, and
+    /// otherwise only the header and the foot are ruled.
+    fn grouped(ruled: bool) -> Vec<Grid> {
+        let mut gl = Vec::new();
+        for (t, x) in [
+            ("Size", 20.0),
+            ("Colour", 80.0),
+            ("Volume", 160.0),
+            ("Error", 220.0),
+        ] {
+            gl.extend(set(t, x, 50.0));
+        }
+        let rule = |y: f64| Rule {
+            bbox: BBox {
+                x0: 15.0,
+                y0: y,
+                x1: 260.0,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let mut rules = vec![rule(55.0)];
+        for (g, (size, colour)) in [("Small", "white"), ("Medium", "blue"), ("Large", "red")]
+            .into_iter()
+            .enumerate()
+        {
+            let top = 66.0 + 40.0 * g as f64;
+            gl.extend(set(size, 20.0, top));
+            gl.extend(set(colour, 80.0, top));
+            for (i, y) in [top, top + 12.0, top + 24.0].into_iter().enumerate() {
+                gl.extend(set(&format!("{}", (g + 1) * 10 + i), 160.0, y));
+                gl.extend(set(&format!("{}.5", 9 - i), 220.0, y));
+            }
+            if ruled || g == 2 {
+                rules.push(rule(top + 27.0));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 270.0,
+            y1: 190.0,
+        };
+        read(&lines(&gl), &rules, region, 0)
+    }
+
+    #[test]
+    fn a_value_set_once_over_a_ruled_group_spans_it() {
+        let grids = grouped(true);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().unwrap();
+        let mut downs = lay.downs.clone();
+        downs.sort();
+        assert_eq!(
+            downs,
+            [
+                (1, 0, 4),
+                (1, 1, 4),
+                (4, 0, 7),
+                (4, 1, 7),
+                (7, 0, 10),
+                (7, 1, 10)
+            ]
+        );
+        // Ruled only under the header and at the foot, it is one group, and
+        // its empty cells are values missing, not spans.
+        let grids = grouped(false);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert!(grids[0].layout.as_deref().unwrap().downs.is_empty());
     }
 
     #[test]

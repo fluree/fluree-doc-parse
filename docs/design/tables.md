@@ -629,6 +629,28 @@ Three conditions keep this from firing where it should not:
 - **A column has to give each row its own value.** Without one there are no
   rows to span.
 
+A table read from its text, a line to a row, shows the same groups. Each is
+ruled off by a rule across the table, and some columns are set once on the
+group's first line while another column fills every line: a tip size and its
+colour over the four volumes tested with it. A column with a value on the
+first line and none on the others spans the group, on the same conditions:
+rules across the table above and below it, two groups or more, and a column
+that fills every line.
+
+### Separate values in a merged block
+
+Where the ruling leaves two columns unparted, a group label spans rows down
+the first, and the block's top row sets a value of its own beside the label,
+the block is two spans crossing. A row with nothing of its own
+under the group label sets its own label in the column beside it, and it
+stays there (`Smoke developed` under `Surface-burning characteristics`). A
+cell left holding text of its own beside another's after the block is read
+is a value, unless the two read as one across the cut between them (an
+address label a column cut runs through, beside its `Apt. no.`). It does not
+carry on the cell to its left, so DoCO names its row by the group and by it
+(`Surface-burning characteristics / Smoke developed`) rather than joining the
+two.
+
 ### Shading parts rows
 
 A shaded row can be parted from the next by nothing but the edge of its
