@@ -64,7 +64,12 @@ detector has always enlarged a small image. The engine enlarges it inside its
 detector, so the recognizer still reads each line from the image's own pixels:
 a crop of 8 to 10 px text 1,200 × 40 read 17 lines this way and 10 at its own
 size, and small screenshots (285 × 152, 411 × 90) lost an account number
-enlarged only twice. Text under about 6 px is not read at any size.
+enlarged only twice. Text under about 6 px is not read at any size. The
+enlargement is decided per pass: read whole, an image's long side stays within
+2,000 px; read in strips, each is enlarged toward 736 across the image's
+width, its length set to fit the cap, which bounds what it costs. So a receipt
+400 px wide is read at its own size up to 16,000 px long, and 1.84 times larger
+in strips past that.
 
 Shrinking an image to a fixed size loses its small text without a word: a
 capture 1,200 × 9,000 shrunk to 2,000 px read none of its 220 rows of 13 px
