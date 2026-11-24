@@ -1419,13 +1419,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         );
         let bands: Vec<crate::geom::BBox> = raw.pages[pi].fills.iter().map(|f| f.bbox).collect();
         let body = block::body_size(kept_columns.iter().flatten());
+        let tables: Vec<crate::geom::BBox> = layout.grids.iter().map(|g| g.bbox).collect();
         let block_columns: Vec<Vec<Block>> = timed(&mut timings.blocks, || {
-            kept_columns
-                .iter()
-                .map(|col| {
-                    block::assemble_with_marks(col, leading, &checkboxes, &dots, &bands, body)
-                })
-                .collect()
+            block::read_side_heads(
+                kept_columns
+                    .iter()
+                    .map(|col| {
+                        block::assemble_with_marks(col, leading, &checkboxes, &dots, &bands, body)
+                    })
+                    .collect(),
+                &tables,
+            )
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();
         if contents_layout {

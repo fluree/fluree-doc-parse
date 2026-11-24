@@ -1474,6 +1474,101 @@ pub fn counts_off(b: &Block) -> bool {
     })
 }
 
+/// Most lines and words of a side head.
+const MAX_SIDE_HEAD_LINES: usize = 3;
+const MAX_SIDE_HEAD_WORDS: usize = 10;
+
+/// Fewest side heads, and the share of its column's blocks they must be,
+/// before a column is read as a column of side heads.
+const MIN_SIDE_HEADS: usize = 2;
+const MIN_SIDE_HEAD_SHARE: f64 = 0.6;
+
+/// Read a column of side heads with the text they label.
+///
+/// Some data sheets set each section's heading in a narrow strip at the
+/// left, level with the first line of its text in the wide column beside
+/// it. Column detection finds the gutter between them and reads the strip
+/// whole before the column, so every head came out an empty section, one
+/// after another, with all the text under the last of them.
+///
+/// A column is one of side heads when it is narrower than the column to its
+/// right, and most of its blocks, at least [`MIN_SIDE_HEADS`] of them, are
+/// short lines whose top is level with the top of a block there. Its blocks
+/// are then read in that column's order, each before the first block of the
+/// text there that starts level with it or lower. The head reads before
+/// the block it labels, and its section takes that block and those after
+/// it up to the next head. A block of the strip level with nothing, a
+/// corner tag over the page, goes where its height puts it.
+///
+/// `tables` are the page's tables, which leave the prose before blocks
+/// form: a head beside a table is level with the table's top.
+pub fn read_side_heads(columns: Vec<Vec<Block>>, tables: &[BBox]) -> Vec<Vec<Block>> {
+    let mut out: Vec<Vec<Block>> = Vec::with_capacity(columns.len());
+    let mut columns = columns.into_iter().peekable();
+    while let Some(col) = columns.next() {
+        let heads = columns
+            .peek()
+            .is_some_and(|text| side_heads(&col, text, tables));
+        if !heads {
+            out.push(col);
+            continue;
+        }
+        let Some(text) = columns.next() else {
+            out.push(col);
+            continue;
+        };
+        let mut merged = Vec::with_capacity(col.len() + text.len());
+        let mut heads = col.into_iter().peekable();
+        for b in text {
+            while heads
+                .peek()
+                .is_some_and(|h| h.bbox.y0 <= b.bbox.y0 + level_tolerance(h, &b))
+            {
+                merged.extend(heads.next());
+            }
+            merged.push(b);
+        }
+        merged.extend(heads);
+        out.push(merged);
+    }
+    out
+}
+
+/// How far apart two tops can be and still be level: half a line.
+fn level_tolerance(a: &Block, b: &Block) -> f64 {
+    (a.font_size.max(b.font_size).max(1.0) as f64) * 0.5
+}
+
+/// Whether `col` is a strip of side heads for `text`, the column to its right.
+fn side_heads(col: &[Block], text: &[Block], tables: &[BBox]) -> bool {
+    if col.is_empty() || text.is_empty() {
+        return false;
+    }
+    let width = |c: &[Block]| {
+        let x0 = c.iter().map(|b| b.bbox.x0).fold(f64::MAX, f64::min);
+        let x1 = c.iter().map(|b| b.bbox.x1).fold(f64::MIN, f64::max);
+        x1 - x0
+    };
+    if width(col) >= width(text) {
+        return false;
+    }
+    let short = |b: &Block| {
+        b.lines.len() <= MAX_SIDE_HEAD_LINES
+            && b.text().split_whitespace().count() <= MAX_SIDE_HEAD_WORDS
+    };
+    let text_x0 = text.iter().map(|b| b.bbox.x0).fold(f64::MAX, f64::min);
+    let level = |h: &Block| {
+        let half_line = (h.font_size.max(1.0) as f64) * 0.5;
+        text.iter()
+            .any(|b| (h.bbox.y0 - b.bbox.y0).abs() <= level_tolerance(h, b))
+            || tables
+                .iter()
+                .any(|t| t.x1 > text_x0 && (h.bbox.y0 - t.y0).abs() <= half_line * 2.0)
+    };
+    let heads = col.iter().filter(|h| short(h) && level(h)).count();
+    heads >= MIN_SIDE_HEADS && heads as f64 >= col.len() as f64 * MIN_SIDE_HEAD_SHARE
+}
+
 /// Whether a poster-like display word governs the lettered item below it.
 ///
 /// Both lines may use the body face and size, so typography provides no
@@ -2629,6 +2724,76 @@ mod tests {
         ];
         let blocks = assemble_with_marks(&lines, 1.2, &[], &[], &[], 8.0);
         assert_eq!(blocks[0].text(), "Acme Corporation");
+    }
+
+    #[test]
+    fn side_heads_are_read_with_the_text_they_are_level_with() {
+        let at = |text: &str, x0: f64, x1: f64, y: f64| {
+            let mut line = l(text, x0, y, 8.0);
+            line.bbox.x1 = x1;
+            build(vec![line])
+        };
+        let heads = vec![
+            at("USG Interior Panel", 40.0, 190.0, 18.0),
+            at("DESCRIPTION", 40.0, 100.0, 305.0),
+            at("INTENDED FOR", 40.0, 100.0, 370.0),
+        ];
+        let text = vec![
+            at("USG SHEETROCK BRAND GYPSUM PANELS", 210.0, 560.0, 84.0),
+            at(
+                "Available in two thicknesses, the panels feature a core.",
+                210.0,
+                560.0,
+                305.0,
+            ),
+            at(
+                "Commercial or residential applications.",
+                210.0,
+                560.0,
+                370.0,
+            ),
+            at(
+                "New or repair and remodel construction.",
+                210.0,
+                560.0,
+                382.0,
+            ),
+        ];
+        let cols = read_side_heads(vec![heads, text], &[]);
+        assert_eq!(cols.len(), 1);
+        let order: Vec<String> = cols[0].iter().map(Block::text).collect();
+        assert_eq!(
+            order,
+            [
+                "USG Interior Panel",
+                "USG SHEETROCK BRAND GYPSUM PANELS",
+                "DESCRIPTION",
+                "Available in two thicknesses, the panels feature a core.",
+                "INTENDED FOR",
+                "Commercial or residential applications.",
+                "New or repair and remodel construction.",
+            ]
+        );
+        // A column of paragraphs is not one of heads, however its tops fall.
+        let left = vec![
+            at(
+                "A paragraph of the left column that runs on for several words more.",
+                40.0,
+                190.0,
+                100.0,
+            ),
+            at(
+                "Another paragraph of the left column that runs on for many more words.",
+                40.0,
+                190.0,
+                200.0,
+            ),
+        ];
+        let right = vec![
+            at("The right column's text.", 210.0, 560.0, 100.0),
+            at("More of it.", 210.0, 560.0, 200.0),
+        ];
+        assert_eq!(read_side_heads(vec![left, right], &[]).len(), 2);
     }
 
     #[test]

@@ -596,7 +596,7 @@ fn pipeline(pdf: &Path) -> Doc {
         // Furniture indices are into the flattened per-page line list, so walk
         // the columns in the same order to line the indices up.
         let mut idx = 0usize;
-        let mut out = Vec::new();
+        let mut per_column = Vec::new();
         let page_body = block::body_size(cols.iter().flatten());
         for col in cols {
             let kept: Vec<fluree_doc_pdf::Line> = col
@@ -611,19 +611,20 @@ fn pipeline(pdf: &Path) -> Doc {
             // column's own right edge, not the page's. The page's fills mark
             // checkboxes and row bands, as they do in the pipeline.
             let checkboxes = rule::checkboxes(&doc.pages[pi].fills);
-            out.extend(
-                block::assemble_with_marks(
-                    &kept,
-                    leading,
-                    &checkboxes,
-                    &block::marking_dots(&kept, &doc.pages[pi].dots),
-                    &fills_per_page[pi],
-                    page_body,
-                )
-                .into_iter()
-                .flat_map(block::split_structural_prefix),
-            );
+            per_column.push(block::assemble_with_marks(
+                &kept,
+                leading,
+                &checkboxes,
+                &block::marking_dots(&kept, &doc.pages[pi].dots),
+                &fills_per_page[pi],
+                page_body,
+            ));
         }
+        let out: Vec<_> = block::read_side_heads(per_column, &[])
+            .into_iter()
+            .flatten()
+            .flat_map(block::split_structural_prefix)
+            .collect();
         pages.push(out);
     }
     let data = std::fs::read(pdf).expect("read");

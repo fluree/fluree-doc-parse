@@ -255,6 +255,19 @@ title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
 
+**Side heads.** Some data sheets set each section's heading in a narrow strip
+at the left, level with the first line of its text in the wide column beside
+it. Such a strip is read with that column, each head just before the text it
+is level with, so each section holds its own text. The strip qualifies when:
+
+- it is narrower than the column beside it;
+- most of its blocks are short lines, at least two of them;
+- each of those starts level with the top of a block or a table in that
+  column.
+
+A block of the strip level with nothing, such as a tag in the corner of the
+page, is read where its height puts it.
+
 **Drop caps.** A paragraph's first letter set large, its top at the top of
 the first line and its foot on the second's, third's or fourth's baseline,
 is read at the head of the first line and joined to its word: `This report
