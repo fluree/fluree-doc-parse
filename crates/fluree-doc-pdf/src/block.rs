@@ -250,10 +250,11 @@ const MARKER_OUTDENT_TOLERANCE: f64 = 2.0;
 /// Geometric shapes, the typographic bullets, the arrows and boxes the
 /// dingbat fonts set as bullets, and the private-use codes a Word file
 /// gives its symbol-font bullets: a PDF made from Word maps the bullet of a
-/// default bulleted list to U+F0B7, the position of `•` in the Symbol font,
-/// and every reader of its text gets that code. Only codes that are no
-/// letter in Symbol or Wingdings are taken; U+F071 is `❑` in one and `θ` in
-/// the other.
+/// default bulleted list to U+F0B7, the position of `•` in the Symbol font.
+/// Extraction reads such a code as the character its font shows, so these
+/// codes remain only where the font's name does not say which font it is.
+/// Of them, only codes that are no letter in Symbol or Wingdings are taken;
+/// U+F071 is `❑` in one and `θ` in the other.
 ///
 /// Dashes are deliberately absent: a line opening with an en dash is as
 /// likely to be a range, a dialogue dash or a torn compound as a list item,

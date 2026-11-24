@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "fda-ndma-ndea-gcms.pdf",
+    "url": "https://www.fda.gov/media/117807/download",
+    "sha256": "2caa17565d31272d4d9e05fbcdf7c843a7bba7a6e63d5c66b1f2c4b56a87e488",
+    "about": "US FDA, Combined Direct Injection NDMA and NDEA Impurity Assay by GC/MS (6 pages, made from Word). Its MRM transitions and oven program join their values with a Wingdings arrow, which the text map gives as the private-use code U+F0E0."
+  },
+  "notes": [
+    "2026-11-23 (#86): a glyph drawn in Symbol or Wingdings now reads as the character the font shows."
+  ],
+  "checks": [
+    {
+      "id": "mrm-transition-arrow",
+      "found": "2026-11-23",
+      "issue": "The arrow of an MRM transition read as U+F0E0: 74amu\\uf0e044amu.",
+      "text": "74amu→44amu"
+    },
+    {
+      "id": "oven-program-arrow",
+      "found": "2026-11-23",
+      "issue": "As above, in the oven program: 0.5min\\uf0e0200°C.",
+      "text": "for 0.5min→200°C"
+    }
+  ]
+}

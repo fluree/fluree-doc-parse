@@ -9,6 +9,11 @@
 //! boxes. A run set in one of those fonts is the same: `m` typed in Symbol
 //! shows `μ`.
 //!
+//! A PDF made from Word keeps the same codes: its text map gives a glyph
+//! set in Symbol or Wingdings the font's code plus `0xF000`, a private-use
+//! character, so `μmole` reads as U+F06D and `mole`, and `=` as U+F03D.
+//! The PDF reader maps those by the font's name (see [`pdf_font`]).
+//!
 //! Symbol is mapped in full. Of the Wingdings, the characters documents
 //! actually write with are: arrows, check marks and boxes, bullets, hands,
 //! circled numbers. Each goes to the character a reader would search for —
@@ -46,6 +51,32 @@ pub fn is_symbol_font(font: &str) -> bool {
         font.trim().to_ascii_lowercase().as_str(),
         "symbol" | "wingdings" | "wingdings 2"
     )
+}
+
+/// The symbol font a PDF's font name is, as [`char_for`] names it: Word
+/// writes `SymbolMT`, `Symbol`, `Wingdings-Regular` or `Wingdings2`, and a
+/// subset puts a tag before it (`LECFOM+SymbolMT`). Any other font is none,
+/// whatever its name begins with.
+pub fn pdf_font(name: &str) -> Option<&'static str> {
+    let name = name.split_once('+').map_or(name, |(_, n)| n);
+    let name = name.split(',').next().unwrap_or(name);
+    let mut n: String = name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    while let Some(style) = ["regular", "bold", "italic", "mt", "ps"]
+        .iter()
+        .find(|s| n.len() > s.len() && n.ends_with(*s))
+    {
+        n.truncate(n.len() - style.len());
+    }
+    match n.as_str() {
+        "symbol" => Some("symbol"),
+        "wingdings" => Some("wingdings"),
+        "wingdings2" => Some("wingdings 2"),
+        _ => None,
+    }
 }
 
 /// Adobe's Symbol encoding.
@@ -406,5 +437,32 @@ mod tests {
         assert_eq!(char_for("symbol", 'm' as u32), Some('μ'));
         assert_eq!(char_for("Wingdings 2", 0xF052), Some('☑'));
         assert_eq!(char_for("Arial", 0xF0B0), None);
+    }
+
+    #[test]
+    fn a_pdf_font_name_is_read_without_its_tag_and_style() {
+        for (name, font) in [
+            ("SymbolMT", "symbol"),
+            ("LECFOM+SymbolMT", "symbol"),
+            ("Symbol", "symbol"),
+            ("Symbol,Bold", "symbol"),
+            ("Wingdings-Regular", "wingdings"),
+            ("NXEDYI+Wingdings-Regular", "wingdings"),
+            ("Wingdings2", "wingdings 2"),
+        ] {
+            assert_eq!(pdf_font(name), Some(font), "{name}");
+        }
+        for name in [
+            "Arial",
+            "SymbolSigns",
+            "Wingdings3",
+            "MT",
+            "AdvMT_SY",
+            "Symbola",
+        ] {
+            assert_eq!(pdf_font(name), None, "{name}");
+        }
+        let micro = pdf_font("SymbolMT").and_then(|f| char_for(f, 0xF06D));
+        assert_eq!(micro, Some('μ'));
     }
 }

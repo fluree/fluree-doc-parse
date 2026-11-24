@@ -88,6 +88,17 @@ from their shape instead:
   leaders between a table's labels and its figures, a decimal point, the
   stops in `U.S.`.
 
+**Symbol fonts.** A PDF made from Word gives a character set in Symbol or
+Wingdings the font's own code plus `0xF000` as its text, a private-use
+character, and every reader of the text layer gets that code: `1600 μmole`
+reads `1600 mole` with an unprintable character before `mole`, `HIi = ∑HQij` loses its
+`=` and `∑`, and an arrow between two values is gone. A glyph drawn in
+Symbol, Wingdings or Wingdings 2 reads as the character the font shows, by
+the same table the Word reader uses: `μ`, `±`, `=`, `∑` from Symbol, `→`,
+`❑`, `✔` from Wingdings. The font is known by its name in the PDF, or, where
+a producer renamed its fonts (`CIDFont+F4`), by the name inside the font
+program. A code in any other font is kept as it is.
+
 **Spaces drawn out of place.** A space a PDF encodes is taken as a word
 boundary, since it is better evidence than the width of a gap. Some
 producers, though, draw a space somewhere other than where it belongs. A
@@ -135,11 +146,13 @@ even below a line that runs to the edge.
 
 **Bullets.** The typographic bullets and geometric shapes are read as
 bullets, and so are the arrows and boxes the dingbat fonts set as them
-(`➢`, `◆`, `❑`), and the private-use codes a Word file gives its symbol-font
-bullets: a PDF made from Word maps the bullet of a default bulleted list to
-U+F0B7, where `•` sits in the Symbol font, and every reader of its text layer
-gets that code. Only codes that are no letter in Symbol or Wingdings are
-read, since the same code is `❑` in one and `θ` in the other. A block that
+(`➢`, `◆`, `❑`). A Word file's symbol-font bullets read as the characters
+they show (see Symbol fonts above): the bullet of a default bulleted list,
+U+F0B7 in the text layer, is `•`, and a Wingdings box is `❑`. Where the
+font's name does not say which font it is, the private-use codes of those
+bullets are read as bullets all the same, but only codes that are no letter
+in Symbol or Wingdings, since the same code is `❑` in one and `θ` in the
+other. A block that
 opens with a bullet is a list item unless it is a heading, and one that opens
 with a plain bullet or a box to tick is never a heading, whatever its size
 or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
