@@ -42,11 +42,11 @@ Measured on the set of seed 4 (digest `d2374f80…`), in the run
 | profile | pages | facts | unread pages, without → with OCR | without OCR | OCR, strict | OCR, whole word |
 |---|---|---|---|---|---|---|
 | clean-300 | 6 | 86 | 6 → 0 | 0.000 | 1.000 | 1.000 |
-| clean-200 | 6 | 86 | 6 → 0 | 0.000 | 0.977 | 0.977 |
+| clean-200 | 6 | 86 | 6 → 0 | 0.000 | 0.988 | 0.988 |
 | clean-150 | 6 | 86 | 6 → 0 | 0.000 | 1.000 | 1.000 |
 | clean-100 | 6 | 86 | 6 → 0 | 0.000 | 1.000 | 0.988 |
 | skew-300 | 6 | 86 | 6 → 0 | 0.000 | 1.000 | 1.000 |
-| noisy-300 | 6 | 86 | 6 → 0 | 0.000 | 1.000 | 0.988 |
+| noisy-300 | 6 | 86 | 6 → 0 | 0.000 | 0.988 | 0.977 |
 | fax-200 | 6 | 86 | 6 → 0 | 0.000 | 1.000 | 1.000 |
 | fax-std | 6 | 86 | 6 → 0 | 0.000 | 0.907 | 0.907 |
 | jpeg-150 | 6 | 86 | 6 → 0 | 0.000 | 0.977 | 0.977 |
@@ -55,8 +55,8 @@ Measured on the set of seed 4 (digest `d2374f80…`), in the run
 | **all scanned** | 54 | 774 | 54 → 0 | 0.000 | **0.984** | **0.982** |
 | **all** | 58 | 842 | 54 → 0 | 0.062 | **0.986** | **0.983** |
 
-By kind of fact, with OCR, as a whole word: names 1.000, identifiers 0.929,
-amounts 0.996, dates 0.990, phrases 0.977. On the pasted pages, all 52 facts
+By kind of fact, with OCR, as a whole word: names 1.000, identifiers 0.940,
+amounts 0.996, dates 0.990, phrases 0.973. On the pasted pages, all 52 facts
 of the text layer are read with and without OCR, and the 16 facts only the
 screenshot holds go from none to all; each letter is two of those pages, so
 these are 26 and 8 distinct facts, each counted at both densities.
@@ -82,24 +82,27 @@ What this shows:
 - **The misses are reading errors, not plumbing.** Fourteen facts are
   missed as a whole word. Eight are on the fax at standard resolution,
   characters misread or spaces moved (`Septeunber`, `caiculated`,
-  `Transter`, `Brookfield,VT`, `+ 1 555`). Three are 9-point phone numbers
+  `Transter`, `Brookfield,VT`, `+ 1 555`). Two are 9-point phone numbers
   whose spaces were lost at 200 dpi or in the 150-dpi JPEG
   (`+1555 9011503`), and one a label run into its amount in the JPEG
-  (`Closing balance:3,050.56`). Two are identifiers run into the label
-  before them, found strictly, not as a whole word: `number:.72-8383-…` on
-  the noisy scan and `no.INV-…` at 100 dpi. Such spaces are not stable: on
-  the noisy and skewed 300-dpi pages the detector boxes `Invoice no.` and its
+  (`Closing balance:3,050.56`). Two are an identifier run into the label
+  before it, found strictly, not as a whole word: `no.INV-…` on the noisy
+  scan and at 100 dpi; and one a phrase on the noisy scan whose space after
+  a comma was lost (`payment,Greenway`). Such spaces are not stable: on the
+  noisy and skewed 300-dpi pages the detector boxes `Invoice no.` and its
   number as one line, and the same line boxed a pixel or two taller or
   shorter is enough for the recognizer to keep or drop the space after
-  `no.`, or one in a phone number.
+  `no.`, or one in a phone number. Read at their own resolution rather than
+  shrunk to 2,000 px, the 300-dpi pages kept one such space and lost two, and
+  the 200-dpi one one fewer.
 - **Identifiers are the weak kind**, as in the engine bake-off: a lost space
   or a misread character costs the whole fact.
 - **The structure of a scan is not read the way the born-digital page's
   is.** On the four pasted pages fdoc reads the 12 headings of the gold,
-  with and without OCR. On the 54 scans, OCR reads 80 headings for 144 in
-  the gold, 72 of them the gold's and eight not; counted page by page, that
-  is 64 fewer than the gold and none over (the *missing* and *extra*
-  columns), and 48 of the 54 pages have a heading count other than the
+  with and without OCR. On the 54 scans, OCR reads 86 headings for 144 in
+  the gold, 72 of them the gold's and 14 not; counted page by page, that
+  is 60 fewer than the gold and two over (the *missing* and *extra*
+  columns), and 46 of the 54 pages have a heading count other than the
   gold's. OCR has no bold, so a bold line of body size (`Re:`, a signature,
   `Bill to:`, `Closing balance`) is lost: a scan's heading is a line set
   larger than its body, or a page's first line. Each line is sized by the
@@ -110,9 +113,11 @@ What this shows:
   heading, and an address or a paragraph is read as one block, as on the
   born-digital page, not line by line. The engine's boxes still vary by a
   pixel or two, and a line a little larger than its body can come out over
-  the 15% a heading needs: of the eight headings read that are not the
-  gold's, six are a statement's `Statement of account`, set in 11 pt
-  over 10. An address line, `7 Orchard Road`, reads as a numbered heading
+  the 15% a heading needs: of the 14 headings read that are not the
+  gold's, ten are a statement's `Statement of account`, set in 11 pt
+  over 10 (six when the pages were read shrunk to 2,000 px, where its box
+  came out a pixel shorter against its body's), and two the account lines
+  of a noisy statement. An address line, `7 Orchard Road`, reads as a numbered heading
   only at 100 dpi, where the address is still cut after its first line. The
   per-document headings are in the baseline, and a page that no longer
   reads one of its gold's, or reads one other than those it read then,
@@ -120,17 +125,17 @@ What this shows:
 
 | headings | pages | gold | OCR read | missing | extra | pages off | gold read |
 |---|---|---|---|---|---|---|---|
-| clean-300 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
+| clean-300 | 6 | 16 | 9 | 7 | 0 | 5 | 8 |
 | clean-200 | 6 | 16 | 9 | 7 | 0 | 5 | 8 |
 | clean-150 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
 | clean-100 | 6 | 16 | 10 | 6 | 0 | 5 | 8 |
-| skew-300 | 6 | 16 | 8 | 8 | 0 | 6 | 8 |
-| noisy-300 | 6 | 16 | 9 | 7 | 0 | 5 | 8 |
+| skew-300 | 6 | 16 | 10 | 6 | 0 | 4 | 8 |
+| noisy-300 | 6 | 16 | 12 | 6 | 2 | 6 | 8 |
 | fax-200 | 6 | 16 | 10 | 6 | 0 | 4 | 8 |
 | fax-std | 6 | 16 | 10 | 6 | 0 | 5 | 9 |
 | jpeg-150 | 6 | 16 | 8 | 8 | 0 | 6 | 7 |
 | pasted, both densities | 4 | 12 | 12 | 0 | 0 | 0 | 12 |
-| **all scanned** | 54 | 144 | 80 | 64 | 0 | 48 | 72 |
+| **all scanned** | 54 | 144 | 86 | 60 | 2 | 46 | 72 |
 
 *Missing* and *extra* are a page's headings fewer or more than its gold's,
 summed; *gold read* counts the gold's headings read as headings, word for
