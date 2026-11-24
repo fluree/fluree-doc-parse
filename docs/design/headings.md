@@ -20,6 +20,17 @@ tells you how far down the ladder it came from.
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
+Weight and size never make a heading of these two:
+
+- **A caption** (`Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
+  Functions`), which is the figure's or the table's.
+- **A label ending in a colon with its value set beside it on its row**
+  (`Color:`), which is a field.
+
+A row of short blocks side by side was tried as a third test, as a table's
+header cells (`TYPE`, `NAME`, `DESCRIPTION`), and dropped: a slide's card
+titles stand side by side the same way (`Our Purpose`, `Our Mission`).
+
 ## The body size
 
 "Larger than body" is measured against one body size per document: the size
