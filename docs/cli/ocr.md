@@ -43,45 +43,64 @@ structure already has its text, and a table crop asks about structure; both are
 left for a model. Given image files (PNG, JPEG, TIFF), it reads them all,
 decoded upright by their EXIF orientation; of a multi-page TIFF, the first page.
 
-The detector reads an image at most 2,000 px on its long side, and scales one
-under 736 px wide up to that first. Shrunk, an image's small text can fall
-under what the detector sees, and its lines are lost without a word. So an
-image the detector shrinks is read whole first, and the thickness of the lines
-it found, at the median and at the scale the detector read them, says whether
-that reading is kept: under 10 px, the image is read again in strips that
-overlap by a fifth, each line kept once, and that reading is kept. Read whole,
-captures 3,400 to 5,000 px tall lost up to a fifth of their 10 to 16 px lines,
-and a 1,200 × 9,000 one of 220 rows 13 px high read none of them; in strips,
-all of them. Only such an image pays for the second reading, which took 1.2 to
-4 times as long as the first, twice at the median: the engine cannot recognize
-the lines of boxes it is given, so the strips are read in full. A strip of an
-image 2,000 px wide or more is as long as the image is wide, so the detector
-still shrinks it, less than the whole.
+## How an image is sized
 
-Where no line is found, the text is too small to be seen, or there is none,
-and the reading cannot tell which. The image is read again in strips only when
-they are detected at full size, the image under 2,000 px wide, and at least
-1.25 times larger than the whole: captures 736 to 1,400 px wide of 5 to 8 px
-text, read whole with no line found, gave up to 452 lines in strips. A blank
-scanned page, or a phone photo 3,024 × 4,032, is read whole, once; cut, it took
-three times as long and gave nothing more. A narrower photo is cut (one 1,200 ×
-2,600 is read again for nothing).
+An image is read at its own resolution, in passes of at most
+[`ocr.max_megapixels`](config.md#ocr) (default 12.5) each, decided on its size
+alone:
 
-It is the text's size, not the image's shape, that decides: a scanned page is
-shrunk too, but its body text, 10 pt at any resolution, has lines detected
-about an em thick, so 16 px or more to the detector (17 px on A3 at 300 dpi),
-and the page is read whole, once. Measured on 172 synthetic captures and
-pages, the lines read whole were 66 %, in strips 92 %, and by this rule 92 %,
-with no page cut. Cut, a page would take two readings for no line more, and
-lose a line running down it longer than the strips' overlap. A capture read in
-strips loses such a line too, or keeps it cut short (400 px for strips of
-2,000). A wide image is never cut, since a cut across it would cut its lines.
+- **Whole**, when it fits: a Letter, A4 or Legal page scanned at 300 dpi (8.4
+  to 10.7 Mpx) and a 12 Mpx phone photo (3,024 × 4,032) are read in one pass.
+- **In strips** across its full width, each at least as tall as the image is
+  wide and within the cap, overlapping by a fifth so a line cut by one strip's
+  edge is whole in the next; each line is kept once. A tall capture or a long
+  scroll is read this way. A line running down such an image longer than the
+  overlap is whole in no strip, and is lost or kept cut short.
+- **Shrunk**, with a warning on stderr, when even a strip as tall as the image
+  is wide would not fit: a page scanned at 600 dpi, a wide panorama. Raise
+  `ocr.max_megapixels` to read it whole.
 
-Only the lines the detector sees vote. Where text of two sizes is mixed, and
-the smaller is too small to be found at all, the median is the larger text's:
-a 1,000 × 4,000 capture with a 26 px heading over every two lines of 8 px text
-is read whole, and lost 118 of its 121 small lines. Strips did not save them
-either (27 of 121).
+The detector misses thin lines in a small image: one whose short side is under
+736 px is read larger, toward 736, at most twice. The engine enlarges it
+inside its detector, so the recognizer still reads each line from the image's
+own pixels; a crop of 8 to 10 px text 1,200 × 40 read 17 lines this way and 10
+at its own size. Text under about 6 px is not read at any size.
+
+Shrinking an image to a fixed size loses its small text without a word: a
+capture 1,200 × 9,000 shrunk to 2,000 px read none of its 220 rows of 13 px
+text, and a 2,400 × 9,000 one none of 1,600; read at their own size, in strips,
+all but a handful. So the cap is on the pixels a pass holds, which is what a
+reading costs, and not on a side.
+
+### Memory and speed
+
+A pass costs about 230 bytes per pixel the detector reads while it is read
+(150 to 240 measured): a 12 Mpx photo takes about 2.9 GB at its peak, a page
+scanned at 300 dpi about 1.7 GB, with the pipeline's own 0.3 to 0.5 GB. The
+engine gives that memory back once the image is read: one memory arena serves
+all its pipelines and is shrunk after each pass, so a process that has read
+large images holds under 1 GB between them, not the largest image's peak.
+
+The passes read at once share one budget, [`ocr.max_memory`](config.md#ocr),
+8 GiB by default (four pages at 300 dpi, or three 12 Mpx photos): a pass that
+does not fit beside those being read waits, in turn; one larger than the whole
+budget is read alone. So `-j` and the cap set how fast a batch reads, and the
+budget bounds what it holds. Measured with `-j4`, four images at once:
+
+| images | 8 GiB budget | no bound |
+|---|---|---|
+| four 12 Mpx photos | 7.9 GB, 6.6 s | 8.9 GB, 5.5 s |
+| four pages at 300 dpi | 6.9 GB, 18 s | 6.9 GB, 19 s |
+| four 2,400 × 9,000 captures, in strips | 6.6 GB, 175 s | 10.2 GB, 121 s |
+| 60 small crops | 1.3 GB, 18 s | 1.5 GB, 18 s |
+
+A pass waits for a whole reading to end, recognition included, as the engine
+reads both in one call: a budget that holds three passes of four reads the
+fourth after them, about a third more time.
+
+A lower cap does not save much: a strip costs what a whole image of its size
+does, and at 8 Mpx pages and photos are cut in two, read more slowly, and on a
+corpus of scanned pages read less text.
 
 ## Options
 
@@ -90,7 +109,8 @@ either (27 of 121).
 | `--models <DIR>` | the OCR assets directory: the models and ONNX Runtime, each checked against the hash `fdoc` was built with. Env: `FDOC_OCR_MODELS`; config: `ocr.models` |
 | `--out <DIR>` | where the word files go |
 | `--engine <ENGINE>` | `oar-ocr` (the default and only one) |
-| `-j`, `--jobs <N>` | images read at once, each on one thread (`0` = one per core). The engine reads with up to four pipelines at once (fewer on fewer cores), built as needed, each 0.6 to 1 GB once it has read pages (more for larger ones); a thread finding them all busy waits. Measured on twelve cores: 27 s for ten pages with `-j1`, 11 s with `-j4`, no faster with `-j8` |
+| `--max-megapixels <MPX>` | most megapixels the engine reads in one pass (default 12.5, from 1 to 128); a larger image is read in strips (see [How an image is sized](#how-an-image-is-sized)). Env: `FDOC_OCR_MAX_MEGAPIXELS`; config: `ocr.max_megapixels` |
+| `-j`, `--jobs <N>` | images read at once, each on one thread (`0` = one per core). The engine reads with up to four pipelines at once (fewer on fewer cores), built as needed, about 0.3 GB each between images; a thread finding them all busy waits, and the passes they read share one memory budget (see [Memory and speed](#memory-and-speed)). Measured on twelve cores: 27 s for ten pages with `-j1`, 11 s with `-j4`, no faster with `-j8` |
 
 ## The assets directory
 

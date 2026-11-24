@@ -85,6 +85,7 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         match crate::commands::ocr::engine_for_convert(
             args.ocr,
             args.models.as_deref(),
+            args.ocr_max_megapixels,
             &cfg.config.ocr,
         ) {
             Ok(engine) => cfg.ocr = engine.map(common::OcrHandle),

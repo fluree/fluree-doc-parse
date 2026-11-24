@@ -135,17 +135,18 @@ than its raw pixels.
 
 What is bounded, for an engine:
 
-- A crop is held back toward 2× (never below it) to stay under 4,000 px on
-  its long edge.
+- A crop is not held to a size of its own: the OCR engine reads one larger
+  than a pass holds (12.5 Mpx by default) in overlapping strips (see
+  [How an image is sized](../cli/ocr.md#how-an-image-is-sized)). A cap of
+  4,000 px on the long edge once read a tall capture with a tenth of its lines
+  lost.
 - A crop is cut from a render of its whole page, and that render is bounded
   outright: at most 64 million pixels (256 MB of RGBA) and 65,535 on a side,
   for every crop of the page, the 2× ones included. A page past what 2× draws
   within those (about 4,000 points square) is drawn below 2×, as large as
   they allow.
-- A page is rendered at most four times for its crops, plus once per crop
-  held to its long-edge cap that no shared scale fits: past four scales, a
-  crop shares the next one up, never a coarser one, nor one past its cap.
-  Such a crop is over about 960 points long, so it is rare.
+- A page is rendered at most four times for its crops: past four scales, a
+  crop shares the next one up, never a coarser one.
 
 A model's crops are drawn at 2× whatever the page's size.
 

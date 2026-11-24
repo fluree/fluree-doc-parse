@@ -18,7 +18,7 @@ members = [
 ]
 # Standalone exploration probe: keeps its own deps (incl. the renderer) and is
 # not part of the shipped workspace.
-exclude = ["spike/hayro-spike"]
+exclude = ["spike/hayro-spike", "vendor/oar-ocr-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -64,3 +64,7 @@ opt-level = 3
 # and triples the rebuild after a one-line edit (12 -> 35 s), fat LTO 3 MB
 # more for a sevenfold rebuild (88 s), neither faster at run time.
 strip = true
+
+# A crate patched until its change is upstream: see vendor/README.md.
+[patch.crates-io]
+oar-ocr-core = { path = "vendor/oar-ocr-core" }
