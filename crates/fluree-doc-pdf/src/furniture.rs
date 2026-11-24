@@ -195,7 +195,9 @@ fn detect_all(
             // Too few pages for repetition alone: a two-page data sheet's
             // letterhead, or a three-page one's head over the pages after
             // its title page.
-            if let Some((kind, hits)) = exact_running(pages, &occ) {
+            if let Some((kind, hits)) =
+                exact_running(pages, &occ).or_else(|| shifted_running(pages, &occ))
+            {
                 for (pi, li, _) in &hits {
                     out[*pi].insert(*li, kind);
                     exact[*pi].insert(*li);
@@ -455,6 +457,127 @@ fn exact_running<'a>(
         kind,
         hits.iter().map(|h| (h.0, h.1, h.3.as_str())).collect(),
     ))
+}
+
+/// A short document's running line that page 2 sets on another template
+/// than page 1, in another place.
+///
+/// A two-page data sheet may move its margins on page 2, and restate page
+/// 1's title as page 2's running head at the top. The copies then agree in
+/// text, size and weight, and lie in the same band, but not in place. Two
+/// things show they are the template's all the same:
+///
+/// - **A line beside it moved with it**: the footer's next line, the
+///   title's subtitle, each set the same distance off its page 1 copy.
+/// - **It opens page 2**, the topmost line there, and stands lower on page
+///   1, under the masthead above the title.
+///
+/// A title restated as the next page's head keeps its page 1 copy, the
+/// document's title: only the copy that opens a later page, higher on it,
+/// is running. Copies that move otherwise, a footer, are running on both.
+fn shifted_running<'a>(
+    pages: &[(Vec<Line>, f64)],
+    occ: &'a [(usize, usize, f64, String)],
+) -> Option<(Furniture, Copies<'a>)> {
+    if pages.len().saturating_sub(1).max(2) != 2 {
+        return None;
+    }
+    let line = |o: &(usize, usize, f64, String)| &pages[o.0].0[o.1];
+    let band = |rel: f64| {
+        if rel < EDGE_BAND {
+            Some(true)
+        } else if rel > 1.0 - EDGE_BAND {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let alike = |a: &Line, b: &Line| {
+        let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+        a.rotation_bucket == b.rotation_bucket
+            && a.text == b.text
+            && f64::from((a.font_size - b.font_size).abs()) <= EXACT_PLACE * size
+            && a.bold == b.bold
+    };
+    // `b` is where `a` would be, moved by `(dx, dy)`.
+    let moved = |a: &Line, b: &Line, dx: f64, dy: f64| {
+        let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+        let near = |p: f64, q: f64| (p - q).abs() <= EXACT_PLACE * size;
+        alike(a, b)
+            && near(a.bbox.y0 + dy, b.bbox.y0)
+            && near(a.bbox.y1 + dy, b.bbox.y1)
+            && (near(a.bbox.x0 + dx, b.bbox.x0) || near(a.bbox.x1 + dx, b.bbox.x1))
+    };
+    let first = occ.iter().map(|o| o.0).min()?;
+    let words = |pi: usize| {
+        pages[pi]
+            .0
+            .iter()
+            .flat_map(|l| l.text.split_whitespace())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    for r in occ.iter().filter(|o| o.0 == first) {
+        let Some(top) = band(r.2) else { continue };
+        let a = line(r);
+        // On each later page, the copy the template moved, if any.
+        let mut later: Vec<&(usize, usize, f64, String)> = Vec::new();
+        let mut raised = true;
+        for o in occ.iter().filter(|o| o.0 != first) {
+            let b = line(o);
+            if later.iter().any(|h| h.0 == o.0) || band(o.2) != Some(top) || !alike(a, b) {
+                continue;
+            }
+            let dx = b.bbox.x0 - a.bbox.x0;
+            let dy = b.bbox.y0 - a.bbox.y0;
+            // Its neighbours on page 1 are where they would be, moved alike.
+            let neighbours: Vec<&Line> =
+                pages[first].0.iter().filter(|nb| runs_on(a, nb)).collect();
+            let carried = |nb: &&Line| pages[o.0].0.iter().any(|m| moved(nb, m, dx, dy));
+            let with_a_neighbour = !neighbours.is_empty() && neighbours.iter().all(carried);
+            let opens_page = top
+                && dy < 0.0
+                && pages[o.0]
+                    .0
+                    .iter()
+                    .filter(|l| l.rotation_bucket == 0)
+                    .all(|l| l.bbox.y0 >= b.bbox.y0 - EXACT_PLACE * f64::from(b.font_size));
+            // A line set beside the copy on its page was moved alike, or is
+            // none of the template's.
+            let beside_carried = pages[o.0]
+                .0
+                .iter()
+                .filter(|nb| runs_on(b, nb))
+                .all(|nb| pages[first].0.iter().any(|m| moved(nb, m, -dx, -dy)));
+            if (with_a_neighbour || opens_page) && beside_carried {
+                raised &= top && dy < 0.0;
+                later.push(o);
+            }
+        }
+        let on: Vec<usize> = std::iter::once(first)
+            .chain(later.iter().map(|o| o.0))
+            .collect();
+        if on.len() < 2 {
+            continue;
+        }
+        // A page left out restates the words, as a title page does; two
+        // signature pages that repeat their block do not run it.
+        let says: String = a.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if (0..pages.len()).any(|pi| !on.contains(&pi) && !words(pi).contains(&says)) {
+            continue;
+        }
+        let kind = classify(later[0].2, false);
+        if kind == Furniture::Watermark {
+            return None;
+        }
+        // The title page keeps its title.
+        let mut copies: Copies<'a> = later.iter().map(|o| (o.0, o.1, o.3.as_str())).collect();
+        if !raised {
+            copies.insert(0, (r.0, r.1, r.3.as_str()));
+        }
+        return Some((kind, copies));
+    }
+    None
 }
 
 /// Two lines set as copies of one: the same size and weight, the same top
@@ -1015,6 +1138,64 @@ mod tests {
             vec![line(&format!("{t} {i}"), 36.0)]
         });
         assert!(detect(&pages).iter().all(|m| m.is_empty()));
+    }
+
+    /// `line` moved by `(dx, dy)`.
+    fn shifted(text: &str, x: f64, y: f64) -> Line {
+        let mut l = line(text, y);
+        l.bbox.x0 += x;
+        l.bbox.x1 += x;
+        l
+    }
+
+    #[test]
+    fn a_footer_moved_with_page_twos_margins_is_running() {
+        // Page 2 sets its margins 18pt further left: the footer's two lines
+        // move together.
+        let pages = doc(2, |i| {
+            let dx = if i == 0 { 0.0 } else { -18.0 };
+            vec![
+                line(&format!("Body text unique to page {i}"), 400.0),
+                shifted("Website: example.com", dx, 950.0 + 0.7 * i as f64),
+                shifted("US: (800) 555-0100", dx, 962.0 + 0.7 * i as f64),
+            ]
+        });
+        let r = detect(&pages);
+        for m in &r {
+            assert_eq!(m.get(&1), Some(&Furniture::Footer), "{r:?}");
+            assert_eq!(m.get(&2), Some(&Furniture::Footer), "{r:?}");
+        }
+        // One line alone, moved, is not shown to be the template's.
+        let pages = doc(2, |i| {
+            let dx = if i == 0 { 0.0 } else { -18.0 };
+            vec![
+                line(&format!("Body text unique to page {i}"), 400.0),
+                shifted("Website: example.com", dx, 950.0),
+            ]
+        });
+        assert!(detect(&pages).iter().all(|m| m.is_empty()));
+    }
+
+    #[test]
+    fn a_title_restated_as_page_twos_head_is_running_there_only() {
+        // Page 1 sets the title under a masthead; page 2 opens with it.
+        let pages = doc(2, |i| {
+            if i == 0 {
+                vec![
+                    line("Masthead", 30.0),
+                    line("Product Name Series", 80.0),
+                    line("Body text unique to page 0", 400.0),
+                ]
+            } else {
+                vec![
+                    line("Product Name Series", 20.0),
+                    line("Body text unique to page 1", 400.0),
+                ]
+            }
+        });
+        let r = detect(&pages);
+        assert_eq!(r[1].get(&0), Some(&Furniture::Header), "{r:?}");
+        assert!(r[0].is_empty(), "the title page keeps its title: {r:?}");
     }
 
     #[test]

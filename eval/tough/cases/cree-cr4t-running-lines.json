@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree CR4T downlight spec sheet (Canada). Its photometry page sets ruled tables side by side, beside a polar chart, in two page columns parted by a vertical rule."
+  },
+  "notes": [
+    "#170: page 2 sets its margins further left than page 1, and opens with the title page 1 sets under its series name."
+  ],
+  "checks": [
+    {
+      "id": "title-once",
+      "found": "2026-11-24",
+      "issue": "The title, restated as page 2’s running head, was a second SectionTitle.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "CR4T™ LED Downlight – 4\" (102mm)"
+      },
+      "count": 1
+    },
+    {
+      "id": "footer-once",
+      "found": "2026-11-24",
+      "issue": "The footer, on both pages 18pt apart across, stayed in the body twice: a Figure on page 1, a Paragraph on page 2.",
+      "text": "Website: creelighting.com",
+      "count": 1
+    }
+  ]
+}
