@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
+  },
+  "notes": [
+    "#132: page 1 ends its two columns over notes set across the page, their `Notes:` label in the left column just over them."
+  ],
+  "checks": [
+    {
+      "id": "notes-label-with-its-notes",
+      "found": "2026-11-24",
+      "issue": "`Notes:` was read with the left column, before the right column’s `Wallplate sold separately`, `Model Number` and `Packages`, apart from notes 1 to 6.",
+      "text": "Notes: 1 An additional wiring and programming step"
+    }
+  ]
+}

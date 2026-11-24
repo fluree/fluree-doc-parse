@@ -1,0 +1,39 @@
+{
+  "document": {
+    "file": "hermanmiller-aeron.pdf",
+    "url": "https://www.hermanmiller.com/content/dam/hermanmiller/documents/product_literature/product_sheets/aeron_chairs_product_sheet.pdf",
+    "sha256": "7adcc6c3eb4b6217a894af9abea1558038cf8acf2c6b7e9eb5e83cf0add391f3",
+    "about": "Herman Miller Aeron chair product sheet (2 pages). Page 2 sets product photos with numbered callouts beside columns of side-headed text."
+  },
+  "notes": [
+    "2026-11-24 (#121): a numbered list whose numbers are set in the items' own text was read as numbered sections, most of them level 1, so the section above the list closed and the rest of the page nested under its last item."
+  ],
+  "checks": [
+    {
+      "id": "feature-item-not-a-section",
+      "found": "2026-11-24",
+      "issue": "Items 2 to 6 of the Key Features list were level-1 sections.",
+      "no_section": "2. PostureFit"
+    },
+    {
+      "id": "feature-item-with-its-description",
+      "found": "2026-11-24",
+      "issue": "As above: each item, its title and its description, is one list item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "2. PostureFit SL® Stabilizes and supports lower back to nurture natural S-shape of the spine and activate healthful posture.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "list-continued-in-the-next-column",
+      "found": "2026-11-24",
+      "issue": "As above, for the list's second column.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "6. Ocean-bound plastic Aeron is composed of more than 50% recycled material, including ocean-bound plastic.",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

@@ -26,8 +26,9 @@
     {
       "id": "sentence-end-kept",
       "found": "2026-11-23",
-      "issue": "The last line of a repeated sentence, gland., was deleted, and the sentence ran into what followed.",
-      "text": "cable gland. Application ranges"
+      "issue": "The last line of a repeated sentence, gland., was deleted, and the sentence ran into what followed. With the box's two columns read line by line in turn (#131), six of its nine pages still ran the next column's line into the sentence.",
+      "text": "matching SKINTOP\uea32 cable gland.",
+      "count": 9
     },
     {
       "id": "standard-number-whole",
