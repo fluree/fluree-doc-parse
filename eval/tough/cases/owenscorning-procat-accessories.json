@@ -3,10 +3,11 @@
     "file": "owenscorning-procat-accessories.pdf",
     "url": "https://www.owenscorning.com/dms/10015771",
     "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
-    "about": "Owens Corning ProCat professional insulation system accessory list (9 pages). The cover sets a four-line right-aligned 28 pt title with a 5.7 pt raised ® after PROCAT, and the last page closes on a bold contact line above the order table."
+    "about": "Owens Corning ProCat professional insulation system accessory list (9 pages, numbered 1 to 9 at the foot). The cover sets a four-line right-aligned 28 pt title with a 5.7 pt raised ® after PROCAT. Each product is a two-column table of fields, `CARTON COUNT | 75`, and the last page closes on a bold contact line above the order table."
   },
   "notes": [
-    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#99): a cell holding only a number as wide as the page numbers was taken for the page number and emptied: every one-digit count, `CARTON COUNT | 1`, `PALLET COUNT | 9`. A cell is the page's number only as the page's own folio, where page numbers stand."
   ],
   "checks": [
     {
@@ -14,6 +15,34 @@
       "found": "2026-11-24",
       "issue": "The bold contact line was a level-6 heading, with the order table nested under it.",
       "no_section": "Owens Corning Customer Service"
+    },
+    {
+      "id": "carton-count-of-one",
+      "found": "2026-11-24",
+      "issue": "The count `1` was emptied as page 1's number.",
+      "row": {
+        "#0": "CARTON COUNT",
+        "#1": "1"
+      }
+    },
+    {
+      "id": "pallet-count-of-nine",
+      "found": "2026-11-24",
+      "issue": "The count `9` was emptied as page 9's number.",
+      "row": {
+        "#0": "PALLET COUNT",
+        "#1": "9"
+      }
+    },
+    {
+      "id": "page-three-is-three",
+      "found": "2026-11-24",
+      "issue": "The sheet numbers its pages 1 to 9 at the foot, and no folio is read on any page.",
+      "folio": {
+        "page": 3,
+        "value": "3"
+      },
+      "status": "open"
     }
   ]
 }
