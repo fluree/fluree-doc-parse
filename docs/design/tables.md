@@ -286,6 +286,34 @@ word — produce the same two baselines and the same scatter of column edges, an
 on boundaries alone are indistinguishable from a letterhead; nothing encloses
 them. Nor does a decorative rule in a margin vouch for a row it never touched.
 
+## A title over the table
+
+A table's first row can be its title rather than its header. A spec table
+often opens with one label across the whole table: a title (`HEX CAP SCREWS
+ASME B18.2.1-2012`), a section band (`Mission Critical (10K rpm)`), or a
+caption that an aligned run took in as its top row (`Thermo Scientific™ M
+Series Centrifuges`). Taken as the header, it named every column, and the
+rows that do name the columns read as data.
+
+The first row of a ruled or aligned grid is the table's title when:
+
+- it holds one label alone, under a row with text in two columns or more;
+- that label is one cell across the whole row, whether ruled so or read so
+  from the alignment, holding one label or text whose words run at their
+  ordinary spacing over the cuts between columns; or it is the only text in
+  the row, in its first column, with nothing in the row spanned;
+- it is short (12 words or fewer) and is not a number.
+
+The title is read out as a paragraph just above the table, and the table is
+read from the row under it, header included: the hex-screw table's four rows
+of column names give paths such as `E / Body Diameter / Min`.
+
+Labels set apart within their columns, each under one ruled cell across the
+table (`Area | Competence`), are the columns' own. So is a group label over
+some of the columns (`Dates` over `Start | Next review`). A table read from
+its text keeps the header its reading found.
+
+
 ## Two-row headers and row groups
 
 A ruled table says where a header label spans columns: the ruling leaves them

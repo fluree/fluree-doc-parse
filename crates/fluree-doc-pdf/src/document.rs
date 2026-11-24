@@ -77,6 +77,107 @@ pub struct Analysis {
 /// beneath (`Monotherapy` over `Adult patients with …`) as a header over
 /// the column names (`Establishment` over `Name | Address | ID/FEI`).
 /// `continues_left` is row-major over the whole grid.
+/// Most words of a table's title band.
+const MAX_TABLE_TITLE_WORDS: usize = 12;
+
+/// A ruled or aligned grid whose first row is the table's title rather
+/// than its header: one label alone in the row, as one cell across the
+/// whole table (`Hex Cap Screws ASME B18.2.1-2012`, a section band
+/// `Mission Critical (10K rpm)`) or as the only text in the first of a row
+/// of empty cells (a caption the run took in, `Thermo Scientific™ M Series
+/// Centrifuges`), over a row that holds text in two columns or more.
+///
+/// Taken as the header, the title named every column and the rows that do
+/// name the columns read as data. Returns the title's text and the grid
+/// from the row under it.
+fn table_title(
+    g: &table::Grid,
+    page: &crate::extract::Page,
+    scrub: &[(String, bool)],
+    spanning: bool,
+) -> Option<(String, table::Grid)> {
+    if g.layout.is_some() || g.rows() < 3 || g.cols() < 2 {
+        return None;
+    }
+    let cols = g.cols();
+    let flat = g.cell_texts(&page.glyphs);
+    let filled = |r: usize| {
+        (0..cols)
+            .filter(|&c| !flat[r * cols + c].trim().is_empty())
+            .count()
+    };
+    let mut merges = g.merges(&page.rules, &page.fills);
+    g.text_merges(&page.glyphs, &page.rules, &mut merges);
+    // One cell across the whole row, or one label in the first column with
+    // nothing to its right and nothing in the row spanned: a group label
+    // over some of the columns (`Dates` over `Start | Next review`) is the
+    // header's, and is spanned over them.
+    // A row the alignment read as one cell across (`spanning`) is one too.
+    let across = spanning || (1..cols).all(|c| merges.continues_left[c]);
+    let alone = filled(0) == 1
+        && !flat[0].trim().is_empty()
+        && (1..cols).all(|c| !merges.continues_left[c]);
+    if !(across || alone) || filled(1) < 2 {
+        return None;
+    }
+    // Across the row, a title is one label, or set as running text: a line
+    // of it, its words at their ordinary spacing, runs over the cuts
+    // between columns (`Hex Cap Screws` over four of them). Labels set
+    // apart, each within its column, are the columns' own (`Area |
+    // Competence` under one ruled cell).
+    let row_lines = || {
+        let inside: Vec<crate::glyph::Glyph> = page
+            .glyphs
+            .iter()
+            .filter(|gl| {
+                gl.bbox.is_some() && !gl.text.trim().is_empty() && gl.is_horizontal() && {
+                    let (x, y) = gl.center();
+                    g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
+                }
+            })
+            .cloned()
+            .collect();
+        crate::line::assemble(&inside)
+    };
+    let lines = if across { row_lines() } else { Vec::new() };
+    let runs_across = lines.iter().any(|l| {
+        g.xs[1..g.xs.len() - 1]
+            .iter()
+            .any(|&x| l.bbox.x0 < x - 1.0 && l.bbox.x1 > x + 1.0)
+    });
+    let text = if across && runs_across {
+        crate::block::build(lines).text()
+    } else if spanning {
+        g.row_text(&page.glyphs, 0)
+    } else if (across || alone) && filled(0) == 1 {
+        (0..cols)
+            .map(|c| flat[c].trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        return None;
+    };
+    let text = furniture::scrub_cell(
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+        scrub,
+    );
+    let words = text.split_whitespace().count();
+    if words == 0
+        || words > MAX_TABLE_TITLE_WORDS
+        || table::is_numeric_cell(&text)
+        || !text.chars().any(char::is_alphabetic)
+    {
+        return None;
+    }
+    let mut trimmed = g.clone();
+    trimmed.ys.remove(0);
+    trimmed.bbox.y0 = trimmed.ys[0];
+    Some((text, trimmed))
+}
+
 fn names_spanned_columns(rows: &[Vec<String>], continues_left: &[bool]) -> bool {
     let cols = rows.first().map(Vec::len).unwrap_or(0);
     if rows.len() < 3 || continues_left.len() < 2 * cols {
@@ -1693,6 +1794,34 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
         for (gi, g) in layout.grids.iter().enumerate() {
+            // A title band over the table is the table's title, not its
+            // header: it is read out as text above the table, and the table
+            // is read from the row under it.
+            let titled = table_title(
+                g,
+                &raw.pages[pi],
+                &scrub_texts,
+                layout.spanning_rows[gi].contains(&0),
+            );
+            let below_title;
+            let (g, shift) = match &titled {
+                Some((text, trimmed)) => {
+                    let title_box = crate::geom::BBox {
+                        x0: g.bbox.x0,
+                        y0: g.bbox.y0,
+                        x1: g.bbox.x1,
+                        y1: trimmed.bbox.y0,
+                    };
+                    table_elements.push(Element {
+                        page: pi,
+                        bbox: Some(title_box),
+                        ..Element::new("doco:Paragraph", text.clone(), "rust", "table-title")
+                    });
+                    below_title = trimmed.clone();
+                    (&below_title, 1)
+                }
+                None => (g, 0),
+            };
             // A folio the grid took in, rows `r0..r1` holding it: the page's
             // own number where page numbers stand (`furniture::is_folio_cell`).
             let page_h = raw.pages[pi].height.max(1.0);
@@ -1790,7 +1919,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // would otherwise deal its words out by which side they fell.
             let cols = g.cols();
             let mut rows = rows;
-            for &r in &layout.spanning_rows[gi] {
+            for r in layout.spanning_rows[gi]
+                .iter()
+                .filter_map(|&r| r.checked_sub(shift))
+            {
                 rows[r][0] = unfolio(
                     furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts),
                     r,

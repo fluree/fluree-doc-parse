@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drives QuickSpecs. Its drive pages set a green band (Mission Critical (10K rpm), Business Critical (7.2K rpm)) over each block of fields and SKU tables."
+  },
+  "notes": [
+    "2026-11-24 (#109): a title band or caption in a table's first row was taken as its column header, naming every column, and the rows that do name the columns read as data."
+  ],
+  "checks": [
+    {
+      "id": "mission-critical-band-names-no-column",
+      "found": "2026-11-24",
+      "issue": "All 73 cells on page 10 carried the band as their column header.",
+      "no_column_header": "Mission Critical (10K rpm)"
+    }
+  ]
+}
