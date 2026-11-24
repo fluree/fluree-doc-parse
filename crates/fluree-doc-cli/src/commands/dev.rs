@@ -740,8 +740,21 @@ pub(crate) fn figures(pdf: &Path, page: Option<usize>) {
         fluree_doc_pdf::rule::strip_highlights(&mut fills, &p.glyphs);
         let found = fluree_doc_pdf::figure::detect(&fills, &p.rules, p.index, (p.width, p.height));
         total += found.len();
-        if found.is_empty() || (page.is_some() && page != Some(p.index)) {
+        if page.is_some() && page != Some(p.index) {
             continue;
+        }
+        for im in &p.images {
+            println!(
+                "page {:4} image      bbox=({:.0},{:.0})-({:.0},{:.0}) {:.0}x{:.0}{}",
+                p.index,
+                im.bbox.x0,
+                im.bbox.y0,
+                im.bbox.x1,
+                im.bbox.y1,
+                im.bbox.width(),
+                im.bbox.height(),
+                if im.texty { " texty" } else { "" }
+            );
         }
         for f in &found {
             println!(

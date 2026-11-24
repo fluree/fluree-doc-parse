@@ -107,6 +107,15 @@ one label to the next, as a chart's labels chain out from its axis. Text at
 the size of the prose is gathered only when it is near the drawing itself:
 a logo beside a column of headings and bullets does not take the column.
 
+Numbered callouts on a photograph gather nothing around them. A product
+sheet numbers the parts of its photo with circles drawn over the picture,
+and the numbers in them are the figure's only labels: the heading set over
+the photo and the key set under it are the page's text. A drawing is a
+photo's callouts when photographs lie under most of it and everything it
+holds is a callout's mark, a number of one or two figures or a single
+letter. A chart drawn over a picture sets values and years on it, and
+gathers its legend and axis labels as any chart does.
+
 ## Tables
 
 `cells` is row-major `Vec<Vec<String>>`. Two extra fields carry what the
