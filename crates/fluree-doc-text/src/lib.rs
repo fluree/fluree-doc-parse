@@ -87,13 +87,19 @@ pub fn is_markdown(src: &str) -> bool {
 
 /// A Markdown link on the line: `[label](https://…)`, `](/path)`,
 /// `](#anchor)`, `](mailto:…)`.
+///
+/// Only a `](` after the line's first `[` can close a label, so that `[` is
+/// found once: looked for again before each `](`, a line of a megabyte of
+/// `](` took seconds, its time growing with its square.
 fn link(line: &str) -> bool {
-    line.match_indices("](").any(|(at, _)| {
-        let target = &line[at + 2..];
-        line[..at].contains('[')
-            && ["http://", "https://", "/", "#", "mailto:"]
-                .iter()
-                .any(|p| target.starts_with(p))
+    let Some(open) = line.find('[') else {
+        return false;
+    };
+    line[open..].match_indices("](").any(|(at, _)| {
+        let target = &line[open + at + 2..];
+        ["http://", "https://", "/", "#", "mailto:"]
+            .iter()
+            .any(|p| target.starts_with(p))
     })
 }
 
@@ -362,6 +368,23 @@ mod tests {
         assert!(!is_markdown("/s/ Ada Park\n------------\nName  | Room\n"));
         assert!(!is_markdown("CHAPTER IV\nController and processor\n"));
         assert!(!is_markdown("Note [1] (see above) and **one** emphasis.\n"));
+        // A `](` before any `[` closes no label.
+        assert!(!is_markdown("](https://example.org) [x]\n"));
+        assert!(is_markdown("](/a) then [b](/c)\n"));
+    }
+
+    #[test]
+    fn a_long_line_is_told_in_time_linear_in_it() {
+        // A megabyte of `](` on one line, with a `[` before it or none:
+        // each `](` used to look back over the whole line for a `[`, and
+        // this took over eight seconds.
+        for open in ["", "["] {
+            let line = format!("{open}x{}", "](".repeat(500_000));
+            let started = std::time::Instant::now();
+            assert!(!is_markdown(&line));
+            let took = started.elapsed();
+            assert!(took.as_secs_f64() < 1.0, "{open:?}: {took:?}");
+        }
     }
 
     #[test]
