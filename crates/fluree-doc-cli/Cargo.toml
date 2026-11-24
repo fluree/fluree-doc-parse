@@ -53,7 +53,7 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 tiff = "0.11"
 cfb = "0.15"
-zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [features]
 default = ["ocr"]

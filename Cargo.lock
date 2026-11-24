@@ -1116,7 +1116,6 @@ dependencies = [
 name = "fluree-doc-ooxml"
 version = "0.1.0"
 dependencies = [
- "flate2",
  "fluree-doc-model",
  "quick-xml 0.36.2",
  "zip",

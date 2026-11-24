@@ -12,7 +12,7 @@ fluree-doc-vision = { workspace = true, optional = true }
 fluree-doc-image = { workspace = true, optional = true }
 
 [dev-dependencies]
-zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
