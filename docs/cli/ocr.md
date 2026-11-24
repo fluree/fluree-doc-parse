@@ -59,10 +59,12 @@ alone:
   `ocr.max_megapixels` to read it whole.
 
 The detector misses thin lines in a small image: one whose short side is under
-736 px is read larger, toward 736, at most twice. The engine enlarges it
-inside its detector, so the recognizer still reads each line from the image's
-own pixels; a crop of 8 to 10 px text 1,200 × 40 read 17 lines this way and 10
-at its own size. Text under about 6 px is not read at any size.
+736 px is read larger, toward 736, its long side not past 2,000 px, as the
+detector has always enlarged a small image. The engine enlarges it inside its
+detector, so the recognizer still reads each line from the image's own pixels:
+a crop of 8 to 10 px text 1,200 × 40 read 17 lines this way and 10 at its own
+size, and small screenshots (285 × 152, 411 × 90) lost an account number
+enlarged only twice. Text under about 6 px is not read at any size.
 
 Shrinking an image to a fixed size loses its small text without a word: a
 capture 1,200 × 9,000 shrunk to 2,000 px read none of its 220 rows of 13 px
