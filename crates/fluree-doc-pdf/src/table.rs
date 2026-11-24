@@ -1050,7 +1050,10 @@ impl Grid {
             && run == 0
             && weights.iter().all(|w| bold(w[0]))
             && weights.iter().all(|w| w[1..].iter().all(|c| !bold(*c)));
-        if label_column || self.lists_fields(rows, glyphs, rules, fills) {
+        // So does one whose labels a colon ends, in any weight.
+        let colon_labels =
+            self.cols() == 2 && rows.iter().all(|r| r.len() == 2) && colon_fields(&rows.concat());
+        if label_column || colon_labels || self.lists_fields(rows, glyphs, rules, fills) {
             return 0;
         }
         // run == 1 is itself the exclusive-stripe evidence: band 0 filled,
@@ -3119,6 +3122,14 @@ pub fn detect_aligned(
             out.push(part);
         }
     }
+    for list in colon_field_lists(glyphs, page) {
+        let taken = out
+            .iter()
+            .any(|g| g.bbox.y0 < list.bbox.y1 && list.bbox.y0 < g.bbox.y1);
+        if !taken {
+            out.push(list);
+        }
+    }
     for g in out.iter_mut() {
         extend_by_banner(g, &rows);
     }
@@ -3284,7 +3295,8 @@ const MAX_FIELD_LABEL_WORDS: usize = 4;
 /// An aligned run that is set as a table: a bold header row naming every
 /// column over plain rows, with at least one column of numbers — or, in two
 /// columns, a short bold label beside a plain value on every row, under a
-/// bold header row or none (`Number | WB-47843`, `Quantity | 2`).
+/// bold header row or none (`Number | WB-47843`, `Quantity | 2`), or a
+/// label of any weight that a colon ends ([`colon_fields`]).
 ///
 /// A table printed with no rules at all (`border: none`, which is how many
 /// receipts and invoices are styled) leaves alignment as its only drawn
@@ -3316,7 +3328,8 @@ fn has_typeset_header(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
                 && !bold(w[1])
                 && cells[r * 2].split_whitespace().count() <= MAX_FIELD_LABEL_WORDS
         });
-        return rows - first >= 2 && labelled;
+        return (rows - first >= 2 && labelled)
+            || (colon_fields(&cells) && !wraps_under_labels(g, glyphs));
     }
     if cols < 3 || rows < 3 {
         return false;
@@ -3338,6 +3351,161 @@ fn has_typeset_header(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
         !body.is_empty() && body.iter().all(|t| is_numeric_cell(t))
     });
     labels && figures
+}
+
+/// Longest label, in words, of a field whose label a colon ends. A colon
+/// says where the label stops, so it may run longer than a bold one
+/// (`Supplied with cap fitted:`); a lead-in sentence ending in one runs
+/// longer still.
+const MAX_COLON_LABEL_WORDS: usize = 6;
+
+/// Two columns of fields whose labels a colon ends, `Weight: | 24 g` down a
+/// spec sheet, set plain as often as bold.
+///
+/// Weight is no evidence there, and alignment alone is what prose set in two
+/// columns has too. The colon is: prose does not end a line with one beside
+/// another column row after row. A label's colon follows a word (`Weight:`,
+/// `No.:`, `Liabilities ($):`), not a figure, so a schedule's `10:30` is no
+/// label. Each row has a value beside its label, and each label is short and
+/// holds its colon. One that ran on to the next label's first word
+/// (`Closure Type: Screw/` over `Snap Fit:`) does not end with it,
+/// but most do: `Patient: A. Sample | DOB: 1987` is two fields to a row,
+/// not a label beside its value. More than one word after the colon is a
+/// value wrapped back under its label, and the row is no field.
+///
+/// A value is a word, a figure or a phrase. A note's is a sentence:
+/// `NOTE: | Output is measured in finished units. All series are…` over `SOURCE: | …`
+/// under a chart is its caption, set with a hanging indent.
+fn colon_fields(cells: &[String]) -> bool {
+    let rows = cells.len() / 2;
+    if rows < 2 {
+        return false;
+    }
+    let (mut ending, mut sentences) = (0, 0);
+    for r in 0..rows {
+        let (label, value) = (cells[r * 2].trim(), cells[r * 2 + 1].trim());
+        if value.is_empty() || label.split_whitespace().count() > MAX_COLON_LABEL_WORDS {
+            return false;
+        }
+        match label_colon(label) {
+            None => return false,
+            Some(last) => ending += usize::from(last),
+        }
+        sentences += usize::from(
+            value.ends_with('.') && value.split_whitespace().count() > MAX_COLON_LABEL_WORDS,
+        );
+    }
+    ending * 2 > rows && sentences * 2 <= rows
+}
+
+/// Where a field label's colon is: `None` when it has none after a word, or
+/// more than one word follows it; else whether it ends the label.
+fn label_colon(label: &str) -> Option<bool> {
+    let label = label.trim_end();
+    let cs: Vec<char> = label.chars().collect();
+    let at = (1..cs.len()).rfind(|&i| {
+        cs[i] == ':' && (cs[i - 1].is_alphabetic() || matches!(cs[i - 1], ')' | '.'))
+    })?;
+    let after: String = cs[at + 1..].iter().collect();
+    match after.split_whitespace().count() {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
+    }
+}
+
+/// Runs of [`colon_fields`] found row by row, each row's glyphs in x order.
+///
+/// [`aligned_rows`] keeps a row's glyphs in the order of their baselines,
+/// so a value set a hundredth of a point above its label comes first
+/// (`38 mm` before `Neck Diameter:`), the label seems to start before the value
+/// ends, and the row reads as one cell. A spec sheet that sets each value
+/// on its own baseline breaks its field list into pieces too short to be
+/// found, and its labels and values are read as two columns of text.
+///
+/// Only field lists are read from the sorted rows. Over every aligned run
+/// the same order turns more multi-column prose into tables — two columns
+/// of a report, three panels of a slide — than the gates of
+/// [`detect_aligned`] can turn away.
+fn colon_field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
+    let (mut rows, _) = aligned_rows(glyphs);
+    for r in rows.iter_mut() {
+        r.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
+    }
+    let cells: Vec<Vec<f64>> = rows.iter().map(|r| cell_starts(r)).collect();
+    // A row is a field when it breaks into a label and a value, and the
+    // label holds a colon after a word.
+    let field = |i: usize| {
+        cells[i].len() == 2 && {
+            let split = cells[i][1] - 0.01;
+            let label: String = rows[i]
+                .iter()
+                .filter(|g| g.bbox.unwrap().x0 < split)
+                .map(|g| g.text.as_str())
+                .collect();
+            label_colon(&label).is_some()
+        }
+    };
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < rows.len() {
+        if !field(i) {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j + 1 < rows.len() && field(j + 1) {
+            j += 1;
+        }
+        if j > i {
+            if let Some(g) = grid_from_cells(&rows[i..=j], &cells[i..=j], page) {
+                if g.cols() == 2
+                    && colon_fields(&g.cell_texts(glyphs))
+                    && !wraps_under_labels(&g, glyphs)
+                {
+                    out.push(g);
+                }
+            }
+        }
+        i = j + 1;
+    }
+    out
+}
+
+/// Whether a field list's last value wraps back under its labels: the line
+/// set just under it starts where the labels do and runs on across the
+/// values, and is no label itself. Those are paragraphs that open on a
+/// label (`Change Note: CN 4431 - Add the drying time to the second wash and`
+/// over `the operator's check after it.`), whose words a wide space after
+/// the colon happened to part. A field list wraps a value under the value.
+fn wraps_under_labels(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    let rows = g.rows();
+    if rows == 0 || g.xs.len() < 3 {
+        return false;
+    }
+    let pitch = (g.ys[rows] - g.ys[0]) / rows as f64;
+    let mut below: Vec<&crate::glyph::Glyph> = glyphs
+        .iter()
+        .filter(|x| x.is_horizontal() && !x.text.trim().is_empty())
+        .filter(|x| {
+            x.bbox
+                .is_some_and(|b| b.y0 > g.bbox.y1 - 1.0 && b.y0 < g.bbox.y1 + 0.75 * pitch)
+        })
+        .collect();
+    if below.is_empty() {
+        return false;
+    }
+    below.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
+    let (x0, x1) = (
+        below[0].bbox.unwrap().x0,
+        below
+            .iter()
+            .map(|x| x.bbox.unwrap().x1)
+            .fold(f64::MIN, f64::max),
+    );
+    let fs = below[0].font_size.max(1.0) as f64;
+    let text: String = below.iter().map(|x| x.text.as_str()).collect();
+    (x0 - g.xs[0]).abs() <= fs && x1 > g.xs[1] && label_colon(&text).is_none()
 }
 
 fn numbered_table_caption(text: &str) -> bool {
@@ -5139,6 +5307,130 @@ mod tests {
             0,
             "a field is not a header"
         );
+    }
+
+    /// A spec sheet's fields, labels and values in one face, every other
+    /// value set `lift` points above its label.
+    fn spec_fields(labels: &[&str], lift: f64) -> Vec<crate::glyph::Glyph> {
+        let values = [
+            "Polypropylene",
+            "500 ml",
+            "38 mm",
+            "24 g",
+            "24 per case",
+            "Yes",
+        ];
+        let mut gl = Vec::new();
+        for (r, label) in labels.iter().enumerate() {
+            gl.push(word(50.0, r, label, Some(400)));
+            let mut v = word(200.0, r, values[r % values.len()], Some(400));
+            if r % 2 == 1 {
+                v.origin.1 -= lift;
+                let b = v.bbox.as_mut().unwrap();
+                b.y0 -= lift;
+                b.y1 -= lift;
+            }
+            gl.push(v);
+        }
+        gl
+    }
+
+    #[test]
+    fn a_field_list_whose_labels_end_in_colons_is_read_in_any_weight() {
+        let labels = [
+            "Material:",
+            "Capacity:",
+            "Neck Diameter:",
+            "Weight:",
+            "Pack Size:",
+            "Supplied with cap fitted:",
+        ];
+        // A value a hundredth of a point above its label sorts ahead of it
+        // by baseline; read in that order the row was one cell.
+        let gl = spec_fields(&labels, 0.02);
+        let grids = detect_aligned(&gl, &[], &[], 0);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert_eq!((grids[0].rows(), grids[0].cols()), (6, 2));
+        let cells = grids[0].cell_texts(&gl);
+        assert_eq!(&cells[4..6], ["Neck Diameter:", "38 mm"]);
+        assert_eq!(&cells[10..12], ["Supplied with cap fitted:", "Yes"]);
+        // Without their colons the same rows are alignment alone.
+        let bare: Vec<&str> = labels.iter().map(|l| l.trim_end_matches(':')).collect();
+        assert!(detect_aligned(&spec_fields(&bare, 0.02), &[], &[], 0).is_empty());
+    }
+
+    #[test]
+    fn a_value_wrapped_under_its_label_is_a_paragraph() {
+        let mut gl = Vec::new();
+        for (r, value) in [
+            "CN 4425 - Correct the units in the mixing table.",
+            "CN 4431 - Add the drying time to the second wash and",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            gl.push(word(50.0, r, "Change", Some(400)));
+            gl.push(word(85.0, r, "Note:", Some(400)));
+            gl.push(word(130.0, r, value, Some(400)));
+        }
+        assert_eq!(detect_aligned(&gl, &[], &[], 0).len(), 1);
+        gl.push(word(
+            50.0,
+            2,
+            "the operator's check after it, and renumber the steps.",
+            Some(400),
+        ));
+        assert!(detect_aligned(&gl, &[], &[], 0).is_empty());
+    }
+
+    #[test]
+    fn colon_fields_are_labels_beside_values() {
+        let s = |v: &[&str]| v.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+        assert!(colon_fields(&s(&[
+            "Report no.:",
+            "FR-0042",
+            "Issued:",
+            "2026-01-05"
+        ])));
+        assert!(colon_fields(&s(&[
+            "Liabilities ($):",
+            "1,204",
+            "Assets ($):",
+            "3,410"
+        ])));
+        // A label run on to the next one's first word, among labels that
+        // end in their colon.
+        assert!(colon_fields(&s(&[
+            "Pack Size:",
+            "12 per pack",
+            "Closure Type: Screw/",
+            "N/A",
+            "Snap Fit:",
+            "Yes",
+        ])));
+        // Two fields to a row.
+        assert!(!colon_fields(&s(&[
+            "Patient: A. Sample",
+            "DOB: 1987-03-14",
+            "Ward: West wing",
+            "Bed: 12",
+        ])));
+        // A schedule's times are no labels.
+        assert!(!colon_fields(&s(&[
+            "09:00",
+            "Registration",
+            "10:30",
+            "Keynote"
+        ])));
+        // A chart's note and source are sentences.
+        assert!(!colon_fields(&s(&[
+            "NOTE:",
+            "Output is measured in finished units. All series are adjusted.",
+            "SOURCE:",
+            "Plant records and the office's own calculations from them.",
+        ])));
+        // A field needs its value.
+        assert!(!colon_fields(&s(&["Weight:", "24 g", "Comments:", ""])));
     }
 
     #[test]

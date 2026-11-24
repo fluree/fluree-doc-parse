@@ -207,7 +207,43 @@ sentences of advice keeps its header row. A field's value is one more value:
 The cells of a field list carry no column header. Each label is the row
 header of its value, and the first field is a row like the rest. Markdown
 has no table without a header row, so it still prints the first field
-there.
+there. A two-column grid whose labels a colon ends (below) is a field list
+on that alone, ruled or not, in any weight.
+
+## Field lists set without rules
+
+A report's header block or a spec sheet's data, `Weight: | 24 g` down two
+columns with no rules, has only alignment to show it is a table, and
+alignment alone is what prose set in columns has too. Its type is the
+evidence. A label column set bold beside plain values is one sign. A label
+that a colon ends is the other, and it holds in any weight: prose does not
+end a line with a colon beside another column, row after row. The colon has
+to follow a word (`Weight:`, `No.:`, `Liabilities ($):`), not a figure, so a
+schedule's `10:30` is no label. The label has to be short, six words at
+most. At most one word may follow the colon: that is a label run on into the
+next one's first word (`Closure Type: Screw/` over `Snap Fit:`).
+Most labels must end with their colon; `Patient: A. Sample | DOB: 1987` is
+two fields to a row, not a label beside its value.
+
+Two things that look like it are not field lists:
+
+- **A chart's `NOTE:` and `SOURCE:`.** They are set the same way, but their
+  values are sentences, and a run whose values are mostly sentences (more
+  than six words, ending in a full stop) is a caption.
+- **Paragraphs that open on a label.** A wide space after the colon parts
+  their words just as a gutter would, but the last value wraps onto a line
+  that starts under the labels and runs on across. A field list wraps a value
+  under the value.
+
+A field list is read from each row's glyphs in x order. Rows are grouped by
+baseline, so a value set a hundredth of a point above its label sorts ahead
+of it, the label seems to start before the value ends, and the row reads as
+one cell. A spec sheet that places each cell on its own baseline then breaks
+its list into runs too short to find. The other aligned runs keep baseline
+order. Read in x order everywhere, more two-column prose, slide panels and
+chart axes became tables than corroboration turned away. That cost 0.0018
+overall on the benchmark (six documents, one by 0.23), and it shows on real
+reports too.
 
 ## Merges
 
