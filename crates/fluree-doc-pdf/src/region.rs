@@ -162,6 +162,103 @@ impl Page<'_> {
             }
             return;
         }
+        // A run across the columns, alone in its band, may open with a
+        // title: lines of one size and type, set large or bold, one to a
+        // row and no longer than a heading. They read top to bottom as one,
+        // whatever columns they start in: a right-aligned display title
+        // whose first line lies wholly right of the gutter and whose second
+        // crosses it. The rest of the band reads after them.
+        if a < z && lines.len() >= 2 {
+            let inside = |r: &BBox, b: &BBox| {
+                b.x0 >= r.x0 - self.h
+                    && b.x1 <= r.x1 + self.h
+                    && b.y0 >= r.y0 - 0.5
+                    && b.y1 <= r.y1 + 0.5
+            };
+            let runs = self.runs(a, z, &lines);
+            if runs
+                .iter()
+                .any(|r| lines.iter().all(|(_, l)| inside(r, &l.bbox)))
+            {
+                let mut by_top: Vec<(usize, &Line)> = lines.clone();
+                by_top.sort_by(|p, q| {
+                    p.1.bbox
+                        .y0
+                        .partial_cmp(&q.1.bbox.y0)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(
+                            p.1.bbox
+                                .x0
+                                .partial_cmp(&q.1.bbox.x0)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        )
+                });
+                let size = by_top[0].1.font_size;
+                let mut title: Vec<(usize, &Line)> = Vec::new();
+                for &(c, l) in &by_top {
+                    let same = (l.font_size - size).abs() <= 0.12 * size.max(l.font_size);
+                    // One to a row: lines side by side are columns of text
+                    // or a caption wrapped around a picture, even where
+                    // their gutter is narrower than an em.
+                    let alone = title
+                        .iter()
+                        .all(|(_, p)| p.bbox.y1.min(l.bbox.y1) - p.bbox.y0.max(l.bbox.y0) <= 0.0);
+                    // Set as a title is set: words, bold or larger than
+                    // the page's text. A chart's numbers stacked down its
+                    // axis, or body lines run together across a gutter,
+                    // are not.
+                    let words = l
+                        .text
+                        .split_whitespace()
+                        .any(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 2);
+                    let display = words
+                        && (l.bold
+                            || l.font_size as f64
+                                > self.h * (1.0 + crate::heading::HEADING_SIZE_MARGIN));
+                    if !same || !display {
+                        break;
+                    }
+                    // A line of the title's own type beside one of its
+                    // lines is a column of text set large, a lead paragraph
+                    // or a bold caption over two columns, not a title.
+                    if !alone {
+                        title.clear();
+                        break;
+                    }
+                    title.push((c, l));
+                }
+                // As short as a heading set large may be: a caption, a
+                // lead paragraph or body lines run together across the
+                // gutter go on longer.
+                let words: usize = title
+                    .iter()
+                    .map(|(_, l)| l.text.split_whitespace().count())
+                    .sum();
+                if words > crate::heading::MAX_LONG_HEADING_WORDS {
+                    title.clear();
+                }
+                // The rest of the band reads after the title, from the
+                // middle of its highest line: every one of them under the
+                // title's lines, or the band is not a title over text.
+                let last = title.iter().map(|(_, l)| mid(l)).fold(f64::MIN, f64::max);
+                let rest = by_top[title.len()..]
+                    .iter()
+                    .map(|(_, l)| mid(l))
+                    .fold(f64::MAX, f64::min);
+                if title.len() >= 2 && last < rest {
+                    let taken = title.len();
+                    out.push(Group {
+                        column: title[0].0,
+                        lines: title.into_iter().map(|(_, l)| l.clone()).collect(),
+                        own_measure: false,
+                    });
+                    if taken < lines.len() {
+                        self.read(a, z, rest, foot, out, depth + 1);
+                    }
+                    return;
+                }
+            }
+        }
         if a == z || depth >= MAX_DEPTH {
             for c in a..=z {
                 let group: Vec<Line> = lines
@@ -250,6 +347,86 @@ impl Page<'_> {
             })
     }
 
+    /// The runs of lines across the columns `a..=z`: a title or an author
+    /// list set full width over several lines, with a wrapped title's short
+    /// last line under it and a label set just over it.
+    fn runs(&self, a: usize, z: usize, lines: &[(usize, &Line)]) -> Vec<BBox> {
+        // Lines across the columns, in runs: a title or an author list
+        // set full width over several lines is one block, and parts the
+        // region above its first line and below its last.
+        // A line's space is the larger type's: a display title's lines
+        // stand a body line's height and more apart.
+        let mut spans: Vec<(BBox, f64, f32)> = lines
+            .iter()
+            .filter(|(c, l)| self.crosses(a, z, *c, &l.bbox))
+            .map(|(_, l)| (l.bbox, (l.font_size as f64).max(self.h), l.font_size))
+            .collect();
+        spans.sort_by(|p, q| {
+            p.0.y0
+                .partial_cmp(&q.0.y0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // Each run with its line space and its first line's size.
+        let mut runs: Vec<(BBox, f64, f32)> = Vec::new();
+        for (b, size, fs) in spans {
+            match runs.last_mut() {
+                Some((r, s, _)) if b.y0 - r.y1 <= s.max(size) * SPAN_RUN => {
+                    *r = r.union(&b);
+                    *s = s.max(size);
+                }
+                _ => runs.push((b, size, fs)),
+            }
+        }
+        // A run goes on through a line set under it, within its width
+        // and a line's space below: a wrapped title's last, short line.
+        let mut under: Vec<&Line> = lines.iter().map(|(_, l)| *l).collect();
+        under.sort_by(|p, q| {
+            p.bbox
+                .y0
+                .partial_cmp(&q.bbox.y0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for (r, s, _) in runs.iter_mut() {
+            for l in &under {
+                let b = &l.bbox;
+                if b.y0 > r.y1 - 0.5
+                    && b.y0 - r.y1 <= s.max(l.font_size as f64) * SPAN_RUN
+                    && b.x0 >= r.x0 - self.h
+                    && b.x1 <= r.x1 + self.h
+                {
+                    r.y1 = r.y1.max(b.y1);
+                }
+            }
+        }
+        // And it takes in a line set just over it, at its size, nearer
+        // it than to the text above: the label of a list across the
+        // columns, `Notes:` over the notes, set in one column.
+        for (r, s, fs) in runs.iter_mut() {
+            let over = under.iter().rev().find(|l| {
+                let b = &l.bbox;
+                b.y1 <= r.y0 + 0.5
+                    && r.y0 - b.y1 <= s.max(l.font_size as f64) * SPAN_RUN
+                    && b.x0 >= r.x0 - self.h
+                    && b.x1 <= r.x1 + self.h
+                    && (l.font_size - *fs).abs() <= 0.5
+            });
+            let Some(l) = over else { continue };
+            let below = r.y0 - l.bbox.y1;
+            let above = under
+                .iter()
+                .filter(|o| {
+                    o.bbox.y1 <= l.bbox.y0 + 0.5
+                        && o.bbox.x1.min(l.bbox.x1) - o.bbox.x0.max(l.bbox.x0) > 0.0
+                })
+                .map(|o| l.bbox.y0 - o.bbox.y1)
+                .fold(f64::MAX, f64::min);
+            if below < above {
+                r.y0 = r.y0.min(l.bbox.y0);
+            }
+        }
+        runs.into_iter().map(|(r, ..)| r).collect()
+    }
+
     /// Heights at which the region `a..=z` parts: under and over a line
     /// across its columns, at a rule or a table across them, at a gap none
     /// of its lines cross that is wider than a paragraph's.
@@ -309,80 +486,7 @@ impl Page<'_> {
         let clear = |j: usize, y: f64| space(j, y) >= self.h * WIDE_GAP;
         let parts = |b: &BBox, y: f64| here.iter().all(|&j| crossed(j, b) || clear(j, y));
         if a < z {
-            // Lines across the columns, in runs: a title or an author list
-            // set full width over several lines is one block, and parts the
-            // region above its first line and below its last.
-            // A line's space is the larger type's: a display title's lines
-            // stand a body line's height and more apart.
-            let mut spans: Vec<(BBox, f64, f32)> = lines
-                .iter()
-                .filter(|(c, l)| self.crosses(a, z, *c, &l.bbox))
-                .map(|(_, l)| (l.bbox, (l.font_size as f64).max(self.h), l.font_size))
-                .collect();
-            spans.sort_by(|p, q| {
-                p.0.y0
-                    .partial_cmp(&q.0.y0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            // Each run with its line space and its first line's size.
-            let mut runs: Vec<(BBox, f64, f32)> = Vec::new();
-            for (b, size, fs) in spans {
-                match runs.last_mut() {
-                    Some((r, s, _)) if b.y0 - r.y1 <= s.max(size) * SPAN_RUN => {
-                        *r = r.union(&b);
-                        *s = s.max(size);
-                    }
-                    _ => runs.push((b, size, fs)),
-                }
-            }
-            // A run goes on through a line set under it, within its width
-            // and a line's space below: a wrapped title's last, short line.
-            let mut under: Vec<&Line> = lines.iter().map(|(_, l)| *l).collect();
-            under.sort_by(|p, q| {
-                p.bbox
-                    .y0
-                    .partial_cmp(&q.bbox.y0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (r, s, _) in runs.iter_mut() {
-                for l in &under {
-                    let b = &l.bbox;
-                    if b.y0 > r.y1 - 0.5
-                        && b.y0 - r.y1 <= s.max(l.font_size as f64) * SPAN_RUN
-                        && b.x0 >= r.x0 - self.h
-                        && b.x1 <= r.x1 + self.h
-                    {
-                        r.y1 = r.y1.max(b.y1);
-                    }
-                }
-            }
-            // And it takes in a line set just over it, at its size, nearer
-            // it than to the text above: the label of a list across the
-            // columns, `Notes:` over the notes, set in one column.
-            for (r, s, fs) in runs.iter_mut() {
-                let over = under.iter().rev().find(|l| {
-                    let b = &l.bbox;
-                    b.y1 <= r.y0 + 0.5
-                        && r.y0 - b.y1 <= s.max(l.font_size as f64) * SPAN_RUN
-                        && b.x0 >= r.x0 - self.h
-                        && b.x1 <= r.x1 + self.h
-                        && (l.font_size - *fs).abs() <= 0.5
-                });
-                let Some(l) = over else { continue };
-                let below = r.y0 - l.bbox.y1;
-                let above = under
-                    .iter()
-                    .filter(|o| {
-                        o.bbox.y1 <= l.bbox.y0 + 0.5
-                            && o.bbox.x1.min(l.bbox.x1) - o.bbox.x0.max(l.bbox.x0) > 0.0
-                    })
-                    .map(|o| l.bbox.y0 - o.bbox.y1)
-                    .fold(f64::MAX, f64::min);
-                if below < above {
-                    r.y0 = r.y0.min(l.bbox.y0);
-                }
-            }
-            let runs: Vec<BBox> = runs.into_iter().map(|(r, ..)| r).collect();
+            let runs = self.runs(a, z, lines);
             for r in runs {
                 cuts.extend([r.y0, r.y1].into_iter().filter(|&y| parts(&r, y)));
             }
@@ -834,6 +938,55 @@ mod tests {
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("right text 4") < at("Notes:"), "{out:?}");
         assert_eq!(at("Notes:") + 1, at("1 A note"), "{out:?}");
+    }
+
+    #[test]
+    fn a_title_over_a_run_reads_first_and_with_it() {
+        // A right-aligned display title: its first line wholly in the right
+        // column, its second across the gutter, over two columns of text.
+        let big = |t: &str, x0: f64, y: f64, x1: f64| {
+            let mut l = line(t, x0, y, x1);
+            l.font_size = 32.0;
+            l.bbox.y1 = y + 23.0;
+            l
+        };
+        let mut left = vec![big("LOOSEFILL INSULATION SYSTEM", 188.0, 63.0, 580.0)];
+        left.extend(col("left", 30.0, 150.0, 6));
+        let mut right = vec![big("PROFESSIONAL PRODUCT", 279.0, 29.0, 581.0)];
+        right.extend(col("right", 230.0, 150.0, 6));
+        let out = read_order(vec![left, right], &[], &[], &[]);
+        assert_eq!(
+            texts(&out)[..2],
+            ["PROFESSIONAL PRODUCT", "LOOSEFILL INSULATION SYSTEM"],
+            "{:?}",
+            texts(&out)
+        );
+        assert_eq!(out[0].lines.len(), 2, "one group: {:?}", texts(&out));
+    }
+
+    #[test]
+    fn a_caption_over_a_run_is_no_title() {
+        // The same lines in bold at the text's size, a caption's: longer
+        // than a heading, so not read as one title.
+        let bold = |t: &str, x0: f64, y: f64, x1: f64| {
+            let mut l = line(t, x0, y, x1);
+            l.bold = true;
+            l
+        };
+        let one = "Figure 1. Mean values of the four measures taken over the whole year";
+        let two = "for each of the twelve sites in the north and south of the region";
+        let mut left = vec![bold(two, 188.0, 40.0, 580.0)];
+        left.extend(col("left", 30.0, 80.0, 6));
+        let mut right = vec![bold(one, 279.0, 30.0, 581.0)];
+        right.extend(col("right", 230.0, 80.0, 6));
+        let out = read_order(vec![left, right], &[], &[], &[]);
+        assert!(
+            out.iter().all(|g| g.lines.len() < 2
+                || !(g.lines.iter().any(|l| l.text == one)
+                    && g.lines.iter().any(|l| l.text == two))),
+            "{:?}",
+            texts(&out)
+        );
     }
 
     #[test]

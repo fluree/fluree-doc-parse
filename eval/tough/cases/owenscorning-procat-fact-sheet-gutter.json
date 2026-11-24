@@ -20,6 +20,12 @@
       "found": "2026-11-24",
       "issue": "A guard: with the gap past a space glyph measured, the bold pieces of page 1's table header read apart, as prose, passed the bold cap (#151), and bold was dropped for the document. Read as the table's header, they leave Disclaimer of Liability a heading.",
       "element": {"type": "doco:SectionTitle", "text": "Disclaimer of Liability"}
+    },
+    {
+      "id": "two-line-title-whole",
+      "found": "2026-11-24",
+      "issue": "The right-aligned title's first line, wholly right of the gutter, read after its second, across it: an empty `LOOSEFILL INSULATION SYSTEM` heading, then `PROCAT® PROFESSIONAL` over the body.",
+      "element": {"type": "doco:SectionTitle", "text": "PROCAT® PROFESSIONAL LOOSEFILL INSULATION SYSTEM"}
     }
   ]
 }
