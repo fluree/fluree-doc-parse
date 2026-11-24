@@ -6,7 +6,8 @@
     "about": "INSEE Informations rapides no. 275, tourist accommodation in the third quarter of 2026 (Licence Ouverte): its ff and fi ligatures are set in fonts of their own, subsets with no names or character map, and mapped to U+FFFD."
   },
   "notes": [
-    "Every reader of the text layer reads d’a�aires. The ligatures are read by their shape, against the same family's letters drawn elsewhere."
+    "Every reader of the text layer reads d’a�aires. The ligatures are read by their shape, against the same family's letters drawn elsewhere.",
+    "2026-11-24 (#135): the page number, worded in French (`4 sur 4`), counted as naming something, since only English paging words were known. The last page's copy was kept as the document's footer and the first page's put in its running text."
   ],
   "checks": [
     {
@@ -26,6 +27,16 @@
       "found": "2026-11-23",
       "issue": "Sixteen words held U+FFFD.",
       "no_text": "�"
+    },
+    {
+      "id": "page-number-not-kept-as-footer",
+      "found": "2026-11-24",
+      "issue": "`4 sur 4` was kept as the document's footer.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "4 sur 4"
+      },
+      "count": 0
     }
   ]
 }

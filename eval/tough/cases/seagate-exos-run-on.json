@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "seagate-exos-x16.pdf",
+    "url": "https://www.seagate.com/www-content/datasheets/pdfs/exos-x16-DS2011-1-1904US-en_US.pdf",
+    "sha256": "f97c80feb3d356c61bde605a02954704343e18bad893e5267164acc18c55c7f2",
+    "about": "Seagate Exos X16 hard drive data sheet (3 pages). The cover sets a 12.7 pt tagline over the 20.2 pt product name, and the back page sets the site name at 10.5 pt above 6 pt legal text."
+  },
+  "notes": [
+    "#169: paragraphs a sentence runs on through, parted where nothing on the page parts them."
+  ],
+  "checks": [
+    {
+      "id": "footnote-whole",
+      "found": "2026-11-24",
+      "issue": "Footnote 1 parted after `to see improved`: the notes are set at nearly twice their size’s leading, past the paragraph spacing.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "1 FastFormat models ship in 512e format state. When switching from 512e to 4Kn by executing the FastFormat routine, all data on the drive will be deleted. Note that data must be aligned to 4K sectors to see improved performance in 4Kn fomat."
+      }
+    }
+  ]
+}

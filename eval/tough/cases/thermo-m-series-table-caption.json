@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). Page 2's specification table sits under a caption, Thermo Scientific™ M Series Centrifuges, which the aligned run took in as its first row."
+  },
+  "notes": [
+    "2026-11-24 (#109): a title band or caption in a table's first row was taken as its column header, naming every column, and the rows that do name the columns read as data."
+  ],
+  "checks": [
+    {
+      "id": "caption-names-no-column",
+      "found": "2026-11-24",
+      "issue": "The caption was column 0's header.",
+      "no_column_header": "Thermo Scientific"
+    },
+    {
+      "id": "real-header-row",
+      "found": "2026-11-24",
+      "issue": "The dark header row Specifications | M17 Series | M21 Series was a data row.",
+      "cell": {
+        "value": "17,000 xg",
+        "column": "M17 Series",
+        "row": "Max RCF"
+      }
+    }
+  ]
+}

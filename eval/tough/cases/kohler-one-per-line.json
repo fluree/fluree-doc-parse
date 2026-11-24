@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "kohler-k-r33912.pdf",
+    "url": "https://techcomm.kohler.com/techcomm/pdf/K-R33912_spec_US-CA_Kohler_en.pdf",
+    "sha256": "b61768a2ab19e9621bb575f793c025f254f2b2f4af35aad473e34b861dd7c214",
+    "about": "Kohler K-R33912 kitchen faucet specification sheet (3 pages, printed by Chrome). The first page opens on a title block; the two after it run the same two lines small at their top right."
+  },
+  "notes": [
+    "#164: Codes/Standards sets one standard per line, well short of the column's measure; Installation Notes sets a short note over a longer one."
+  ],
+  "checks": [
+    {
+      "id": "standard-on-its-own",
+      "found": "2026-11-24",
+      "issue": "The standards read two and three to a paragraph: `ASME A112.18.1/CSA B125.1 NSF/ANSI/CAN 372`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "NSF/ANSI/CAN 372"
+      }
+    },
+    {
+      "id": "longest-standard-on-its-own",
+      "found": "2026-11-24",
+      "issue": "As above: `DOE - Energy Policy Act 1992 California Energy Commission (CEC) ADA`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "California Energy Commission (CEC)"
+      }
+    },
+    {
+      "id": "short-note-on-its-own",
+      "found": "2026-11-24",
+      "issue": "The first Installation Note ran into the second: `ADA compliant for faucet handles only ADA, CSA B651 compliant…`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "ADA compliant for faucet handles only"
+      }
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it.",
+    "2026-11-24 (#112): the ordering table's shaded `IVD-MD | General Use Only` row has a rule under its first column only; the shading's edge is the line under the others, and the row and the first values below were read as one."
+  ],
+  "checks": [
+    {
+      "id": "closing-link-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The closing link line was a level-5 heading.",
+      "no_section": "Learn more at"
+    },
+    {
+      "id": "category-tag-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The 12pt category tag above the 28pt title was an empty level-5 section ahead of it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Centrifugation"
+      }
+    },
+    {
+      "id": "shaded-row-parts-its-values",
+      "found": "2026-11-24",
+      "issue": "#112: the header read `MT 17 / IVD-MD 75002576`, and the first row of values was lost into it.",
+      "cell": {
+        "value": "75002576",
+        "column": "MT 17 / IVD-MD",
+        "row": "120 V, 50/60 Hz"
+      }
+    }
+  ]
+}

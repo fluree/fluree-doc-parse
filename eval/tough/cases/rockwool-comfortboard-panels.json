@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "rockwool-comfortboard-80.pdf",
+    "url": "https://www.rockwool.com/siteassets/o2-rockwool/documentation/technical-data-sheets/residential/comfortboard-80-non-structural-sheathing-continuous-insulation-techdata.pdf",
+    "sha256": "fd44762c3241aa494fe7124c1b96dd839b7f8bbbcba31b29d03029074fed84bb",
+    "about": "ROCKWOOL Comfortboard 80 technical data sheet. Page 1 sets a subtitle and paragraph beside a photo on a rectangle, an accent bar, and a red callout box holding a heading and a paragraph."
+  },
+  "notes": [
+    "#114: the rectangle behind the photo, the accent bar and the callout box made a three-shape drawing, and the subtitle, the paragraph and the callout's text were typed as its labels."
+  ],
+  "checks": [
+    {
+      "id": "subtitle-beside-the-panels",
+      "found": "2026-11-24",
+      "issue": "`Exterior Continuous Insulation` was typed as a drawing's label.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Exterior Continuous Insulation"
+      },
+      "count": 2
+    },
+    {
+      "id": "paragraph-beside-the-panels",
+      "found": "2026-11-24",
+      "issue": "The intro paragraph was typed as a drawing's label.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "ROCKWOOL Comfortboard® 80 thermal insulated sheathing is a rigid stone wool insulation board designed for use as an exterior continuous insulation. Comfortboard® 80 does not produce smoke or propagate flames, keeping occupants safe and reducing property damage in the event of a fire. Vapor permeable, Comfortboard allows fast outward drying, keeping moisture out of your wall assembly."
+      }
+    }
+  ]
+}

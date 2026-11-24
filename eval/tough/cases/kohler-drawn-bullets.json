@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "kohler-k-r33912.pdf",
+    "url": "https://techcomm.kohler.com/techcomm/pdf/K-R33912_spec_US-CA_Kohler_en.pdf",
+    "sha256": "b61768a2ab19e9621bb575f793c025f254f2b2f4af35aad473e34b861dd7c214",
+    "about": "Kohler K-R33912 kitchen faucet specification sheet (3 pages, printed by Chrome). The first page opens on a title block; the two after it run the same two lines small at their top right."
+  },
+  "notes": [
+    "#119: the Features list draws each bullet as a filled square 1.5pt across, which extraction discarded. The items split only where their spacing read as a paragraph's, and two pairs fused."
+  ],
+  "checks": [
+    {
+      "id": "fused-item-split",
+      "found": "2026-11-24",
+      "issue": "`Boost technology…` was run into the item above it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Boost technology increases the flow rate by 30% with the press of a button. Use Boost with stream for faster filling or with Sweep® spray for more powerful cleaning",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "second-fused-item-split",
+      "found": "2026-11-24",
+      "issue": "`1.5 gpm…` was run into the item above it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "1.5 gpm (5.7 lpm) maximum flow rate at 60 psi (4.14 bar)",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

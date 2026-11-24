@@ -37,6 +37,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `cells` | tables | row-major, **as detected** |
 | `header_rows` | tables | `None` → treat as 1 |
 | `sub_headers` | tables | indices of rows that label the rows beneath them: full-width banners, and labels set alone in the first column |
+| `restated_headers` | tables | indices of rows below the header that name the columns afresh for the rows beneath them, until the next such row; not data |
 | `merged_down` | tables | row-major continuation flags |
 | `merged_left` | tables | row-major continuation flags |
 | `continues` | tables continued from the page before | the `id` of the table this one carries on |

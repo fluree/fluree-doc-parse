@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drive QuickSpecs. Each drive family's box sets a block of fields over its SKU table, and the block rules its four columns only in its own rows."
+  },
+  "notes": [
+    "The block's column rules fell short of grid lines, and its labels and values ran together."
+  ],
+  "checks": [
+    {
+      "id": "block-cells-apart",
+      "found": "2026-11-24",
+      "issue": "#103: `7200 rpm Di mensio ns`: a value and the next label cut and joined in one cell.",
+      "no_text": "Di mensio ns"
+    }
+  ]
+}

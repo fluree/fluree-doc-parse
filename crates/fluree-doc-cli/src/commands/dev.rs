@@ -596,7 +596,8 @@ fn pipeline(pdf: &Path) -> Doc {
         // Furniture indices are into the flattened per-page line list, so walk
         // the columns in the same order to line the indices up.
         let mut idx = 0usize;
-        let mut out = Vec::new();
+        let mut per_column = Vec::new();
+        let page_body = block::body_size(cols.iter().flatten());
         for col in cols {
             let kept: Vec<fluree_doc_pdf::Line> = col
                 .iter()
@@ -612,14 +613,29 @@ fn pipeline(pdf: &Path) -> Doc {
             // as they do in the pipeline.
             let checkboxes = rule::checkboxes(&doc.pages[pi].fills);
             let ocr = block::ocr_centers(&doc.pages[pi]);
-            out.extend(
-                block::assemble_with_marks(&kept, leading, &checkboxes, &fills_per_page[pi], &ocr)
-                    .into_iter()
-                    .flat_map(block::split_structural_prefix),
-            );
+            per_column.push(block::assemble_with_marks(
+                &kept,
+                leading,
+                &checkboxes,
+                &block::marking_dots(&kept, &doc.pages[pi].dots),
+                &fills_per_page[pi],
+                page_body,
+                &ocr,
+            ));
         }
+        let out: Vec<_> = block::read_side_heads(per_column, &[])
+            .into_iter()
+            .flatten()
+            .flat_map(block::split_structural_prefix)
+            .collect();
         pages.push(out);
     }
+    let data = std::fs::read(pdf).expect("read");
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data)).expect("parse");
+    let ol = outline::extract(&raw);
+    let first = heading::detect(&pages, &ol);
+    let named = heading::outline_names(&ol);
+    block::gather_counted_items(&mut pages, &|t| named(t), &heading::in_section(&first));
     Doc {
         pages,
         leading,
@@ -740,7 +756,13 @@ pub(crate) fn figures(pdf: &Path, page: Option<usize>) {
     for p in &doc.pages {
         let mut fills = p.fills.clone();
         fluree_doc_pdf::rule::strip_highlights(&mut fills, &p.glyphs);
-        let found = fluree_doc_pdf::figure::detect(&fills, &p.rules, p.index, (p.width, p.height));
+        let found = fluree_doc_pdf::figure::detect(
+            &fills,
+            &p.rules,
+            &p.glyphs,
+            p.index,
+            (p.width, p.height),
+        );
         total += found.len();
         if page.is_some() && page != Some(p.index) {
             continue;
@@ -793,10 +815,17 @@ pub(crate) fn rules(pdf: &Path, page: Option<usize>) {
         f += p.fills.len();
         if page == Some(p.index) {
             println!(
-                "page {}: {ph} horizontal, {pv} vertical rules, {} fills",
+                "page {}: {ph} horizontal, {pv} vertical rules, {} fills, {} dots",
                 p.index,
-                p.fills.len()
+                p.fills.len(),
+                p.dots.len()
             );
+            for d in &p.dots {
+                println!(
+                    "   Dot bbox=({:.1},{:.1})-({:.1},{:.1})",
+                    d.x0, d.y0, d.x1, d.y1
+                );
+            }
             let mut rs: Vec<_> = p.rules.iter().collect();
             rs.sort_by(|a, b| a.axis_pos().partial_cmp(&b.axis_pos()).unwrap());
             for r in rs.iter().take(14) {
@@ -833,7 +862,8 @@ pub(crate) fn tables(pdf: &Path, page: Option<usize>) {
         dedup::remove_faux_bold(&mut p.glyphs, 8);
         let frames = fluree_doc_pdf::textart::draw_rules(&mut p.glyphs, &mut p.rules, p.index);
         dedup::remove_struck_underlines(&mut p.glyphs);
-        let mut grids = fluree_doc_pdf::table::detect_framed(&p.rules, p.index, &frames);
+        let mut grids =
+            fluree_doc_pdf::table::detect_framed(&p.rules, &p.fills, &p.glyphs, p.index, &frames);
         total += grids.len();
         if page != Some(p.index) {
             continue;
