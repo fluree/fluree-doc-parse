@@ -6,38 +6,85 @@
 //! the engine's code (5.8 MB in a release build of `fdoc`) and a deployment
 //! ships the library and the models for its platform beside the binary.
 //!
-//! The detector's settings are the ones the corpus benchmark measured
-//! (detection sized on the image's short side at 736 px, at most 2,000 px on
-//! the long one): each word box this engine gives is a detected line, turned
-//! upright about its center, with the line's angle. An image the detector
-//! shrinks until its text is too small to be seen ([`text_too_small`]) is
-//! read again in overlapping strips ([`strips`]), and its lines kept once.
+//! An image is read at its own resolution, in passes the [`OcrSizing`] it
+//! is opened with plans ([`crate::sizing`]): whole, or in overlapping strips
+//! across its width, whose lines are kept once ([`merge_strips`]). Each word
+//! box this engine gives is a detected line, turned upright about its
+//! center, with the line's angle.
+//!
+//! Memory. The detector's memory grows with the pixels it reads, about
+//! [`BYTES_PER_PIXEL`] each; the pipelines reading at once share one budget
+//! of it ([`OarOptions::memory`]), and one ONNX Runtime memory arena, which
+//! gives back what a large image took once it is read.
 
 use crate::assets::{Assets, Runtime};
+use crate::sizing::{OcrPlan, OcrSizing, Pass};
 use crate::{Coords, Layout, OcrEngine, OcrWord, Pixels, WordReading};
-use oar_ocr::core::config::OrtSessionConfig;
+use oar_ocr::core::config::{OrtExecutionProvider, OrtSessionConfig};
 use oar_ocr::domain::tasks::TextDetectionConfig;
 use oar_ocr::oarocr::{OAROCRBuilder, OAROCR};
 use oar_ocr::processors::LimitType;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 /// The name each reading records.
 pub const ENGINE: &str = "pp-ocrv6-small/oar-ocr";
 
+/// What the detector holds while it reads, per pixel it reads (the image
+/// as the detector is given it: padded, enlarged), arena included.
+///
+/// Measured on PP-OCRv6 small with the shared arena, one image at a time,
+/// less the pipeline's own memory: a page scanned at 300 dpi peaked at 150
+/// bytes a pixel, a 3,024 × 4,032 photo at 210, the 12.5 Mpx strips of a
+/// 2,400 × 9,000 capture at 240.
+pub const BYTES_PER_PIXEL: u64 = 230;
+
+/// The default of [`OarOptions::memory`]: 8 GiB, four pages scanned at 300
+/// dpi read at once, or three 12 Mpx photos.
+///
+/// Measured with four pipelines, four images at a time: four photos peaked
+/// at 7.9 GB in 6.6 s (8.9 GB in 5.5 s with no bound), four tall captures
+/// read in strips at 6.6 GB in 175 s (10.2 GB in 121 s); four pages read as
+/// with no bound, 6.9 GB in 18 s. At 6 GiB the pages took 27 s.
+pub const DEFAULT_MEMORY: u64 = 8 << 30;
+
+/// Whom an engine tells what a reading did that its caller should know.
+pub type Notices = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// How the engine runs.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OarOptions {
     /// ONNX Runtime threads per model run. One by default: a caller reading
     /// many images at once reads each on its own thread, and threads inside
     /// each run would fight over the same cores.
     pub threads: usize,
     /// Most images read at once, each by a pipeline of its own; a thread
-    /// that finds them all busy waits for one. A pipeline holds about
-    /// 0.6 to 1 GB once it has read pages, so this bounds the engine's memory
-    /// whatever the caller's parallelism. By default the cores, at most
-    /// four: measured on twelve cores, eight read no faster than four.
+    /// that finds them all busy waits for one. Idle, a pipeline holds about
+    /// 0.3 GB. By default the cores, at most four: measured on twelve cores,
+    /// eight read no faster than four.
     pub pipelines: usize,
+    /// How images are sized: at most [`OcrSizing::max_pixels`] a pass.
+    pub sizing: OcrSizing,
+    /// The memory, in bytes, the passes being read at once may take, each
+    /// counted at [`BYTES_PER_PIXEL`] a pixel: a pipeline whose pass does
+    /// not fit waits for others to finish theirs. A pass larger than all of
+    /// it is read alone.
+    pub memory: u64,
+    /// Told of what a reading does that its caller should know: an image
+    /// shrunk to fit [`OcrSizing::max_pixels`]. None: nobody is told.
+    pub notices: Option<Notices>,
+}
+
+impl std::fmt::Debug for OarOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OarOptions")
+            .field("threads", &self.threads)
+            .field("pipelines", &self.pipelines)
+            .field("sizing", &self.sizing)
+            .field("memory", &self.memory)
+            .field("notices", &self.notices.is_some())
+            .finish()
+    }
 }
 
 impl Default for OarOptions {
@@ -46,6 +93,9 @@ impl Default for OarOptions {
         OarOptions {
             threads: 1,
             pipelines: cores.min(4),
+            sizing: OcrSizing::default(),
+            memory: DEFAULT_MEMORY,
+            notices: None,
         }
     }
 }
@@ -56,13 +106,17 @@ impl Default for OarOptions {
 /// one image at a time. The engine keeps a pipeline per image being read at
 /// once: one when it opens, and another each time a thread finds them all
 /// busy, built from the same checked models and kept for the next reading,
-/// up to [`OarOptions::pipelines`].
+/// up to [`OarOptions::pipelines`]. Sharing one pipeline between threads
+/// would save only its own memory (about 70 MB), not what a reading takes.
 pub struct OarEngine {
     det: Vec<u8>,
     rec: Vec<u8>,
     dict: String,
     threads: usize,
+    sizing: OcrSizing,
     pipes: Pipelines<OAROCR>,
+    budget: Budget,
+    notices: Option<Notices>,
 }
 
 /// Up to `most` pipelines, built as readers need them and shared between
@@ -152,6 +206,76 @@ impl<T> Pipelines<T> {
     }
 }
 
+/// The memory the passes read at once may take, in bytes, handed out first
+/// come, first served: a pass waits until it fits beside those being read,
+/// or, larger than the whole budget, until none is. In turn, so a large
+/// pass is not passed over for good by small ones.
+struct Budget {
+    most: u64,
+    state: Mutex<BudgetState>,
+    freed: Condvar,
+}
+
+struct BudgetState {
+    /// Bytes held by the passes being read.
+    held: u64,
+    /// The next turn to be served, and the next to be handed out.
+    serving: u64,
+    issued: u64,
+}
+
+/// A share of the [`Budget`], given back when dropped (a panic included).
+struct Grant<'a> {
+    budget: &'a Budget,
+    bytes: u64,
+}
+
+impl Budget {
+    fn new(most: u64) -> Self {
+        Budget {
+            most: most.max(1),
+            state: Mutex::new(BudgetState {
+                held: 0,
+                serving: 0,
+                issued: 0,
+            }),
+            freed: Condvar::new(),
+        }
+    }
+
+    /// `bytes` of the budget, once it is this caller's turn and they fit.
+    fn take(&self, bytes: u64) -> Grant<'_> {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let turn = st.issued;
+        st.issued += 1;
+        while st.serving != turn || (st.held > 0 && st.held + bytes > self.most) {
+            st = self.freed.wait(st).unwrap_or_else(|e| e.into_inner());
+        }
+        st.held += bytes;
+        st.serving += 1;
+        drop(st);
+        // The next in turn may fit beside this one.
+        self.freed.notify_all();
+        Grant {
+            budget: self,
+            bytes,
+        }
+    }
+
+    fn held(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).held
+    }
+}
+
+impl Drop for Grant<'_> {
+    fn drop(&mut self) {
+        let mut st = self.budget.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.held -= self.bytes;
+        drop(st);
+        self.budget.freed.notify_all();
+    }
+}
+
 /// The ONNX Runtime library loaded into this process, once one is: a process
 /// holds one, so another may not be loaded beside it. A load that fails
 /// leaves nothing loaded (`ort` loads the path it is given, and looks nowhere
@@ -169,14 +293,69 @@ fn load_runtime(runtime: &Runtime) -> Result<(), String> {
             path.display()
         )),
         None => {
-            // Only the library is loaded here: oar-ocr builds the process's
-            // one environment on it when it creates its first session, and
-            // keeps it.
-            ort::init_from(runtime.load_path()).map_err(|e| format!("{}: {e}", path.display()))?;
+            let builder = ort::init_from(runtime.load_path())
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            install_environment(builder)?;
             *state = Some(path.clone());
             Ok(())
         }
     }
+}
+
+/// Build the process's one ONNX Runtime environment, register on it the CPU
+/// memory arena every session shares (`session.use_env_allocators`), and
+/// hand it to oar-ocr, which would otherwise build one without.
+///
+/// One arena for all pipelines rather than one each: a block freed by one
+/// pipeline serves the next reading of another, and each session's run
+/// options shrink it after the run ([`OarEngine::pipeline`]), so the memory
+/// a large image took is given back. Measured with four pipelines reading
+/// four 12 Mpx photos: 9 GB at the peak and 1 GB held after, against 11 GB
+/// held for good with an arena per session, at the same speed. Grown by
+/// powers of two (ONNX Runtime's default): growing by what is asked serves
+/// images of varying sizes worse, at a higher peak.
+///
+/// `ort` has no safe call for registering an arena on an environment, so
+/// this goes through its C API.
+fn install_environment(builder: ort::environment::EnvironmentBuilder) -> Result<(), String> {
+    use ort::AsPointer;
+    let env = builder.build().map_err(|e| e.to_string())?;
+    env.set_log_level(ort::logging::LogLevel::Error);
+    let api = ort::api();
+    let check = |status: ort::sys::OrtStatusPtr| -> Result<(), String> {
+        if status.0.is_null() {
+            return Ok(());
+        }
+        // SAFETY: a non-null status from the C API holds a message, and is
+        // released here, once.
+        let msg = unsafe { std::ffi::CStr::from_ptr((api.GetErrorMessage)(status.0)) }
+            .to_string_lossy()
+            .into_owned();
+        unsafe { (api.ReleaseStatus)(status.0) };
+        Err(format!("registering the shared ONNX Runtime arena: {msg}"))
+    };
+    let info = ort::memory::MemoryInfo::new(
+        ort::memory::AllocationDevice::CPU,
+        0,
+        ort::memory::AllocatorType::Arena,
+        ort::memory::MemoryType::Default,
+    )
+    .map_err(|e| e.to_string())?;
+    // Grown by powers of two (`arena_extend_strategy` 0), no cap.
+    let keys = [c"arena_extend_strategy".as_ptr()];
+    let values: [usize; 1] = [0];
+    let mut cfg: *mut ort::sys::OrtArenaCfg = std::ptr::null_mut();
+    // SAFETY: one key and one value, both live for the call; `cfg` is
+    // written by it.
+    check(unsafe { (api.CreateArenaCfgV2)(keys.as_ptr(), values.as_ptr(), 1, &mut cfg) })?;
+    // SAFETY: `env` and `info` are live handles, and `cfg` the one just
+    // created; the environment copies what it needs from both.
+    let registered =
+        check(unsafe { (api.CreateAndRegisterAllocator)(env.ptr() as *mut _, info.ptr(), cfg) });
+    // SAFETY: released once, whether the registration took it or not.
+    unsafe { (api.ReleaseArenaCfg)(cfg) };
+    registered?;
+    oar_ocr::core::inference::set_ort_environment(env).map_err(|e| e.to_string())
 }
 
 impl OarEngine {
@@ -195,7 +374,10 @@ impl OarEngine {
             rec: assets.rec,
             dict: assets.dict,
             threads: options.threads.max(1),
+            sizing: options.sizing,
             pipes: Pipelines::new(options.pipelines),
+            budget: Budget::new(options.memory),
+            notices: options.notices.clone(),
         };
         drop(engine.pipes.take(|| engine.pipeline())?);
         Ok(engine)
@@ -207,32 +389,69 @@ impl OarEngine {
         self.pipes.built()
     }
 
+    /// How the engine sizes the images it reads.
+    pub fn sizing(&self) -> OcrSizing {
+        self.sizing
+    }
+
+    /// The bytes of [`OarOptions::memory`] the passes being read hold now.
+    pub fn memory_held(&self) -> u64 {
+        self.budget.held()
+    }
+
+    /// The memory the passes read at once may take ([`OarOptions::memory`]).
+    pub fn memory(&self) -> u64 {
+        self.budget.most
+    }
+
     /// A new pipeline on the engine's models.
     fn pipeline(&self) -> Result<OAROCR, String> {
+        // The detector takes a short side under 736 up to it, which the
+        // reading's padding turns into the enlargement it plans
+        // ([`crate::sizing`]); it never shrinks a pass, planned within the
+        // cap, whose long side is then at most `max_side`.
         let det = TextDetectionConfig {
             score_threshold: 0.2,
             box_threshold: 0.45,
             unclip_ratio: 1.4,
             max_candidates: 3000,
-            limit_side_len: Some(DET_SHORT_SIDE),
+            limit_side_len: Some(crate::sizing::DET_SHORT_SIDE),
             limit_type: Some(LimitType::Min),
-            max_side_len: Some(DET_LONG_SIDE),
+            max_side_len: Some(self.sizing.max_side()),
         };
+        let mut session = OrtSessionConfig::new()
+            .with_intra_threads(self.threads)
+            .with_inter_threads(1)
+            // Planning allocations per input shape only grows the memory of
+            // a pipeline fed images of every size.
+            .with_memory_pattern(false)
+            .with_execution_providers(vec![OrtExecutionProvider::CPU])
+            // Give the shared arena back what a run took beyond what it
+            // still holds (see `install_environment`).
+            .with_arena_shrinkage(true);
+        session.session_config_entries =
+            Some([("session.use_env_allocators".to_string(), "1".to_string())].into());
         // The models as the bytes that were checked, not read again by path.
         OAROCRBuilder::new(self.det.clone(), self.rec.clone(), PathBuf::new())
             .character_dict_content(self.dict.clone())
-            .ort_session(
-                OrtSessionConfig::new()
-                    .with_intra_threads(self.threads)
-                    .with_inter_threads(1)
-                    // Planning allocations per input shape only grows the
-                    // memory of a pipeline fed images of every size.
-                    .with_memory_pattern(false),
-            )
+            .ort_session(session)
             .text_detection_config(det)
             .image_batch_size(1)
             .build()
             .map_err(|e| format!("building the OCR pipeline: {e}"))
+    }
+
+    /// Read one pass of a plan, given as the image the detector reads
+    /// ([`pass_image`]), within the memory budget.
+    fn read_pass(
+        &self,
+        ocr: &OAROCR,
+        canvas: image::RgbImage,
+        pass: &Pass,
+    ) -> Result<Words, String> {
+        let bytes = (pass.det_pixels() as u64).saturating_mul(BYTES_PER_PIXEL);
+        let _grant = self.budget.take(bytes);
+        read_one(ocr, canvas, pass.top)
     }
 }
 
@@ -242,31 +461,54 @@ impl OcrEngine for OarEngine {
     }
 
     fn read(&self, image: &Pixels) -> Result<WordReading, String> {
+        let plan = self.sizing.plan(image.width, image.height);
         // oar-ocr reads RGB: a grey image is spread to three channels, and
         // a crop's transparent pixels are composited over white paper.
-        let rgb = || {
-            image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
-                .ok_or("the image's buffer does not match its size")
-        };
-        let bands = strips(image.width, image.height);
+        let mut img = image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
+            .ok_or("the image's buffer does not match its size")?;
+        if let Some(f) = plan.shrunk {
+            self.notice(&format!(
+                "OCR: a {} × {} image is too wide to read in strips of at most {:.1} Mpx; \
+                 read shrunk to {:.0} % (set ocr.max_megapixels higher to read it whole)",
+                image.width,
+                image.height,
+                self.sizing.max_pixels() as f64 / 1e6,
+                f * 100.0
+            ));
+            img = image::imageops::resize(
+                &img,
+                plan.width,
+                plan.height,
+                image::imageops::FilterType::Triangle,
+            );
+        }
         let lease = self.pipes.take(|| self.pipeline())?;
-        let whole = read_one(&lease, rgb()?, 0)?;
-        // Read whole first: only an image the detector shrinks until its
-        // text is too small to be seen is read again, in strips, and that
-        // reading kept.
-        let words = if !bands.is_empty() && text_too_small(image.width, image.height, &whole) {
-            let img = rgb()?;
-            let mut read = Vec::new();
-            for &(top, bottom) in &bands {
-                let strip =
-                    image::imageops::crop_imm(&img, 0, top, image.width, bottom - top).to_image();
-                read.push((top, bottom, read_one(&lease, strip, top)?));
-            }
-            merge_strips(read, image.height)
-        } else {
-            whole.into_iter().map(|(w, _)| w).collect()
+        let mut words = match plan.passes.as_slice() {
+            // Read as it is: the image is given to the detector, not copied.
+            [pass] if pass.canvas == img.dimensions() => self
+                .read_pass(&lease, img, pass)?
+                .into_iter()
+                .map(|(w, _)| w)
+                .collect(),
+            _ => read_plan(&plan, &mut |pass| {
+                self.read_pass(&lease, pass_image(&img, pass), pass)
+            })?,
         };
         drop(lease);
+        if plan.shrunk.is_some() {
+            let (sx, sy) = (
+                f64::from(image.width) / f64::from(plan.width),
+                f64::from(image.height) / f64::from(plan.height),
+            );
+            for w in &mut words {
+                w.bbox = [
+                    w.bbox[0] * sx,
+                    w.bbox[1] * sy,
+                    w.bbox[2] * sx,
+                    w.bbox[3] * sy,
+                ];
+            }
+        }
         Ok(WordReading {
             coords: Coords::Px,
             width: Some(image.width as f64),
@@ -277,142 +519,54 @@ impl OcrEngine for OarEngine {
     }
 }
 
-/// The detector's sizing (see [`OarEngine::pipeline`]): an image whose short
-/// side is under [`DET_SHORT_SIDE`] is scaled up to it, then one whose long
-/// side is over [`DET_LONG_SIDE`] is scaled down to that.
-const DET_SHORT_SIDE: u32 = 736;
-const DET_LONG_SIDE: u32 = 2000;
-
-/// Shortest strip worth reading on its own, in pixels: a narrower image is
-/// read whole.
-const MIN_STRIP: u32 = 200;
-
-/// The scale the detector reads an image of `width` × `height` at (see
-/// [`OarEngine::pipeline`]): up to [`DET_SHORT_SIDE`] on its short side,
-/// then down to [`DET_LONG_SIDE`] on its long one.
-fn det_scale(width: u32, height: u32) -> f64 {
-    let (short, long) = (width.min(height).max(1) as f64, width.max(height) as f64);
-    let up = (DET_SHORT_SIDE as f64 / short).max(1.0);
-    up.min(DET_LONG_SIDE as f64 / long)
+impl OarEngine {
+    fn notice(&self, msg: &str) {
+        if let Some(n) = &self.notices {
+            n(msg);
+        }
+    }
 }
 
-/// The thickness of a detected line, in the pixels the detector sees, under
-/// which it starts to miss lines: an image whose lines read whole are
-/// thinner than this, at the median, is read again in strips.
-///
-/// The detector draws a box at least about 9 px thick around any line it
-/// finds, so the thickness it gives a line of small text is at that floor.
-/// Measured on 172 synthetic captures (lines in DejaVu Sans at 1.6 em, 6 to
-/// 16 px high, 736 to 2,000 px wide, 2,600 to 5,000 tall, and pages of 16
-/// to 30 px text at 200 and 300 dpi). Of the 134 whose lines came out under
-/// 10 px, or with no line, strips read more lines in 123 (up to a fifth at
-/// 10 to 16 px, every line where the whole reading found none) and fewer in
-/// 5, all 2,000 px wide with 6 to 9 px text. Of the 38 at 10 px or over,
-/// the pages among them at 11.5 to 28 px, the whole reading lost one line,
-/// in one image. Over all 172, the lines read: whole, 66 %; in strips, 92 %;
-/// by this rule, 92 %, with no page cut.
-const SMALL_TEXT: f64 = 10.0;
-
-/// The least gain in scale, strips over the whole image, for which an image
-/// where no line is seen is read again in strips.
-///
-/// Such an image has text too small to be seen, or none: a blank scanned
-/// verso, a photo. Which of the two it is cannot be told from the reading,
-/// so what decides is whether strips could see what the whole reading did
-/// not. Measured on synthetic captures where no line was counted (5 to 8 px
-/// text): 736 to 1,400 px wide and 2,600 to 5,000 tall, read 1.3 to 2.5
-/// times larger, the strips read up to 452 lines where the whole reading
-/// read none (156 of 259 in a 736 × 2,600 capture of 6 px text, 271 of 272
-/// in a 1,000 × 3,000 one of 7 px); 2,200 to 2,400 tall, 1.1 to 1.2 times
-/// larger, they read none either. A blank page 2,550 × 3,300, or a 3,024 ×
-/// 4,032 photo, is 2,550 or 3,024 wide, and its strips are no more read at
-/// full size (see [`text_too_small`]).
-const NO_LINE_GAIN: f64 = 1.25;
-
-/// Whether an image of `width` × `height`, read whole into `whole`, has text
-/// too small for the detector to see at the scale it read it: the median
-/// thickness of its detected lines, times [`det_scale`], is under
-/// [`SMALL_TEXT`].
-///
-/// Only a line at least twice as long as thick, and covering less than half
-/// the image, is counted. Text shrunk below what the detector resolves is
-/// found, if at all, as one box over the whole image, read as a few
-/// characters of noise: a 1,000 × 4,000 capture of 7 px lines gives a single
-/// box 1,000 thick, and a photo gives the same. Where no line is counted,
-/// the image is read in strips only where they are detected at full size,
-/// the image under [`DET_LONG_SIDE`] wide, and at least [`NO_LINE_GAIN`]
-/// times larger than the whole. A strip of an image 2,000 px wide or more is
-/// as long as the image is wide, and shrunk past 2,000: of 17 captures 2,000
-/// px wide where no line was counted, strips read 3 lines more at most, and
-/// on a blank page or a photo nothing, for three times the time of the whole
-/// reading.
-///
-/// A second reading costs a whole one, detection and recognition: oar-ocr
-/// does not recognize the lines of boxes it is given.
-///
-/// It is the text's size, not the image's shape, that says whether a shrunk
-/// image loses lines. A page scanned at 300 dpi is shrunk to 0.6, and its
-/// 30 px lines are still 18 px to the detector; a capture of the same shape
-/// with 10 px text loses a quarter of its lines.
-fn text_too_small(width: u32, height: u32, whole: &[(OcrWord, Bounds)]) -> bool {
-    let area = width as f64 * height as f64;
-    let mut thick: Vec<f64> = whole
-        .iter()
-        .map(|(w, _)| (w.bbox[2] - w.bbox[0], w.bbox[3] - w.bbox[1]))
-        .filter(|&(len, t)| len >= 2.0 * t && len * t < area / 2.0)
-        .map(|(_, t)| t)
-        .collect();
-    if thick.is_empty() {
-        let gain = det_scale(width, strip_len(width)) / det_scale(width, height);
-        return width < DET_LONG_SIDE && gain >= NO_LINE_GAIN;
-    }
-    thick.sort_by(f64::total_cmp);
-    thick[thick.len() / 2] * det_scale(width, height) < SMALL_TEXT
-}
-
-/// The rows a tall image is read in, `(top, bottom)` each, when strips
-/// would read it larger than whole; empty when they would not. Whether it
-/// is read in them is [`text_too_small`]'s call, on a reading of the whole.
-///
-/// Read whole, a capture 1,200 pixels wide and 9,000 tall is shrunk to 267 ×
-/// 2,000 for detection, and its short rows go unseen. Cut across its height,
-/// each strip as long as the detector takes at the image's width, it is
-/// detected at full size, 4.5 times larger. A strip of an image 2,000 pixels
-/// wide or more is as long as the image is wide, and the detector still
-/// shrinks it to 2,000, though less than the whole. The strips overlap by a
-/// fifth of their length, so a line cut by one strip's edge is whole in the
-/// next; a wide image is not cut, as its lines would be.
-fn strips(width: u32, height: u32) -> Vec<(u32, u32)> {
-    let len = strip_len(width);
-    if height <= len || len < MIN_STRIP {
-        return Vec::new();
-    }
-    let step = len - len / 5;
-    let mut out = Vec::new();
-    let mut top = 0;
-    while top + len < height {
-        out.push((top, top + len));
-        top += step;
-    }
-    out.push((height - len, height));
-    out
-}
-
-/// How tall a strip of an image `width` wide is ([`strips`]): as long as the
-/// detector takes it at that width.
-fn strip_len(width: u32) -> u32 {
-    if width >= DET_LONG_SIDE {
-        width
-    } else if width >= DET_SHORT_SIDE {
-        DET_LONG_SIDE
+/// The image the detector is given for `pass`: its rows of `img`, at the
+/// top left of its canvas, the rest white paper.
+fn pass_image(img: &image::RgbImage, pass: &Pass) -> image::RgbImage {
+    let (w, h) = (img.width(), pass.bottom - pass.top);
+    let rows = if (pass.top, h) == (0, img.height()) {
+        None
     } else {
-        (DET_LONG_SIDE as u64 * width as u64 / DET_SHORT_SIDE as u64) as u32
+        Some(image::imageops::crop_imm(img, 0, pass.top, w, h).to_image())
+    };
+    if pass.canvas == (w, h) {
+        rows.unwrap_or_else(|| img.clone())
+    } else {
+        let mut c = image::RgbImage::from_pixel(pass.canvas.0, pass.canvas.1, image::Rgb([255; 3]));
+        match &rows {
+            Some(r) => image::imageops::replace(&mut c, r, 0, 0),
+            None => image::imageops::replace(&mut c, img, 0, 0),
+        }
+        c
     }
+}
+
+/// The words of an image read by `plan`, each pass read by `read`: one
+/// pass's words as they are, strips' merged ([`merge_strips`]).
+fn read_plan(
+    plan: &OcrPlan,
+    read: &mut dyn FnMut(&Pass) -> Result<Words, String>,
+) -> Result<Vec<OcrWord>, String> {
+    if let [whole] = plan.passes.as_slice() {
+        return Ok(read(whole)?.into_iter().map(|(w, _)| w).collect());
+    }
+    let mut strips = Vec::new();
+    for pass in &plan.passes {
+        strips.push((pass.top, pass.bottom, read(pass)?));
+    }
+    Ok(merge_strips(strips, plan.height))
 }
 
 /// Read one image, its rows starting at `dy` in the image the words are
 /// given for: each word, with its quad's bounds (see [`Bounds`]).
-fn read_one(ocr: &OAROCR, img: image::RgbImage, dy: u32) -> Result<Vec<(OcrWord, Bounds)>, String> {
+fn read_one(ocr: &OAROCR, img: image::RgbImage, dy: u32) -> Result<Words, String> {
     let result = ocr
         .predict(vec![img])
         .map_err(|e| format!("OCR: {e}"))?
@@ -469,7 +623,10 @@ fn bounds(quad: &[(f64, f64); 4]) -> Bounds {
 
 /// One strip's reading: its top and bottom rows, and its words, each with
 /// its quad's bounds, in the image's rows.
-type StripReading = (u32, u32, Vec<(OcrWord, Bounds)>);
+type StripReading = (u32, u32, Words);
+
+/// One pass's words, each with its quad's [`Bounds`].
+type Words = Vec<(OcrWord, Bounds)>;
 
 /// The words of an image read in strips, `(top, bottom, words)` each in
 /// the image's rows, as one reading; each word comes with its quad's
@@ -486,9 +643,8 @@ type StripReading = (u32, u32, Vec<(OcrWord, Bounds)>);
 /// pieces in two strips are not both kept. One longer than the strips'
 /// overlap (a fifth of a strip, 400 rows for a strip of 2,000) is whole in
 /// no strip: it is lost, or kept cut short where the detector's box stops a
-/// few pixels before the cut. A page is not cut ([`text_too_small`]): its
-/// text is large enough to be seen whole, or, with none seen, its strips are
-/// shrunk as well. So this is a tall capture's sideways text.
+/// few pixels before the cut. Strips are at least as tall as the image is
+/// wide ([`crate::sizing`]), so this is a tall capture's sideways text.
 fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
     // Each word kept so far: its strip, how far inside it it lies, its
     // place in reading order, and its quad's bounds.
@@ -832,155 +988,141 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A whole reading of `n` level lines `thick` pixels thick, each twenty
-    /// times as long, as [`read_one`] gives it.
-    fn lines(n: usize, thick: f64) -> Vec<(OcrWord, Bounds)> {
-        (0..n)
-            .map(|i| {
-                let y = i as f64 * thick * 1.6;
-                let bbox = [10.0, y, 10.0 + 20.0 * thick, y + thick];
-                let word = OcrWord {
-                    text: format!("line {i}"),
-                    bbox,
-                    angle: Some(0.0),
-                    conf: Some(0.99),
-                };
-                (word, bbox)
-            })
-            .collect()
+    #[test]
+    fn passes_wait_for_the_memory_they_take() {
+        let budget = Budget::new(100);
+        let a = budget.take(60);
+        let b = budget.take(40);
+        assert_eq!(budget.held(), 100);
+        let waited = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|s| {
+            let t = s.spawn(|| {
+                let _c = budget.take(10);
+                assert!(
+                    waited.load(std::sync::atomic::Ordering::SeqCst),
+                    "it waited"
+                );
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            waited.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(a);
+            t.join().unwrap();
+        });
+        drop(b);
+        assert_eq!(budget.held(), 0);
     }
 
     #[test]
-    fn a_scanned_page_is_read_whole() {
-        // Letter, A4, A3 and Legal, at 200 to 600 dpi, upright or turned:
-        // 10 pt body text, its detected lines about an em thick (0.96 to
-        // 1.16 measured; 0.9 here), is 15 px or more to the detector,
-        // however much the page is shrunk.
-        for (w, h, dpi) in [
-            (1700, 2200, 200.0),
-            (2550, 3300, 300.0),
-            (5100, 6600, 600.0),
-            (1654, 2339, 200.0),
-            (2481, 3508, 300.0),
-            (3508, 4961, 300.0),
-            (1700, 2800, 200.0),
-            (2550, 4200, 300.0),
-            (3400, 5600, 400.0),
-        ] {
-            let body = lines(40, 0.9 * 10.0 / 72.0 * dpi);
-            assert!(!text_too_small(w, h, &body), "{w} × {h} is read whole");
-            assert!(!text_too_small(h, w, &body), "{h} × {w} is read whole");
-        }
-        // Its 6 pt footnotes too.
-        assert!(!text_too_small(
-            2550,
-            3300,
-            &lines(40, 0.9 * 6.0 / 72.0 * 300.0)
-        ));
-        // A few specks or lines of fine print under the body do not cut it:
-        // the median is the body's.
-        let mut body = lines(40, 0.9 * 10.0 / 72.0 * 300.0);
-        body.extend(lines(3, 4.0));
-        assert!(!text_too_small(2550, 3300, &body));
+    fn a_pass_larger_than_the_budget_is_read_alone() {
+        let budget = Budget::new(100);
+        // Alone: it goes.
+        drop(budget.take(500));
+        // Behind another: it waits for it, then holds the budget alone.
+        let small = budget.take(10);
+        let done = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|s| {
+            let t = s.spawn(|| {
+                let _big = budget.take(500);
+                assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+                assert_eq!(budget.held(), 500);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            drop(small);
+            t.join().unwrap();
+        });
     }
 
     #[test]
-    fn a_capture_of_small_text_is_read_again_in_strips() {
-        // 10 px lines, their boxes 12 px thick: shrunk to 0.77 for 1,000 ×
-        // 2,600, they are 9.2 px to the detector, which misses some.
-        assert!(text_too_small(1000, 2600, &lines(150, 12.0)));
-        // 13 px lines, 15 px boxes: 11.5 px, all seen.
-        assert!(!text_too_small(1000, 2600, &lines(120, 15.0)));
-        // The same 12 px boxes in a capture 1,400 wide, read at the same
-        // scale, are as small; at 1,000 × 2,000, read at full size, not.
-        assert!(text_too_small(1400, 2600, &lines(150, 12.0)));
-        assert!(!text_too_small(1000, 2000, &lines(150, 12.0)));
-        // The median decides: a few large headings do not hide the body,
-        // nor do many, short of half the lines.
-        let mut mixed = lines(100, 12.0);
-        mixed.extend(lines(20, 40.0));
-        assert!(text_too_small(1000, 2600, &mixed));
-        let mut mixed = lines(60, 12.0);
-        mixed.extend(lines(40, 40.0));
-        assert!(text_too_small(1000, 2600, &mixed));
+    fn passes_are_served_in_turn() {
+        // A large pass waiting is not passed over by a small one that
+        // would fit beside what is held.
+        let budget = Budget::new(100);
+        let held = budget.take(60);
+        let order = Mutex::new(Vec::new());
+        std::thread::scope(|s| {
+            let big = s.spawn(|| {
+                let _g = budget.take(80);
+                order.lock().unwrap().push("big");
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let small = s.spawn(|| {
+                let _g = budget.take(10);
+                order.lock().unwrap().push("small");
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert!(order.lock().unwrap().is_empty(), "both wait");
+            drop(held);
+            big.join().unwrap();
+            small.join().unwrap();
+        });
+        assert_eq!(order.into_inner().unwrap()[0], "big");
     }
 
     #[test]
-    fn a_capture_where_no_line_is_seen_is_read_in_strips() {
-        assert!(text_too_small(1000, 4000, &[]), "nothing detected");
-        // Strips 2,000 long read 736 × 2,600 1.3 times larger.
-        assert!(text_too_small(736, 2600, &[]));
-        // Text the detector cannot resolve comes back as one box over the
-        // whole image, read as noise: no line.
-        let all = [0.0, 0.0, 1000.0, 4000.0];
-        let blob = |bbox: [f64; 4]| OcrWord {
-            text: "WNm".into(),
-            bbox,
-            angle: Some(90.0),
-            conf: Some(0.2),
+    fn a_grant_is_given_back_when_its_reader_panics() {
+        let budget = Budget::new(100);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = budget.take(70);
+            panic!("the engine failed");
+        }));
+        assert!(r.is_err());
+        assert_eq!(budget.held(), 0);
+        drop(budget.take(100));
+    }
+
+    #[test]
+    fn a_pass_is_its_rows_padded_with_paper() {
+        let img = image::RgbImage::from_fn(30, 100, |_, y| image::Rgb([y as u8; 3]));
+        let pass = Pass {
+            top: 40,
+            bottom: 60,
+            canvas: (50, 25),
+            up: 2.0,
         };
-        // Upright about its center, as [`quad_box`] sets a tall quad.
-        let upright = [-1500.0, 1500.0, 2500.0, 2500.0];
-        assert!(text_too_small(1000, 4000, &[(blob(upright), all)]));
-        // Nor is a box as thick as it is long.
-        let square = [100.0, 100.0, 400.0, 400.0];
-        assert!(text_too_small(1000, 4000, &[(blob(square), square)]));
-    }
-
-    #[test]
-    fn an_image_where_no_line_is_seen_is_read_whole_where_strips_see_no_more() {
-        // A blank scanned verso and a phone photo, its noise one box over
-        // all of it: their strips, as long as they are wide, are shrunk too.
-        assert!(!text_too_small(2550, 3300, &[]));
-        let all = [0.0, 0.0, 3024.0, 4032.0];
-        let noise = OcrWord {
-            text: "中".into(),
-            bbox: all,
-            angle: Some(0.0),
-            conf: Some(0.3),
+        let c = pass_image(&img, &pass);
+        assert_eq!(c.dimensions(), (50, 25));
+        assert_eq!(c.get_pixel(0, 0).0, [40; 3], "its first row at the top");
+        assert_eq!(c.get_pixel(29, 19).0, [59; 3]);
+        assert_eq!(c.get_pixel(30, 0).0, [255; 3], "paper to the right");
+        assert_eq!(c.get_pixel(0, 20).0, [255; 3], "and below");
+        // A whole image within its canvas is read as it is.
+        let whole = Pass {
+            top: 0,
+            bottom: 100,
+            canvas: (30, 100),
+            up: 1.0,
         };
-        assert!(!text_too_small(3024, 4032, &[(noise, all)]));
-        assert!(!text_too_small(2000, 4000, &[]));
-        // Strips that read it barely larger: 1.2 and 1.02 times.
-        assert!(!text_too_small(1000, 2400, &[]));
-        assert!(!text_too_small(1536, 2048, &[]));
+        assert_eq!(pass_image(&img, &whole), img);
     }
 
     #[test]
-    fn strips_are_offered_wherever_they_read_an_image_larger() {
-        // Strips 2,000 long for a capture 736 to 2,000 wide: one a row
-        // taller is cut, in two.
-        assert!(strips(1000, 2000).is_empty());
-        assert_eq!(strips(1000, 2001), [(0, 2000), (1, 2001)]);
-        assert_eq!(strips(1000, 3600), [(0, 2000), (1600, 3600)]);
-        // As long as the image is wide from 2,000 on, so a page is offered
-        // them, and read whole on its text's size.
-        assert!(!strips(2550, 3300).is_empty());
-        assert!(strips(3300, 2550).is_empty());
-        // Scaled up to 736 across first.
-        assert!(strips(368, 1000).is_empty());
-        assert!(!strips(368, 1001).is_empty(), "strips of 1,000 rows");
-    }
-
-    #[test]
-    fn a_tall_image_is_read_in_overlapping_strips() {
-        // Within what the detector takes whole: no strips.
-        assert!(strips(1224, 1584).is_empty());
-        assert!(strips(9000, 1200).is_empty(), "a wide image is not cut");
-        // 1,200 × 9,000: strips of 2,000, a fifth overlapping, the last
-        // flush with the bottom.
-        let s = strips(1200, 9000);
-        assert_eq!(s[0], (0, 2000));
-        assert_eq!(s[1], (1600, 3600));
-        assert_eq!(*s.last().unwrap(), (7000, 9000));
-        assert!(
-            s.windows(2).all(|w| w[1].0 < w[0].1),
-            "each overlaps the next"
-        );
-        // A narrow receipt is scaled up to 736 across: shorter strips.
-        assert_eq!(strips(368, 6000)[0], (0, 1000));
-        // Too narrow to be worth strips.
-        assert!(strips(40, 9000).is_empty());
+    fn a_plan_in_strips_reads_each_and_keeps_a_line_once() {
+        let plan = OcrSizing::megapixels(1.0).unwrap().plan(800, 5000);
+        assert!(plan.passes.len() > 2, "{plan:?}");
+        // Each strip reads one line at its own top quarter, and the line
+        // in the overlap with the next, at the same rows in the image.
+        let mut seen = Vec::new();
+        let words = read_plan(&plan, &mut |pass| {
+            seen.push((pass.top, pass.bottom));
+            let mid = pass.bottom - (pass.bottom - pass.top) / 10;
+            Ok(vec![
+                w(
+                    &format!("own {}", pass.top),
+                    f64::from(pass.top) + 300.0,
+                    f64::from(pass.top) + 320.0,
+                ),
+                w("shared", f64::from(mid), f64::from(mid) + 20.0),
+            ])
+        })
+        .unwrap();
+        assert_eq!(seen.len(), plan.passes.len());
+        let own = words.iter().filter(|w| w.text.starts_with("own")).count();
+        assert_eq!(own, plan.passes.len(), "every strip's own line");
+        // One whole plan: the words as read.
+        let one = OcrSizing::default().plan(800, 600);
+        let words = read_plan(&one, &mut |_| Ok(vec![w("a", 10.0, 30.0)])).unwrap();
+        assert_eq!(words.len(), 1);
     }
 
     fn w(text: &str, y0: f64, y1: f64) -> (OcrWord, Bounds) {

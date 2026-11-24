@@ -386,11 +386,26 @@ fn images_read_at_once_share_a_bounded_set_of_pipelines() {
 #[test]
 #[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
 fn a_tall_capture_is_read_row_by_row() {
-    // 800 × 9,000 pixels of 220 short rows, 13 px high: read whole, the
-    // detector would shrink it to 178 × 2,000 and see none of them.
+    // 800 × 9,000 pixels of 220 short rows, 13 px high: 7.2 Mpx, read whole
+    // at its own size (shrunk to 178 × 2,000, the detector would see none of
+    // them); and, under a cap of 2 Mpx, in strips across it, each row kept
+    // once, the passes taking turns within a budget smaller than one.
     use fluree_doc_vision::OcrEngine;
     let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
-    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let whole = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let strips = OarEngine::open(
+        &dir,
+        &OarOptions {
+            sizing: fluree_doc_vision::sizing::OcrSizing::megapixels(2.0).unwrap(),
+            memory: 1,
+            ..OarOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        strips_of(&strips, 800, 9000) > 4,
+        "read in strips under 2 Mpx"
+    );
     let rows: String = (0..220)
         .map(|i| {
             format!(
@@ -412,24 +427,39 @@ fn a_tall_capture_is_read_row_by_row() {
     fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
     let image = image.unwrap();
     assert_eq!((image.width, image.height), (800, 9000));
-    let reading = engine.read(&image).unwrap();
-    let mut seen = vec![0; 220];
+    for engine in [&whole, &strips] {
+        rows_read_once(&engine.read(&image).unwrap(), 220);
+    }
+}
+
+/// How many passes `engine`'s sizing plans for an image `w` × `h`.
+fn strips_of(engine: &OarEngine, w: u32, h: u32) -> usize {
+    engine.sizing().plan(w, h).passes.len()
+}
+
+/// Each of the `n` rows `Row 000` … of a reading is read once, its boxes
+/// in the image's rows.
+fn rows_read_once(reading: &fluree_doc_vision::WordReading, n: usize) {
+    let mut seen = vec![0; n];
     for w in &reading.words {
         let t: String = w.text.split_whitespace().collect();
-        if let Some(n) = t
+        if let Some(i) = t
             .strip_prefix("Row")
             .and_then(|r| r.get(..3)?.parse::<usize>().ok())
         {
-            if n < 220 {
-                seen[n] += 1;
+            if i < n {
+                seen[i] += 1;
             }
         }
-        assert!(w.bbox[3] <= 9000.0, "boxes are in the whole image's rows");
+        assert!(
+            w.bbox[3] <= reading.height.unwrap() + 1.0,
+            "boxes are in the whole image's rows"
+        );
     }
-    let once = seen.iter().filter(|&&n| n == 1).count();
+    let once = seen.iter().filter(|&&k| k == 1).count();
     assert_eq!(
         once,
-        220,
+        n,
         "rows read other than once: {:?}",
         seen.iter()
             .enumerate()
@@ -440,10 +470,10 @@ fn a_tall_capture_is_read_row_by_row() {
 
 #[test]
 #[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
-fn a_capture_of_small_text_is_read_again_in_strips() {
-    // 1,000 × 2,600 pixels of 160 rows of 10 px text: its shape is a
-    // screen's, but the detector, shrinking it to 0.77, sees its lines 9 px
-    // thick and misses some. Read whole first, it is read again in strips.
+fn a_capture_of_small_text_is_read_at_its_own_size() {
+    // 1,000 × 2,600 pixels of 160 rows of 10 px text: shrunk to 0.77, as
+    // the detector once did to fit 2,000 px, its lines are 9 px thick and
+    // some are missed. Read at its own size, every one is.
     use fluree_doc_vision::OcrEngine;
     let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
     let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
@@ -471,29 +501,7 @@ fn a_capture_of_small_text_is_read_again_in_strips() {
     fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
     let image = image.unwrap();
     assert_eq!((image.width, image.height), (1000, 2600));
-    let reading = engine.read(&image).unwrap();
-    let mut seen = vec![0; 160];
-    for w in &reading.words {
-        let t: String = w.text.split_whitespace().collect();
-        if let Some(n) = t
-            .strip_prefix("Row")
-            .and_then(|r| r.get(..3)?.parse::<usize>().ok())
-        {
-            if n < 160 {
-                seen[n] += 1;
-            }
-        }
-    }
-    let once = seen.iter().filter(|&&n| n == 1).count();
-    assert_eq!(
-        once,
-        160,
-        "rows read other than once: {:?}",
-        seen.iter()
-            .enumerate()
-            .filter(|(_, n)| **n != 1)
-            .collect::<Vec<_>>()
-    );
+    rows_read_once(&engine.read(&image).unwrap(), 160);
 }
 
 #[test]

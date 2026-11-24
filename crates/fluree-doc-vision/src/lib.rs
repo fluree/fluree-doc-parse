@@ -10,7 +10,9 @@
 //!   in memory ([`Pixels`]) into that format;
 //! - with the `oar` feature, a built-in engine ([`oar::OarEngine`]):
 //!   PP-OCRv6 through oar-ocr, on an ONNX Runtime loaded from an assets
-//!   directory rather than linked in.
+//!   directory rather than linked in;
+//! - how an image is sized for an OCR engine ([`sizing`]): at its own
+//!   resolution, in passes within a pixel cap.
 //!
 //! Laying the words out as text is the layout engine's job
 //! (`fluree_doc_pdf::ocr`).
@@ -21,6 +23,7 @@ use serde::{Deserialize, Serialize};
 pub mod assets;
 #[cfg(feature = "oar")]
 pub mod oar;
+pub mod sizing;
 
 /// How each pixel of [`Pixels`] is laid out: 8 bits a channel.
 ///
