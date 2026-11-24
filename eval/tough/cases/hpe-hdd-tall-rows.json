@@ -6,7 +6,8 @@
     "about": "HPE hard disk drive QuickSpecs. Each drive family's box sets a block of short field rows over SKU rows four to five lines tall, each row's verticals drawn on their own."
   },
   "notes": [
-    "Where the field rows set the median, every SKU row was over 3.5 times it: the table ended at the first, and the SKU rows were paragraphs."
+    "Where the field rows set the median, every SKU row was over 3.5 times it: the table ended at the first, and the SKU rows were paragraphs.",
+    "2026-11-24 (#111): the SKU rows' own header row, its names turned on their side, sits under the block of fields in the same box; it was a row of data, and the SKU rows were named by the box's title band."
   ],
   "checks": [
     {
@@ -16,6 +17,16 @@
       "cell": {
         "value": "HPE 300GB SAS 12G Mission Critical 10K SFF SC 3-year Warranty Multi Vendor HDD",
         "row": "872475-B21"
+      }
+    },
+    {
+      "id": "sku-columns-named",
+      "found": "2026-11-24",
+      "issue": "#111: every SKU cell's `doc:columnHeader` was `Mission Critical (10K rpm)`.",
+      "cell": {
+        "value": "195",
+        "column": "OD Media Rate, Max Sequential Throughput (MiB/s)",
+        "row": "P40430-B21"
       }
     }
   ]

@@ -8,7 +8,8 @@
   "notes": [
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
     "2026-11-24 (#136): a degree set as a raised `o` read as the letter after a number and a space (`75 oF`).",
-    "2026-11-24 (#126): a raised ® beside a display title was dropped or joined a smaller line beside it, because the space glyph the producer set after it decided which line it was."
+    "2026-11-24 (#126): a raised ® beside a display title was dropped or joined a smaller line beside it, because the space glyph the producer set after it decided which line it was.",
+    "2026-11-24 (#110): the acoustical rows `2`, `3`, `5` were a second table with no column names; the outer table's label, centred on its tall row, falls between `1.5` and `2` and broke the run of aligned rows."
   ],
   "checks": [
     {
@@ -54,6 +55,16 @@
       "found": "2026-11-24",
       "issue": "As above.",
       "no_text": "® Technical Data Sheet"
+    },
+    {
+      "id": "acoustic-rows-under-their-header",
+      "found": "2026-11-24",
+      "issue": "#110: the rows under the break had no `doc:columnHeader`.",
+      "cell": {
+        "value": "0.37",
+        "column": "125 Hz",
+        "row": "2"
+      }
     }
   ]
 }

@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
-    "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it."
+    "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it.",
+    "2026-11-24 (#112): the ordering table's shaded `IVD-MD | General Use Only` row has a rule under its first column only; the shading's edge is the line under the others, and the row and the first values below were read as one."
   ],
   "checks": [
     {
@@ -23,6 +24,16 @@
       "element": {
         "type": "doco:Paragraph",
         "text": "Centrifugation"
+      }
+    },
+    {
+      "id": "shaded-row-parts-its-values",
+      "found": "2026-11-24",
+      "issue": "#112: the header read `MT 17 / IVD-MD 75002576`, and the first row of values was lost into it.",
+      "cell": {
+        "value": "75002576",
+        "column": "MT 17 / IVD-MD",
+        "row": "120 V, 50/60 Hz"
       }
     }
   ]

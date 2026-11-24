@@ -1133,6 +1133,37 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         ),
                     };
                     let subs = e.sub_headers.clone().unwrap_or_default();
+                    // A row set like the header, partway down, names the
+                    // columns of the rows beneath it in the header's place:
+                    // its labels stand for the header's lowest row, under
+                    // any rows above that one (`K25W951 / By wt`).
+                    let restated = e.restated_headers.clone().unwrap_or_default();
+                    let upper = if head.len() > 1 {
+                        let n = head.len() - 1;
+                        let left = head_left.get(..n * ncols).unwrap_or(&[]);
+                        column_headers(&head[..n], n, Some(left))
+                    } else {
+                        Vec::new()
+                    };
+                    let restated_header = |s: usize| -> Vec<String> {
+                        (0..ncols)
+                            .map(|c| {
+                                let label = rows[s].get(c).map_or("", |t| t.trim());
+                                if label.is_empty() {
+                                    return header.get(c).cloned().unwrap_or_default();
+                                }
+                                match upper.get(c).map(|u| u.trim()).filter(|u| !u.is_empty()) {
+                                    Some(u) if u != label => format!("{u} / {label}"),
+                                    _ => label.to_string(),
+                                }
+                            })
+                            .collect()
+                    };
+                    let restated_headers: Vec<(usize, Vec<String>)> = restated
+                        .iter()
+                        .filter(|&&s| s >= n_header && s < rows.len())
+                        .map(|&s| (s, restated_header(s)))
+                        .collect();
                     // A table wrapped into side-by-side copies of its columns
                     // holds one record per copy on each row.
                     let width = record_width(&header).unwrap_or(ncols).max(1);
@@ -1149,6 +1180,14 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         if subs.contains(&r) && data_after(r) {
                             continue;
                         }
+                        if restated.contains(&r) {
+                            continue;
+                        }
+                        let header = restated_headers
+                            .iter()
+                            .rev()
+                            .find(|(s, _)| *s < r)
+                            .map_or(&header, |(_, h)| h);
                         // The bands over a row: the nearest above it, and
                         // each band set directly over that one, a group over
                         // its sub-group (`Power Management` over `Average
@@ -1171,9 +1210,43 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             })
                             .filter(|t| !t.is_empty());
                         let section = section.as_deref();
+                        // A group label set down the first column, a span
+                        // over the rows it groups, beside each row's own
+                        // label: the row is named by both, group first
+                        // (`Vertical Angle / 55°`).
+                        // The span lies in the body: a first cell carrying
+                        // on the header's is no group.
+                        let spans_down = |r: usize, c: usize| {
+                            let at = |r: usize| {
+                                e.merged_down
+                                    .as_ref()
+                                    .and_then(|m| m.get(r * ncols + c))
+                                    .copied()
+                                    .unwrap_or(false)
+                            };
+                            (r > n_header && at(r)) || (r + 1 < rows.len() && at(r + 1))
+                        };
+                        // A row's own label, not a figure (`55°` is one,
+                        // `158,571` is not).
+                        let figure = |t: &str| {
+                            t.chars().any(|c| c.is_ascii_digit())
+                                && t.chars().all(|c| {
+                                    c.is_ascii_digit() || ",.$€£¥%()-+\u{2212} ".contains(c)
+                                })
+                        };
                         for (c, cell) in row.iter().enumerate() {
                             let first = c - c % width;
-                            let row_header = row.get(first).map(|t| t.trim()).unwrap_or("");
+                            let group = row.get(first).map(|t| t.trim()).unwrap_or("");
+                            let own = row.get(first + 1).map(|t| t.trim()).unwrap_or("");
+                            let stacked = (c > first + 1
+                                && first + 1 < first + width
+                                && spans_down(r, first)
+                                && !group.is_empty()
+                                && !own.is_empty()
+                                && !figure(own)
+                                && own != group)
+                                .then(|| format!("{group} / {own}"));
+                            let row_header = stacked.as_deref().unwrap_or(group);
                             let value = cell.trim();
                             if value.is_empty() {
                                 continue;
@@ -1823,9 +1896,15 @@ mod tests {
             system["doc:rowHeader"], "Baseline noise",
             "the cut cell is above the break"
         );
+        // A value beyond the cause is named by the problem spanning its
+        // rows and its own cause, group first.
         assert_eq!(
             row_of(tables[1], "Purge it")["doc:rowHeader"],
-            "Baseline noise"
+            "Baseline noise / Detector needs purging"
+        );
+        assert_eq!(
+            row_of(tables[1], "Clean the system")["doc:rowHeader"],
+            "Baseline noise / Dirty system"
         );
         assert_eq!(
             row_of(tables[1], "Replace it")["doc:rowHeader"],
@@ -1842,6 +1921,41 @@ mod tests {
             let want = n.get("nif:isString").or(n.get("doc:cellValue")).unwrap();
             assert_eq!(&slice, want.as_str().unwrap());
         }
+    }
+
+    #[test]
+    fn a_row_restating_the_header_names_the_rows_under_it() {
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        t.cells = Some(vec![
+            vec!["".into(), "K25W951".into(), "".into()],
+            vec!["".into(), "LB/Gal".into(), "g/L".into()],
+            vec!["Coating Density".into(), "11.95".into(), "1432".into()],
+            vec!["".into(), "By wt".into(), "By vol".into()],
+            vec!["Total Volatiles".into(), "39.0%".into(), "55.7%".into()],
+            vec!["Water".into(), "39.0%".into(), "55.6%".into()],
+        ]);
+        t.header_rows = Some(2);
+        let mut ml = vec![false; 18];
+        ml[2] = true; // `K25W951` spans both columns
+        t.merged_left = Some(ml);
+        t.restated_headers = Some(vec![3]);
+        let g = graph(&[t]);
+        let cell = |value: &str| -> Vec<Value> {
+            g.iter()
+                .filter(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .collect()
+        };
+        assert_eq!(cell("11.95")[0]["doc:columnHeader"], "K25W951 / LB/Gal");
+        assert_eq!(cell("55.7%")[0]["doc:columnHeader"], "K25W951 / By vol");
+        assert!(
+            cell("39.0%")
+                .iter()
+                .all(|c| c["doc:columnHeader"] == "K25W951 / By wt"),
+            "every row under it until the next"
+        );
+        assert!(cell("By wt").is_empty(), "the row itself is not data");
     }
 
     #[test]

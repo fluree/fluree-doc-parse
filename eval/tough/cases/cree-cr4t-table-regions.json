@@ -6,7 +6,8 @@
     "about": "Cree CR4T downlight spec sheet (Canada). Its photometry page sets ruled tables side by side, beside a polar chart, in two page columns parted by a vertical rule."
   },
   "notes": [
-    "The page's rules were read as one grid before being cut into tables, so tables side by side shared row lines and the chart's axis and the page divider became columns."
+    "The page's rules were read as one grid before being cut into tables, so tables side by side shared row lines and the chart's axis and the page divider became columns.",
+    "2026-11-24: the luminance table's `Vertical Angle`, turned down a column of its own, was every row's `doc:rowHeader`; a group label over each row's own label names the row with both."
   ],
   "checks": [
     {
@@ -32,6 +33,15 @@
       "found": "2026-11-24",
       "issue": "#102: the polar chart's axis labels headed the CU table.",
       "no_column_header": "0 96 192 289 385"
+    },
+    {
+      "id": "luminance-row-under-its-group",
+      "found": "2026-11-24",
+      "issue": "Every row's `doc:rowHeader` was `Vertical Angle`.",
+      "cell": {
+        "value": "17,146",
+        "row": "Vertical Angle / 55°"
+      }
     }
   ]
 }

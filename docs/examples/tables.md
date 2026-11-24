@@ -204,6 +204,7 @@ full of `<`, `>` and `&`.
 |---|---|
 | `header_rows` | how many leading rows are headers; **absent means 1**, not zero |
 | `sub_headers` | row indices that are one full-width banner splitting the body into sections |
+| `restated_headers` | row indices that name the columns afresh for the rows beneath them (a header row set partway down); skip them as data |
 | `merged_down` | flat `rows × cols`: this cell continues the one above |
 | `merged_left` | flat `rows × cols`: this cell continues the one to its left |
 | `datums` | workbooks only, nested like `cells`: each cell's stored value, typed (`0.12345` under `12%`), or `null` for text |

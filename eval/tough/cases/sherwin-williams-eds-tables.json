@@ -6,7 +6,8 @@
     "about": "Sherwin-Williams environmental data sheet. Each page sets small ruled VOC tables under larger ones and under full-width section banners."
   },
   "notes": [
-    "Against the page's ruling, the small tables' rules fell short of grid lines; they were read from their text, without their label column."
+    "Against the page's ruling, the small tables' rules fell short of grid lines; they were read from their text, without their label column.",
+    "2026-11-24 (#111): the VOC tables restate their columns partway down (`By wt | By vol`, `LB/Gal | g/L`); the rows under such a row were named by the header at the top."
   ],
   "checks": [
     {
@@ -17,6 +18,14 @@
         "value": "39.1%",
         "column": "K25W951 / By wt",
         "row": "Total Volatiles"
+      }
+    },
+    {
+      "id": "us-by-volume",
+      "found": "2026-11-24",
+      "issue": "#111: in the U.S. and California tables, `Total Volatiles` by volume (`55.7%`) was under `K25W951 / g/L`, the header's unit, not the `By vol` the row above it names.",
+      "no_row": {
+        "K25W951 / g/L": "55.7%"
       }
     }
   ]

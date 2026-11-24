@@ -351,7 +351,42 @@ banner's columns (`3.1 mg in 2 mL` under `Strength`) names nothing. And where
 the label above spans every column it is as often a band titling the rows
 beneath (`Monotherapy` over `Adult patients with …`) as a header over the
 column names (`Establishment` over `Name | Address | ID/FEI`), so the labels
-under it must be short, as column names are.
+under it must be short, as column names are. A column no label spans is named
+by the first row alone: the second row leaves it empty, or the ruling runs its
+label down through it. A value of its own there (`FPWINGRF-JP2` under
+`Product No.`, beside two under a `Type` set across two columns) makes the
+row the first of the data.
+
+### A header restated partway down
+
+A table can name its columns afresh partway down: a VOC table's `By wt |
+By vol` under a `LB/Gal | g/L` header, or a SKU table's own header row under
+a block of fields in the same box. Such a row sets names in two cells or
+more, each its own, and no figure or part number, over two rows or more with
+something in a column it names. It is set apart from the rows under it one
+of three ways:
+
+- **Bold.** Every value cell is bold, two or more, over a row that is not. A
+  first column of row labels keeps its own weight: `VOC Content` is set as
+  `Total` is, beside a bold `LB/Gal | g/L`. One bold word beside a label is
+  emphasis.
+- **Shaded as the header row is,** over two rows that are not; striped rows
+  alternate.
+- **Names turned on their side** in two cells or more, as narrow columns'
+  names are. A group label turned down the rows it groups runs on past the
+  row, and names none.
+
+The row is not data. The rows under it, until the next such row, take its
+names in place of the header's lowest row, under any rows above that one:
+`K25W951 / By wt`. A band across the row is a section's label instead.
+
+### Row headers under a group label
+
+A row is named by its first column. Where that column is a group label set
+down the rows it groups, a span (`Vertical Angle` turned beside the rows of
+angles, a `Problem` over its causes), the rows under it are told apart by the
+column beside it. A value further along is named by both, group first:
+`Vertical Angle / 55°`.
 
 A table ruled with horizontals only groups its columns another way. Each
 group's label (`2024`, `2023`, `Percent Change`) is set over a rule drawn
@@ -487,6 +522,39 @@ Three conditions keep this from firing where it should not:
 - **A column has to give each row its own value.** Without one there are no
   rows to span.
 
+### Shading parts rows
+
+A shaded row can be parted from the next by nothing but the edge of its
+shading. A header shaded down to its first row, with no rule between them,
+was read as one row with it, so the header named every column after the
+first product (`Part No. AFPG430`). A rule drawn under one column only, with
+the shading ending on the same line over the others, left those columns open,
+and a merge read the shaded labels and the first values as one cell
+(`IVD-MD 75002576`).
+
+So the edge of a fill parts rows as a rule there would, in two places:
+
+- **In the grid.** A fill across nine tenths of a table's width, hanging
+  from one of its lines (a header band from the top rule, a shaded row from
+  the rule above it), whose other edge falls inside a row, a cell's height
+  from its lines and through no line of text, is a row boundary too. Only
+  inside a grid the rules make, of two rows and two columns or more: an
+  edge never makes a table where the rules make none, nor parts a chart's
+  frame, its legend boxed over the plot, into rows.
+- **In the merges.** Where a rule is drawn under some columns of a row
+  boundary, a fill ending on that line over the others closes them. Its
+  sides must stand on column edges, as a cell's shading does, not a
+  highlight set inside a cell behind a line of its text. Never alone: a
+  boundary no rule is drawn on claims no span.
+
+An edge counts only where the shading stops. A column shaded as one block is
+often drawn a fill to a row, edge to edge, and the seams are not seen: a fill
+butted on to another across the line parts nothing. A background laid under
+the whole table is no such fill, and the band on it still shows. And only a
+table shaded once: one band across it, under half its height, is a header or
+a row set apart, while a table striped row by row has many, whose edges are
+no rules, and is left to the rules it draws.
+
 ## Tables split by a page break
 
 A table that runs off the foot of one page and on at the head of the next is
@@ -524,6 +592,28 @@ into a table of their own.
 The parts stay separate elements, because an element and its box sit on one
 page. Each later part names the one before it, and the DoCO and Markdown
 emitters read the chain as one table.
+
+### Parts of one table on one page
+
+A table can also come out of one page in two parts, and the lower one has no
+column names. Parts that follow one another with nothing between, the lower
+one a box's spacing below, are linked in two ways:
+
+- **A header boxed apart.** A spreadsheet laid out for print fills its header
+  in one box and rules its rows in another. The upper part sets names and no
+  figures, the lower opens on figures, the two share their outer edges, and
+  every upper column edge is a lower one, each within a quarter of the
+  narrowest lower column (a box drawn a row at a time has its sides in
+  pieces a little apart). A name over two of the lower part's columns heads
+  both (`Nominal Size` over the size and its decimal), so the header is dealt
+  onto the lower part's columns, a name spanning those it covers, and is all
+  header: `D / Body Diameter / Max.`.
+- **Rows set below a table on its columns.** A run of rows read by alignment
+  breaks where a line of something else falls between two of them, such as
+  an outer table's label centred on the tall row the inner table sits in.
+  The rows under the break carry on the table where they are as many
+  columns, each column's middle inside the other's, and open on figures with
+  no header of their own, under a table that has a header and figures.
 
 ## Escalation signals
 
