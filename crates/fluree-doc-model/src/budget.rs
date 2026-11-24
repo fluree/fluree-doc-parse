@@ -393,7 +393,14 @@ impl Budget {
         let n = chars
             .into_iter()
             .fold(0u64, |n, c| n.saturating_add(char_cost(c)));
-        self.spend_memory("text", n, TEXT_BYTES)
+        self.spend_text_cost(n)
+    }
+
+    /// Count text about to be made whose cost is already known, `cost` as
+    /// [`text_cost`] counts it: text a reader gathers from a tree, counted
+    /// in a pass that copies nothing, then gathered into a string.
+    pub fn spend_text_cost(&mut self, cost: u64) -> Result<(), TooLarge> {
+        self.spend_memory("text", cost, TEXT_BYTES)
     }
 
     /// Count what the output copies of the table `e`, once its cells are
@@ -460,7 +467,7 @@ impl Budget {
 /// The most bytes `c` takes in any output: a control character is six
 /// (`\u0001` in JSON), `"` six (`&quot;` in XHTML), `&` five, `<` and `>`
 /// four; a character Markdown escapes two; any other its UTF-8.
-fn char_cost(c: char) -> u64 {
+pub fn char_cost(c: char) -> u64 {
     match c {
         c if c.is_ascii_control() => 6,
         '"' | '&' => 6,

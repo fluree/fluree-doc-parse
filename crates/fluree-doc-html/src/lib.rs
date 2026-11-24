@@ -27,12 +27,12 @@
 //! counted, the attributes its tokenizer compares on each tag, counted from
 //! the tags before it starts, the elements it walks and the siblings it
 //! looks among, and what it does on each formatting element's tag; then as
-//! it is made each element with its text and
-//! links, a table's grid before it is made (a `colspan` of a billion asks
-//! for a billion cells), the cells its spans mark, and what DoCO copies of
-//! its cells. Past it, the page is refused ([`TooLarge`]). What nests past
-//! [`MAX_DEPTH`] is read beside its ancestor at that depth. The walk that
-//! reads the tree is linear in it.
+//! it is made each element with its links, its text counted before it is
+//! gathered, a table's grid before it is made (a `colspan` of
+//! a billion asks for a billion cells), the cells its spans mark, and what
+//! DoCO copies of its cells. Past it, the page is refused ([`TooLarge`]).
+//! What nests past [`MAX_DEPTH`] is read beside its ancestor at that depth.
+//! The walk that reads the tree is linear in it.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-use fluree_doc_model::budget::{Budget, TooLarge};
+use fluree_doc_model::budget::{char_cost, Budget, TooLarge};
 use fluree_doc_model::{DocumentInfo, Element, Link};
 use html5ever::interface::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::StrTendril;
@@ -433,7 +433,7 @@ fn read_dom(
     // text has marked it wrongly, and is read whole.
     let mut mains = Vec::new();
     find_mains(&dom.document, &out.facts, &mut mains);
-    mains.retain(|m| !text_of(m, &out.facts).0.is_empty());
+    mains.retain(|m| has_text(m, &out.facts));
     if mains.is_empty() {
         walk(&dom.document, &mut out);
     } else {
@@ -1049,13 +1049,63 @@ struct Out {
 impl Out {
     /// Keep `e`, it, its text and its links spent first.
     fn push(&mut self, e: Element) {
+        if self.spend(|b| b.spend_text(&e.text)) {
+            self.push_gathered(e);
+        }
+    }
+
+    /// Keep `e`, whose text was spent as it was gathered ([`Out::text`]),
+    /// it and its links spent first.
+    fn push_gathered(&mut self, e: Element) {
         let links = e.links.as_deref().unwrap_or_default();
         if self.spend(|b| {
             b.spend_elements(1)?;
-            b.spend_text(&e.text)?;
             b.spend_links(links)
         }) {
             self.keep(e);
+        }
+    }
+
+    /// The text `gather` gathers, with its links, spent before it is made:
+    /// gathered once to count it, copying nothing, then made. `None` once
+    /// the page is refused.
+    ///
+    /// Made first and spent after, with a map of each of its bytes to
+    /// place its links by, a paragraph took 20 bytes of memory for each
+    /// byte of it before it was spent: one of 193 MB, which the budget
+    /// refuses, aborted the process under 4 GB.
+    fn text(&mut self, gather: impl Fn(&mut Gather)) -> Option<(String, Vec<Link>)> {
+        if self.over.is_some() {
+            return None;
+        }
+        let mut count = Gather::new(&self.facts, false);
+        gather(&mut count);
+        let cost = count.cost;
+        if !self.spend(|b| b.spend_text_cost(cost)) {
+            return None;
+        }
+        let mut made = Gather::new(&self.facts, true);
+        gather(&mut made);
+        Some(made.finish())
+    }
+
+    /// An element of `kind` of the text `gather` gathers, where it has any.
+    fn paragraph(&mut self, kind: &str, level: Option<usize>, gather: impl Fn(&mut Gather)) {
+        if let Some((text, links)) = self.text(gather).filter(|(text, _)| !text.is_empty()) {
+            self.push_gathered(linked(kind, text, level, links));
+        }
+    }
+
+    /// A paragraph of a `<pre>`'s text as it is drawn ([`pre_text`]),
+    /// spent at [`pre_cost`] before it is made.
+    fn pre(&mut self, h: &Handle) {
+        let cost = pre_cost(h, &self.facts);
+        if !self.spend(|b| b.spend_text_cost(cost)) {
+            return;
+        }
+        let (text, links) = pre_text(h, &self.facts);
+        if !text.is_empty() {
+            self.push_gathered(linked("doco:Paragraph", text, None, links));
         }
     }
 
@@ -1243,54 +1293,213 @@ fn element(kind: &str, text: String, level: Option<usize>) -> Element {
 /// All text under a node, whitespace-collapsed, with any `<a href>` inside it
 /// located. Inline markup (`<em>`, `<a>`, `<span>`) is transparent: it styles
 /// a phrase, it does not divide one — but an `<a>` also says something about
-/// the phrase it styles, and that survives here as a span.
+/// the phrase it styles, and that survives here as a span. Not spent: the
+/// text the walk keeps is gathered by [`Out::text`].
 fn text_of(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
-    let mut raw = String::new();
-    let mut anchors = Vec::new();
-    collect(h, facts, &mut raw, &mut anchors);
-    squeeze(&raw, &anchors)
+    let mut g = Gather::new(facts, true);
+    g.children(h);
+    g.finish()
 }
 
-fn collect(h: &Handle, facts: &Facts, out: &mut String, anchors: &mut Vec<(usize, usize, String)>) {
-    for child in h.children.borrow().iter() {
-        collect_node(child, facts, out, anchors);
+/// Is there text under this node, once its whitespace is collapsed?
+/// Counted, not copied.
+fn has_text(h: &Handle, facts: &Facts) -> bool {
+    let mut g = Gather::new(facts, false);
+    g.children(h);
+    g.n > 0
+}
+
+/// Text gathered from a page's nodes, its whitespace collapsed as it is
+/// gathered, the way the readers always have, and each `<a href>` in it
+/// located by the characters it spans; or only counted, at [`char_cost`],
+/// to be spent before it is made ([`Out::text`]).
+///
+/// One copy, made as the nodes are read. The text was gathered whole, then
+/// collapsed with a map from each of its bytes to the character it lands
+/// on, to place the links: 18 bytes for each byte of it.
+struct Gather<'f> {
+    facts: &'f Facts,
+    /// The text, or `None` where it is only counted.
+    text: Option<String>,
+    /// What the text costs, each character at [`char_cost`].
+    cost: u64,
+    /// The characters of the text.
+    n: usize,
+    /// Whitespace met since the last character: a space before the next.
+    pending: bool,
+    /// Where the last character is.
+    last: usize,
+    /// Each anchor met.
+    anchors: Vec<Anchor>,
+    /// The anchors no character has started yet.
+    awaiting: Vec<usize>,
+    /// The anchors, in the order they end.
+    ended: Vec<usize>,
+    /// The last of the text, at least [`MARK_CONTEXT`] bytes of it where
+    /// there is as much, to tell a note's mark by.
+    tail: String,
+}
+
+/// An `<a href>` met as text is gathered.
+struct Anchor {
+    href: String,
+    /// Where its first and last characters are, once it has one.
+    span: Option<(usize, usize)>,
+    /// Its end is not met yet.
+    open: bool,
+}
+
+impl<'f> Gather<'f> {
+    /// Text to `make`, or only to count.
+    fn new(facts: &'f Facts, make: bool) -> Self {
+        Gather {
+            facts,
+            text: make.then(String::new),
+            cost: 0,
+            n: 0,
+            pending: false,
+            last: 0,
+            anchors: Vec::new(),
+            awaiting: Vec::new(),
+            ended: Vec::new(),
+            tail: String::new(),
+        }
     }
-}
 
-/// One node's contribution to the text [`collect`] gathers.
-fn collect_node(
-    node: &Handle,
-    facts: &Facts,
-    out: &mut String,
-    anchors: &mut Vec<(usize, usize, String)>,
-) {
-    match &node.data {
-        NodeData::Text { contents } => out.push_str(&contents.borrow()),
-        NodeData::Element { .. } => {
-            let Some(tag) = tag_of(node) else { return };
-            if facts.skipped(node) {
-                return;
-            }
-            if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
-                out.push(' ');
-            }
-            let raised = tag == "sup" || (tag == "a" && note_link(node));
-            if raised && fluree_doc_model::marks::note_mark(out, &text_of(node, facts).0) {
-                out.push(' ');
-            }
-            // Recorded around the recursion: an anchor's text is whatever
-            // its subtree contributes, and nesting is legal markup. In
-            // bytes, which `squeeze` turns into characters once: counting
-            // the characters here, at each element, is quadratic in a run.
-            let start = out.len();
-            collect(node, facts, out, anchors);
-            if tag == "a" {
-                if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
-                    anchors.push((start, out.len(), href));
-                }
+    fn push_str(&mut self, s: &str) {
+        for c in s.chars() {
+            self.push(c);
+        }
+    }
+
+    fn push(&mut self, raw: char) {
+        let c = repair_c1(raw);
+        if c.is_whitespace() {
+            self.pending = self.n > 0;
+            return;
+        }
+        if std::mem::take(&mut self.pending) {
+            self.put(' ');
+        }
+        for i in self.awaiting.drain(..) {
+            let a = &mut self.anchors[i];
+            if a.open {
+                a.span = Some((self.n, self.n));
             }
         }
-        _ => {}
+        self.last = self.n;
+        self.put(c);
+    }
+
+    fn put(&mut self, c: char) {
+        self.tail.push(c);
+        if self.tail.len() >= 2 * MARK_CONTEXT {
+            let mut cut = self.tail.len() - MARK_CONTEXT;
+            while !self.tail.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            self.tail.drain(..cut);
+        }
+        self.cost = self.cost.saturating_add(char_cost(c));
+        if let Some(t) = &mut self.text {
+            t.push(c);
+        }
+        self.n += 1;
+    }
+
+    /// The text of `node`'s children, located as an anchor's where `node`
+    /// is one: an anchor's text is whatever its subtree contributes, and
+    /// nesting is legal markup. Counted text locates none.
+    fn around(&mut self, node: &Handle, tag: &str) {
+        let href = (tag == "a" && self.text.is_some())
+            .then(|| attr_of(node, "href"))
+            .flatten()
+            .filter(|h| !h.trim().is_empty());
+        let Some(href) = href else {
+            self.children(node);
+            return;
+        };
+        let at = self.anchors.len();
+        self.anchors.push(Anchor {
+            href,
+            span: None,
+            open: true,
+        });
+        self.awaiting.push(at);
+        self.children(node);
+        let last = self.last;
+        let a = &mut self.anchors[at];
+        a.open = false;
+        if let Some((_, end)) = &mut a.span {
+            *end = last;
+        }
+        self.ended.push(at);
+    }
+
+    fn children(&mut self, h: &Handle) {
+        for child in h.children.borrow().iter() {
+            self.node(child);
+        }
+    }
+
+    /// One node's contribution to the text.
+    fn node(&mut self, node: &Handle) {
+        match &node.data {
+            NodeData::Text { contents } => self.push_str(&contents.borrow()),
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(node) else { return };
+                if self.facts.skipped(node) {
+                    return;
+                }
+                if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
+                    self.push(' ');
+                }
+                // A note's mark is read apart from the word it marks.
+                let raised = tag == "sup" || (tag == "a" && note_link(node));
+                if raised && self.n > 0 && !self.pending {
+                    let mark = mark_text(node, self.facts);
+                    if mark.is_some_and(|m| fluree_doc_model::marks::note_mark(&self.tail, &m)) {
+                        self.push(' ');
+                    }
+                }
+                self.around(node, &tag);
+            }
+            _ => {}
+        }
+    }
+
+    /// An element's text excluding nested block containers, so a list item
+    /// that holds a sub-list contributes only its own label.
+    fn own(&mut self, h: &Handle) {
+        for child in h.children.borrow().iter() {
+            match &child.data {
+                NodeData::Text { contents } => self.push_str(&contents.borrow()),
+                NodeData::Element { .. } => {
+                    let Some(tag) = tag_of(child) else { continue };
+                    if self.facts.skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
+                        continue;
+                    }
+                    self.push(' ');
+                    self.around(child, &tag);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The text, and its links [`ordered`].
+    fn finish(self) -> (String, Vec<Link>) {
+        let mut anchors = self.anchors;
+        let links: Vec<Link> = self
+            .ended
+            .iter()
+            .filter_map(|&i| {
+                let a = &mut anchors[i];
+                let (first, last) = a.span?;
+                Some(Link::uri(std::mem::take(&mut a.href)).spanning(first, last + 1))
+            })
+            .collect();
+        (self.text.unwrap_or_default(), ordered(links))
     }
 }
 
@@ -1378,14 +1587,13 @@ fn is_block(tag: &str) -> bool {
 
 /// A paragraph from a run of inline siblings, when it has any text.
 fn flush_run(run: &mut Vec<Handle>, out: &mut Out) {
-    let mut raw = String::new();
-    let mut anchors = Vec::new();
-    for node in run.iter() {
-        collect_node(node, &out.facts, &mut raw, &mut anchors);
-    }
-    let (text, links) = squeeze(&raw, &anchors);
-    if !text.is_empty() {
-        out.push(linked("doco:Paragraph", text, None, links));
+    let gathered = out.text(|g| {
+        for node in run.iter() {
+            g.node(node);
+        }
+    });
+    if let Some((text, links)) = gathered.filter(|(text, _)| !text.is_empty()) {
+        out.push_gathered(linked("doco:Paragraph", text, None, links));
     }
     out.figures(run.iter());
     run.clear();
@@ -1426,106 +1634,57 @@ fn walk_container(h: &Handle, out: &mut Out) {
     flush_run(&mut run, out);
 }
 
-/// An element's text excluding nested block containers, so a list item that
-/// holds a sub-list contributes only its own label.
-fn own_text(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
-    let mut raw = String::new();
-    let mut anchors = Vec::new();
-    for child in h.children.borrow().iter() {
-        match &child.data {
-            NodeData::Text { contents } => raw.push_str(&contents.borrow()),
-            NodeData::Element { .. } => {
-                let Some(tag) = tag_of(child) else { continue };
-                if facts.skipped(child) || matches!(tag.as_str(), "ul" | "ol" | "table") {
-                    continue;
-                }
-                raw.push(' ');
-                let start = raw.len();
-                collect(child, facts, &mut raw, &mut anchors);
-                if tag == "a" {
-                    if let Some(href) = attr_of(child, "href").filter(|h| !h.trim().is_empty()) {
-                        anchors.push((start, raw.len(), href));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    squeeze(&raw, &anchors)
-}
-
-/// Collapse whitespace the way the readers always have, carrying the anchor
-/// offsets through the collapse.
-///
-/// The offsets are bytes of the raw concatenation, and normalising it
-/// deletes characters — so they cannot simply be copied across. Each raw
-/// byte keeps the position, in characters, its character lands on, and an
-/// anchor's range becomes the first and last positions its characters
-/// occupy.
-fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
-    let mut out = String::new();
-    let mut at: Vec<Option<usize>> = Vec::with_capacity(raw.len());
-    let (mut n, mut pending) = (0usize, false);
-    for raw_c in raw.chars() {
-        let bytes = raw_c.len_utf8();
-        let c = repair_c1(raw_c);
-        if c.is_whitespace() {
-            pending = n > 0;
-            at.extend(std::iter::repeat_n(None, bytes));
-            continue;
-        }
-        if pending {
-            out.push(' ');
-            n += 1;
-            pending = false;
-        }
-        at.extend(std::iter::repeat_n(Some(n), bytes));
-        out.push(c);
-        n += 1;
-    }
-    let links = spans(&at, anchors);
-    (out, links)
-}
-
-/// The anchors located in the text a raw concatenation became, given where
-/// each raw character landed (`None` for one the text left out).
-fn spans(at: &[Option<usize>], anchors: &[(usize, usize, String)]) -> Vec<Link> {
-    let mut links: Vec<Link> = anchors
-        .iter()
-        .filter_map(|(b, e, href)| {
-            let range = at.get(*b..(*e).min(at.len()))?;
-            let first = range.iter().flatten().next()?;
-            let last = range.iter().flatten().next_back()?;
-            Some(Link::uri(href.clone()).spanning(*first, last + 1))
-        })
-        .collect();
-    // Emitters splice in one pass, so the spans have to arrive ordered and
-    // disjoint. Nested anchors are invalid markup but do occur; the outer one
-    // is the one the document drew.
-    links.sort_by_key(|l| (l.begin.unwrap_or(0), std::cmp::Reverse(l.end.unwrap_or(0))));
-    let mut end = 0usize;
-    links.retain(|l| match l.span() {
-        Some((b, e)) if b >= end => {
-            end = e;
-            true
-        }
-        _ => false,
-    });
-    links
-}
-
 /// A `<pre>`'s text as it is drawn, with any `<a href>` inside it located.
 ///
 /// In a `<pre>` the line breaks, the blank lines and the runs of spaces are
 /// the content (HTML, the `pre` element): a hearing transcript or a public
 /// law is published as one, its letterhead centred and its witness list set
 /// in columns by spaces alone. So nothing is collapsed. A `<br>` is a line
-/// break, and a block set inside one starts a line of its own.
+/// break, and a block set inside one starts a line of its own. Not spent:
+/// [`Out::pre`] spends it, at [`pre_cost`], before it is made.
 fn pre_text(h: &Handle, facts: &Facts) -> (String, Vec<Link>) {
     let mut raw = Raw::default();
     let mut anchors = Vec::new();
     collect_pre(h, facts, &mut raw, &mut anchors);
     verbatim(&raw.text, &anchors)
+}
+
+/// What a `<pre>`'s text can cost at most, each character at
+/// [`char_cost`] as it is drawn, counted down the tree without a copy: no
+/// less than [`pre_text`] makes, which leaves out some of the whitespace
+/// counted here, and adds no line break beyond the one counted for each
+/// `<br>` and each side of a block.
+fn pre_cost(h: &Handle, facts: &Facts) -> u64 {
+    let mut cost = 0u64;
+    let mut todo: Vec<Handle> = h.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = todo.pop() {
+        match &node.data {
+            NodeData::Text { contents } => {
+                for c in contents.borrow().chars() {
+                    cost = cost.saturating_add(char_cost(drawn(c)));
+                }
+            }
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(&node) else { continue };
+                if facts.skipped(&node) {
+                    continue;
+                }
+                let breaks = if tag == "br" {
+                    1
+                } else if is_block(&tag) {
+                    2
+                } else {
+                    0
+                };
+                cost = cost.saturating_add(breaks * char_cost('\n'));
+                if tag != "br" {
+                    todo.extend(node.children.borrow().iter().rev().cloned());
+                }
+            }
+            _ => {}
+        }
+    }
+    cost
 }
 
 /// Text gathered in order, with its length in characters kept as it grows:
@@ -1589,61 +1748,172 @@ fn collect_pre(
     }
 }
 
+/// A character of preformatted text as it is drawn: a tab stays a tab,
+/// since it sets a column, and any other space character, a no-break space
+/// among them, is a space.
+fn drawn(c: char) -> char {
+    match repair_c1(c) {
+        '\n' => '\n',
+        '\t' => '\t',
+        c if c.is_whitespace() => ' ',
+        c => c,
+    }
+}
+
 /// Preformatted text as written, carrying the anchor offsets through.
 ///
 /// Only what is never drawn goes: the whitespace before the first character
 /// and after the last, as every element's text is trimmed, and the spaces a
-/// line ends in. A tab stays a tab, since it sets a column; any other space
-/// character, a no-break space among them, is a space.
+/// line ends in. Each anchor, a range of `raw`'s characters, spans the
+/// characters kept from it. A flag for each character of `raw` says whether
+/// it is kept, and the anchors are placed in one pass over it, in the order
+/// they start and end: a map from each character to where it lands took 16
+/// bytes for each.
 fn verbatim(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
-    let chars: Vec<char> = raw
-        .chars()
-        .map(repair_c1)
-        .map(|c| match c {
-            '\n' | '\t' => c,
-            c if c.is_whitespace() => ' ',
-            c => c,
-        })
-        .collect();
-    let Some(first) = chars.iter().position(|c| !c.is_whitespace()) else {
-        return (String::new(), Vec::new());
-    };
-    let last = chars
-        .iter()
-        .rposition(|c| !c.is_whitespace())
-        .unwrap_or(first);
-    let mut keep = vec![false; chars.len()];
+    let n = raw.chars().count();
+    let mut keep = vec![false; n];
     // Walked backwards, so a run of spaces knows whether a line break or
-    // the end follows it.
-    let mut line_end = true;
-    for i in (first..=last).rev() {
-        match chars[i] {
-            '\n' => {
+    // the end follows it. Nothing after the last character is kept.
+    let (mut line_end, mut first) = (true, None);
+    for (back, c) in raw.chars().rev().map(drawn).enumerate() {
+        let i = n - 1 - back;
+        match c {
+            '\n' if first.is_some() => {
                 keep[i] = true;
                 line_end = true;
             }
-            ' ' | '\t' if line_end => {}
+            '\n' | ' ' | '\t' if first.is_none() || line_end => {}
+            c if c.is_whitespace() => keep[i] = true,
             _ => {
                 keep[i] = true;
                 line_end = false;
+                first = Some(i);
             }
         }
     }
+    // Nor anything before the first.
+    if let Some(first) = first {
+        keep[..first].fill(false);
+    }
+    let mut by_start: Vec<usize> = (0..anchors.len()).collect();
+    by_start.sort_by_key(|&a| anchors[a].0);
+    let mut by_end = by_start.clone();
+    by_end.sort_by_key(|&a| anchors[a].1);
+    let mut placed: Vec<Option<(usize, usize)>> = vec![None; anchors.len()];
+    let (mut started, mut ended) = (0, 0);
+    let mut awaiting = Vec::new();
+    let mut last_kept = 0usize;
     let mut out = String::with_capacity(raw.len());
-    let mut at = Vec::with_capacity(chars.len());
-    let mut n = 0usize;
-    for (c, k) in chars.iter().zip(&keep) {
-        if *k {
-            out.push(*c);
-            at.push(Some(n));
-            n += 1;
-        } else {
-            at.push(None);
+    let mut at = 0usize;
+    for (i, c) in raw.chars().map(drawn).enumerate() {
+        while let Some(&a) = by_end.get(ended).filter(|&&a| anchors[a].1 <= i) {
+            if let Some((_, last)) = &mut placed[a] {
+                *last = last_kept;
+            }
+            ended += 1;
+        }
+        while let Some(&a) = by_start.get(started).filter(|&&a| anchors[a].0 <= i) {
+            awaiting.push(a);
+            started += 1;
+        }
+        if keep[i] {
+            for a in awaiting.drain(..) {
+                if anchors[a].1 > i {
+                    placed[a] = Some((at, at));
+                }
+            }
+            out.push(c);
+            last_kept = at;
+            at += 1;
         }
     }
-    (out, spans(&at, anchors))
+    for &a in &by_end[ended..] {
+        if let Some((_, last)) = &mut placed[a] {
+            *last = last_kept;
+        }
+    }
+    let links = anchors
+        .iter()
+        .zip(placed)
+        .filter_map(|((_, _, href), at)| {
+            let (first, last) = at?;
+            Some(Link::uri(href.clone()).spanning(first, last + 1))
+        })
+        .collect();
+    (out, ordered(links))
 }
 
+/// Links ordered and disjoint: emitters splice in one pass. Nested anchors
+/// are invalid markup but do occur; the outer one is the one the document
+/// drew.
+fn ordered(mut links: Vec<Link>) -> Vec<Link> {
+    links.sort_by_key(|l| (l.begin.unwrap_or(0), std::cmp::Reverse(l.end.unwrap_or(0))));
+    let mut end = 0usize;
+    links.retain(|l| match l.span() {
+        Some((b, e)) if b >= end => {
+            end = e;
+            true
+        }
+        _ => false,
+    });
+    links
+}
+
+/// The bytes of text before a raised mark [`Gather`] keeps to tell a note's
+/// mark from raised text that belongs to its word
+/// ([`note_mark`](fluree_doc_model::marks::note_mark)), which looks at the
+/// word before the mark and the character before that word. Asked of all
+/// the text gathered so far, a run of a million raised digits after one
+/// unbroken word looked at the word again at each: kept to its last
+/// stretch, a word longer than any a mark follows is told by its end.
+const MARK_CONTEXT: usize = 256;
+
+/// The text of a raised element read as a note's mark, whitespace
+/// collapsed, as [`text_of`] would gather it; `None` where it holds more
+/// than a mark could ([`note_mark`](fluree_doc_model::marks::note_mark)
+/// takes four characters at most), and the walk stops there. Gathered
+/// whole at each raised element, nested ones each walked again what the
+/// one inside them holds.
+fn mark_text(h: &Handle, facts: &Facts) -> Option<String> {
+    /// Nodes looked at, and characters other than whitespace, past which
+    /// it is no mark.
+    const NODES: usize = 64;
+    const CHARS: usize = 8;
+    let mut raw = String::new();
+    let (mut nodes, mut chars) = (0usize, 0usize);
+    let mut todo: Vec<Handle> = h.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = todo.pop() {
+        nodes += 1;
+        if nodes > NODES {
+            return None;
+        }
+        match &node.data {
+            NodeData::Text { contents } => {
+                for c in contents.borrow().chars().map(repair_c1) {
+                    if !c.is_whitespace() {
+                        chars += 1;
+                        if chars > CHARS {
+                            return None;
+                        }
+                    }
+                    raw.push(c);
+                }
+            }
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(&node) else { continue };
+                if facts.skipped(&node) {
+                    continue;
+                }
+                if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
+                    raw.push(' ');
+                }
+                todo.extend(node.children.borrow().iter().rev().cloned());
+            }
+            _ => {}
+        }
+    }
+    Some(raw.split_whitespace().collect::<Vec<_>>().join(" "))
+}
 /// An element carrying whatever links its text contained.
 fn linked(kind: &str, text: String, level: Option<usize>, links: Vec<Link>) -> Element {
     let mut e = element(kind, text, level);
@@ -1672,16 +1942,6 @@ fn walk(h: &Handle, out: &mut Out) {
     }
 }
 
-/// Keep an element of `kind` for a block's text, where it has any. Made
-/// here, not in [`walk_node`]: each element made there took a slot of its
-/// frame, which each level of a page's nesting takes, and 512 nested
-/// tables overflowed a 2 MiB stack.
-fn paragraph(out: &mut Out, kind: &str, level: Option<usize>, (text, links): (String, Vec<Link>)) {
-    if !text.is_empty() {
-        out.push(linked(kind, text, level, links));
-    }
-}
-
 fn walk_node(h: &Handle, out: &mut Out) {
     if let Some(tag) = tag_of(h) {
         let t = tag.as_str();
@@ -1696,8 +1956,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
                 // (`Price list, prices in EUR`); it reads before the table.
                 for c in children_of(h) {
                     if tag_of(&c).as_deref() == Some("caption") {
-                        let block = text_of(&c, &out.facts);
-                        paragraph(out, "doco:Paragraph", None, block);
+                        out.paragraph("doco:Paragraph", None, |g| g.children(&c));
                     }
                 }
                 emit_table(h, out); // innermost wins: cells own their text
@@ -1706,8 +1965,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             return;
         }
         if let Some(level) = heading_level(t) {
-            let block = text_of(h, &out.facts);
-            paragraph(out, "doco:SectionTitle", Some(level), block);
+            out.paragraph("doco:SectionTitle", Some(level), |g| g.children(h));
             out.figures([h]);
             return;
         }
@@ -1715,8 +1973,7 @@ fn walk_node(h: &Handle, out: &mut Out) {
             "li" => {
                 // A nested list inside an item is walked separately; the
                 // item's own text stops at it.
-                let block = own_text(h, &out.facts);
-                paragraph(out, "doc:ListItem", None, block);
+                out.paragraph("doc:ListItem", None, |g| g.own(h));
                 let children = children_of(h);
                 out.figures(
                     children
@@ -1736,13 +1993,12 @@ fn walk_node(h: &Handle, out: &mut Out) {
             // One paragraph, its lines and spacing kept, as a Markdown code
             // block is read.
             "pre" => {
-                let block = pre_text(h, &out.facts);
-                paragraph(out, "doco:Paragraph", None, block);
+                out.pre(h);
+                out.figures([h]);
                 return;
             }
             "p" | "blockquote" | "figcaption" | "dd" | "dt" => {
-                let block = text_of(h, &out.facts);
-                paragraph(out, "doco:Paragraph", None, block);
+                out.paragraph("doco:Paragraph", None, |g| g.children(h));
                 out.figures([h]);
                 return;
             }
@@ -3410,5 +3666,130 @@ mod tests {
             texts(&els),
             ["Factbox.", "Loose run", "Block", "One run with a script"]
         );
+    }
+
+    #[test]
+    fn a_text_past_the_budget_is_refused_before_it_is_made() {
+        // Made, then spent, with a map of each of its bytes to place its
+        // links by, a paragraph took 20 bytes for each of its own before it
+        // was spent: one of 193 MB aborted the process under 4 GB.
+        let word = "abcdefgh ";
+        let page = format!("<p>{}</p>", word.repeat(10_000));
+        let (dom, budget) = build(&page, Budget::default()).unwrap();
+        let p = {
+            let mut stack = vec![dom.document.clone()];
+            loop {
+                let h = stack.pop().unwrap();
+                if tag_of(&h).as_deref() == Some("p") {
+                    break h;
+                }
+                stack.extend(children_of(&h));
+            }
+        };
+        // Its text, collapsed: the last space is dropped.
+        let cost = (word.len() * 10_000 - 1) as u64 * TEXT_BYTES;
+        let spent = MAX_MEMORY - budget.memory_left();
+        let gather = |memory: u64| {
+            let mut out = Out {
+                budget: Budget::new(memory, u64::MAX),
+                facts: Facts::of(&dom.document),
+                ..Out::default()
+            };
+            let made = Cell::new(false);
+            let text = out.text(|g| {
+                made.set(made.get() || g.text.is_some());
+                g.children(&p);
+            });
+            (text.map(|(t, _)| t.len()), made.get())
+        };
+        assert_eq!(gather(cost), (Some(word.len() * 10_000 - 1), true));
+        assert_eq!(gather(cost - 1), (None, false));
+        // And the page with it, as a page.
+        let err = within(&page, spent + cost - 1).unwrap_err().to_string();
+        assert!(err.starts_with("text past"), "{err}");
+    }
+
+    #[test]
+    fn anchors_are_placed_as_their_text_is_gathered() {
+        // An anchor of whitespace alone spans nothing; one whose text ends
+        // in whitespace ends at its last character; anchors in a list
+        // item's own text are its own.
+        let els = parse(
+            "<p>a <a href=\"/w\"> </a> b <a href=\"/x\">c d </a> e</p>\
+             <ul><li>Go <a href=\"/y\">here</a><ul><li><a href=\"/z\">in</a></li></ul></li></ul>",
+        );
+        assert_eq!(els[0].text, "a b c d e");
+        let spans = |e: &Element| -> Vec<(Option<(usize, usize)>, String)> {
+            e.links
+                .iter()
+                .flatten()
+                .map(|l| (l.span(), l.href().to_string()))
+                .collect()
+        };
+        assert_eq!(spans(&els[0]), [(Some((4, 7)), "/x".to_string())]);
+        assert_eq!(els[1].text, "Go here");
+        assert_eq!(spans(&els[1]), [(Some((3, 7)), "/y".to_string())]);
+        assert_eq!(spans(&els[2]), [(Some((0, 2)), "/z".to_string())]);
+    }
+
+    #[test]
+    fn raised_marks_are_told_in_time_linear_in_the_page() {
+        // Each raised element's text was gathered whole, and nested ones
+        // each gathered again what the one inside them holds; and each was
+        // told by all the text before it, a word of a million raised
+        // digits looked at again at each.
+        let nested = format!(
+            "<p>Revenue{}{}{}</p>",
+            "<sup>".repeat(500),
+            "<br>x".repeat(20_000),
+            "</sup>".repeat(500)
+        );
+        let run = format!("<p>\u{3c1}w{}</p>", "<sup>2</sup>".repeat(100_000));
+        for page in [nested, run] {
+            let start = std::time::Instant::now();
+            assert_eq!(parse(&page).len(), 1);
+            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+        }
+        // A mark is still told apart, and a power kept with its value.
+        assert_eq!(
+            texts(&parse(
+                "<p>Revenue<sup>1</sup> rose; 10<sup>6</sup> m<sup>2</sup></p>"
+            )),
+            ["Revenue 1 rose; 106 m2"]
+        );
+    }
+
+    #[test]
+    fn a_pre_past_the_budget_is_refused_before_it_is_made() {
+        let page = format!("<pre>{}</pre>", "abcdefgh\n".repeat(10_000));
+        let (dom, _) = build(&page, Budget::default()).unwrap();
+        let pre = {
+            let mut stack = vec![dom.document.clone()];
+            loop {
+                let h = stack.pop().unwrap();
+                if tag_of(&h).as_deref() == Some("pre") {
+                    break h;
+                }
+                stack.extend(children_of(&h));
+            }
+        };
+        let facts = Facts::of(&dom.document);
+        // Counted as it is drawn, a line break at the cost of a control
+        // character: no less than what is made, the last line break left
+        // out of it.
+        let cost = pre_cost(&pre, &facts);
+        assert_eq!(cost, 80_000 + 10_000 * 6);
+        assert_eq!(pre_text(&pre, &facts).0.len(), 89_999);
+        let read = |memory: u64| {
+            let mut out = Out {
+                budget: Budget::new(memory, u64::MAX),
+                facts: Facts::of(&dom.document),
+                ..Out::default()
+            };
+            out.pre(&pre);
+            (out.elements.len(), out.over.is_some())
+        };
+        assert_eq!(read(2 * cost * TEXT_BYTES), (1, false));
+        assert_eq!(read(cost * TEXT_BYTES - 1), (0, true));
     }
 }

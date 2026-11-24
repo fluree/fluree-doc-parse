@@ -217,6 +217,20 @@ element with a fact to keep (a block under it, or left out) takes about
 70 bytes more at the peak, within what its node is counted at: the page
 of a million `<aside>` peaks 68 MB higher, at 265 MB.
 
+A block's text is spent before it is made: gathered once to count it,
+copying nothing, then gathered into one string, its whitespace collapsed
+and its links placed as it is gathered. It was gathered whole, collapsed
+with a map from each of its bytes to the character it lands on (16 bytes
+a byte), then spent: about 20 bytes of memory for each byte of a
+paragraph before the budget saw it, so a page of one paragraph of 50 MB
+peaked at 1.0 GB, one of 185 MB converted at 3.7 GB, and one of 193 MB,
+which the budget refuses, aborted the process under a 4 GB address space,
+as did a table whose cell held as much. The 50 MB one now converts at 0.2
+GB, the 185 MB one at 0.71 GB (0.89 GB as DoCO), and the 193 MB one is
+refused at 0.56 GB, the table at 1.1 GB. A table's cells are each
+gathered once, then spent with the table, as a sheet's are; a page's
+`<main>` is tested for text by counting it, without a copy.
+
 ## A Markdown document's tree
 
 A Markdown document (and a `.txt`, read as one) is parsed by pulldown-cmark,
