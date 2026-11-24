@@ -13,8 +13,8 @@
 //!   the whole image shrunk until it fits, and a notice says so.
 //!
 //! The detector sees small text better larger: an image whose short side is
-//! under [`DET_SHORT_SIDE`] is read up to that, at most [`MAX_UPSCALE`]
-//! times larger. The engine does the enlarging, inside its detector, so the
+//! under [`DET_SHORT_SIDE`] is read up to that, its long side not past
+//! [`UPSCALE_LONG_SIDE`], as the detector has always enlarged a small image. The engine does the enlarging, inside its detector, so the
 //! recognizer still reads each line from the image's own pixels: the image
 //! is padded with white paper to the short side that makes the detector's
 //! own sizing (up to [`DET_SHORT_SIDE`]) come out at the scale chosen here.
@@ -45,11 +45,15 @@ pub const MAX_MEGAPIXELS: f64 = 128.0;
 /// PP-OCR's detector misses thin lines below it.
 pub const DET_SHORT_SIDE: u32 = 736;
 
-/// The most an image is enlarged for the detector. Measured on narrow
-/// crops of 8 to 10 px text (1,200 × 40 and the like): twice as large reads
-/// nearly all the lines an unbounded enlargement does, which can take a
-/// strip of a few pixels to many times its size.
-pub const MAX_UPSCALE: f64 = 2.0;
+/// The longest an image's long side is enlarged to for the detector.
+///
+/// A small screenshot reads better enlarged a lot: 285 × 152 and 411 × 90
+/// px captures lost an account number at twice their size and read it at
+/// 4.8 times, and a 1,200 × 40 crop of 8 to 10 px text read 17 lines at
+/// 1.7 times and 10 at its own size. Bounded by the long side, a strip a
+/// few pixels high is not taken to many times its length; the pixel cap
+/// bounds the rest.
+pub const UPSCALE_LONG_SIDE: u32 = 2000;
 
 /// The share of a strip the next one overlaps: a line cut by one strip's
 /// edge is whole in the next.
@@ -96,7 +100,7 @@ impl OcrSizing {
     pub fn plan(&self, width: u32, height: u32) -> OcrPlan {
         let (w, h) = (width.max(1), height.max(1));
         let cap = self.max_pixels as f64;
-        let whole = Pass::rows(w, 0, h, upscale(w.min(h)));
+        let whole = Pass::rows(w, 0, h, upscale(w.min(h), w.max(h)));
         if whole.det_pixels() <= cap {
             return OcrPlan {
                 width: w,
@@ -106,8 +110,9 @@ impl OcrSizing {
             };
         }
         // Strips across the full width, at least as tall as wide: the
-        // image's width is their short side.
-        let up = upscale(w);
+        // image's width is their short side, enlarged as it would be in a
+        // strip as tall as wide.
+        let up = upscale(w, w);
         let across = f64::from(w.max(pad_to(up)));
         let len = (cap / (across * up * up)).floor() as u32;
         if len >= w.max(pad_to(up)) && len < h {
@@ -156,10 +161,13 @@ impl OcrSizing {
     }
 }
 
-/// How the detector enlarges an image whose short side is `short` pixels:
-/// toward [`DET_SHORT_SIDE`], at most [`MAX_UPSCALE`] times.
-fn upscale(short: u32) -> f64 {
-    (f64::from(DET_SHORT_SIDE) / f64::from(short.max(1))).clamp(1.0, MAX_UPSCALE)
+/// How the detector enlarges an image whose sides are `short` and `long`
+/// pixels: toward [`DET_SHORT_SIDE`] on the short one, the long one not
+/// past [`UPSCALE_LONG_SIDE`]; never shrunk.
+fn upscale(short: u32, long: u32) -> f64 {
+    let toward = f64::from(DET_SHORT_SIDE) / f64::from(short.max(1));
+    let within = f64::from(UPSCALE_LONG_SIDE) / f64::from(long.max(1));
+    toward.min(within).max(1.0)
 }
 
 /// The short side an image is padded to for the detector to enlarge it
@@ -241,21 +249,29 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_crop_is_enlarged_at_most_twice() {
+    fn a_small_image_is_enlarged_toward_the_detector_s_short_side() {
         let s = OcrSizing::default();
-        // 40 rows of text: twice, padded to 368 rows so the detector's 736
-        // comes out at twice.
+        // A small screenshot: 736 / 152, its long side under 2,000.
+        let p = s.plan(285, 152);
+        assert!((p.passes[0].up - 736.0 / 152.0).abs() < 1e-9);
+        assert_eq!(p.passes[0].canvas, (285, 152));
+        // 40 rows of text 1,200 wide: its long side to 2,000, padded so the
+        // detector's 736 comes out at that.
         let p = s.plan(1200, 40);
-        assert_eq!(p.passes[0].up, 2.0);
-        assert_eq!(p.passes[0].canvas, (1200, 368));
+        assert!((p.passes[0].up - 2000.0 / 1200.0).abs() < 1e-9);
+        assert_eq!(p.passes[0].canvas, (1200, 442));
         // 500 rows: 736 / 500.
         let p = s.plan(1200, 500);
         assert!((p.passes[0].up - 1.472).abs() < 1e-9);
         assert_eq!(p.passes[0].canvas, (1200, 500));
-        // A narrow receipt: across.
+        // A long narrow receipt is not enlarged past 2,000 px.
         let p = s.plan(400, 3000);
-        assert!((p.passes[0].up - 1.84).abs() < 1e-9);
-        assert_eq!(p.passes[0].canvas, (400, 3000));
+        assert_eq!(p.passes[0].up, 1.0);
+        assert_eq!(
+            p.passes[0].canvas,
+            (736, 3000),
+            "padded across, not enlarged"
+        );
     }
 
     #[test]
@@ -273,7 +289,7 @@ mod tests {
             assert!(pass.det_pixels() <= 12.5e6, "{pass:?}");
             assert!(pass.bottom - pass.top >= 2400, "at least as tall as wide");
         }
-        // A narrow one is enlarged in its strips as it would be whole.
+        // A narrow one is enlarged in its strips toward 736 across.
         let p = s.plan(400, 40_000);
         assert!(p.passes.len() > 1);
         assert!(p.passes.iter().all(|q| (q.up - 1.84).abs() < 1e-9));
