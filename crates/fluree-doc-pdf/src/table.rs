@@ -170,6 +170,34 @@ impl Grid {
             .collect()
     }
 
+    /// Which of `glyphs` the grid takes from the page's prose: each glyph
+    /// its cells read ([`Self::glyph_cells`]), and none they leave out.
+    ///
+    /// A cell reads a word whole, in the cell holding its centre of mass,
+    /// and the prose was given every glyph whose own centre fell outside the
+    /// grid. A word an edge cut through was then read twice or lost: with
+    /// its centre of mass inside, its letters outside were in the prose as
+    /// well (`WARNING!` in the cell, `WAR` in the paragraph); with it
+    /// outside, its letters inside were in neither (`See` read `S`). A
+    /// glyph a cell never considers, turned or without ink, still goes by
+    /// where its own centre is.
+    pub(crate) fn takes(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<bool> {
+        glyphs
+            .iter()
+            .zip(self.glyph_cells(glyphs))
+            .map(|(g, home)| {
+                if home.is_some() {
+                    return true;
+                }
+                let read = g.bbox.is_some() && !g.text.trim().is_empty() && g.is_horizontal();
+                let (x, y) = g
+                    .bbox
+                    .map_or(g.origin, |b| ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5));
+                !read && self.cell_at(x, y).is_some()
+            })
+            .collect()
+    }
+
     /// The cell each glyph is read into, as `row * cols + col`; `None` for
     /// a glyph outside the grid or set across it.
     fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
@@ -5322,6 +5350,44 @@ mod tests {
             0,
             "a field is not a header"
         );
+    }
+
+    #[test]
+    fn a_word_across_the_grids_edge_is_in_the_cell_or_the_prose() {
+        // Letters 5pt apart, one pen run: a word.
+        let letters = |x: f64, text: &str| -> Vec<crate::glyph::Glyph> {
+            text.chars()
+                .enumerate()
+                .map(|(k, c)| {
+                    let mut g = word(x + 5.0 * k as f64, 0, &c.to_string(), None);
+                    g.bbox.as_mut().unwrap().y0 = 100.0;
+                    g.bbox.as_mut().unwrap().y1 = 110.0;
+                    g.origin.1 = 110.0;
+                    g
+                })
+                .collect()
+        };
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: crate::geom::BBox {
+                x0: 100.0,
+                y0: 90.0,
+                x1: 300.0,
+                y1: 140.0,
+            },
+            xs: vec![100.0, 200.0, 300.0],
+            ys: vec![90.0, 140.0],
+        };
+        // `See` starts left of the edge: its centre of mass is outside, so
+        // its last letter, centred inside, stays with the rest in the prose.
+        let see = letters(88.0, "See");
+        assert_eq!(grid.takes(&see), [false, false, false]);
+        // `warranty` has its centre of mass inside: the cell reads it whole,
+        // its first letters, centred outside, too.
+        let w = letters(92.0, "warranty");
+        assert!(grid.takes(&w).iter().all(|&t| t));
+        assert_eq!(grid.cell_texts(&w)[0], "warranty");
     }
 
     /// A spec sheet's fields, labels and values in one face, every other
