@@ -7,7 +7,7 @@ pub mod forms;
 pub mod render;
 pub mod triage;
 
-use crate::cli::{Cli, Commands, ConvertArgs, DevCommands, Format};
+use crate::cli::{Cli, Commands, ConvertArgs, DevCommands, Format, MdLinks};
 
 /// Dispatch a parsed CLI to its command, returning the process exit code.
 pub fn run(cli: Cli) -> i32 {
@@ -41,6 +41,7 @@ fn compat(pdf: std::path::PathBuf, format: Format) -> ConvertArgs {
     ConvertArgs {
         inputs: vec![pdf],
         format,
+        md_links: MdLinks::Inline,
         output: None,
         out_dir: None,
         pages: None,

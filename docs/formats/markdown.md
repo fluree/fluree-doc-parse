@@ -49,9 +49,29 @@ Three forms come out of it:
 | text that *is* its own address | `<https://example.org/a>` |
 | a jump to elsewhere in the document | `[Chapter 4](#page=12)` |
 
+An address is written as an autolink, `<…>`, only when it has a scheme
+(`https:`, `mailto:` and so on), because that is all Markdown will link. An
+address printed as `www.example.org` and linked to the same text stays
+`[www.example.org](www.example.org)`. Punctuation the link took in after
+the address, usually the sentence's full stop, is written after the autolink:
+`<https://example.org/a>.`
+
 `#page=N` is 1-based, the fragment convention PDF viewers already use, and it
 is the only form Markdown has for "elsewhere in this document". A jump that
 lands on the page it starts from is not emitted: it takes a reader nowhere.
+
+### Links as plain text
+
+```bash
+fdoc convert report.pdf --md-links text
+```
+
+`--md-links text` writes each anchor's words and leaves the address out:
+`See the filing for detail.` Use it where the reader wants the prose and not
+the addresses, such as an embedding model or a diff against a transcription.
+The links are still in [`json`](json.md), [`doco`](doco.md) and
+[`xhtml`](xhtml.md); only the Markdown changes. The default, `inline`, is the
+markup above.
 
 A link whose anchor sits on a picture rather than on text has no words to mark
 up, so it appears in [`json`](json.md) and [`doco`](doco.md) and not here.
@@ -60,10 +80,21 @@ Anchors inside table cells are the same — a pipe table has no room for one.
 Markdown and HTML sources carry their own links through unchanged, so
 `fdoc convert notes.md` round-trips them. DOCX, PPTX and XLSX do not yet.
 
-**This costs benchmark score, and is emitted anyway.** Ground truth
+**The default costs benchmark score, and is emitted anyway.** Ground truth
 transcribed from a visible page has no link markup, so every address we
-recover is counted as an insertion error — see [where our output differs from
-the reference](../benchmarks/where-we-differ.md).
+recover is counted as an insertion error. `--md-links text` writes what such a
+reference holds. See [where our output differs from the
+reference](../benchmarks/where-we-differ.md).
+
+## Text that looks like a link
+
+Some text a document prints is Markdown link syntax by accident.
+Mathematics such as `Γ[w](t)` reads as a link to `t` whose text is `w`, and a
+renderer shows only the `w`. A paragraph that opens `[1]: Smith, 2019` reads
+as a link definition, and a renderer shows nothing at all. Both are escaped
+with one backslash, `Γ[w\](t)` and `\[1]: Smith, 2019`, and render as the
+page printed them. No other bracket is escaped, since no other pairing makes
+a link without a definition, and this output contains none.
 
 ## Pages nothing read
 

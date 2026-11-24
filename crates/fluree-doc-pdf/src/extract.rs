@@ -8,6 +8,7 @@
 use crate::geom::BBox;
 use crate::glyph::Glyph;
 use crate::rule::{self, Fill, Rule};
+use fluree_doc_model::symbols;
 use hayro_interpret::font::Glyph as HGlyph;
 use hayro_interpret::hayro_syntax::Pdf;
 use hayro_interpret::util::TransformExt;
@@ -214,6 +215,183 @@ struct Collector {
     /// `Glyph` because it is scaffolding: once weights are resolved it has no
     /// further use, and every consumer of `Glyph` would have to carry it.
     ink: Vec<Option<(u128, f64)>>,
+    /// The letters a ligature joins, as the document draws them, kept across
+    /// pages to read the ligatures it draws unmapped; see [`crate::ligature`].
+    letters: crate::ligature::Letters,
+    /// Glyphs drawn as U+FFFD, by index into `glyphs`, with their family and
+    /// outline, to be read by shape once the document's letters are known.
+    unread: Vec<(usize, String, kurbo::BezPath)>,
+    /// The page's marked content as its streams begin it, for the
+    /// ActualText the device is not told; see [`crate::marked`].
+    marks: crate::marked::Marks,
+    /// The marked content open now, innermost last: the outermost one that
+    /// states ActualText carries it, with the glyphs drawn inside it.
+    open: Vec<Option<Spoken>>,
+    /// The symbol font each font the page draws with is, if any, by font,
+    /// and whether the font program's own name was asked.
+    symbol_fonts: std::collections::HashMap<u128, (Option<&'static str>, bool)>,
+    /// Glyphs drawn in a symbol font, by index into `glyphs`, with the font.
+    symbols: Vec<(usize, &'static str)>,
+}
+
+/// Marked content whose ActualText stands for the glyphs drawn inside it.
+struct Spoken {
+    text: String,
+    /// `glyphs.len()` when it began: the glyphs drawn inside it follow.
+    start: usize,
+    /// Of those, the ones that put ink on the page.
+    inked: Vec<usize>,
+}
+
+/// Most glyphs one ActualText may be given to whole, as the cluster a
+/// shaper drew for it: a few. A longer span stated otherwise than one
+/// character a glyph is not a cluster, and its glyphs keep their own text.
+const MAX_CLUSTER: usize = 8;
+
+/// An ActualText as it can stand for ink: tabs and line breaks read as
+/// spaces and other control characters dropped. `None` when what is left
+/// says nothing but spacing and punctuation — a tab, a soft hyphen, a space
+/// a producer marks over a leader, the dots of the leader itself — which
+/// are the layout's to read from the page, or holds U+FFFD, which says
+/// nothing at all.
+fn spoken(text: &str) -> Option<String> {
+    let s: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\t' | '\n' | '\r' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect();
+    let format = |c: char| {
+        matches!(
+            c,
+            '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}'
+        )
+    };
+    let says = s.chars().any(|c| {
+        !c.is_whitespace() && !format(c) && !c.is_ascii_punctuation() && !is_punctuation(c)
+    });
+    (says && !s.contains('\u{FFFD}')).then_some(s)
+}
+
+/// A punctuation mark outside ASCII: dashes, quotation marks, the ellipsis,
+/// CJK and full-width stops and brackets.
+fn is_punctuation(c: char) -> bool {
+    matches!(
+        c,
+        '\u{2010}'..='\u{2027}' | '\u{2030}'..='\u{205E}' | '\u{3001}'..='\u{3003}' | '\u{3008}'..='\u{3011}'
+            | '\u{FF01}'..='\u{FF0F}' | '\u{FF1A}'..='\u{FF20}' | '\u{00A1}' | '\u{00A7}' | '\u{00AB}'
+            | '\u{00B6}' | '\u{00B7}' | '\u{00BB}' | '\u{00BF}'
+    )
+}
+
+impl Collector {
+    /// Read the glyphs drawn in Symbol or Wingdings as the characters the
+    /// font shows.
+    ///
+    /// Word gives such a glyph the font's own code plus 0xF000 as its text,
+    /// a private-use character, and every reader of the text layer gets that
+    /// code: `μmole` reads U+F06D `mole`, an equation's `=` U+F03D. Read once
+    /// the page is drawn, because a span's ActualText may state the code
+    /// after its glyphs are drawn.
+    fn read_symbols(&mut self) {
+        for &(i, font) in &self.symbols {
+            let g = &mut self.glyphs[i];
+            if g.text.chars().any(symbol_code) {
+                g.text = g
+                    .text
+                    .chars()
+                    .map(|c| {
+                        symbol_code(c)
+                            .then(|| symbols::char_for(font, c as u32))
+                            .flatten()
+                            .unwrap_or(c)
+                    })
+                    .collect();
+            }
+        }
+    }
+
+    /// Give the glyphs a span drew the text its ActualText states for them.
+    ///
+    /// Taken only where it corrects the glyphs' own text: when the span inks
+    /// something, on one line, and says more than the glyphs say already. A
+    /// producer also states ActualText for the case a style changed — the
+    /// heading set in capitals says `ecent` over the drawn `ECENT`, and only
+    /// over some of its letters — and there the drawn capitals are the text
+    /// a reader sees, and stay.
+    fn speak(&mut self, span: Spoken) {
+        let Some(said) = spoken(&span.text) else {
+            return;
+        };
+        let Some(&first) = span.inked.first() else {
+            return;
+        };
+        let lead = &self.glyphs[first];
+        let size = span
+            .inked
+            .iter()
+            .map(|&i| self.glyphs[i].font_size as f64)
+            .fold(0.0, f64::max)
+            .max(1.0);
+        let (sin, cos) = (lead.rotation_deg as f64).to_radians().sin_cos();
+        let one_line = span.inked.iter().all(|&i| {
+            let g = &self.glyphs[i];
+            let (dx, dy) = (g.origin.0 - lead.origin.0, g.origin.1 - lead.origin.1);
+            g.rotation_bucket() == lead.rotation_bucket()
+                && (dx * sin + dy * cos).abs() <= 0.5 * size
+        });
+        if !one_line {
+            return;
+        }
+        let range = span.start..self.glyphs.len();
+        let drawn: String = self.glyphs[range.clone()]
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect();
+        let solid = |s: &str| -> String {
+            crate::text::normalize(s)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect()
+        };
+        let (was, now) = (solid(&drawn), solid(&said));
+        if was == now || was.to_lowercase() == now.to_lowercase() {
+            return;
+        }
+        let chars: Vec<char> = said.chars().collect();
+        let letters: Vec<char> = chars
+            .iter()
+            .copied()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        if chars.len() == range.len() {
+            // One character a glyph, in drawing order.
+            for (g, c) in self.glyphs[range.clone()].iter_mut().zip(&chars) {
+                g.text = c.to_string();
+            }
+        } else if letters.len() == span.inked.len() {
+            // One letter an inked glyph; the spaces drawn between keep
+            // theirs.
+            for (&i, c) in span.inked.iter().zip(&letters) {
+                self.glyphs[i].text = c.to_string();
+            }
+        } else if span.inked.len() <= MAX_CLUSTER {
+            // A cluster stated whole: the first mark carries it.
+            for i in range.clone() {
+                self.glyphs[i].text = if i == first {
+                    said.trim().to_string()
+                } else {
+                    String::new()
+                };
+            }
+        } else {
+            return;
+        }
+        // Their text is stated now, not left to be read from their shape.
+        self.unread.retain(|(i, ..)| !range.contains(i));
+    }
 }
 
 impl<'a> Device<'a> for Collector {
@@ -297,6 +475,25 @@ impl<'a> Device<'a> for Collector {
     fn pop_clip_path(&mut self) {}
     fn pop_transparency_group(&mut self) {}
 
+    fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
+        let actual = self.marks.begin(tag, mcid);
+        let outer = self.open.iter().any(Option::is_some);
+        self.open.push(match actual {
+            Some(text) if !outer => Some(Spoken {
+                text,
+                start: self.glyphs.len(),
+                inked: Vec::new(),
+            }),
+            _ => None,
+        });
+    }
+
+    fn end_marked_content(&mut self) {
+        if let Some(Some(span)) = self.open.pop() {
+            self.speak(span);
+        }
+    }
+
     fn draw_glyph(
         &mut self,
         glyph: &HGlyph<'a>,
@@ -311,6 +508,33 @@ impl<'a> Device<'a> for Collector {
             None => String::new(),
         };
 
+        // Drawn in Symbol or Wingdings: its text is read as that font's
+        // characters once it is final (see `read_symbols`). The font is
+        // known by the name the PDF gives it, or, where a producer renamed
+        // its fonts (`CIDFont+F4`) and the glyph says a symbol font's code,
+        // by the name inside the font program.
+        let symbol_font = match glyph {
+            HGlyph::Outline(o) => {
+                let (font, asked) =
+                    self.symbol_fonts
+                        .entry(o.font_cache_key())
+                        .or_insert_with(|| {
+                            let named = o.font_data().and_then(|f| f.postscript_name);
+                            (named.as_deref().and_then(symbols::pdf_font), false)
+                        });
+                if font.is_none() && !*asked && text.chars().any(symbol_code) {
+                    *asked = true;
+                    *font = o
+                        .font_data()
+                        .and_then(|f| program_name((*f.data).as_ref()))
+                        .as_deref()
+                        .and_then(symbols::pdf_font);
+                }
+                *font
+            }
+            _ => None,
+        };
+
         // Cross-examine suspicious decodes against the drawn shape. A known
         // academic-publisher toolchain family subsets
         // TeX math fonts with the symbol glyphs renamed after Latin lookalikes
@@ -323,6 +547,31 @@ impl<'a> Device<'a> for Collector {
             if let HGlyph::Outline(o) = glyph {
                 if let Some(fixed) = lookalike_repair(&text, &o.outline()) {
                     text = fixed.to_string();
+                }
+            }
+        }
+
+        // The letters a ligature is made of, and a glyph whose characters
+        // the document left unknown, kept by family to be compared once the
+        // whole document is read.
+        let mut unread = None;
+        if let HGlyph::Outline(o) = glyph {
+            let lost = text == "\u{FFFD}";
+            if lost || crate::ligature::is_ligature_letter(&text) {
+                let family = self.letters.family(o.font_cache_key(), || {
+                    o.font_data().and_then(|f| f.postscript_name)
+                });
+                if let Some(family) = family {
+                    if lost {
+                        unread = Some((family, o.outline()));
+                    } else if let Some(c) = text
+                        .chars()
+                        .next()
+                        .filter(|c| self.letters.wants(&family, *c))
+                    {
+                        let advance = o.advance_width().unwrap_or(0.0) as f64;
+                        self.letters.keep(family, c, o.outline(), advance);
+                    }
                 }
             }
         }
@@ -410,6 +659,32 @@ impl<'a> Device<'a> for Collector {
             return;
         }
         let draw_index = self.glyphs.len();
+        if let Some((family, outline)) = unread {
+            self.unread.push((draw_index, family, outline));
+        }
+        // A glyph inside a span that states its text: note it if it puts
+        // ink down. A Type3 glyph has no box yet but draws all the same,
+        // unless it is a space.
+        let inks = bbox.is_some()
+            || (!matches!(glyph, HGlyph::Outline(_))
+                && (text.is_empty() || !text.trim().is_empty()));
+        if inks {
+            if let Some(span) = self.open.iter_mut().flatten().next() {
+                span.inked.push(draw_index);
+            }
+        }
+        // A soft hyphen drawn with ink is the hyphen it prints. Some
+        // producers map every hyphen they draw to U+00AD, a compound's and a
+        // code's (`60-70`, `MESA-approved`) as well as the one a line break
+        // set (`microcom-` over `puter`), so it is read as `-`, and a line
+        // ending on it joins the next by the rule for a printed hyphen. One
+        // that draws nothing shows nothing.
+        if text.contains('\u{AD}') {
+            text = text.replace('\u{AD}', if inks { "-" } else { "" });
+        }
+        if let Some(font) = symbol_font {
+            self.symbols.push((draw_index, font));
+        }
         self.ink.push(ink);
         self.glyphs.push(Glyph {
             text,
@@ -553,6 +828,24 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
     frac >= MIN_TEXTY_ROW_FRACTION
 }
 
+/// A private-use character Word gives a glyph set in one of its symbol
+/// fonts: the font's own code, `0x20`–`0xFF`, plus `0xF000`.
+fn symbol_code(c: char) -> bool {
+    ('\u{F020}'..='\u{F0FF}').contains(&c)
+}
+
+/// The PostScript name a TrueType or OpenType font program gives itself.
+fn program_name(data: &[u8]) -> Option<String> {
+    use read_fonts::{types::NameId, FontRef, TableProvider};
+    let font = FontRef::new(data).ok()?;
+    let name = font.name().ok()?;
+    name.name_record()
+        .iter()
+        .filter(|r| r.name_id() == NameId::POSTSCRIPT_NAME)
+        .find_map(|r| r.string(name.string_data()).ok())
+        .map(|s| s.chars().collect())
+}
+
 /// Repair a TeX-lookalike misdecode by interrogating the outline itself.
 ///
 /// The characters in the suspicious set are what the broken producer's tables
@@ -594,6 +887,20 @@ fn lookalike_repair(text: &str, outline: &kurbo::BezPath) -> Option<&'static str
     if w <= 0.0 || h <= 0.0 {
         return None;
     }
+    // A full stop: one small round mark resting on the baseline. Dot
+    // leaders are set in it, and a producer that maps the leader's glyph to
+    // U+FFFD leaves a run of unknowns between a table's label and its
+    // figures. In the font's 1000-unit em a stop is about a tenth of it
+    // each way; a middle dot sits higher, an ellipsis is three marks.
+    if text == "\u{FFFD}"
+        && subpaths == 1
+        && w <= 250.0
+        && h <= 250.0
+        && (0.6 * h..=1.7 * h).contains(&w)
+        && (-40.0..=60.0).contains(&b.y0)
+    {
+        return Some(".");
+    }
     if subpaths == 2 && w >= 2.0 * h && segments <= 16 {
         return Some("=");
     }
@@ -615,7 +922,6 @@ fn lookalike_repair(text: &str, outline: &kurbo::BezPath) -> Option<&'static str
             (false, false) => "]",
         });
     }
-    let _ = text;
     None
 }
 
@@ -758,6 +1064,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let settings = InterpreterSettings::default();
     let mut pages = Vec::new();
     let mut ink: Vec<Vec<Option<(u128, f64)>>> = Vec::new();
+    let mut letters = crate::ligature::Letters::default();
+    let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
 
     for (index, page) in pdf.pages().iter().enumerate() {
         let (w, h) = page.render_dimensions();
@@ -768,6 +1076,12 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             rules: Vec::new(),
             fills: Vec::new(),
             ink: Vec::new(),
+            letters: std::mem::take(&mut letters),
+            unread: Vec::new(),
+            marks: crate::marked::Marks::read(page),
+            open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -783,6 +1097,15 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             settings.clone(),
         );
         interpret_page(page, &mut ctx, &mut dev);
+        // A span the page left open still covers what it drew.
+        while let Some(open) = dev.open.pop() {
+            if let Some(span) = open {
+                dev.speak(span);
+            }
+        }
+        dev.read_symbols();
+        letters = std::mem::take(&mut dev.letters);
+        unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let mut page = Page {
             index,
             glyphs: dev.glyphs,
@@ -800,6 +1123,16 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         pages.push(page);
     }
     infer_weights(&mut pages, &ink);
+    // Read the unmapped glyphs by their shape, now that every letter the
+    // document draws is known. Glyph order is fixed from here on, so an
+    // index still names the glyph it was taken from.
+    for (page, i, family, outline) in unread {
+        if let Some(name) = letters.name(&family, &outline) {
+            if let Some(g) = pages[page].glyphs.get_mut(i) {
+                g.text = name.to_string();
+            }
+        }
+    }
 
     Ok(Document { pages })
 }
@@ -938,6 +1271,13 @@ const SYNTH_DESCENT: f64 = 0.22;
 /// isolated one.
 const SYNTH_WIDTH: f64 = 0.60;
 
+/// Widest a glyph's advance is taken to be, in sizes, when measured to the
+/// next glyph: a CJK character, `ﬃ` or `W` runs about one. Further on, the
+/// pen crossed a word space no space glyph was drawn for (a deck's
+/// `assume` and the `1b` set after it in another font), and the fallback
+/// width leaves that space to be read.
+const MAX_SYNTH_ADVANCE: f64 = 1.25;
+
 /// Give outline-less TEXT glyphs a geometric extent.
 ///
 /// Type3 fonts are drawing programs whose glyph procedures we do not
@@ -952,6 +1292,13 @@ const SYNTH_WIDTH: f64 = 0.60;
 /// baseline states this glyph's advance exactly (Type3 or not, the pen
 /// moved). Synthesize `bbox`/`advance` from those, with a font-size
 /// fallback for line-final glyphs.
+///
+/// The next glyph is the next of any font. A browser prints a ligature or
+/// a run of CJK it has no embeddable font for in Type3, among text set in
+/// another font: measured to the next Type3 glyph only, the `ﬃ` of
+/// `oﬃce` and the last character before a full stop took the fallback
+/// width, and the rest of their advance read as a word space (`offi ce`,
+/// `有限公司 .`).
 ///
 /// Whitespace keeps `bbox: None` deliberately — the span-merge and
 /// explicit-space rules key on boxless spaces, and giving a space ink
@@ -969,26 +1316,26 @@ fn synthesize_missing_boxes(glyphs: &mut [Glyph]) {
     if candidates.is_empty() {
         return;
     }
-    // Sort by (baseline y, x); successive same-baseline deltas give widths.
-    let mut order = candidates;
-    order.sort_by(|&a, &b| {
-        let (oa, ob) = (glyphs[a].origin, glyphs[b].origin);
-        oa.1.partial_cmp(&ob.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(oa.0.partial_cmp(&ob.0).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    for w in 0..order.len() {
-        let i = order[w];
+    // Every upright glyph, by baseline: the neighbours a width is measured
+    // to, of whatever font, explicit spaces among them.
+    let mut by_y: Vec<usize> = (0..glyphs.len())
+        .filter(|&i| glyphs[i].rotation_bucket().rem_euclid(180) == 0)
+        .collect();
+    by_y.sort_by(|&a, &b| glyphs[a].origin.1.total_cmp(&glyphs[b].origin.1));
+    for i in candidates {
         let (x, y) = glyphs[i].origin;
         let font = glyphs[i].font_size.max(1.0) as f64;
-        // Right neighbour on the same baseline (within the same tolerance
-        // assembly uses), measured through explicit spaces: the pen delta
-        // is the advance whether or not something is drawn between.
-        let width = order
-            .get(w + 1)
-            .map(|&j| glyphs[j].origin)
-            .filter(|(nx, ny)| (ny - y).abs() < font * 0.25 && *nx > x && (nx - x) < font * 2.5)
-            .map(|(nx, _)| nx - x)
+        // The nearest pen position to the right on the same baseline
+        // (within the tolerance assembly uses): the pen delta is the
+        // advance, whatever is drawn there.
+        let tol = font * 0.25;
+        let from = by_y.partition_point(|&j| glyphs[j].origin.1 < y - tol);
+        let width = by_y[from..]
+            .iter()
+            .take_while(|&&j| glyphs[j].origin.1 <= y + tol)
+            .map(|&j| glyphs[j].origin.0 - x)
+            .filter(|&d| d > 0.01 && d < font * MAX_SYNTH_ADVANCE)
+            .min_by(f64::total_cmp)
             .unwrap_or(font * SYNTH_WIDTH);
         glyphs[i].bbox = Some(BBox {
             x0: x,
@@ -1010,6 +1357,37 @@ pub fn extract_file(path: &std::path::Path) -> Result<Document, ExtractError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_type3_glyph_is_as_wide_as_the_pen_moves_to_any_next_glyph() {
+        // `oﬃce`: the ﬃ is Type3 (no box), the letters around it are not.
+        let glyph = |text: &str, x: f64, boxed: bool| Glyph {
+            text: text.into(),
+            bbox: boxed.then_some(BBox {
+                x0: x,
+                y0: 44.0,
+                x1: x + 6.0,
+                y1: 52.5,
+            }),
+            page: 0,
+            origin: (x, 52.5),
+            rotation_deg: 0.0,
+            font_size: 12.0,
+            weight: None,
+            advance: boxed.then_some(6.67),
+            draw_index: 0,
+        };
+        let mut g = vec![
+            glyph("o", 57.76, true),
+            glyph("\u{FB03}", 64.44, false),
+            glyph("c", 76.22, true),
+            glyph("青", 216.95, false),
+        ];
+        synthesize_missing_boxes(&mut g);
+        assert!((g[1].advance.unwrap() - 11.78).abs() < 0.01);
+        // Nothing follows on the line: the fallback.
+        assert!((g[3].advance.unwrap() - 12.0 * SYNTH_WIDTH).abs() < 0.01);
+    }
 
     fn page(n: usize) -> Page {
         let glyphs = (0..n)
@@ -1086,6 +1464,128 @@ mod tests {
         let mut pages = vec![page(200)];
         infer_weights(&mut pages, &ink(180, 20, 0.90));
         assert!(pages[0].glyphs.iter().all(|g| g.weight.is_none()));
+    }
+}
+
+#[cfg(test)]
+mod actual_text_tests {
+    use super::*;
+
+    fn glyph(text: &str, x: f64, y: f64, inked: bool) -> Glyph {
+        Glyph {
+            text: text.into(),
+            bbox: inked.then_some(BBox {
+                x0: x,
+                y0: y - 8.0,
+                x1: x + 5.0,
+                y1: y + 2.0,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            advance: Some(5.0),
+            draw_index: 0,
+        }
+    }
+
+    /// The glyphs' text after a span stating `said` covers all of them.
+    fn spoken_over(glyphs: Vec<Glyph>, said: &str) -> Vec<String> {
+        let inked = (0..glyphs.len())
+            .filter(|&i| glyphs[i].bbox.is_some())
+            .collect();
+        let mut c = Collector {
+            page: 0,
+            glyphs,
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            page_box: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 600.0,
+                y1: 800.0,
+            },
+            ink: Vec::new(),
+            letters: crate::ligature::Letters::default(),
+            unread: Vec::new(),
+            marks: crate::marked::Marks::default(),
+            open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
+        };
+        c.speak(Spoken {
+            text: said.into(),
+            start: 0,
+            inked,
+        });
+        c.glyphs.into_iter().map(|g| g.text).collect()
+    }
+
+    #[test]
+    fn a_radical_reads_as_the_ideograph_the_span_states() {
+        assert_eq!(
+            spoken_over(vec![glyph("\u{2ED8}", 0.0, 10.0, true)], "青"),
+            ["青"]
+        );
+    }
+
+    #[test]
+    fn a_cluster_stated_whole_goes_to_its_first_mark() {
+        let g = vec![glyph("", 0.0, 10.0, true), glyph("", 5.0, 10.0, true)];
+        assert_eq!(
+            spoken_over(g, "\u{0915}\u{094D}\u{0937}"),
+            ["\u{0915}\u{094D}\u{0937}", ""]
+        );
+    }
+
+    #[test]
+    fn letters_stated_one_for_one_keep_their_spaces() {
+        let g = vec![
+            glyph("h", 0.0, 10.0, true),
+            glyph(" ", 5.0, 10.0, false),
+            glyph("h", 10.0, 10.0, true),
+        ];
+        assert_eq!(spoken_over(g, "l l"), ["l", " ", "l"]);
+    }
+
+    #[test]
+    fn a_styled_case_a_leader_or_two_lines_keep_the_drawn_text() {
+        // Capitals a style drew over lower-case text.
+        let caps: Vec<Glyph> = "ECENT"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| glyph(&c.to_string(), i as f64 * 5.0, 10.0, true))
+            .collect();
+        assert_eq!(spoken_over(caps, "ecent").concat(), "ECENT");
+        // A leader's dots, stated with spaces between.
+        let mut dots = vec![glyph(" ", 0.0, 10.0, false)];
+        dots.extend((1..16).map(|i| glyph(".", i as f64 * 3.0, 10.0, true)));
+        assert_eq!(
+            spoken_over(dots, &". ".repeat(16)).concat(),
+            " ..............."
+        );
+        // A span that runs onto the next line.
+        let wrapped = vec![glyph("a", 0.0, 10.0, true), glyph("b", 0.0, 24.0, true)];
+        assert_eq!(spoken_over(wrapped, "xy"), ["a", "b"]);
+    }
+
+    #[test]
+    fn spacing_and_punctuation_state_nothing() {
+        for said in [
+            "\t",
+            "\u{00AD}",
+            "\u{2002}",
+            "\u{0007}",
+            ". . . .",
+            "\u{2026}",
+            "a\u{FFFD}",
+        ] {
+            assert_eq!(spoken(said), None, "{said:?}");
+        }
+        assert_eq!(spoken("fi").as_deref(), Some("fi"));
+        assert_eq!(spoken("x\ty").as_deref(), Some("x y"));
     }
 }
 

@@ -28,11 +28,15 @@ break) changed no benchmark output at all. Here they are checked by name.
 | `cases/<id>.json` | a public document and its checks | yes |
 | `docs/` | the public documents, fetched by `--fetch` | no |
 | `private/<id>.json` | a document that cannot be published, by local path | no |
+| `fixtures/` | documents made for a case, from invented text, with their source | yes |
 
 Public documents are fetched from their publisher, never redistributed, and
 checked against the SHA-256 their checks were written on. A different copy is
 reported, not failed: the publisher may have revised it, and the checks may
 then need revising too.
+
+A case on a fixture names it by `"path"` relative to the case file, and its
+notes say how to make it again.
 
 Private cases follow the same format with `"path"` (absolute, `~`, or relative
 to the case file) in place of `"url"`. Their documents and their checks quote
@@ -72,7 +76,10 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `cell` | some cell has this `value`, and the `column`, `row` and `section` names given |
 | `text` | the text projection contains this text, exactly `count` times where one is given |
 | `no_text` | the text projection does not contain this text anywhere |
-| `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence` |
+| `element` | some element has this `type`, exactly this `text` (its `nif:isString`, line breaks and all) and, where given, this `evidence`; exactly `count` elements do where one is given, `0` for one that must be gone |
+| `section` | some section is headed by exactly this `title` and, where given, sits at this `level` and directly inside the section headed by `within` |
+| `no_section` | no section is headed by a title beginning with this text |
+| `folio` | the `page` (its place in the file, from 1) carries this printed `value` in `doc:pages`, or none where it is `null` |
 
 A row is the cells sharing a `doc:rowIndex` in one table, a table split by a
 page break counting as one (its parts are followed back by `doc:continues`).

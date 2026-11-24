@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "mahle-ap-90-12.pdf",
+    "url": "https://www.mahle-aftermarket.com/media/local-media-north-america/pdfs-&-thumbnails/catalogs-and-literature/all-products/ap-90-12-web-final.pdf",
+    "sha256": "c236ae54209953878e44be60cff3714bda2614b589cec92e429029842f8dfc99",
+    "about": "MAHLE aftermarket catalogue AP-90-12. Its interchange lists wrap each competitor number and its MAHLE Clevite number into side-by-side copies of the same columns, two or three to a record, across the page."
+  },
+  "notes": [
+    "2026-11-23: every cell's doc:rowHeader was the row's first cell, the first copy's key, so a MAHLE number in a later copy was paired with a competitor number it has nothing to do with (#52)."
+  ],
+  "checks": [
+    {
+      "id": "fourth-copy-keyed-by-its-own-number",
+      "found": "2026-11-23",
+      "issue": "J17829, in the fourth pair, carried the first pair's FP-1804353 as its row header; it is the MAHLE Clevite number for Fel-Pro 55350.",
+      "cell": {"value": "J17829", "column": "MAHLE CLEVITE", "row": "55350"}
+    },
+    {
+      "id": "three-column-copy-keyed-by-its-own-number",
+      "found": "2026-11-23",
+      "issue": "In a list wrapped three columns to a record, the second copy's competitor (IHC, for 1811191-C3) was keyed by the first copy's number, 14079426.",
+      "cell": {"value": "IHC", "column": "COMPETITOR", "row": "1811191-C3"}
+    }
+  ]
+}

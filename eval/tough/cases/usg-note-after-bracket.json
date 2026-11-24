@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its physical-properties tables footnote a value given in brackets, with the note's number raised right after the closing bracket."
+  },
+  "notes": [
+    "2026-11-23 (#79): a raised number was read as a note's only after a word of letters, so after a bracket it stayed in the value. After a bracket that holds words it is a note, unless the bracket closes a formula's term."
+  ],
+  "checks": [
+    {
+      "id": "core-hardness-note-apart",
+      "found": "2026-11-23",
+      "issue": "Note 5 was read into the value: Not less than 11 lbf (49 N)5.",
+      "text": "Not less than 11 lbf (49 N) 5",
+      "count": 3
+    },
+    {
+      "id": "page-3-note-apart",
+      "found": "2026-11-23",
+      "issue": "As above, for note 6 on the third page.",
+      "text": "Not less than 11 lbf (49 N) 6",
+      "count": 3
+    },
+    {
+      "id": "no-glued-note",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "no_text": "(49 N)5"
+    }
+  ]
+}

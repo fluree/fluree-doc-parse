@@ -1,0 +1,39 @@
+{
+  "document": {
+    "file": "lapp-innovation-catalogue.pdf",
+    "url": "https://lappespana.lappgroup.com/fileadmin/DAM/Lapp_Espana/1R_05_DESCARGAS/Catalogos_y_folletos/PDF/lapp_innovation-catalogue_spring26_en.pdf",
+    "sha256": "23355150efc339a27675fe73bf66a881292ef6bb9a858e9dd5ee0f93c1a3af24",
+    "about": "LAPP innovation catalogue, spring 2026 (36 pages). Its product pages share one template: box headings and the close of a standard description stand at the same place on page after page, and a thumb index runs down the side margin."
+  },
+  "notes": [
+    "The template's repeated text was taken for watermarks and deleted. The side-margin thumb index is page furniture and is still removed."
+  ],
+  "checks": [
+    {
+      "id": "box-heading-kept",
+      "found": "2026-11-23",
+      "issue": "Technical data, a box heading on every product page, survived on 5 of 25.",
+      "text": "Technical data",
+      "count": 25
+    },
+    {
+      "id": "second-box-heading-kept",
+      "found": "2026-11-23",
+      "issue": "As above, for Benefits.",
+      "text": "Benefits",
+      "count": 25
+    },
+    {
+      "id": "sentence-end-kept",
+      "found": "2026-11-23",
+      "issue": "The last line of a repeated sentence, gland., was deleted, and the sentence ran into what followed.",
+      "text": "cable gland. Application ranges"
+    },
+    {
+      "id": "standard-number-whole",
+      "found": "2026-11-23",
+      "issue": "A standard's number broken across lines at its hyphen ran together: EN 455452.",
+      "text": "DIN EN 45545-2, requirement sets"
+    }
+  ]
+}

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 pub(crate) enum SourceKind {
     Pdf,
     Markdown,
+    Text,
     Html,
     Docx,
     Pptx,
@@ -25,7 +26,8 @@ pub(crate) enum SourceKind {
 /// another name.
 const SOURCE_EXTENSIONS: &[(SourceKind, &[&str])] = &[
     (SourceKind::Pdf, &["pdf"]),
-    (SourceKind::Markdown, &["md", "markdown", "txt", "text"]),
+    (SourceKind::Markdown, &["md", "markdown"]),
+    (SourceKind::Text, &["txt", "text"]),
     (SourceKind::Html, &["html", "htm", "xhtml"]),
     (SourceKind::Docx, &["docx", "docm", "dotx", "dotm"]),
     (

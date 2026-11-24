@@ -395,11 +395,28 @@ pub(crate) fn is_toc_marker(text: &str) -> bool {
 
 /// A bullet or dash opening the block marks a list item, not a heading.
 /// Datasheet feature lists are set larger than the surrounding table text and
-/// would otherwise all qualify on size alone.
+/// would otherwise all qualify on size alone, and an option list's bold
+/// items (`❑ Peg rack`) on weight.
+///
+/// The plain bullets and the boxes to tick, not every bullet: the arrows and
+/// diamonds of the dingbat fonts are set before headings as often as before
+/// items, as an annotation guideline marks each of its subsections
+/// `❖ Gene`, `❖ Disease`. Those the heading pass decides as it would any
+/// block; a block it leaves is still a list item.
 fn starts_like_list_item(text: &str) -> bool {
     matches!(
         text.chars().next(),
-        Some('\u{2022}' | '\u{25A0}' | '\u{25CF}' | '-' | '\u{2013}' | '\u{2014}')
+        Some(
+            '\u{2022}' // •
+                | '\u{F0B7}' // the Symbol font's •, as Word maps it
+                | '\u{25A0}' // ■
+                | '\u{25CF}' // ●
+                | '\u{2751}' // ❑
+                | '\u{2752}' // ❒
+                | '-'
+                | '\u{2013}'
+                | '\u{2014}'
+        )
     )
 }
 
@@ -1017,6 +1034,7 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         };
         Block {
             lines: vec![l; lines.max(1)],
@@ -1375,6 +1393,29 @@ mod tests {
             blk("table cell", 8.0, 40),
         ]];
         assert!(detect(&pages, &[]).is_empty());
+        // An option list's boxes and a Word file's symbol bullet, on size
+        // or on weight.
+        for item in ["\u{2751} Peg rack", "\u{F0B7}\tHigh stiffness"] {
+            let pages = vec![vec![blk(item, 10.0, 1), blk("table cell", 8.0, 40)]];
+            assert!(detect(&pages, &[]).is_empty(), "{item}");
+            let mut bold = blk(item, 8.0, 1);
+            bold.bold = true;
+            let pages = vec![vec![
+                blk("ordinary body prose here", 8.0, 40),
+                bold,
+                blk("more ordinary body prose here", 8.0, 40),
+            ]];
+            assert!(detect(&pages, &[]).is_empty(), "bold {item}");
+        }
+        // A diamond before a bold subsection title leaves it a heading.
+        let mut bold = blk("\u{2756} General rules", 8.0, 1);
+        bold.bold = true;
+        let pages = vec![vec![
+            blk("ordinary body prose here", 8.0, 40),
+            bold,
+            blk("more ordinary body prose here", 8.0, 40),
+        ]];
+        assert_eq!(detect(&pages, &[]).len(), 1);
     }
 
     #[test]
