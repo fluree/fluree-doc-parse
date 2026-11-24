@@ -1456,8 +1456,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             glyphs_outside_grids(&p.glyphs, &grids)
         });
 
+        // The prose's columns, which the field lists below look between too.
+        let prose_cols = timed(&mut timings.columns, || crate::column::detect(&prose));
         let mut cols = timed(&mut timings.columns, || {
-            line::assemble_columns_with_rules(&prose, &p.rules, p.index)
+            line::assemble_columns_in(&prose, &p.rules, p.index, &prose_cols)
         });
 
         // Second table strategy: alignment, for the 14 corpus documents whose
@@ -1481,7 +1483,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // where a row across the page holds more than a label and its
         // value. Their cells hold the prose's glyphs, so they are pointed
         // at the page's.
-        let fields = timed(&mut timings.tables, || table::field_lists(&prose, p.index));
+        let fields = timed(&mut timings.tables, || {
+            table::field_lists(&prose, p.index, &prose_cols)
+        });
         if !fields.is_empty() {
             let at: std::collections::HashMap<usize, usize> = p
                 .glyphs
