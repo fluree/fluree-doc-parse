@@ -8,7 +8,8 @@
   "notes": [
     "2026-11-23: every cell's doc:rowHeader was the row's first cell, the first copy's key, so a MAHLE number in a later copy was paired with a competitor number it has nothing to do with (#52).",
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
-    "2026-11-24 (#100): year ranges at the foot of the page (`1991-1998`) were taken for its folio, `1998`, ahead of the footer's own number."
+    "2026-11-24 (#100): year ranges at the foot of the page (`1991-1998`) were taken for its folio, `1998`, ahead of the footer's own number.",
+    "2026-11-24 (#137): MAHLE is set in small capitals drawn partly with capital codes and partly with lower-case ones, and its ActualText states the word's own case. A statement in case alone was never taken, so the name read `MAhlE` 44 times. It is taken now where the drawn word mixes its cases at one size."
   ],
   "checks": [
     {
@@ -69,6 +70,18 @@
         "page": 45,
         "value": "45"
       }
+    },
+    {
+      "id": "name-in-its-own-case",
+      "found": "2026-11-24",
+      "issue": "The name read `MAhlE`.",
+      "no_text": "MAhlE"
+    },
+    {
+      "id": "name-opens-the-sentence",
+      "found": "2026-11-24",
+      "issue": "As above, in the body.",
+      "text": "MAHLE Clevite recommends"
     }
   ]
 }
