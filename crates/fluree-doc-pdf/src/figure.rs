@@ -755,7 +755,12 @@ pub fn attach(
                 let chained = label
                     && gap(b, &drawing) <= reach * CHAIN_LIMIT
                     && taken.iter().any(|&t| gap(b, &blocks[t].0) <= reach);
-                if !(near && (label || beside(b))) && !chained {
+                // Text at the prose's size is the drawing's only as a title,
+                // a legend or an axis's name: no wider than the drawing, give
+                // or take its tick labels. A sentence beside a small code or
+                // an icon runs well past it, and is the page's.
+                let fits = b.width() <= drawing.width() * PROSE_LABEL_WIDTH;
+                if !(near && (label || (beside(b) && fits))) && !chained {
                     continue;
                 }
                 let grown = f.bbox.union(b);
@@ -829,6 +834,10 @@ const CHAIN_LIMIT: f64 = 2.0;
 /// Largest size, against the page's prose, at which text is a drawing's
 /// label wherever it stands among the others.
 const LABEL_SIZE: f32 = 0.95;
+
+/// Widest, against its drawing, text at the prose's size may be and still
+/// be the drawing's label.
+const PROSE_LABEL_WIDTH: f64 = 1.5;
 
 /// Is the drawing a photograph's numbered callouts, rather than a chart?
 ///
@@ -1085,6 +1094,39 @@ mod tests {
         let blocks = vec![(bb(230.0, 132.0, 270.0, 142.0), 10.0, "Logo")];
         attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
         assert_eq!(figs[0].bbox.y1, 142.0, "the caption under it is its label");
+    }
+
+    #[test]
+    fn a_sentence_beside_a_small_code_is_not_its_label() {
+        // A QR code, 49pt wide, and two lines of prose set at its left in
+        // the same tinted box, the first ending within its reach.
+        let mut figs = vec![Figure {
+            bbox: bb(500.0, 689.0, 549.0, 739.0),
+            drawing: bb(500.0, 689.0, 549.0, 739.0),
+            page: 0,
+            shapes: 8,
+        }];
+        let blocks = vec![(
+            bb(271.0, 703.0, 490.0, 739.0),
+            10.0,
+            "For more information and article numbers, visit www.example.com/E3",
+        )];
+        attach(&mut figs, &blocks, &[], (595.0, 842.0), 9.0);
+        assert_eq!(figs[0].bbox.x0, 500.0, "the sentence stays prose");
+        // A chart's title at the prose's size, as wide as the chart, is its.
+        let mut figs = vec![Figure {
+            bbox: bb(100.0, 300.0, 400.0, 460.0),
+            drawing: bb(100.0, 300.0, 400.0, 460.0),
+            page: 0,
+            shapes: 30,
+        }];
+        let blocks = vec![(
+            bb(100.0, 280.0, 350.0, 292.0),
+            10.0,
+            "Renewable energy purchases by year",
+        )];
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
+        assert_eq!(figs[0].bbox.y0, 280.0, "the title is the chart's");
     }
 
     #[test]
