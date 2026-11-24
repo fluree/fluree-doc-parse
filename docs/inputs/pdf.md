@@ -390,7 +390,10 @@ and the labels around it:
 - never further from the drawing than the drawing's own size.
 
 A list item, a sentence of more than fifteen words, and a block too wide to be
-a label stay the page's, however close they are set. So does a line that runs
+a label stay the page's, however close they are set. Text at the prose's
+size is a label only as wide as the drawing, give or take half again: a
+chart's title, legend or axis name. Two lines of prose beside a small QR
+code or an icon run well past it, and stay the page's. So does a line that runs
 on, at the same size and left edge, from text the figure did not take, such
 as the last of a column of notes or the first bullets of a list. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
