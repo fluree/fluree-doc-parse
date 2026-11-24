@@ -1227,11 +1227,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             (r > n_header && at(r)) || (r + 1 < rows.len() && at(r + 1))
                         };
                         // A row's own label, not a figure (`55°` is one,
-                        // `158,571` is not).
+                        // `158,571` is not, nor are two figures a slash
+                        // parts, `0 / 0`, or a bound, `<5%`).
                         let figure = |t: &str| {
                             t.chars().any(|c| c.is_ascii_digit())
                                 && t.chars().all(|c| {
-                                    c.is_ascii_digit() || ",.$€£¥%()-+\u{2212} ".contains(c)
+                                    c.is_ascii_digit() || ",.$€£¥%()-+\u{2212}/<>≤≥± ".contains(c)
                                 })
                         };
                         for (c, cell) in row.iter().enumerate() {
@@ -2011,6 +2012,39 @@ mod tests {
         let eleven = g.iter().find(|n| n["doc:cellValue"] == "11").unwrap();
         assert_eq!(eleven["doc:columnHeader"], "Drug / Grades 3-4");
         assert_eq!(eleven["doc:rowHeader"], "Diarrhea");
+    }
+
+    #[test]
+    fn a_value_beside_a_group_label_is_no_part_of_the_rows_name() {
+        // A property wrapped down the rows of its two test methods, each row
+        // with its value: `0 / 0` and `<5%` are figures, not labels that
+        // tell the rows apart. A label beside it still does (`Field`).
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Property", "Value", "Test"],
+                ["Surface burning", "0 / 0", "Method A"],
+                ["", "<5%", "Method B"],
+                ["Hardness", "Field", "Method C"],
+                ["", "Edge", "Method D"],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        let mut down = vec![false; 15];
+        down[6] = true;
+        down[12] = true;
+        t.merged_down = Some(down);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let header = |v: &str| {
+            cells.iter().find(|c| c["doc:cellValue"] == v).unwrap()["doc:rowHeader"].clone()
+        };
+        assert_eq!(header("Method A"), "Surface burning");
+        assert_eq!(header("Method B"), "Surface burning");
+        assert_eq!(header("Method D"), "Hardness / Edge");
     }
 
     #[test]

@@ -34,6 +34,26 @@
       "found": "2026-11-24",
       "issue": "#102: the first data row was every column's header.",
       "no_column_header": "Resistencia térmica"
+    },
+    {
+      "id": "test-named-by-its-property",
+      "found": "2026-11-24",
+      "issue": "A value beside the property wrapped down the rows of its two test methods, `0 / 0`, was read as part of the rows' name: `… desprendimiento de humo / 0 / 0`.",
+      "cell": {
+        "value": "ASTM E84",
+        "column": "PRUEBA",
+        "row": "Características de combustión superficial propagación del fuego/ desprendimiento de humo"
+      }
+    },
+    {
+      "id": "second-test-named-by-its-property",
+      "found": "2026-11-24",
+      "issue": "As above, for the second test method.",
+      "cell": {
+        "value": "Can/ULC S102.2",
+        "column": "PRUEBA",
+        "row": "Características de combustión superficial propagación del fuego/ desprendimiento de humo"
+      }
     }
   ]
 }
