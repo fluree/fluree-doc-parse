@@ -49,6 +49,17 @@ number may differ between the copies if it counts the pages and the line
 says nothing else (`Page 1 of 2`); `Table 1` over one page and `Table 2`
 over the next are headings.
 
+A two-page sheet may set page 2 on another template: its margins 18pt
+further left, its title block 50pt higher. Its copies then agree in text,
+size and weight, and lie in the same band, but not in place. They are still
+the template's when a line beside one moved with it, the same distance (the
+footer's next line, the title's subtitle), or when the copy opens page 2,
+its topmost line, and stands lower on page 1, under a masthead. A copy that
+opens page 2 restates page 1's title there: page 1 keeps it as its title,
+and only page 2's is running. A footer that moved is running on both pages.
+One line alone that moved, with nothing beside it and not opening its page,
+stays text.
+
 A title page that sets the running head's words as its own title, larger
 and in its own place, keeps its title. The copies at the running head's
 place are furniture; the title is not. Nor are the same words elsewhere on

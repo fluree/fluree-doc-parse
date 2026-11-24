@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "sherwin-williams-emerald-pds.pdf",
+    "url": "https://www.sherwin-williams.com/document/PDS/en/790417048503/",
+    "sha256": "6b0b5a593bfb3075c36c8819e6450983f5b787daac3797fb92a22c617a469219",
+    "about": "Sherwin-Williams Emerald interior paint product data sheet (2 pages). Page 2's text is read as a ruled table whose left edge falls inside its first column of text, through the first letters of a lead warning's lines."
+  },
+  "notes": [
+    "#170: page 2 opens with the title block page 1 sets lower, under the product code."
+  ],
+  "checks": [
+    {
+      "id": "title-once",
+      "found": "2026-11-24",
+      "issue": "The title, restated at the head of page 2, was a second SectionTitle.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Emerald® Symmetry"
+      },
+      "count": 1
+    },
+    {
+      "id": "subtitle-once",
+      "found": "2026-11-24",
+      "issue": "As above, for the line under it.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Interior Acrylic Matte"
+      },
+      "count": 1
+    }
+  ]
+}
