@@ -55,7 +55,7 @@ alone:
   edge is whole in the next; each line is kept once. A tall capture or a long
   scroll is read this way. A line running down such an image longer than the
   overlap is whole in no strip, and is lost or kept cut short.
-- **Shrunk**, with a warning on stderr, when even a strip as tall as the image
+- **Shrunk**, with a warning on stderr that names the file, when even a strip as tall as the image
   is wide would not fit: a page scanned at 600 dpi, a wide panorama. Raise
   `ocr.max_megapixels` to read it whole.
 

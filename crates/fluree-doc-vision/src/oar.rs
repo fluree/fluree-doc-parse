@@ -71,7 +71,9 @@ pub struct OarOptions {
     /// it is read alone.
     pub memory: u64,
     /// Told of what a reading does that its caller should know: an image
-    /// shrunk to fit [`OcrSizing::max_pixels`]. None: nobody is told.
+    /// shrunk to fit [`OcrSizing::max_pixels`]. Called on the thread that
+    /// asked for the reading, so a caller reading many documents can say
+    /// which one it is. None: nobody is told.
     pub notices: Option<Notices>,
 }
 

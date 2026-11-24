@@ -598,3 +598,54 @@ fn a_page_scanned_sideways_at_300_dpi_is_read_whole() {
     }
     assert_eq!(read.len(), 15, "{read:?}");
 }
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn fdoc_ocr_names_the_image_it_shrinks() {
+    // 3,000 × 400 px over a cap of 1 Mpx: a strip as tall as the image is
+    // wide would not fit, so the image is read shrunk, and the warning says
+    // which image, as a run reading many would need.
+    let models = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let dir = scratch("names-shrunk");
+    let png = dir.join("wide-capture.png");
+    let (w, h) = (3000u32, 400u32);
+    let mut pixels = vec![255u8; (w * h) as usize];
+    for y in 180..220 {
+        for x in 100..2900 {
+            pixels[(y * w + x) as usize] = 0;
+        }
+    }
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&png).unwrap());
+    let mut enc = png::Encoder::new(&mut file, w, h);
+    enc.set_color(png::ColorType::Grayscale);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .unwrap()
+        .write_image_data(&pixels)
+        .unwrap();
+    drop(file);
+    let out = fdoc(&dir)
+        .arg("ocr")
+        .arg(&png)
+        .arg("--out")
+        .arg(dir.join("out"))
+        .arg("--models")
+        .arg(&models)
+        .args(["--max-megapixels", "1"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let warning = stderr
+        .lines()
+        .find(|l| l.contains("read shrunk"))
+        .unwrap_or_else(|| panic!("no shrink warning: {stderr}"));
+    assert!(
+        warning.starts_with(&format!(
+            "warning: {}: OCR: a 3000 × 400 image",
+            png.display()
+        )),
+        "{warning}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
