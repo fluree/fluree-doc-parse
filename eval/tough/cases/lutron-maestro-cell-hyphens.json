@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "lutron-maestro-369-116.pdf",
+    "url": "https://assets.lutron.com/a/documents/369-116_maestro_120v_multi-location_fluorescent_smart_dimmer.pdf",
+    "sha256": "94c8a1723c49c88c65b9458d21f8be68911a87db0f7a49e5accdcad36a4c1f57",
+    "about": "Lutron Maestro fluorescent multi-location dimmer submittal sheet. Its ratings table sets the load types in a narrow column, hyphenating words at its line ends."
+  },
+  "notes": [
+    "A cell's lines joined at a line-end hyphen kept it, so a word the typesetter broke read with its hyphen inside: `Fluo-rescent Dimming Bal-lasts`. The same words are printed whole in the title and the next cells."
+  ],
+  "checks": [
+    {
+      "id": "load-type-words-whole",
+      "found": "2026-11-24",
+      "issue": "#113: `3-wire Electronic Fluo-rescent Dimming Bal-lasts`.",
+      "cell": {"value": "3-wire Electronic Fluorescent Dimming Ballasts (Lutron FDB, ECO, HL3, or H3D series)", "column": "Rated Load Types"}
+    },
+    {
+      "id": "no-broken-fluorescent",
+      "found": "2026-11-24",
+      "issue": "#113: the break's hyphen kept inside the word.",
+      "no_text": "Fluo-rescent"
+    },
+    {
+      "id": "no-broken-ballasts",
+      "found": "2026-11-24",
+      "issue": "#113: the break's hyphen kept inside the word.",
+      "no_text": "Bal-lasts"
+    }
+  ]
+}

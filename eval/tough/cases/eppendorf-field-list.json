@@ -24,7 +24,6 @@
     {
       "id": "tall-rows-stay-in-the-list",
       "found": "2026-11-23",
-      "status": "open",
       "issue": "The four fields with values several lines tall (Intended use, Storage accessories, Operating conditions, Others) fall out of the table, and their values run together as one paragraph.",
       "row": {"#0": "Storage accessories"}
     }

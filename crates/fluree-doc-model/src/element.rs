@@ -153,6 +153,12 @@ pub struct Element {
     /// matrix into sections. Empty where there are none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_headers: Option<Vec<usize>>,
+    /// Row indices, below the header block, set like a header row: they
+    /// name the columns afresh for the rows beneath them, until the next
+    /// such row (`By wt | By vol` under a `LB/Gal | g/L` header). They are
+    /// not data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restated_headers: Option<Vec<usize>>,
     /// Row-major, same shape as `cells`: this cell continues the one above
     /// it (a vertical merge). `cells` follows the rowspan convention — the
     /// value sits where the text was laid out and the other spanned rows
@@ -271,6 +277,7 @@ impl Element {
             cells: None,
             header_rows: None,
             sub_headers: None,
+            restated_headers: None,
             merged_down: None,
             merged_left: None,
             continues: None,

@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "kohler-k-r33912.pdf",
+    "url": "https://techcomm.kohler.com/techcomm/pdf/K-R33912_spec_US-CA_Kohler_en.pdf",
+    "sha256": "b61768a2ab19e9621bb575f793c025f254f2b2f4af35aad473e34b861dd7c214",
+    "about": "Kohler K-R33912 kitchen faucet specification sheet (3 pages, printed by Chrome). Page 1 lists the finishes as code beside name, on the baselines of the feature bullets to their left."
+  },
+  "notes": [
+    "2026-11-24 (#163): a list of fields set without rules, label beside value row after row, was run together into one paragraph when its labels end in no colon or when it shares its baselines with another page column."
+  ],
+  "checks": [
+    {
+      "id": "code-and-name",
+      "found": "2026-11-24",
+      "issue": "Each code and name was a paragraph of its own.",
+      "cell": {
+        "value": "Polished Chrome",
+        "row": "CP"
+      }
+    },
+    {
+      "id": "name-set-close",
+      "found": "2026-11-24",
+      "issue": "`2MB Vibrant Brushed Moderne Brass` sets its name closer to the code than cells are parted.",
+      "cell": {
+        "value": "Vibrant Brushed Moderne Brass",
+        "row": "2MB"
+      }
+    }
+  ]
+}

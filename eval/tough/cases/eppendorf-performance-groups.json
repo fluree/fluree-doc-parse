@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "eppendorf-multipette-e3.pdf",
+    "url": "https://www.eppendorf.com/product-media/doc/en/148063/Eppendorf_Liquid-Handling_Technical-data_MultipetteE3-E3x_Combitips-advanced_Multipette-E3-E3x-Combitips-advanced-Performance-Data-Sheet.pdf",
+    "sha256": "2d4b6e0e628c0d56eedcc72a7b4e52ec50a3f27ce67b7eb222fcc1c35b48b45e",
+    "about": "Eppendorf Multipette E3/E3x data sheet. Its performance table rules each tip size off with a rule across the table, sets the size, colour and volume range once on the group's first line, and gives each tested volume a line of its own."
+  },
+  "notes": [
+    "2026-11-24 (#162): the table is read line by line, and only the header's spans were kept. The tip size, colour and volume range sat on the group's first row alone, and the DoCO cells of the three rows under it carried no row header: 27 of the 36 rows lost their tip size. Each row now carries the size and the colour set beside it, as the path a group label and the label beside it make."
+  ],
+  "checks": [
+    {
+      "id": "second-volume-names-its-tip",
+      "found": "2026-11-24",
+      "issue": "#162: the group's second row carried no row header.",
+      "cell": {
+        "value": "10 μL",
+        "column": "Volume",
+        "row": "0.1 mL / white"
+      }
+    },
+    {
+      "id": "last-volume-names-its-tip",
+      "found": "2026-11-24",
+      "issue": "#162: as above, on the group's last row.",
+      "cell": {
+        "value": "100 μL",
+        "column": "Volume",
+        "row": "0.1 mL / white"
+      }
+    },
+    {
+      "id": "error-names-its-tip",
+      "found": "2026-11-24",
+      "issue": "#162: as above, for an error value.",
+      "cell": {
+        "value": "±1.6 %",
+        "column": "Systematic error1)",
+        "row": "0.1 mL / white"
+      }
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree CR4T downlight spec sheet (Canada). Its photometry page sets ruled tables side by side, beside a polar chart, in two page columns parted by a vertical rule."
+  },
+  "notes": [
+    "The page's rules were read as one grid before being cut into tables, so tables side by side shared row lines and the chart's axis and the page divider became columns.",
+    "2026-11-24: the luminance table's `Vertical Angle`, turned down a column of its own, was every row's `doc:rowHeader`; a group label over each row's own label names the row with both."
+  ],
+  "checks": [
+    {
+      "id": "open-space-and-corridor-apart",
+      "found": "2026-11-24",
+      "issue": "#102: Open Space and Corridor were one table of twelve columns, each row holding a row of both.",
+      "no_row": {
+        "Open Space / Spacing": "4 x 4",
+        "Corridor / Spacing": "4' on Center"
+      }
+    },
+    {
+      "id": "luminance-table",
+      "found": "2026-11-24",
+      "issue": "#102: the Average Luminance table was a column of the CU table.",
+      "cell": {
+        "value": "17,146",
+        "column": "Average Luminance Table (cd/m²)"
+      }
+    },
+    {
+      "id": "no-chart-labels-as-header",
+      "found": "2026-11-24",
+      "issue": "#102: the polar chart's axis labels headed the CU table.",
+      "no_column_header": "0 96 192 289 385"
+    },
+    {
+      "id": "luminance-row-under-its-group",
+      "found": "2026-11-24",
+      "issue": "Every row's `doc:rowHeader` was `Vertical Angle`.",
+      "cell": {
+        "value": "17,146",
+        "row": "Vertical Angle / 55°"
+      }
+    }
+  ]
+}
