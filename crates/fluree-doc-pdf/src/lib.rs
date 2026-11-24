@@ -69,6 +69,7 @@ pub mod link;
 pub(crate) mod marked;
 pub mod outline;
 pub mod overlay;
+pub(crate) mod region;
 
 /// Pages the router says carry content, which the final element stream does
 /// not hold.

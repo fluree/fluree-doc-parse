@@ -570,6 +570,7 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
         }
     }
 
+    let lines = part_at_gutters(lines, glyphs, ratio);
     let mut lines = label_display(lines, glyphs, ratio);
 
     // Restore document order across buckets. This is a provisional order —
@@ -1148,6 +1149,175 @@ fn script_attached(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     overlap >= (hi - lo).max(f64::EPSILON) * SCRIPT_OVERLAP
 }
 
+/// Lines a space glyph kept whole across a gutter, parted there.
+///
+/// A space written as a glyph has no ink and no box, so the gap after a word
+/// ended by one was never measured, and a column's line ran on across the
+/// gutter into the next: `fit easily into` and the callout `Wide range of
+/// rotors for` beside it, one line. Measured from the last glyph that put
+/// ink down, past the space, the gap is a gutter's when it is wider than the
+/// block gap and no line just above or below, set to the same measure, puts
+/// ink in it. A justified line's stretched space is crossed by its
+/// paragraph's words, on lines that start and end where it does; a gutter
+/// stands clear down the rows, whatever a title over it does. Where every
+/// row of two columns ran together, each looks set to one measure with the
+/// next, and their ragged ends reach into each other's gaps; but those rows
+/// are cut by the gutter too, their own gap ending where this one's does or
+/// spanning its middle, and do not count as running across it. A number or
+/// a label set off from its text by a tab keeps it (`3.1 ⇥ Results`, `Note
+/// 3. ⇥ Business Segment…`).
+fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> {
+    let boxes: Vec<(BBox, f64, bool)> = lines
+        .iter()
+        .map(|l| (l.bbox, l.font_size.max(1.0) as f64, l.is_horizontal()))
+        .collect();
+    // Each line's ink, as the spans its glyphs cover.
+    let ink: Vec<Vec<(f64, f64)>> = lines
+        .iter()
+        .map(|l| {
+            let mut spans: Vec<(f64, f64)> = l
+                .glyphs
+                .iter()
+                .filter_map(|&j| glyphs[j].bbox.map(|b| (b.x0, b.x1)))
+                .collect();
+            spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+            spans
+        })
+        .collect();
+    // Is line `j` parted by a gap of its own over the gap `x0..x1`: one
+    // whose text resumes where the gap's does, or that spans its middle?
+    // Then it does not run across that gutter but is cut by it too.
+    let parted_over = |j: usize, x0: f64, x1: f64, size: f64| {
+        let quarter = (x1 - x0) * 0.25;
+        let mut reach = f64::MIN;
+        ink[j].iter().any(|&(g0, g1)| {
+            let hit = reach > f64::MIN
+                && g0 - reach > size * BLOCK_GAP_RATIO
+                && ((g0 - x1).abs() <= size || (reach < x1 - quarter && g0 > x0 + quarter));
+            reach = reach.max(g1);
+            hit
+        })
+    };
+    let crossed = |me: usize, x0: f64, x1: f64, size: f64| {
+        let b = boxes[me].0;
+        // The paragraph's own lines: set to the line's measure, starting
+        // and ending where it does.
+        boxes.iter().enumerate().any(|(j, (o, _, horizontal))| {
+            j != me
+                && *horizontal
+                && o.y0 < b.y1 + size * GUTTER_ROWS
+                && o.y1 > b.y0 - size * GUTTER_ROWS
+                && o.x0 < x0 + 1.0
+                && o.x1 > x1 - 1.0
+                && (o.x0 - b.x0).abs() <= size * SAME_MEASURE
+                && (o.x1 - b.x1).abs() <= size * SAME_MEASURE
+                && {
+                    // In the gap's middle: a ragged edge reaching a point
+                    // into it is the edge, not a word set across it.
+                    let quarter = (x1 - x0) * 0.25;
+                    ink[j]
+                        .iter()
+                        .any(|&(g0, g1)| g0 < x1 - quarter && g1 > x0 + quarter)
+                }
+                // Two columns the line pass ran together row after row:
+                // each row's own gap ends where the next column starts, or
+                // a line beside it in the other column stands in the gap.
+                && !parted_over(j, x0, x1, size)
+        })
+    };
+    let mut out = Vec::with_capacity(lines.len());
+    for (me, l) in lines.into_iter().enumerate() {
+        if !l.is_horizontal() {
+            out.push(l);
+            continue;
+        }
+        let idxs = &l.glyphs;
+        let mut cuts: Vec<usize> = Vec::new();
+        for k in 1..idxs.len() {
+            let (prev, next) = (&glyphs[idxs[k - 1]], &glyphs[idxs[k]]);
+            if prev.bbox.is_some() || next.bbox.is_none() {
+                continue;
+            }
+            let from = cuts.last().copied().unwrap_or(0);
+            let Some(inked) = idxs[from..k]
+                .iter()
+                .rev()
+                .find(|&&j| glyphs[j].bbox.is_some())
+            else {
+                continue;
+            };
+            let (Some(a), Some(b)) = (glyphs[*inked].bbox, next.bbox) else {
+                continue;
+            };
+            let size = glyphs[*inked].font_size.max(next.font_size).max(1.0) as f64;
+            if b.x0 - a.x1 > size * BLOCK_GAP_RATIO
+                && !lone_label(glyphs, &idxs[from..k])
+                && !crossed(me, a.x1, b.x0, size)
+            {
+                cuts.push(k);
+            }
+        }
+        if cuts.is_empty() {
+            out.push(l);
+            continue;
+        }
+        let mut edges = vec![0];
+        edges.extend(&cuts);
+        edges.push(idxs.len());
+        let parts: Vec<Line> = edges
+            .windows(2)
+            .filter_map(|w| build_line(glyphs, &idxs[w[0]..w[1]], l.rotation_bucket, ratio))
+            .collect();
+        if parts.len() == cuts.len() + 1 {
+            out.extend(parts);
+        } else {
+            out.push(l);
+        }
+    }
+    out
+}
+
+/// How far, in the line's size, another line's ends may stand from its own
+/// for the two to be set to one measure.
+const SAME_MEASURE: f64 = 1.5;
+
+/// Rows above and below, in the line's size, whose lines show a gap is no
+/// gutter by running across it.
+const GUTTER_ROWS: f64 = 2.5;
+
+/// Is the line so far a number or a marker alone, `3.1`, `12`, `IV.`,
+/// `(a)`, `•`, or one a word names, `Note 3.`, `Item 1A.`, `Section 2.1`,
+/// `Article IV`? Set off from its text by a tab, it heads that text.
+fn lone_label(glyphs: &[Glyph], cur: &[usize]) -> bool {
+    let text: String = cur.iter().map(|&j| glyphs[j].text.as_str()).collect();
+    let number = |t: &str| {
+        let letters = t.chars().filter(|c| c.is_alphabetic()).count();
+        !t.is_empty() && t.chars().count() <= LABEL_MAX_CHARS && letters <= LABEL_MAX_LETTERS
+    };
+    let words: Vec<&str> = text.split_whitespace().collect();
+    match words[..] {
+        [t] => number(t),
+        [w, t] => {
+            w.chars().next().is_some_and(char::is_uppercase)
+                && w.chars().all(char::is_alphabetic)
+                && w.chars().count() <= LABEL_WORD_CHARS
+                && number(t)
+                && t.chars().any(|c| c.is_ascii_digit() || c.is_uppercase())
+        }
+        _ => false,
+    }
+}
+
+/// Longest the word naming a label is: `Schedule`, `Appendix`.
+const LABEL_WORD_CHARS: usize = 10;
+
+/// Longest a number or marker set before a tab is, in characters: `1.2.3.4`.
+const LABEL_MAX_CHARS: usize = 8;
+
+/// Most letters such a label holds: a roman numeral or a letter (`iv.`,
+/// `A.1`), not a word.
+const LABEL_MAX_LETTERS: usize = 3;
+
 /// True when two glyphs on one baseline are separated by enough space to be
 /// separate blocks — a column gutter, a table cell boundary, or a header's
 /// left and right groups. Splitting here is what stops `www.ti.com` and
@@ -1538,7 +1708,7 @@ struct Word {
     /// Holds a letter or a digit.
     spells: bool,
     /// Set after a gap the line pass parts columns at ([`BLOCK_GAP_RATIO`]),
-    /// which a space that puts no ink down kept from parting this line.
+    /// which it kept this line whole across: a number set before a tab.
     parted: bool,
 }
 
@@ -1845,11 +2015,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         .iter()
         .fold((0, 0), |(n, h), w| (n + w.inked, h + w.heavy));
     //
-    // The last word is the last before a gutter. A space that puts no ink
-    // down keeps the line pass from parting columns at it, and a heading
-    // ran on into the next column's plain text (`9.5. Adapting to the New
-    // Normal: Changing` and, across the gutter, `demand during COVID-19;`)
-    // read as ending plain.
+    // The last word is the last before a gutter. Where the line pass kept a
+    // line whole across one, words past it are not the line's own: a
+    // heading run on into the next column's plain text (`9.5. Adapting to
+    // the New Normal: Changing` and, across the gutter, `demand during
+    // COVID-19;`) read as ending plain.
     let first = words.iter().position(|w| w.letters > 0);
     let own = first.map_or(words.len(), |f| {
         words[f + 1..]
@@ -2014,7 +2184,8 @@ mod tests {
     #[test]
     fn a_heading_run_on_across_a_gutter_ends_where_its_column_does() {
         // A bold heading, a space that puts no ink down, then the next
-        // column's plain text 3.5 ems on: the space keeps the line whole.
+        // column's plain text 3.5 ems on: the gap is measured past the
+        // space, and the heading's line ends at the gutter.
         let mut v = weighted("Adapting", 0.0, Some(700));
         v.push(Glyph {
             bbox: None,
@@ -2023,8 +2194,9 @@ mod tests {
         });
         v.extend(weighted("demand", 75.0, None));
         let lines = assemble(&v);
-        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines[0].bold, "{}", lines[0].text);
+        assert!(!lines[1].bold, "{}", lines[1].text);
         // Without the gutter, the plain word ends it.
         let mut v = weighted("Adapting", 0.0, Some(700));
         v.extend(weighted("demand", 45.0, None));
@@ -2551,6 +2723,99 @@ mod tests {
         let mut v = run("Produits", 100.0, 0);
         v.push(space(111.5, 20));
         assert_eq!(assemble(&v)[0].text, "Produits");
+    }
+
+    #[test]
+    fn a_space_glyph_does_not_hide_a_gutter() {
+        // A column's line ends `fit easily into` and its space glyph; a
+        // callout across the gutter, 37pt on, starts `Wide`.
+        let mut v = run("into", 0.0, 0);
+        v.push(space(20.0, 4));
+        v.extend(run("Wide", 57.0, 5));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0].text, "into");
+        assert_eq!(lines[1].text, "Wide");
+        // A word space the glyph stands in stays one: `of the`.
+        let mut v = run("of", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("the", 14.0, 3));
+        assert_eq!(assemble(&v).len(), 1);
+    }
+
+    /// `text` at `x` on the row `y`, its glyphs drawn from `first`.
+    fn run_at(text: &str, x: f64, y: f64, first: usize) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut l = g(&c.to_string(), x + 5.0 * i as f64, y, 4.5, 0.0);
+                l.advance = Some(5.0);
+                l.draw_index = first + i;
+                l
+            })
+            .collect()
+    }
+
+    #[test]
+    fn columns_run_together_row_after_row_part_at_their_gutter() {
+        // Two rows of a ragged left column, each ended by a space glyph,
+        // and the right column's text at x 200 on both. Each row's end
+        // reaches into the other's gap, and both rows span both columns.
+        let mut v = run_at("aaaaaaaaaa", 0.0, 0.0, 0);
+        v.push(space(50.0, 10));
+        v.extend(run_at("bbbb", 200.0, 0.0, 11));
+        let mut low = run_at("cccccccccccccccccccccccc", 0.0, 14.0, 20);
+        let mut sp = space(120.0, 44);
+        sp.origin.1 = 24.0;
+        low.push(sp);
+        low.extend(run_at("dddd", 200.0, 14.0, 45));
+        v.extend(low);
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(
+            texts,
+            ["aaaaaaaaaa", "bbbb", "cccccccccccccccccccccccc", "dddd"],
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    fn a_justified_space_crossed_by_its_paragraph_stays() {
+        // A line stretched to the measure, a wide space in it, between two
+        // lines of its paragraph that run across where it stands.
+        let mut v = run_at("cccccccccccccccccccccccccccccccccccccccc", 0.0, -14.0, 0);
+        v.extend(run_at("aaaaaaaaaa", 0.0, 0.0, 50));
+        v.push(space(50.0, 60));
+        v.extend(run_at("bbbbbbbbbbbbbbbbbbbbbbbbb", 75.0, 0.0, 61));
+        v.extend(run_at(
+            "dddddddddddddddddddddddddddddddddddddddd",
+            0.0,
+            14.0,
+            90,
+        ));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+    }
+
+    #[test]
+    fn a_number_set_off_by_a_tab_keeps_its_text() {
+        // `3.1 ⇥ Results`: a heading's number, a space glyph, and the
+        // heading's text at the tab stop.
+        let mut v = run("3.1", 0.0, 0);
+        v.push(space(15.0, 3));
+        v.extend(run("Results", 45.0, 4));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lone_label(&run("12", 0.0, 0), &[0, 1]));
+        assert!(!lone_label(&run("NOTE:", 0.0, 0), &[0, 1, 2, 3, 4]));
+        let label = |t: &str| {
+            let v = run(t, 0.0, 0);
+            lone_label(&v, &(0..v.len()).collect::<Vec<_>>())
+        };
+        assert!(label("Note 3."));
+        assert!(label("Item 1A."));
+        assert!(label("Article IV"));
+        assert!(!label("fit easily"));
+        assert!(!label("Rated voltage"));
     }
 
     #[test]

@@ -445,6 +445,10 @@ fn prose_size(blocks: &[Block]) -> f32 {
 /// labels.
 const RULED_TABLE_FILL: f64 = 0.5;
 
+/// How far, as a share of the page's height, a block may stand from a
+/// running line's row and still be on it: a baseline's wobble between pages.
+const FURNITURE_ROW_SLACK: f64 = 0.005;
+
 /// Fraction of a block that must lie inside a figure's drawing for the
 /// block to belong to it without being taken as a label. High enough that a
 /// paragraph brushing the drawing's margin stays prose.
@@ -729,6 +733,9 @@ struct PageLayout {
     /// alignment rather than drawn; see [`Grid::split_by_alignment`].
     spanning_rows: Vec<Vec<usize>>,
     prose_columns: Vec<Vec<Line>>,
+    /// Per prose column, the page column it is a stretch of, and whether it
+    /// sets its own measure; see [`crate::region::Group`].
+    prose_sources: Vec<(usize, bool)>,
     route: crate::route::Route,
     missing_tables: Vec<crate::geom::BBox>,
     demoted_tables: Vec<bool>,
@@ -1335,6 +1342,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .collect()
         });
 
+        // Each region's columns in turn, down the page.
+        let table_boxes: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
+        let pictures: Vec<crate::geom::BBox> = p.images.iter().map(|im| im.bbox).collect();
+        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures);
+        let prose_sources: Vec<(usize, bool)> =
+            groups.iter().map(|g| (g.column, g.own_measure)).collect();
+        let cols: Vec<Vec<Line>> = groups.into_iter().map(|g| g.lines).collect();
         flat_lines.push((cols.iter().flatten().cloned().collect(), p.height));
         if opts.table_conf_debug {
             for (ti, g) in grids.iter().enumerate() {
@@ -1397,6 +1411,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources,
             spanning_rows,
             prose_columns: cols,
+            prose_sources,
             route,
             missing_tables: missing,
             demoted_tables: demoted,
@@ -1500,6 +1515,28 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             .cloned()
             .collect()
     };
+    // The rows each furniture text runs on, as shares of the page's height:
+    // a running line leaks into a block on its own row, where a line the
+    // page set beside it merged with it. Elsewhere its words are content: a
+    // running head parted into its groups (`July 26, 2023`, `Chair Powell's
+    // Press Conference`) is set again in the transcript's title under it.
+    let mut furniture_rows: std::collections::HashMap<String, Vec<(f64, f64)>> = Default::default();
+    for (pi, page_marks) in marks.iter().enumerate() {
+        let (lines, height) = &flat_lines[pi];
+        if *height <= 0.0 {
+            continue;
+        }
+        for (li, kind) in page_marks.iter() {
+            let l = &lines[*li];
+            furniture_rows
+                .entry(furniture_key(
+                    l.text.trim(),
+                    matches!(kind, furniture::Furniture::PageNumber),
+                ))
+                .or_default()
+                .push((l.bbox.y0 / height, l.bbox.y1 / height));
+        }
+    }
     // The sizes each furniture text is printed at, to tell a running head
     // from a title page that sets the same words as its title.
     let mut furniture_sizes: std::collections::HashMap<String, Vec<f32>> = Default::default();
@@ -1512,6 +1549,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .push(l.font_size);
         }
     }
+    // The running strings to scrub from text spanning `top..foot` of its
+    // page, as shares of the page's height: those found on those rows.
+    let on_rows = |top: f64, foot: f64| -> Vec<(String, bool)> {
+        scrub_texts
+            .iter()
+            .filter(|(t, vary)| {
+                furniture_rows
+                    .get(&furniture_key(t, *vary))
+                    .is_none_or(|rows| {
+                        rows.iter().any(|&(y0, y1)| {
+                            y0 < foot + FURNITURE_ROW_SLACK && top < y1 + FURNITURE_ROW_SLACK
+                        })
+                    })
+            })
+            .cloned()
+            .collect()
+    };
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
 
@@ -1532,7 +1586,29 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             idx += col.len();
             kept_columns.push(kept);
         }
-        let contents_layout = is_contents_layout(&kept_columns);
+        // The region pass reads a page column in stretches. A stretch's
+        // measure is its column's, unless it is one side of a box read at
+        // its own gutter; and side heads are read beside their text over
+        // whole columns, as the page-wide pass found them.
+        let sources = &layout.prose_sources;
+        let measures: Vec<Vec<Line>> = (0..kept_columns.len())
+            .map(|i| match sources.get(i) {
+                Some(&(c, false)) => kept_columns
+                    .iter()
+                    .zip(sources)
+                    .filter(|(_, s)| s.0 == c)
+                    .flat_map(|(k, _)| k.iter().cloned())
+                    .collect(),
+                _ => kept_columns[i].clone(),
+            })
+            .collect();
+        let page_columns = {
+            let mut c: Vec<usize> = sources.iter().map(|s| s.0).collect();
+            c.sort_unstable();
+            c.dedup();
+            c.len()
+        };
+        let contents_layout = page_columns > 1 && is_contents_layout(&kept_columns);
         let checkboxes = crate::rule::checkboxes(&raw.pages[pi].fills);
         let dots = block::marking_dots(
             &kept_columns.iter().flatten().cloned().collect::<Vec<_>>(),
@@ -1542,15 +1618,24 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let body = block::body_size(kept_columns.iter().flatten());
         let tables: Vec<crate::geom::BBox> = layout.grids.iter().map(|g| g.bbox).collect();
         let block_columns: Vec<Vec<Block>> = timed(&mut timings.blocks, || {
-            block::read_side_heads(
-                kept_columns
-                    .iter()
-                    .map(|col| {
-                        block::assemble_with_marks(col, leading, &checkboxes, &dots, &bands, body)
-                    })
-                    .collect(),
-                &tables,
-            )
+            let mut runs: Vec<(usize, Vec<Block>)> = Vec::new();
+            for (i, col) in kept_columns.iter().enumerate() {
+                let blocks = block::assemble_in_measure(
+                    col,
+                    &measures[i],
+                    leading,
+                    &checkboxes,
+                    &dots,
+                    &bands,
+                    body,
+                );
+                let c = sources.get(i).map_or(i, |s| s.0);
+                match runs.last_mut() {
+                    Some((last, run)) if *last == c => run.extend(blocks),
+                    _ => runs.push((c, blocks)),
+                }
+            }
+            block::read_side_heads(runs.into_iter().map(|(_, r)| r).collect(), &tables)
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();
         if contents_layout {
@@ -1750,8 +1835,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             });
             let scrubbed = if retitled {
                 text.clone()
-            } else if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
+            } else if height <= 0.0 {
                 furniture::scrub_block(&text, &scrub_texts)
+            } else if b.bbox.y0 < band || b.bbox.y1 > height - band {
+                furniture::scrub_block(&text, &on_rows(b.bbox.y0 / height, b.bbox.y1 / height))
             } else {
                 text.clone()
             };
@@ -1794,6 +1881,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
         for (gi, g) in layout.grids.iter().enumerate() {
+            // A running string leaks into a table only where the table
+            // reaches its row: a grid takes its glyphs before furniture is
+            // read, so a footer crossing it lands in its cells. Elsewhere the
+            // string's words are the table's own: a running head parted into
+            // its groups names the document again in a note under a table.
+            let height = raw.pages[pi].height;
+            let scrub_texts = if height > 0.0 {
+                on_rows(g.bbox.y0 / height, g.bbox.y1 / height)
+            } else {
+                scrub_texts.clone()
+            };
             // A title band over the table is the table's title, not its
             // header: it is read out as text above the table, and the table
             // is read from the row under it.

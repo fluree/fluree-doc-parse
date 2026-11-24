@@ -65,6 +65,11 @@ const MIN_HARD_BREAK_LINES: usize = 3;
 /// `-`), list numbers (`1.`, `iv.`) and footnote references are all short.
 const MAX_MARKER_CHARS: usize = 4;
 
+/// Farthest, in its item's size, a marker stands left of the item's text: a
+/// hanging indent or a tab stop. A number further off is a label of its own,
+/// a drawing's callout beside another.
+const MARKER_REACH: f64 = 5.0;
+
 #[derive(Debug, Clone)]
 pub struct Block {
     pub lines: Vec<Line>,
@@ -380,7 +385,8 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     }
     let smaller = (l.font_size as f64) < nb.font_size as f64 * 0.92;
     let outdented = l.bbox.x1 <= nb.bbox.x0 + 1.0;
-    smaller || outdented
+    let within = nb.bbox.x0 - l.bbox.x1 <= (nb.font_size as f64).max(1.0) * MARKER_REACH;
+    (smaller || outdented) && within
 }
 
 /// Group one page's lines into blocks, given the document's modal leading.
@@ -533,9 +539,27 @@ pub fn assemble_with_marks(
     bands: &[BBox],
     body: f64,
 ) -> Vec<Block> {
+    assemble_in_measure(lines, lines, leading, checkboxes, dots, bands, body)
+}
+
+/// [`assemble_with_marks`] over a stretch of a column, `lines`, whose
+/// measure is set by `measure`, the column's lines: a wrapped title read
+/// as a region of its own reaches the column's edge, not the edge of its
+/// own longer line, and a figure's callout number at the head of a
+/// stretch is no list marker unless it stands at the column's margin.
+pub fn assemble_in_measure(
+    lines: &[Line],
+    measure: &[Line],
+    leading: f64,
+    checkboxes: &[BBox],
+    dots: &[BBox],
+    bands: &[BBox],
+    body: f64,
+) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
-    let edge = Edge::of(lines, body);
-    let left_edge = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let edge = Edge::of(measure, body);
+    // A marker is set at the measure's left margin.
+    let left_edge = measure.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
     // Separate markers first so they cannot act as block boundaries.
     let mut content: Vec<Line> = Vec::new();
     let mut markers: Vec<Line> = Vec::new();
@@ -2970,6 +2994,60 @@ mod tests {
             assert!(b.iter().all(|b| b.marker.is_none()), "{mark}");
             assert!(b.iter().any(|b| b.text().contains(mark)), "{mark}");
         }
+    }
+
+    #[test]
+    fn a_number_far_from_the_text_beside_it_is_no_marker() {
+        // A drawing's callouts: `2` at the left of a stretch read alone,
+        // and `6, 7` a long way off on its row.
+        let mut two = l("2", 291.0, 0.0, 8.0);
+        two.bbox.x1 = 296.0;
+        let mut six = l("6, 7", 529.0, 0.0, 8.0);
+        six.bbox.x1 = 545.0;
+        let b = assemble(&[two.clone(), six], 1.2);
+        assert!(
+            b.iter().any(|b| b.text() == "2"),
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // Set before its item's text, it marks the item.
+        let mut item = l("Remove the front housing", 305.0, 0.0, 8.0);
+        item.bbox.x1 = 420.0;
+        let b = assemble(&[two, item], 1.2);
+        assert!(!b.iter().any(|b| b.text() == "2"));
+    }
+
+    #[test]
+    fn a_wrapped_title_read_alone_keeps_its_columns_measure() {
+        // A two-line display title the region pass reads as a stretch of
+        // its column: only the column's text shows its first line is full.
+        let line = |t: &str, x0: f64, y: f64, x1: f64, fs: f32| {
+            let mut l = l(t, x0, y, fs);
+            l.bbox.x1 = x1;
+            // Its ink: capitals and no descenders.
+            l.bbox.y1 = y + fs as f64 * 0.72;
+            l
+        };
+        // Its first line carries a registered sign in a lighter weight, so
+        // the two lines differ in weight: only a line that ran out of room
+        // goes on across that.
+        let mut second = line("GYPSUM PANELS", 225.0, 111.0, 430.0, 30.0);
+        second.bold = true;
+        let title = vec![line("SHEETROCK® BRAND", 225.0, 84.0, 540.0, 30.0), second];
+        let mut column = title.clone();
+        for i in 0..6 {
+            column.push(line(
+                "body text of the column set to its measure",
+                224.0,
+                160.0 + 10.0 * i as f64,
+                570.0,
+                8.0,
+            ));
+        }
+        let alone = assemble_with_marks(&title, 1.2, &[], &[], &[], 8.0);
+        let measured = assemble_in_measure(&title, &column, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(alone.len(), 2);
+        assert_eq!(measured.len(), 1);
     }
 
     #[test]

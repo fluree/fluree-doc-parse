@@ -268,6 +268,29 @@ is level with, so each section holds its own text. The strip qualifies when:
 A block of the strip level with nothing, such as a tag in the corner of the
 page, is read where its height puts it.
 
+**Regions.** Pages rarely run their columns from top to foot. A title band
+sits over two columns, two sections share one pair of columns, a box of
+text in two columns sits under full-width text, a picture's caption spans
+two of four columns. So a page is first parted into regions, at what runs
+across its text: a title across the columns, a rule or a table across them,
+or a stretch of white space wider than a paragraph's. Each region is read
+column by column before the next. A cut never runs through a paragraph: a
+caption, rule or table that spans only some of the columns leaves the
+paragraphs beside it whole, and a link's underline is part of its line. Two
+charts or cards side by side, each opening with a title on one row, are each
+read whole before the next. A box set in two columns of running text under
+full-width text is read one column after the other, even where the page as a
+whole has no gutter there. A field list keeps each value with its label, and
+a side tab's turned labels at the page's edge are not weighed.
+
+**Columns run together.** Many producers write the space after a word as a
+glyph that puts no ink down. Where the next glyph on the line stands across a
+gutter, the gap is measured from the last glyph that put ink down, so a
+column's line and a callout, or the next column's line, are read apart. A
+justified line's stretched space stays a space: the lines of its paragraph
+run across it. A number or a label set off from its text by a tab, `3.1 ⇥
+Results` or `Note 3. ⇥ Business Segment`, stays with its text.
+
 **Drop caps.** A paragraph's first letter set large, its top at the top of
 the first line and its foot on the second's, third's or fourth's baseline,
 is read at the head of the first line and joined to its word: `This report

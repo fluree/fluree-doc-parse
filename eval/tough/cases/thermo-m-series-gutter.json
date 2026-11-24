@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "#130: the flyer writes the space after each word as a glyph with no box. The body column's lines ended in one, the gap to a callout across the gutter was never measured, and each body line ran on into the callout beside it.",
+    "#131: the callouts and the body column were then read line by line in turn. Each callout now reads whole, after the body text."
+  ],
+  "checks": [
+    {
+      "id": "callout-apart-from-body-line",
+      "found": "2026-11-24",
+      "issue": "The callout `Wide range of rotors for` was read into the body line `…fit easily into` beside it.",
+      "element": {
+        "text": "Wide range of rotors for"
+      }
+    },
+    {
+      "id": "second-callout-apart-from-body-line",
+      "found": "2026-11-24",
+      "issue": "The callout `(up to 21,100 x g` was read into the body line `…ventilated or` beside it, and its first lines were read between the body's.",
+      "element": {
+        "text": "Rapid acceleration and deceleration (up to 21,100 x g in ~12 seconds)"
+      }
+    }
+  ]
+}
