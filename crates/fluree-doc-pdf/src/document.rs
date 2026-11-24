@@ -527,6 +527,81 @@ fn link_rows_below(prev: &Element, next: &mut Element, a: &TableFrame, b: &Table
     next.header_rows = Some(0);
 }
 
+/// Fewest bold lines stacked one after another, with nothing between them,
+/// that are a list of labels rather than a section opening on its first
+/// subsection.
+const STACKED_LABELS: usize = 3;
+
+/// Read headings on their weight alone that head nothing, read as text.
+///
+/// A section head is followed by what it heads: text, a table, a figure,
+/// or a section under it. Bold lines at one level that follow each other
+/// with nothing between them are looked at as a run, and these runs are
+/// no sections:
+///
+/// - **A run that heads nothing:** the end of the document follows it, or a
+///   bold heading above its level. That is the name and the role that close
+///   minutes or a letter (`Joshua Gallin` over `Secretary`), or a slide's
+///   kicker over its title.
+/// - **A run set as a row:** two of its lines sit side by side, so it is
+///   read across. That is a table's header cells left out of its grid
+///   (`Date | Description`), or an answer scale (`OFTEN`, `SOMETIMES`,
+///   `RARELY`, `NEVER`). Card titles set side by side on a slide are never
+///   a run, because each is followed by its own text.
+/// - **A run of three lines or more set one under another:** a list of
+///   names, a chart's legend words, a form's labels. Its last line is
+///   followed by text, and keeps the heading.
+///
+/// Two bold lines one over the other, followed by text, stay: that is a
+/// section opening on its first subsection (`Materials and Methods` over
+/// `Apiary selection`) as often as a label over a label.
+///
+/// Only weight is judged, because a numbered, outlined or larger line says
+/// more than its weight does. Only bold lines end a run, because a bold
+/// line's level says nothing beside another kind of heading's.
+fn demote_empty_bold_heads(elements: &mut [Element]) {
+    let bold = |e: &Element| e.kind == "doco:SectionTitle" && e.evidence == "bold";
+    let level = |e: &Element| e.level.unwrap_or(6);
+    let same_row = |a: &Element, b: &Element| match (a.bbox, b.bbox) {
+        (Some(a_box), Some(b_box)) if a.page == b.page => {
+            let overlap = a_box.y1.min(b_box.y1) - a_box.y0.max(b_box.y0);
+            let shorter = (a_box.y1 - a_box.y0).min(b_box.y1 - b_box.y0);
+            shorter > 0.0 && overlap >= shorter * 0.5
+        }
+        _ => false,
+    };
+    let mut demote: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i < elements.len() {
+        if !bold(&elements[i]) {
+            i += 1;
+            continue;
+        }
+        let lvl = level(&elements[i]);
+        let mut j = i;
+        while j + 1 < elements.len() && bold(&elements[j + 1]) && level(&elements[j + 1]) == lvl {
+            j += 1;
+        }
+        let heads_nothing = match elements.get(j + 1) {
+            None => true,
+            Some(next) => bold(next) && level(next) < lvl,
+        };
+        let row = (i + 1..=j).any(|k| same_row(&elements[k - 1], &elements[k]));
+        if heads_nothing || row {
+            demote.extend(i..=j);
+        } else if j + 1 - i >= STACKED_LABELS {
+            demote.extend(i..j);
+        }
+        i = j + 1;
+    }
+    for i in demote {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
+    }
+}
+
 /// Insert tables into the existing prose reading stream without reordering
 /// blocks. Horizontal overlap selects the relevant column; within that lane a
 /// table follows only elements that are entirely above its top edge. Blocks
@@ -2581,6 +2656,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    demote_empty_bold_heads(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -2797,6 +2873,89 @@ fn furniture_key(text: &str, digits_vary: bool) -> String {
 mod tests {
     use super::*;
     use crate::geom::BBox;
+
+    fn line_at(
+        kind: &str,
+        text: &str,
+        evidence: &'static str,
+        level: Option<usize>,
+        y: f64,
+        x: f64,
+    ) -> Element {
+        Element {
+            level,
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 80.0,
+                y1: y + 10.0,
+            }),
+            ..Element::new(kind, text, "rust", evidence)
+        }
+    }
+
+    fn heads(elements: &[Element]) -> Vec<&str> {
+        elements
+            .iter()
+            .filter(|e| e.kind == "doco:SectionTitle")
+            .map(|e| e.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn bold_lines_that_head_nothing_are_text() {
+        let head = |t: &str, y: f64, x: f64| line_at("doco:SectionTitle", t, "bold", Some(2), y, x);
+        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
+        // A section, then the name and role closing the minutes.
+        let mut minutes = vec![
+            head("Notation Vote", 100.0, 50.0),
+            text("By notation vote completed on…", 115.0),
+            head("Joshua Gallin", 160.0, 50.0),
+            head("Secretary", 172.0, 50.0),
+        ];
+        demote_empty_bold_heads(&mut minutes);
+        assert_eq!(heads(&minutes), ["Notation Vote"]);
+        // A table's header cells read across one row, then its rows.
+        let mut cells = vec![
+            head("TYPE", 100.0, 50.0),
+            head("DESCRIPTION", 100.0, 150.0),
+            text("I Ground reference voltage", 115.0),
+        ];
+        demote_empty_bold_heads(&mut cells);
+        assert!(heads(&cells).is_empty());
+        // A list of names, one under another: the last is followed by text.
+        let mut names = vec![
+            head("Ann Archer", 100.0, 50.0),
+            head("Ben Baker", 112.0, 50.0),
+            head("Cara Cole", 124.0, 50.0),
+            text("Address for notices", 140.0),
+        ];
+        demote_empty_bold_heads(&mut names);
+        assert_eq!(heads(&names), ["Cara Cole"]);
+        // A section opening on its first subsection, set the same way.
+        let mut paper = vec![
+            head("Materials and Methods", 100.0, 50.0),
+            head("Apiary selection", 115.0, 50.0),
+            text("Colonies were drawn from…", 130.0),
+        ];
+        demote_empty_bold_heads(&mut paper);
+        assert_eq!(heads(&paper), ["Materials and Methods", "Apiary selection"]);
+        // A heading of another kind after a bold line says nothing of it.
+        let mut outlined = vec![
+            head("Sectors of primary focus", 100.0, 50.0),
+            line_at(
+                "doco:SectionTitle",
+                "Energy",
+                "outline",
+                Some(1),
+                115.0,
+                50.0,
+            ),
+            text("Electricity generation…", 130.0),
+        ];
+        demote_empty_bold_heads(&mut outlined);
+        assert_eq!(heads(&outlined), ["Sectors of primary focus", "Energy"]);
+    }
 
     #[test]
     fn a_word_a_cell_breaks_is_read_whole_where_the_document_prints_it_whole() {

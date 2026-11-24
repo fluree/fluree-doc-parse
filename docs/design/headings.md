@@ -114,6 +114,36 @@ wraps from, so a line starting far to the left of a full line is in another
 column and begins its own block. Centred and right-aligned lines are exempt:
 they start where their length puts them.
 
+## Bold lines that head nothing
+
+A section head is followed by what it heads: text, a table, a figure, or a
+section under it. Once the page's tables and figures are placed in reading
+order, `bold` headings at one level that follow each other with nothing
+between them are looked at as a run. Three kinds of run are read as text:
+
+- **A run that heads nothing.** The end of the document follows it, or a bold
+  heading above its level does. This is the name and the role that close
+  minutes or a letter (`Joshua Gallin` over `Secretary`), or a slide's kicker
+  over its title.
+- **A run set as a row.** Two of its lines sit side by side, so the run is
+  read across. This is a table's header cells left out of its grid, or an
+  answer scale (`OFTEN`, `SOMETIMES`, `RARELY`, `NEVER`). Card titles set
+  side by side on a slide are never a run, because each is followed by its
+  own text.
+- **Three lines or more set one under another.** This is a list of names, a
+  chart's legend or a map's labels, or a form's labels. The last line is
+  followed by text and stays a heading.
+
+Two bold lines one over the other, followed by text, both stay. A section
+that opens on its first subsection (`Materials and Methods` over `Apiary
+selection`) is set that way as often as one label is set over another.
+
+Only `bold` evidence is judged, and only a bold line ends a run. A numbered,
+outlined or larger heading says more than weight does. A bold line's level
+also says nothing beside another kind of heading's: a bold head over its
+outlined subsections (`Sectors of primary focus` over `Energy`) has a deeper
+level number than they do.
+
 ## Numbering that is not an outline
 
 A bare integer — `5 Results`, `2 — Never` — is the weakest numbering form,
