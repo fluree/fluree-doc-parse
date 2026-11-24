@@ -1128,7 +1128,7 @@ mod tests {
     }
 
     /// `text` laid a glyph per character from `x`.
-    fn word(text: &str, x: f64, baseline: f64, size: f32) -> Vec<Glyph> {
+    fn sized_word(text: &str, x: f64, baseline: f64, size: f32) -> Vec<Glyph> {
         text.chars()
             .enumerate()
             .map(|(i, c)| {
@@ -1147,7 +1147,7 @@ mod tests {
         // A 30-point section number centred on a 10-point title, its
         // baseline 7 points below the title's: one line, as drawn.
         let mut v = vec![sized_at("1", 40.0, 107.0, 30.0)];
-        v.extend(word("Introduction", 70.0, 100.0, 10.0));
+        v.extend(sized_word("Introduction", 70.0, 100.0, 10.0));
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].text.starts_with('1') && lines[0].text.ends_with("Introduction"));
@@ -1157,9 +1157,9 @@ mod tests {
     fn a_small_raised_mark_stays_on_its_line() {
         // A registered mark at 4 points, raised 2.5 points after a word set
         // at 10.
-        let mut v = word("Widget", 40.0, 100.0, 10.0);
+        let mut v = sized_word("Widget", 40.0, 100.0, 10.0);
         v.push(sized_at("®", 73.0, 97.5, 4.0));
-        v.extend(word("is", 80.0, 100.0, 10.0));
+        v.extend(sized_word("is", 80.0, 100.0, 10.0));
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].text.contains("Widget®"), "{}", lines[0].text);
