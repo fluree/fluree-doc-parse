@@ -484,6 +484,18 @@ available, had the batch killed, silently; they now convert one at a time.
 And a group limited to 9 GB, after 4 GB written to a file had left 3.1 GB
 of cache counted in its use, no longer lowers `-j 2` to one.
 
+A batch reading images with the OCR engine (`--ocr`) sets aside, before it
+counts documents, the memory the engine may take: its own budget
+(`ocr.max_memory`, 8 GiB by default, or one pass at `ocr.max_megapixels`
+where that is more) and 0.3 GB for each pipeline it may build, one per
+image read at once, four at most. The engine is shared by every document,
+so it is set aside once, not per document: with 16 GiB free and the
+defaults, a batch runs one document at once beside an engine of four
+pipelines (`note: -j 4 lowered to 1: 16384 MiB of memory free, 9392 MiB of
+it for OCR, 3840 MiB a document`). Lower `ocr.max_memory` to run more
+documents at once; the engine then reads fewer images at a time
+([Memory and speed](../cli/ocr.md#memory-and-speed)).
+
 ## Pages
 
 A PDF or an XPS document is read to its 10,000th page, the page limit

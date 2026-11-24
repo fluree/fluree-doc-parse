@@ -222,7 +222,9 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         .map(|m| m.len())
         .max()
         .unwrap_or(0);
-    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory(), largest);
+    // The OCR engine reads for every document, in memory of its own.
+    let ocr = cfg.ocr.as_ref().map_or(0, |e| e.0.most_memory());
+    let (jobs, lowered) = batch_jobs(args.jobs, cores, free_memory(), largest, ocr);
     // Lowered to no fewer than the files there are, it changes nothing.
     if let Some(why) = lowered.filter(|_| !quiet && jobs < files.len()) {
         eprintln!("note: {why}");
@@ -306,13 +308,14 @@ fn document_memory(input: u64) -> u64 {
 
 /// How many documents a batch converts at once, and why, where it is fewer
 /// than `requested` (`0`, one per core of `cores`), its largest input
-/// `largest` bytes.
+/// `largest` bytes, with `beside` bytes set aside for an OCR engine the
+/// documents share.
 ///
 /// Each document may take its whole budget and what goes with it
 /// ([`document_memory`], counted at the largest input, which any worker
 /// may take) at once, so no more run together than `memory`, the
-/// memory free to the process, holds, and at least one; where that is not
-/// known, no more than one per core. A document past its budget fails on its
+/// memory free to the process less `beside`, holds, and at least one; where
+/// that is not known, no more than one per core. A document past its budget fails on its
 /// own, but documents within theirs that together pass what the machine has
 /// would abort the whole batch, or have it killed.
 fn batch_jobs(
@@ -320,19 +323,29 @@ fn batch_jobs(
     cores: usize,
     memory: Option<u64>,
     largest: u64,
+    beside: u64,
 ) -> (usize, Option<String>) {
     let asked = if requested == 0 { cores } else { requested };
     let document = document_memory(largest);
     let (bound, why) = match memory {
         Some(free) => (
-            usize::try_from(free / document)
+            usize::try_from(free.saturating_sub(beside) / document)
                 .unwrap_or(usize::MAX)
                 .max(1),
-            format!(
-                "{} MiB of memory free, {} MiB a document",
-                free >> 20,
-                document >> 20
-            ),
+            if beside == 0 {
+                format!(
+                    "{} MiB of memory free, {} MiB a document",
+                    free >> 20,
+                    document >> 20
+                )
+            } else {
+                format!(
+                    "{} MiB of memory free, {} MiB of it for OCR, {} MiB a document",
+                    free >> 20,
+                    beside >> 20,
+                    document >> 20
+                )
+            },
         ),
         None => (
             cores,
@@ -2978,23 +2991,23 @@ mod tests {
         // Room for three documents: -j 8 and one per core of 12 lowered.
         let doc = document_memory(0);
         let three = Some(3 * doc + (doc >> 1));
-        let (jobs, why) = batch_jobs(8, 12, three, 0);
+        let (jobs, why) = batch_jobs(8, 12, three, 0, 0);
         assert_eq!(jobs, 3);
         assert!(why.unwrap().starts_with("-j 8 lowered to 3: "));
-        let (jobs, why) = batch_jobs(0, 12, three, 0);
+        let (jobs, why) = batch_jobs(0, 12, three, 0, 0);
         assert_eq!(jobs, 3);
         assert!(why.unwrap().starts_with("-j 0 (one per core) lowered to 3"));
         // Within it: as asked, unsaid.
-        assert_eq!(batch_jobs(2, 12, three, 0), (2, None));
-        assert_eq!(batch_jobs(0, 2, three, 0), (2, None));
+        assert_eq!(batch_jobs(2, 12, three, 0, 0), (2, None));
+        assert_eq!(batch_jobs(0, 2, three, 0, 0), (2, None));
         // A budget each is not room enough: what goes with it counts.
-        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY), 0).0, 2);
+        assert_eq!(batch_jobs(4, 12, Some(3 * MAX_MEMORY), 0, 0).0, 2);
         // Less than one document's room: still one.
-        assert_eq!(batch_jobs(4, 12, Some(1 << 30), 0).0, 1);
+        assert_eq!(batch_jobs(4, 12, Some(1 << 30), 0, 0).0, 1);
         // A smaller memory limit makes room for more.
         let mut small = fluree_doc_model::budget::Limits::default();
         small.memory = MAX_MEMORY / 4;
-        let more = fluree_doc_model::budget::limited_to(small, || batch_jobs(8, 12, three, 0));
+        let more = fluree_doc_model::budget::limited_to(small, || batch_jobs(8, 12, three, 0, 0));
         assert_eq!(more.0, 7);
         // But what goes with a budget does not shrink with it: under a
         // budget of 1 MiB, 4 GiB free holds three documents, not 2,730.
@@ -3002,19 +3015,37 @@ mod tests {
         tiny.memory = 1 << 20;
         let four = Some(4u64 << 30);
         let (jobs, why) =
-            fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 0));
+            fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 0, 0));
         assert_eq!(jobs, 3);
         assert!(why
             .unwrap()
             .ends_with("4096 MiB of memory free, 1281 MiB a document"));
         // And a document holds its input whole: 400 MiB inputs make it two.
         let (jobs, _) =
-            fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 400 << 20));
+            fluree_doc_model::budget::limited_to(tiny, || batch_jobs(64, 12, four, 400 << 20, 0));
         assert_eq!(jobs, 2);
-        assert_eq!(batch_jobs(1, 12, Some(0), 0), (1, None));
+        assert_eq!(batch_jobs(1, 12, Some(0), 0, 0), (1, None));
         // Not known: one per core at most.
-        assert_eq!(batch_jobs(0, 6, None, 0), (6, None));
-        assert_eq!(batch_jobs(16, 6, None, 0).0, 6);
+        assert_eq!(batch_jobs(0, 6, None, 0, 0), (6, None));
+        assert_eq!(batch_jobs(16, 6, None, 0, 0).0, 6);
+    }
+
+    #[test]
+    fn a_batch_sets_aside_what_its_ocr_engine_may_take() {
+        // Room for three documents and a half; an engine that may take one
+        // document's worth leaves room for two.
+        let doc = document_memory(0);
+        let free = Some(3 * doc + (doc >> 1));
+        let (jobs, why) = batch_jobs(8, 12, free, 0, doc);
+        assert_eq!(jobs, 2);
+        assert!(why.unwrap().contains(&format!(
+            "MiB of memory free, {} MiB of it for OCR",
+            doc >> 20
+        )));
+        // An engine that may take all of it still leaves one.
+        assert_eq!(batch_jobs(8, 12, free, 0, u64::MAX).0, 1);
+        // Free memory not known: one per core, whatever the engine.
+        assert_eq!(batch_jobs(0, 6, None, 0, doc), (6, None));
     }
 
     #[test]
@@ -3164,7 +3195,7 @@ mod tests {
         ]);
         let free = free_memory_in(&read);
         assert_eq!(free, Some(2_999_000_000));
-        let (jobs, why) = batch_jobs(4, 12, free, 0);
+        let (jobs, why) = batch_jobs(4, 12, free, 0, 0);
         assert_eq!(jobs, 1);
         assert!(why.unwrap().contains("2860 MiB of memory free"));
         // Under an address space smaller still, that.

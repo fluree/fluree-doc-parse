@@ -49,6 +49,12 @@ pub const BYTES_PER_PIXEL: u64 = 230;
 /// with no bound, 6.9 GB in 18 s. At 6 GiB the pages took 27 s.
 pub const DEFAULT_MEMORY: u64 = 8 << 30;
 
+/// What a pipeline holds between readings, about 0.3 GB: its sessions and
+/// models, and what the shared arena keeps once shrunk. Measured after
+/// readings, the process held 0.6 to 0.7 GB with one pipeline and 0.6 to
+/// 1.6 GB with four, the budget's passes all given back.
+pub const PIPELINE_MEMORY: u64 = 300 << 20;
+
 /// Whom an engine tells what a reading did that its caller should know.
 pub type Notices = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -457,6 +463,14 @@ impl OarEngine {
 impl OcrEngine for OarEngine {
     fn name(&self) -> &str {
         ENGINE
+    }
+
+    /// Its budget, or the largest pass it reads alone where that is more,
+    /// and [`PIPELINE_MEMORY`] for each pipeline it may build.
+    fn most_memory(&self) -> u64 {
+        let pass = self.sizing.max_pixels().saturating_mul(BYTES_PER_PIXEL);
+        let pipelines = (self.pipes.most as u64).saturating_mul(PIPELINE_MEMORY);
+        self.budget.most.max(pass).saturating_add(pipelines)
     }
 
     fn read(&self, image: &Pixels) -> Result<WordReading, String> {

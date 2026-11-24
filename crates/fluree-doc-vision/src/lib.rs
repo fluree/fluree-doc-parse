@@ -113,6 +113,13 @@ pub trait OcrEngine: Send + Sync {
 
     /// Read one image.
     fn read(&self, image: &Pixels) -> Result<WordReading, String>;
+
+    /// The most memory, in bytes, the engine may hold at once while it
+    /// reads as many images together as it will: what a caller running
+    /// other work beside it sets aside. None of note by default.
+    fn most_memory(&self) -> u64 {
+        0
+    }
 }
 
 /// One word, or one line, as an OCR engine read it.
