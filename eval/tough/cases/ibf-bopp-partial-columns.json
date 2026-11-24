@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "ibf-bopp-tds.pdf",
+    "url": "https://ibfgraphica.pl/wp-content/uploads/2025/06/TDS_EN_BOPP_STM_202505.pdf",
+    "sha256": "23ab36d49353f77fea0e7f435d4f2ccd37731bc42fab39a0e184e30273d46595",
+    "about": "IBF BOPP film technical data sheet. Its thickness columns are ruled apart only in the rows where they differ, a few points apart from row to row."
+  },
+  "notes": [
+    "The 35 and 40 µm columns were read as one."
+  ],
+  "checks": [
+    {
+      "id": "thickness-35",
+      "found": "2026-11-24",
+      "issue": "#103: `35 40` in one cell.",
+      "cell": {
+        "value": "35",
+        "row": "Thickness"
+      }
+    },
+    {
+      "id": "thickness-40",
+      "found": "2026-11-24",
+      "issue": "#103: as above.",
+      "cell": {
+        "value": "40",
+        "row": "Thickness"
+      }
+    },
+    {
+      "id": "otr-own-cell",
+      "found": "2026-11-24",
+      "issue": "#103: `>1500 >1300` in one cell.",
+      "cell": {
+        "value": ">1500",
+        "row": "OTR (23°C, 0%-RH)"
+      }
+    }
+  ]
+}

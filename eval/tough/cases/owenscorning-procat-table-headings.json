@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "owenscorning-procat-accessories.pdf",
+    "url": "https://www.owenscorning.com/dms/10015771",
+    "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
+    "about": "Owens Corning ProCat accessory list. Each product sets its heading at the left, over its photo, and its table of codes to the right, the heading level with the table's top."
+  },
+  "notes": [
+    "2026-11-24 (#107): a table went after the last block above it that it overlapped across, so a table whose heading sits beside it, to its left, went into the section before."
+  ],
+  "checks": [
+    {
+      "id": "framing-gasket-table-under-its-head",
+      "found": "2026-11-24",
+      "issue": "p7: the Framing Gasket table followed the Sill Gasket table, ahead of its own heading.",
+      "under": {
+        "text": "780778",
+        "section": "ProPink ComfortSeal™ Framing Gasket"
+      }
+    },
+    {
+      "id": "wood-plugs-table-under-its-head",
+      "found": "2026-11-24",
+      "issue": "p2: the Wood Plugs table sat in the ProCat® Insulation section.",
+      "under": {
+        "text": "581088",
+        "section": "3\" Wood Plugs"
+      }
+    },
+    {
+      "id": "multi-purpose-table-under-its-head",
+      "found": "2026-11-24",
+      "issue": "p4: the Multi-Purpose table sat in the Attic Hatch Bag section.",
+      "under": {
+        "text": "1445360",
+        "section": "Multi-Purpose Fiberglass Insulation"
+      }
+    },
+    {
+      "id": "floor-mat-tape-table-under-its-head",
+      "found": "2026-11-24",
+      "issue": "p8: the Floor Mat Tape table sat in the Floor Mat section.",
+      "under": {
+        "text": "717599",
+        "section": "QuietZone® Acoustic Floor Mat Tape"
+      }
+    }
+  ]
+}

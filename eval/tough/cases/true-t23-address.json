@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 1 centres a three-line address over a form set in small columns."
+  },
+  "notes": [
+    "#132: the page-wide column cut falls through each line of the address, and the columns under it are a few lines each."
+  ],
+  "checks": [
+    {
+      "id": "address-reads-in-order",
+      "found": "2026-11-24",
+      "issue": "The address was dealt into the columns: `2001 East Terra Lane • Fax (636)272-2408 • …`, then `O’Fallon, Missouri 63366-4434 • (636)240-2400`, then `Parts Dept. Fax# …`.",
+      "text": "2001 East Terra Lane • O’Fallon, Missouri 63366-4434 • (636)240-2400 Fax (636)272-2408"
+    }
+  ]
+}

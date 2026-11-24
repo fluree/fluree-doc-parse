@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "fomcminutes20240131.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcminutes20240131.pdf",
+    "sha256": "6ce451a5bcf43bf90ac2172f6872cd245e04689c80d4b01e28a01519bb3f0dcc",
+    "about": "Minutes of the Federal Open Market Committee, January 30–31, 2024 (11 pages). The minutes close on a signature block: the Secretary's name set bold over the role."
+  },
+  "notes": [
+    "2026-11-24 (#151): a bold line at the body size was a heading whatever followed it. Bold lines in a run with nothing between them, a name over a role at the end or a chart's labels, opened sections that held nothing."
+  ],
+  "checks": [
+    {
+      "id": "signature-name-no-section",
+      "found": "2026-11-24",
+      "issue": "`Joshua Gallin`, the Secretary's name closing the minutes, was a section.",
+      "no_section": "Joshua Gallin"
+    },
+    {
+      "id": "signature-role-no-section",
+      "found": "2026-11-24",
+      "issue": "`Secretary` under it was a section of its own.",
+      "no_section": "Secretary"
+    },
+    {
+      "id": "notation-vote-stays",
+      "found": "2026-11-24",
+      "issue": "The last real head, set the same way, must stay.",
+      "section": {
+        "title": "Notation Vote"
+      }
+    }
+  ]
+}
