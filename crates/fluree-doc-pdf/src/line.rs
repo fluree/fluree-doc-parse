@@ -836,6 +836,17 @@ fn drop_caps(
     if adv != Advance::Right {
         return (clusters, caps);
     }
+    // Each line beside a cap opens with a glyph the cap is DROP_CAP_RATIO
+    // times the size of, and a cap needs two such lines. Counting the glyphs
+    // that small, from the page's sizes in order, turns a letter at the
+    // text's own size away before the scans below, each over the whole page:
+    // without it every letter on the page was scanned against every glyph.
+    let mut sizes: Vec<f64> = glyphs
+        .iter()
+        .filter(|o| o.bbox.is_some())
+        .map(|o| o.font_size.max(1.0) as f64)
+        .collect();
+    sizes.sort_by(|a, b| cmp(*a, *b));
     let mut moves: Vec<(usize, usize, usize)> = Vec::new();
     for (ci, c) in clusters.iter().enumerate() {
         for &g in c {
@@ -846,6 +857,9 @@ fn drop_caps(
                 continue;
             }
             let size = cap.font_size as f64;
+            if sizes.partition_point(|&fs| size >= fs * DROP_CAP_RATIO) < 2 {
+                continue;
+            }
             // A drop cap opens its word: no letter of its size stands
             // right before it, as one does before a logo's last letter
             // (`JNER` beside a journal's name).
