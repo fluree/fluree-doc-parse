@@ -72,7 +72,8 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
     let mut pkg = Package::open(bytes).map_err(PptxError::Zip)?;
     // What the deck makes, slide by slide, is spent from one budget as it
     // is made, and each part it is read from, inflated whole, before: a
-    // slide listed a thousand times is read a thousand times.
+    // slide listed a thousand times is read a thousand times, and its
+    // relationships once.
     let mut budget = Budget::default();
     let slides = slide_parts(&mut pkg, &mut budget)?;
     if slides.is_empty() {
@@ -83,31 +84,42 @@ pub fn parse_with_info(bytes: &[u8]) -> Result<(Vec<Element>, DocumentInfo), Ppt
     // Each chart part read once, by its name, however many slides or
     // frames name it: `None` where it holds no series.
     let mut parsed: HashMap<String, Option<ChartData>> = HashMap::new();
+    // Each slide's charts by relationship id, the first of an id that
+    // names a chart with series, resolved once for its part however many
+    // times the deck lists it, and spent once: read again for each
+    // listing, a slide of 300,000 chart relationships listed 100 times
+    // took 17 s, and the budget allows a million listings.
+    let mut slide_charts: HashMap<String, HashMap<String, String>> = HashMap::new();
     for (idx, name) in slides.iter().enumerate() {
         let Some(xml) = pkg.read_within(name, &mut budget)? else {
             continue;
         };
-        // Charts live in their own parts; the slide only names a
-        // relationship id, so resolve those before walking it.
-        let mut named: Vec<(String, String)> = Vec::new();
-        for r in pkg.relationships(name) {
-            if !r.is("chart") || r.external {
-                continue;
+        if !slide_charts.contains_key(name) {
+            // Charts live in their own parts; the slide only names a
+            // relationship id, so resolve those before walking it.
+            let mut by_id: HashMap<String, String> = HashMap::new();
+            for r in pkg.relationships(name) {
+                if !r.is("chart") || r.external || by_id.contains_key(&r.id) {
+                    continue;
+                }
+                if !parsed.contains_key(&r.target) {
+                    let chart = match pkg.read_within(&r.target, &mut budget)? {
+                        Some(cx) => parse_chart(&cx, &mut budget)?,
+                        None => None,
+                    };
+                    parsed.insert(r.target.clone(), chart);
+                }
+                if parsed[&r.target].is_some() {
+                    budget.spend_text(&r.id)?;
+                    budget.spend_text(&r.target)?;
+                    by_id.insert(r.id, r.target);
+                }
             }
-            if !parsed.contains_key(&r.target) {
-                let chart = match pkg.read_within(&r.target, &mut budget)? {
-                    Some(cx) => parse_chart(&cx, &mut budget)?,
-                    None => None,
-                };
-                parsed.insert(r.target.clone(), chart);
-            }
-            named.push((r.id, r.target));
+            slide_charts.insert(name.clone(), by_id);
         }
-        let charts: Vec<(String, &ChartData)> = named
-            .into_iter()
-            .filter_map(|(id, part)| Some((id, parsed.get(&part)?.as_ref()?)))
-            .collect();
-        out.extend(parse_slide(&xml, idx, &charts, &mut budget)?);
+        let by_id = &slide_charts[name];
+        let chart = |id: &str| parsed.get(by_id.get(id)?)?.as_ref();
+        out.extend(parse_slide(&xml, idx, &chart, &mut budget)?);
     }
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
@@ -452,25 +464,26 @@ pub fn parse_slide_with_charts(
             parsed.push((id.clone(), chart));
         }
     }
-    let charts: Vec<(String, &ChartData)> = parsed.iter().map(|(id, c)| (id.clone(), c)).collect();
-    parse_slide(xml, page, &charts, &mut budget)
+    // The first of an id, as a scan finds it.
+    let mut by_id: HashMap<&str, &ChartData> = HashMap::new();
+    for (id, chart) in &parsed {
+        by_id.entry(id.as_str()).or_insert(chart);
+    }
+    parse_slide(xml, page, &|id| by_id.get(id).copied(), &mut budget)
 }
 
 /// [`parse_slide_with_charts`], what the slide makes spent from the deck's
 /// `budget` as it is made.
-fn parse_slide(
+///
+/// `chart` finds the chart a frame names by relationship id in one lookup:
+/// a scan of the slide's charts for each frame made the slide's cost their
+/// product.
+fn parse_slide<'c>(
     xml: &str,
     page: usize,
-    charts: &[(String, &ChartData)],
+    chart: &dyn Fn(&str) -> Option<&'c ChartData>,
     budget: &mut Budget,
 ) -> Result<Vec<Element>, PptxError> {
-    // Each frame's chart found in one lookup, the first of an id as a scan
-    // found it: a scan of the slide's charts for each frame made the
-    // slide's cost their product.
-    let mut by_id: HashMap<&str, &ChartData> = HashMap::new();
-    for (id, chart) in charts {
-        by_id.entry(id.as_str()).or_insert(chart);
-    }
     let mut r = Reader::from_str(xml);
     r.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -519,7 +532,7 @@ fn parse_slide(
                 "chart" => {
                     // The frame names its part by relationship id.
                     if let Some(id) = attr(&e, "id") {
-                        if let Some(chart) = by_id.get(id.as_str()) {
+                        if let Some(chart) = chart(&id) {
                             out.extend(chart_element(chart, page, budget)?);
                         }
                     }
@@ -1078,6 +1091,54 @@ mod tests {
     }
 
     #[test]
+    fn a_slides_relationships_are_read_once_however_often_it_is_listed() {
+        // A slide of 200,000 chart relationships listed 200 times: its
+        // relationships read and resolved again for each listing, 300,000
+        // listed 100 times took 17 s in a release build.
+        let chart = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
+        let slide_rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
+        let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
+                     <c:chart xmlns:c=\"c\" r:id=\"rId0000007\"/></a:graphicData></a:graphic></p:graphicFrame>";
+        let charts: String = (0..200_000)
+            .map(|i| {
+                format!(
+                    "<Relationship Id=\"rId{i:07}\" Type=\"{chart}\" Target=\"../charts/chart1.xml\"/>"
+                )
+            })
+            .collect();
+        let listed = "<p:sldId id=\"256\" r:id=\"rIdS\"/>".repeat(200);
+        let parts = vec![
+            (
+                "ppt/presentation.xml".to_string(),
+                format!("<p:presentation {NS}><p:sldIdLst>{listed}</p:sldIdLst></p:presentation>"),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels".to_string(),
+                format!(
+                    "<Relationships><Relationship Id=\"rIdS\" Type=\"{slide_rel}\" \
+                     Target=\"slides/slide1.xml\"/></Relationships>"
+                ),
+            ),
+            (
+                "ppt/charts/chart1.xml".to_string(),
+                chart_xml(&ser("Share", &["EMEA"], &["28.0"])),
+            ),
+            ("ppt/slides/slide1.xml".to_string(), slide(frame)),
+            (
+                "ppt/slides/_rels/slide1.xml.rels".to_string(),
+                format!("<Relationships>{charts}</Relationships>"),
+            ),
+        ];
+        let bytes = package(&parts);
+        let start = std::time::Instant::now();
+        let els = parse(&bytes).unwrap();
+        let took = start.elapsed();
+        let tables = els.iter().filter(|e| e.kind == "doco:Table").count();
+        assert_eq!(tables, 200, "the chart, at each listing");
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    }
+
+    #[test]
     fn a_chart_named_by_many_frames_is_read_once() {
         // A chart part of 1 MiB, named by each of 1,300 slides and twice by
         // the first: read once, it spends 2 MiB of the budget; read for
@@ -1209,7 +1270,7 @@ mod tests {
             "<p:graphicFrame><a:graphic><a:graphicData><a:tbl>{wide}{tall}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"
         ));
         let mut small = Budget::new(1 << 30, 0);
-        let err = parse_slide(&x, 0, &[], &mut small).unwrap_err();
+        let err = parse_slide(&x, 0, &|_| None, &mut small).unwrap_err();
         assert!(matches!(err, PptxError::TooLarge(_)), "{err}");
     }
 }

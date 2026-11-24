@@ -162,7 +162,12 @@ nothing. A 338 KB `.docx` of 100,000 header references and 10,000
 pictures naming no relationship among 30,000 took 17 s; it takes 0.27 s.
 A 554 KB `.pptx` listing 20,000 slides by an id none of 200,000
 relationships has took 24 s, and one whose slide frames 20,000 charts
-that way 24 s; each takes about 0.1 s.
+that way 24 s; each takes about 0.1 s. A slide's relationships are read
+once, however many times the deck lists it, and the charts they name
+spent once; the slide's part is read, and spent, at each listing. A
+slide of 300,000 chart relationships listed 100 times took 25 s, its
+relationships read again at each listing; listed 1,000 times, it takes
+0.3 s.
 
 ## A web page's tree
 
