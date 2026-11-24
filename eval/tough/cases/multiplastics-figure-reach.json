@@ -6,7 +6,8 @@
     "about": "Multi-Plastics 7500 PLA film sell sheet (1 page). A product photo stands beside a column of headings, a description and property bullets, all set at the size of the page's text."
   },
   "notes": [
-    "2026-11-23: the photo's figure region walked from block to block down the column, and every heading and bullet in it was typed doco:Figure (#50)."
+    "2026-11-23: the photo's figure region walked from block to block down the column, and every heading and bullet in it was typed doco:Figure (#50).",
+    "2026-11-24 (#136): a degree set as a raised `o` read as the letter at the head of a units cell (`oC`)."
   ],
   "checks": [
     {
@@ -24,6 +25,12 @@
       "section": {
         "title": "Properties"
       }
+    },
+    {
+      "id": "units-cell-degree",
+      "found": "2026-11-24",
+      "issue": "The Heat Seal Range units cell read `oC`.",
+      "text": "Heat Seal Range °C 85-140"
     }
   ]
 }

@@ -6,7 +6,8 @@
     "about": "ROCKWOOL Comfortboard 80 technical data sheet (2 pages). Its 36 pt and 26 pt titles carry a small raised ®, and page 2 ends a paragraph on a bold web address."
   },
   "notes": [
-    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#136): a degree set as a raised `o` read as the letter after a number and a space (`75 oF`)."
   ],
   "checks": [
     {
@@ -14,6 +15,18 @@
       "found": "2026-11-24",
       "issue": "The bold web address ending the certifications paragraph was a level-5 heading.",
       "no_section": "rockwool.com"
+    },
+    {
+      "id": "degree-after-a-space-fahrenheit",
+      "found": "2026-11-24",
+      "issue": "`@ 75 °F` read `@ 75 oF`.",
+      "text": "@ 75 °F"
+    },
+    {
+      "id": "degree-after-a-space-celsius",
+      "found": "2026-11-24",
+      "issue": "`@ 24 °C` read `@ 24 oC`.",
+      "text": "@ 24 °C"
     }
   ]
 }

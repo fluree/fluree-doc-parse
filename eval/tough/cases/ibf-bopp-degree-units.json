@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "ibf-bopp-tds.pdf",
+    "url": "https://ibfgraphica.pl/wp-content/uploads/2025/06/TDS_EN_BOPP_STM_202505.pdf",
+    "sha256": "23ab36d49353f77fea0e7f435d4f2ccd37731bc42fab39a0e184e30273d46595",
+    "about": "IBF BOPP film technical data sheet, made from Word (1 page). Its units column and its test conditions set the degree sign as a raised `o`: `°C` alone in a cell, and `(130°C, 1 bar, 1s)` after a number."
+  },
+  "notes": [
+    "2026-11-24 (#136): a degree set as a raised `o` read as the letter at the head of a units cell (`oC`), where nothing comes before it to measure it against."
+  ],
+  "checks": [
+    {
+      "id": "units-cell-degree",
+      "found": "2026-11-24",
+      "issue": "The Sealing temperature units cell read `oC`.",
+      "text": "Sealing temperature °C 110-140"
+    },
+    {
+      "id": "degree-after-a-number-kept",
+      "found": "2026-11-24",
+      "issue": "The test condition's degree after its number is read already, and stays.",
+      "text": "(130°C, 1 bar, 1s)"
+    }
+  ]
+}
