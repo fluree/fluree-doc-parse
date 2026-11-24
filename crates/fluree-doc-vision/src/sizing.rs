@@ -13,11 +13,19 @@
 //!   the whole image shrunk until it fits, and a notice says so.
 //!
 //! The detector sees small text better larger: an image whose short side is
-//! under [`DET_SHORT_SIDE`] is read up to that, its long side not past
-//! [`UPSCALE_LONG_SIDE`], as the detector has always enlarged a small image. The engine does the enlarging, inside its detector, so the
-//! recognizer still reads each line from the image's own pixels: the image
-//! is padded with white paper to the short side that makes the detector's
-//! own sizing (up to [`DET_SHORT_SIDE`]) come out at the scale chosen here.
+//! under [`DET_SHORT_SIDE`] is read up to that, as the detector has always
+//! enlarged a small image. Each pass is enlarged on its own terms. An image
+//! read whole keeps its long side within [`UPSCALE_LONG_SIDE`], so a short
+//! wide strip of text is not taken to many times its length. A strip is
+//! enlarged toward [`DET_SHORT_SIDE`] across the image's width, as a pass as
+//! tall as wide would be: its length is then set to fit the cap, which
+//! bounds what it costs. So a 400 px wide receipt is read at its own size
+//! whole, up to 16,000 px long, and 1.84 times larger in strips past that.
+//!
+//! The engine does the enlarging, inside its detector, so the recognizer
+//! still reads each line from the image's own pixels: the image is padded
+//! with white paper to the short side that makes the detector's own sizing
+//! (up to [`DET_SHORT_SIDE`]) come out at the scale chosen here.
 //!
 //! This is the OCR half of how a crop is sized. A model reader's crops are
 //! sized for what a call costs, not for this machine, and are rendered at a
@@ -291,9 +299,33 @@ mod tests {
         }
         // A narrow one is enlarged in its strips toward 736 across.
         let p = s.plan(400, 40_000);
-        assert!(p.passes.len() > 1);
+        assert!(p.passes.len() >= 3);
         assert!(p.passes.iter().all(|q| (q.up - 1.84).abs() < 1e-9));
         assert!(p.passes.iter().all(|q| q.det_pixels() <= 12.5e6));
+        // Each strip overlaps the next by at least a fifth of its own
+        // length, so a line one cuts is whole in the next.
+        for p in [s.plan(400, 40_000), s.plan(2400, 9000)] {
+            for w in p.passes.windows(2) {
+                let len = w[0].bottom - w[0].top;
+                assert!(w[0].bottom - w[1].top >= len / 5, "{w:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_narrow_image_is_enlarged_by_the_pass_it_is_read_in() {
+        // Read whole, a narrow image is not enlarged past 2,000 px along:
+        // 400 × 16,000 is read as it is, padded across.
+        let s = OcrSizing::default();
+        let p = s.plan(400, 16_000);
+        assert_eq!(p.passes.len(), 1);
+        assert_eq!(p.passes[0].up, 1.0);
+        // Too long for one pass, it is read in strips, each enlarged toward
+        // 736 across as a strip as tall as wide would be: the cap bounds
+        // what a strip costs, and its length is set to fit it.
+        let p = s.plan(400, 17_500);
+        assert!(p.passes.len() > 1);
+        assert!(p.passes.iter().all(|q| (q.up - 1.84).abs() < 1e-9));
     }
 
     #[test]
