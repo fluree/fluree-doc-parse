@@ -1044,3 +1044,172 @@ fn an_rtf_document_reads_in_every_output_whatever_its_name() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A one-slide PowerPoint 97 deck: a title, then a pasted screenshot, a
+/// picture shape showing the store's first entry, its PNG in the
+/// `Pictures` stream.
+fn ppt_with_picture(png: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let rec = |container: bool, inst: u16, typ: u16, data: &[u8]| {
+        let mut v = ((inst << 4) | if container { 0x0F } else { 0 })
+            .to_le_bytes()
+            .to_vec();
+        v.extend(typ.to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let mut fbse = vec![6u8, 6];
+    fbse.extend([0u8; 26]);
+    fbse.extend(0u32.to_le_bytes());
+    fbse.extend([0u8; 4]);
+    let store = rec(
+        true,
+        0,
+        0x040B,
+        &rec(
+            true,
+            0,
+            0xF000,
+            &rec(true, 0, 0xF001, &rec(false, 6, 0xF007, &fbse)),
+        ),
+    );
+    let persist = rec(
+        false,
+        0,
+        0x03F3,
+        &[2u32.to_le_bytes().to_vec(), vec![0; 16]].concat(),
+    );
+    let document = rec(
+        true,
+        0,
+        0x03E8,
+        &[rec(true, 0, 0x0FF0, &persist), store].concat(),
+    );
+    let title = rec(
+        true,
+        0,
+        0xF00D,
+        &[
+            rec(false, 0, 0x0F9F, &0u32.to_le_bytes()),
+            rec(
+                false,
+                0,
+                0x0FA0,
+                &"Screens"
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<u8>>(),
+            ),
+        ]
+        .concat(),
+    );
+    let mut opt = (0x0104u16 | 0x4000).to_le_bytes().to_vec();
+    opt.extend(1u32.to_le_bytes());
+    let picture = rec(
+        true,
+        0,
+        0xF004,
+        &[rec(false, 75, 0xF00A, &[0; 8]), rec(false, 1, 0xF00B, &opt)].concat(),
+    );
+    let slide = rec(true, 0, 0x03EE, &[title, picture].concat());
+    let mut s = document.clone();
+    let slide_at = s.len() as u32;
+    s.extend(&slide);
+    let dir_at = s.len() as u32;
+    let mut dir = Vec::new();
+    for (id, off) in [(1u32, 0u32), (2, slide_at)] {
+        dir.extend(((1u32 << 20) | id).to_le_bytes());
+        dir.extend(off.to_le_bytes());
+    }
+    s.extend(rec(false, 0, 0x1772, &dir));
+    let edit_at = s.len() as u32;
+    let mut edit = vec![0u8; 8];
+    for v in [0u32, dir_at, 1] {
+        edit.extend(v.to_le_bytes());
+    }
+    s.extend(rec(false, 0, 0x0FF5, &edit));
+    let mut user = vec![0u8; 16];
+    user.extend(edit_at.to_le_bytes());
+    let blip = rec(
+        false,
+        0x6E0,
+        0xF01E,
+        &[vec![0u8; 17], png.to_vec()].concat(),
+    );
+    let mut cf =
+        cfb::CompoundFile::create_with_version(cfb::Version::V3, std::io::Cursor::new(Vec::new()))
+            .unwrap();
+    for (name, data) in [
+        ("/PowerPoint Document", &s),
+        ("/Current User", &user),
+        ("/Pictures", &blip),
+    ] {
+        cf.create_stream(name).unwrap().write_all(data).unwrap();
+    }
+    cf.flush().unwrap();
+    cf.into_inner().into_inner()
+}
+
+#[test]
+fn a_screenshot_pasted_in_a_ppt_is_read_as_a_docx_ones_is() {
+    let dir = scratch("ppt-picture");
+    let mut png = Vec::new();
+    // Lines of dark marks on white: text to the probe a picture is read by.
+    image::GrayImage::from_fn(120, 40, |x, y| {
+        let ink = (y / 4) % 3 == 0 && (x / 3) % 2 == 0;
+        image::Luma([if ink { 20 } else { 250 }])
+    })
+    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+    .unwrap();
+    let input = dir.join("deck.ppt");
+    std::fs::write(&input, ppt_with_picture(&png)).unwrap();
+    // Nothing to read it: a figure, listed unread.
+    let o = convert(&dir, &input, "doco", &[]);
+    let doco = String::from_utf8_lossy(&o.stdout).into_owned();
+    let unread = document_value(&doco, "doc:unreadImages");
+    assert!(
+        unread.contains("figure-0-1") && unread.contains("NotRead"),
+        "{doco}"
+    );
+    // Words an engine wrote for it (`<stem>_m1.json`): its text, after
+    // its figure.
+    let words = dir.join("words");
+    std::fs::create_dir_all(&words).unwrap();
+    let reading = serde_json::json!({
+        "coords": "px", "width": 120, "height": 40,
+        "words": [
+            {"text": "Invoice", "box": [4.0, 10.0, 60.0, 24.0]},
+            {"text": "4417", "box": [64.0, 10.0, 100.0, 24.0]}
+        ]
+    });
+    std::fs::write(words.join("deck_m1.json"), reading.to_string()).unwrap();
+    let o = convert(
+        &dir,
+        &input,
+        "json",
+        &["--ocr-words", words.to_str().unwrap()],
+    );
+    let json: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let kinds: Vec<(&str, &str)> = json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["type"].as_str().unwrap(), e["text"].as_str().unwrap()))
+        .collect();
+    assert_eq!(kinds[0], ("doco:SectionTitle", "Screens"));
+    assert_eq!(kinds[1].0, "doco:Figure");
+    assert!(kinds[2].1.contains("Invoice 4417"), "{kinds:?}");
+    // `render-routed` writes it under the name its reading takes.
+    let crops = dir.join("crops");
+    let o = Command::new(env!("CARGO_BIN_EXE_fdoc"))
+        .args(["dev", "render-routed"])
+        .arg(&input)
+        .arg(&crops)
+        .env("HOME", dir.join("home"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(crops.join("deck_m1.png").is_file());
+    let _ = std::fs::remove_dir_all(dir);
+}

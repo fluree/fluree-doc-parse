@@ -263,7 +263,15 @@ fn nesting_past_the_bound_is_not_followed() {
     }
     let r = record(&inner, 0).unwrap();
     let mut out = Vec::new();
-    texts(&inner, &r, 0, &mut 4, false, &mut out);
+    texts(
+        &inner,
+        &r,
+        0,
+        (&mut 4, false),
+        &mut Budget::default(),
+        &mut out,
+    )
+    .unwrap();
     assert!(out.is_empty());
 }
 
@@ -304,12 +312,20 @@ fn a_title_placeholder_is_the_title_whatever_its_text_header_says() {
     );
     let r = record(&slide, 0).unwrap();
     let mut out = Vec::new();
-    texts(&slide, &r, 0, &mut 4, false, &mut out);
+    texts(
+        &slide,
+        &r,
+        0,
+        (&mut 4, false),
+        &mut Budget::default(),
+        &mut out,
+    )
+    .unwrap();
     let kinds: Vec<(u32, &str)> = out
         .iter()
         .filter_map(|i| match i {
             Item::Text(t) => Some((t.kind, t.text.as_str())),
-            Item::Table(_) => None,
+            Item::Table(_) | Item::Picture(..) => None,
         })
         .collect();
     assert_eq!(kinds, [(0, "Review"), (4, "Body text")]);
@@ -347,7 +363,7 @@ fn bullets_and_indent_levels_make_list_items() {
         paras: runs,
     };
     assert_eq!(
-        paragraphs(&t),
+        paragraphs(&t, &mut Budget::default()).unwrap(),
         [
             ("Orders up".to_string(), true),
             ("West region".to_string(), true),
@@ -372,7 +388,7 @@ fn bullets_and_indent_levels_make_list_items() {
         ],
     };
     assert_eq!(
-        paragraphs(&body),
+        paragraphs(&body, &mut Budget::default()).unwrap(),
         [
             ("Intro".to_string(), false),
             ("Point".to_string(), true),
@@ -384,7 +400,10 @@ fn bullets_and_indent_levels_make_list_items() {
         text: "Caption".into(),
         paras: Vec::new(),
     };
-    assert_eq!(paragraphs(&other), [("Caption".to_string(), false)]);
+    assert_eq!(
+        paragraphs(&other, &mut Budget::default()).unwrap(),
+        [("Caption".to_string(), false)]
+    );
 }
 
 /// A shape's properties: each id and value, none complex.
@@ -449,7 +468,15 @@ fn a_group_drawn_as_a_table_is_a_table() {
     let slide = rec(true, 0, SLIDE, &rec(true, 0, 0x040C, &group));
     let r = record(&slide, 0).unwrap();
     let mut out = Vec::new();
-    texts(&slide, &r, 0, &mut 4, false, &mut out);
+    texts(
+        &slide,
+        &r,
+        0,
+        (&mut 4, false),
+        &mut Budget::default(),
+        &mut out,
+    )
+    .unwrap();
     let [Item::Table(t)] = out.as_slice() else {
         panic!("{out:?}");
     };
@@ -471,6 +498,397 @@ fn a_group_drawn_as_a_table_is_a_table() {
     );
     let r = record(&plain, 0).unwrap();
     let mut out = Vec::new();
-    texts(&plain, &r, 0, &mut 4, false, &mut out);
+    texts(
+        &plain,
+        &r,
+        0,
+        (&mut 4, false),
+        &mut Budget::default(),
+        &mut out,
+    )
+    .unwrap();
     assert!(matches!(out.as_slice(), [Item::Text(t)] if t.text == "Loose"));
+}
+
+/// A one-slide deck: the document holding the slide list and `extra`
+/// records, the slide holding `slide`; the `Pictures` stream where given.
+fn deck_of(extra: &[u8], slide: &[u8], pictures: Option<&[u8]>) -> Vec<u8> {
+    let list = rec(true, 0, SLIDE_LIST, &slide_persist(2));
+    let document = rec(true, 0, DOCUMENT, &[list, extra.to_vec()].concat());
+    let slide = rec(true, 0, SLIDE, slide);
+    let mut s = document.clone();
+    let slide_at = s.len() as u32;
+    s.extend(&slide);
+    let dir = s.len() as u32;
+    s.extend(persist_dir(&[(1, 0), (2, slide_at)]));
+    let edit = s.len() as u32;
+    s.extend(user_edit(0, dir, 1));
+    let mut user = vec![0u8; 16];
+    user.extend(edit.to_le_bytes());
+    let mut streams: Vec<(&str, &[u8])> =
+        vec![("/PowerPoint Document", &s), ("/Current User", &user)];
+    if let Some(p) = pictures {
+        streams.push(("/Pictures", p));
+    }
+    compound(&streams)
+}
+
+/// A PNG picture record, as the `Pictures` stream keeps one.
+fn png_blip(png: &[u8]) -> Vec<u8> {
+    rec(
+        false,
+        0x6E0,
+        0xF01E,
+        &[vec![7u8; 16], vec![0xFF], png.to_vec()].concat(),
+    )
+}
+
+/// A store entry: its picture at `delay` in the `Pictures` stream, or held
+/// in the entry itself.
+fn fbse(delay: u32, inline: Option<&[u8]>) -> Vec<u8> {
+    let mut d = vec![6u8, 6];
+    d.extend([0u8; 16]);
+    d.extend([0u8; 2]);
+    d.extend(0u32.to_le_bytes());
+    d.extend(1u32.to_le_bytes());
+    d.extend(delay.to_le_bytes());
+    d.extend([0u8; 4]);
+    if let Some(b) = inline {
+        d.extend(b);
+    }
+    rec(false, 6, 0xF007, &d)
+}
+
+/// A picture shape showing store entry `pib`, its alternative text `alt`
+/// (a complex property, UTF-16 with its terminating zero).
+fn picture_shape(pib: u32, alt: Option<&str>) -> Vec<u8> {
+    let mut props = vec![(PIB | 0x4000, pib, Vec::new())];
+    if let Some(a) = alt {
+        let b: Vec<u8> = a
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        props.push((DESCRIPTION | 0x8000, b.len() as u32, b));
+    }
+    let mut d = Vec::new();
+    for (id, v, _) in &props {
+        d.extend(id.to_le_bytes());
+        d.extend(v.to_le_bytes());
+    }
+    for (_, _, b) in &props {
+        d.extend(b);
+    }
+    rec(
+        true,
+        0,
+        SHAPE,
+        &[
+            rec(false, 75, SHAPE_HEADER, &[0; 8]),
+            rec(false, props.len() as u16, OPT, &d),
+        ]
+        .concat(),
+    )
+}
+
+#[test]
+fn pictures_are_figures_whose_bytes_the_store_gives() {
+    let png = b"\x89PNG\r\n\x1a\n first picture";
+    let other = b"\x89PNG\r\n\x1a\n second picture";
+    let pictures = png_blip(png);
+    let store = rec(
+        true,
+        0,
+        0x040B,
+        &rec(
+            true,
+            0,
+            0xF000,
+            &rec(
+                true,
+                0,
+                0xF001,
+                &[fbse(0, None), fbse(0, Some(&png_blip(other)))].concat(),
+            ),
+        ),
+    );
+    let slide = rec(
+        true,
+        0,
+        0x040C,
+        &[
+            textbox(&[header(0), chars("Screens")]),
+            picture_shape(1, Some("Order screen  for Alex Sample")),
+            picture_shape(2, None),
+            // An entry the store does not have.
+            picture_shape(9, None),
+        ]
+        .concat(),
+    );
+    let bytes = deck_of(&store, &slide, Some(&pictures));
+    let (els, media) = parse_with_media(&bytes).unwrap();
+    let figures: Vec<(&str, Option<&str>)> = els
+        .iter()
+        .filter(|e| e.kind == "doco:Figure")
+        .map(|e| (e.text.as_str(), e.figure.as_deref()))
+        .collect();
+    assert_eq!(
+        figures,
+        [
+            ("Order screen for Alex Sample", Some("figure-0-1")),
+            ("", Some("figure-0-2")),
+            ("", Some("figure-0-3")),
+        ]
+    );
+    let parts: Vec<(Option<&str>, &str, String)> = media
+        .iter()
+        .map(|m| (m.source.part(), m.source.name(), m.tag()))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            (Some("Pictures#1"), "Pictures#1", "m1".to_string()),
+            (Some("Pictures#2"), "Pictures#2", "m2".to_string()),
+            (None, "Pictures#9", "m3".to_string()),
+        ]
+    );
+    // The bytes: from the Pictures stream, and from the entry itself.
+    assert_eq!(read_media(&bytes, "Pictures#1").unwrap(), png);
+    assert_eq!(read_media(&bytes, "Pictures#2").unwrap(), other);
+    assert!(read_media(&bytes, "Pictures#9").is_err());
+    assert!(read_media(&bytes, "word/media/x.png").is_err());
+}
+
+/// A deck whose slide list is `list`, with slides `slides`, each object id
+/// in `ids` mapped to where a slide is (by its index in `slides`).
+fn deck_listing(list: &[u8], slides: &[Vec<u8>], ids: &[(u32, usize)]) -> Vec<u8> {
+    let document = rec(true, 0, DOCUMENT, &rec(true, 0, SLIDE_LIST, list));
+    let mut s = document;
+    let mut at = Vec::new();
+    for slide in slides {
+        at.push(s.len() as u32);
+        s.extend(rec(true, 0, SLIDE, slide));
+    }
+    let mut entries = vec![(1, 0)];
+    entries.extend(ids.iter().map(|&(id, k)| (id, at[k])));
+    let dir = s.len() as u32;
+    s.extend(persist_dir(&entries));
+    let edit = s.len() as u32;
+    s.extend(user_edit(0, dir, 1));
+    let mut user = vec![0u8; 16];
+    user.extend(edit.to_le_bytes());
+    compound(&[("/PowerPoint Document", &s), ("/Current User", &user)])
+}
+
+#[test]
+fn a_slide_listed_again_is_not_read_again() {
+    let list = [slide_persist(2), slide_persist(2), slide_persist(2)].concat();
+    let slide = textbox(&[header(1), bytes("Once")]);
+    let els = parse(&deck_listing(&list, &[slide], &[(2, 0)])).unwrap();
+    let texts: Vec<(usize, &str)> = els.iter().map(|e| (e.page, e.text.as_str())).collect();
+    assert_eq!(texts, [(0, "Once")]);
+}
+
+#[test]
+fn slides_that_are_one_slide_are_read_once() {
+    // 300 slide ids the persist directory maps to one slide of a million
+    // characters: read for each, 300 million from a deck of one million.
+    let ids: Vec<(u32, usize)> = (2..302).map(|id| (id, 0)).collect();
+    let list: Vec<u8> = ids.iter().flat_map(|&(id, _)| slide_persist(id)).collect();
+    let big = "x".repeat(1 << 20);
+    let slide = textbox(&[header(1), bytes(&big)]);
+    let els = parse(&deck_listing(&list, std::slice::from_ref(&slide), &ids)).unwrap();
+    assert_eq!(els.len(), 1);
+    assert_eq!(els[0].text.len(), 1 << 20);
+}
+
+#[test]
+fn notes_slides_that_are_one_are_read_once() {
+    // Two slides naming two notes ids the persist directory sends to one
+    // notes slide.
+    let list = rec(
+        true,
+        0,
+        SLIDE_LIST,
+        &[slide_persist(2), slide_persist(3)].concat(),
+    );
+    let notes_list = rec(
+        true,
+        2,
+        SLIDE_LIST,
+        &[notes_persist(4, 256), notes_persist(5, 257)].concat(),
+    );
+    let mut s = rec(true, 0, DOCUMENT, &[list, notes_list].concat());
+    let slide = |n: u32, t: &str| {
+        rec(
+            true,
+            0,
+            SLIDE,
+            &[slide_atom(n), textbox(&[header(1), chars(t)])].concat(),
+        )
+    };
+    let s1 = s.len() as u32;
+    s.extend(slide(256, "One"));
+    let s2 = s.len() as u32;
+    s.extend(slide(257, "Two"));
+    let n = s.len() as u32;
+    s.extend(rec(
+        true,
+        0,
+        NOTES,
+        &textbox(&[header(2), chars("Say it once.")]),
+    ));
+    let dir = s.len() as u32;
+    s.extend(persist_dir(&[(1, 0), (2, s1), (3, s2), (4, n), (5, n)]));
+    let edit = s.len() as u32;
+    s.extend(user_edit(0, dir, 1));
+    let mut user = vec![0u8; 16];
+    user.extend(edit.to_le_bytes());
+    let els = parse(&compound(&[
+        ("/PowerPoint Document", &s),
+        ("/Current User", &user),
+    ]))
+    .unwrap();
+    let said = els.iter().filter(|e| e.text == "Say it once.").count();
+    assert_eq!(said, 1, "{els:#?}");
+}
+
+#[test]
+fn paragraphs_past_the_budget_are_refused_before_they_are_made() {
+    use fluree_doc_model::budget::{ELEMENT_BYTES, TEXT_BYTES};
+    // A thousand paragraphs, a mark each: an element each.
+    let slide = textbox(&[header(4), bytes(&"a\r".repeat(1_000))]);
+    let bytes = deck_of(&[], &slide, None);
+    // The text, its marks counted at six bytes each, then the elements.
+    let budget = |n: u64| Budget::new(n * ELEMENT_BYTES + 7_000 * TEXT_BYTES, 0);
+    assert_eq!(
+        parse_within(&bytes, &mut budget(1_000)).unwrap().0.len(),
+        1_000
+    );
+    assert!(matches!(
+        parse_within(&bytes, &mut budget(999)),
+        Err(PptError::TooLarge(ref m)) if m.contains("elements")
+    ));
+}
+
+#[test]
+fn a_picture_shown_again_is_listed_at_each_shape_and_read_once() {
+    let slide = [
+        picture_shape(1, Some("Logo")),
+        picture_shape(1, Some("Logo")),
+        picture_shape(2, None),
+    ]
+    .concat();
+    let (els, media) = parse_with_media(&deck_of(&[], &slide, None)).unwrap();
+    assert_eq!(els.iter().filter(|e| e.kind == "doco:Figure").count(), 3);
+    let parts: Vec<&str> = media.iter().map(|m| m.source.name()).collect();
+    assert_eq!(parts, ["Pictures#1", "Pictures#1", "Pictures#2"]);
+    // The reader groups them by their image: two pictures, the logo shown
+    // by two figures.
+    let pictures = fluree_doc_model::pictures(media);
+    let figures: Vec<Vec<&str>> = pictures.iter().map(|p| p.figures()).collect();
+    assert_eq!(
+        figures,
+        [vec!["figure-0-1", "figure-0-2"], vec!["figure-0-3"]]
+    );
+}
+
+#[test]
+fn a_text_of_many_paragraphs_and_runs_finds_each_run_once() {
+    // 200,000 paragraphs over 100,000 runs: a search of the runs from the
+    // first for each paragraph is ten billion steps.
+    let n = 200_000;
+    let t = Text {
+        kind: 4,
+        text: "a\r".repeat(n),
+        paras: (0..100_000)
+            .map(|i| ParaRun {
+                count: 2,
+                indent: u16::from(i % 2 == 1),
+                bullet: None,
+            })
+            .collect(),
+    };
+    let p = paragraphs(&t, &mut Budget::default()).unwrap();
+    assert_eq!(p.len(), n);
+    assert!(!p[0].1 && p[1].1 && !p[2].1);
+    assert!(!p[n - 1].1);
+}
+
+/// A table group: its first shape saying it is one, then `cells`.
+fn table_group(cells: &[Vec<u8>]) -> Vec<u8> {
+    rec(
+        true,
+        0,
+        GROUP,
+        &[
+            rec(
+                true,
+                0,
+                SHAPE,
+                &opt(TERTIARY_OPT, &[(TABLE_PROPERTIES, 0xE)]),
+            ),
+            cells.concat(),
+        ]
+        .concat(),
+    )
+}
+
+#[test]
+fn cells_that_overlap_across_the_grid_are_read_as_text() {
+    // 1,000 cells, each from its own corner to the far one: a grid of a
+    // million, each cell marking most of it.
+    let cells: Vec<Vec<u8>> = (0..1_000).map(|i| cell(i, i, 2_000, 2_000, "c")).collect();
+    let group = table_group(&cells);
+    let r = record(&group, 0).unwrap();
+    assert!(table(&group, &r, 0, &mut Budget::default())
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn a_group_that_is_no_table_is_read_once_however_deep() {
+    // Sixteen groups, each inside a cell of the one above, each claiming to
+    // be a table of 1,025 cells down a diagonal, a grid past the bound: a
+    // group read once as a table and again as text, at each level, is read
+    // 65,536 times at the deepest.
+    let diagonal: Vec<Vec<u8>> = (0..1_025).map(|i| cell(i, i, i + 1, i + 1, "")).collect();
+    let mut inner = table_group(&[cell(0, 0, 1, 1, "deepest")]);
+    for _ in 0..16 {
+        let holder = rec(
+            true,
+            0,
+            SHAPE,
+            &[
+                rec(false, 1, SHAPE_HEADER, &[0; 8]),
+                rec(
+                    false,
+                    0,
+                    CHILD_ANCHOR,
+                    &[5_000i32, 5_000, 5_001, 5_001]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<u8>>(),
+                ),
+                inner,
+            ]
+            .concat(),
+        );
+        let mut cells = diagonal.clone();
+        cells.push(holder);
+        inner = table_group(&cells);
+    }
+    let slide = rec(true, 0, SLIDE, &inner);
+    let r = record(&slide, 0).unwrap();
+    let mut out = Vec::new();
+    texts(
+        &slide,
+        &r,
+        0,
+        (&mut 4, false),
+        &mut Budget::default(),
+        &mut out,
+    )
+    .unwrap();
+    assert!(out.iter().any(|i| matches!(i, Item::Table(_))));
 }

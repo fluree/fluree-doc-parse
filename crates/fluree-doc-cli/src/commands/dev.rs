@@ -1177,6 +1177,7 @@ pub(crate) fn render_routed(
             SourceKind::Xlsx => Some(xlsx_crops),
             SourceKind::Email => Some(email_crops),
             SourceKind::Xps => Some(xps_crops),
+            SourceKind::Ppt => Some(ppt_crops),
             _ => None,
         };
         if let Some(crops) = crops {
@@ -1467,6 +1468,15 @@ fn docx_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json:
         stem,
         outdir,
     )
+}
+
+/// A PowerPoint 97-2003 deck's crops ([`media_crops`]): each picture on a
+/// slide, `<stem>_m<n>.png` for the figure `figure-<slide>-<n>`, with its
+/// store entry as its part, read from the deck, opened once.
+fn ppt_crops(bytes: &[u8], stem: &str, outdir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    let (_, media) = fluree_doc_ppt::parse_with_media(bytes).map_err(|e| e.to_string())?;
+    let deck = fluree_doc_ppt::MediaReader::open(bytes).map_err(|e| e.to_string())?;
+    media_crops(media, &mut |part| deck.read(part), stem, outdir)
 }
 
 /// An XLSX's crops ([`media_crops`]): each picture anchored to a sheet's

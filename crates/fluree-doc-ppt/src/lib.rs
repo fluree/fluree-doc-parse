@@ -22,18 +22,28 @@
 //! `notes`, so a consumer that wants what the audience saw leaves them out.
 //! A **table**, a group of shapes whose first says it is one, is rebuilt
 //! from its cells' positions.
+//! **Pictures** are each a figure where they stand, their alternative
+//! text its text, their bytes in the picture store ([`parse_with_media`],
+//! [`read_media`]) for an OCR engine or a model to read.
 //! **What is not**: the masters' placeholder prompts, the list level itself
-//! (the element model keeps a level on headings only), pictures, charts and embedded objects, and the
-//! summary information. Encrypted files fail as malformed or unsupported.
+//! (the element model keeps a level on headings only), charts and embedded
+//! objects, and the summary information. Encrypted files fail as malformed
+//! or unsupported.
 //!
 //! **Bounds**: the compound file is opened by the `cfb` crate, which
 //! refuses a looping sector chain; the stream is read to at most
 //! [`MAX_STREAM_BYTES`]; records nest at most [`MAX_DEPTH`] deep, at most
 //! [`MAX_EDITS`] edits are followed, each once, each persist directory
 //! read once and at most [`MAX_PERSIST_ENTRIES`] of their entries, and at
-//! most [`MAX_SLIDES`] slides read.
+//! most [`MAX_SLIDES`] slides read, each once, as each notes slide, by
+//! where they are in the stream (slide ids that all lead to one place are
+//! one slide). Every text read, before it is decoded, every element and
+//! every table cell, before it is made, is spent from the document's
+//! [`Budget`], and past it the deck is refused. A picture shown by several
+//! shapes is listed at each, and read once.
 
-use fluree_doc_model::Element;
+use fluree_doc_model::budget::{Budget, TooLarge};
+use fluree_doc_model::{Element, Media, MediaSource};
 use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 
@@ -97,6 +107,12 @@ impl std::fmt::Display for PptError {
 }
 
 impl std::error::Error for PptError {}
+
+impl From<TooLarge> for PptError {
+    fn from(e: TooLarge) -> Self {
+        Self::TooLarge(e.to_string())
+    }
+}
 
 /// Whether `bytes` is a PowerPoint 97-2003 presentation: a compound file
 /// with a `PowerPoint Document` stream.
@@ -334,17 +350,21 @@ fn title_placeholder(d: &[u8], r: &Record, depth: usize) -> bool {
 }
 
 /// A text atom's text: UTF-16 (`TextCharsAtom`), or one byte a character
-/// (`TextBytesAtom`), the low byte of UTF-16, which is Latin-1.
-fn atom_text(typ: u16, data: &[u8]) -> String {
-    if typ == TEXT_CHARS {
-        let units: Vec<u16> = data
-            .chunks_exact(2)
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
-            .collect();
-        String::from_utf16_lossy(&units)
-    } else {
-        data.iter().map(|&b| b as char).collect()
-    }
+/// (`TextBytesAtom`), the low byte of UTF-16, which is Latin-1; spent from
+/// `budget` before it is decoded, character by character.
+fn atom_text(typ: u16, data: &[u8], budget: &mut Budget) -> Result<String, PptError> {
+    let chars = || -> Box<dyn Iterator<Item = char> + '_> {
+        if typ == TEXT_CHARS {
+            let units = data
+                .chunks_exact(2)
+                .map(|p| u16::from_le_bytes([p[0], p[1]]));
+            Box::new(char::decode_utf16(units).map(|c| c.unwrap_or('\u{fffd}')))
+        } else {
+            Box::new(data.iter().map(|&b| char::from(b)))
+        }
+    };
+    budget.spend_chars(chars())?;
+    Ok(chars().collect())
 }
 
 /// What a slide shows, in its shapes' order: text, or a table.
@@ -352,6 +372,9 @@ fn atom_text(typ: u16, data: &[u8]) -> String {
 enum Item {
     Text(Text),
     Table(Table),
+    /// A picture: its index in the document's picture store (`pib`, from
+    /// 1), and its alternative text.
+    Picture(u32, String),
 }
 
 /// A table rebuilt from its cells' positions.
@@ -378,6 +401,10 @@ const CHILD_ANCHOR: u16 = 0xF00F;
 const SHAPE_HEADER: u16 = 0xF00A;
 const OPT: u16 = 0xF00B;
 const TERTIARY_OPT: u16 = 0xF122;
+/// `pib`: the picture store entry a picture shows, from 1.
+const PIB: u16 = 0x0104;
+/// `wzDescription`: a shape's alternative text, UTF-16.
+const DESCRIPTION: u16 = 0x0381;
 /// `tableProperties`: set on the group a table is drawn as.
 const TABLE_PROPERTIES: u16 = 0x03A0;
 /// `msosptLine`: a cell's border, not a cell.
@@ -420,17 +447,25 @@ fn has_property(d: &[u8], shape: &Record, id: u16) -> bool {
 /// anchor, holding its text. The grid is rebuilt from the cells' edges: a
 /// cell spanning several columns or rows makes the cells it covers
 /// continuations. `None` where the group is no table, or one past the
-/// bounds above.
-fn table(d: &[u8], group: &Record, depth: usize) -> Option<Table> {
+/// bounds above, decided from the cells' anchors before any cell's text is
+/// read, so a group is read once whichever it is.
+fn table(
+    d: &[u8],
+    group: &Record,
+    depth: usize,
+    budget: &mut Budget,
+) -> Result<Option<Table>, PptError> {
     let shapes: Vec<Record> = children(d, group)
         .into_iter()
         .filter(|c| c.typ == SHAPE && c.container)
         .collect();
-    let first = shapes.first()?;
+    let Some(first) = shapes.first() else {
+        return Ok(None);
+    };
     if !has_property(d, first, TABLE_PROPERTIES) {
-        return None;
+        return Ok(None);
     }
-    let mut cells: Vec<([i32; 4], String)> = Vec::new();
+    let mut cells: Vec<([i32; 4], &Record)> = Vec::new();
     for s in &shapes[1..] {
         let parts = children(d, s);
         if parts
@@ -453,24 +488,13 @@ fn table(d: &[u8], group: &Record, depth: usize) -> Option<Table> {
         if r <= l || b <= t {
             continue;
         }
-        let mut found = Vec::new();
-        texts(d, s, depth + 1, &mut 4, false, &mut found);
-        let text = found
-            .iter()
-            .filter_map(|i| match i {
-                Item::Text(t) => Some(tidy(&t.text.replace('\r', " "))),
-                Item::Table(_) => None,
-            })
-            .filter(|t| !t.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        cells.push(([l, t, r, b], text));
+        cells.push(([l, t, r, b], s));
         if cells.len() > MAX_TABLE_CELLS {
-            return None;
+            return Ok(None);
         }
     }
     if cells.is_empty() {
-        return None;
+        return Ok(None);
     }
     let edges = |a: usize, b: usize| {
         let mut v: Vec<i32> = cells.iter().flat_map(|(c, _)| [c[a], c[b]]).collect();
@@ -481,17 +505,43 @@ fn table(d: &[u8], group: &Record, depth: usize) -> Option<Table> {
     let (xs, ys) = (edges(0, 2), edges(1, 3));
     let (ncols, nrows) = (xs.len() - 1, ys.len() - 1);
     if ncols == 0 || nrows == 0 || ncols.saturating_mul(nrows) > MAX_TABLE_GRID {
-        return None;
+        return Ok(None);
     }
     let pos = |v: &[i32], x: i32| v.binary_search(&x).unwrap_or(0);
+    // Each cell is (first column, last, first row, last) in the grid. The
+    // cells of a table tile it: cells that overlap, each spanning the
+    // grid, would mark it again for each.
+    let spans: Vec<(usize, usize, usize, usize)> = cells
+        .iter()
+        .map(|([l, t, r, b], _)| (pos(&xs, *l), pos(&xs, *r), pos(&ys, *t), pos(&ys, *b)))
+        .collect();
+    let covered = spans
+        .iter()
+        .map(|&(c0, c1, r0, r1)| (c1 - c0).saturating_mul(r1 - r0))
+        .fold(0usize, usize::saturating_add);
+    if covered > MAX_TABLE_GRID {
+        return Ok(None);
+    }
+    budget.spend_cells((ncols * nrows) as u64)?;
     let mut grid = Table {
         rows: vec![vec![String::new(); ncols]; nrows],
         left: vec![false; ncols * nrows],
         down: vec![false; ncols * nrows],
     };
-    for ([l, t, r, b], text) in cells {
-        let (c0, c1, r0, r1) = (pos(&xs, l), pos(&xs, r), pos(&ys, t), pos(&ys, b));
-        grid.rows[r0][c0] = text;
+    for ((_, s), (c0, c1, r0, r1)) in cells.iter().zip(spans) {
+        let mut found = Vec::new();
+        texts(d, s, depth + 1, (&mut 4, false), budget, &mut found)?;
+        // A cell that holds text is a node of the output of its own.
+        budget.spend_elements(1)?;
+        grid.rows[r0][c0] = found
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text(t) => Some(tidy(&t.text.replace('\r', " "))),
+                Item::Table(_) | Item::Picture(..) => None,
+            })
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
         for row in r0..r1 {
             for col in c0..c1 {
                 if col > c0 {
@@ -503,15 +553,53 @@ fn table(d: &[u8], group: &Record, depth: usize) -> Option<Table> {
             }
         }
     }
-    Some(grid)
+    Ok(Some(grid))
+}
+
+/// A shape that shows a picture from the store (`pib`), with its
+/// alternative text where it has one.
+fn picture(d: &[u8], shape: &Record, budget: &mut Budget) -> Result<Option<Item>, PptError> {
+    let props: Vec<(u16, u32, Option<Vec<u8>>)> = children(d, shape)
+        .iter()
+        .filter(|c| matches!(c.typ, OPT | TERTIARY_OPT))
+        .flat_map(|c| properties(d, c))
+        .collect();
+    let Some(pib) = props.iter().find(|(id, _, _)| *id == PIB).map(|p| p.1) else {
+        return Ok(None);
+    };
+    let alt = props
+        .iter()
+        .find(|(id, _, _)| *id == DESCRIPTION)
+        .and_then(|(_, _, b)| b.as_ref())
+        .map(|b| {
+            let units: Vec<u16> = b
+                .chunks_exact(2)
+                .map(|p| u16::from_le_bytes([p[0], p[1]]))
+                .take_while(|u| *u != 0)
+                .collect();
+            String::from_utf16_lossy(&units)
+        })
+        .unwrap_or_default();
+    budget.spend_text(&alt)?;
+    Ok(Some(Item::Picture(
+        pib,
+        alt.split_whitespace().collect::<Vec<_>>().join(" "),
+    )))
 }
 
 /// What a container shows, in order: each text atom with the header before
 /// it and the paragraph properties after it, and each table.
 /// `title` makes every text a title, the shape being a title placeholder.
-fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &mut Vec<Item>) {
+fn texts(
+    d: &[u8],
+    r: &Record,
+    depth: usize,
+    (kind, title): (&mut u32, bool),
+    budget: &mut Budget,
+    out: &mut Vec<Item>,
+) -> Result<(), PptError> {
     if depth > MAX_DEPTH {
-        return;
+        return Ok(());
     }
     for c in children(d, r) {
         let data = &d[c.data.0..c.data.1];
@@ -519,7 +607,7 @@ fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &
             TEXT_HEADER => *kind = u32_at(data, 0).unwrap_or(4),
             TEXT_CHARS | TEXT_BYTES => out.push(Item::Text(Text {
                 kind: if title { 0 } else { *kind },
-                text: atom_text(c.typ, data),
+                text: atom_text(c.typ, data, budget)?,
                 paras: Vec::new(),
             })),
             // The properties of the text just read, beside it.
@@ -532,21 +620,25 @@ fn texts(d: &[u8], r: &Record, depth: usize, kind: &mut u32, title: bool, out: &
             }
             // A group a table is drawn as is the table; any other group
             // is its shapes.
-            GROUP if c.container => match table(d, &c, depth + 1) {
+            GROUP if c.container => match table(d, &c, depth + 1, budget)? {
                 Some(t) => out.push(Item::Table(t)),
-                None => texts(d, &c, depth + 1, kind, title, out),
+                None => texts(d, &c, depth + 1, (kind, title), budget, out)?,
             },
             // A shape: a placeholder that is a slide's title makes its text
             // the title, whatever its text header says (LibreOffice writes
             // `Other` for every slide text).
             SHAPE if c.container => {
+                if let Some(p) = picture(d, &c, budget)? {
+                    out.push(p);
+                }
                 let title = title || title_placeholder(d, &c, depth + 1);
-                texts(d, &c, depth + 1, kind, title, out);
+                texts(d, &c, depth + 1, (kind, title), budget, out)?;
             }
-            _ if c.container => texts(d, &c, depth + 1, kind, title, out),
+            _ if c.container => texts(d, &c, depth + 1, (kind, title), budget, out)?,
             _ => {}
         }
     }
+    Ok(())
 }
 
 /// A rebuilt table as a `doco:Table`. PowerPoint declares no header row,
@@ -573,18 +665,26 @@ fn table_element(t: Table, page: usize) -> Element {
 /// properties give it a bullet or an indent level past the first, as a
 /// PPTX paragraph is; where they do not say, a body placeholder's text
 /// (`Body`, `HalfBody`, `QuarterBody`), which the master bullets, is one.
-fn paragraphs(t: &Text) -> Vec<(String, bool)> {
+/// Each is an element, spent from `budget` before it is made.
+fn paragraphs(t: &Text, budget: &mut Budget) -> Result<Vec<(String, bool)>, TooLarge> {
     let body = matches!(t.kind, 1 | 7 | 8);
     let mut out = Vec::new();
     let mut start = 0usize;
+    // The run covering the paragraph's first character, and where it ends:
+    // the paragraphs and the runs both go forward, so each is passed once.
+    let mut runs = t.paras.iter();
+    let mut run = runs.next();
+    let mut end = run.map_or(0, |r| r.count as usize);
     for p in t.text.split('\r') {
-        // The run covering the paragraph's first character.
-        let mut at = 0usize;
-        let run = t.paras.iter().find(|r| {
-            at += r.count as usize;
-            at > start
-        });
+        while run.is_some() && end <= start {
+            run = runs.next();
+            end += run.map_or(0, |r| r.count as usize);
+        }
         start += p.encode_utf16().count() + 1;
+        if p.trim().is_empty() {
+            continue;
+        }
+        budget.spend_elements(1)?;
         let text = tidy(p);
         if text.is_empty() {
             continue;
@@ -595,7 +695,7 @@ fn paragraphs(t: &Text) -> Vec<(String, bool)> {
         };
         out.push((text, listy));
     }
-    out
+    Ok(out)
 }
 
 /// A paragraph's text: its line breaks as lines, each line's runs of
@@ -610,6 +710,148 @@ fn tidy(s: &str) -> String {
 
 /// Parse a `.ppt` file's bytes into elements, a slide a page.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
+    parse_with_media(bytes).map(|(elements, _)| elements)
+}
+
+/// The most bytes one picture is read to: 64 MiB, as a DOCX's.
+pub const MAX_MEDIA_BYTES: u64 = 64 << 20;
+
+/// Where a picture is kept: in the `Pictures` stream at an offset, or in
+/// the document stream, inside its store entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stored {
+    Delayed(usize),
+    Inline(usize),
+}
+
+/// The picture store's entries (`FBSE`), in order: where each picture is
+/// in the `Pictures` stream, or the record holding it inline.
+fn picture_store(doc: &[u8], document: &Record) -> Vec<Option<Stored>> {
+    let mut out = Vec::new();
+    let mut stack = vec![*document];
+    // Down to the store: the drawing group, its container, the store.
+    while let Some(r) = stack.pop() {
+        for c in children(doc, &r) {
+            match c.typ {
+                0x040B | 0xF000 | 0xF001 if c.container => stack.push(c),
+                0xF007 => {
+                    let data = &doc[c.data.0..c.data.1];
+                    let name = usize::from(*data.get(33).unwrap_or(&0));
+                    // A picture kept in the entry itself follows its name.
+                    let inline = c.data.0 + 36 + name;
+                    out.push(if inline + 8 <= c.data.1 {
+                        Some(Stored::Inline(inline))
+                    } else {
+                        u32_at(data, 28).map(|o| Stored::Delayed(o as usize))
+                    });
+                }
+                _ => {}
+            }
+        }
+        if out.len() > 100_000 {
+            break;
+        }
+    }
+    out
+}
+
+/// A picture record's image: its bytes past the record's own header, its
+/// unique ids and its tag. A drawing (EMF, WMF, PICT) is returned as stored,
+/// compressed, and is no image a reader decodes.
+fn blip(d: &[u8], at: usize) -> Result<Vec<u8>, String> {
+    let r = record(d, at).ok_or("the picture is not where its entry says")?;
+    if (r.data.1 - r.data.0) as u64 > MAX_MEDIA_BYTES {
+        return Err(format!("a picture of more than {MAX_MEDIA_BYTES} bytes"));
+    }
+    let uids = if r.instance & 1 == 1 { 32 } else { 16 };
+    let skip = match r.typ {
+        // JPEG, PNG, DIB, TIFF, CMYK JPEG: the ids, then a tag byte.
+        0xF01D | 0xF01E | 0xF01F | 0xF029 | 0xF02A => uids + 1,
+        // EMF, WMF, PICT: the ids, then a metafile header.
+        0xF01A..=0xF01C => uids + 34,
+        _ => return Err(format!("not a picture record ({:#06x})", r.typ)),
+    };
+    d.get(r.data.0 + skip..r.data.1)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| "the picture record is cut short".into())
+}
+
+/// The bytes of one of the pictures [`parse_with_media`] lists, by its
+/// `part` (`Pictures#<n>`), at most [`MAX_MEDIA_BYTES`]. This opens the deck
+/// for the one picture: to read several, open a [`MediaReader`] once.
+pub fn read_media(bytes: &[u8], part: &str) -> Result<Vec<u8>, String> {
+    MediaReader::open(bytes)
+        .map_err(|e| e.to_string())?
+        .read(part)
+}
+
+/// A deck's picture store, opened once for every picture read from it:
+/// opening the deck, its streams and its edits, again for each picture of a
+/// deck of many costs the deck's size each time.
+pub struct MediaReader {
+    doc: Vec<u8>,
+    store: Vec<Option<Stored>>,
+    /// The `Pictures` stream, where an entry keeps its picture there.
+    pictures: Option<Result<Vec<u8>, String>>,
+}
+
+impl MediaReader {
+    pub fn open(bytes: &[u8]) -> Result<Self, PptError> {
+        let Opened {
+            doc,
+            document,
+            mut cf,
+            ..
+        } = open(bytes)?;
+        let store = picture_store(&doc, &document);
+        let delayed = store.iter().any(|e| matches!(e, Some(Stored::Delayed(_))));
+        let pictures = delayed.then(|| stream(&mut cf, "/Pictures").map_err(|e| e.to_string()));
+        Ok(Self {
+            doc,
+            store,
+            pictures,
+        })
+    }
+
+    /// The bytes of the picture `part` names, as [`read_media`] reads them.
+    pub fn read(&self, part: &str) -> Result<Vec<u8>, String> {
+        let pib: usize = part
+            .strip_prefix("Pictures#")
+            .and_then(|n| n.parse().ok())
+            .filter(|&n| n > 0)
+            .ok_or_else(|| format!("{part}: no such picture"))?;
+        let entry = self
+            .store
+            .get(pib - 1)
+            .copied()
+            .flatten()
+            .ok_or_else(|| format!("{part}: no such picture"))?;
+        let got = match entry {
+            Stored::Inline(at) => blip(&self.doc, at),
+            Stored::Delayed(at) => match &self.pictures {
+                Some(Ok(p)) => blip(p, at),
+                Some(Err(e)) => Err(e.clone()),
+                None => Err("no Pictures stream".into()),
+            },
+        };
+        got.map_err(|e| format!("{part}: {e}"))
+    }
+}
+
+/// A deck opened through its last edit.
+struct Opened<'a> {
+    /// The `PowerPoint Document` stream.
+    doc: Vec<u8>,
+    /// Its document container.
+    document: Record,
+    /// The persist directory: object id to offset in `doc`.
+    map: HashMap<u32, u32>,
+    cf: cfb::CompoundFile<Cursor<&'a [u8]>>,
+}
+
+/// Open a deck: its document stream, and its document container through
+/// the last edit's persist directory. An encrypted deck is refused.
+fn open(bytes: &[u8]) -> Result<Opened<'_>, PptError> {
     let mut cf = cfb::CompoundFile::open(Cursor::new(bytes))
         .map_err(|e| PptError::Container(e.to_string()))?;
     if !cf.is_stream("/PowerPoint Document") {
@@ -626,16 +868,43 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
         .ok_or_else(|| PptError::Malformed("the Current User stream is cut short".into()))?
         as usize;
     let (map, doc_id) = persist(&doc, edit)?;
-    let at = |id: u32| map.get(&id).and_then(|&o| record(&doc, o as usize));
-    let document = at(doc_id).filter(|r| r.typ == DOCUMENT).ok_or_else(|| {
-        PptError::Malformed("the document is not where the persist directory says".into())
-    })?;
+    let document = map
+        .get(&doc_id)
+        .and_then(|&o| record(&doc, o as usize))
+        .filter(|r| r.typ == DOCUMENT)
+        .ok_or_else(|| {
+            PptError::Malformed("the document is not where the persist directory says".into())
+        })?;
     if children(&doc, &document)
         .iter()
         .any(|c| c.typ == CRYPT_SESSION)
     {
         return Err(PptError::Encrypted);
     }
+    Ok(Opened {
+        doc,
+        document,
+        map,
+        cf,
+    })
+}
+
+/// [`parse`], with the pictures its slides show, each a figure
+/// (`figure-<slide>-<n>`, numbered across the deck) whose text is its
+/// alternative text, and the store entry holding it (`Pictures#<n>`), for an
+/// OCR engine or a model to read; [`read_media`] reads one's bytes.
+pub fn parse_with_media(bytes: &[u8]) -> Result<(Vec<Element>, Vec<Media>), PptError> {
+    parse_within(bytes, &mut Budget::default())
+}
+
+/// [`parse_with_media`], against `budget`: every text read, from the slide
+/// list, the slides, their notes and their tables, spent before it is
+/// decoded; every element and cell before it is made.
+fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<Media>), PptError> {
+    let Opened {
+        doc, document, map, ..
+    } = open(bytes)?;
+    let at = |id: u32| map.get(&id).and_then(|&o| record(&doc, o as usize));
     // The slide list (instance 0): its slides in order, each with the text
     // the list itself keeps for it.
     let mut slides: Vec<(u32, Vec<Text>)> = Vec::new();
@@ -659,7 +928,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
                     if let Some((_, t)) = slides.last_mut() {
                         t.push(Text {
                             kind,
-                            text: atom_text(c.typ, data),
+                            text: atom_text(c.typ, data, budget)?,
                             paras: Vec::new(),
                         });
                     }
@@ -684,12 +953,28 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
             }
         }
     }
+    // The pictures the store holds, by their `pib`.
+    let blips: HashSet<u32> = picture_store(&doc, &document)
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.is_some())
+        .map(|(i, _)| i as u32 + 1)
+        .collect();
+    let mut media = Vec::new();
+    let mut figures = 0usize;
     let mut out = Vec::new();
+    // A slide is listed once, and a notes slide belongs to one slide: one
+    // listed again, or named again, is not read again. Each is known by
+    // where it is in the stream: the persist directory may send any number
+    // of ids to one place.
+    let mut places = HashSet::new();
+    slides.retain(|(id, _)| map.get(id).is_none_or(|&o| places.insert(o)));
+    let mut notes_read = HashSet::new();
     for (page, (id, listed)) in slides.into_iter().enumerate() {
         let mut found = Vec::new();
         let slide = at(id).filter(|r| r.typ == SLIDE);
         if let Some(slide) = &slide {
-            texts(&doc, slide, 0, &mut 4, false, &mut found);
+            texts(&doc, slide, 0, (&mut 4, false), budget, &mut found)?;
         }
         // The speaker's notes: the notes slide the slide's own atom names
         // (`notesIdRef`, after its layout, placeholders and master), read
@@ -703,17 +988,18 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
             })
             .filter(|&n| n != 0)
             .and_then(|n| notes_at.get(&n))
+            .filter(|&p| map.get(p).is_some_and(|&o| notes_read.insert(o)))
             .and_then(|&p| at(p))
             .filter(|r| r.typ == NOTES)
             .map(|r| {
                 let mut v = Vec::new();
-                texts(&doc, &r, 0, &mut 2, false, &mut v);
-                v
+                texts(&doc, &r, 0, (&mut 2, false), budget, &mut v).map(|()| v)
             })
+            .transpose()?
             .unwrap_or_default();
         let shows = |i: &Item| match i {
             Item::Text(t) => !t.text.trim().is_empty(),
-            Item::Table(_) => true,
+            Item::Table(_) | Item::Picture(..) => true,
         };
         let runs = if found.iter().any(shows) {
             found
@@ -724,7 +1010,31 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
             let t = match item {
                 Item::Text(t) => t,
                 Item::Table(t) => {
+                    budget.spend_elements(1)?;
                     out.push(table_element(t, page));
+                    continue;
+                }
+                Item::Picture(pib, alt) => {
+                    budget.spend_elements(1)?;
+                    figures += 1;
+                    let id = format!("figure-{page}-{figures}");
+                    // Each shape that shows it: the reader reads a picture
+                    // once, however many show it.
+                    let part = format!("Pictures#{pib}");
+                    media.push(Media {
+                        figure: id.clone(),
+                        source: if blips.contains(&pib) {
+                            MediaSource::Part(part)
+                        } else {
+                            MediaSource::Missing(part)
+                        },
+                        index: 0,
+                    });
+                    out.push(Element {
+                        page,
+                        figure: Some(id),
+                        ..Element::new("doco:Figure", alt, "ppt", "ppt")
+                    });
                     continue;
                 }
             };
@@ -732,6 +1042,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
             if title {
                 let line = tidy(&t.text.replace(['\r', '\u{b}'], " "));
                 if !line.is_empty() {
+                    budget.spend_elements(1)?;
                     out.push(Element {
                         page,
                         level: Some(1),
@@ -740,7 +1051,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
                 }
                 continue;
             }
-            for (text, listy) in paragraphs(&t) {
+            for (text, listy) in paragraphs(&t, budget)? {
                 let kind = if listy {
                     "doc:ListItem"
                 } else {
@@ -754,9 +1065,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
         }
         for t in notes.into_iter().filter_map(|i| match i {
             Item::Text(t) => Some(t),
-            Item::Table(_) => None,
+            Item::Table(_) | Item::Picture(..) => None,
         }) {
-            for (l, _) in paragraphs(&t) {
+            for (l, _) in paragraphs(&t, budget)? {
                 out.push(Element {
                     page,
                     ..Element::new("doco:Paragraph", l, "ppt", "notes")
@@ -767,7 +1078,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Element>, PptError> {
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    Ok(out)
+    Ok((out, media))
 }
 
 #[cfg(test)]

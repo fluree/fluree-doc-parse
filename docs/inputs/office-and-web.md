@@ -305,16 +305,35 @@ text. The grid is rebuilt from the cells' edges, a cell spanning several
 columns or rows making the cells it covers continuations (`merged_left`,
 `merged_down`); border lines are no cells. PowerPoint declares no header
 row, so `header_rows` is left undetected. A table of more than 10,000 cells,
-or whose grid would pass a million, is read as its cells' text.
+or whose grid would pass a million, or whose cells overlap to cover more
+than a million, is read as its cells' text; which it is is decided from
+the cells' positions before any text is read, so a group is read once.
 
-Not read: the masters' placeholder prompts, pictures, charts, embedded objects and summary information.
+**Pictures** on a slide are each a `doco:Figure` where they stand, its text
+the picture's alternative text where it has one, numbered across the deck
+(`figure-<slide>-<n>`). Their bytes are in the deck's picture store (the
+`Pictures` stream, or the store entry itself), and are read by the rules a
+[DOCX picture](#docx) is read by: OCR (`--ocr`, `--ocr-words`
+`<stem>_m<n>.json`), a reading supplied (`--tier-results`), or the
+configured model, the text placed after the figure; `render-routed` writes
+`<stem>_m<n>.png`; one nothing read is listed in `doc:unreadImages`. A
+drawing (EMF, WMF, PICT) is listed but not read, as in a DOCX. In a
+library, `fluree_doc_ppt::parse_with_media`, and `MediaReader` to read
+their bytes, the deck opened once for all of them (`read_media` opens it
+for one).
+
+Not read: the masters' placeholder prompts, charts, embedded objects and summary information.
 An encrypted file is refused. A file is recognised by its content, a
 compound file holding a `PowerPoint Document` stream, whatever its name and
 on stdin. The container is opened by the `cfb` crate, which refuses a
 looping sector chain; the stream is read to at most 256 MiB, records nest
 at most 64 deep, at most 4,096 edits are followed (each once, so an edit
-chain that loops ends) and 10,000 slides read. Provenance and evidence are
-`ppt`. Returns `PptError` (`fluree_doc_ppt::parse`) otherwise.
+chain that loops ends), each persist directory read once and about four
+million of their entries in all, and 10,000 slides read. A slide listed
+twice, or a notes slide named by two slides, is read once; the text read,
+however many slides name one place in the stream, is at most 256 MiB.
+Provenance and evidence are `ppt`. Returns `PptError`
+(`fluree_doc_ppt::parse`) otherwise.
 
 ## XLSX
 

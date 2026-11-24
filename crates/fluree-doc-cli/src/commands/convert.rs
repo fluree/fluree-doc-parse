@@ -455,11 +455,37 @@ fn convert_source(
                 fluree_doc_rtf::parse_with_info(&data).map_err(|e| e.to_string())?;
             (elements, declared(info))
         }
-        // A PowerPoint 97-2003 deck's slide text, a slide a page.
-        SourceKind::Ppt => (
-            fluree_doc_ppt::parse(&data).map_err(|e| e.to_string())?,
-            fluree_doc_model::Notes::default(),
-        ),
+        // A PowerPoint 97-2003 deck, a slide a page. A picture on a slide is
+        // read as a DOCX's is, its text placed after its figure.
+        SourceKind::Ppt => {
+            let (mut elements, media) =
+                fluree_doc_ppt::parse_with_media(&data).map_err(|e| e.to_string())?;
+            // The deck opened once, when the first picture is read.
+            let deck = std::cell::OnceCell::new();
+            let media = read_media(
+                src.stem,
+                media,
+                &|part| {
+                    deck.get_or_init(|| {
+                        fluree_doc_ppt::MediaReader::open(&data).map_err(|e| e.to_string())
+                    })
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .read(part)
+                },
+                cfg,
+                quiet,
+            );
+            fluree_doc_image::place_after_figures(&mut elements, media.read);
+            (
+                elements,
+                fluree_doc_model::Notes {
+                    unread_images: media.unread,
+                    ocr: media.ocr,
+                    ..Default::default()
+                },
+            )
+        }
         // A Word 97-2003 document's text, through its piece table.
         SourceKind::Doc => (
             fluree_doc_doc::parse(&data).map_err(|e| e.to_string())?,
