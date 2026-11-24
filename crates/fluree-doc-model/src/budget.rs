@@ -327,6 +327,12 @@ pub const TEXT_BYTES: u64 = 12;
 /// pages of fifty lines of words, 3,350 glyphs a page, peaked at 217 bytes
 /// a glyph (1.47 and 3.64 GB). What a line or a crowded page costs beyond
 /// that is spent apart: [`LINE_BYTES`], [`PAGE_GLYPH_BYTES`].
+///
+/// Dense text costs a little more than counted: 2,100 pages of fifty lines
+/// of 100 characters in 7 pt peaked at 233 bytes a glyph (2.45 GB, 2.36
+/// counted), 4% over: 90 MB there, about 100 MB at the budget's edge. The
+/// gap is left, small, rather than closed: counted at 240, the 3,500 pages
+/// of ordinary text that convert within the budget would be refused.
 pub const GLYPH_BYTES: u64 = 224;
 
 /// What a line of glyphs costs beyond its glyphs: 48 bytes, spent for each

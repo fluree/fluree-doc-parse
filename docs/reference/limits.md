@@ -541,7 +541,12 @@ bytes, 48 more where it starts a line (it does not follow the glyph before
 it along its baseline), 192 more for each glyph of the page that holds
 the most, once, and a rule, a fill or an image placement a cell slot.
 Text PDFs of fifty lines of words a page peaked at 217 bytes a glyph:
-1.47 GB for 2,100 pages, 3.64 GB for 5,000. A page is laid out with its
+1.47 GB for 2,100 pages, 3.64 GB for 5,000. Dense text costs a little more
+than counted: fifty lines of 100 characters in 7 pt peaked at 233 bytes a
+glyph (2.45 GB for 2,100 pages, 2.36 GB counted), 4% over: a document of
+such text at the budget's edge takes about 100 MB more than it is counted.
+The gap is left, small, rather than closed: counted at 240 bytes a glyph,
+3,500 pages of ordinary text would be refused. A page is laid out with its
 glyphs all at hand, so a crowded page costs more: two million glyphs in
 lines of words peaked at 374 bytes each on one page, 278 on two, 211 on
 ten; a line each, at 412 on one page and 251 over a thousand. Counted at
