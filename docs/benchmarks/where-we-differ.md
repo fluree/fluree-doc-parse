@@ -10,7 +10,9 @@ the answer key — would make the engine worse at the job it is actually for.
 
 ## Links the reference does not carry
 
-**Cost: 0.0020 of the deterministic overall, across 22 of 200 documents.**
+**Not in the scores we report, which are taken with `--md-links text`. The
+default Markdown would cost 0.0020 of the deterministic overall, across 21 of
+200 documents.**
 
 A PDF carries its hyperlinks as annotations beside the content stream, not as
 glyphs. A parser that ignores them sees the anchor's words and nothing else,
@@ -44,17 +46,16 @@ without one, and for anything that loads a document into a graph it is one of
 the more valuable facts on the page. It costs 0.0421 there.
 
 The trade in full: 21 documents change, every one of them downward, summing to
-0.385 — which over 200 documents is 0.0019 on the overall. Measured when the
-change landed, tier 1 went from 0.891562 to 0.889638 and tier 3 from 0.931645
-to 0.929711. Both kept their places, and later work has since carried both
-past the figures they started from.
+0.40, which over 200 documents is 0.0020 on the overall. Tier 1 scores
+0.899297 with the default and 0.901319 with `--md-links text`; tier 3 scores
+0.938413 and 0.940703.
 
-We would make the same trade again. A link is content.
+The default Markdown keeps the links all the same. A link is content.
 
-The scores we report use the default. A caller who wants the reference's form
-can ask for it: `--md-links text` writes each anchor's words without the
-address, and on this benchmark it scores 0.900236 against the default's
-0.898213. Every link is still in `json`, `doco` and `xhtml` either way.
+The scores we report are taken with `--md-links text`, which writes each
+anchor's words without the address, as the reference does, so every engine is
+compared on the words. Every link is still in `json`, `doco` and `xhtml`, and
+in the default Markdown.
 
 ## Chart labels paired with their values
 

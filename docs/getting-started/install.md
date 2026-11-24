@@ -52,6 +52,6 @@ See [`fdoc completions`](../cli/completions.md).
 ## Cold start
 
 There is no model to load and no cache to warm, so the first document costs
-the same as the thousandth — the deterministic tier measures ~7 ms per
+the same as the thousandth — the deterministic tier measures ~8 ms per
 document. This is the property that makes it viable in a Lambda-style
 environment where a model container is not.

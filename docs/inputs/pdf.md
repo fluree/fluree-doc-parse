@@ -198,6 +198,25 @@ number is read apart from it, `22 3/8"`, and a numerator raised over a slash
 is a fraction's, not a power: `78 5/16"`, not `78⁵/16"`. Old-style figures
 are as short, but stand on the baseline, and stay as they are.
 
+**Display type beside text.** A cover title or a margin title set at two and
+a half or more times the size of the text beside it shares a line with it
+only where the two stand on one baseline to within the smaller text's own
+jitter, and no wider than a gutter measured in that text's size. Measured
+in the title's size, a 28pt title took the line of a 10pt description that
+sat 5pt from its baseline, and cut the description in three around it. A
+title stacked in a margin, read line by line with the column beside it, is
+put back together as one block, its number and its words in whatever
+weight: `III. Regulatory cholesterol`. Display type is never a list marker.
+
+**Drop caps.** A paragraph's first letter set large, its top at the top of
+the first line and its foot on the second's, third's or fourth's baseline,
+is read at the head of the first line and joined to its word: `This report
+defines`, not `T` on its own, nor `T of those stories` two lines down.
+
+**Registered and trademark signs.** `®`, `™`, `©`, `℠` and `℗` belong to
+the word before them at any size: a 28pt title's `®` at 8.4pt, or a 3.5pt
+`®` after a 10pt `ProCat`, which came out `ProCat .` with the sign lost.
+
 **Text the producer states.** Where a PDF wraps what it draws in marked
 content with `/ActualText`, that text stands for the glyphs inside: a browser
 states `青` over a glyph its font maps to the radical `⻘`, and some producers
@@ -237,6 +256,6 @@ report, so malformed files fail as errors you can catch.
 
 ## Performance
 
-~7 ms per document for the deterministic tier, ~2.4 ms per page for parsing
+~8 ms per document for the deterministic tier, ~2.4 ms per page for parsing
 alone, ~420 pages/s. There is no model to load, so the first document costs
 what the thousandth does.

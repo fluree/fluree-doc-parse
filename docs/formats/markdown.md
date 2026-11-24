@@ -80,10 +80,11 @@ Anchors inside table cells are the same — a pipe table has no room for one.
 Markdown and HTML sources carry their own links through unchanged, so
 `fdoc convert notes.md` round-trips them. DOCX, PPTX and XLSX do not yet.
 
-**The default costs benchmark score, and is emitted anyway.** Ground truth
-transcribed from a visible page has no link markup, so every address we
-recover is counted as an insertion error. `--md-links text` writes what such a
-reference holds. See [where our output differs from the
+**Benchmarks are scored with `--md-links text`.** Ground truth transcribed
+from a visible page has no link markup, so under the default every address we
+recover would count as an insertion error. `--md-links text` writes what such
+a reference holds. The default keeps the links anyway, because a link is
+content. See [where our output differs from the
 reference](../benchmarks/where-we-differ.md).
 
 ## Text that looks like a link

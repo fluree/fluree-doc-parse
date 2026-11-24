@@ -28,6 +28,8 @@ doubt.
 
 One file per page. An array of detector boxes over the **2× page render**, so
 coordinates are in pixels at twice PDF units (`fdoc` halves them on read).
+[Producing layout boxes](escalation-tiers.md#producing-layout-boxes) renders
+the pages and runs a detector over them.
 
 ```json
 [
@@ -258,7 +260,8 @@ region reading is refused where the whole-page one took words in its region
 **OCR text is never taken for page furniture.** Furniture — running
 headers, footers, watermarks — is found by repetition across pages, and on a
 scan the same content repeats for its own reasons: a fax that sends one ID
-card on every page. OCR lines stay in the body, page numbers included.
+card on every page, a form copied with the same note down its margin. OCR
+lines stay in the body, page numbers included.
 
 Right-to-left scripts are laid out left to right: their words come out in
 reverse order.

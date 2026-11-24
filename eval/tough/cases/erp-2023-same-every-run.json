@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "erp-2023.pdf",
+    "url": "https://www.govinfo.gov/content/pkg/ERP-2023/pdf/ERP-2023.pdf",
+    "sha256": "651e037dc3e12753417c3a565b2ac1b0c963e5c99c77b90808f65db643d7fb5a",
+    "about": "Economic Report of the President, 2023 (513 pages). Every page carries a running chapter title and its number, and the charts repeat their labels and sources across pages, so many lines are furniture and several often stand together at a block's start or end. Pages of prose carry link underlines drawn as rules."
+  },
+  "notes": [
+    "Furniture was scrubbed from a block one pattern at a time, in the order a hash map gave them, and a pattern matched only at the block's end; two running lines together at the end both went only when the outer one was tried first. A column ruler was also chosen in that order where two ranks of rules tied. On the same binary, ten runs gave seven different Markdown readings: a chart's labels kept or cut, and a paragraph read whole or split."
+  ],
+  "checks": [
+    {
+      "id": "doco-same-every-run",
+      "found": "2026-11-23",
+      "issue": "Converted again, the same binary read chart labels and a paragraph differently.",
+      "same_every_run": 2
+    }
+  ]
+}
