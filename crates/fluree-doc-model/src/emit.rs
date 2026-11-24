@@ -391,7 +391,7 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                     // plain `<td>` rather than asserting a header that may
                     // not exist.
                     let th_rows = e.header_rows.unwrap_or(0);
-                    let subs = e.sub_headers.clone().unwrap_or_default();
+                    let subs = e.sub_header_rows(rows.len());
                     let ncols = rows.first().map(Vec::len).unwrap_or(0);
                     let md = e
                         .merged_down
@@ -420,9 +420,7 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
                         // A merged full-width band is one spanning header
                         // cell; its text may be split across columns in the
                         // raw grid, so join it back.
-                        if subs.contains(&ri)
-                            || (ri < th_rows && r[1..].iter().all(|c| c.is_empty()))
-                        {
+                        if subs[ri] || (ri < th_rows && r[1..].iter().all(|c| c.is_empty())) {
                             let joined = r
                                 .iter()
                                 .map(|c| c.trim())

@@ -303,6 +303,17 @@ impl Element {
                 .all(|c| !c.chars().any(char::is_alphanumeric))
     }
 
+    /// Whether each of a table's first `n` rows is a sub-header band
+    /// ([`Element::sub_headers`]), a band past `n` left out: one pass, so a
+    /// writer asks of a row in constant time rather than searching the list.
+    pub(crate) fn sub_header_rows(&self, n: usize) -> Vec<bool> {
+        let mut bands = vec![false; n];
+        for &r in self.sub_headers.iter().flatten().filter(|&&r| r < n) {
+            bands[r] = true;
+        }
+        bands
+    }
+
     /// The element's box, or an empty one for sources without geometry.
     ///
     /// Convenience for geometric pipelines (PDF), where every element has a

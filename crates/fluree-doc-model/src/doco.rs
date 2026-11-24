@@ -421,38 +421,44 @@ fn column_headers(
     };
     // One header row: a column the row leaves empty, inside a label's span,
     // is under that label. A column with text of its own keeps it, since a
-    // PDF's merged run can set its words across the columns it spans.
+    // PDF's merged run can set its words across the columns it spans. The
+    // owner is carried along the row, as below.
     if n_header == 1 {
-        return (0..ncols)
-            .map(|c| {
-                let mut owner = c;
-                while owner > 0 && continues_left(0, owner) && rows[0][owner].trim().is_empty() {
-                    owner -= 1;
-                }
+        let mut owner = 0;
+        let mut names = Vec::with_capacity(ncols);
+        for c in 0..ncols {
+            if c == 0
+                || !continues_left(0, c)
+                || !rows[0].get(c).is_some_and(|t| t.trim().is_empty())
+            {
+                owner = c;
+            }
+            names.push(
                 rows[0]
                     .get(owner)
                     .map(|t| t.trim())
                     .unwrap_or("")
-                    .to_string()
-            })
-            .collect();
+                    .to_string(),
+            );
+        }
+        return names;
     }
-    (0..ncols)
-        .map(|c| {
-            let mut path: Vec<&str> = Vec::new();
-            for (r, row) in rows.iter().enumerate().take(n_header) {
-                let mut owner = c;
-                while owner > 0 && continues_left(r, owner) {
-                    owner -= 1;
-                }
-                let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
-                if !label.is_empty() && !path.contains(&label) {
-                    path.push(label);
-                }
+    let mut paths: Vec<Vec<&str>> = vec![Vec::new(); ncols];
+    for (r, row) in rows.iter().enumerate().take(n_header) {
+        // The cell holding the label over column `c`, carried along the
+        // row rather than walked back to from each column.
+        let mut owner = 0;
+        for (c, path) in paths.iter_mut().enumerate() {
+            if c == 0 || !continues_left(r, c) {
+                owner = c;
             }
-            path.join(" / ")
-        })
-        .collect()
+            let label = row.get(owner).map(|t| t.trim()).unwrap_or("");
+            if !label.is_empty() && !path.contains(&label) {
+                path.push(label);
+            }
+        }
+    }
+    paths.into_iter().map(|path| path.join(" / ")).collect()
 }
 
 /// What the DoCO output copies of a table's cells, beyond the cells a
@@ -517,13 +523,7 @@ pub fn table_copies(e: &Element) -> Copies {
     };
     let mut text = 0u64;
     let mut d = own.clone();
-    let subs: Vec<bool> = {
-        let mut s = vec![false; n];
-        for &r in e.sub_headers.iter().flatten().filter(|&&r| r < n) {
-            s[r] = true;
-        }
-        s
-    };
+    let subs = e.sub_header_rows(n);
     if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
         let flag = |m: &Option<Vec<bool>>, i: usize| {
             m.as_ref().and_then(|m| m.get(i)).copied().unwrap_or(false)
@@ -1350,9 +1350,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                 .merged_left
                                 .clone()
                                 .unwrap_or_else(|| vec![false; rows.len() * ncols]),
-                            full_width_row: (0..rows.len())
-                                .map(|r| e.sub_headers.as_ref().is_some_and(|s| s.contains(&r)))
-                                .collect(),
+                            full_width_row: e.sub_header_rows(rows.len()),
                         };
                         crate::merges::denormalize(&mut rows, &m);
                     }
@@ -1387,23 +1385,24 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             column_headers(rows, n_header, e.merged_left.as_deref()),
                         ),
                     };
-                    let subs = e.sub_headers.clone().unwrap_or_default();
+                    let subs = e.sub_header_rows(rows.len());
                     // A table wrapped into side-by-side copies of its columns
                     // holds one record per copy on each row.
                     let width = record_width(&header).unwrap_or(ncols).max(1);
+                    // The last band above the row being written, carried
+                    // down the table rather than searched for at each row.
+                    let mut band = subs[..n_header].iter().rposition(|&s| s);
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
                         // `doc:sectionLabel` so every cell entity carries
                         // the section it belongs to.
-                        if subs.contains(&r) {
+                        if subs[r] {
+                            band = Some(r);
                             continue;
                         }
-                        let section = subs
-                            .iter()
-                            .filter(|s| **s < r)
-                            .max()
-                            .and_then(|s| rows[*s].first())
+                        let section = band
+                            .and_then(|s| rows[s].first())
                             .map(|t| t.trim())
                             .filter(|t| !t.is_empty());
                         for (c, cell) in row.iter().enumerate() {
@@ -2718,6 +2717,65 @@ mod tests {
                 merged: 0
             }
         );
+    }
+
+    #[test]
+    fn a_table_of_many_bands_is_written_in_linear_time() {
+        // Each row searched the list of bands, twice, for whether it is one
+        // and for the last above it: 170,000 bands took 28 s.
+        let n = 120_000;
+        let mut t = el("doco:Table", "", None);
+        let mut rows = vec![vec!["Name".to_string(), "Code".to_string()]];
+        for i in 0..n {
+            rows.push(vec![format!("Band {i}"), String::new()]);
+            rows.push(vec![format!("Item {i}"), i.to_string()]);
+        }
+        t.cells = Some(rows);
+        t.header_rows = Some(1);
+        t.sub_headers = Some((0..n).map(|i| 1 + 2 * i).collect());
+        let start = std::time::Instant::now();
+        let g = graph(std::slice::from_ref(&t));
+        let xhtml = crate::emit::to_xhtml(std::slice::from_ref(&t));
+        let took = start.elapsed();
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), 2 * n);
+        let last = cells.last().unwrap();
+        assert_eq!(last["doc:sectionLabel"], format!("Band {}", n - 1));
+        assert_eq!(last["doc:cellValue"], (n - 1).to_string());
+        assert_eq!(xhtml.matches("<th colspan=\"2\">Band").count(), n);
+        assert!(took.as_secs() < 30, "{took:?}");
+    }
+
+    #[test]
+    fn a_tall_stacked_header_is_named_in_time_linear_in_its_cells() {
+        // Each column walked back along its row to the cell holding its
+        // label: 128 rows merged across 16,384 columns took 4 s.
+        let (h, cols) = (64, 16_384);
+        let mut t = el("doco:Table", "", None);
+        let mut rows: Vec<Vec<String>> = (0..h)
+            .map(|r| {
+                let mut row = vec![String::new(); cols];
+                row[0] = format!("Level {r}");
+                row
+            })
+            .collect();
+        rows.push((0..cols).map(|c| c.to_string()).collect());
+        t.cells = Some(rows);
+        t.header_rows = Some(h);
+        let mut left = vec![true; (h + 1) * cols];
+        for r in 0..=h {
+            left[r * cols] = false;
+        }
+        left[h * cols..].fill(false);
+        t.merged_left = Some(left);
+        let start = std::time::Instant::now();
+        let g = graph(std::slice::from_ref(&t));
+        let took = start.elapsed();
+        let cells = find(&g, "doc:TableCell");
+        assert_eq!(cells.len(), cols);
+        let path = (0..h).map(|r| format!("Level {r}")).collect::<Vec<_>>();
+        assert_eq!(cells[cols - 1]["doc:columnHeader"], path.join(" / "));
+        assert!(took.as_secs() < 10, "{took:?}");
     }
 
     /// What the DoCO output writes for a table's cells, at the budget's
