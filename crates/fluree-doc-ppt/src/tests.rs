@@ -665,6 +665,40 @@ fn pictures_are_figures_whose_bytes_the_store_gives() {
     assert!(deck.head("Pictures#9", 8).is_err());
 }
 
+#[test]
+fn entries_pointing_at_one_picture_name_it_once() {
+    // Entries 1, 2 and 4 all point at the one picture of the Pictures
+    // stream; entry 3 holds its own. Shown four times, they are two
+    // pictures, read once each.
+    let png = b"\x89PNG\r\n\x1a\n shared picture";
+    let other = b"\x89PNG\r\n\x1a\n own picture";
+    let entries = [
+        fbse(0, None),
+        fbse(0, None),
+        fbse(0, Some(&png_blip(other))),
+        fbse(0, None),
+    ]
+    .concat();
+    let store = rec(
+        true,
+        0,
+        0x040B,
+        &rec(true, 0, 0xF000, &rec(true, 0, 0xF001, &entries)),
+    );
+    let shapes: Vec<u8> = (1..=4).flat_map(|pib| picture_shape(pib, None)).collect();
+    let slide = rec(true, 0, 0x040C, &shapes);
+    let bytes = deck_of(&store, &slide, Some(&png_blip(png)));
+    let (_, media) = parse_with_media(&bytes).unwrap();
+    let parts: Vec<&str> = media.iter().filter_map(|m| m.source.part()).collect();
+    assert_eq!(
+        parts,
+        ["Pictures#1", "Pictures#1", "Pictures#3", "Pictures#1"]
+    );
+    let pictures = fluree_doc_model::pictures(media);
+    assert_eq!(pictures.len(), 2);
+    assert_eq!(pictures[0].uses.len(), 3);
+}
+
 /// A deck whose slide list is `list`, with slides `slides`, each object id
 /// in `ids` mapped to where a slide is (by its index in `slides`).
 fn deck_listing(list: &[u8], slides: &[Vec<u8>], ids: &[(u32, usize)]) -> Vec<u8> {

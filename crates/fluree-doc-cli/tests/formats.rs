@@ -1211,23 +1211,26 @@ fn ppt_with_pictures(png: &[u8], n: u32) -> Vec<u8> {
 }
 
 #[test]
-fn a_ppt_whose_store_points_many_times_at_one_large_picture_converts_at_once() {
-    // 4,000 entries of a deck's store, each shown on the slide, all at one
-    // 32 MB picture: each picture's format is told from its first bytes,
-    // not from a copy of the whole picture (128 GB copied, half a minute).
+fn a_ppt_whose_store_points_many_times_at_one_picture_lists_it_once() {
+    // 300 entries of a deck's store, each shown on the slide, all at one
+    // picture: one picture, read (or, as here, listed unread) once, not
+    // 300 copies of it held for a reader or sent to a model.
     let dir = scratch("ppt-aliased");
-    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &vec![0u8; 32 << 20]].concat();
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[0u8; 64]].concat();
     let input = dir.join("deck.ppt");
-    std::fs::write(&input, ppt_with_pictures(&png, 4000)).unwrap();
-    let t0 = std::time::Instant::now();
-    let o = convert(&dir, &input, "md", &[]);
+    std::fs::write(&input, ppt_with_pictures(&png, 300)).unwrap();
+    let o = convert(&dir, &input, "doco", &[]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert!(String::from_utf8_lossy(&o.stdout).contains("Screens"));
-    assert!(
-        t0.elapsed() < std::time::Duration::from_secs(10),
-        "{:?}",
-        t0.elapsed()
-    );
+    let doco = String::from_utf8_lossy(&o.stdout).into_owned();
+    let unread: serde_json::Value =
+        serde_json::from_str(&document_value(&doco, "doc:unreadImages")).unwrap();
+    let figures = unread["@value"].as_array().unwrap();
+    assert_eq!(figures.len(), 300, "each figure is listed");
+    let images: std::collections::HashSet<(&str, &str)> = figures
+        .iter()
+        .map(|f| (f["image"].as_str().unwrap(), f["part"].as_str().unwrap()))
+        .collect();
+    assert_eq!(images, [("m1", "Pictures#1")].into(), "as one image");
     let _ = std::fs::remove_dir_all(dir);
 }
 

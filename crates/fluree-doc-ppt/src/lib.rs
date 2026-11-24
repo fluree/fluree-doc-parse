@@ -725,7 +725,7 @@ pub const MAX_MEDIA_BYTES: u64 = fluree_doc_model::budget::scaled(64 << 20);
 
 /// Where a picture is kept: in the `Pictures` stream at an offset, or in
 /// the document stream, inside its store entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Stored {
     Delayed(usize),
     Inline(usize),
@@ -971,12 +971,18 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
             }
         }
     }
-    // The pictures the store holds, by their `pib`.
-    let blips: HashSet<u32> = picture_store(&doc, &document)
+    // The pictures the store holds, by their `pib`, each named by the first
+    // entry that points where it is: entries may point any number of times
+    // at one picture, and a picture is read once by its name, however many
+    // show it.
+    let mut first: HashMap<Stored, u32> = HashMap::new();
+    let blips: HashMap<u32, u32> = picture_store(&doc, &document)
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.is_some())
-        .map(|(i, _)| i as u32 + 1)
+        .filter_map(|(i, e)| {
+            let pib = i as u32 + 1;
+            e.map(|at| (pib, *first.entry(at).or_insert(pib)))
+        })
         .collect();
     let mut media = Vec::new();
     let mut figures = 0usize;
@@ -1042,13 +1048,11 @@ fn parse_within(bytes: &[u8], budget: &mut Budget) -> Result<(Vec<Element>, Vec<
                     let id = format!("figure-{page}-{figures}");
                     // Each shape that shows it: the reader reads a picture
                     // once, however many show it.
-                    let part = format!("Pictures#{pib}");
                     media.push(Media {
                         figure: id.clone(),
-                        source: if blips.contains(&pib) {
-                            MediaSource::Part(part)
-                        } else {
-                            MediaSource::Missing(part)
+                        source: match blips.get(&pib) {
+                            Some(named) => MediaSource::Part(format!("Pictures#{named}")),
+                            None => MediaSource::Missing(format!("Pictures#{pib}")),
                         },
                         index: 0,
                     });
