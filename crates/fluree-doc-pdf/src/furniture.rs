@@ -327,20 +327,32 @@ fn offer_folios(sources: &mut Vec<FolioSource>, covers: usize, stable: &[(usize,
     }
 }
 
+/// The words a page's number is set with, in the languages documents print
+/// them in: `Page 3`, `p. 3`, `Página 3`, `pág. 3`, `Seite 3`, `Blatt 3`,
+/// `Sida 3`, `Strona 3`.
+const PAGE_WORDS: &[&str] = &[
+    "page", "pages", "pg", "p", "pp", "pag", "pág", "pagina", "página", "seite", "blatt", "sida",
+    "side", "strona", "str",
+];
+
+/// The words that set a page's number against the count of pages: `3 of 15`,
+/// `3 sur 3`, `3 de 9`, `3 von 4`, `3 di 5`, `3 da 5`, `3 z 8`, `3 van 4`,
+/// `3 av 4`.
+const OF_WORDS: &[&str] = &["of", "sur", "de", "von", "di", "da", "z", "van", "av"];
+
 /// Whether a line names its number a page's: `Page 3`, `p. 3`, `Pg 3`,
-/// `3 of 15`, `Página 3`, `Seite 3`.
+/// `3 of 15`, `Página 3`, `3 sur 3`, `Seite 3`.
 fn says_page(text: &str) -> bool {
-    const PAGE: &[&str] = &["page", "pg", "p", "pp", "pag", "pagina", "página", "seite"];
     let words: Vec<String> = text
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
         .collect();
     let number = |w: &str| w.chars().all(|c| c.is_ascii_digit());
-    words.iter().any(|w| PAGE.contains(&w.as_str()))
+    words.iter().any(|w| PAGE_WORDS.contains(&w.as_str()))
         || words
             .windows(3)
-            .any(|w| number(&w[0]) && w[1] == "of" && number(&w[2]))
+            .any(|w| number(&w[0]) && OF_WORDS.contains(&w[1].as_str()) && number(&w[2]))
 }
 
 /// A running line's copies: page, line index, text.
@@ -625,13 +637,20 @@ pub struct Running {
 }
 
 /// Whether a furniture line says anything besides where the reader is.
-/// `Page 3 of 15` and `- 3 -` do not; `ACME LABS`, `Revision 4` and
-/// `Form QA-12 Page 3` do. Nor does `P age 3`, set with its letters apart.
+/// `Page 3 of 15`, `3 sur 3`, `Página 2 de 9` and `- 3 -` do not; `ACME
+/// LABS`, `Revision 4` and `Form QA-12 Page 3` do. Nor does `P age 3`, set
+/// with its letters apart. The paging words are any language's a document
+/// numbers its pages in ([`PAGE_WORDS`], [`OF_WORDS`]): read in English
+/// alone, a French report's `3 sur 3` named something, and its last page's
+/// number was kept as the document's footer.
 pub fn names_something(text: &str) -> bool {
-    const PAGING: &[&str] = &["page", "pages", "pg", "p", "pp", "of"];
+    let paging = |w: &str| {
+        let w = w.to_lowercase();
+        PAGE_WORDS.contains(&w.as_str()) || OF_WORDS.contains(&w.as_str())
+    };
     let names = |text: &str| {
         text.split(|c: char| !c.is_alphabetic())
-            .any(|w| w.chars().count() >= 2 && !PAGING.contains(&w.to_lowercase().as_str()))
+            .any(|w| w.chars().count() >= 2 && !paging(w))
     };
     let closed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     names(text) && names(&closed)
@@ -1186,6 +1205,23 @@ mod tests {
         assert!(!identifies("- 3 -", Furniture::PageNumber));
         assert!(names_something("DRAFT"));
         assert!(!names_something("3 of 15"));
+        // In the languages documents number their pages in.
+        for page in [
+            "3 sur 3",
+            "1 de 3",
+            "Página 2 de 9",
+            "pág. 4",
+            "Seite 1 von 4",
+            "Pagina 3 di 5",
+            "Strona 2 z 8",
+            "Sida 3 av 4",
+        ] {
+            assert!(!names_something(page), "{page}");
+            assert!(says_page(page), "{page}");
+        }
+        // A line with a name besides them still names it.
+        assert!(names_something("Banco de España 3"));
+        assert!(names_something("Rapport annuel 3 sur 3"));
     }
 
     #[test]

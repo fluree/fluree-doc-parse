@@ -6,7 +6,8 @@
     "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables. Each language numbers its three pages from 1, in its own words, and sets its step numbers at the top of its second and third pages."
   },
   "notes": [
-    "2026-11-24 (#121): a numbered list whose numbers are set in the items' own text was read as numbered sections, most of them level 1, so the section above the list closed and the rest of the page nested under its last item."
+    "2026-11-24 (#121): a numbered list whose numbers are set in the items' own text was read as numbered sections, most of them level 1, so the section above the list closed and the rest of the page nested under its last item.",
+    "2026-11-24 (#135): the Spanish and French pages' numbers (`1 de 3`, `3 de 3`) counted as naming something, since only English paging words were known; the last one was kept as the document's footer."
   ],
   "checks": [
     {
@@ -24,6 +25,16 @@
         "text": "3. Suitable for wet locations. Convient aux emplacements mouilles",
         "evidence": "marker"
       }
+    },
+    {
+      "id": "spanish-page-number-not-kept-as-footer",
+      "found": "2026-11-24",
+      "issue": "`3 de 3` was kept as the document's footer.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "3 de 3"
+      },
+      "count": 0
     }
   ]
 }
