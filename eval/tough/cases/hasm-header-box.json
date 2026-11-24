@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "hasm-hex-socket-cap-screws.pdf",
+    "url": "https://hasmnorthamerica.com/wp-content/uploads/2019/07/dimensions-of-hexagon-socket-head-cap-screws-07292019.pdf",
+    "sha256": "1d3535a504e4e787ee00dc0599067625b3990a1318eef9eb04a8601c8ed44b0c",
+    "about": "HASM dimensions of hexagon socket head cap screws (3 landscape pages). Each page titles a table whose header row is filled dark green cell by cell."
+  },
+  "notes": [
+    "2026-11-24 (#110): the header is filled in a box of its own over the ruled box of rows, a gap apart, and was read as a table naming nothing over one with no column names. Its 12 columns are the rows' 14 with two pairs joined: `Nominal Size` over the size and its decimal, `J` over the socket size and its decimal."
+  ],
+  "checks": [
+    {
+      "id": "rows-take-the-boxed-header",
+      "found": "2026-11-24",
+      "issue": "#110: the rows' cells had no `doc:columnHeader`.",
+      "cell": {
+        "value": "0.1250",
+        "column": "D / Body Diameter / Max.",
+        "row": "5"
+      }
+    },
+    {
+      "id": "a-name-over-two-columns",
+      "found": "2026-11-24",
+      "issue": "#110: as above, for a name the header box sets over two of the rows' columns.",
+      "cell": {
+        "value": "(0.1250)",
+        "column": "Nominal Size / (Basic Product Diameter)",
+        "row": "5"
+      }
+    }
+  ]
+}

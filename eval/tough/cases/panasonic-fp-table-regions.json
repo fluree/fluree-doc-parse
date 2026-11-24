@@ -8,7 +8,8 @@
   "notes": [
     "A column rule drawn in a few rows fell short of a grid line, so two models read as one column.",
     "A table whose middle column is unruled touches in two sets of rules; only its header band joins them.",
-    "A row label read across the sub-columns of the rows above it, where their rule stops short of it, was cut at that rule and its pieces joined with a space (`Rea l-time clock function`)."
+    "A row label read across the sub-columns of the rows above it, where their rule stops short of it, was cut at that rule and its pieces joined with a space (`Rea l-time clock function`).",
+    "2026-11-24 (#112): a header shaded down to its first row with no rule between them was read as one row with it."
   ],
   "checks": [
     {
@@ -55,6 +56,16 @@
       "cell": {
         "value": "Real-time clock function",
         "column": "Item"
+      }
+    },
+    {
+      "id": "shaded-header-parts-first-row",
+      "found": "2026-11-24",
+      "issue": "#112: `Product No. FPG-PP11`, `Part No. AFPG430` were the header; the first product was no row.",
+      "cell": {
+        "value": "AFPG430",
+        "column": "Part No.",
+        "row": "FPΣ Positioning Unit"
       }
     }
   ]

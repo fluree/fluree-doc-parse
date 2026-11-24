@@ -178,7 +178,11 @@ fn table_title(
     Some((text, trimmed))
 }
 
-fn names_spanned_columns(rows: &[Vec<String>], continues_left: &[bool]) -> bool {
+fn names_spanned_columns(
+    rows: &[Vec<String>],
+    continues_left: &[bool],
+    continues_above: &[bool],
+) -> bool {
     let cols = rows.first().map(Vec::len).unwrap_or(0);
     if rows.len() < 3 || continues_left.len() < 2 * cols {
         return false;
@@ -194,7 +198,27 @@ fn names_spanned_columns(rows: &[Vec<String>], continues_left: &[bool]) -> bool 
                 .all(|t| !t.is_empty() && !table::is_numeric_cell(t))
             && names.iter().collect::<std::collections::HashSet<_>>().len() == names.len()
     };
+    // A column the first row names without spanning it may take a second
+    // label under the first (`This study` over `MAF (411 patients)`), but
+    // a part number of its own there (`FPWINGRF-JP2` under `Product No.`,
+    // beside two values under a `Type` set across two columns) makes the row
+    // the first of the data. Where the ruling runs the first row's label
+    // down through the second, the second holds nothing of its own.
+    let code = |t: &str| {
+        !t.contains(char::is_whitespace)
+            && t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().any(char::is_alphabetic)
+    };
+    let spanned = |c: usize| spans.iter().any(|&(a, b)| (a..b).contains(&c));
+    let named_above = (0..cols).filter(|&c| !spanned(c)).all(|c| {
+        let t = rows[1][c].trim();
+        t.is_empty()
+            || rows[0][c].trim().is_empty()
+            || continues_above.get(cols + c).copied().unwrap_or(false)
+            || !code(t)
+    });
     !spans.is_empty()
+        && named_above
         && spans.iter().all(|&(a, b)| labels(a, b))
         && rows[1]
             .iter()
@@ -291,6 +315,16 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     };
     for i in 1..elements.len() {
         let (before, after) = elements.split_at_mut(i);
+        if before[i - 1].kind == "doco:Table"
+            && after[0].kind == "doco:Table"
+            && after[0].page == before[i - 1].page
+        {
+            if let (Some(a), Some(b)) = (frame(&before[i - 1]), frame(&after[0])) {
+                link_header_box(&mut before[i - 1], &mut after[0], a, b);
+                link_rows_below(&before[i - 1], &mut after[0], a, b);
+            }
+            continue;
+        }
         let (prev, next) = (&before[i - 1], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
@@ -335,6 +369,162 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             0
         });
     }
+}
+
+/// Widest gap, in points, between a header drawn as a box of its own and
+/// the box of rows under it: the space a layout leaves between two boxes,
+/// not a paragraph's.
+const HEADER_BOX_GAP: f64 = 24.0;
+
+/// Link a header drawn as a box of its own to the rows boxed under it.
+///
+/// A spreadsheet laid out for print can fill its header in one box and
+/// rule its rows in another a gap below, each read as a table: the header
+/// one names nothing, and the rows have no names. The upper part is the
+/// lower one's header where the two follow one another with nothing
+/// between, share their outer edges, every upper column edge is a lower
+/// one, the upper part sets names and no figures, and the lower sets
+/// figures. A name over two of the lower part's columns heads both
+/// (`Nominal Size` over the size and its decimal), so the upper part is
+/// dealt onto the lower one's columns, a name spanning the columns it
+/// covers, and it is all header.
+fn link_header_box(prev: &mut Element, next: &mut Element, a: &TableFrame, b: &TableFrame) {
+    let tol = CONTINUED_EDGE_TOLERANCE;
+    let (Some(pa), Some(pb)) = (prev.bbox, next.bbox) else {
+        return;
+    };
+    let (Some(&a0), Some(&a1), Some(&b0), Some(&b1)) =
+        (a.xs.first(), a.xs.last(), b.xs.first(), b.xs.last())
+    else {
+        return;
+    };
+    // An upper edge is the lower edge nearest it, within a quarter of the
+    // narrowest lower column: no other edge of the lower part is meant. A
+    // box drawn a row at a time has its sides in pieces a little apart.
+    let narrowest =
+        b.xs.windows(2)
+            .map(|w| w[1] - w[0])
+            .fold(f64::MAX, f64::min);
+    let reach = (narrowest / 4.0).max(tol);
+    let gap = pb.y0 - pa.y1;
+    if !(-tol..=HEADER_BOX_GAP).contains(&gap)
+        || (a0 - b0).abs() > reach
+        || (a1 - b1).abs() > reach
+        || !a
+            .xs
+            .iter()
+            .all(|x| b.xs.iter().any(|y| (x - y).abs() <= reach))
+        || next.continues.is_some()
+    {
+        return;
+    }
+    let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+        return;
+    };
+    let names = head
+        .iter()
+        .flatten()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .all(|t| t.chars().any(char::is_alphabetic) && !table::is_numeric_cell(t));
+    let figures = rows
+        .first()
+        .is_some_and(|r| r.iter().any(|t| table::is_numeric_cell(t.trim())));
+    if !names || !figures || head.is_empty() {
+        return;
+    }
+    // Each lower column under the upper column its middle falls in.
+    let cols = b.xs.len() - 1;
+    let under: Vec<usize> = (0..cols)
+        .map(|j| {
+            let mid = (b.xs[j] + b.xs[j + 1]) / 2.0;
+            a.xs.windows(2)
+                .position(|w| mid >= w[0] && mid < w[1])
+                .unwrap_or(0)
+        })
+        .collect();
+    let old_cols = a.xs.len() - 1;
+    let flag = |m: &Option<Vec<bool>>, r: usize, i: usize| {
+        m.as_ref()
+            .and_then(|m| m.get(r * old_cols + i))
+            .copied()
+            .unwrap_or(false)
+    };
+    let mut cells = Vec::with_capacity(head.len());
+    let mut left = Vec::with_capacity(head.len() * cols);
+    let mut down = Vec::with_capacity(head.len() * cols);
+    for (r, row) in head.iter().enumerate() {
+        let mut out = Vec::with_capacity(cols);
+        for j in 0..cols {
+            let i = under[j];
+            let opens = j == 0 || under[j - 1] != i;
+            out.push(if opens {
+                row.get(i).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            });
+            left.push(!opens || flag(&prev.merged_left, r, i));
+            down.push(flag(&prev.merged_down, r, i));
+        }
+        cells.push(out);
+    }
+    prev.header_rows = Some(cells.len());
+    prev.cells = Some(cells);
+    prev.merged_left = Some(left);
+    prev.merged_down = down.iter().any(|d| *d).then_some(down);
+    next.continues = Some(prev.id.clone());
+    next.header_rows = Some(0);
+}
+
+/// Link rows set a little below a table, on its columns, to that table.
+///
+/// A run of rows read by alignment breaks where a line of something else
+/// falls between two of them: a label centred on the tall row of an outer
+/// table the inner one sits in (`Acoustical Performance` beside rows `1`,
+/// `1.5` | `2`, `3`, `5`). The rows under the break are the same table's
+/// where they follow it with nothing between, a gap of a box's spacing
+/// below, on as many columns lined up with its own, and open on figures
+/// with no header of their own.
+fn link_rows_below(prev: &Element, next: &mut Element, a: &TableFrame, b: &TableFrame) {
+    if next.continues.is_some() || a.xs.len() != b.xs.len() || a.xs.len() < 3 {
+        return;
+    }
+    let (Some(pa), Some(pb)) = (prev.bbox, next.bbox) else {
+        return;
+    };
+    let gap = pb.y0 - pa.y1;
+    if !(-CONTINUED_EDGE_TOLERANCE..=HEADER_BOX_GAP).contains(&gap) {
+        return;
+    }
+    // Column for column, each one's middle inside the other's: edges read
+    // from the text's alignment move with each part's widths.
+    let inside = |p: &[f64], q: &[f64]| {
+        p.windows(2).zip(q.windows(2)).all(|(c, d)| {
+            let mid = (c[0] + c[1]) / 2.0;
+            mid >= d[0] && mid <= d[1]
+        })
+    };
+    if !inside(&a.xs, &b.xs) || !inside(&b.xs, &a.xs) {
+        return;
+    }
+    let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+        return;
+    };
+    let headed = prev.header_rows.unwrap_or(0);
+    let figures = |row: &Vec<String>| {
+        let filled: Vec<&str> = row
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        !filled.is_empty()
+            && filled.iter().filter(|t| table::is_numeric_cell(t)).count() * 2 > filled.len()
+    };
+    if headed == 0 || !head.iter().skip(headed).any(figures) || !rows.first().is_some_and(figures) {
+        return;
+    }
+    next.continues = Some(prev.id.clone());
+    next.header_rows = Some(0);
 }
 
 /// Insert tables into the existing prose reading stream without reordering
@@ -2080,7 +2270,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // banner repeats itself (`Short | Short`), and no numbers.
             if explicit.is_none()
                 && header_rows == 1
-                && names_spanned_columns(&rows, &merges.continues_left)
+                && names_spanned_columns(&rows, &merges.continues_left, &merges.continues_above)
             {
                 header_rows = 2;
             }
@@ -2216,6 +2406,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .map(|(r, _)| r)
                     .collect(),
             };
+            let restated_headers = match explicit {
+                Some(_) => Vec::new(),
+                None => g.restated_header_rows(
+                    &rows,
+                    header_rows,
+                    &sub_headers,
+                    &raw.pages[pi].glyphs,
+                    &raw.pages[pi].fills,
+                ),
+            };
             tables += 1;
             let text = rows
                 .iter()
@@ -2228,6 +2428,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 cells: Some(rows),
                 header_rows: Some(header_rows),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
+                restated_headers: (!restated_headers.is_empty()).then_some(restated_headers),
                 merged_down: merges
                     .continues_above
                     .iter()
@@ -2657,26 +2858,26 @@ mod tests {
             &["", "NISTmAb", "Amgen mAb", "NISTmAb", "Amgen mAb"],
             &["Channel", "Short", "Short", "Short", "Short"],
         ]);
-        assert!(names_spanned_columns(&methods, &left));
+        assert!(names_spanned_columns(&methods, &left, &[]));
         // Data under a banner repeats itself; it names nothing.
         let data = grid(&[
             &["", "Primary", "", "Secondary", ""],
             &["Channel", "Short", "Short", "Short", "Short"],
             &["Flow", "0.5", "0.5", "1.5", "1.5"],
         ]);
-        assert!(!names_spanned_columns(&data, &left));
+        assert!(!names_spanned_columns(&data, &left, &[]));
         // Nor is a row of numbers, nor a header with no span.
         let numbers = grid(&[
             &["", "Primary", "", "Secondary", ""],
             &["Flow", "0.5", "0.7", "1.5", "1.7"],
             &["Time", "3", "4", "5", "6"],
         ]);
-        assert!(!names_spanned_columns(&numbers, &left));
-        assert!(!names_spanned_columns(&methods, &[false; 15]));
+        assert!(!names_spanned_columns(&numbers, &left, &[]));
+        assert!(!names_spanned_columns(&methods, &[false; 15], &[]));
         // A value run across the banner's columns names nothing.
         let mut run = left.clone();
         run[5 + 2] = true;
-        assert!(!names_spanned_columns(&methods, &run));
+        assert!(!names_spanned_columns(&methods, &run, &[]));
         // A band over every column titles rows unless short labels follow.
         let mut band = vec![false; 9];
         band[1] = true;
@@ -2694,13 +2895,38 @@ mod tests {
                 "Until disease progression",
             ],
         ]);
-        assert!(!names_spanned_columns(&titled, &band));
+        assert!(!names_spanned_columns(&titled, &band, &[]));
         let named = grid(&[
             &["Establishment", "", ""],
             &["Name", "Address", "ID/FEI"],
             &["Plant A", "1 Main St", "123"],
         ]);
-        assert!(names_spanned_columns(&named, &band));
+        assert!(names_spanned_columns(&named, &band, &[]));
+        // A label across two columns over a product's row: the columns it
+        // does not span hold the product's own codes, so the row is data.
+        let mut typed = vec![false; 12];
+        typed[1] = true;
+        let products = grid(&[
+            &["Type", "", "Product No.", "Part No."],
+            &[
+                "Japanese version kit",
+                "CD-ROM, with cable",
+                "FPWINGRF-JP2",
+                "AFPS10122",
+            ],
+            &["English version", "CD-ROM", "FPWINGRF-EN2", "AFPS10520"],
+        ]);
+        assert!(!names_spanned_columns(&products, &typed, &[]));
+        // Unless the ruling runs those columns' labels down into the row.
+        let mut down = vec![false; 12];
+        down[4 + 2] = true;
+        down[4 + 3] = true;
+        let stacked = grid(&[
+            &["Type", "", "Product No.", "Part No."],
+            &["Medium", "Cable", "", "No."],
+            &["English version", "CD-ROM", "FPWINGRF-EN2", "AFPS10520"],
+        ]);
+        assert!(names_spanned_columns(&stacked, &typed, &down));
     }
 
     #[test]

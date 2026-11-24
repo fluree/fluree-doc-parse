@@ -885,7 +885,7 @@ impl Grid {
         // a span blanks most of the table (measured: TEDS −0.13).
         for r in 1..rows {
             let y = self.ys[r];
-            let at_y: Vec<(f64, f64)> = hs
+            let mut at_y: Vec<(f64, f64)> = hs
                 .iter()
                 .filter(|rule| (rule.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0)
                 .map(|rule| (rule.bbox.x0, rule.bbox.x1))
@@ -893,6 +893,27 @@ impl Grid {
             if at_y.is_empty() {
                 continue;
             }
+            // Where a rule runs under some columns, a fill ending on its line
+            // parts the others: a shaded row whose shading is its bottom
+            // edge over the columns the rule leaves open. Never alone: a
+            // boundary drawn by no rule claims no span. A cell's shading,
+            // its sides on column edges; not a highlight set inside a cell
+            // behind a line of its text.
+            let on_edge = |x: f64| self.xs.iter().any(|e| (e - x).abs() <= EDGE_TOLERANCE);
+            let striped = shaded_bands(fills, &self.xs, &self.ys).len() > 1;
+            at_y.extend(
+                fills
+                    .iter()
+                    .filter(|f| {
+                        !striped
+                            && ((f.bbox.y1 - y).abs() <= EDGE_TOLERANCE * 2.0
+                                || (f.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0)
+                            && on_edge(f.bbox.x0)
+                            && on_edge(f.bbox.x1)
+                            && shading_ends(fills, f, y)
+                    })
+                    .map(|f| (f.bbox.x0, f.bbox.x1)),
+            );
             let open: Vec<bool> = (0..cols)
                 .map(|c| {
                     let (x0, x1) = (self.xs[c], self.xs[c + 1]);
@@ -1459,6 +1480,123 @@ impl Grid {
             }
         }
         weighted > 0 && heavy * 2 > weighted
+    }
+
+    /// Rows below the header block set like a header row: they name the
+    /// columns afresh for the rows beneath them.
+    ///
+    /// A table can rename its columns partway down: a shaded bold `By wt |
+    /// By vol` under a `LB/Gal | g/L` header, or a SKU table's header row
+    /// under a block of fields in the same box. Such a row sets names in two
+    /// cells or more, each its own, and no figure or code, over two rows or
+    /// more with something in a column it names, and is set apart from the
+    /// rows under it one of three ways:
+    ///
+    /// - bold in two value cells or more, and every value cell (a first
+    ///   column of row labels keeps its own weight: `VOC Content` set as
+    ///   `Total` is, beside a bold `LB/Gal | g/L`), over a row that is not;
+    /// - shaded as the header row is, over two rows that are not (striped
+    ///   rows alternate);
+    /// - its names turned on their side in two cells or more, as narrow
+    ///   columns' names are.
+    ///
+    /// A band across the row is a section's label, not this.
+    pub fn restated_header_rows(
+        &self,
+        rows: &[Vec<String>],
+        header_rows: usize,
+        bands: &[usize],
+        glyphs: &[crate::glyph::Glyph],
+        fills: &[crate::rule::Fill],
+    ) -> Vec<usize> {
+        let n = rows.len().min(self.rows());
+        // A code is one token of letters and digits: a part number, not a
+        // name (`AFP2632`, `P40430-B21`).
+        let code = |t: &str| {
+            !t.contains(char::is_whitespace)
+                && t.chars().any(|c| c.is_ascii_digit())
+                && t.chars().any(char::is_alphabetic)
+        };
+        // Names, each its own: no figure, no code, none repeated (a row of
+        // values under a banner repeats itself).
+        let labels = |r: usize| {
+            let cells: Vec<&str> = rows[r]
+                .iter()
+                .map(|t| t.trim())
+                .filter(|t| !t.is_empty())
+                .collect();
+            let distinct: std::collections::HashSet<&&str> = cells.iter().collect();
+            cells.len() >= 2
+                && distinct.len() == cells.len()
+                && cells
+                    .iter()
+                    .all(|t| t.chars().any(char::is_alphabetic) && !is_numeric_cell(t) && !code(t))
+        };
+        let heavy = |(weighted, heavy): (usize, usize)| weighted > 0 && heavy * 2 > weighted;
+        // Value cells holding weighted text, and how many of them are bold.
+        let bold_values = |r: usize| {
+            let w = self.cell_weights(glyphs, r);
+            let values: Vec<&(usize, usize)> = w.iter().skip(1).filter(|c| c.0 > 0).collect();
+            let bold = values.iter().filter(|c| heavy(***c)).count();
+            (values.len(), bold)
+        };
+        let bold = |r: usize| {
+            let (values, bold) = bold_values(r);
+            bold >= 2 && bold == values
+        };
+        let plain = |r: usize| {
+            let (values, bold) = bold_values(r);
+            bold < values || values == 0
+        };
+        let shaded = |r: usize| self.band_has_fill(fills, r);
+        // Turned glyphs inside the table, each with the cell its ink is in.
+        let turned_at: Vec<(&crate::glyph::Glyph, (usize, usize))> = glyphs
+            .iter()
+            .filter(|g| {
+                g.bbox.is_some()
+                    && !g.text.trim().is_empty()
+                    && matches!(g.rotation_bucket().rem_euclid(360), 90 | 270)
+            })
+            .filter_map(|g| {
+                let b = g.bbox.unwrap();
+                Some((g, self.cell_at((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5)?))
+            })
+            .collect();
+        // Cells of row `r` naming their column on its side: a turned line
+        // wholly inside the row. A group label turned down the rows it
+        // groups runs on past the row, and names none.
+        let turned = |r: usize| {
+            let cells: std::collections::HashSet<usize> = turned_at
+                .iter()
+                .filter(|(_, (row, _))| *row == r)
+                .filter(|(g, _)| {
+                    let fs = g.font_size.max(1.0) as f64;
+                    !turned_at.iter().any(|(o, (row, _))| {
+                        *row != r && (o.origin.0 - g.origin.0).abs() < fs * 0.3
+                    })
+                })
+                .map(|(_, (_, c))| *c)
+                .collect();
+            cells.len() >= 2
+        };
+        // Two rows under it at least: one row under a row of names is as
+        // likely its value.
+        (header_rows.max(1)..n.saturating_sub(2))
+            .filter(|&r| {
+                !bands.contains(&r)
+                    && labels(r)
+                    && rows[r]
+                        .iter()
+                        .zip(&rows[r + 1])
+                        .any(|(a, b)| !a.trim().is_empty() && !b.trim().is_empty())
+                    && ((bold(r) && plain(r + 1))
+                        || (shaded(r)
+                            && shaded(0)
+                            && !shaded(r + 1)
+                            && (r + 2 >= n || !shaded(r + 2)))
+                        || turned(r))
+            })
+            .collect()
     }
 
     /// The header block grown down through a stacked header's rows.
@@ -2267,6 +2405,8 @@ fn detect_group(
     // Boundaries closer together than this hold no content — an artefact of a
     // border rule sitting alongside a cell edge, which produced a spurious
     // empty first column on one such table.
+    // The rules make the table; a shaded band's edge only parts its rows.
+    let ys = with_fill_edges(ys, &xs, fills, glyphs);
     split_row_bands(xs, ys, rules, page, frames, glyphs)
 }
 
@@ -3757,6 +3897,121 @@ fn detect_components(
     });
     out
 }
+
+/// Row boundaries with the edges of the fills laid across the table.
+///
+/// A shaded header band, or a shaded row, can be the only thing parting a
+/// row from the next: no rule is drawn under it, and the shading's edge is
+/// the line. In a grid of two rows and two columns or more, the one fill
+/// across nine tenths of the table's width, hanging from one of the table's
+/// lines, whose other edge falls between two boundaries, a cell's height
+/// from each and through no line of text, is a row boundary too. A table
+/// striped row by row has many, and is left to its rules.
+fn with_fill_edges(
+    mut ys: Vec<f64>,
+    xs: &[f64],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+) -> Vec<f64> {
+    // A table's rows and columns, already: a box the rules draw as one cell
+    // (a chart's frame, its title band shaded) is not parted into rows by
+    // its shading.
+    if xs.len() < 3 || ys.len() < 3 {
+        return ys;
+    }
+    let (Some(&x0), Some(&x1)) = (xs.first(), xs.last()) else {
+        return ys;
+    };
+    let (Some(&top), Some(&bottom)) = (ys.first(), ys.last()) else {
+        return ys;
+    };
+    let straddled = |y: f64| {
+        glyphs.iter().any(|g| {
+            g.bbox.is_some_and(|b| {
+                b.x1 > x0 && b.x0 < x1 && b.y0 < y - EDGE_TOLERANCE && b.y1 > y + EDGE_TOLERANCE
+            }) && !g.text.trim().is_empty()
+        })
+    };
+    let lines = ys.clone();
+    let on_line = |y: f64| lines.iter().any(|&o| (o - y).abs() <= EDGE_TOLERANCE);
+    // One band across the table: a header shaded apart from its rows.
+    // Bands down a table, alternate rows striped, are no header's, and
+    // their edges are no rules.
+    let bands = shaded_bands(fills, xs, &ys);
+    if bands.len() != 1 {
+        return ys;
+    }
+    for f in bands {
+        let b = f.bbox;
+        // A table's shading hangs from one of its lines: a header band from
+        // the top rule, a shaded row from the rule above it. Its other edge
+        // parts the row it falls in. A box laid over a chart starts on none.
+        for (y, other) in [(b.y0, b.y1), (b.y1, b.y0)] {
+            if !on_line(other)
+                || !shading_ends(fills, f, y)
+                || y - top < MIN_CELL_EXTENT
+                || bottom - y < MIN_CELL_EXTENT
+                || ys.iter().any(|&o| (o - y).abs() < MIN_CELL_EXTENT)
+                || straddled(y)
+            {
+                continue;
+            }
+            ys.push(y);
+        }
+    }
+    ys.sort_by(f64::total_cmp);
+    ys
+}
+
+/// Whether `f`'s shading stops at its edge on `y`: no other fill butts on
+/// to it there over the same columns. A column shaded as one block is often
+/// drawn as a fill per row, edge to edge; the seams are not seen, and part
+/// nothing. A background laid under the whole table is no such fill: it
+/// starts well before the edge, and the band on it still shows.
+fn shading_ends(fills: &[crate::rule::Fill], f: &crate::rule::Fill, y: f64) -> bool {
+    let b = f.bbox;
+    let below = (b.y1 - y).abs() <= (b.y0 - y).abs();
+    !fills.iter().any(|g| {
+        let o = g.bbox;
+        let butts = if below {
+            (o.y0 - y).abs() <= EDGE_TOLERANCE && o.y1 > y + EDGE_TOLERANCE
+        } else {
+            (o.y1 - y).abs() <= EDGE_TOLERANCE && o.y0 < y - EDGE_TOLERANCE
+        };
+        butts && o.x1.min(b.x1) - o.x0.max(b.x0) >= (b.x1 - b.x0) * FILL_ROW_COVERAGE
+    })
+}
+
+/// The fills laid across a table as bands: nine tenths of its width, under
+/// half its height (a background under the whole table is no band), their
+/// middles inside it. One is a header or a row shaded apart; more are rows
+/// striped, whose edges are no rules.
+fn shaded_bands<'a>(
+    fills: &'a [crate::rule::Fill],
+    xs: &[f64],
+    ys: &[f64],
+) -> Vec<&'a crate::rule::Fill> {
+    let (Some(&x0), Some(&x1), Some(&top), Some(&bottom)) =
+        (xs.first(), xs.last(), ys.first(), ys.last())
+    else {
+        return Vec::new();
+    };
+    let (w, h) = (x1 - x0, bottom - top);
+    fills
+        .iter()
+        .filter(|f| {
+            let b = f.bbox;
+            let mid = (b.y0 + b.y1) / 2.0;
+            b.x1.min(x1) - b.x0.max(x0) >= w * FILL_ROW_COVERAGE
+                && b.y1 - b.y0 < h / 2.0
+                && mid > top
+                && mid < bottom
+        })
+        .collect()
+}
+
+/// Share of a table's width a fill must cover for its edge to part rows.
+const FILL_ROW_COVERAGE: f64 = 0.9;
 
 /// Boundaries along one axis.
 ///
@@ -5936,6 +6191,145 @@ mod header_tests {
         }
         let cells = g.cell_texts(&gl);
         assert!(cells.iter().all(|c| c.is_empty()), "got {cells:?}");
+    }
+
+    fn plain_grid(xs: Vec<f64>, ys: Vec<f64>) -> Grid {
+        let bbox = BBox {
+            x0: xs[0],
+            y0: ys[0],
+            x1: *xs.last().unwrap(),
+            y1: *ys.last().unwrap(),
+        };
+        Grid {
+            layout: None,
+            page: 0,
+            xs,
+            ys,
+            bbox,
+        }
+    }
+
+    #[test]
+    fn a_shaded_header_band_parts_its_first_row() {
+        // A header shaded down to y 10 over a first row with no rule between.
+        let xs = [0.0, 100.0, 200.0];
+        let ys = vec![0.0, 20.0, 40.0];
+        let band = fill(0.0, 0.0, 200.0, 10.0);
+        let parted = with_fill_edges(ys.clone(), &xs, std::slice::from_ref(&band), &[]);
+        assert_eq!(parted, vec![0.0, 10.0, 20.0, 40.0]);
+        // Not through a line of text set across the edge.
+        let across = gly(20.0, 14.0, 30.0, "Name");
+        let kept = with_fill_edges(ys.clone(), &xs, std::slice::from_ref(&band), &[across]);
+        assert_eq!(kept, ys);
+        // Nor at the seam of a column shaded as one block, a fill a row.
+        let next = fill(0.0, 10.0, 200.0, 20.0);
+        let seam = with_fill_edges(ys.clone(), &xs, &[band, next], &[]);
+        assert_eq!(seam, ys);
+    }
+
+    #[test]
+    fn a_shaded_row_closes_the_columns_its_rule_leaves_open() {
+        // A rule under the first column only, at y 20; the second column's
+        // shading ends on the same line.
+        let g = plain_grid(vec![0.0, 100.0, 200.0], vec![0.0, 10.0, 20.0, 30.0]);
+        let rules = vec![h(0.0, 100.0, 20.0)];
+        let open = g.merges(&rules, &[]);
+        assert!(
+            open.continues_above[2 * 2 + 1],
+            "no shading: the column is open"
+        );
+        let shaded = [fill(100.0, 10.0, 200.0, 20.0)];
+        let closed = g.merges(&rules, &shaded);
+        assert!(
+            !closed.continues_above[2 * 2 + 1],
+            "the shading's edge parts it"
+        );
+        // A shading that carries on in a fill butted on below parts nothing.
+        let block = [
+            fill(100.0, 10.0, 200.0, 20.0),
+            fill(100.0, 20.0, 200.0, 30.0),
+        ];
+        assert!(g.merges(&rules, &block).continues_above[2 * 2 + 1]);
+    }
+
+    #[test]
+    fn a_bold_row_of_labels_partway_down_restates_the_header() {
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            (0..6).map(|k| k as f64 * 20.0).collect(),
+        );
+        let rows = rows(&[
+            &["", "LB/Gal", "g/L"],
+            &["Coating Density", "11.95", "1432"],
+            &["VOC Content", "By wt", "By vol"],
+            &["Total Volatiles", "39.0%", "55.7%"],
+            &["Water", "39.0%", "55.6%"],
+        ]);
+        let set = |r: usize, bold: &[bool]| -> Vec<crate::glyph::Glyph> {
+            rows[r]
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.is_empty())
+                .map(|(c, t)| {
+                    let mut x = gly(c as f64 * 100.0 + 5.0, r as f64 * 20.0 + 14.0, 30.0, t);
+                    x.weight = Some(if bold[c] { 700 } else { 400 });
+                    x
+                })
+                .collect()
+        };
+        let mut glyphs = Vec::new();
+        for r in 0..5 {
+            // The labels in the first column keep their own weight.
+            glyphs.extend(set(r, &[false, r == 2 || r == 0, r == 2 || r == 0]));
+        }
+        assert_eq!(g.restated_header_rows(&rows, 1, &[], &glyphs, &[]), vec![2]);
+        // A row of figures set bold is a total, not a header.
+        let mut totals = rows.clone();
+        totals[2] = vec!["Total".into(), "12".into(), "14".into()];
+        assert!(g
+            .restated_header_rows(&totals, 1, &[], &glyphs, &[])
+            .is_empty());
+        // Nor is a band across the row.
+        assert!(g
+            .restated_header_rows(&rows, 1, &[2], &glyphs, &[])
+            .is_empty());
+        // One bold word beside a label is emphasis, not a header.
+        let mut one = Vec::new();
+        for r in 0..5 {
+            one.extend(set(r, &[false, r == 2 || r == 0, r == 0]));
+        }
+        assert!(g.restated_header_rows(&rows, 1, &[], &one, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_row_of_names_on_their_side_restates_the_header() {
+        // Field rows, then a row whose columns are named on their side over
+        // rows of codes and figures; no weights, no shading.
+        let g = plain_grid(
+            vec![0.0, 60.0, 120.0, 180.0],
+            vec![0.0, 20.0, 40.0, 100.0, 120.0, 140.0],
+        );
+        let rows = rows(&[
+            &["Form", "SFF", ""],
+            &["Speed", "10000 rpm", ""],
+            &["SKU", "Throughput (MiB/s)", "Random Rd (IOPs)"],
+            &["P40430-B21", "195", "170"],
+            &["P53561-B21", "200", "165"],
+        ]);
+        let mut glyphs = Vec::new();
+        for (x, t) in [(90.0, "T"), (150.0, "R")] {
+            let mut c = gly(x, 90.0, 6.0, t);
+            c.rotation_deg = 90.0;
+            c.bbox = Some(BBox {
+                x0: x - 6.0,
+                y0: 84.0,
+                x1: x,
+                y1: 90.0,
+            });
+            c.origin = (x, 90.0);
+            glyphs.push(c);
+        }
+        assert_eq!(g.restated_header_rows(&rows, 0, &[], &glyphs, &[]), vec![2]);
     }
 
     #[test]
