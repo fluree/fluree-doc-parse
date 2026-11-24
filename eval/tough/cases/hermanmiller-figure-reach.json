@@ -6,7 +6,8 @@
     "about": "Herman Miller Aeron chair product sheet (2 pages). Page 2 sets product photos with numbered callouts beside columns of side-headed text."
   },
   "notes": [
-    "2026-11-23: the photos' figure regions walked across the page, and 80 of its 87 elements were typed doco:Figure, the side-heads among them (#50). Headings set near a photo are still typed as its labels."
+    "2026-11-23: the photos' figure regions walked across the page, and 80 of its 87 elements were typed doco:Figure, the side-heads among them (#50).",
+    "2026-11-24 (#81): the callouts on the chair photos still reached up over the page title and the heading set over them, and down over the key set under them. Numbered callouts drawn on a photograph now take only their own marks."
   ],
   "checks": [
     {
@@ -31,6 +32,40 @@
       "issue": "As above, for `Sustainability`.",
       "section": {
         "title": "Sustainability"
+      }
+    },
+    {
+      "id": "heading-over-the-photo",
+      "found": "2026-11-23",
+      "issue": "`Key Features`, set over the chair photos as the page sets `Details` and `Materials`, was typed as a label of the photos' callouts.",
+      "section": {
+        "title": "Key Features"
+      }
+    },
+    {
+      "id": "page-title-over-the-photo",
+      "found": "2026-11-23",
+      "issue": "The page title `Aeron® Chair`, above that heading, was typed as a label of the callouts.",
+      "section": {
+        "title": "Aeron® Chair"
+      }
+    },
+    {
+      "id": "key-under-the-photo",
+      "found": "2026-11-23",
+      "issue": "The key under the photos, its first entry, was typed as a label of the callouts.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "8Z Pellicle offers unprecedented comfort through eight varied zones of tension in the seat and back."
+      }
+    },
+    {
+      "id": "callout-stays-in-the-figure",
+      "found": "2026-11-23",
+      "issue": "A guard: a callout's number on the photo stays the figure's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "4"
       }
     }
   ]
