@@ -1391,28 +1391,43 @@ const SHARED_BASELINE: f64 = 0.1;
 
 /// A cell's lines, top to bottom, as one value.
 ///
-/// A line ending in a hyphen joins the next with no space and keeps the
-/// hyphen. A narrow column breaks a value at a hyphen it already has, so the
-/// hyphen is the value's own: a product code `FR-` over `15T` is `FR-15T`,
-/// a name `Ben-` over `David` is `Ben-David`. A paragraph drops the hyphen
-/// instead (see [`crate::block::Block::text`]), because running prose is
-/// where typesetters hyphenate words that have none; a cell's codes and names
-/// are where that reading costs the value.
+/// A line ending in a hyphen joins the next with no space. A narrow column
+/// breaks a value at a hyphen it already has, so the hyphen is the value's
+/// own: a product code `FR-` over `15T` is `FR-15T`, a name `Ben-` over
+/// `David` is `Ben-David`. Where the break could be a typesetter's, inside a
+/// word (`Fluo-` over `rescent`, as [`HyphenJoin`](crate::block::HyphenJoin)
+/// reads it), the hyphen is set down as [`CELL_BREAK`] instead, for the
+/// document to settle: a narrow cell breaks a compound at its own hyphen
+/// (`long-` over `term`) more often than prose does, and only the rest of
+/// the document says which of the two this is. See
+/// `document::settle_cell_breaks`.
 fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
+    use crate::block::HyphenJoin;
     let mut out = String::new();
     for l in lines {
-        let wrapped = out
-            .strip_suffix('-')
-            .and_then(|s| s.chars().next_back())
-            .is_some_and(char::is_alphanumeric)
-            && l.starts_with(char::is_alphanumeric);
-        if !out.is_empty() && !wrapped {
-            out.push(' ');
+        if !out.is_empty() {
+            match out.strip_suffix('-') {
+                Some(stem)
+                    if stem.chars().next_back().is_some_and(char::is_alphanumeric)
+                        && l.starts_with(char::is_alphanumeric) =>
+                {
+                    if HyphenJoin::of(stem, l) == HyphenJoin::Word {
+                        out.pop();
+                        out.push(CELL_BREAK);
+                    }
+                }
+                _ => out.push(' '),
+            }
         }
         out.push_str(l);
     }
     out
 }
+
+/// A hyphen ending one of a cell's lines inside what may be one word broken
+/// across them, until the document settles it: a soft hyphen, which no
+/// glyph's text carries (extraction prints or drops each one it reads).
+pub const CELL_BREAK: char = '\u{AD}';
 
 /// Total length of `[x0, x1]` covered by the union of `spans`.
 fn span_coverage(spans: impl Iterator<Item = (f64, f64)>, x0: f64, x1: f64) -> f64 {
@@ -5392,6 +5407,11 @@ mod tests {
         );
         // A dash set apart is a range or a blank, not a wrapped word.
         assert_eq!(join_cell_lines(["10 -", "20"].into_iter()), "10 - 20");
+        // A break that may be a typesetter's is left for the document.
+        assert_eq!(
+            join_cell_lines(["Electronic Fluo-", "rescent"].into_iter()),
+            format!("Electronic Fluo{CELL_BREAK}rescent")
+        );
         let g = grid(&[0.0, 60.0], &[0.0, 30.0]);
         let mut gl = set("FR-", 5.0, 10.0);
         gl.extend(set("15T", 5.0, 22.0));

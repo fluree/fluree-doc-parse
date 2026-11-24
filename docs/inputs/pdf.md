@@ -131,6 +131,14 @@ broke, and reads as the word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
+A table cell needs one more piece of evidence. A narrow column breaks a
+compound at its own hyphen (`long-` over `term`) far more often than prose
+does, and the letters alone cannot tell the two apart. So a cell's word
+broken that way reads whole only where the document prints it whole on a
+line somewhere else: `Fluo-` over `rescent` is `Fluorescent` in a sheet whose
+title says `Fluorescent`. A word the document prints hyphenated, or nowhere
+else, keeps its hyphen.
+
 **Bold inside the text.** A heading set in bold is bold from its first word
 to its last, so a line reads as bold only when it is: most of its glyphs
 bold, and its first and last words. A face that declares no weight counts

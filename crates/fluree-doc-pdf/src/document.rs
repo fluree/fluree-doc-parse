@@ -1800,6 +1800,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    settle_cell_breaks(
+        &mut elements,
+        flat_lines
+            .iter()
+            .flat_map(|(ls, _)| ls.iter().map(|l| l.text.as_str())),
+    );
 
     // Per page. Averaged over a document the ratio disappears: a deck whose
     // stat pages are four fifths headings reads 0.36 across all its pages.
@@ -1872,6 +1878,98 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     }
 }
 
+/// Settles each hyphen a table cell set down at a line's end as
+/// [`table::CELL_BREAK`]: the word is read whole where the document prints
+/// it whole elsewhere (`Fluo-` over `rescent`, and `Fluorescent` in the
+/// title), and keeps its hyphen otherwise.
+///
+/// A paragraph reads such a break as a word broken, from its letters alone
+/// (see [`block::Block::text`]). A cell needs more: a narrow column breaks a
+/// compound at its own hyphen (`long-` over `term`) far more often than
+/// running prose does, and the letters cannot tell the two apart. The page
+/// usually can: a document printing `Ballasts` in one cell and `Bal-` over
+/// `lasts` in the next was hyphenated by its typesetter. A form printed
+/// hyphenated elsewhere, or no form at all, keeps the hyphen, as cells did
+/// before.
+///
+/// Printed means set on one line: the words of `lines` (the prose, line by
+/// line) and of the tables' cells, whose lines joined only at a space, at a
+/// hyphen kept, or at a break still to settle. A paragraph's text is no
+/// witness, since it has read its own breaks: two columns of a cell
+/// interleaved into a paragraph give `conduc-` over `fixed`, joined there as
+/// `conducfixed`.
+fn settle_cell_breaks<'a>(elements: &mut [Element], lines: impl Iterator<Item = &'a str>) {
+    use std::collections::HashSet;
+    let brk = table::CELL_BREAK;
+    let marked = |e: &Element| {
+        e.text.contains(brk) || e.cells.iter().flatten().flatten().any(|c| c.contains(brk))
+    };
+    if !elements.iter().any(marked) {
+        return;
+    }
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '-' || c == brk;
+    let mut words: HashSet<String> = HashSet::new();
+    let mut witness = |text: &str| {
+        for w in text.split(|c: char| !is_word_char(c)) {
+            if w.is_empty() || w.contains(brk) {
+                continue;
+            }
+            let w = w.to_lowercase();
+            if w.contains('-') {
+                for part in w.split('-').filter(|p| !p.is_empty()) {
+                    words.insert(part.to_string());
+                }
+            }
+            words.insert(w);
+        }
+    };
+    lines.for_each(&mut witness);
+    elements
+        .iter()
+        .filter_map(|e| e.cells.as_ref())
+        .flatten()
+        .flatten()
+        .for_each(|c| witness(c));
+    let settle = |text: &str| -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find(brk) {
+            // The word around the break: back to its start, on to its end.
+            let start = rest[..at]
+                .char_indices()
+                .rev()
+                .take_while(|&(_, c)| is_word_char(c))
+                .last()
+                .map_or(at, |(i, _)| i);
+            let end = rest[at..]
+                .char_indices()
+                .find(|&(_, c)| !is_word_char(c))
+                .map_or(rest.len(), |(i, _)| at + i);
+            let word = &rest[start..end];
+            let joined = word.replace(brk, "").to_lowercase();
+            let hyphened = word.replace(brk, "-").to_lowercase();
+            let whole = words.contains(&joined) && !words.contains(&hyphened);
+            out.push_str(&rest[..start]);
+            out.push_str(&word.replace(brk, if whole { "" } else { "-" }));
+            rest = &rest[end..];
+        }
+        out.push_str(rest);
+        out
+    };
+    for e in elements.iter_mut() {
+        if e.text.contains(brk) {
+            e.text = settle(&e.text);
+        }
+        if let Some(rows) = e.cells.as_mut() {
+            for cell in rows.iter_mut().flatten() {
+                if cell.contains(brk) {
+                    *cell = settle(cell);
+                }
+            }
+        }
+    }
+}
+
 /// Column doubt over a page's prose: its glyphs outside every table.
 ///
 /// [`column::doubt`] sees a gutter that exists only over a band of rows and
@@ -1918,6 +2016,49 @@ fn furniture_key(text: &str, digits_vary: bool) -> String {
 mod tests {
     use super::*;
     use crate::geom::BBox;
+
+    #[test]
+    fn a_word_a_cell_breaks_is_read_whole_where_the_document_prints_it_whole() {
+        let brk = table::CELL_BREAK;
+        let cells = vec![vec![
+            format!("3-wire Fluo{brk}rescent Bal{brk}lasts"),
+            "20 Ballasts".to_string(),
+            format!("long{brk}term"),
+            format!("Un{brk}employ{brk}ment"),
+            format!("Wid{brk}gets"),
+        ]];
+        let text = cells[0].join(" | ");
+        let mut elements = vec![
+            // A paragraph's own breaks are read already, and are no witness.
+            Element::new("doco:Paragraph", "widgets for all", "rust", "blocks"),
+            Element {
+                cells: Some(cells),
+                ..Element::new("doco:Table", text, "rust", "rules")
+            },
+        ];
+        let lines = [
+            "Fluorescent Dimmer",
+            "a long-term lease",
+            "UNEMPLOYMENT RATE",
+        ];
+        settle_cell_breaks(&mut elements, lines.into_iter());
+        assert_eq!(
+            elements[1].cells.as_ref().unwrap()[0],
+            [
+                "3-wire Fluorescent Ballasts",
+                "20 Ballasts",
+                // Printed hyphenated elsewhere: the compound's own hyphen.
+                "long-term",
+                "Unemployment",
+                // Printed nowhere else: the hyphen stays, as it was.
+                "Wid-gets",
+            ]
+        );
+        assert_eq!(
+            elements[1].text,
+            "3-wire Fluorescent Ballasts | 20 Ballasts | long-term | Unemployment | Wid-gets"
+        );
+    }
 
     /// A table on `page` with these rows, `header` of them header, framed
     /// by columns at `xs`, and the frame it was read from.
