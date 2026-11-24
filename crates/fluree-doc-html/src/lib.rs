@@ -116,8 +116,23 @@ fn skipped(h: &Handle) -> bool {
 }
 
 /// Parse an HTML document into elements in reading order.
+///
+/// A page that declares no headings but shows them by keyword and number,
+/// as a statute or a contract does (`CHAPTER IV`, `Article 30`), has them
+/// read as section titles: see [`fluree_doc_model::outline`]. A mail body,
+/// read through [`parse_with_quote_depth`], is not.
 pub fn parse(src: &str) -> Vec<Element> {
-    parse_with_quote_depth(src).0
+    let mut elements = parse_with_quote_depth(src).0;
+    if fluree_doc_model::outline::infer_headings(&mut elements) {
+        number(&mut elements);
+    }
+    elements
+}
+
+fn number(elements: &mut [Element]) {
+    for (i, e) in elements.iter_mut().enumerate() {
+        e.id = format!("elem-{:05}", i + 1);
+    }
 }
 
 /// Decode an HTML file's bytes. A byte-order mark decides; then UTF-8, when
@@ -203,9 +218,7 @@ pub fn parse_with_quote_depth(src: &str) -> (Vec<Element>, Vec<usize>) {
             walk(m, &mut out);
         }
     }
-    for (i, e) in out.elements.iter_mut().enumerate() {
-        e.id = format!("elem-{:05}", i + 1);
-    }
+    number(&mut out.elements);
     (out.elements, out.depths)
 }
 
@@ -354,6 +367,10 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
             if matches!(tag.as_str(), "br" | "td" | "th" | "li" | "p" | "div") {
                 out.push(' ');
             }
+            let raised = tag == "sup" || (tag == "a" && note_link(node));
+            if raised && fluree_doc_model::marks::note_mark(out, &text_of(node).0) {
+                out.push(' ');
+            }
             // Recorded around the recursion: an anchor's text is whatever
             // its subtree contributes, and nesting is legal markup.
             let start = out.chars().count();
@@ -366,6 +383,33 @@ fn collect_node(node: &Handle, out: &mut String, anchors: &mut Vec<(usize, usize
         }
         _ => {}
     }
+}
+
+/// A link to a note on the same page: a note's mark written as a link
+/// rather than in a `<sup>` (Statistics Canada's tables: `Provincial
+/// governments<a href="#fn01" class="sd-tablefnref">1</a>`). Its target is
+/// a fragment of the page, and the link says it is a note's: by its role
+/// (`doc-noteref`), or a class, id, target or label that names a note
+/// (`fn`, `note`, `foot`).
+fn note_link(node: &Handle) -> bool {
+    let Some(href) = attr_of(node, "href").filter(|h| h.trim_start().starts_with('#')) else {
+        return false;
+    };
+    if attr_of(node, "role").is_some_and(|r| r.eq_ignore_ascii_case("doc-noteref")) {
+        return true;
+    }
+    [
+        Some(href),
+        attr_of(node, "class"),
+        attr_of(node, "id"),
+        attr_of(node, "aria-label"),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|v| {
+        let v = v.to_ascii_lowercase();
+        v.contains("fn") || v.contains("note") || v.contains("foot")
+    })
 }
 
 /// Elements that lay out as blocks. Everything else, text included, flows
@@ -542,6 +586,13 @@ fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>)
         out.push(c);
         n += 1;
     }
+    let links = spans(&at, anchors);
+    (out, links)
+}
+
+/// The anchors located in the text a raw concatenation became, given where
+/// each raw character landed (`None` for one the text left out).
+fn spans(at: &[Option<usize>], anchors: &[(usize, usize, String)]) -> Vec<Link> {
     let mut links: Vec<Link> = anchors
         .iter()
         .filter_map(|(b, e, href)| {
@@ -563,7 +614,132 @@ fn squeeze(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>)
         }
         _ => false,
     });
-    (out, links)
+    links
+}
+
+/// A `<pre>`'s text as it is drawn, with any `<a href>` inside it located.
+///
+/// In a `<pre>` the line breaks, the blank lines and the runs of spaces are
+/// the content (HTML, the `pre` element): a hearing transcript or a public
+/// law is published as one, its letterhead centred and its witness list set
+/// in columns by spaces alone. So nothing is collapsed. A `<br>` is a line
+/// break, and a block set inside one starts a line of its own.
+fn pre_text(h: &Handle) -> (String, Vec<Link>) {
+    let mut raw = Raw::default();
+    let mut anchors = Vec::new();
+    collect_pre(h, &mut raw, &mut anchors);
+    verbatim(&raw.text, &anchors)
+}
+
+/// Text gathered in order, with its length in characters kept as it grows:
+/// a `<pre>` can run to hundreds of thousands of characters and hold an
+/// anchor on every line.
+#[derive(Default)]
+struct Raw {
+    text: String,
+    chars: usize,
+}
+
+impl Raw {
+    fn push_str(&mut self, s: &str) {
+        self.text.push_str(s);
+        self.chars += s.chars().count();
+    }
+
+    /// Start a new line unless one has just begun.
+    fn break_line(&mut self) {
+        if !self.text.is_empty() && !self.text.ends_with('\n') {
+            self.push_str("\n");
+        }
+    }
+}
+
+fn collect_pre(h: &Handle, out: &mut Raw, anchors: &mut Vec<(usize, usize, String)>) {
+    for node in h.children.borrow().iter() {
+        match &node.data {
+            NodeData::Text { contents } => out.push_str(&contents.borrow()),
+            NodeData::Element { .. } => {
+                let Some(tag) = tag_of(node) else { continue };
+                if skipped(node) {
+                    continue;
+                }
+                if tag == "br" {
+                    out.push_str("\n");
+                    continue;
+                }
+                let block = is_block(&tag);
+                if block {
+                    out.break_line();
+                }
+                let start = out.chars;
+                collect_pre(node, out, anchors);
+                if tag == "a" {
+                    if let Some(href) = attr_of(node, "href").filter(|h| !h.trim().is_empty()) {
+                        anchors.push((start, out.chars, href));
+                    }
+                }
+                if block {
+                    out.break_line();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Preformatted text as written, carrying the anchor offsets through.
+///
+/// Only what is never drawn goes: the whitespace before the first character
+/// and after the last, as every element's text is trimmed, and the spaces a
+/// line ends in. A tab stays a tab, since it sets a column; any other space
+/// character, a no-break space among them, is a space.
+fn verbatim(raw: &str, anchors: &[(usize, usize, String)]) -> (String, Vec<Link>) {
+    let chars: Vec<char> = raw
+        .chars()
+        .map(repair_c1)
+        .map(|c| match c {
+            '\n' | '\t' => c,
+            c if c.is_whitespace() => ' ',
+            c => c,
+        })
+        .collect();
+    let Some(first) = chars.iter().position(|c| !c.is_whitespace()) else {
+        return (String::new(), Vec::new());
+    };
+    let last = chars
+        .iter()
+        .rposition(|c| !c.is_whitespace())
+        .unwrap_or(first);
+    let mut keep = vec![false; chars.len()];
+    // Walked backwards, so a run of spaces knows whether a line break or
+    // the end follows it.
+    let mut line_end = true;
+    for i in (first..=last).rev() {
+        match chars[i] {
+            '\n' => {
+                keep[i] = true;
+                line_end = true;
+            }
+            ' ' | '\t' if line_end => {}
+            _ => {
+                keep[i] = true;
+                line_end = false;
+            }
+        }
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut at = Vec::with_capacity(chars.len());
+    let mut n = 0usize;
+    for (c, k) in chars.iter().zip(&keep) {
+        if *k {
+            out.push(*c);
+            at.push(Some(n));
+            n += 1;
+        } else {
+            at.push(None);
+        }
+    }
+    (out, spans(&at, anchors))
 }
 
 /// An element carrying whatever links its text contained.
@@ -643,7 +819,16 @@ fn walk_node(h: &Handle, out: &mut Out) {
             // A quotation or a caption that holds paragraphs of its own is a
             // container of them, not one paragraph run together.
             "blockquote" | "figcaption" | "dd" | "dt" if holds_block(h) => {}
-            "p" | "pre" | "blockquote" | "figcaption" | "dd" | "dt" => {
+            // One paragraph, its lines and spacing kept, as a Markdown code
+            // block is read.
+            "pre" => {
+                let (text, links) = pre_text(h);
+                if !text.is_empty() {
+                    out.push(linked("doco:Paragraph", text, None, links));
+                }
+                return;
+            }
+            "p" | "blockquote" | "figcaption" | "dd" | "dt" => {
                 let (text, links) = text_of(h);
                 if !text.is_empty() {
                     out.push(linked("doco:Paragraph", text, None, links));
@@ -732,6 +917,235 @@ fn num_attr(h: &Handle, name: &str) -> usize {
         .unwrap_or(1)
 }
 
+/// What one cell of a row says about the row.
+struct CellMark {
+    /// It holds text.
+    filled: bool,
+    th: bool,
+    /// A `<td>` set as a header is: bold throughout, or ruled beneath.
+    styled: bool,
+    /// Its text is a caption in brackets, the units a filer sets in the
+    /// label column of its header row: `(in millions)`.
+    caption: bool,
+    /// Its text is a bare figure, set neither bold nor in `<th>`: a value
+    /// however it is ruled.
+    figure: bool,
+}
+
+/// What a table row is, for finding where the header ends.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RowKind {
+    /// No text in any cell: a spacer.
+    Blank,
+    /// Its text is all in `<th>` cells. An empty `<td>` may stand before
+    /// them, the corner over the row labels.
+    Th { cells: usize },
+    /// Its text is in two cells or more, each a `<th>` or a `<td>` set as a
+    /// header: the header row a filer's table, an SEC inline-XBRL
+    /// statement among them, writes in `<td>`. A units caption in the
+    /// label column may stand plain beside them. `labelled` where the label
+    /// column holds text other than such a caption.
+    Styled { labelled: bool },
+    /// One `<td>` set as a header over a value column, the label column
+    /// left empty or given to the units: `Annual Output`, or a contents
+    /// page's `Page`.
+    StyledOne,
+    /// Values: text in a `<td>` not set as a header.
+    Data,
+    /// Anything else: a row of one label, set bold (`Revenues`), or a
+    /// `<th>` label beside empty `<td>` values.
+    Other,
+}
+
+fn row_kind(marks: &[CellMark]) -> RowKind {
+    let filled: Vec<&CellMark> = marks.iter().filter(|m| m.filled).collect();
+    if filled.is_empty() {
+        return RowKind::Blank;
+    }
+    // The heads: every filled cell but a units caption in the label column,
+    // which a filer sets plain beside heads that are bold or ruled.
+    let heads: Vec<(usize, &CellMark)> = marks
+        .iter()
+        .enumerate()
+        .filter(|(i, m)| m.filled && !(*i == 0 && m.caption && !m.th))
+        .collect();
+    if heads.iter().any(|(_, m)| !m.th && !m.styled) {
+        return RowKind::Data;
+    }
+    let first_th = marks.iter().position(|m| m.th);
+    let empty_td_after_th = first_th.is_some_and(|f| marks[f..].iter().any(|m| !m.th));
+    if filled.iter().all(|m| m.th) && !(filled.len() == 1 && empty_td_after_th) {
+        return RowKind::Th {
+            cells: filled.len(),
+        };
+    }
+    // Two heads or more; or one over a value column, the label cell left
+    // empty or given to the units. One label alone in the label column is
+    // a band (`Revenues`).
+    if heads.len() >= 2 {
+        return RowKind::Styled {
+            labelled: heads[0].0 == 0,
+        };
+    }
+    // A lone figure ruled beneath is the line under the values before a
+    // subtotal, not a head.
+    if heads.first().is_some_and(|(i, m)| *i > 0 && !m.figure) {
+        return RowKind::StyledOne;
+    }
+    RowKind::Other
+}
+
+/// How many rows from the top are the header.
+///
+/// HTML states its header, in `<th>` and `<thead>`, but not always both, and
+/// not always all of it:
+/// - With no `<thead>`, the header is the leading rows whose text is all in
+///   `<th>`, an empty `<td>` corner over the row labels notwithstanding.
+/// - A `<thead>` ends the header, except that rows of several `<th>` at the
+///   top of the body go on with it: a statistical table sets its units
+///   (`thousands of units`, `% change`) there, under the periods. A single
+///   `<th>` across the table there is a band over the rows beneath it, not
+///   a header row.
+/// - A filer's table sets its header in `<td>` cells, bold or ruled
+///   beneath, and nothing else so. Such leading rows are the header when
+///   rows of plain values follow.
+///
+/// Blank spacer rows inside the header are part of it; the header ends at
+/// its last row of labels.
+fn header_rows(kinds: &[RowKind], thead: usize) -> usize {
+    let values_follow = |from: usize| kinds[from..].contains(&RowKind::Data);
+    // The next row with text after `from`.
+    let next = |from: usize| kinds[from..].iter().find(|k| **k != RowKind::Blank);
+    let mut end = thead;
+    for (i, kind) in kinds.iter().enumerate().skip(thead) {
+        let header = match kind {
+            RowKind::Blank => continue,
+            RowKind::Th { cells } => thead == 0 || *cells >= 2,
+            RowKind::Styled { .. } => values_follow(i + 1),
+            // One head over a column heads it when what follows is the
+            // body or more of the header. A styled row with a label of its
+            // own after it is a contents page's entry under its `Page`.
+            RowKind::StyledOne => {
+                values_follow(i + 1)
+                    && !matches!(next(i + 1), Some(RowKind::Styled { labelled: true }))
+            }
+            RowKind::Data | RowKind::Other => false,
+        };
+        if !header {
+            break;
+        }
+        end = i + 1;
+    }
+    end
+}
+
+/// A row of one head names a column of figures: `Annual Output` over
+/// output, a contents page's `Page` over page numbers. One over names and
+/// titles is a signature's line (`/s/ Jane Q. Signer` ruled above the
+/// signer), and is no header. Columns are counted by `colspan`.
+fn heads_over_figures(rows: &[Vec<(String, usize, usize)>], kinds: &mut [RowKind]) {
+    let spans = |row: &[(String, usize, usize)]| {
+        let mut c = 0usize;
+        row.iter()
+            .map(|(text, colspan, _)| {
+                let span = (c, c + (*colspan).max(1));
+                c = span.1;
+                (text.trim().to_string(), span)
+            })
+            .collect::<Vec<_>>()
+    };
+    for r in 0..rows.len() {
+        if kinds[r] != RowKind::StyledOne {
+            continue;
+        }
+        let Some((_, (a, b))) = spans(&rows[r])
+            .into_iter()
+            .skip(1)
+            .find(|(t, _)| !t.is_empty())
+        else {
+            continue;
+        };
+        let figures = rows[r + 1..].iter().any(|row| {
+            spans(row)
+                .iter()
+                .any(|(t, (x, y))| *x < b && a < *y && t.chars().any(|c| c.is_ascii_digit()))
+        });
+        if !figures {
+            kinds[r] = RowKind::Other;
+        }
+    }
+}
+
+/// Is this cell set as a header: ruled beneath, or bold throughout?
+fn header_styled(cell: &Handle) -> bool {
+    ruled_below(cell) || bold_throughout(cell, false) == Some(true)
+}
+
+/// An element's inline style, lowercase and without whitespace.
+fn style_of(h: &Handle) -> String {
+    attr_of(h, "style")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// Does the cell draw a rule along its bottom edge: `border-bottom: 1px
+/// solid`, or `border-bottom-style: solid`? A rule on every side is a
+/// grid's, and says nothing of a header.
+///
+/// Any width above zero is a rule. Filings draw theirs at half a point
+/// (`border-bottom: 0.5pt solid #000`), which reading every width that
+/// began with a `0` as none took for no rule at all.
+fn ruled_below(cell: &Handle) -> bool {
+    const LINES: &[&str] = &[
+        "solid", "double", "dotted", "dashed", "groove", "ridge", "inset", "outset",
+    ];
+    style_of(cell).split(';').any(|d| match d.split_once(':') {
+        Some(("border-bottom", v)) => {
+            // The width leads the shorthand when it is given first; the
+            // declaration's spaces are already gone (`0.5ptsolid#000`).
+            let width: String = v
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let zero = width.parse::<f64>().is_ok_and(|w| w <= 0.0);
+            !v.is_empty() && !v.contains("none") && !v.contains("hidden") && !zero
+        }
+        Some(("border-bottom-style", v)) => LINES.contains(&v),
+        _ => false,
+    })
+}
+
+fn bold_style(h: &Handle) -> bool {
+    let style = style_of(h);
+    style.split(';').any(|d| {
+        d.strip_prefix("font-weight:").is_some_and(|w| {
+            matches!(w, "bold" | "bolder") || w.parse::<u32>().is_ok_and(|n| n >= 600)
+        })
+    })
+}
+
+/// Is every word under this node set bold? `None` where it holds no text.
+fn bold_throughout(h: &Handle, inherited: bool) -> Option<bool> {
+    let bold = inherited || bold_style(h) || matches!(tag_of(h).as_deref(), Some("b" | "strong"));
+    let mut seen = None;
+    for c in h.children.borrow().iter() {
+        let here = match &c.data {
+            NodeData::Text { contents } if !contents.borrow().trim().is_empty() => Some(bold),
+            NodeData::Element { .. } if !skipped(c) => bold_throughout(c, bold),
+            _ => None,
+        };
+        match here {
+            Some(false) => return Some(false),
+            Some(true) => seen = Some(true),
+            None => {}
+        }
+    }
+    seen
+}
+
 /// Build the flat grid, carrying `colspan` / `rowspan` into the model's merge
 /// flags — the same convention DOCX's gridSpan/vMerge map to and the PDF
 /// engine derives from ruling.
@@ -740,60 +1154,61 @@ fn emit_table(table: &Handle, out: &mut Out) {
     rows_under(table, &mut trs);
 
     let mut rows: Vec<Vec<(String, usize, usize)>> = Vec::new();
-    let mut header_rows = 0usize;
-    let mut saw_body = false;
+    let mut kinds: Vec<RowKind> = Vec::new();
     for tr in &trs {
         let mut cells = Vec::new();
-        let mut all_th = true;
+        let mut marks = Vec::new();
         for cell in children_of(tr) {
-            match tag_of(&cell).as_deref() {
-                Some("th") => {}
-                Some("td") => all_th = false,
+            let th = match tag_of(&cell).as_deref() {
+                Some("th") => true,
+                Some("td") => false,
                 _ => continue,
-            }
-            cells.push((
-                // A table cell's text becomes a grid position, which has no
-                // room for an anchor span; the link is dropped with it.
-                text_of(&cell).0,
-                num_attr(&cell, "colspan"),
-                num_attr(&cell, "rowspan"),
-            ));
+            };
+            // A table cell's text becomes a grid position, which has no
+            // room for an anchor span; the link is dropped with it.
+            let text = text_of(&cell).0;
+            let caption = {
+                let t = text.trim();
+                t.len() > 2 && t.starts_with('(') && t.ends_with(')')
+            };
+            marks.push(CellMark {
+                filled: !text.is_empty(),
+                th,
+                styled: !th && !text.is_empty() && header_styled(&cell),
+                caption,
+                figure: !th
+                    && text.chars().any(|c| c.is_ascii_digit())
+                    && !text.chars().any(char::is_alphabetic)
+                    && bold_throughout(&cell, false) != Some(true),
+            });
+            cells.push((text, num_attr(&cell, "colspan"), num_attr(&cell, "rowspan")));
         }
         if cells.is_empty() {
             continue;
         }
-        // A leading run of all-`th` rows is the header — HTML states it,
-        // unlike a PDF where it has to be measured.
-        if all_th && !saw_body {
-            header_rows += 1;
-        } else {
-            saw_body = true;
-        }
+        kinds.push(row_kind(&marks));
         rows.push(cells);
     }
     if rows.is_empty() {
         return;
     }
-    // A `<thead>`, where there is one, is where the header ends: a `<th>`
-    // spanning the table at the top of `<tbody>` is a group heading
-    // (`scope="rowgroup"`), a band over the rows beneath it.
+    heads_over_figures(&rows, &mut kinds);
     let mut thead_trs = Vec::new();
     for c in children_of(table) {
         if tag_of(&c).as_deref() == Some("thead") {
             rows_under(&c, &mut thead_trs);
         }
     }
-    if !thead_trs.is_empty() {
-        let n = thead_trs
-            .iter()
-            .filter(|tr| {
-                children_of(tr)
-                    .iter()
-                    .any(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
-            })
-            .count();
-        header_rows = n.min(rows.len());
-    }
+    let thead = thead_trs
+        .iter()
+        .filter(|tr| {
+            children_of(tr)
+                .iter()
+                .any(|c| matches!(tag_of(c).as_deref(), Some("td" | "th")))
+        })
+        .count()
+        .min(rows.len());
+    let header_rows = header_rows(&kinds, thead);
     let width = rows
         .iter()
         .map(|r| r.iter().map(|c| c.1).sum::<usize>())
@@ -956,6 +1371,80 @@ mod tests {
     }
 
     #[test]
+    fn a_pre_keeps_its_lines_blank_lines_and_spacing() {
+        // How a hearing transcript or a public law is published: the whole
+        // document one `<pre>`, its letterhead and addresses set by spaces.
+        let els = parse(
+            "<body><pre>\nCOMMITTEE ON ENERGY AND COMMERCE\n\nWashington, DC 20515\n\n\
+             \x20   Dear Chairman Example:\n\n    Line with   three   spaces.\n</pre></body>",
+        );
+        assert_eq!(kinds(&els), ["doco:Paragraph"]);
+        assert_eq!(
+            els[0].text,
+            "COMMITTEE ON ENERGY AND COMMERCE\n\nWashington, DC 20515\n\n\
+             \x20   Dear Chairman Example:\n\n    Line with   three   spaces."
+        );
+        // Text outside a `<pre>` still flows.
+        let p = parse("<p>one\n\n   two</p><pre>a\n  b</pre><p>three</p>");
+        assert_eq!(texts(&p), ["one two", "a\n  b", "three"]);
+    }
+
+    #[test]
+    fn a_pre_keeps_its_links_columns_and_breaks() {
+        let e = parse(
+            "<pre>Name\tRoom   \nAda Park\t214\nwrite to <a href=\"mailto:a@example.org\">the\n  clerk</a>\
+             <br>l\u{92}art\u{a0}x  \n\n\n</pre>",
+        );
+        // A tab sets a column and stays; the spaces a line ends in are not
+        // drawn; a `<br>` breaks the line; a no-break space is a space.
+        assert_eq!(
+            e[0].text,
+            "Name\tRoom\nAda Park\t214\nwrite to the\n  clerk\nl\u{2019}art x"
+        );
+        let l = &e[0].links.as_ref().expect("links")[0];
+        let (b, end) = l.span().unwrap();
+        let anchor: String = e[0].text.chars().skip(b).take(end - b).collect();
+        assert_eq!(anchor, "the\n  clerk");
+        assert_eq!(l.href(), "mailto:a@example.org");
+        // A block set inside one starts a line of its own.
+        let d = parse("<pre><div>a</div><div>b</div>c</pre>");
+        assert_eq!(d[0].text, "a\nb\nc");
+    }
+
+    #[test]
+    fn a_statute_without_heading_markup_reads_as_sections() {
+        // How the Official Journal publishes a regulation: its outline is in
+        // classes and identifiers of its own, with no heading element.
+        let els = parse(
+            "<div id=\"cpt_IV\"><p class=\"oj-ti-section-1\"><span class=\"oj-italic\">CHAPTER IV</span></p>\
+             <div class=\"eli-title\"><p class=\"oj-ti-section-2\">Controller and processor</p></div>\
+             <div class=\"eli-subdivision\" id=\"art_30\"><p class=\"oj-ti-art\">Article\u{a0}30</p>\
+             <div class=\"eli-title\"><p class=\"oj-sti-art\">Records of processing activities</p></div>\
+             <p class=\"oj-normal\">1.\u{a0}\u{a0}\u{a0}Each controller shall maintain a record.</p></div></div>",
+        );
+        assert_eq!(
+            kinds(&els),
+            ["doco:SectionTitle", "doco:SectionTitle", "doco:Paragraph"]
+        );
+        assert_eq!(
+            texts(&els)[..2],
+            [
+                "CHAPTER IV Controller and processor",
+                "Article 30 Records of processing activities"
+            ]
+        );
+        assert_eq!((els[0].level, els[1].level), (Some(1), Some(2)));
+        let ids: Vec<&str> = els.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["elem-00001", "elem-00002", "elem-00003"]);
+        // A page that declares its headings keeps them as declared.
+        let declared = parse("<h1>Terms</h1><p>Article 1</p><p>Scope</p>");
+        assert_eq!(
+            kinds(&declared),
+            ["doco:SectionTitle", "doco:Paragraph", "doco:Paragraph"]
+        );
+    }
+
+    #[test]
     fn a_quotation_holding_paragraphs_is_their_container() {
         let els = parse("<blockquote><p>First.</p><div>Second.</div></blockquote><blockquote>Short one.</blockquote>");
         assert_eq!(texts(&els), vec!["First.", "Second.", "Short one."]);
@@ -1063,6 +1552,231 @@ mod tests {
         let t = &els[0];
         assert_eq!(t.header_rows, Some(1));
         assert_eq!(t.cells.as_ref().unwrap()[1], vec!["2024", "12"]);
+    }
+
+    fn header(html: &str) -> (Option<usize>, Vec<Vec<String>>) {
+        let els = parse(html);
+        let t = els
+            .iter()
+            .find(|e| e.kind == "doco:Table")
+            .expect("a table");
+        (t.header_rows, t.cells.clone().unwrap())
+    }
+
+    #[test]
+    fn a_units_row_of_th_under_the_thead_goes_on_with_the_header() {
+        let (n, cells) = header(
+            "<table><thead><tr><th></th><th>March<br/>2026</th><th>April<br/>2026<sup>r</sup></th>\
+             <th>March to April 2026</th></tr></thead><tbody>\
+             <tr><th></th><th>thousands of units</th><th>thousands of units</th><th>% change</th></tr>\
+             <tr><th>North</th><td>1,204</td><td>1,250</td><td>3.8</td></tr>\
+             <tr><th>South</th><td>980</td><td>1,011</td><td>3.2</td></tr></tbody></table>",
+        );
+        assert_eq!(n, Some(2));
+        // A revised mark is a note on the header, not part of its year.
+        assert_eq!(cells[0][2], "April 2026 r");
+    }
+
+    #[test]
+    fn an_empty_td_corner_does_not_make_a_header_row_data() {
+        let (n, _) = header(
+            "<table><tr><td></td><th colspan=\"2\">12-month rate (%)</th><th colspan=\"2\">1-month rate (%)</th></tr>\
+             <tr><td></td><th>May 2026</th><th>June 2026</th><th>May 2026</th><th>June 2026</th></tr>\
+             <tr><th>All items</th><td>3.6</td><td>3.7</td><td>0.4</td><td>0.5</td></tr>\
+             <tr><th>Food</th><td>2.1</td><td>2.4</td><td>0.2</td><td>0.3</td></tr></table>",
+        );
+        assert_eq!(n, Some(2));
+        // A label beside empty values is a row, not a header.
+        let (n, _) = header(
+            "<table><tr><th>Region</th><td></td><td></td></tr>\
+             <tr><th>North</th><td>1</td><td>2</td></tr><tr><th>South</th><td>3</td><td>4</td></tr></table>",
+        );
+        assert_eq!(n, Some(0));
+    }
+
+    #[test]
+    fn a_filers_header_in_bold_or_ruled_td_cells_is_the_header() {
+        let ruled = "font-weight:bold;border-bottom:1px solid #000";
+        let (n, _) = header(&format!(
+            "<table><tr><td style=\"{ruled}\">Region</td><td style=\"{ruled}\">2024</td>\
+             <td style=\"{ruled}\">2023</td></tr>\
+             <tr><td>North</td><td>120</td><td>110</td></tr><tr><td>South</td><td>95</td><td>90</td></tr></table>"
+        ));
+        assert_eq!(n, Some(1));
+        // As an SEC statement sets it: two rows of bold labels, spans and a
+        // spacer row, then a bold band over the values, which is not header.
+        let (n, cells) = header(
+            "<table><tr><td></td><td colspan=\"2\" style=\"font-weight:bold\">Three months ended</td>\
+               <td colspan=\"2\" style=\"font-weight:bold\">Nine months ended</td></tr>\
+             <tr><td></td><td></td><td></td><td></td><td></td></tr>\
+             <tr><td><b>(in millions)</b></td><td><b>2018</b></td><td><b>2017</b></td>\
+               <td style=\"border-bottom: 1px solid\">2018</td><td style=\"border-bottom-style:solid\">2017</td></tr>\
+             <tr><td><b>Revenues</b></td><td></td><td></td><td></td><td></td></tr>\
+             <tr><td>Premiums</td><td>321.1</td><td>282.8</td><td>914.5</td><td>750.6</td></tr></table>",
+        );
+        assert_eq!(n, Some(3));
+        assert_eq!(cells[3][0], "Revenues");
+        // Bold everywhere is emphasis, not a header; so is a grid's rule on
+        // every cell.
+        for html in [
+            "<table><tr><td><b>A</b></td><td><b>1</b></td></tr><tr><td><b>B</b></td><td><b>2</b></td></tr></table>",
+            "<table><tr><td style=\"border-bottom:1px solid\">A</td><td style=\"border-bottom:1px solid\">1</td></tr>\
+             <tr><td style=\"border-bottom:1px solid\">B</td><td style=\"border-bottom:1px solid\">2</td></tr></table>",
+            "<table><tr><td style=\"border-bottom:none\">A</td><td style=\"border-bottom-color:#000\">1</td></tr>\
+             <tr><td>B</td><td>2</td></tr></table>",
+        ] {
+            assert_eq!(header(html).0, Some(0), "{html}");
+        }
+    }
+
+    #[test]
+    fn a_hairline_under_the_heads_is_a_rule() {
+        // A filing's unit caption over bold heads, each cell ruled beneath
+        // at half a point or less; the caption is plain.
+        for width in ["0.5pt", "0.75pt", ".5pt", "0.4px", "1px", "thin"] {
+            let r = format!("border-bottom:{width} solid #000");
+            let (n, _) = header(&format!(
+                "<table><tr><td style=\"{r}\">(in thousand tonnes)</td>\
+                 <td style=\"{r}\"><b>2024</b></td><td style=\"{r}\"><b>2023</b></td></tr>\
+                 <tr><td>North plant</td><td>1,240</td><td>1,180</td></tr>\
+                 <tr><td>South plant</td><td>615</td><td>590</td></tr></table>"
+            ));
+            assert_eq!(n, Some(1), "{width}");
+        }
+        // A width of zero draws nothing.
+        for width in ["0", "0px", "0.0pt"] {
+            let r = format!("border-bottom:{width} solid #000");
+            let (n, _) = header(&format!(
+                "<table><tr><td style=\"{r}\">A</td><td style=\"{r}\">1</td></tr>\
+                 <tr><td>B</td><td>2</td></tr><tr><td>C</td><td>3</td></tr></table>"
+            ));
+            assert_eq!(n, Some(0), "{width}");
+        }
+    }
+
+    #[test]
+    fn a_units_caption_or_an_empty_label_cell_leaves_the_heads_a_header() {
+        let r = "border-bottom:0.5pt solid #000";
+        // The units in the label column, plain, beside ruled year heads.
+        let (n, _) = header(&format!(
+            "<table><tr><td>(in millions)</td><td style=\"{r}\">2024</td><td style=\"{r}\">2023</td></tr>\
+             <tr><td>Northfield Power</td><td>214</td><td>198</td></tr>\
+             <tr><td>Lakeside Gas</td><td>11</td><td>12</td></tr></table>"
+        ));
+        assert_eq!(n, Some(1));
+        // One head over the value column, the label cell left empty.
+        let (n, _) = header(&format!(
+            "<table><tr><td style=\"{r}\">&#160;</td><td style=\"{r}\"><b>Annual Output</b></td></tr>\
+             <tr><td>North plant</td><td>1,240</td></tr><tr><td>South plant</td><td>615</td></tr></table>"
+        ));
+        assert_eq!(n, Some(1));
+        // A contents page's `Page` over its numbers, then a bold article
+        // with its page: the article is an entry, not a second header row.
+        let (n, _) = header(
+            "<table><tr><td></td><td><b>Page</b></td></tr>\
+             <tr><td><b>ARTICLE I DEFINITIONS</b></td><td><b>1</b></td></tr>\
+             <tr><td>Section 1.1 Definitions</td><td>1</td></tr>\
+             <tr><td><b>ARTICLE II TERM</b></td><td><b>5</b></td></tr></table>",
+        );
+        assert_eq!(n, Some(0));
+        // A signature ruled above the signer's name and title heads nothing.
+        let (n, _) = header(&format!(
+            "<table><tr><td></td><td style=\"{r}\">/s/ Jane Q. Signer</td></tr>\
+             <tr><td>By:</td><td>Jane Q. Signer</td></tr>\
+             <tr><td>Its:</td><td>President</td></tr></table>"
+        ));
+        assert_eq!(n, Some(0));
+        // A plain label that is no caption is a row's, and the row is data;
+        // a bold label alone in the label column is a band.
+        for html in [
+            format!(
+                "<table><tr><td>Net income</td><td style=\"{r}\">221</td><td style=\"{r}\">204</td></tr>\
+                 <tr><td>North</td><td>1</td><td>2</td></tr></table>"
+            ),
+            "<table><tr><td><b>Revenues</b></td><td></td></tr>\
+             <tr><td>North</td><td>1</td></tr></table>"
+                .to_string(),
+        ] {
+            assert_eq!(header(&html).0, Some(0), "{html}");
+        }
+    }
+
+    #[test]
+    fn one_head_over_every_value_column_beside_a_blank_corner_is_the_header() {
+        let r = "border-bottom:1px solid";
+        let (n, _) = header(&format!(
+            "<table><tr><td></td><td colspan=\"2\"><b>Year Ended December 31,</b></td></tr>\
+             <tr><td></td><td style=\"{r}\"><b>2024</b></td><td style=\"{r}\"><b>2023</b></td></tr>\
+             <tr><td>Revenue</td><td>120</td><td>110</td></tr>\
+             <tr><td>Costs</td><td>80</td><td>75</td></tr></table>"
+        ));
+        assert_eq!(n, Some(2));
+        // A year set bold over a single column of values heads it.
+        let (n, _) = header(
+            "<table><tr><td></td><td><b>2024</b></td></tr>\
+             <tr><td>Revenue</td><td>120</td></tr><tr><td>Costs</td><td>80</td></tr></table>",
+        );
+        assert_eq!(n, Some(1));
+    }
+
+    #[test]
+    fn emphasis_or_a_rule_beside_a_label_is_not_a_header() {
+        for html in [
+            // A key-value table's bold value.
+            "<table><tr><td>Borrower:</td><td><b>Acme Corp</b></td></tr>\
+             <tr><td>Amount:</td><td>$100</td></tr></table>",
+            // The figures underlined before a subtotal, with or without a
+            // label beside them.
+            "<table><tr><td>Cost of sales</td><td style=\"border-bottom:1px solid\">(60)</td>\
+             <td style=\"border-bottom:1px solid\">(50)</td></tr>\
+             <tr><td>Gross profit</td><td>40</td><td>40</td></tr></table>",
+            "<table><tr><td></td><td style=\"border-bottom:1px solid\">(60)</td></tr>\
+             <tr><td>Gross profit</td><td>40</td></tr></table>",
+        ] {
+            assert_eq!(header(html).0, Some(0), "{html}");
+        }
+    }
+
+    #[test]
+    fn a_note_mark_written_as_a_link_stands_apart() {
+        let t = |html: &str| parse(html)[0].text.clone();
+        assert_eq!(
+            t(
+                "<p>Provincial governments<a href=\"#fn01\" class=\"btn sd-tablefnref\" \
+               aria-label=\"Table note 1\" role=\"button\">1</a> rose</p>"
+            ),
+            "Provincial governments 1 rose"
+        );
+        assert_eq!(
+            t("<p>Revenue<a role=\"doc-noteref\" href=\"#n3\">3</a></p>"),
+            "Revenue 3"
+        );
+        // A link that is no note's, or goes elsewhere, is read as written.
+        assert_eq!(t("<p>Part<a href=\"#part2\">2</a></p>"), "Part2");
+        assert_eq!(
+            t("<p>Table<a href=\"https://example.org/fn\">5</a></p>"),
+            "Table5"
+        );
+    }
+
+    #[test]
+    fn a_raised_note_mark_stands_apart_and_a_power_does_not() {
+        let t = |html: &str| parse(html)[0].text.clone();
+        assert_eq!(
+            t("<p>Acrylonitrile<sup>a</sup> and Revenue<sup>1</sup></p>"),
+            "Acrylonitrile a and Revenue 1"
+        );
+        assert_eq!(t("<p>Net income<sup>*</sup></p>"), "Net income *");
+        assert_eq!(
+            t("<p>10 m<sup>2</sup>, 10<sup>6</sup>, the 1<sup>st</sup> and 2<sup>e</sup></p>"),
+            "10 m2, 106, the 1st and 2e"
+        );
+        // After a quantity or a bracket of words, a number is a note's; a
+        // unit of length takes a power whatever its name's length.
+        assert_eq!(
+            t("<p>up to 26TB<sup>1</sup>, 11 lbf (49 N)<sup>5</sup>, 1000 PIES<sup>2</sup></p>"),
+            "up to 26TB 1, 11 lbf (49 N) 5, 1000 PIES2"
+        );
     }
 
     #[test]

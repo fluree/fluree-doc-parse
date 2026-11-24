@@ -93,19 +93,88 @@ impl Block {
     /// see a spurious boundary mid-sentence.
     pub fn text(&self) -> String {
         let mut out = String::new();
+        let mut prev: Option<&Line> = None;
         for l in &self.lines {
             if !out.is_empty() {
-                // A hyphen at a line end is usually a soft break introduced by
-                // wrapping; joining without it restores the original word.
-                if out.ends_with('-') {
-                    out.pop();
-                } else {
+                // A line ending on a hyphen joins the next as
+                // [`HyphenJoin::of`] reads it.
+                //
+                // A script that sets no spaces between its words wraps between
+                // any two characters, and a line it wrapped joins the next
+                // without one: `有限公` and `司` are one name. A line that
+                // stops short of the block's edge was ended by hand, and the
+                // next is another item (an office over a company's name).
+                let wrapped = prev
+                    .is_some_and(|p| p.bbox.x1 >= self.bbox.x1 - p.font_size.max(1.0) as f64 * 1.5);
+                let cjk = wrapped
+                    && out
+                        .chars()
+                        .next_back()
+                        .is_some_and(crate::line::wraps_anywhere)
+                    && l.text
+                        .chars()
+                        .next()
+                        .is_some_and(crate::line::wraps_anywhere);
+                if let Some(stem) = out.strip_suffix('-') {
+                    match HyphenJoin::of(stem, &l.text) {
+                        HyphenJoin::Word => {
+                            out.pop();
+                        }
+                        HyphenJoin::Hyphen => {}
+                        HyphenJoin::Dash => out.push(' '),
+                    }
+                } else if !cjk {
                     out.push(' ');
                 }
             }
             out.push_str(&l.text);
+            prev = Some(l);
         }
         out
+    }
+}
+
+/// What a hyphen ending a line is, and so how the line joins the next.
+#[derive(Debug, PartialEq)]
+enum HyphenJoin {
+    /// A break wrapping set inside a word (`microcom-` over `puter`):
+    /// dropped, and the word read whole.
+    Word,
+    /// The text's own, in a number, a code, a compound or a range
+    /// (`1-800-222-` over `1222`, `Polish-` over `German`, `(A)-` over
+    /// `(L)`): kept, the lines joined without a space.
+    Hyphen,
+    /// A dash, set apart from the word before it (`a pause -`): kept, the
+    /// lines joined with a space.
+    Dash,
+}
+
+impl HyphenJoin {
+    /// Read from the text before the hyphen and the next line.
+    ///
+    /// A typesetter breaks a word between two letters of one case, and
+    /// leaves at least two on each side. Anything else at the end of a line
+    /// was printed there: a figure beside it, a capital after a lowercase
+    /// letter or before one (`Fly-Casting`, `R-warfarin`), a single letter
+    /// (`e-mail`, `X-Forwarded`). An all-capital compound (`BY-PRODUCTS`)
+    /// cannot be told from an all-capital word broken (`SO-LAR`), and is
+    /// read as the word.
+    fn of(stem: &str, next: &str) -> HyphenJoin {
+        let Some(before) = stem.chars().next_back().filter(|c| !c.is_whitespace()) else {
+            return HyphenJoin::Dash;
+        };
+        let Some(after) = next.chars().next() else {
+            return HyphenJoin::Hyphen;
+        };
+        let left = stem.chars().rev().take_while(|c| c.is_alphabetic()).count();
+        let right = next.chars().take_while(|c| c.is_alphabetic()).count();
+        let one_case = (before.is_lowercase() && after.is_lowercase())
+            || (before.is_uppercase() && after.is_uppercase());
+        if one_case && left >= 2 && right >= 2 {
+            HyphenJoin::Word
+        } else {
+            HyphenJoin::Hyphen
+        }
     }
 }
 
@@ -178,10 +247,19 @@ const MARKER_OUTDENT_TOLERANCE: f64 = 2.0;
 /// not spell a roman numeral are a word.
 /// Characters used as bullets, and only those.
 ///
-/// Geometric shapes and the typographic bullets. Dashes are deliberately
-/// absent: a line opening with an en dash is as likely to be a range, a
-/// dialogue dash or a torn compound as a list item, and treating it as a
-/// bullet deletes the character from text where it belonged.
+/// Geometric shapes, the typographic bullets, the arrows and boxes the
+/// dingbat fonts set as bullets, and the private-use codes a Word file
+/// gives its symbol-font bullets: a PDF made from Word maps the bullet of a
+/// default bulleted list to U+F0B7, the position of `•` in the Symbol font.
+/// Extraction reads such a code as the character its font shows, so these
+/// codes remain only where the font's name does not say which font it is.
+/// Of them, only codes that are no letter in Symbol or Wingdings are taken;
+/// U+F071 is `❑` in one and `θ` in the other.
+///
+/// Dashes are deliberately absent: a line opening with an en dash is as
+/// likely to be a range, a dialogue dash or a torn compound as a list item,
+/// and treating it as a bullet deletes the character from text where it
+/// belonged.
 const BULLETS: &[char] = &[
     '\u{2022}', // •
     '\u{25AA}', // ▪
@@ -197,7 +275,23 @@ const BULLETS: &[char] = &[
     '\u{2043}', // ⁃
     '\u{25B8}', // ▸
     '\u{25AC}', // ▬
+    '\u{25BA}', // ►
+    '\u{25C6}', // ◆
+    '\u{2751}', // ❑
+    '\u{2752}', // ❒
+    '\u{2756}', // ❖
+    '\u{27A2}', // ➢
+    '\u{27A4}', // ➤
+    '\u{F0B7}', // Symbol •
+    '\u{F0A7}', // Wingdings ▪ (Symbol ♣)
+    '\u{F0D8}', // Wingdings ➢ (Symbol ¬)
+    '\u{F0E8}', // Wingdings ➔ (Symbol ⎝)
 ];
+
+/// A character used as a bullet; see [`BULLETS`].
+pub(crate) fn is_bullet(c: char) -> bool {
+    BULLETS.contains(&c)
+}
 
 /// A bullet the layout pass read as the first character of its own line,
 /// rather than as a marker standing apart from it.
@@ -213,7 +307,7 @@ pub fn strip_leading_bullet(text: &str) -> Option<&str> {
     let t = text.trim_start();
     let mut chars = t.chars();
     let first = chars.next()?;
-    if !BULLETS.contains(&first) {
+    if !is_bullet(first) {
         return None;
     }
     let rest = chars.as_str();
@@ -234,6 +328,14 @@ fn marker_shaped(text: &str) -> bool {
     lower
         .chars()
         .all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
+}
+
+/// A character that is content, not a bullet's shape: a letter or digit, or
+/// a sign that stands for letters or digits — `™` for `TM`, `℃`, `№`, `㎡`
+/// — which line text keeps as printed and which spelled out was content.
+fn says_something(c: char) -> bool {
+    use unicode_normalization::UnicodeNormalization;
+    c.is_alphanumeric() || c.to_string().nfkc().any(char::is_alphanumeric)
 }
 
 /// True for a short line that is a bullet, list number or footnote reference
@@ -269,7 +371,7 @@ fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f
     let Some(nb) = after.or(before) else {
         return false;
     };
-    let worded = l.text.chars().any(char::is_alphanumeric);
+    let worded = l.text.chars().any(says_something);
     if worded && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
         return false;
     }
@@ -386,9 +488,8 @@ pub fn assemble_with_marks(
     ocr: &[(f64, f64)],
 ) -> Vec<Block> {
     // Right edge of the content, used to decide whether a line was wrapped.
-    let right_edge = lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let edge = Edge::of(lines);
     let left_edge = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
-    let span = (right_edge - left_edge).max(1.0);
     // Separate markers first so they cannot act as block boundaries.
     let mut content: Vec<Line> = Vec::new();
     let mut markers: Vec<Line> = Vec::new();
@@ -407,6 +508,12 @@ pub fn assemble_with_marks(
 
     // Lines a checkbox introduces, by index into `lines`.
     let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
+    // Lines a marker pulled out above stands beside: each is an item of its
+    // own, not the wrapped text of the item above it (see [`hangs_under`]).
+    let led: Vec<bool> = lines
+        .iter()
+        .map(|l| markers.iter().any(|m| marker_beside(m, l)))
+        .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
     let read: Vec<bool> = lines.iter().map(|l| read_by_ocr(l, ocr)).collect();
     let mut marked: Vec<usize> = Vec::new();
@@ -424,7 +531,7 @@ pub fn assemble_with_marks(
         if !ticked[i]
             && band[i] == band[i - 1]
             && read[i] == read[i - 1]
-            && continues(cur.last().unwrap(), l, leading, right_edge, span)
+            && continues(cur.last().unwrap(), l, leading, &edge, !led[i])
         {
             cur.push(l.clone());
         } else {
@@ -495,7 +602,17 @@ pub fn assemble_with_marks(
     blocks
 }
 
-fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64) -> bool {
+/// `m`, a marker, stands just left of `l` on its row, as a bullet drawn
+/// apart from its item's text does.
+fn marker_beside(m: &Line, l: &Line) -> bool {
+    let fs = (l.font_size as f64).max(1.0);
+    let gap = l.bbox.x0 - m.bbox.x1;
+    m.bbox.y1 > l.bbox.y0 && m.bbox.y0 < l.bbox.y1 && gap > -fs * 0.5 && gap < fs * CHECKBOX_REACH
+}
+
+/// `hang`: whether `next` may go on as the wrapped line of a bulleted item
+/// above it, which a line with a marker of its own may not.
+fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge, hang: bool) -> bool {
     if prev.rotation_bucket != next.rotation_bucket {
         return false;
     }
@@ -505,12 +622,31 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     }
     let fs = prev.font_size.max(next.font_size).max(1.0) as f64;
 
+    // A bullet set at the head of its line begins an item, however the
+    // geometry reads: below a full line at body leading and the same indent,
+    // the items of a list ran together into one paragraph.
+    if strip_leading_bullet(&next.text).is_some() {
+        return false;
+    }
+
     // Weight change — a run-in heading. Very common in academic papers, where
     // a bold section title sits directly above body text *at the same size*, so
     // the font-size test below cannot see it. Measured case: `2 Depth
     // Up-Scaling` was absorbed into an 11-line paragraph and never reached
     // heading detection at all.
-    if prev.bold != next.bold {
+    //
+    // A line opening on a bold label begins a paragraph the same way: the
+    // label is the paragraph's run-in head (`PUMP: With stainless steel…`
+    // below `…and long life.`), and the space between such paragraphs is
+    // often too slight to part them.
+    //
+    // Unless the line before ran out of room. A heading ends its line where
+    // it ends, so a line the next word did not fit on goes on into the next
+    // whatever its weight: bold names in a sentence wrapped onto a line of
+    // their own (`…Sweden, and the` over `United Kingdom.`), or a run-in
+    // label wrapped onto a second line.
+    let run_in = next.opens_bold && !next.bold;
+    if (prev.bold != next.bold || run_in) && !edge.ran_out_of_room(prev, next) {
         return false;
     }
 
@@ -519,8 +655,9 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     if rel > FONT_SIZE_TOLERANCE {
         return false;
     }
-    let full =
-        |l: &Line| (l.bbox.x1 - (right_edge - span * (1.0 - FULL_LINE_FRACTION))) >= -f64::EPSILON;
+    let full = |l: &Line| {
+        (l.bbox.x1 - (edge.right - edge.span * (1.0 - FULL_LINE_FRACTION))) >= -f64::EPSILON
+    };
     let prev_full = full(prev);
     if rel > SIZE_STEP && !(prev_full && full(next)) {
         return false;
@@ -540,11 +677,149 @@ fn continues(prev: &Line, next: &Line, leading: f64, right_edge: f64, span: f64)
     // full line ended because it ran out of room, so the next line continues
     // the same paragraph however its left edge moves.
     let indent = (next.bbox.x0 - prev.bbox.x0).abs() / fs;
-    if indent > INDENT_TOLERANCE && !prev_full {
+    if indent > INDENT_TOLERANCE && !prev_full && !(hang && hangs_under(prev, next, fs, edge)) {
         return false;
     }
 
     true
+}
+
+/// Farthest, in ems, a bulleted item's wrapped lines start right of its
+/// bullet: the bullet, and the space or tab after it.
+const HANGING_INDENT: f64 = 3.0;
+
+/// `next` is the wrapped line of the item `prev` opens with a bullet set in
+/// its text run: it starts right of the bullet, where the item's text does.
+///
+/// A list with a hanging indent sets each item's bullet out at the margin
+/// and every line of its text in from it, so a wrapped line starts an em or
+/// two right of the line it wraps from, and the bullet line is short of the
+/// edge more often than not. Read as an indent, it was cut off the item and
+/// came out a paragraph of its own: `Large tapswitch with a rocker-style
+/// dimmer for a` and `standard designer wallplate opening.`
+///
+/// Not a line that opens a list of its own under the item: one opening with
+/// a dash, or below a bullet line that ends on a colon (`UL Listed to
+/// control:` over `— Dimmable LEDs`). Nor the paragraph after the list,
+/// which a word processor often sets where the items' text is, or a
+/// first-line indent in from the bullets: below an item that ends a
+/// sentence short of the edge, a line that opens one goes on only if the
+/// item ran out of room for its first word.
+fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
+    let shift = (next.bbox.x0 - prev.bbox.x0) / fs;
+    let opens_list = next
+        .text
+        .trim_start()
+        .starts_with(['-', '\u{2013}', '\u{2014}']);
+    let ends_sentence = prev
+        .text
+        .trim_end()
+        .trim_end_matches(['"', '\'', '\u{201D}', '\u{2019}', ')'])
+        .ends_with(['.', '!', '?']);
+    let opens_sentence = next
+        .text
+        .trim_start()
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .is_some_and(|c| c.is_uppercase() || c.is_numeric());
+    strip_leading_bullet(&prev.text).is_some()
+        && !prev.text.trim_end().ends_with(':')
+        && !opens_list
+        && shift > 0.3
+        && shift <= HANGING_INDENT
+        && (!(ends_sentence && opens_sentence) || edge.ran_out_of_room(prev, next))
+}
+
+/// The right edge a column's text wraps at.
+struct Edge {
+    right: f64,
+    /// From the column's left edge to `right`.
+    span: f64,
+    /// Two lines running at least half way across end at `right`, within
+    /// an em: it is where the text wraps, not only where the widest line
+    /// happens to end.
+    agreed: bool,
+}
+
+impl Edge {
+    /// The rightmost end another long line also reaches. One line standing
+    /// out past the rest (a centred notice under two columns, kept with the
+    /// first) is not the measure, and taking it made no line of the column
+    /// full. Where no two long lines agree, the widest line is.
+    fn of(lines: &[Line]) -> Edge {
+        let left = lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+        let mut ends: Vec<(f64, f64)> = lines
+            .iter()
+            .map(|l| (l.bbox.x1, l.font_size.max(1.0) as f64))
+            .collect();
+        ends.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let widest = ends.first().map_or(f64::MIN, |e| e.0);
+        let half = left + (widest - left) / 2.0;
+        let agreed = ends
+            .windows(2)
+            .find(|w| w[1].0 >= half && w[0].0 - w[1].0 <= w[0].1.max(w[1].1))
+            .map(|w| w[0].0);
+        let right = agreed.unwrap_or(widest);
+        Edge {
+            right,
+            span: (right - left).max(1.0),
+            agreed: agreed.is_some(),
+        }
+    }
+
+    /// `prev` was broken because the first word of `next` did not fit after
+    /// it: it breaks a word with a hyphen, or ends short of the edge by less
+    /// than that word, the test [`split_hard_breaks`] makes the other way
+    /// round.
+    ///
+    /// Never against an edge no other line agrees on: the widest line is
+    /// short of its own end by nothing, whatever follows it. And never for a
+    /// line a dot leader carries to the edge (a contents entry and its
+    /// page), which reaches it by design.
+    fn ran_out_of_room(&self, prev: &Line, next: &Line) -> bool {
+        if has_leader(&prev.text) {
+            return false;
+        }
+        // A wrapped line goes on at its column's left edge, at most a
+        // first-line indent left of the line it wraps from. One starting far
+        // to the left is in another column: a heading the line pass ran on
+        // across the gutter, below a full line of the column beside it.
+        // Centred and right-aligned lines start where their length puts
+        // them.
+        let fs = prev.font_size.max(next.font_size).max(1.0) as f64;
+        let centre = |l: &Line| (l.bbox.x0 + l.bbox.x1) / 2.0;
+        if prev.bbox.x0 - next.bbox.x0 > fs * WRAP_OUTDENT
+            && (centre(prev) - centre(next)).abs() > fs * 2.0
+            && (prev.bbox.x1 - next.bbox.x1).abs() > fs
+        {
+            return false;
+        }
+        let mut end = prev.text.chars().rev();
+        let breaks_word = matches!(end.next(), Some('-' | '\u{AD}'))
+            && end.next().is_some_and(char::is_alphabetic);
+        breaks_word || (self.agreed && self.right - prev.bbox.x1 < first_word_width(next))
+    }
+}
+
+/// The furthest, in ems, a wrapped line goes on left of the line above it:
+/// a first-line indent.
+const WRAP_OUTDENT: f64 = 4.0;
+
+/// Holds a dot leader: four or more dots in a run, spaced or not.
+fn has_leader(text: &str) -> bool {
+    let mut dots = 0;
+    for c in text.chars() {
+        match c {
+            '.' | '·' | '․' => dots += 1,
+            '…' => dots += 3,
+            ' ' => {}
+            _ => dots = 0,
+        }
+        if dots >= 4 {
+            return true;
+        }
+    }
+    false
 }
 
 /// Width of a line's first word plus the space before it, estimated from the
@@ -758,7 +1033,43 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         }
+    }
+
+    #[test]
+    fn a_line_of_chinese_wrapped_mid_word_joins_without_a_space() {
+        let block = |a: &str, b: &str| Block {
+            lines: vec![l(a, 50.0, 100.0, 11.0), l(b, 50.0, 114.0, 11.0)],
+            bbox: BBox {
+                x0: 50.0,
+                y0: 100.0,
+                x1: 350.0,
+                y1: 125.0,
+            },
+            page: 0,
+            font_size: 11.0,
+            bold: false,
+            gap_above: None,
+            marker: None,
+        };
+        assert_eq!(
+            block("deliver it to 青松纸业有限公", "司.").text(),
+            "deliver it to 青松纸业有限公司."
+        );
+        // A line ended short of the edge is another item.
+        let mut b = block("放送課", "株式会社");
+        b.lines[0].bbox.x1 = 90.0;
+        assert_eq!(b.text(), "放送課 株式会社");
+        // Korean spaces its words and wraps at the spaces; Latin too.
+        assert_eq!(
+            block("한국어 문장이", "이어집니다").text(),
+            "한국어 문장이 이어집니다"
+        );
+        assert_eq!(
+            block("the order", "was confirmed").text(),
+            "the order was confirmed"
+        );
     }
 
     #[test]
@@ -868,6 +1179,7 @@ mod tests {
         // A bold run-in heading above same-size body text.
         let mut h = l("2 Depth Up-Scaling", 10.0, 0.0, 10.0);
         h.bold = true;
+        h.bbox.x1 = 100.0;
         let lines = vec![
             h,
             l("To efficiently scale-up LLMs, we aim to", 10.0, 12.0, 10.0),
@@ -879,6 +1191,323 @@ mod tests {
             "a bold heading must not absorb the paragraph below it"
         );
         assert_eq!(b[0].text(), "2 Depth Up-Scaling");
+    }
+
+    #[test]
+    fn a_full_line_does_not_go_on_into_a_line_far_to_its_left() {
+        // The right column's full line, then a heading the line pass ran on
+        // from the left column across the gutter into the right one.
+        let mut fused = l(
+            "1.2 Changing Business demand during the year;",
+            0.0,
+            0.0,
+            10.0,
+        );
+        fused.bbox.x1 = 550.0;
+        let item = l(
+            "• Moving into new products and services in high",
+            250.0,
+            12.0,
+            10.0,
+        );
+        let mut heading = l(
+            "9.5. Adapting to the New Normal: Changing demand",
+            0.0,
+            24.0,
+            10.0,
+        );
+        heading.bbox.x1 = 450.0;
+        heading.opens_bold = true;
+        let b = assemble(&[fused, item, heading], 1.2);
+        assert!(b.last().unwrap().text().starts_with("9.5."), "{b:?}");
+        // Right-aligned: each line starts where its length puts it.
+        let mut name = l("OWENS CORNING INSULATING SYSTEMS, LLC", 393.0, 0.0, 9.0);
+        name.bbox.x1 = 582.0;
+        name.bold = true;
+        let mut street = l(
+            "ONE OWENS CORNING PARKWAY TOLEDO, OH 43659 USA",
+            351.0,
+            10.0,
+            9.0,
+        );
+        street.bbox.x1 = 582.0;
+        assert_eq!(assemble(&[name, street], 1.2).len(), 1);
+    }
+
+    #[test]
+    fn a_line_out_of_room_goes_on_whatever_the_weight_below() {
+        // Bold names in a sentence, the last wrapped onto its own line.
+        let mut name = l("United Kingdom.", 10.0, 24.0, 10.0);
+        name.bold = true;
+        name.bbox.x1 = 90.0;
+        let lines = vec![
+            l(
+                "We identified 10 countries that do not restrict",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "land ownership: Belgium, France, Sweden, and the",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            name,
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 1);
+        assert!(b[0].text().ends_with("and the United Kingdom."));
+    }
+
+    #[test]
+    fn a_line_carried_to_the_edge_by_design_has_not_run_out_of_room() {
+        let bold = |text: &str, y: f64| {
+            let mut b = l(text, 10.0, y, 10.0);
+            b.bold = true;
+            b.bbox.x1 = 150.0;
+            b
+        };
+        // A contents entry, its leader running to the page number.
+        let lines = vec![
+            l(
+                "Summary . . . . . . . . . . . . . . . . . . . . . 1",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "Overview . . . . . . . . . . . . . . . . . . . . 3",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            bold("Part 1: Recent Developments", 24.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 2);
+        // A short rule set as a row of dashes breaks no word.
+        let mut dashes = l("----------", 10.0, 0.0, 10.0);
+        dashes.bbox.x1 = 60.0;
+        let lines = vec![dashes, bold("Product Name", 12.0)];
+        assert_eq!(assemble(&lines, 1.2).len(), 2);
+    }
+
+    #[test]
+    fn a_word_broken_at_a_hyphen_goes_on_whatever_the_weight_below() {
+        let mut label = l(
+            "STRAINER SYSTEM: Equipped with self-flush-",
+            10.0,
+            0.0,
+            10.0,
+        );
+        label.bbox.x1 = 250.0;
+        label.bold = true;
+        let lines = vec![
+            label,
+            l("ing, easily removable strainers", 10.0, 12.0, 10.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn a_line_opening_on_a_bold_label_begins_a_paragraph() {
+        let label = |text: &str, y: f64| {
+            let mut b = l(text, 10.0, y, 10.0);
+            b.opens_bold = true;
+            b
+        };
+        let mut last = l("trim panels are 20 gauge.", 10.0, 24.0, 10.0);
+        last.bbox.x1 = 120.0;
+        let lines = vec![
+            label("CONSTRUCTION: Drawn tank, tank shelf and feet", 0.0),
+            l(
+                "of 16 gauge stainless steel. Wash chamber and",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            last,
+            label("PUMP: With stainless steel pump and impeller", 36.0),
+            l(
+                "motor assures alignment and quiet operation.",
+                10.0,
+                48.0,
+                10.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(b.len(), 2);
+        assert!(b[1].text().starts_with("PUMP:"));
+    }
+
+    #[test]
+    fn a_bold_word_opening_a_wrapped_line_begins_nothing() {
+        let mut names = l("Germany, Ireland, Japan, the Netherlands", 10.0, 12.0, 10.0);
+        names.opens_bold = true;
+        let lines = vec![
+            l(
+                "We identified 10 countries: Belgium, France,",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            names,
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 1);
+    }
+
+    #[test]
+    fn a_bullet_at_the_head_of_a_line_begins_an_item() {
+        // Each item full or nearly, at body leading and the same indent.
+        let lines = vec![
+            l(
+                "• store at room temperature away from direct light",
+                10.0,
+                0.0,
+                10.0,
+            ),
+            l(
+                "• keep the carton for full directions and warnings",
+                10.0,
+                12.0,
+                10.0,
+            ),
+            l("• keep out of reach of children", 10.0, 24.0, 10.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 3);
+    }
+
+    #[test]
+    fn a_bulleted_items_wrapped_line_hangs_under_its_text() {
+        // A submittal's feature list: the bullet at the margin, each line
+        // of the item's text an em and a quarter in from it.
+        let at = |text: &str, x: f64, y: f64, x1: f64| {
+            let mut line = l(text, x, y, 11.0);
+            line.bbox.x1 = x1;
+            line
+        };
+        let lines = vec![
+            at(
+                "• Large tapswitch with a rocker-style dimmer for a",
+                31.3,
+                121.0,
+                250.0,
+            ),
+            at("standard designer wallplate opening.", 44.9, 135.0, 230.0),
+            at(
+                "• Advanced dimming technology designed for",
+                31.3,
+                153.0,
+                240.0,
+            ),
+            at(
+                "compatibility with a broader range of high efficacy bulbs.",
+                44.9,
+                167.0,
+                330.0,
+            ),
+            at("• UL Listed to control:", 31.3, 185.0, 150.0),
+            at("— Dimmable LEDs", 44.9, 199.0, 130.0),
+            at(
+                "• Coordinating Claro and stainless steel wallplates",
+                31.3,
+                217.0,
+                329.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.27);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert_eq!(
+            texts,
+            [
+                "• Large tapswitch with a rocker-style dimmer for a standard designer wallplate opening.",
+                "• Advanced dimming technology designed for compatibility with a broader range of high efficacy bulbs.",
+                "• UL Listed to control:",
+                "— Dimmable LEDs",
+                "• Coordinating Claro and stainless steel wallplates",
+            ]
+        );
+        // The paragraph after a list, set where the items' text is, below
+        // an item that ends a sentence with room to spare.
+        let lines = vec![
+            at("• Keep the unit dry.", 87.0, 634.8, 230.0),
+            at(
+                "• Store it upright when it is not in use.",
+                87.0,
+                657.7,
+                330.0,
+            ),
+            at(
+                "The parts listed below are sold separately and may include:",
+                108.4,
+                680.7,
+                520.0,
+            ),
+            at(
+                "filters, seals and the like, which are described in turn below.",
+                108.4,
+                703.7,
+                519.0,
+            ),
+        ];
+        assert_eq!(assemble(&lines, 1.9).len(), 3);
+        // The next item's bullet drawn apart from its text, on a lower
+        // baseline: the text is an item of its own.
+        let mut ring = at("\u{25CB}", 78.6, 216.0, 86.0);
+        ring.font_size = 12.9;
+        let lines = vec![
+            at(
+                "\u{25CB} Shipping to new regions: northern sites",
+                78.6,
+                197.8,
+                280.0,
+            ),
+            ring,
+            at("Faster service for existing sites", 104.5, 212.5, 300.0),
+            at("\u{25CB} Online ordering and tracking", 78.6, 227.3, 329.0),
+            at("\u{25CB} Online returns and refunds", 78.6, 242.1, 330.0),
+        ];
+        let b = assemble(&lines, 1.27);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        assert_eq!(b[1].marker.as_deref(), Some("\u{25CB}"));
+        // A paragraph indented far past the bullet is not the item's text.
+        let lines = vec![
+            at(
+                "• Large tapswitch with a rocker-style dimmer",
+                31.3,
+                121.0,
+                250.0,
+            ),
+            at("A note set well in from the list", 80.0, 135.0, 330.0),
+        ];
+        assert_eq!(assemble(&lines, 1.27).len(), 2);
+    }
+
+    #[test]
+    fn a_bold_line_wider_than_the_rest_has_not_run_out_of_room() {
+        // The widest line ends at its own end; no other line says the text
+        // wraps there.
+        let mut h = l("Results of the second survey round", 10.0, 0.0, 10.0);
+        h.bold = true;
+        let mut body = l("Most firms kept their staff.", 10.0, 12.0, 10.0);
+        body.bbox.x1 = 200.0;
+        assert_eq!(assemble(&[h, body], 1.2).len(), 2);
+    }
+
+    #[test]
+    fn one_line_standing_out_past_the_column_is_not_its_measure() {
+        // A centred notice under two columns, kept with the first, ends far
+        // past the column's lines.
+        let mut lines: Vec<Line> = (0..4)
+            .map(|k| l("column text", 10.0, 12.0 * k as f64, 10.0))
+            .collect();
+        let mut notice = l("As continued improvement is a policy", 80.0, 60.0, 10.0);
+        notice.bbox.x1 = 500.0;
+        lines.push(notice);
+        let edge = Edge::of(&lines);
+        assert!(edge.agreed);
+        assert_eq!(edge.right, 310.0);
     }
 
     #[test]
@@ -1142,6 +1771,52 @@ mod tests {
     }
 
     #[test]
+    fn a_hyphen_beside_a_digit_or_a_capital_is_the_texts_own() {
+        let joined = |a: &str, b: &str| {
+            let lines = vec![l(a, 10.0, 0.0, 10.0), l(b, 10.0, 12.0, 10.0)];
+            assemble(&lines, 1.2)[0].text()
+        };
+        assert_eq!(
+            joined("call Poison Control (1-800-222-", "1222) right away."),
+            "call Poison Control (1-800-222-1222) right away."
+        );
+        assert_eq!(
+            joined("in the 2019-", "2020 period"),
+            "in the 2019-2020 period"
+        );
+        assert_eq!(
+            joined("The Polish-", "German Gazetteer"),
+            "The Polish-German Gazetteer"
+        );
+        assert_eq!(
+            joined("test kits are MESA-", "approved"),
+            "test kits are MESA-approved"
+        );
+        // A dash set apart from its words stays one.
+        assert_eq!(joined("a pause -", "then more"), "a pause - then more");
+    }
+
+    #[test]
+    fn a_hyphen_is_a_word_break_only_between_two_letters_of_one_case() {
+        use HyphenJoin::*;
+        for (stem, next, want) in [
+            ("microcom", "puter is", Word),
+            ("accidental", "ly drained", Word),
+            ("the SO", "LAR model", Word),
+            ("Fly", "Casting", Hyphen),
+            ("S-warfarin/R", "warfarin", Hyphen),
+            ("an e", "mail address", Hyphen),
+            ("the X", "Forwarded-Proto header", Hyphen),
+            ("PD-1/PD", "L1 inhibitors", Hyphen),
+            ("COVID", "19", Hyphen),
+            ("subdivisions (v)(1)(A)", "(L), (ae)(1)", Hyphen),
+            ("a pause ", "then", Dash),
+        ] {
+            assert_eq!(HyphenJoin::of(stem, next), want, "{stem}- / {next}");
+        }
+    }
+
+    #[test]
     fn separate_columns_never_merge() {
         let mut right = l("right column", 400.0, 0.0, 10.0);
         right.bbox.x1 = 700.0;
@@ -1299,6 +1974,20 @@ mod tests {
     }
 
     #[test]
+    fn a_trade_mark_raised_after_a_name_is_not_a_list_marker() {
+        // Set apart in a smaller size after the name, as a flyer sets it on
+        // a line of its own; read as a bullet it was dropped.
+        for mark in ["\u{2122}", "\u{2120}"] {
+            let mut sup = l(mark, 120.0, 0.0, 6.0);
+            sup.bbox.x1 = 126.0;
+            let lines = vec![l("Thermo Scientific", 30.0, 2.0, 10.0), sup];
+            let b = assemble(&lines, 1.2);
+            assert!(b.iter().all(|b| b.marker.is_none()), "{mark}");
+            assert!(b.iter().any(|b| b.text().contains(mark)), "{mark}");
+        }
+    }
+
+    #[test]
     fn a_short_real_line_is_not_treated_as_a_marker() {
         // Same size, same left edge: content, not a marker.
         let lines = vec![l("Yes.", 30.0, 0.0, 10.0), l("Next para", 30.0, 40.0, 10.0)];
@@ -1346,6 +2035,24 @@ mod tests {
             strip_leading_bullet("\u{2022}\u{00A0}Non-breaking space"),
             Some("Non-breaking space")
         );
+    }
+
+    #[test]
+    fn a_word_files_symbol_bullet_and_the_dingbat_boxes_mark_a_list() {
+        // Word maps its default bullet to U+F0B7, the Symbol font's `•`,
+        // and sets a tab after it.
+        assert_eq!(
+            strip_leading_bullet("\u{F0B7}\tHigh stiffness"),
+            Some("High stiffness")
+        );
+        assert_eq!(strip_leading_bullet("\u{2751} Peg rack"), Some("Peg rack"));
+        assert_eq!(
+            strip_leading_bullet("\u{27A2} Install before use"),
+            Some("Install before use")
+        );
+        // A private-use code that is a letter in the Symbol font is not
+        // taken: U+F071 is `θ` there.
+        assert_eq!(strip_leading_bullet("\u{F071} is the angle"), None);
     }
 
     #[test]

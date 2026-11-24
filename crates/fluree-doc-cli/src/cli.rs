@@ -40,9 +40,9 @@ pub enum OcrEngineName {
 pub enum Commands {
     /// Convert documents to Markdown, XHTML, DoCO JSON-LD, JSON or text
     ///
-    /// Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip
-    /// transcripts, and email (.eml, .msg). PDF structure is inferred from
-    /// layout; the others declare theirs and carry no geometry.
+    /// Reads PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, WebVTT and
+    /// SubRip transcripts, and email (.eml, .msg). PDF structure is inferred
+    /// from layout; the others declare theirs and carry no geometry.
     ///
     /// Examples:
     ///   fdoc convert report.pdf
@@ -167,6 +167,24 @@ pub enum Format {
     Text,
 }
 
+/// How `--format md` writes a link.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MdLinks {
+    /// `[words](address)`, or `<address>` where the words are the address
+    Inline,
+    /// The words alone; the addresses stay in json, doco and xhtml
+    Text,
+}
+
+impl From<MdLinks> for fluree_doc_model::MdLinks {
+    fn from(m: MdLinks) -> Self {
+        match m {
+            MdLinks::Inline => Self::Inline,
+            MdLinks::Text => Self::Text,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 pub struct ConvertArgs {
     /// Input documents: files, directories, or `-` for stdin (a PDF, a
@@ -177,6 +195,10 @@ pub struct ConvertArgs {
     /// Output format
     #[arg(long, short = 'f', value_enum, default_value_t = Format::Md)]
     pub format: Format,
+
+    /// How `--format md` writes links
+    #[arg(long, value_enum, default_value_t = MdLinks::Inline, value_name = "MODE")]
+    pub md_links: MdLinks,
 
     /// Write output to this file (single input only; default stdout)
     #[arg(long, short = 'o', value_name = "FILE", conflicts_with = "out_dir")]

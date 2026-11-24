@@ -67,7 +67,7 @@ From the escalation path:
 | `table-missing` | a detector found a table where the grid pass found none |
 | `layout-demoted` | a detector corroborated demoting this heading to prose |
 
-And from the declared formats: `markdown`, `html`, `docx`, `pptx`, `xlsx`, and
+And from the declared formats: `markdown`, `text`, `html`, `docx`, `pptx`, `xlsx`, and
 `header` and `footer` for what a Word file's page header and footer hold. These are
 the honest ones — an element marked `docx` was not inferred at all, and no
 amount of escalation would improve it. `vtt` and `srt` are nearly so: the
@@ -77,6 +77,12 @@ reader decides is where one turn ends and the next begins — see
 reader decides where a quoted message begins, from the line that introduces
 it. An email body sent only as HTML keeps the HTML reader's evidence,
 `html`, under the email reader's provenance.
+
+One value in a declared format is inferred: `keyword`, a heading an HTML page
+or a text file shows without declaring it, read from a paragraph that is a
+structural keyword and its number, with at most a short title (`CHAPTER IV`,
+`Article 30`, `§ 7001. Definitions.`). Its level is inferred too, from how
+the document nests those keywords; see [HTML](../inputs/office-and-web.md#html).
 
 ## Reading it
 

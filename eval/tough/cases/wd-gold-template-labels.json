@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "wd-gold-datasheet.pdf",
+    "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-gold/data-sheet-wd-gold-hdd.pdf",
+    "sha256": "341f32848640e76bc71a507b17aa0635608ad2191b58dec742df80b3481159e4",
+    "about": "Western Digital WD Gold data sheet (4 pages). Pages 2 to 4 repeat one spec-table layout for different model ranges, so its row and group labels stand at the same place on three pages."
+  },
+  "notes": [
+    "Repetition at a fixed place away from the page edges was taken for a watermark, and the labels were deleted from every page, leaving their values unlabelled."
+  ],
+  "checks": [
+    {
+      "id": "warranty-label-kept",
+      "found": "2026-11-23",
+      "issue": "Limited Warranty was deleted as a watermark on all three pages.",
+      "text": "Limited Warranty",
+      "count": 3
+    },
+    {
+      "id": "temperature-label-kept",
+      "found": "2026-11-23",
+      "issue": "As above, for Operating temperature.",
+      "text": "Operating temperature",
+      "count": 3
+    },
+    {
+      "id": "group-label-kept",
+      "found": "2026-11-23",
+      "issue": "As above, for the Environmental group label.",
+      "text": "Environmental",
+      "count": 3
+    }
+  ]
+}

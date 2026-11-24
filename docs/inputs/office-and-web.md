@@ -1,4 +1,4 @@
-# DOCX, PPTX, XLSX, HTML and Markdown
+# DOCX, PPTX, XLSX, HTML, Markdown and plain text
 
 Four of these **declare** their structure. A `w:pStyle` names the heading level;
 `<h1>` is a heading because it says so. So these readers map rather than
@@ -77,7 +77,8 @@ a list of contents under it are a heading and the paragraphs after it.
 **Symbol fonts.** A character from Symbol or Wingdings is stored as the font's
 own code for it, which in any other font is nothing. It is read as the
 character it shows: `°`, `±` and `μ` from Symbol, arrows, check marks and
-boxes (`→`, `✔`, `☐`, `☑`) from Wingdings and Wingdings 2.
+boxes (`→`, `✔`, `☐`, `☑`) from Wingdings and Wingdings 2. A PDF made from
+Word is read by the same table.
 
 **Pictures and embedded objects** — an image, a chart, an object embedded
 from another program — are each a `doco:Figure` where they stand, its text
@@ -246,6 +247,45 @@ browser lays it out: each run of it between blocks is a paragraph, and two
 all email, set their text. A `<blockquote>` that holds paragraphs of its own
 is their container rather than one paragraph run together.
 
+A `<pre>` is read as written: one paragraph whose text keeps its line breaks,
+blank lines and runs of spaces, so offsets index into the text as it was set.
+Government publishers serve whole documents as one `<pre>` (every hearing and
+public law on govinfo.gov, many SEC exhibits), with the letterhead centred and
+the lists set in columns by spaces alone. Only what is never drawn is dropped:
+the whitespace before the first character and after the last, and the spaces
+a line ends in.
+
+A page that declares no headings but shows them, as statutes and contracts do,
+has them read by their shape. The Official Journal sets a regulation's
+outline in classes of its own, and a filer sets a contract's in centred bold,
+with no `<h1>`–`<h6>` anywhere. A paragraph that is nothing but a structural
+keyword and its number becomes a section title: `CHAPTER IV`, `Section 1`,
+`Article 30`, `ARTICLE II`, `ANNEX III`, `§ 7002`. So does one that adds its
+own short title after a number closed by a full stop (`§ 7001.
+Definitions.`, `ARTICLE 1. GENERAL PROVISIONS`), and a code's section number
+alone (`1798.100.`). The keywords are Book, Part, Title, Division, Chapter,
+Article, Section, Annex, Appendix, Schedule and Exhibit, and their sub-
+forms. A short paragraph after a heading with no title of its own that
+reads as a title is joined to it (`Article 30 Records of processing
+activities`), and so is a title in capitals broken mid-phrase over two
+paragraphs. A title on the heading's line that stops short of its full stop
+takes the next paragraph when that one ends it. Such a heading carries the
+evidence `keyword`.
+
+The levels come from how the document nests its keywords, not from a fixed
+table. A regulation sets articles inside sections, and a contract sets
+sections inside articles. In each case the outer keyword is the rarer, so
+keywords rank by how often they occur, divisions (part, title, chapter) above
+units (article, section). An annex or schedule sits beside the outermost
+division, or above the articles where there are no divisions, so an
+agreement attached to another keeps its own articles. A label that comes
+before any of the body, such as the `Exhibit 10.1` a filing is made under,
+names the document and is left as it is.
+
+A heading set at the start of its own text (`Section 2.1 Closing. Unless this
+Agreement…`) stays a paragraph. A page that declares any heading keeps its
+headings as declared, and an email body is never read this way.
+
 A table used for **layout** is read as the containers its cells are, not as
 data. Email, and many older pages, are laid out in tables: a column of
 boxes, a logo beside a banner, tables nested to centre a column. Read as
@@ -261,6 +301,50 @@ whether to announce a table to a screen reader. A cell marked `<th>` does
 not make a table data when it holds a table or sits in a single row,
 because email frameworks set their columns in `<th>`. A data table inside a
 layout table is still read as a table.
+
+A data table's **header** is the rows at its top that label the columns:
+
+- With no `<thead>`, the leading rows whose text is all in `<th>` cells. An
+  empty `<td>` before them, the corner over the row labels, does not make
+  such a row data; a `<th>` label beside empty `<td>` values does.
+- A `<thead>` ends the header, except that rows of several `<th>` at the top
+  of the body go on with it: a statistical table sets its units there
+  (`thousands of units`, `% change`) under the periods. A single `<th>`
+  across the table there is a band over the rows beneath it.
+- A filer's table, as an SEC filing sets it, writes its header in `<td>`
+  cells, bold or ruled beneath (`font-weight: bold`, `border-bottom` of
+  any width above zero, `0.5pt` included), and nothing else so. Leading
+  rows of two such cells or more are the header when rows of plain values
+  follow. The units caption in the label column, `(in millions)`, may stand
+  in plain text beside the heads.
+- One such head over the value columns is a header row too, with the label
+  cell blank or holding the units: `Annual Output` over a pair of columns,
+  a contents page's `Page`. It needs figures under it, and the row after it
+  must not be a styled row with a label of its own: a signature over a
+  name, or a contents page's first bold entry, is not a header. A lone
+  figure ruled beneath is the line before a subtotal, not a head.
+- A single bold label in the first column (`Revenues`) is a band, not a
+  header row, and bold or a rule on every row is emphasis or a grid.
+
+Under a header of several rows, a column's `doc:columnHeader` is its labels
+from the top down, joined with ` / ` (`Three months ended September 30, /
+2018`). A label spanning columns names each of them, so a value set beside
+its currency sign is under the period above both.
+
+A raised note mark is kept apart from the word it marks: `April 2026<sup>r</sup>`
+reads `April 2026 r`, and `Expenses<sup>1</sup>` reads `Expenses 1`. So is a
+number raised after a quantity (`26TB<sup>1</sup>` reads `26TB 1`) or after a
+bracket that holds words (`(49 N)<sup>5</sup>` reads `(49 N) 5`). Raised
+text that belongs to the word stays in it: a unit's power
+(`m<sup>2</sup>` reads `m2`, `PIES<sup>2</sup>` reads `PIES2`), an exponent (`10<sup>6</sup>`, `106`), an
+ordinal's ending (`1<sup>st</sup>`, `1st`) and a formula's index or power
+(`2<sup>p</sup>`, a raised letter after a single letter, a term of a formula
+set after `=`). PDFs follow the same rule for the raised glyphs they draw.
+A mark written as a link to a note on the same page, rather than in a
+`<sup>`, is read the same way: `governments<a href="#fn01"
+class="sd-tablefnref">1</a>` reads `governments 1`. The link has to say it
+is a note's, by `role="doc-noteref"` or a class, id, target or label naming
+a note (`fn`, `note`, `foot`); any other link's text reads as written.
 
 In Rust, `fluree_doc_html::parse_with_quote_depth` returns beside the
 elements how many cited quotations enclose each one: a `<blockquote>` with
@@ -283,6 +367,43 @@ a table states where its header ends. Where the PDF engine reports a
 reports a *fact*.
 
 Infallible, for the same reason as HTML.
+
+## Plain text
+
+```bash
+fdoc convert statute.txt -f doco
+```
+
+A text file (`.txt`, `.text`) declares nothing but its lines. A blank line
+ends a paragraph, and the line breaks inside one are kept. A line that starts
+with a list marker (`-`, `*`, `•`, `1.`, `2)`) is a list item, and the lines
+after it continue it until the next marker or a blank line. A bullet is
+dropped and a number kept, because a clause's number is how it is cited.
+
+It is not read as Markdown. An indented line is not code, a line underlined
+with `=` or `-` is not a heading, and `*`, `_` and `<…>` are characters.
+Plain text underlines labels, signatures and column headers, and Markdown
+would make a heading of each.
+
+Its headings are the ones it shows, read as for an [HTML](#html) page
+without heading markup: a line that is a structural keyword and its number,
+with or without its title (`CHAPTER IV`, `§ 7001. Definitions.`,
+`1798.100.`). Such a line at the top of a paragraph is set apart from the
+lines under it, so a heading with its title on the next line reads as a
+heading and its title rather than as one sentence wrapped over two lines.
+Further down a paragraph, such a line stays where it is: there it is more
+likely a reference wrapped onto a line of its own.
+
+Markdown is often saved as `.txt`, and a file that writes Markdown's markup
+is read as Markdown: two headings marked with `#`, the rule under a table's
+header (`|---|---|`), a fenced block, two phrases in `**bold**`, or a link
+written `[label](address)`.
+
+A file is decoded by its byte-order mark, then as UTF-8 when it is valid
+UTF-8, then as Windows-1252. Windows (CR LF) and classic Mac (CR) line ends
+are read as line ends.
+
+Infallible: any sequence of bytes is some text.
 
 ## Why convert Markdown at all
 

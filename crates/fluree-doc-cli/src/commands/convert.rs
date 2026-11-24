@@ -285,6 +285,18 @@ fn convert_path(
                 fluree_doc_model::Notes::default(),
             )
         }
+        // Plain text is read as lines, not as Markdown: an indented line
+        // is not code and a row of `=` makes no heading. Markdown saved
+        // under a text file's name is told by its markup and read as such.
+        Some(SourceKind::Text) => {
+            let text = fluree_doc_text::decode(&data);
+            let elements = if fluree_doc_text::is_markdown(&text) {
+                fluree_doc_markdown::parse(&text)
+            } else {
+                fluree_doc_text::parse(&text)
+            };
+            (elements, fluree_doc_model::Notes::default())
+        }
         Some(SourceKind::Html) => {
             let text = fluree_doc_html::decode(&data);
             (
@@ -533,7 +545,13 @@ fn render(
     notes: &fluree_doc_model::Notes,
 ) -> String {
     match args.format {
-        Format::Md => fluree_doc_model::to_markdown_with(elements, notes),
+        Format::Md => fluree_doc_model::to_markdown_with_options(
+            elements,
+            notes,
+            &fluree_doc_model::MarkdownOptions {
+                links: args.md_links.into(),
+            },
+        ),
         Format::Xhtml => fluree_doc_model::to_xhtml_with(elements, notes),
         Format::Json => serde_json::to_string_pretty(elements).unwrap(),
         Format::Doco => {
@@ -754,7 +772,7 @@ fn convert_bytes(
         running_text: a
             .furniture
             .iter()
-            .filter(|(text, _)| fluree_doc_pdf::furniture::names_something(text))
+            .filter(|(text, vary)| fluree_doc_pdf::furniture::says_something(text, *vary))
             .map(|(text, _)| text.clone())
             .collect(),
         info: fluree_doc_pdf::info::read(&raw),

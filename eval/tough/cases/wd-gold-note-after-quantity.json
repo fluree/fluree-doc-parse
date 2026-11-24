@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "wd-gold-datasheet.pdf",
+    "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-gold/data-sheet-wd-gold-hdd.pdf",
+    "sha256": "341f32848640e76bc71a507b17aa0635608ad2191b58dec742df80b3481159e4",
+    "about": "Western Digital WD Gold data sheet (4 pages). Its body text footnotes capacities and workloads with a note number raised right after the quantity."
+  },
+  "notes": [
+    "2026-11-23 (#79): a raised number after a quantity stayed in it, so 26TB with note 1 read 26TB1. After a quantity it is a note, unless it squares or cubes a unit of length."
+  ],
+  "checks": [
+    {
+      "id": "capacity-note-apart",
+      "found": "2026-11-23",
+      "issue": "Note 1 was read into the capacity: up to 26TB1.",
+      "text": "up to 26TB 1",
+      "count": 2
+    },
+    {
+      "id": "workload-note-apart",
+      "found": "2026-11-23",
+      "issue": "As above, for note 2 on the workload: 550TB2 per year.",
+      "text": "550TB 2 per year"
+    },
+    {
+      "id": "no-glued-capacity",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "no_text": "26TB1"
+    }
+  ]
+}
