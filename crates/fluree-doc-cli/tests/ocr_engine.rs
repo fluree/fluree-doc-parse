@@ -21,6 +21,14 @@ fn scan_of(lines: &[&str]) -> Vec<u8> {
 /// As [`scan_of`], the image `scale` pixels per point of the page (2 is
 /// 144 ppi).
 fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
+    scan_image(lines, scale, 0)
+}
+
+/// As [`scan_at`], the image turned `quarters` quarter turns
+/// counter-clockwise: a sheet fed into the scanner sideways or the wrong
+/// way round, with no `/Rotate` to say so. The page is square, so the image
+/// still covers it.
+fn scan_image(lines: &[&str], scale: f32, quarters: u8) -> Vec<u8> {
     let text = pdf(
         &lines
             .iter()
@@ -47,6 +55,16 @@ fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
             gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
         },
     );
+    for _ in 0..quarters {
+        // A quarter counter-clockwise: the new row y is the old column
+        // w - 1 - y, read top to bottom.
+        let turned: Vec<u8> = (0..w)
+            .flat_map(|y| (0..h).map(move |x| (x, y)))
+            .map(|(x, y)| gray[(x * w + (w - 1 - y)) as usize])
+            .collect();
+        gray = turned;
+        (w, h) = (h, w);
+    }
     let image = [
         format!(
             "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray \
@@ -144,6 +162,103 @@ fn a_scanned_page_reads_as_text() {
         .join("\n");
     assert!(text.contains("4417-0093-21"), "{text}");
     assert!(text.contains("15-OCT-1997"), "{text}");
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn an_upside_down_scan_reads_upright_where_its_text_is() {
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let lines = [
+        "Account number 4417-0093-21",
+        "Date of birth 15-OCT-1997",
+        "Policy holder Margaret Holloway",
+        "Premium due on the first of March",
+    ];
+    let bytes = scan_image(&lines, 2.0, 2);
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+    let mut doc = fluree_doc_pdf::extract_bytes(bytes).unwrap();
+    let pass = fluree_doc_pdf::ocr::read_pages(
+        &mut doc,
+        &raw,
+        &engine,
+        None,
+        fluree_doc_pdf::escalate::CropScale::Stored,
+        0,
+    );
+    assert!(pass.failed.is_empty(), "{:?}", pass.failed);
+    let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+    let text: String = analysis
+        .elements
+        .iter()
+        .map(|e| e.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for want in ["4417-0093-21", "15-OCT-1997", "Margaret Holloway"] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    // The first line is drawn 100 pt from the top of the upright sheet:
+    // on the page as stored, upside down, it sits 100 pt from the bottom,
+    // and that is where its box is, for a highlight to land on it.
+    let first = analysis
+        .elements
+        .iter()
+        .find(|e| e.text.contains("4417-0093-21"))
+        .unwrap();
+    let b = first.bbox.unwrap();
+    let mid = (b.y0 + b.y1) / 2.0;
+    assert!(mid > 285.0 && mid < 320.0, "{b:?}");
+    assert!(b.x1 > 340.0, "the line ends near the right edge: {b:?}");
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_scan_whose_text_runs_up_reads_upright_where_its_text_is() {
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let lines = [
+        "Account number 4417-0093-21",
+        "Date of birth 15-OCT-1997",
+        "Policy holder Margaret Holloway",
+        "Premium due on the first of March",
+    ];
+    // A quarter counter-clockwise: the text runs up the page, which the
+    // pipeline alone reads as noise.
+    let bytes = scan_image(&lines, 2.0, 1);
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+    let mut doc = fluree_doc_pdf::extract_bytes(bytes).unwrap();
+    let pass = fluree_doc_pdf::ocr::read_pages(
+        &mut doc,
+        &raw,
+        &engine,
+        None,
+        fluree_doc_pdf::escalate::CropScale::Stored,
+        0,
+    );
+    assert!(pass.failed.is_empty(), "{:?}", pass.failed);
+    let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
+    let texts: Vec<&str> = analysis.elements.iter().map(|e| e.text.as_str()).collect();
+    let text = texts.join("\n");
+    for want in ["4417-0093-21", "15-OCT-1997", "Margaret Holloway"] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    // Read in the frame where it runs upright: the first line comes first.
+    assert!(texts[0].contains("4417-0093-21"), "{text}");
+    // The first line is drawn 100 pt from the top of the upright sheet:
+    // turned, it runs up the page 100 pt from its left edge, and that is
+    // where its box is.
+    let first = analysis
+        .elements
+        .iter()
+        .find(|e| e.text.contains("4417-0093-21"))
+        .unwrap();
+    let b = first.bbox.unwrap();
+    let mid = (b.x0 + b.x1) / 2.0;
+    assert!(mid > 80.0 && mid < 120.0, "{b:?}");
+    assert!(
+        b.y1 > 340.0 && b.y1 - b.y0 > 200.0,
+        "runs up from near the bottom: {b:?}"
+    );
 }
 
 /// A scratch directory for one test.

@@ -242,7 +242,9 @@ Chinese government documents.
 
 Two failure modes, both detected rather than guessed:
 
-- **The text is pixels.** A scanned page has no glyphs to analyze.
+- **The text is pixels.** A scanned page has no glyphs to analyze; an OCR
+  engine reads it, the built-in one also when the sheet was fed upside down
+  or sideways (see [OCR](../cli/convert.md#ocr)).
 - **The text is garbage.** Broken CID fonts yield glyphs whose Unicode is
   unknown or wrong — the layout can be perfect and the text worthless.
 

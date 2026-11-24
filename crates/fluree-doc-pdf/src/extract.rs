@@ -951,13 +951,8 @@ fn same_box(a: &BBox, b: &BBox) -> bool {
 /// Where a box of a page `w` × `h` lands once the page is turned by `turn`
 /// degrees, as [`turn_page`] turns it.
 fn turn_box(w: f64, h: f64, turn: i32, b: BBox) -> BBox {
-    let point = |(x, y): (f64, f64)| match turn {
-        90 => (y, w - x),
-        180 => (w - x, h - y),
-        _ => (h - y, x),
-    };
-    let (ax, ay) = point((b.x0, b.y0));
-    let (bx, by) = point((b.x1, b.y1));
+    let (ax, ay) = turn_point(w, h, turn, (b.x0, b.y0));
+    let (bx, by) = turn_point(w, h, turn, (b.x1, b.y1));
     BBox {
         x0: ax.min(bx),
         y0: ay.min(by),
@@ -1531,23 +1526,8 @@ fn read_upright(page: &mut Page) {
 /// any it had, so the display frame stays where it was.
 pub(crate) fn turn_page(page: &mut Page, turn: i32) {
     let (w, h) = (page.width, page.height);
-    let point = |(x, y): (f64, f64)| -> (f64, f64) {
-        match turn {
-            90 => (y, w - x),
-            180 => (w - x, h - y),
-            _ => (h - y, x),
-        }
-    };
-    let rect = |b: BBox| -> BBox {
-        let (ax, ay) = point((b.x0, b.y0));
-        let (bx, by) = point((b.x1, b.y1));
-        BBox {
-            x0: ax.min(bx),
-            y0: ay.min(by),
-            x1: ax.max(bx),
-            y1: ay.max(by),
-        }
-    };
+    let point = |p: (f64, f64)| turn_point(w, h, turn, p);
+    let rect = |b: BBox| turn_box(w, h, turn, b);
     for g in page.glyphs.iter_mut() {
         g.origin = point(g.origin);
         g.bbox = g.bbox.map(rect);
@@ -1577,6 +1557,16 @@ pub(crate) fn turn_page(page: &mut Page, turn: i32) {
         page.height = w;
     }
     page.rotation = (page.rotation + turn).rem_euclid(360);
+}
+
+/// Where a point of a page `w` × `h` lands once the page is turned by `turn`
+/// degrees (90, 180 or 270) counter-clockwise, as [`turn_page`] turns it.
+pub(crate) fn turn_point(w: f64, h: f64, turn: i32, (x, y): (f64, f64)) -> (f64, f64) {
+    match turn {
+        90 => (y, w - x),
+        180 => (w - x, h - y),
+        _ => (h - y, x),
+    }
 }
 
 /// Ascent above the baseline as a fraction of font size, for synthesized

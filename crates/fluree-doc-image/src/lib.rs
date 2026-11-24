@@ -488,11 +488,12 @@ fn analysed(
 ) -> ImageElements {
     let (reading, noise) = without_noise(&doc, reading);
     let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
-    let page = &doc.pages[0];
+    // A page OCR turned a quarter to read is still the image as shown.
+    let (width, height) = doc.pages[0].display_size();
     let size = fluree_doc_model::PageSize {
         index: 0,
-        width: page.width,
-        height: page.height,
+        width,
+        height,
         folio: None,
     };
     let mut analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
@@ -1232,6 +1233,37 @@ mod tests {
             (d.pixels.width, d.pixels.height, d.pixels.layout),
             (100, 300, Layout::Luma8)
         );
+    }
+
+    #[test]
+    fn an_image_read_turned_a_quarter_keeps_its_size() {
+        // A 200 × 600 scan of a landscape sheet, its three lines running up
+        // the image: the page is read turned a quarter, and is still the
+        // image as shown.
+        let words = [60.0, 100.0, 140.0]
+            .into_iter()
+            .zip(["Statement", "Account", "Holloway"])
+            .map(|(x, text)| OcrWord {
+                text: text.into(),
+                bbox: [x - 100.0, 290.0, x + 100.0, 310.0],
+                angle: Some(90.0),
+                conf: Some(0.95),
+            })
+            .collect();
+        let reading = WordReading {
+            coords: Coords::Px,
+            width: Some(200.0),
+            height: Some(600.0),
+            engine: None,
+            words,
+        };
+        let read = elements_from_words(&png(200, 600), reading).unwrap();
+        assert_eq!(read.ocr[0].words, 3, "{:?}", read.ocr);
+        assert_eq!((read.size.width, read.size.height), (200.0, 600.0));
+        for e in &read.elements {
+            let b = e.bbox.as_ref().expect("a box");
+            assert!(b.x1 <= 200.0 && b.y1 <= 600.0, "{b:?}");
+        }
     }
 
     #[test]

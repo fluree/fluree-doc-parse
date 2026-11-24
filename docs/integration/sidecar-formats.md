@@ -270,10 +270,15 @@ first, and the runs of one visual line share one baseline. Lines are set
 level, so on a skewed sheet text sits off where it is drawn by its distance
 from the middle of the reading times the skew's tangent. A word 7.5° or more off the sheet's angle is laid on its own: along its angle when it runs sideways (about ±90°), level about its center otherwise. An engine that boxes
 whole lines square, with no `angle`, on a skewed sheet gives nothing to
-measure the skew by: give the angle. A sheet fed upside down, whose words
-the engine states at about 180°, is read in the frame where they run
-upright, as a page drawn upside down is when it is extracted; over a page
-that has its own text, such a reading is refused.
+measure the skew by: give the angle. A sheet fed sideways, two thirds of
+whose text, counted in characters of words of three or more, the engine
+states at about one of ±90°, with less than a quarter of it level, or fed
+upside down, two thirds of its text at about 180° or more of it at 180°
+than level with the two together a quarter of it (an upright fax header
+over a sheet upside down, or a table set sideways on it), is read in the frame where it runs upright, as a page
+drawn turned is when it is extracted, its boxes still on the page as displayed. Over a page that has
+its own text, a reading upside down is refused, and a sideways one has its
+words laid along their angle where they are.
 
 Two runs of one line boxed into each other by up to 1 em, as an engine does
 when it splits a long line, are set one after the other, the second squeezed

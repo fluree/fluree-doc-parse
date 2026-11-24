@@ -895,6 +895,35 @@ fn inputs_of_one_name_are_not_cropped_into_each_other() {
 }
 
 #[test]
+fn an_image_read_turned_a_quarter_is_the_page_it_shows() {
+    // A 200 × 600 scan of a landscape sheet, its three lines running up the
+    // image: OCR reads the page turned a quarter, and the page is still the
+    // image as shown, every box on it.
+    let dir = scratch("sideways");
+    let input = dir.join("sideways.png");
+    let img = image::GrayImage::from_pixel(200, 600, image::Luma([255]));
+    img.save(&input).unwrap();
+    let words: Vec<serde_json::Value> =
+        [(60.0, "Statement"), (100.0, "Account"), (140.0, "Holloway")]
+            .into_iter()
+            .map(|(x, text)| {
+                serde_json::json!({
+                    "text": text, "box": [x - 100.0, 290.0, x + 100.0, 310.0], "angle": 90.0
+                })
+            })
+            .collect();
+    let w = dir.join("words");
+    std::fs::create_dir_all(&w).unwrap();
+    let reading =
+        serde_json::json!({ "coords": "px", "width": 200, "height": 600, "words": words });
+    std::fs::write(w.join("sideways.json"), reading.to_string()).unwrap();
+    let out = convert(&input, &["--ocr-words", w.to_str().unwrap()]);
+    assert!(out.to_string().contains("Holloway"), "{out}");
+    assert_eq!(page_size(&out), (200.0, 600.0), "{out}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn an_image_reads_the_words_sized_as_it_is() {
     // A shared words directory holding a PDF page's words under the image's
     // stem: the image reads its own, sized as it is.

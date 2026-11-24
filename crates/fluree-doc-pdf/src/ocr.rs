@@ -714,28 +714,34 @@ fn inject_one(
         Ok(placed) => placed,
         Err(why) => return refused(page, crop, why),
     };
-    // A sheet fed upside down, read by an engine that says so. Line assembly
-    // reads a line rightwards, up or down, never right to left, so the page
-    // is read in the frame where its words run upright, as a page drawn
-    // upside down is when it is extracted. Only a page whose text is all
-    // pixels can be turned for its reading.
-    let turned = upside_down(&placed);
-    if turned {
+    // A sheet fed upside down or sideways, read by an engine that says so.
+    // Line assembly reads a line rightwards, up or down, never right to
+    // left, and orders lines down the page, so the page is read in the
+    // frame where most of its words run upright, as a page drawn turned is
+    // when it is extracted. Only a page whose text is all pixels can be
+    // turned for its reading.
+    let mut turned = page_turn(&placed);
+    if let Some(turn) = turned {
         // A page with text of its own (a fax header, a stamped number) would
-        // have that text turned with it, and read backwards.
+        // have that text turned with it, and read backwards or sideways.
         let own_text = p.glyphs.iter().any(|g| !g.text.trim().is_empty());
         if !matches!(t.area, Area::Page) || (own_text && !t.replaces) {
-            return refused(
-                page,
-                crop,
-                "the reading runs upside down over a page of text",
-            );
-        }
-        crate::extract::turn_page(p, 180);
-        let (w, h) = (p.width, p.height);
-        for word in placed.iter_mut().flatten() {
-            word.quad = word.quad.map(|(x, y)| (w - x, h - y));
-            word.angle = normalise_deg(word.angle - 180.0);
+            if turn == 180 {
+                return refused(
+                    page,
+                    crop,
+                    "the reading runs upside down over a page of text",
+                );
+            }
+            // Sideways words are laid along their angle where they are.
+            turned = None;
+        } else {
+            let (w, h) = (p.width, p.height);
+            crate::extract::turn_page(p, turn);
+            for word in placed.iter_mut().flatten() {
+                word.quad = word.quad.map(|q| crate::extract::turn_point(w, h, turn, q));
+                word.angle = normalise_deg(word.angle + f64::from(turn));
+            }
         }
     }
     let first_glyph = match &p.ocr {
@@ -758,8 +764,8 @@ fn inject_one(
     // take the place of a text layer.
     // A page turned for a reading it then does not take is turned back.
     let unturn = |p: &mut Page| {
-        if turned {
-            crate::extract::turn_page(p, 180);
+        if let Some(turn) = turned {
+            crate::extract::turn_page(p, 360 - turn);
         }
     };
     if matches!(t.area, Area::Page) && result.taken > 0 && result.taken * 2 < offered {
@@ -963,15 +969,75 @@ fn quarter_turned(read: f64, crop: f64) -> bool {
     r.is_finite() && c.is_finite() && (r - c).abs() > 1.25f64.ln() && (r + c).abs() < 1.05f64.ln()
 }
 
-/// Whether most of a reading's words run upside down on the page.
-fn upside_down(placed: &[Option<Placed>]) -> bool {
-    let words: Vec<&Placed> = placed.iter().flatten().collect();
-    let turned = words
-        .iter()
-        .filter(|w| normalise_deg(w.angle - 180.0).abs() < 2.0 * LEVEL_BELOW_DEG)
-        .count();
-    turned * 2 > words.len()
+/// The turn, in degrees counter-clockwise, that sets a reading's text
+/// upright: 180 when it runs upside down, 90 when it runs down the page, 270
+/// when it runs up it.
+///
+/// Text is weighed by its characters, so the cells of a table count for what
+/// they hold, not as many lines, and words of one or two characters not at
+/// all: a digit's box is about as tall as wide, and an engine states any
+/// angle for it. The page turns a quarter for [`TURN_SHARE`] of its text at
+/// one angle, and only while less than [`KEEP_LEVEL_SHARE`] of it is level: a
+/// page with upright text of its own keeps its frame, and a table set
+/// sideways on it is laid along its angle where it is. It turns a half for
+/// [`TURN_SHARE`] of its text upside down, or for more upside down than level
+/// when the two make [`KEEP_LEVEL_SHARE`] of it: a sheet fed upside down
+/// under an upright fax header, or with a table set sideways on it. None
+/// otherwise.
+fn page_turn(placed: &[Option<Placed>]) -> Option<i32> {
+    let weight = |w: &Placed| {
+        let n = w.text.chars().filter(|c| !c.is_whitespace()).count();
+        if n >= 3 {
+            n as f64
+        } else {
+            0.0
+        }
+    };
+    let words = || placed.iter().flatten();
+    let at = |deg: f64| -> f64 {
+        words()
+            .filter(|w| normalise_deg(w.angle - deg).abs() < 2.0 * LEVEL_BELOW_DEG)
+            .map(weight)
+            .sum()
+    };
+    let total: f64 = words().map(weight).sum();
+    if total == 0.0 {
+        return None;
+    }
+    // Words upside down cannot be laid along their angle where they are:
+    // read in the page's frame, their lines come out last first. The page
+    // turns for them once they outweigh its level text, and its level text
+    // is laid upside down in turn. They are weighed with the level text
+    // against what runs sideways, as level text alone keeps the frame: a
+    // sheet fed upside down with a table set sideways on it is a page with
+    // text of its own, turned a half.
+    let (level, upside_down) = (at(0.0), at(180.0));
+    if upside_down >= TURN_SHARE * total
+        || (upside_down > level && upside_down + level >= KEEP_LEVEL_SHARE * total)
+    {
+        return Some(180);
+    }
+    if level >= KEEP_LEVEL_SHARE * total {
+        return None;
+    }
+    [(-90.0, 90), (90.0, 270)]
+        .into_iter()
+        .find(|&(deg, _)| at(deg) >= TURN_SHARE * total)
+        .map(|(_, turn)| turn)
 }
+
+/// Share of a reading's text, by characters, that must run at one angle for
+/// its page to be read turned.
+const TURN_SHARE: f64 = 2.0 / 3.0;
+
+/// Share of a reading's text, by characters, set level that keeps its page
+/// in its own frame, however much of the rest runs sideways; text upside
+/// down that outweighs the level text makes up that share with it, and the
+/// page is turned a half. A page scanned sideways reads a few hundredths
+/// level at most; a caption line over a table set sideways is about a fifth
+/// of the page's text, and the page reads better turned, the table kept a
+/// table; four lines of text and up keep the frame.
+const KEEP_LEVEL_SHARE: f64 = 0.25;
 
 /// An angle in degrees, brought into (-180, 180].
 fn normalise_deg(a: f64) -> f64 {
@@ -3823,8 +3889,18 @@ mod tests {
         };
         let mut w = word("AB", [100.0, 100.0, 140.0, 120.0]);
         w.angle = Some(90.0);
-        inject(&mut doc, &[(0, Crop::Page, px(vec![w]))]);
-        let g = &doc.pages[0].glyphs;
+        // Most of the page level, so it is read as it stands.
+        let level = vec![
+            word("Name", [300.0, 400.0, 360.0, 420.0]),
+            word("Date", [300.0, 440.0, 360.0, 460.0]),
+        ];
+        inject(&mut doc, &[(0, Crop::Page, px([vec![w], level].concat()))]);
+        assert_eq!(doc.pages[0].rotation, 0);
+        let g: Vec<_> = doc.pages[0]
+            .glyphs
+            .iter()
+            .filter(|g| g.text == "A" || g.text == "B")
+            .collect();
         assert!((g[0].rotation_deg - 90.0).abs() < 1e-6);
         // Read bottom to top: the second letter sits above the first.
         assert!(g[1].origin.1 < g[0].origin.1);
@@ -4933,10 +5009,17 @@ mod tests {
             width: Some(1224.0),
             height: Some(792.0),
             engine: None,
-            words: vec![word("Account Holder", [600.0, 200.0, 640.0, 290.0])],
+            words: vec![
+                word("Account Holder", [600.0, 200.0, 640.0, 290.0]),
+                // Most of the page level, so it is read as it stands.
+                word("Name", [100.0, 500.0, 200.0, 520.0]),
+                word("Date", [100.0, 540.0, 200.0, 560.0]),
+            ],
         };
         inject(&mut doc, &[(0, Crop::Page, reading)]);
-        for g in doc.pages[0].glyphs.iter().filter_map(|g| g.bbox) {
+        assert_eq!(doc.pages[0].rotation, 0);
+        let holder = doc.pages[0].glyphs.iter().filter(|g| g.origin.0 > 250.0);
+        for g in holder.filter_map(|g| g.bbox) {
             assert!(g.y0 >= 199.0 && g.y1 <= 291.0, "{g:?}");
         }
     }
@@ -5193,6 +5276,166 @@ mod tests {
         assert_eq!(texts(&mut doc, &r), [lines.join(" ")]);
     }
 
+    /// Three lines of words on a landscape sheet scanned on a portrait page,
+    /// their text running up the page (`angle` 90°) or down it (-90°), as an
+    /// engine that says so reads them; `off` of them pushed off the page.
+    fn sideways_words(angle: f64, off: usize) -> Vec<OcrWord> {
+        let lines = [
+            "The quick brown fox jumps over the dog",
+            "Pack my box with five dozen liquor jugs",
+            "How vexingly quick daft zebras jump",
+        ];
+        let mut words = Vec::new();
+        for (k, line) in lines.iter().enumerate() {
+            for w in run_words(line, 72.0, 100.0 + 14.0 * k as f64, 13.0, 6.0) {
+                // The word's box on the 792 x 612 sheet, moved to where the
+                // turned sheet shows its center: still the box, turned about
+                // its center by `angle`.
+                let [x0, y0, x1, y1] = w.bbox;
+                let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+                let (nx, ny) = if angle > 0.0 {
+                    (cy, 792.0 - cx)
+                } else {
+                    (612.0 - cy, cx)
+                };
+                let (hw, hh) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
+                let shift = if words.len() < off { 5000.0 } else { 0.0 };
+                words.push(OcrWord {
+                    bbox: [nx - hw + shift, ny - hh, nx + hw + shift, ny + hh],
+                    angle: Some(angle),
+                    ..w
+                });
+            }
+        }
+        words
+    }
+
+    #[test]
+    fn a_page_read_sideways_reads_line_by_line() {
+        let lines = [
+            "The quick brown fox jumps over the dog",
+            "Pack my box with five dozen liquor jugs",
+            "How vexingly quick daft zebras jump",
+        ];
+        for (angle, turn) in [(90.0, 270), (-90.0, 90)] {
+            let mut doc = blank_scan();
+            let words = sideways_words(angle, 0);
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+            assert_eq!(r[0].taken, 22, "{angle}");
+            assert_eq!(doc.pages[0].rotation, turn, "{angle}");
+            // In the turned frame the words run level, and are laid as runs,
+            // a space between them, not one by one about their centers.
+            let glyphs = &doc.pages[0].glyphs;
+            assert!(
+                glyphs.iter().all(|g| g.rotation_deg.abs() < 1e-3),
+                "{angle}"
+            );
+            let first: String = glyphs[..4].iter().map(|g| g.text.as_str()).collect();
+            assert_eq!(first, "The ", "{angle}");
+            assert_eq!(texts(&mut doc, &r), [lines.join(" ")], "{angle}");
+        }
+    }
+
+    #[test]
+    fn a_page_turned_a_quarter_for_a_reading_it_then_refuses_is_turned_back() {
+        // Most of the words off the page, or all of them: the page, turned a
+        // quarter for them, is turned back, not on by a further quarter.
+        for angle in [90.0, -90.0] {
+            for (off, refused) in [
+                (15, Some("most of the reading could not be placed")),
+                (22, Some("none of the reading could be placed")),
+            ] {
+                let mut doc = blank_scan();
+                let before = doc.pages[0].images[0].bbox;
+                let words = sideways_words(angle, off);
+                let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+                assert_eq!((r[0].refused, r[0].taken), (refused, 0), "{angle} {off}");
+                let p = &doc.pages[0];
+                assert_eq!(p.rotation, 0, "{angle} {off}");
+                assert_eq!((p.width, p.height), (612.0, 792.0), "{angle} {off}");
+                let after = p.images[0].bbox;
+                assert!(
+                    (after.x0 - before.x0).abs() < 1e-9
+                        && (after.y0 - before.y0).abs() < 1e-9
+                        && (after.x1 - before.x1).abs() < 1e-9
+                        && (after.y1 - before.y1).abs() < 1e-9,
+                    "{angle} {off}: {after:?}"
+                );
+            }
+        }
+    }
+
+    /// Four lines of upright text at the top of the page, a header over
+    /// whatever the page holds below.
+    fn upright_header() -> (Vec<OcrWord>, Vec<&'static str>) {
+        let lines = vec![
+            "Account number 4417-0093-21",
+            "Date of birth 15-OCT-1997",
+            "Policy holder Margaret Holloway",
+            "Premium due on the first of March",
+        ];
+        let words = (lines.iter().enumerate())
+            .flat_map(|(k, l)| run_words(l, 72.0, 60.0 + 20.0 * k as f64, 13.0, 6.0))
+            .collect();
+        (words, lines)
+    }
+
+    #[test]
+    fn an_upright_page_holding_a_table_set_sideways_keeps_its_frame() {
+        // Below the header, a table turned a quarter: eight rows of four
+        // cells, each a word read along its angle, over two thirds of the
+        // page's words and characters sideways.
+        for angle in [90.0, -90.0] {
+            let (mut words, header) = upright_header();
+            let cells = ["SKU-60138", "Bracket", "Spindle", "Washer"];
+            for row in 0..8 {
+                for (col, cell) in cells.iter().enumerate() {
+                    let (x, y) = (150.0 + 20.0 * row as f64, 300.0 + 80.0 * col as f64);
+                    let len = 6.0 * cell.len() as f64;
+                    words.push(OcrWord {
+                        angle: Some(angle),
+                        ..word(cell, [x - len / 2.0, y - 6.5, x + len / 2.0, y + 6.5])
+                    });
+                }
+            }
+            let mut doc = blank_scan();
+            let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+            assert_eq!(r[0].taken, 32 + 18, "{angle}");
+            assert_eq!(doc.pages[0].rotation, 0, "{angle}");
+            let t = texts(&mut doc, &r).join("\n");
+            let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+            for pair in header.windows(2) {
+                assert!(at(pair[0]) < at(pair[1]), "{angle}: {t}");
+            }
+            assert!(at(header[3]) < at("SKU-60138"), "{angle}: {t}");
+        }
+    }
+
+    #[test]
+    fn an_upright_page_holding_a_grid_of_digits_keeps_its_frame() {
+        // A survey form's scores: single digits, each boxed taller than wide
+        // and stated sideways by the engine, far more of them than lines.
+        let (mut words, header) = upright_header();
+        for row in 0..10 {
+            for col in 0..8 {
+                let (x, y) = (72.0 + 40.0 * col as f64, 200.0 + 25.0 * row as f64);
+                let digit = ((row * 3 + col * 7) % 10).to_string();
+                words.push(OcrWord {
+                    angle: Some(-90.0),
+                    ..word(&digit, [x, y, x + 10.0, y + 7.0])
+                });
+            }
+        }
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        assert_eq!(doc.pages[0].rotation, 0);
+        let t = texts(&mut doc, &r).join("\n");
+        let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+        for pair in header.windows(2) {
+            assert!(at(pair[0]) < at(pair[1]), "{t}");
+        }
+    }
+
     /// Three lines of words as a sheet fed upside down shows them, every
     /// word at 180°; `off` of them pushed off the page.
     fn upside_down_words(off: usize) -> Vec<OcrWord> {
@@ -5219,6 +5462,66 @@ mod tests {
             }
         }
         words
+    }
+
+    #[test]
+    fn a_page_upside_down_holding_digits_is_turned_a_half() {
+        // Single digits read at whatever angle the engine gives them, here
+        // a quarter off, outnumbering the page's words: they do not count.
+        let mut words = upside_down_words(0);
+        for k in 0..60 {
+            let (x, y) = (
+                100.0 + 30.0 * (k % 12) as f64,
+                250.0 - 25.0 * (k / 12) as f64,
+            );
+            words.push(OcrWord {
+                angle: Some(90.0),
+                ..word(&(k % 10).to_string(), [x, y, x + 10.0, y + 7.0])
+            });
+        }
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        assert_eq!(doc.pages[0].rotation, 180);
+        let t = texts(&mut doc, &r).join("\n");
+        assert!(t.starts_with("The quick brown fox"), "{t}");
+    }
+
+    #[test]
+    fn a_page_upside_down_under_an_upright_fax_header_is_turned_a_half() {
+        // A sheet fed upside down, two lines of it, and the header the fax
+        // machine stamped upright on its pixels, read as one line: two fifths
+        // of the text level, the rest upside down. Read in the page's frame,
+        // its lines would come out last first.
+        let header = "From: +1 555 0100 Nov 12 2025 14:02 Page 001 of 003";
+        let mut words = vec![word(header, [30.0, 15.0, 330.0, 25.0])];
+        words.extend(upside_down_words(0).into_iter().take(16));
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        assert_eq!(r[0].taken, 17);
+        assert_eq!(doc.pages[0].rotation, 180);
+        let t = texts(&mut doc, &r).join("\n");
+        let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+        assert!(at("The quick brown fox") < at("Pack my box with"), "{t}");
+        assert!(t.contains(header), "{t}");
+    }
+
+    #[test]
+    fn a_page_upside_down_with_a_table_set_sideways_is_turned_a_half() {
+        // Three lines running up the page, as a table set sideways on it
+        // would, and two upside down: more of the text sideways, but the
+        // lines upside down are the page's own text. Kept in the page's
+        // frame, they would come out last first.
+        let mut words = sideways_words(90.0, 0);
+        words.extend(upside_down_words(0).into_iter().take(16).map(|w| OcrWord {
+            text: w.text.to_uppercase(),
+            ..w
+        }));
+        let mut doc = blank_scan();
+        let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
+        assert_eq!(doc.pages[0].rotation, 180);
+        let t = texts(&mut doc, &r).join("\n");
+        let at = |s: &str| t.find(s).unwrap_or_else(|| panic!("{s} in {t}"));
+        assert!(at("THE QUICK BROWN FOX") < at("PACK MY BOX WITH"), "{t}");
     }
 
     #[test]
