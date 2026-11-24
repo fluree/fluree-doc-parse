@@ -176,7 +176,9 @@ of adjacent columns over a stretch of the page. It is cut across first, at:
 - **a run of lines across its columns**, a title or an author list over
   several lines, taken with a short last line set under it. The lines of a
   run stand a line's space apart at the larger type's size: a display
-  title's lines are more than a body line apart;
+  title's lines are more than a body line apart. A line set just over the
+  run, at its size and nearer it than to the text above, is its label and
+  goes with it: `Notes:` in the left column over notes set across the page;
 - **a table across two of its columns or more**;
 - **a horizontal rule** across most of the region's width;
 - **a gap no line crosses**, at least twice the page's line height. A
@@ -278,7 +280,11 @@ A second guard remains behind it: if more than a quarter of a column's rows
 look like spanning fragments, the page is in columns and none of them are.
 That one catches *justified* two-column text, where every line reaches the
 gutter. Ragged-right text defeats it, because only some lines do — which is
-how this survived until a field report.
+how this survived until a field report. The guard needs six such rows at
+least: justified text gives one on every row of a page's columns, while a
+centred address of three lines over a form's columns of eight or eleven
+lines each is a large share of small columns, and its lines were dealt into
+them.
 
 ## A line across more than one cut, or on a page of columns
 

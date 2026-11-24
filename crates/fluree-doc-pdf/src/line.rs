@@ -375,6 +375,12 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
     /// `Ethics Statement` on the academic papers that dominate the MHS gap.
     const MAX_SPANNING_FRACTION: f64 = 0.25;
 
+    /// Fewest such fragments that show a layout in two columns. Justified
+    /// text gives one on every row of a page's columns; a few rows of a
+    /// centred address over a form's small columns are lines the cut
+    /// bisected, however large a share of those columns they make.
+    const MIN_TWO_COLUMN_ROWS: usize = 6;
+
     for i in 0..per_col.len().saturating_sub(1) {
         let cut = cols[i].x1;
         // Snapshot the geometry of the lines left of the cut so the retain
@@ -423,7 +429,7 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
             .count();
         let limit = (per_col[i + 1].len().max(per_col[i].len()) as f64 * MAX_SPANNING_FRACTION)
             .ceil() as usize;
-        let only_words = candidates > limit;
+        let only_words = candidates > limit && candidates >= MIN_TWO_COLUMN_ROWS;
 
         let mut moved: Vec<Line> = Vec::new();
         per_col[i + 1].retain(|r| match gap_back(r) {
@@ -3195,11 +3201,11 @@ mod tests {
     }
 
     #[test]
-    fn a_word_the_cut_fell_inside_rejoins_on_a_page_of_columns() {
-        // Short columns beside a centred address block: the block's rows are
-        // more than a quarter of the rows, so the guard holds back. A row cut
-        // inside a word (`Toll F|ree`, 0.9pt on 7pt) is still one line; one
-        // cut at a space stays apart.
+    fn a_few_rows_the_cut_bisected_over_short_columns_rejoin() {
+        // A centred address block over a form's short columns: its rows are
+        // more than a quarter of the columns' rows, but four rows are no
+        // page of two-column text. Each is one line, whether the cut fell
+        // inside a word (`Toll F|ree`, 0.9pt on 7pt) or at a space.
         let cols = cols_at(&[166.0]);
         let mut v = vec![
             vec![
@@ -3217,6 +3223,26 @@ mod tests {
         ];
         rejoin_spanning_lines(&mut v, &cols);
         assert_eq!(v[0][0].text, "Fax (636)272-2408 • Toll Free (800)325-6152");
-        assert_eq!(v[1].len(), 3, "rows cut at a space stay apart: {v:?}");
+        assert_eq!(v[0][1].text, "2001 East Terra Lane • O'Fallon, Missouri");
+        assert!(v[1].is_empty(), "every row is one line: {v:?}");
+    }
+
+    #[test]
+    fn a_word_the_cut_fell_inside_rejoins_on_a_page_of_columns() {
+        // Rows that end at the cut and go on just past it, row after row:
+        // a page of two columns, and the guard holds back. A row cut inside
+        // a word is still one line; one cut at a space stays apart.
+        let cols = cols_at(&[166.0]);
+        let mut left = vec![ln("Fax (636)272-2408 • Toll F", 80.0, 165.4, 80.0, 7.0)];
+        let mut right = vec![ln("ree (800)325-6152", 166.3, 320.0, 80.0, 7.0)];
+        for k in 0..6 {
+            let y = 90.0 + 10.0 * k as f64;
+            left.push(ln("the column's text at its edge", 80.0, 165.0, y, 7.0));
+            right.push(ln("Another column's text", 167.5, 320.0, y, 7.0));
+        }
+        let mut v = vec![left, right];
+        rejoin_spanning_lines(&mut v, &cols);
+        assert_eq!(v[0][0].text, "Fax (636)272-2408 • Toll Free (800)325-6152");
+        assert_eq!(v[1].len(), 6, "rows cut at a space stay apart: {v:?}");
     }
 }
