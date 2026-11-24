@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+  ],
+  "checks": [
+    {
+      "id": "closing-link-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The closing link line was a level-5 heading.",
+      "no_section": "Learn more at"
+    }
+  ]
+}

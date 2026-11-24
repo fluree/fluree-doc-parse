@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-23: the photos' figure regions walked across the page, and 80 of its 87 elements were typed doco:Figure, the side-heads among them (#50).",
-    "2026-11-24 (#81): the callouts on the chair photos still reached up over the page title and the heading set over them, and down over the key set under them. Numbered callouts drawn on a photograph now take only their own marks."
+    "2026-11-24 (#81): the callouts on the chair photos still reached up over the page title and the heading set over them, and down over the key set under them. Numbered callouts drawn on a photograph now take only their own marks.",
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
   ],
   "checks": [
     {
@@ -67,6 +68,12 @@
         "type": "doco:Figure",
         "text": "4"
       }
+    },
+    {
+      "id": "link-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The link line at the foot of page 1 was a level-4 heading.",
+      "no_section": "hermanmiller.com"
     }
   ]
 }

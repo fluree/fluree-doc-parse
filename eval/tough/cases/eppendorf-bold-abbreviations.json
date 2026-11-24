@@ -5,6 +5,9 @@
     "sha256": "2d4b6e0e628c0d56eedcc72a7b4e52ec50a3f27ce67b7eb222fcc1c35b48b45e",
     "about": "Eppendorf Multipette E3/E3x performance data sheet (2 pages). Each item of its Applications list sets one abbreviation bold, Dispensing (Dis). Only the bold face declares a weight, and the bold face's digits and signs come from a face that declares none (E3/E3x)."
   },
+  "notes": [
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+  ],
   "checks": [
     {
       "id": "item-with-a-bold-abbreviation-is-no-section",
@@ -35,6 +38,18 @@
         "title": "Applications",
         "level": 2
       }
+    },
+    {
+      "id": "distributor-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The contact lines at the foot of page 2 were level-5 and level-3 headings.",
+      "no_section": "Your local distributor"
+    },
+    {
+      "id": "site-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "no_section": "www.eppendorf.com"
     }
   ]
 }
