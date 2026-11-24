@@ -53,6 +53,18 @@ const MAX_HEADING_CHARS: usize = 200;
 /// Headings are short in *words*, not only characters.
 const MAX_HEADING_WORDS: usize = 12;
 
+/// Most words of a heading that more than its shape vouches for
+/// ([`vouched_for`]). `3. Perspective of supply and demand
+/// balance of wood pellets and cost structure in Japan` is 15 words.
+const MAX_LONG_HEADING_WORDS: usize = 20;
+const MAX_LONG_HEADING_CHARS: usize = 160;
+
+/// Size, against the body, of type set clearly larger than it.
+const DISPLAY_HEADING_RATIO: f64 = 1.5;
+
+/// Size, against the body, of a numbered line set larger than it.
+const NUMBERED_HEADING_RATIO: f64 = 1.1;
+
 /// Tighter limits for the typography-only path, where there is no outline or
 /// numbering to corroborate.
 const MAX_FONTSIZE_HEADING_CHARS: usize = 90;
@@ -328,6 +340,45 @@ fn has_bare_number_label(text: &str) -> bool {
             .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Whether more than a heading's shape vouches for it, so that it may run
+/// longer, on at most two lines: section numbering on a line set larger
+/// than the body, or type set clearly larger than it. A line at the body
+/// size keeps the ordinary limits, numbered or bold: a long numbered line
+/// there is a list's item or a note's (`1. When changing objectives …
+/// the following changes will occur:`), and a sentence set bold is no
+/// heading.
+///
+/// And only a title's shape: a long line ending as a sentence ends (`We've
+/// cut overall product energy use … since 2008.`, `Want to learn more…?`)
+/// or holding a list (`Leticia Morales*1, Beatriz Ricardo 1, Adán Bolaños
+/// 1, …`) is no title, and a bare number is a form's question
+/// (`12 Did you explain to the taxpayer…`), not a section's label. Nor is a
+/// formula (`GFR (mL/min/1.73m²) = 141 x …`) or a bulleted line.
+fn vouched_for(text: &str, b: &Block, body: f32) -> bool {
+    let size = b.font_size as f64 / (body as f64).max(1.0);
+    let t = text.trim();
+    let shaped = !t.ends_with(['.', '?', '!'])
+        && t.matches(',').count() < 2
+        && !t.contains('=')
+        && !t
+            .chars()
+            .next()
+            .is_some_and(|c| block::is_bullet(c) || c == '\u{25CB}');
+    let labelled = numbering_depth(t).is_some() && !has_bare_number_label(t);
+    b.lines.len() <= MAX_FONTSIZE_HEADING_LINES
+        && shaped
+        && ((labelled && size >= NUMBERED_HEADING_RATIO) || size >= DISPLAY_HEADING_RATIO)
+}
+
+/// The most words a block may hold and still be a heading.
+fn word_limit(text: &str, b: &Block, body: f32) -> usize {
+    if vouched_for(text, b, body) {
+        MAX_LONG_HEADING_WORDS
+    } else {
+        MAX_HEADING_WORDS
+    }
+}
+
 /// Shape tests every heading candidate must pass, regardless of which signal
 /// proposed it.
 ///
@@ -342,9 +393,14 @@ fn has_bare_number_label(text: &str) -> bool {
 /// — two sections merge — far more than a spurious one, which merely splits a
 /// section.
 fn title_like(text: &str) -> bool {
+    title_like_within(text, MAX_HEADING_WORDS)
+}
+
+/// [`title_like`], with room for `max_words` words.
+fn title_like_within(text: &str, max_words: usize) -> bool {
     let t = text.trim();
     let words = t.split_whitespace().count();
-    if !(1..=MAX_HEADING_WORDS).contains(&words) {
+    if !(1..=max_words).contains(&words) {
         return false;
     }
     if !(4..=MAX_HEADING_CHARS).contains(&t.chars().count()) {
@@ -498,11 +554,12 @@ fn runs_into_prose(text: &str) -> bool {
 /// caption. The label word plus a number is the test; a heading that merely
 /// *mentions* a figure mid-phrase does not start with the pattern.
 ///
-/// **Not wired into heading detection.** Measured twice (all evidence paths,
-/// then bold-only): −0.0004 overall both times, because this corpus' ground
-/// truth blesses prominent captions as headings often enough that MHS's
-/// recall bias punishes the exclusion. Used where a figure has taken a
-/// caption as its label: a caption is the figure's, whatever its style.
+/// A caption is never a heading on bold or size evidence
+/// ([`not_a_typographic_heading`]), and is the figure's where a figure has
+/// taken it as its label, whatever its style. The benchmark's ground truth
+/// keeps some prominent captions as headings, so the exclusion costs a
+/// little there (−0.0004 when first measured, and −0.0005 on one page whose
+/// real heading was missed, the caption standing in for it).
 pub(crate) fn is_caption(text: &str) -> bool {
     let mut words = text.split_whitespace();
     let Some(first) = words.next() else {
@@ -527,11 +584,13 @@ pub(crate) fn is_caption(text: &str) -> bool {
     if !label {
         return false;
     }
-    // The next token is a number or dotted number ("2.1", "3", "B.2").
+    // The next token is a number, dotted or hyphenated by chapter ("2.1",
+    // "3", "B.2", "5-1").
     words.next().is_some_and(|w| {
         let w = w.trim_end_matches([':', '.', ',']);
         !w.is_empty()
-            && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '\u{2013}'))
             && w.chars().any(|c| c.is_ascii_digit())
     })
 }
@@ -744,7 +803,10 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             .take(4)
             // Once ordinary prose starts, a later isolated equation lead-in
             // is not the document title.
-            .take_while(|b| b.text().split_whitespace().count() <= MAX_HEADING_WORDS)
+            .take_while(|b| {
+                let text = b.text();
+                text.split_whitespace().count() <= word_limit(&text, b, body)
+            })
             .enumerate()
             .filter(|(i, b)| {
                 let text = b.text();
@@ -758,7 +820,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                 let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
                 if b.marker.is_some()
                     || (b.lines.len() > 3 && !stacked)
-                    || !title_like(&text)
+                    || !title_like_within(&text, word_limit(&text, b, body))
                     || (numbering_depth(&text).is_some()
                         && repeated_numbered.contains(&norm(&text)))
                 {
@@ -913,7 +975,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             // An ordered list's item, its number set in its own text: the
             // list counts off from one item to the next, which a section
             // number never does on its own page.
-            if !title_like(&text) || block::counts_off(b) {
+            if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
                 continue;
             }
             // A numbered title occurs once in a document: sections are not
@@ -962,6 +1024,11 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                 });
                 continue;
             }
+            // Typography alone does not make a heading of a caption or of a
+            // field's label with its value beside it.
+            if not_a_typographic_heading(&text, b, blocks) {
+                continue;
+            }
             // 4. Bold, at body size. Documents very commonly set section
             // titles in the body face at the body size, differing only in
             // weight, which no size-based test can see.
@@ -984,7 +1051,13 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             }
             // 5. Typography, for documents with neither. Uncorroborated, so
             // it must also look like a heading: short, and not a paragraph.
-            if n_chars > MAX_FONTSIZE_HEADING_CHARS
+            // Display type may run longer.
+            let char_limit = if b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO {
+                MAX_LONG_HEADING_CHARS
+            } else {
+                MAX_FONTSIZE_HEADING_CHARS
+            };
+            if n_chars > char_limit
                 || b.lines.len() > MAX_FONTSIZE_HEADING_LINES
                 || starts_like_list_item(&text)
             {
@@ -1013,6 +1086,35 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
     drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out);
     out
+}
+
+/// Widest gap, in ems, between a field's label and its value beside it.
+const MAX_LABEL_GAP: f64 = 8.0;
+
+/// A block that bold or size would make a heading but that is something
+/// else:
+///
+/// - a caption, `Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
+///   Functions`: the figure's or the table's, never a section's title. The
+///   benchmark's ground truth keeps some prominent captions as headings,
+///   so this costs a little there;
+/// - a label ending in a colon with its value set beside it on its row,
+///   `Color:`: a field.
+///
+/// A row of cells set side by side is not tested: a slide's card titles
+/// stand side by side as often as a table's header cells do.
+fn not_a_typographic_heading(text: &str, b: &Block, page: &[Block]) -> bool {
+    if is_caption(text) {
+        return true;
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    text.trim_end().ends_with(':')
+        && page.iter().any(|o| {
+            !std::ptr::eq(o, b)
+                && (o.bbox.y0 - b.bbox.y0).abs() <= fs * 0.5
+                && o.bbox.x0 >= b.bbox.x1
+                && o.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP
+        })
 }
 
 /// A kicker is not a section: a category, series name or tagline set in
@@ -1460,22 +1562,22 @@ mod tests {
         assert_eq!(texts, ["Exos X16", "Best-Fit Applications"], "{hs:?}");
     }
 
+    fn body() -> Block {
+        blk(
+            "Some body text that runs on for a while here and more.",
+            10.0,
+            3,
+        )
+    }
+
     #[test]
     fn a_divisions_label_over_its_title_stays_a_heading_at_its_level() {
         let page = vec![
             blk("Chapter 3", 14.0, 1),
             blk("Numerical differentiation", 24.0, 1),
-            blk(
-                "Some body text that runs on for a while here and more.",
-                10.0,
-                3,
-            ),
+            body(),
             blk("3.1 Introduction", 14.0, 1),
-            blk(
-                "Some body text that runs on for a while here and more.",
-                10.0,
-                3,
-            ),
+            body(),
         ];
         let hs = detect(&[page], &[]);
         let got: Vec<(&str, usize)> = hs.iter().map(|h| (h.text.as_str(), h.level)).collect();
@@ -1487,6 +1589,52 @@ mod tests {
         assert!(!division_label("Chapter 3 Numerical differentiation"));
         assert!(!division_label("Scalable. Responsive."));
         assert!(!division_label("Section"));
+    }
+
+    #[test]
+    fn a_caption_or_a_field_label_is_no_heading_by_typography() {
+        let mut caption = blk("Figure 5-1. Low-Level Output Voltage", 10.0, 1);
+        caption.bold = true;
+        let mut head = blk("Typical Characteristics", 10.0, 1);
+        head.bold = true;
+        let page = vec![head, body(), caption, body()];
+        let hs = detect(&[page], &[]);
+        let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["Typical Characteristics"], "{hs:?}");
+        // A label with its value beside it on its row.
+        let mut label = blk("Color:", 10.0, 1);
+        label.bold = true;
+        let mut value = blk("Most colors", 10.0, 1);
+        value.bbox.x0 = label.bbox.x1 + 10.0;
+        value.bbox.x1 = value.bbox.x0 + 60.0;
+        value.bbox.y0 = label.bbox.y0;
+        value.bbox.y1 = label.bbox.y1;
+        let page = vec![label.clone(), value];
+        assert!(not_a_typographic_heading("Color:", &label, &page));
+        assert!(!not_a_typographic_heading("Color:", &label, &page[..1]));
+    }
+
+    #[test]
+    fn a_long_title_is_a_heading_when_numbered_and_set_larger_or_set_as_display() {
+        let long = "3. Perspective of supply and demand balance of wood pellets and cost structure in Japan";
+        let page = vec![blk(long, 13.0, 1), body(), body(), body()];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().any(|h| h.text == long), "{hs:?}");
+        // Numbered at the body size: a list's item or a note's.
+        let item = "1. When changing objectives from scanning power to lower power to high power the following changes will occur:";
+        let page = vec![blk("Steps", 14.0, 1), body(), blk(item, 10.0, 1), body()];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().all(|h| h.text != item), "{hs:?}");
+        // Display type: a slide's statement.
+        let statement = "Upstage offers 3 AI packs that process unstructured information and data, making a tangible impact";
+        let page = vec![
+            blk("AI Pack", 13.0, 1),
+            blk(statement, 22.0, 1),
+            body(),
+            body(),
+        ];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().any(|h| h.text == statement), "{hs:?}");
     }
 
     #[test]
@@ -1717,6 +1865,7 @@ mod tests {
         ));
         assert!(is_caption("Table 3 Results of the second survey"));
         assert!(is_caption("Diagram 4 Distribution of Instagram Content"));
+        assert!(is_caption("Figure 5-1. Low-Level Output Voltage"));
         assert!(!is_caption("Figures of speech in modern prose"));
         assert!(!is_caption("The Table Mountain region"));
         assert!(!is_caption("2. General Profile of MSMEs"));
