@@ -470,6 +470,64 @@ fn a_tall_capture_is_read_row_by_row() {
 
 #[test]
 #[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
+fn a_capture_of_small_text_is_read_again_in_strips() {
+    // 1,000 × 2,600 pixels of 160 rows of 10 px text: its shape is a
+    // screen's, but the detector, shrinking it to 0.77, sees its lines 9 px
+    // thick and misses some. Read whole first, it is read again in strips.
+    use fluree_doc_vision::OcrEngine;
+    let dir = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
+    let engine = OarEngine::open(&dir, &OarOptions::default()).unwrap();
+    let rows: String = (0..160)
+        .map(|i| {
+            format!(
+                "BT /F1 5 Tf 12 {} Td (Row {i:03} account {} transfer pending {}.{:02} reference {}) Tj ET\n",
+                1290 - 8 * i,
+                4417 + 7 * i,
+                120 + 13 * i,
+                i % 100,
+                88310 + 29 * i
+            )
+        })
+        .collect();
+    let bytes = pdf_sized(
+        500,
+        1300,
+        &rows,
+        "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+        None,
+    );
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+    let mut image = None;
+    fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| image = Some(c.pixels));
+    let image = image.unwrap();
+    assert_eq!((image.width, image.height), (1000, 2600));
+    let reading = engine.read(&image).unwrap();
+    let mut seen = vec![0; 160];
+    for w in &reading.words {
+        let t: String = w.text.split_whitespace().collect();
+        if let Some(n) = t
+            .strip_prefix("Row")
+            .and_then(|r| r.get(..3)?.parse::<usize>().ok())
+        {
+            if n < 160 {
+                seen[n] += 1;
+            }
+        }
+    }
+    let once = seen.iter().filter(|&&n| n == 1).count();
+    assert_eq!(
+        once,
+        160,
+        "rows read other than once: {:?}",
+        seen.iter()
+            .enumerate()
+            .filter(|(_, n)| **n != 1)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+#[ignore = "needs the OCR assets: set FDOC_OCR_MODELS"]
 fn a_page_scanned_sideways_at_300_dpi_is_read_whole() {
     // A landscape sheet scanned on a Letter page at 300 dpi, 2,550 × 3,300
     // pixels: its 15 lines run down the page, from row 100 or so past row
