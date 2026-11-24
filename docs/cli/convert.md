@@ -154,5 +154,5 @@ analyzed; the filter applies to the emitted elements, so cross-page structure
 ## Compatibility forms
 
 `fdoc md`, `fdoc json` and `fdoc xhtml` are hidden single-file equivalents of
-`convert <file> --format <fmt>`, kept because benchmark adapters shell them.
-Prefer `convert`.
+`convert <file> --format <fmt> --no-escalate`, kept for scripts that shell
+them. Prefer `convert`.

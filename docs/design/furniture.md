@@ -98,6 +98,11 @@ and nothing lies on it. A figure that repeats and overlaps its own labels
 does so the same way on every page, and is drawn among the page's text, so
 it is kept as well.
 
+A line OCR read is never a watermark, as it is never furniture: on a scan
+the same text repeats for its own reasons, such as a form copied per
+applicant with the same note down the margin of every copy. Its words still
+count as the text beneath a watermark the PDF draws over the scan.
+
 ## Matching inside table cells
 
 Removing furniture from prose is not enough — it also has to be scrubbed from
@@ -127,6 +132,15 @@ be: the start or end of a block that reaches into the page's top or bottom
 band. A running header is often a phrase the document's sentences use, and
 stripped wherever it occurred, a set of minutes headed `Federal Open Market
 Committee` lost the committee's name from every sentence that named it.
+
+Two running lines can merge into one block together, a chapter title over
+its number, and the inner one stands at the block's end only once the outer
+one is gone; a cell can hold a title block's `DATE: -`, where the `-` is a
+pattern too, left whole only once `DATE:` is cut. So the patterns are tried
+until none takes anything more, the longer first where two overlap (`DATE:`
+before `DATE`). What is left does not depend on the order the patterns were
+found in. Tried once each in an arbitrary order, the same document read
+differently from one run to the next.
 
 ## What is not furniture
 

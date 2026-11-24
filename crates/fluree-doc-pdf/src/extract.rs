@@ -1025,10 +1025,16 @@ fn infer_weights(pages: &mut [Page], ink: &[Vec<Option<(u128, f64)>>]) {
     }
     // The body face is the one setting the most letters. Comparing against the
     // mean of all faces instead would let a heading-heavy page drag the
-    // reference upward and hide the very contrast being looked for.
+    // reference upward and hide the very contrast being looked for. Two faces
+    // setting as many letters are told apart by their ink, the lighter being
+    // the body, and then by font, so the choice is the same on every run.
     let (_, &(body_n, body_sum)) = stats
         .iter()
-        .max_by_key(|(_, (n, _))| *n)
+        .max_by(|(ka, (na, sa)), (kb, (nb, sb))| {
+            na.cmp(nb)
+                .then_with(|| (sb / *nb as f64).total_cmp(&(sa / *na as f64)))
+                .then_with(|| kb.cmp(ka))
+        })
         .expect("non-empty");
     let threshold = (body_sum / body_n as f64) * BOLD_INK_MARGIN;
     let bold: std::collections::HashSet<u128> = stats
@@ -1443,6 +1449,16 @@ mod tests {
             Some(700),
             "denser face reads bold"
         );
+    }
+
+    #[test]
+    fn of_two_faces_setting_as_many_letters_the_lighter_is_the_body() {
+        for _ in 0..8 {
+            let mut pages = vec![page(200)];
+            infer_weights(&mut pages, &ink(100, 100, 0.65));
+            assert!(pages[0].glyphs[0].weight.is_none());
+            assert_eq!(pages[0].glyphs[199].weight, Some(700));
+        }
     }
 
     #[test]
