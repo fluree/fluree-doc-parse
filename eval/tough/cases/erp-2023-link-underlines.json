@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "erp-2023.pdf",
+    "url": "https://www.govinfo.gov/content/pkg/ERP-2023/pdf/ERP-2023.pdf",
+    "sha256": "651e037dc3e12753417c3a565b2ac1b0c963e5c99c77b90808f65db643d7fb5a",
+    "about": "Economic Report of the President, 2023 (513 pages). Its citations are links, each underlined with a drawn rule, and a line citing three sources in a row carries three rules under it, evenly spaced across the measure."
+  },
+  "notes": [
+    "The underlines of a line of citations were read as a rank of rules under column headings, and the page as three columns at the gaps between the links: on ten pages of prose. On two the paragraph broke at that line, and a citation's link with it."
+  ],
+  "checks": [
+    {
+      "id": "citation-link-whole",
+      "found": "2026-11-24",
+      "issue": "The paragraph broke after `Protopsaltis and`, and the link was cut in two with it.",
+      "element": {"type": "doc:Link", "text": "Protopsaltis and Parrott 2017"}
+    },
+    {
+      "id": "paragraph-not-broken-at-the-underlines",
+      "found": "2026-11-24",
+      "issue": "The citation's last words stood as a paragraph of their own.",
+      "element": {"type": "doco:Paragraph", "text": "Parrott 2017)."},
+      "count": 0
+    },
+    {
+      "id": "second-page-paragraph-not-broken",
+      "found": "2026-11-24",
+      "issue": "As above, on another page: `U.S. Department of the` / `Treasury 2021).`",
+      "element": {"type": "doco:Paragraph", "text": "Treasury 2021)."},
+      "count": 0
+    }
+  ]
+}
