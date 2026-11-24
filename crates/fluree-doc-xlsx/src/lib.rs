@@ -1109,8 +1109,10 @@ fn layout(sheet: &Sheet, page: usize) -> Vec<Element> {
         for c in cells.values() {
             *hist.entry((c.size * 2.0).round() as u32).or_default() += c.text.len();
         }
+        // Of two sizes setting as much text, the smaller, as for a PDF's
+        // body; taken in the map's order, the choice changed between runs.
         hist.into_iter()
-            .max_by_key(|(_, n)| *n)
+            .max_by_key(|&(k, n)| (n, std::cmp::Reverse(k)))
             .map(|(k, _)| k as f32 / 2.0)
             .unwrap_or(11.0)
     };
@@ -2177,6 +2179,27 @@ mod tests {
             kinds(&parse_sheet(&xml)),
             vec!["doco:SectionTitle:1", "doco:Paragraph", "doco:Paragraph"]
         );
+    }
+
+    #[test]
+    fn of_two_sizes_setting_as_much_text_the_smaller_is_the_body() {
+        // As much text at 11pt as at 9pt: the 9pt is the body, and the 11pt
+        // cell standing alone above it is display type.
+        let xml = sheet(
+            &[
+                text("A1", 0, "Site summary"),
+                text("A3", 3, "Site"),
+                text("B3", 3, "Visits"),
+                text("A4", 3, "Rd"),
+            ],
+            "",
+        );
+        for _ in 0..8 {
+            assert_eq!(
+                kinds(&parse_sheet(&xml)),
+                vec!["doco:SectionTitle:1", "doco:SectionTitle:2", "doco:Table"]
+            );
+        }
     }
 
     #[test]

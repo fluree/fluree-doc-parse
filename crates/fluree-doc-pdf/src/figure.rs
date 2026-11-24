@@ -355,14 +355,25 @@ pub fn doubt(elements: &[fluree_doc_model::Element], page: usize) -> Option<Doub
 /// beside a column of short blocks, and walked from block to block the
 /// region crossed the page: a fact sheet's paragraphs and table titles, a
 /// sell sheet's headings and bullets, all typed as the logo's labels. Text
-/// at prose size is the drawing's only when it is near the drawing itself;
-/// a label set smaller, as tick labels, legends and source notes are, may
-/// be reached through the labels already taken.
+/// at prose size is the drawing's only when it is near the drawing itself,
+/// and beside, above or below it rather than off a corner: a cover's
+/// description set clear of its logo's corner was typed as the logo's
+/// label. A label set smaller, as tick labels, legends and source notes
+/// are, may be reached through the labels already taken.
 ///
 /// The reach is the drawing's own size throughout, so the walk does not
 /// compound. Only short blocks are absorbed, so a paragraph beside the
 /// chart stays prose however close it is set.
-pub fn attach(figures: &mut [Figure], blocks: &[(BBox, f32)], page: (f64, f64), prose: f32) {
+///
+/// Numbered callouts on a photograph reach for nothing (see [`callouts`]):
+/// their labels are the marks in them, inside the drawing already.
+pub fn attach(
+    figures: &mut [Figure],
+    blocks: &[(BBox, f32, &str)],
+    images: &[BBox],
+    page: (f64, f64),
+    prose: f32,
+) {
     let (page_width, page_height) = page;
     let max_w = page_width * LABEL_MAX_WIDTH;
     // The same bound detection applies: a region this large is the page, not a
@@ -374,7 +385,12 @@ pub fn attach(figures: &mut [Figure], blocks: &[(BBox, f32)], page: (f64, f64), 
             && b.width() / page_width > MAX_PAGE_FRACTION
             && b.height() / page_height > MAX_PAGE_FRACTION
     };
+    // A page-sized image is the page's background, not a picture on it.
+    let photos: Vec<BBox> = images.iter().copied().filter(|b| !too_big(b)).collect();
     for f in figures.iter_mut() {
+        if callouts(&f.bbox, blocks, &photos) {
+            continue;
+        }
         let drawing = f.bbox;
         let reach = drawing.width().min(drawing.height()) * LABEL_REACH;
         let near = |b: &BBox, r: &BBox| {
@@ -382,14 +398,20 @@ pub fn attach(figures: &mut [Figure], blocks: &[(BBox, f32)], page: (f64, f64), 
             let dy = (b.y0 - r.y1).max(r.y0 - b.y1).max(0.0);
             dx <= reach && dy <= reach
         };
+        // Beside, above or below the drawing: sharing its height or its
+        // width. Text off one of its corners is the page's.
+        let beside = |b: &BBox| {
+            b.x1.min(drawing.x1) > b.x0.max(drawing.x0)
+                || b.y1.min(drawing.y1) > b.y0.max(drawing.y0)
+        };
         loop {
             let mut grew = false;
-            for (b, size) in blocks {
+            for (b, size, _) in blocks {
                 if b.width() > max_w {
                     continue;
                 }
                 let label = *size < prose * LABEL_SIZE;
-                if !near(b, &drawing) && !(label && near(b, &f.bbox)) {
+                if !(near(b, &drawing) && (label || beside(b))) && !(label && near(b, &f.bbox)) {
                     continue;
                 }
                 let grown = f.bbox.union(b);
@@ -412,6 +434,84 @@ pub fn attach(figures: &mut [Figure], blocks: &[(BBox, f32)], page: (f64, f64), 
 /// Largest size, against the page's prose, at which text is a drawing's
 /// label wherever it stands among the others.
 const LABEL_SIZE: f32 = 0.95;
+
+/// Is the drawing a photograph's numbered callouts, rather than a chart?
+///
+/// A product sheet numbers the parts of its photo with circles drawn over
+/// the picture, and they cluster as a chart's shapes do. But the photo is
+/// the figure and the numbers in the circles its only labels. Grown by a
+/// chart's reach, the region took the page's title and the heading set over
+/// the photo, set as the page's other headings are, and the key set under
+/// it.
+///
+/// Callouts are drawn on a picture: photographs lie under most of the
+/// drawing. And a callout says nothing but its mark: every block inside the
+/// drawing is a number of one or two figures or a single letter. A
+/// scientific figure's annotations over its panels say `sky` and `near
+/// coast`, and a chart drawn over a picture sets values and years in it, so
+/// both reach for their labels as charts do.
+fn callouts(drawing: &BBox, blocks: &[(BBox, f32, &str)], photos: &[BBox]) -> bool {
+    let inside: Vec<&str> = blocks
+        .iter()
+        .filter(|(b, ..)| share_inside(b, drawing) >= MARK_INSIDE)
+        .map(|(_, _, t)| *t)
+        .collect();
+    inside.len() >= 2
+        && inside.iter().all(|t| callout_mark(t))
+        && photo_cover(drawing, photos) >= PHOTO_COVER
+}
+
+/// A callout's mark: `3`, `12`, `B`, `⑤`.
+fn callout_mark(text: &str) -> bool {
+    let t = text.trim();
+    let n = t.chars().count();
+    (1..=2).contains(&n) && t.chars().all(|c| c.is_ascii_digit())
+        || (n == 1
+            && t.chars()
+                .all(|c| c.is_ascii_alphabetic() || ('\u{2460}'..='\u{2473}').contains(&c)))
+}
+
+/// Share of `b` inside `r`.
+fn share_inside(b: &BBox, r: &BBox) -> f64 {
+    let w = (b.x1.min(r.x1) - b.x0.max(r.x0)).max(0.0);
+    let h = (b.y1.min(r.y1) - b.y0.max(r.y0)).max(0.0);
+    w * h / (b.width() * b.height()).max(1e-9)
+}
+
+/// Share of the drawing that photographs lie under, counted once where
+/// they overlap: sampled on a grid, since a figure's pictures are often
+/// drawn in overlapping pieces.
+fn photo_cover(drawing: &BBox, photos: &[BBox]) -> f64 {
+    if drawing.width() <= 0.0 || drawing.height() <= 0.0 {
+        return 0.0;
+    }
+    let steps = PHOTO_SAMPLES;
+    let mut under = 0usize;
+    for i in 0..steps {
+        for j in 0..steps {
+            let x = drawing.x0 + (i as f64 + 0.5) * drawing.width() / steps as f64;
+            let y = drawing.y0 + (j as f64 + 0.5) * drawing.height() / steps as f64;
+            if photos
+                .iter()
+                .any(|p| p.x0 <= x && x <= p.x1 && p.y0 <= y && y <= p.y1)
+            {
+                under += 1;
+            }
+        }
+    }
+    under as f64 / (steps * steps) as f64
+}
+
+/// Share of a drawing that photographs must lie under for it to be drawn on
+/// them.
+const PHOTO_COVER: f64 = 0.8;
+
+/// Points to a side of the grid [`photo_cover`] samples.
+const PHOTO_SAMPLES: usize = 20;
+
+/// Share of a block inside a drawing for it to be one of the drawing's own
+/// marks.
+const MARK_INSIDE: f64 = 0.6;
 
 #[cfg(test)]
 mod tests {
@@ -544,7 +644,7 @@ mod tests {
         // and the chain used to cross the whole page: the region reached
         // y=768 and every paragraph under the banner came out as a figure
         // fragment with no prose emitted at all.
-        let blocks: Vec<(BBox, f32)> = (0..16)
+        let blocks: Vec<(BBox, f32, &str)> = (0..16)
             .map(|i| {
                 (
                     bb(
@@ -554,17 +654,40 @@ mod tests {
                         210.0 + 40.0 * i as f64,
                     ),
                     7.0,
+                    "caption",
                 )
             })
             .collect();
         let mut figs = banner();
-        attach(&mut figs, &blocks, (612.0, 792.0), 10.0);
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
         let grown = figs[0].bbox;
         assert!(
             grown.height() / 792.0 <= MAX_PAGE_FRACTION,
             "figure grew to {:.0}pt of a 792pt page",
             grown.height()
         );
+    }
+
+    #[test]
+    fn prose_off_a_drawings_corner_is_not_its_label() {
+        // A cover's logo, and the description set clear of its corner, at
+        // the page's prose size; a caption under it at prose size is the
+        // logo's.
+        let mut figs = vec![Figure {
+            bbox: bb(222.0, 78.0, 277.0, 126.0),
+            page: 0,
+            shapes: 15,
+        }];
+        let blocks = vec![(
+            bb(294.0, 150.0, 548.0, 181.0),
+            10.0,
+            "The insulation is a loose-fill thermal fiberglass",
+        )];
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
+        assert_eq!(figs[0].bbox.x1, 277.0, "the description stays prose");
+        let blocks = vec![(bb(230.0, 132.0, 270.0, 142.0), 10.0, "Logo")];
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
+        assert_eq!(figs[0].bbox.y1, 142.0, "the caption under it is its label");
     }
 
     #[test]
@@ -577,11 +700,11 @@ mod tests {
             shapes: 12,
         }];
         let blocks = vec![
-            (bb(96.0, 470.0, 150.0, 480.0), 7.0),  // tick label below
-            (bb(210.0, 470.0, 260.0, 480.0), 7.0), // another tick
-            (bb(120.0, 285.0, 180.0, 295.0), 7.0), // value label above
+            (bb(96.0, 470.0, 150.0, 480.0), 7.0, "2021"), // tick label below
+            (bb(210.0, 470.0, 260.0, 480.0), 7.0, "2022"), // another tick
+            (bb(120.0, 285.0, 180.0, 295.0), 7.0, "37%"), // value label above
         ];
-        attach(&mut figs, &blocks, (612.0, 792.0), 10.0);
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
         assert!(
             figs[0].bbox.y1 >= 480.0,
             "labels below the axis belong to it"
@@ -628,13 +751,13 @@ mod tests {
             page: 0,
             shapes: 33,
         }];
-        let column: Vec<(BBox, f32)> = (0..6)
+        let column: Vec<(BBox, f32, &str)> = (0..6)
             .map(|i| {
                 let y = 130.0 + 30.0 * i as f64;
-                (bb(30.0, y, 210.0, y + 20.0), 10.0)
+                (bb(30.0, y, 210.0, y + 20.0), 10.0, "heading")
             })
             .collect();
-        attach(&mut figs, &column, (612.0, 792.0), 10.0);
+        attach(&mut figs, &column, &[], (612.0, 792.0), 10.0);
         assert!(figs[0].bbox.y1 <= 150.0, "grew to {:?}", figs[0].bbox);
         // Set smaller, as a chart's tick labels are, the same blocks chain.
         let mut figs = vec![Figure {
@@ -642,8 +765,8 @@ mod tests {
             page: 0,
             shapes: 33,
         }];
-        let ticks: Vec<(BBox, f32)> = column.iter().map(|(b, _)| (*b, 7.0)).collect();
-        attach(&mut figs, &ticks, (612.0, 792.0), 10.0);
+        let ticks: Vec<(BBox, f32, &str)> = column.iter().map(|(b, _, t)| (*b, 7.0, *t)).collect();
+        attach(&mut figs, &ticks, &[], (612.0, 792.0), 10.0);
         assert!(figs[0].bbox.y1 >= 300.0, "stopped at {:?}", figs[0].bbox);
     }
 
@@ -655,8 +778,65 @@ mod tests {
             shapes: 12,
         }];
         // A full-measure paragraph: wider than a label can be.
-        let blocks = vec![(bb(27.0, 470.0, 560.0, 520.0), 10.0)];
-        attach(&mut figs, &blocks, (612.0, 792.0), 10.0);
+        let blocks = vec![(bb(27.0, 470.0, 560.0, 520.0), 10.0, "prose")];
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
         assert_eq!(figs[0].bbox.y1, 460.0, "a paragraph is not a label");
+    }
+
+    #[test]
+    fn numbered_callouts_on_a_photo_reach_for_nothing() {
+        // Callout circles over two product photos, numbered 1 to 3, under a
+        // heading set 12pt above them and over a key set 14pt below.
+        let photos = [bb(40.0, 87.0, 172.0, 220.0), bb(174.0, 87.0, 303.0, 221.0)];
+        let callouts = || {
+            vec![Figure {
+                bbox: bb(41.0, 88.0, 302.0, 219.0),
+                page: 0,
+                shapes: 8,
+            }]
+        };
+        let around = vec![
+            (bb(37.0, 66.0, 110.0, 77.0), 11.0, "Key Features"),
+            (bb(37.0, 233.0, 120.0, 240.0), 7.0, "1. 8Z Pellicle"),
+            (bb(172.0, 91.0, 175.0, 96.0), 4.5, "1"),
+            (bb(109.0, 125.0, 112.0, 130.0), 4.5, "2"),
+            (bb(214.0, 167.0, 217.0, 172.0), 4.5, "3"),
+        ];
+        let mut figs = callouts();
+        attach(&mut figs, &around, &photos, (792.0, 612.0), 7.0);
+        assert_eq!(figs[0].bbox, bb(41.0, 88.0, 302.0, 219.0));
+        // The same drawing on the page, with no photo under it, is a chart's.
+        let mut figs = callouts();
+        attach(&mut figs, &around, &[], (792.0, 612.0), 7.0);
+        assert!(figs[0].bbox.y0 <= 66.0, "kept to {:?}", figs[0].bbox);
+    }
+
+    #[test]
+    fn annotations_over_panels_reach_as_a_chart_does() {
+        // A scientific figure's arrows over its image panels, labelled in
+        // words: its labels around the drawing are still its own.
+        let panels = [bb(212.0, 234.0, 462.0, 446.0)];
+        let mut figs = vec![Figure {
+            bbox: bb(212.0, 297.0, 462.0, 430.0),
+            page: 0,
+            shapes: 9,
+        }];
+        let labels = vec![
+            (bb(310.0, 300.0, 347.0, 305.0), 5.0, "near coast"),
+            (bb(309.0, 310.0, 322.0, 315.0), 5.0, "sea"),
+            (bb(408.0, 262.0, 420.0, 270.0), 5.0, "sky"),
+        ];
+        attach(&mut figs, &labels, &panels, (612.0, 792.0), 9.0);
+        assert!(figs[0].bbox.y0 <= 262.0, "kept to {:?}", figs[0].bbox);
+    }
+
+    #[test]
+    fn a_callout_mark_is_a_short_number_or_a_letter() {
+        for t in ["3", "12", "B", "\u{2464}"] {
+            assert!(callout_mark(t), "{t}");
+        }
+        for t in ["123", "37%", "2021", "sky", "1.", "AB"] {
+            assert!(!callout_mark(t), "{t}");
+        }
     }
 }

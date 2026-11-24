@@ -165,7 +165,8 @@ text that would not split two pages' content. Page numbers are excluded, bare
 or as `Page 3 of 15`: a folio identifies nothing about the document. It
 identifies a page, and is kept on that page's entry in `doc:pages`. A line
 the same on every page is no page number, and is kept however it reads: a
-telephone number, a revision year.
+telephone number, a revision year. The lines are in the order they are
+first printed: page by page, and down each page as it reads.
 
 ## Pages nothing read
 

@@ -5,15 +5,17 @@ stands, how to reproduce that in about ten minutes, and which documents carry
 the deficit. [`eval/TEST_PLAN.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/TEST_PLAN.md)
 remains the full record; this is the working face of it.
 
-Measured 2026-10-07 on opendataloader-bench, 200 documents.
+Measured 2026-11-23 on opendataloader-bench, 200 documents, with
+`--md-links text` (links written as their words, as the reference writes
+them).
 
 ## Where we stand
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse-cascade** | **0.934448** | 0.9484 | 0.9420 | 0.8814 | ~1.5¹ |
+| 1 | **fluree-doc-parse-cascade** | **0.940703** | 0.9512 | 0.9420 | 0.9012 | ~1.5¹ |
 | 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.894673** | 0.9238 | 0.8616 | 0.8172 | **~0.009**² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.901319** | 0.9264 | 0.8616 | 0.8402 | **~0.011**² |
 | 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
 | 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
 | 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
@@ -31,33 +33,38 @@ Measured 2026-10-07 on opendataloader-bench, 200 documents.
 
 ² Warm, median of five. **The harness spawns 200 separate `fdoc` processes**,
 so this number is substantially process startup and page cache, not parsing —
-treat it as an upper bound on the engine and never as a profile of it. A cold
-run costs ~10.7 ms/doc against 8.0–8.9 ms warm across two independent
-measurements. A single timing is not a measurement: warm up, then take the
-median of five. This directory's own history contains a latency "regression"
-that was only ever a first run.
+treat it as an upper bound on the engine and never as a profile of it. Five
+warm runs measured 11.2–11.8 ms; in one process (`fdoc convert <dir> -j 1`)
+the same 200 documents take 7.7 ms each. A single timing is not a
+measurement: warm up, then take the median of five. This directory's own
+history contains a latency "regression" that was only ever a first run, and
+a real one that doubled the time: a per-letter scan over the whole page,
+found by timing each build against the one before it, interleaved per
+document so that the machine's load falls on both alike.
 
-¹ The benchmark reports 0.010 s/doc for the cascade, which is only the Rust
+¹ The benchmark reports 0.012 s/doc for the cascade, which is only the Rust
 pass reading cached model output. Honestly: 87 of 200 documents escalate,
 113 never leave the Rust pass at 8 ms, the median escalated document costs
 1.7 s and the worst 18.9 s. Quote ~1.5 s/document, or 51 s for the corpus at
 the 6-way concurrency the runner uses.
 
-**The deterministic engine is 0.0096 ahead of nutrient**, after weak
+**The deterministic engine is 0.0163 ahead of nutrient**, after weak
 typography inside deterministic figure regions was demoted, split heading
 fragments were coalesced, and false numbered sentences, page labels, formulas,
 and chart metrics were rejected. Display labels governing lettered content
 sequences are also recovered without relying on font metadata. It remains
-roughly 90× faster than docling.
+roughly 65× faster than docling by the harness's timing.
 
-**0.0019 of the deterministic deficit is deliberate.** PDF link annotations
-are read and emitted, and the ground truth — transcribed from the visible
-page — carries no link markup anywhere in the corpus, so every address
-recovered scores as an insertion error. 21 documents change, all downward,
-summing to 0.385. The full accounting, with the readings side by side, is in
-[Where our output differs from the
-reference](../benchmarks/where-we-differ.md). Do not "fix" this; it is the
-engine being right.
+**The scores are taken with `--md-links text`.** PDF link annotations are
+read and emitted, and the ground truth — transcribed from the visible page —
+carries no link markup anywhere in the corpus, so in the default Markdown
+every address recovered scores as an insertion error: 21 documents, all
+downward, summing to 0.40, or 0.0020 of the overall (tier 1 0.899297 against
+0.901319). The adapter asks for the reference's form, so the standings
+compare words with words. The full accounting, with the readings side by
+side, is in [Where our output differs from the
+reference](../benchmarks/where-we-differ.md). Do not drop links from the
+default; they are the engine being right.
 
 The aggregate gain still has four score-noise regressions against the preceding
 commit: deterministic 015 (−0.0002) and 183 (−0.0009), and cascade 015
@@ -79,6 +86,11 @@ cd opendataloader-bench && uv sync
 cp <repo>/bench-adapter/pdf_parser_fluree.py src/
 ```
 
+The adapter runs `fdoc convert <pdf> --format md --md-links text
+--no-escalate`. An adapter copied before 2026-11-23 ran `fdoc md`, which
+writes links inline and scores 0.0020 lower; copy it again.
+`FLUREE_DOC_MD_LINKS=inline` scores the default Markdown on purpose.
+
 Add to `src/engine_registry.py`, in both `ENGINES` and `_ENGINE_MODULES`:
 
 ```python
@@ -96,12 +108,22 @@ cargo build --release --manifest-path <repo>/Cargo.toml
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
   uv run python src/run.py --engine fluree-doc-parse --force
 
+# tier 2, the layout detector alone, from the committed cache
+FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
+FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
+  uv run python src/run.py --engine fluree-doc-parse-cascade --force
+
 # the full cascade, from committed caches, no GPU and no API key
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
 FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
 FDOC_TIER_RESULTS=<repo>/eval/cascade-cache \
   uv run python src/run.py --engine fluree-doc-parse-cascade --force
 ```
+
+**Run one at a time.** `run.py` writes each engine's Markdown to
+`prediction/<engine>/markdown` whatever `--prediction-root` says, so two runs
+at once overwrite each other, and tiers 2 and 3 share an engine name. Copy
+`evaluation.json` out after each run.
 
 **`--force` is not optional.** Without it `run.py` re-scores the markdown
 already on disk instead of re-parsing, so a code change appears to do
@@ -112,6 +134,10 @@ Per-document scores land in
 `metrics.score.overall_mean`.
 
 ## The next points are in headings
+
+This section is the 2026-10-07 analysis, at 0.894673 and MHS 0.8172. MHS has
+since risen to 0.8402, past nutrient's 0.8190, and the list below has not been
+re-derived.
 
 The deterministic engine beats nutrient on tables by a distance (TEDS 0.8616
 vs 0.7081) and narrowly loses on headings (MHS 0.8172 vs 0.8190). Summed per

@@ -175,9 +175,9 @@ warning: --escalate was asked for but no provider is set
 
 Two paths deliberately never escalate: `--tier-results` supplies readings
 someone already has, so paying to produce them again would be surprising; and
-the hidden `fdoc md` / `json` / `xhtml` forms that benchmark adapters shell,
-so a configured key on the machine that ran a benchmark cannot change the
-number.
+the hidden `fdoc md` / `json` / `xhtml` forms, which scripts shell, so a
+configured key on the machine that runs one cannot change its output. The
+benchmark adapter passes `--no-escalate` for the same reason.
 
 ## What it costs
 

@@ -1407,11 +1407,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut figures = figure::detect(&page.fills, &page.rules, pi, (page.width, page.height));
         // The drawing does not contain its own labels; grow each region to
         // reach them before deciding which blocks belong to it.
-        let block_boxes: Vec<(crate::geom::BBox, f32)> =
-            blocks.iter().map(|b| (b.bbox, b.font_size)).collect();
+        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
+        let block_boxes: Vec<(crate::geom::BBox, f32, &str)> = blocks
+            .iter()
+            .zip(&block_texts)
+            .map(|(b, t)| (b.bbox, b.font_size, t.as_str()))
+            .collect();
+        let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
         figure::attach(
             &mut figures,
             &block_boxes,
+            &images,
             (page.width, page.height),
             prose_size(blocks),
         );
