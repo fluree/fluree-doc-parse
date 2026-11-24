@@ -28,6 +28,7 @@ not.
 | `pdf` | PDF: outline, metadata, notes, embedded files, links; the extraction and analysis of a document of at most four pages | `convert`'s pipeline without OCR or a model |
 | `html` | a web page, and an e-mail's HTML body | `fluree_doc_html::decode`, `parse`, `info`, `parse_with_quote_depth` |
 | `markdown` | Markdown, as UTF-8 | `fluree_doc_markdown::parse` |
+| `text` | plain text, decoded as `convert` decodes it, and read as Markdown when its markup says so | `fluree_doc_text::decode`, `is_markdown`, `parse`; `fluree_doc_markdown::parse` |
 | `image` | PNG, JPEG, TIFF: the header, and the image decoded and read by a stand-in OCR engine (no models) | `fluree_doc_image::header`, `elements` |
 | `email` | `.eml` and `.msg`, the files they carry, down through attached messages, each converted by the reader `convert` hands it to, within what the message leaves of the budget (no OCR, no model, four pages at most) | `fluree_doc_email::parse`, `fluree_doc_cli::convert_attachments` |
 | `detect` | which reader `convert` sends a file to, by content and name (the first byte picks the name) | `fluree_doc_cli::detect` |

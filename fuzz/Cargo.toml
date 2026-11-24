@@ -25,6 +25,7 @@ fluree-doc-pdf = { path = "../crates/fluree-doc-pdf" }
 fluree-doc-email = { path = "../crates/fluree-doc-email" }
 fluree-doc-html = { path = "../crates/fluree-doc-html" }
 fluree-doc-markdown = { path = "../crates/fluree-doc-markdown" }
+fluree-doc-text = { path = "../crates/fluree-doc-text" }
 fluree-doc-image = { path = "../crates/fluree-doc-image" }
 fluree-doc-vision = { path = "../crates/fluree-doc-vision" }
 # Without the built-in OCR engine: detection, and the conversion of a
@@ -149,6 +150,13 @@ bench = false
 [[bin]]
 name = "markdown"
 path = "fuzz_targets/markdown.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
 test = false
 doc = false
 bench = false

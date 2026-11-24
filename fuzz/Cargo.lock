@@ -713,6 +713,7 @@ dependencies = [
  "fluree-doc-ppt",
  "fluree-doc-pptx",
  "fluree-doc-rtf",
+ "fluree-doc-text",
  "fluree-doc-vision",
  "fluree-doc-xls",
  "fluree-doc-xlsx",

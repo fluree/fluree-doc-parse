@@ -11,7 +11,7 @@ rather than from bytes its first check refuses.
 
 Flat OpenDocument sources are written by hand and converted by LibreOffice
 (`soffice`, or set SOFFICE) to the office formats; XPS, RTF, CSV, e-mail,
-Outlook messages, web pages, Markdown, and a Word and an Excel file of
+Outlook messages, web pages, Markdown, plain text, and a Word and an Excel file of
 merged cells are written here directly; Pillow writes the images; pypdf
 adds notes and an embedded file to a PDF. Run from the repository root:
 
@@ -58,7 +58,7 @@ TARGET_OF = {
     ".csv": "csv", ".tsv": "csv", ".xls": "xls", ".xlsb": "xlsb", ".doc": "doc", ".ppt": "ppt",
     ".odt": "odf", ".ods": "odf", ".odp": "odf", ".rtf": "rtf", ".xps": "xps", ".oxps": "xps",
     ".docx": "docx", ".xlsx": "xlsx", ".pptx": "pptx", ".pdf": "pdf", ".eml": "email",
-    ".msg": "email", ".html": "html", ".htm": "html", ".md": "markdown", ".png": "image",
+    ".msg": "email", ".html": "html", ".htm": "html", ".md": "markdown", ".txt": "text", ".png": "image",
     ".jpg": "image", ".jpeg": "image", ".tif": "image", ".tiff": "image",
 }
 
@@ -481,6 +481,26 @@ def markdown() -> list[tuple[str, bytes]]:
     ]
 
 
+def text() -> list[tuple[str, bytes]]:
+    """Plain text: paragraphs, lists and headings in CRLF, CR and LF, text in
+    Windows-1252 and behind a byte-order mark, Markdown saved as text, and a
+    line of `](` that `is_markdown` once read in time quadratic in it."""
+    letter = (
+        "CHAPTER IV\r\nController and processor\r\n\r\nDear Ada,\r\n\r\n"
+        "The pilot starts in May and\r\nruns to June.\r\n\r\nNext steps:\r\n"
+        "- sign the order\r\n- book the kickoff\r\n  for May\r\n1. first\r\n2) second\r\n"
+    )
+    notes = "# Minutes\n\nSee [the filing](https://example.org/f).\n\n## Attendance\n| A | B |\n|---|---|\n"
+    return [
+        ("seed.txt", letter.encode()),
+        ("seed_mac.txt", letter.replace("\r\n", "\r").encode()),
+        ("seed_1252.txt", "\u201cCaf\u00e9\u201d \u00a7 7001. Definitions.\n".encode("cp1252")),
+        ("seed_bom.txt", "Name\nValue\n".encode("utf-16")),
+        ("seed_markdown.txt", notes.encode()),
+        ("seed_brackets.txt", ("x" + "](" * 3000 + "\n").encode()),
+    ]
+
+
 def image() -> list[tuple[str, bytes]]:
     """Images: a PNG, a one-bit PNG, a JPEG turned by its EXIF orientation,
     and a TIFF of two pages."""
@@ -751,7 +771,8 @@ def main() -> None:
             generated.setdefault(target, []).extend(files)
     for target, files in [("xps", xps()), ("rtf", rtf()), ("csv", csv()), ("email", eml()),
                           ("email", msg()), ("docx", docx()), ("xlsx", xlsx()),
-                          ("html", html()), ("markdown", markdown()), ("image", image())]:
+                          ("html", html()), ("markdown", markdown()), ("text", text()),
+                          ("image", image())]:
         generated.setdefault(target, []).extend(files)
     # The text's PDF, with notes and an embedded file added.
     for name, data in list(generated.get("pdf", [])):
