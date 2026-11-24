@@ -205,6 +205,10 @@ struct Collector {
     symbol_fonts: std::collections::HashMap<u128, (Option<&'static str>, bool)>,
     /// Glyphs drawn in a symbol font, by index into `glyphs`, with the font.
     symbols: Vec<(usize, &'static str)>,
+    /// ActualText that restates its glyphs in another case only, with the
+    /// end of what it covers, held until the page's words are drawn whole;
+    /// see [`Collector::read_cased`].
+    cased: Vec<(Spoken, usize)>,
 }
 
 /// Marked content whose ActualText stands for the glyphs drawn inside it.
@@ -316,6 +320,14 @@ impl Collector {
     /// over some of its letters — and there the drawn capitals are the text
     /// a reader sees, and stay.
     fn speak(&mut self, span: Spoken) {
+        let end = self.glyphs.len();
+        self.state(span, end, false);
+    }
+
+    /// Give the glyphs `span.start..end` the text `span` states. Text that
+    /// differs from what is drawn in case alone is held for
+    /// [`Collector::read_cased`] unless `cased`.
+    fn state(&mut self, span: Spoken, end: usize, cased: bool) {
         let Some(said) = spoken(&span.text) else {
             return;
         };
@@ -339,7 +351,7 @@ impl Collector {
         if !one_line {
             return;
         }
-        let range = span.start..self.glyphs.len();
+        let range = span.start..end;
         let drawn: String = self.glyphs[range.clone()]
             .iter()
             .map(|g| g.text.as_str())
@@ -351,7 +363,11 @@ impl Collector {
                 .collect()
         };
         let (was, now) = (solid(&drawn), solid(&said));
-        if was == now || was.to_lowercase() == now.to_lowercase() {
+        if was == now {
+            return;
+        }
+        if was.to_lowercase() == now.to_lowercase() && !cased {
+            self.cased.push((span, end));
             return;
         }
         let chars: Vec<char> = said.chars().collect();
@@ -385,6 +401,67 @@ impl Collector {
         }
         // Their text is stated now, not left to be read from their shape.
         self.unread.retain(|(i, ..)| !range.contains(i));
+    }
+
+    /// Take the ActualText that restates its glyphs in another case only
+    /// where the word they are drawn in mixes its cases at their size.
+    ///
+    /// InDesign states lower case over some letters of a word drawn all in
+    /// capitals (`p` over the P of REPORT), and there the capitals drawn are
+    /// what a reader sees, so a statement in case alone was never taken. A
+    /// small-capital face drawn with some letters' capital codes and some
+    /// letters' lower-case ones says the other thing: the word is one case
+    /// and its codes are not (`SCrewS`, `MAhlE`), and the ActualText over
+    /// the odd letters is the word's own case (`Screws`, `MAHLE`). Whether
+    /// a word mixes its cases is known only once it is drawn whole, so the
+    /// page is read to its end first.
+    fn read_cased(&mut self) {
+        for (span, end) in std::mem::take(&mut self.cased) {
+            if self.mixes_case(span.start, end) {
+                self.state(span, end, true);
+            }
+        }
+    }
+
+    /// Whether the word drawn around the glyphs `start..end` holds letters
+    /// of both cases at their size: the glyphs either side of them, drawn
+    /// one after another on their baseline with no space between.
+    fn mixes_case(&self, start: usize, end: usize) -> bool {
+        let gs = &self.glyphs;
+        let Some(lead) = gs[start..end].iter().find(|g| g.bbox.is_some()) else {
+            return false;
+        };
+        if lead.rotation_bucket() != 0 {
+            return false;
+        }
+        let size = lead.font_size.max(1.0) as f64;
+        // `b` is drawn on from `a` within the word.
+        let joins = |a: &Glyph, b: &Glyph| {
+            let pen = a.origin.0 + a.advance.unwrap_or(0.0);
+            a.bbox.is_some()
+                && b.bbox.is_some()
+                && !b.text.trim().is_empty()
+                && b.rotation_bucket() == 0
+                && (b.origin.1 - a.origin.1).abs() <= 0.3 * size
+                && (b.origin.0 - pen).abs() <= 0.3 * size
+        };
+        let mut from = start;
+        while from > 0 && joins(&gs[from - 1], &gs[from]) {
+            from -= 1;
+        }
+        let mut to = end;
+        while to < gs.len() && to > 0 && joins(&gs[to - 1], &gs[to]) {
+            to += 1;
+        }
+        let at_size = gs[from..to]
+            .iter()
+            .filter(|g| (g.font_size as f64 - size).abs() <= 0.15 * size);
+        let (mut upper, mut lower) = (false, false);
+        for c in at_size.flat_map(|g| g.text.chars()) {
+            upper |= c.is_uppercase();
+            lower |= c.is_lowercase();
+        }
+        upper && lower
     }
 }
 
@@ -1109,6 +1186,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             clips: Vec::new(),
+            cased: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -1130,6 +1208,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
                 dev.speak(span);
             }
         }
+        dev.read_cased();
         dev.read_symbols();
         letters = std::mem::take(&mut dev.letters);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
@@ -1549,13 +1628,97 @@ mod actual_text_tests {
             open: Vec::new(),
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
+            cased: Vec::new(),
         };
         c.speak(Spoken {
             text: said.into(),
             start: 0,
             inked,
         });
+        c.read_cased();
         c.glyphs.into_iter().map(|g| g.text).collect()
+    }
+
+    /// A word drawn from `letters`, `(text, size)` each 5 wide on one
+    /// baseline, after spans stating `(start, end, said)` over some of
+    /// them, read to the page's end.
+    fn cased_over(letters: &[(&str, f32)], spans: &[(usize, usize, &str)]) -> String {
+        let glyphs: Vec<Glyph> = letters
+            .iter()
+            .enumerate()
+            .map(|(i, (t, size))| Glyph {
+                font_size: *size,
+                ..glyph(t, i as f64 * 5.0, 10.0, true)
+            })
+            .collect();
+        let mut c = Collector {
+            page: 0,
+            glyphs,
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            dots: Vec::new(),
+            page_box: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 600.0,
+                y1: 800.0,
+            },
+            clips: Vec::new(),
+            ink: Vec::new(),
+            letters: crate::ligature::Letters::default(),
+            unread: Vec::new(),
+            marks: crate::marked::Marks::default(),
+            open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
+            cased: Vec::new(),
+        };
+        for &(start, end, said) in spans {
+            let span = Spoken {
+                text: said.into(),
+                start,
+                inked: (start..end).collect(),
+            };
+            c.state(span, end, false);
+        }
+        c.read_cased();
+        c.glyphs.iter().map(|g| g.text.as_str()).collect()
+    }
+
+    #[test]
+    fn a_word_whose_codes_mix_its_case_takes_the_case_stated() {
+        // Small capitals drawn with some capital codes and some lower-case
+        // ones, at one size, after a full capital: the ActualText over the
+        // odd ones is the word's case.
+        let screws = [
+            ("S", 14.0),
+            ("C", 9.8),
+            ("r", 9.8),
+            ("e", 9.8),
+            ("w", 9.8),
+            ("S", 9.8),
+        ];
+        assert_eq!(cased_over(&screws, &[(1, 2, "c"), (5, 6, "s")]), "Screws");
+        let mahle = [
+            ("M", 10.0),
+            ("A", 10.0),
+            ("h", 10.0),
+            ("l", 10.0),
+            ("E", 10.0),
+        ];
+        assert_eq!(cased_over(&mahle, &[(2, 4, "HL")]), "MAHLE");
+        // A word drawn in one case keeps it: InDesign's `p` over the P of
+        // REPORT is not what a reader sees.
+        let report = [
+            ("R", 10.0),
+            ("E", 10.0),
+            ("P", 10.0),
+            ("O", 10.0),
+            ("R", 10.0),
+            ("T", 10.0),
+        ];
+        assert_eq!(cased_over(&report, &[(2, 3, "p")]), "REPORT");
     }
 
     #[test]
@@ -1583,6 +1746,7 @@ mod actual_text_tests {
             open: Vec::new(),
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
+            cased: Vec::new(),
         };
         let circle = BBox {
             x0: 133.0,

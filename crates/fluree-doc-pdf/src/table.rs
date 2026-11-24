@@ -393,12 +393,35 @@ impl Grid {
                 .filter(|x| **x > lo && **x < hi)
                 .count();
             if crossings >= 2 {
-                for &i in run.iter() {
-                    let b = glyphs[i].bbox.unwrap();
-                    if let Some((r, c)) = self.cell_at((b.x0 + b.x1) * 0.5, cy) {
-                        home[i] = Some(r * cols + c);
+                // Dealt by its words, each to the column of its middle: a
+                // word whose letters touch is not cut between columns.
+                let mut part: Vec<usize> = Vec::new();
+                let deal = |part: &[usize], home: &mut Vec<Option<usize>>| {
+                    let (mut x, mut n) = (0.0, 0.0);
+                    for &i in part {
+                        let b = glyphs[i].bbox.unwrap();
+                        x += (b.x0 + b.x1) * 0.5;
+                        n += 1.0;
                     }
+                    if let Some((r, c)) = self.cell_at(x / n, cy) {
+                        for &i in part {
+                            home[i] = Some(r * cols + c);
+                        }
+                    }
+                };
+                for &i in run.iter() {
+                    if let Some(&prev) = part.last() {
+                        let (p, g) = (&glyphs[prev], &glyphs[i]);
+                        let pen = p.advance.map_or(p.bbox.unwrap().x1, |a| p.origin.0 + a);
+                        let fs = p.font_size.max(g.font_size).max(1.0) as f64;
+                        if g.bbox.unwrap().x0.min(g.origin.0) - pen > fs * WORD_TOUCH {
+                            deal(&part, &mut home);
+                            part.clear();
+                        }
+                    }
+                    part.push(i);
                 }
+                deal(&part, &mut home);
                 continue;
             }
             if let Some((r, c)) = self.cell_at(cx, cy) {
@@ -4459,6 +4482,10 @@ const COLUMN_ALIGN_TOLERANCE: f64 = 1.5;
 /// positions to repeat across rows, not from this threshold.
 const TABLE_CELL_GAP: f64 = 0.9;
 
+/// Widest gap, in font sizes, between two letters of one word: where the
+/// pen leaves off and the next letter's ink begins, a kern apart at most.
+const WORD_TOUCH: f64 = 0.05;
+
 /// Fraction of a run's rows that must use a column for it to be real.
 const MIN_COLUMN_SUPPORT: f64 = 0.6;
 
@@ -7775,6 +7802,32 @@ mod tests {
             0,
             "a field is not a header"
         );
+    }
+
+    #[test]
+    fn a_word_across_two_columns_is_not_cut_between_them() {
+        // `Dimensions`, its letters touching, set across two of a grid's
+        // column boundaries: dealt glyph by glyph it read `Di | mensio | ns`.
+        let word_at = |x: f64, text: &str| -> Vec<crate::glyph::Glyph> {
+            text.chars()
+                .enumerate()
+                .map(|(k, c)| word(x + 5.0 * k as f64, 0, &c.to_string(), None))
+                .collect()
+        };
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: crate::geom::BBox {
+                x0: 0.0,
+                y0: -1.0,
+                x1: 60.0,
+                y1: 11.0,
+            },
+            xs: vec![0.0, 20.0, 40.0, 60.0],
+            ys: vec![-1.0, 11.0],
+        };
+        let gl = word_at(5.0, "Dimensions");
+        assert_eq!(grid.cell_texts(&gl), ["", "Dimensions", ""]);
     }
 
     #[test]
