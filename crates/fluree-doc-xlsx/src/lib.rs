@@ -242,7 +242,7 @@ pub fn parse_with_media(
             if let Some((xml, part)) = xml.zip(drawing) {
                 let drawing_rels = pkg.relationships(&part);
                 let drawing_rels = Relations::new(&drawing_rels);
-                for pic in pictures(&xml) {
+                for pic in pictures(&xml, &mut budget)? {
                     budget.spend_elements(1)?;
                     budget.spend_text(&pic.alt)?;
                     figure_count += 1;
@@ -392,14 +392,19 @@ struct Anchor {
     descr: String,
     title: String,
     rids: Vec<String>,
+    /// The ids in `rids`, each kept once: a scan of `rids` for each made
+    /// an anchor's cost the square of the images it names.
+    named: HashSet<String>,
 }
 
 /// The pictures of a drawing part (`xl/drawings/drawing1.xml`), in the
 /// order it anchors them. Only a picture (`xdr:pic`) has an image to read:
 /// a chart has data, and a shape's image fill is a texture. The fallback
 /// copy of an alternate content is not read twice. A drawing that does not
-/// parse anchors nothing: the cells are read without it.
-fn pictures(xml: &str) -> Vec<Picture> {
+/// parse anchors nothing: the cells are read without it. Each image a
+/// picture names is spent from `budget` before it is kept: one may name
+/// millions.
+fn pictures(xml: &str, budget: &mut Budget) -> Result<Vec<Picture>, TooLarge> {
     let mut r = Reader::from_str(xml);
     let mut buf = Vec::new();
     let mut out = Vec::new();
@@ -410,7 +415,7 @@ fn pictures(xml: &str) -> Vec<Picture> {
     let mut reading: Option<&'static str> = None;
     loop {
         let (e, start) = match r.read_event_into(&mut buf) {
-            Err(_) => return Vec::new(),
+            Err(_) => return Ok(Vec::new()),
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) => (e.into_owned(), true),
             Ok(Event::Empty(e)) => (e.into_owned(), false),
@@ -491,7 +496,9 @@ fn pictures(xml: &str) -> Vec<Picture> {
                     anchor.as_mut(),
                     attr(&e, "embed").or_else(|| attr(&e, "link")),
                 ) {
-                    if !a.rids.contains(&rid) {
+                    if !a.named.contains(&rid) {
+                        budget.spend_media(&rid)?;
+                        a.named.insert(rid.clone());
                         a.rids.push(rid);
                     }
                 }
@@ -500,7 +507,7 @@ fn pictures(xml: &str) -> Vec<Picture> {
         }
         buf.clear();
     }
-    out
+    Ok(out)
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -4009,6 +4016,30 @@ mod tests {
     }
 
     #[test]
+    fn a_pictures_images_are_each_kept_once_in_one_lookup_and_spent() {
+        // One picture naming 200,000 images, each its own id, and the first
+        // named again: a scan of those kept for each took 15 s in a release
+        // build, and none of them was spent.
+        let blips: String = (0..200_000)
+            .map(|i| format!("<a:blip r:embed=\"r{i}\"/>"))
+            .collect();
+        let xml = format!(
+            "<xdr:wsDr><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>\
+             <xdr:pic><xdr:blipFill>{blips}<a:blip r:embed=\"r0\"/></xdr:blipFill></xdr:pic>\
+             </xdr:twoCellAnchor></xdr:wsDr>"
+        );
+        let start = std::time::Instant::now();
+        let got = pictures(&xml, &mut Budget::default()).unwrap();
+        let took = start.elapsed();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].rids.len(), 200_000);
+        assert_eq!(got[0].rids[199_999], "r199999");
+        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        // Each spent before it is kept.
+        assert!(pictures(&xml, &mut Budget::new(16 << 20, 0)).is_err());
+    }
+
+    #[test]
     fn only_a_drawings_pictures_are_read_once_each() {
         let pic = |rid: &str, attr: &str| {
             format!(
@@ -4039,7 +4070,8 @@ mod tests {
             pic("rId6", "embed"),
             pic("rId4", "link"),
         );
-        let got: Vec<((u32, u32), String, Vec<String>)> = pictures(&xml)
+        let got: Vec<((u32, u32), String, Vec<String>)> = pictures(&xml, &mut Budget::default())
+            .unwrap()
             .into_iter()
             .map(|p| (p.at, p.alt, p.rids))
             .collect();
@@ -4052,7 +4084,11 @@ mod tests {
                 ((u32::MAX, u32::MAX), "TrId4".to_string(), rids(&["rId4"])),
             ]
         );
-        assert!(pictures("<xdr:wsDr><xdr:twoCellAnchor>").is_empty());
+        assert!(
+            pictures("<xdr:wsDr><xdr:twoCellAnchor>", &mut Budget::default())
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
