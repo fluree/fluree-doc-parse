@@ -695,21 +695,29 @@ fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
 }
 
 fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
+    // The glyphs each grid's cells read, so that a glyph is in a cell or
+    // in the prose, never both and never neither (`Grid::takes`).
+    let taken: Vec<Option<Vec<bool>>> = grids
+        .iter()
+        .map(|grid| match grid.layout.as_deref() {
+            Some(lay) if !lay.claimed.is_empty() => None,
+            _ => Some(grid.takes(glyphs)),
+        })
+        .collect();
     glyphs
         .iter()
-        .filter(|g| {
-            let (x, y) = match g.bbox {
-                Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
-                None => g.origin,
-            };
-            !grids.iter().any(|grid| match grid.layout.as_deref() {
-                Some(lay) if !lay.claimed.is_empty() => {
-                    lay.claimed.binary_search(&g.draw_index).is_ok()
-                }
-                _ => grid.cell_at(x, y).is_some(),
-            })
+        .enumerate()
+        .filter(|(i, g)| {
+            !grids
+                .iter()
+                .zip(&taken)
+                .any(|(grid, taken)| match (grid.layout.as_deref(), taken) {
+                    (_, Some(t)) => t[*i],
+                    (Some(lay), None) => lay.claimed.binary_search(&g.draw_index).is_ok(),
+                    (None, None) => false,
+                })
         })
-        .cloned()
+        .map(|(_, g)| g.clone())
         .collect()
 }
 
