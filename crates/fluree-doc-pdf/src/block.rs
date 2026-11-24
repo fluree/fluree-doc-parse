@@ -15,6 +15,7 @@
 
 use crate::geom::BBox;
 use crate::line::Line;
+use std::collections::HashMap;
 
 /// A gap this many times the document's modal leading starts a new block.
 /// Chosen to sit between single spacing (1.0x by definition) and the
@@ -946,6 +947,323 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     out
 }
 
+/// Fewest items that make a numbered list of a page's blocks. Two numbered
+/// lines in a row are as often two short sections (`5. The dynamics`,
+/// `6. Modeling the dynamics`) as a list.
+const MIN_COUNTED_ITEMS: usize = 3;
+
+/// Most blocks set under one numbered item before the next one, and most
+/// lines among them: a title's description, a translation, a line the item
+/// wrapped onto. A section's worth of text under the number is a section.
+const MAX_ITEM_BODY_BLOCKS: usize = 3;
+const MAX_ITEM_BODY_LINES: usize = 6;
+
+/// Widest gap, in ems, between a list's item and the text above it.
+const MAX_ITEM_GAP: f64 = 2.5;
+
+/// Most items of a list nested under a numbered item.
+const MAX_NESTED_ITEMS: usize = 12;
+
+/// Gather each page's numbered items, each with the text set under it, into
+/// one block per item: an ordered list's items.
+///
+/// A feature list sets each item's number in the item's own text run, `2.
+/// PostureFit SL®` over a line or two of description, so the marker pass
+/// has nothing to pull out and each title reads as a block of its own. Those
+/// blocks pass for numbered sections, so a list of six made six sections,
+/// the last of them holding everything after the list. A list is told from
+/// numbered sections by what the document sets around the numbers:
+///
+/// - the numbers count off from one, `1.`, `2.`, `3.`, at least
+///   [`MIN_COUNTED_ITEMS`] of them, each at the left edge of the one before.
+///   A run carrying on where a run on the same page stopped, as a list
+///   continued in the next column does, is the same list;
+/// - under each number is at most a few short blocks, set no larger than the
+///   item, within a line of it and not left of it, and none opening with a
+///   number of its own, as a section's clauses do (`1.1 "Services" means…`);
+/// - the numbering stops with the list. A document whose next numbered line
+///   carries on the count, on this page or a later one, is numbering its
+///   sections (`4. Term and Renewal`, then `5. Termination` overleaf);
+/// - the list sits in a section: `in_section(page, block)` says a heading
+///   other than the document's title comes before its first item. Numbers
+///   straight under the title are the document's own sections (`1. SCOPE OF
+///   SERVICES`, `2. TERM`, `3. FEES`), however short.
+///
+/// A block the outline names is a heading the author declared, and is never
+/// an item. Returns whether any items were gathered.
+///
+/// Each item keeps its number in its text and carries it as its marker, as
+/// [`split_hard_breaks`] marks a hand-broken list's steps. The last item
+/// takes as many blocks as the items before it took, and no more, so the
+/// paragraph after a list is not read into its last item.
+pub fn gather_counted_items(
+    pages: &mut [Vec<Block>],
+    named: &dyn Fn(&str) -> bool,
+    in_section: &dyn Fn(usize, usize) -> bool,
+) -> bool {
+    let ordinals: Vec<Vec<Option<u32>>> = pages
+        .iter()
+        .map(|blocks| {
+            blocks
+                .iter()
+                .map(|b| {
+                    if b.marker.is_some() || b.lines.len() > MAX_ITEM_BODY_LINES {
+                        return None;
+                    }
+                    b.lines
+                        .first()
+                        .and_then(|l| ordinal_prefix(&l.text))
+                        .map(|(n, _)| n)
+                        .filter(|_| !named(&b.text()))
+                })
+                .collect()
+        })
+        .collect();
+    // The ordinal of the first numbered block after `(page, block)`, in
+    // reading order through the rest of the document.
+    let next_ordinal = |page: usize, block: usize| -> Option<u32> {
+        let rest = ordinals[page][block + 1..].iter();
+        rest.chain(ordinals[page + 1..].iter().flatten())
+            .find_map(|o| *o)
+    };
+    let mut gathered = false;
+    for (pi, blocks) in pages.iter_mut().enumerate() {
+        let counted = counted_items(
+            blocks,
+            &ordinals[pi],
+            |b| next_ordinal(pi, b),
+            |b| in_section(pi, b),
+        );
+        if counted.iter().any(Option::is_some) {
+            let taken = std::mem::take(blocks);
+            *blocks = merge_items(taken, &counted);
+            gathered = true;
+        }
+    }
+    gathered
+}
+
+/// Where each of a page's numbered items ends: `Some(end)` on the block that
+/// opens an item, the item taking the blocks up to `end`.
+fn counted_items(
+    blocks: &[Block],
+    ordinals: &[Option<u32>],
+    next_ordinal: impl Fn(usize) -> Option<u32>,
+    in_section: impl Fn(usize) -> bool,
+) -> Vec<Option<usize>> {
+    // `d` follows `prev` within a line or so, not left of the item.
+    let placed = |item: &Block, prev: &Block, d: &Block| -> bool {
+        let fs = (item.font_size as f64).max(1.0);
+        d.bbox.x0 >= item.bbox.x0 - fs * 0.5
+            && d.bbox.y0 >= prev.bbox.y1 - fs * 0.5
+            && d.bbox.y0 - prev.bbox.y1 <= fs * 1.5
+    };
+    // `d` is text set under the item: a description, a translation.
+    let under = |item: &Block, prev: &Block, d: &Block| -> bool {
+        let fs = (item.font_size as f64).max(1.0);
+        placed(item, prev, d)
+            && d.lines.len() <= MAX_ITEM_BODY_LINES
+            && d.font_size <= item.font_size * 1.1
+            && d.bbox.x0 <= item.bbox.x0 + fs * 4.0
+            && !d
+                .lines
+                .first()
+                .is_some_and(|l| opens_with_subnumber(&l.text))
+    };
+    // An item of a list nested under the item, `• For most adult vaccines…`.
+    let nested = |d: &Block| d.marker.is_some() || strip_leading_bullet(&d.text()).is_some();
+
+    // What is set under item `i`, up to the next numbered block or the first
+    // block that is neither: (where that stops, the blocks of text directly
+    // under the item, whether all of it is placed as an item's).
+    let body = |i: usize| -> (usize, usize, bool) {
+        let item = &blocks[i];
+        let (mut j, mut text, mut lines, mut nests) = (i + 1, 0, 0, 0);
+        let mut first_nested: Option<usize> = None;
+        while j < blocks.len() && ordinals[j].is_none() {
+            let d = &blocks[j];
+            if nested(d) && placed(item, &blocks[j - 1], d) {
+                nests += 1;
+                first_nested.get_or_insert(j);
+                if nests > MAX_NESTED_ITEMS {
+                    return (j, text, false);
+                }
+            } else if first_nested.is_none() && under(item, &blocks[j - 1], d) {
+                text += 1;
+                lines += d.lines.len();
+                if text > MAX_ITEM_BODY_BLOCKS || lines > MAX_ITEM_BODY_LINES {
+                    return (j, text, false);
+                }
+            } else {
+                return (j, text, false);
+            }
+            j += 1;
+        }
+        (j, text, true)
+    };
+
+    // Runs of items counting off, each the indices of its items, and
+    // whether the run ended on an item with a section's worth under it.
+    let mut runs: Vec<(Vec<usize>, bool)> = Vec::new();
+    let mut used = vec![false; blocks.len()];
+    for start in 0..blocks.len() {
+        let Some(mut n) = ordinals[start] else {
+            continue;
+        };
+        if used[start] {
+            continue;
+        }
+        let mut run = vec![start];
+        let mut i = start;
+        let sectioned;
+        loop {
+            let item = &blocks[i];
+            let fs = (item.font_size as f64).max(1.0);
+            let same_x = |k: usize| (blocks[k].bbox.x0 - item.bbox.x0).abs() <= fs;
+            let (j, _, whole) = body(i);
+            let next = (j < blocks.len() && ordinals[j] == Some(n + 1) && same_x(j)).then_some(j);
+            // The next item follows the text above it. A wider gap holds
+            // something the prose blocks leave out, a table or a drawing, or
+            // ends a section.
+            let follows = next.is_some_and(|j| {
+                let gap = blocks[j].bbox.y0 - blocks[j - 1].bbox.y1;
+                (-fs * 0.5..=fs * MAX_ITEM_GAP).contains(&gap)
+            });
+            match next {
+                Some(j) if whole && follows => {
+                    run.push(j);
+                    i = j;
+                    n += 1;
+                }
+                _ => {
+                    // The count carries on further down the column, past
+                    // more than an item holds: a section's worth.
+                    sectioned = !whole
+                        && (j..blocks.len())
+                            .find(|&k| ordinals[k].is_some())
+                            .is_some_and(|k| ordinals[k] == Some(n + 1) && same_x(k));
+                    break;
+                }
+            }
+        }
+        for &k in &run {
+            used[k] = true;
+        }
+        runs.push((run, sectioned));
+    }
+    // Lists: runs counting off from one, joined by the runs in another
+    // column of the page that carry on their count. A number with a
+    // section's worth under it spoils the list it is in.
+    let mut lists: Vec<(Vec<usize>, bool)> = Vec::new();
+    for (run, sectioned) in runs {
+        let first = ordinals[run[0]].unwrap_or(0);
+        let head = &blocks[run[0]];
+        match lists.last_mut() {
+            Some((list, spoiled))
+                if ordinals[*list.last().unwrap_or(&0)].is_some_and(|m| first == m + 1)
+                    && list.last().is_some_and(|&l| {
+                        let fs = (blocks[l].font_size as f64).max(1.0);
+                        (blocks[l].bbox.x0 - head.bbox.x0).abs() > fs * 2.0
+                    }) =>
+            {
+                list.extend(run);
+                *spoiled |= sectioned;
+            }
+            _ if first == 1 => lists.push((run, sectioned)),
+            _ => {}
+        }
+    }
+    let mut counted: Vec<Option<usize>> = vec![None; blocks.len()];
+    for (list, spoiled) in lists {
+        let Some(&last) = list.last() else {
+            continue;
+        };
+        let carries_on = ordinals[last].is_some_and(|m| next_ordinal(last) == Some(m + 1));
+        if spoiled || list.len() < MIN_COUNTED_ITEMS || carries_on || !in_section(list[0]) {
+            continue;
+        }
+        // Each item takes the text directly under it. An item last in its
+        // column takes as many blocks as most items of the list took, so the
+        // paragraph after a list is not read into it.
+        let takes: Vec<usize> = list
+            .iter()
+            .enumerate()
+            .filter(|&(r, &i)| list.get(r + 1).is_some_and(|&next| body(i).0 == next))
+            .map(|(_, &i)| body(i).1)
+            .collect();
+        let usual = {
+            let mut counts: HashMap<usize, usize> = HashMap::new();
+            for t in &takes {
+                *counts.entry(*t).or_default() += 1;
+            }
+            counts
+                .into_iter()
+                .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+                .map_or(0, |(t, _)| t)
+        };
+        for (r, &i) in list.iter().enumerate() {
+            let (_, text, _) = body(i);
+            let closes_column = list.get(r + 1).is_none_or(|&next| body(i).0 != next);
+            let take = if closes_column { text.min(usual) } else { text };
+            counted[i] = Some(i + 1 + take);
+        }
+    }
+    counted
+}
+
+/// Merge each counted item with the blocks it takes.
+fn merge_items(blocks: Vec<Block>, counted: &[Option<usize>]) -> Vec<Block> {
+    let mut out = Vec::with_capacity(blocks.len());
+    let mut blocks = blocks.into_iter().enumerate().peekable();
+    while let Some((i, b)) = blocks.next() {
+        let Some(end) = counted[i] else {
+            out.push(b);
+            continue;
+        };
+        let label = b
+            .lines
+            .first()
+            .and_then(|l| ordinal_prefix(&l.text))
+            .map(|(_, label)| label.to_string());
+        let gap_above = b.gap_above;
+        let mut lines = b.lines;
+        while blocks.peek().is_some_and(|(k, _)| *k < end) {
+            if let Some((_, d)) = blocks.next() {
+                lines.extend(d.lines);
+            }
+        }
+        let mut item = build(lines);
+        item.marker = label;
+        item.gap_above = gap_above;
+        out.push(item);
+    }
+    out
+}
+
+/// A line opening with a section's own number, `1.1` or `2.3.1`: a clause
+/// under a numbered section, not an item's description.
+fn opens_with_subnumber(text: &str) -> bool {
+    let head: String = text
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let parts: Vec<&str> = head.trim_end_matches('.').split('.').collect();
+    parts.len() >= 2 && parts.iter().all(|p| !p.is_empty())
+}
+
+/// A block that is an ordered list's item with its number in its own text,
+/// as [`gather_counted_items`] and [`split_hard_breaks`] mark them: the
+/// marker is the label the text opens with.
+pub fn counts_off(b: &Block) -> bool {
+    b.marker.as_deref().is_some_and(|m| {
+        b.lines
+            .first()
+            .and_then(|l| ordinal_prefix(&l.text))
+            .is_some_and(|(_, label)| label == m)
+    })
+}
+
 /// Whether a poster-like display word governs the lettered item below it.
 ///
 /// Both lines may use the body face and size, so typography provides no
@@ -1667,6 +1985,169 @@ mod tests {
         assert_eq!(b[0].marker.as_deref(), Some("1."));
         assert_eq!(b[4].marker.as_deref(), Some("5."));
         assert!(b[4].text().starts_with("5. Add a few"));
+    }
+
+    /// A page of blocks, one per entry, each `(text, x, y, lines)` at 7pt.
+    fn page(entries: &[(&str, f64, f64, usize)]) -> Vec<Block> {
+        entries
+            .iter()
+            .map(|&(text, x, y, n)| {
+                let lines = (0..n)
+                    .map(|k| {
+                        l(
+                            if k == 0 { text } else { "and more of it" },
+                            x,
+                            y + k as f64 * 8.0,
+                            7.0,
+                        )
+                    })
+                    .collect();
+                build(lines)
+            })
+            .collect()
+    }
+
+    fn feature_list() -> Vec<Block> {
+        page(&[
+            ("Key Features", 40.0, 60.0, 1),
+            ("1. 8Z Pellicle", 40.0, 100.0, 1),
+            (
+                "Offers comfort through eight zones of tension.",
+                40.0,
+                108.0,
+                3,
+            ),
+            ("2. PostureFit SL", 40.0, 136.0, 1),
+            ("Stabilizes and supports the lower back.", 40.0, 144.0, 3),
+            ("3. Harmonic 2 Tilt", 40.0, 172.0, 1),
+            ("Helps the chair move with you.", 40.0, 180.0, 2),
+            ("Details", 40.0, 240.0, 1),
+        ])
+    }
+
+    #[test]
+    fn numbered_items_with_short_descriptions_are_one_list() {
+        let mut pages = vec![feature_list()];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        let texts: Vec<String> = pages[0].iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 5, "{texts:?}");
+        assert!(
+            texts[1].starts_with("1. 8Z Pellicle Offers comfort"),
+            "{texts:?}"
+        );
+        assert!(
+            texts[3].starts_with("3. Harmonic 2 Tilt Helps the chair"),
+            "{texts:?}"
+        );
+        assert_eq!(pages[0][1].marker.as_deref(), Some("1."));
+        assert!(counts_off(&pages[0][2]));
+        // The heading after the list is not read into its last item.
+        assert_eq!(texts[4], "Details");
+    }
+
+    #[test]
+    fn numbered_sections_are_not_a_list() {
+        // The count carries on overleaf: the document's sections.
+        let mut pages = vec![
+            feature_list(),
+            page(&[
+                ("4. Termination", 40.0, 60.0, 1),
+                ("Either party may end it.", 40.0, 68.0, 2),
+            ]),
+        ];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        assert_eq!(pages[0].len(), 8);
+        // Clauses under each number are a section's.
+        let mut pages = vec![page(&[
+            ("1. Definitions", 40.0, 100.0, 1),
+            (
+                "1.1 \"Services\" means the hosted applications.",
+                40.0,
+                108.0,
+                2,
+            ),
+            ("2. Subscription and Use", 40.0, 136.0, 1),
+            ("2.1 Customer may use the Services.", 40.0, 144.0, 2),
+            ("3. Fees and Payment", 40.0, 172.0, 1),
+            ("3.1 Customer will pay the fees.", 40.0, 180.0, 2),
+        ])];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        assert_eq!(pages[0].len(), 6);
+        // A count that does not start from one carries on from elsewhere.
+        let mut pages = vec![page(&[
+            ("16. Hertog M: Optimization of a method.", 40.0, 100.0, 2),
+            ("17. Yernool D: Cloning and expression.", 40.0, 120.0, 2),
+            ("18. French A: Conformational energy.", 40.0, 140.0, 2),
+        ])];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        assert!(pages[0].iter().all(|b| b.marker.is_none()));
+        // Two in a row are as often two short sections.
+        let mut pages = vec![page(&[
+            ("1. The dynamics", 40.0, 100.0, 1),
+            ("Short text.", 40.0, 108.0, 2),
+            ("2. Modeling the dynamics", 40.0, 136.0, 1),
+        ])];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        assert_eq!(pages[0].len(), 3);
+    }
+
+    #[test]
+    fn a_count_broken_by_what_the_prose_leaves_out_is_not_one_list() {
+        // A table between the third item and the fourth: the heading over
+        // the table is not the third item's description. Whether the count
+        // carried on below the table is one list or a document's sections,
+        // the page does not say, and the numbers are left as they are.
+        let mut pages = vec![page(&[
+            (
+                "1. Description: the parts below are discontinued.",
+                40.0,
+                100.0,
+                2,
+            ),
+            ("2. Reason: the line is closing.", 40.0, 120.0, 2),
+            ("3. Replacement: see the datasheet.", 40.0, 140.0, 2),
+            ("Discontinued items", 40.0, 160.0, 1),
+            ("4. Key dates: last buy in December.", 40.0, 300.0, 2),
+            ("5. Please confirm your quantity.", 40.0, 320.0, 2),
+        ])];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        let texts: Vec<String> = pages[0].iter().map(Block::text).collect();
+        assert!(
+            texts.contains(&"Discontinued items".to_string()),
+            "{texts:?}"
+        );
+        assert!(pages[0].iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
+    fn numbers_straight_under_the_title_are_sections() {
+        let mut pages = vec![feature_list()];
+        assert!(!gather_counted_items(&mut pages, &|_| false, &|_, _| false));
+        assert!(pages[0].iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
+    fn a_numbered_heading_the_outline_names_is_not_an_item() {
+        let mut pages = vec![feature_list()];
+        gather_counted_items(&mut pages, &|t| t == "2. PostureFit SL", &|_, _| true);
+        assert!(pages[0].iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
+    fn a_list_carried_on_in_the_next_column_is_one_list() {
+        let mut blocks = feature_list();
+        blocks.extend(page(&[
+            ("4. Three sizes", 300.0, 100.0, 1),
+            ("Aeron comes in three sizes.", 300.0, 108.0, 2),
+            ("5. Dematerialized base", 300.0, 136.0, 1),
+        ]));
+        let mut pages = vec![blocks];
+        gather_counted_items(&mut pages, &|_| false, &|_, _| true);
+        let marked: Vec<&str> = pages[0]
+            .iter()
+            .filter_map(|b| b.marker.as_deref())
+            .collect();
+        assert_eq!(marked, ["1.", "2.", "3.", "4.", "5."]);
     }
 
     #[test]

@@ -618,6 +618,12 @@ fn pipeline(pdf: &Path) -> Doc {
         }
         pages.push(out);
     }
+    let data = std::fs::read(pdf).expect("read");
+    let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data)).expect("parse");
+    let ol = outline::extract(&raw);
+    let first = heading::detect(&pages, &ol);
+    let named = heading::outline_names(&ol);
+    block::gather_counted_items(&mut pages, &|t| named(t), &heading::in_section(&first));
     Doc {
         pages,
         leading,

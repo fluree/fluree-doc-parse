@@ -1338,7 +1338,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     }
 
     let headings = timed(&mut timings.headings, || {
-        heading::detect(&blocks_per_page, outline)
+        let first = heading::detect(&blocks_per_page, outline);
+        let named = heading::outline_names(outline);
+        let in_section = heading::in_section(&first);
+        if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
+            heading::detect(&blocks_per_page, outline)
+        } else {
+            first
+        }
     });
     let body_font = timed(&mut timings.headings, || {
         heading::body_font_size(&blocks_per_page)

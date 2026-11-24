@@ -108,6 +108,32 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// Whether a block's text is a title the outline declares, as the outline
+/// match in [`detect`] reads one.
+pub fn outline_names(outline: &[OutlineItem]) -> impl Fn(&str) -> bool {
+    let titles: std::collections::HashSet<String> = outline
+        .iter()
+        .map(|it| norm(&it.title))
+        .filter(|k| !k.is_empty())
+        .collect();
+    move |text: &str| titles.contains(&norm(text))
+}
+
+/// Whether a heading other than the document's title comes before block
+/// `block` of page `page`: the block is inside a section of the document,
+/// not straight under its title.
+pub fn in_section(headings: &[Heading]) -> impl Fn(usize, usize) -> bool {
+    let mut at: Vec<(usize, usize, Evidence)> = headings
+        .iter()
+        .map(|h| (h.page, h.block_index, h.evidence))
+        .collect();
+    at.sort_by_key(|&(p, b, _)| (p, b));
+    move |page: usize, block: usize| {
+        let before = at.partition_point(|&(p, b, _)| (p, b) < (page, block));
+        before > 0 && at[before - 1].2 != Evidence::Title
+    }
+}
+
 /// Parse a leading section number and return its depth: `5.` → 1,
 /// `5.3` → 2, `6.3.1` → 3. Returns `None` when the block does not start with
 /// one, so ordinary prose beginning with a figure is not mistaken for a heading.
@@ -629,7 +655,12 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
     let repeated_numbered: std::collections::HashSet<String> = {
         let mut seen: HashMap<String, usize> = HashMap::new();
         for b in pages.iter().flatten() {
-            let text = b.text();
+            // A list's item gathered with its description repeats a
+            // numbered line by its own first line, `1) Zero-Shot`.
+            let text = match b.lines.first() {
+                Some(l) if block::counts_off(b) => l.text.clone(),
+                _ => b.text(),
+            };
             if numbering_depth(&text).is_some() {
                 *seen.entry(norm(&text)).or_default() += 1;
             }
@@ -862,7 +893,10 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                 });
                 continue;
             }
-            if !title_like(&text) {
+            // An ordered list's item, its number set in its own text: the
+            // list counts off from one item to the next, which a section
+            // number never does on its own page.
+            if !title_like(&text) || block::counts_off(b) {
                 continue;
             }
             // A numbered title occurs once in a document: sections are not
