@@ -46,23 +46,40 @@ under 736 px wide up to that first. Shrunk, an image's small text can fall
 under what the detector sees, and its lines are lost without a word. So an
 image the detector shrinks is read whole first, and the thickness of the lines
 it found, at the median and at the scale the detector read them, says whether
-that reading is kept: under 10 px, or with no line found, the image is read
-again in strips that overlap by a fifth, each line kept once, and that reading
-is kept. Read whole, captures 3,400 to 5,000 px tall lost up to a fifth of
-their 10 to 16 px lines, and a 1,200 × 9,000 one of 220 rows 13 px high read
-none of them; in strips, all of them. Only such an image pays for the second
-reading, which took 1.2 to 4 times as long as the first, twice at the median. A
-strip of an image 2,000 px wide or more is as long as the image is wide, so the
-detector still shrinks it, less than the whole.
+that reading is kept: under 10 px, the image is read again in strips that
+overlap by a fifth, each line kept once, and that reading is kept. Read whole,
+captures 3,400 to 5,000 px tall lost up to a fifth of their 10 to 16 px lines,
+and a 1,200 × 9,000 one of 220 rows 13 px high read none of them; in strips,
+all of them. Only such an image pays for the second reading, which took 1.2 to
+4 times as long as the first, twice at the median: the engine cannot recognize
+the lines of boxes it is given, so the strips are read in full. A strip of an
+image 2,000 px wide or more is as long as the image is wide, so the detector
+still shrinks it, less than the whole.
+
+Where no line is found, the text is too small to be seen, or there is none,
+and the reading cannot tell which. The image is read again in strips only when
+they are detected at full size, the image under 2,000 px wide, and at least
+1.25 times larger than the whole: captures 736 to 1,400 px wide of 5 to 8 px
+text, read whole with no line found, gave up to 437 lines in strips. A blank
+scanned page, or a phone photo 3,024 × 4,032, is read whole, once; cut, it took
+three times as long and gave nothing more. A narrower photo is cut (one 1,200 ×
+2,600 is read again for nothing).
 
 It is the text's size, not the image's shape, that decides: a scanned page is
-shrunk too, but its body text, 10 pt at any resolution, is 20 px or more to the
-detector, and the page is read whole, once. Measured on 172 synthetic captures
-and pages, the lines read whole were 66 %, in strips 92 %, and by this rule
-92 %, with no page cut. Cut, a page would take two readings for no line more,
-and lose a line running down it longer than the strips' overlap. A capture read
-in strips loses such a line too, or keeps it cut short (400 px for strips of
+shrunk too, but its body text, 10 pt at any resolution, has lines detected
+about an em thick, so 16 px or more to the detector (17 px on A3 at 300 dpi),
+and the page is read whole, once. Measured on 172 synthetic captures and
+pages, the lines read whole were 66 %, in strips 92 %, and by this rule 92 %,
+with no page cut. Cut, a page would take two readings for no line more, and
+lose a line running down it longer than the strips' overlap. A capture read in
+strips loses such a line too, or keeps it cut short (400 px for strips of
 2,000). A wide image is never cut, since a cut across it would cut its lines.
+
+Only the lines the detector sees vote. Where text of two sizes is mixed, and
+the smaller is too small to be found at all, the median is the larger text's:
+a 1,000 × 4,000 capture with a 26 px heading over every two lines of 8 px text
+is read whole, and lost 118 of its 121 small lines. Strips did not save them
+either (27 of 121).
 
 ## Options
 
