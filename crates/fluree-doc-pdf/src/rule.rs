@@ -14,7 +14,7 @@ use crate::geom::BBox;
 
 /// Thickness at or below which a shape is a rule rather than a fill, in PDF
 /// units. Hairlines are often 0.5pt; 3pt is a heavy rule but still a rule.
-const MAX_RULE_THICKNESS: f64 = 3.0;
+pub(crate) const MAX_RULE_THICKNESS: f64 = 3.0;
 
 /// A rule must be at least this many times longer than it is thick, so a small
 /// square is not mistaken for a very short line.

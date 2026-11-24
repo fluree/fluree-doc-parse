@@ -60,6 +60,22 @@ two crossed bands, because in a table ruled with horizontals alone every band
 is uncrossed, and splitting on those alone turns a ruled table of contents into
 one table per entry.
 
+A grid's top and bottom are trimmed of bands no vertical crosses: a heading's
+underline welded on above a ruled box. Only verticals within a row's height
+of its rows count.
+Read page-wide, a grid takes in every rule on the page, and a logo's strokes
+at the page foot crossed none of a horizontals-only spec table's rows, so it
+was trimmed to its last two.
+
+A table ruled with horizontals only takes its columns from where its rules
+break: a rule drawn a cell at a time has pieces meeting end to end at the
+columns' edges. A rule drawn a cell at a time can run each cell's piece on
+past its edge into the next, a few points or a column's padding. The two
+ends inside such an overlap are one column's edge, at the overlap's middle,
+not two edges with an empty column between them. Pieces a longer rule is
+drawn over whole (group underlines under a rule across all of them) keep
+their ends.
+
 ## Each box is read on its own
 
 Read all at once, a page's rules make one grid before it is cut into tables.
@@ -408,7 +424,10 @@ below fills every column. The full row is what tells a group from a row whose
 values are missing: a receipt's `TOTAL` with no amount sits over `Cash` and
 `Change`, as sparse as it is. A label wrapped onto the next row (`Median in`
 over `months (95% CI)`) is carried on, not a group, and a two-column list is
-left alone, since a field left empty there looks the same.
+left alone, since a field left empty there looks the same. A label over
+another such label is a group over its sub-group (`Power Management` over
+`Average power requirements (W)` over `Operational | 6.7W | …`), and the
+rows under both carry both.
 
 ## A list of fields has no header row
 
@@ -641,13 +660,24 @@ and a merge read the shaded labels and the first values as one cell
 
 So the edge of a fill parts rows as a rule there would, in two places:
 
-- **In the grid.** A fill across nine tenths of a table's width, hanging
-  from one of its lines (a header band from the top rule, a shaded row from
-  the rule above it), whose other edge falls inside a row, a cell's height
-  from its lines and through no line of text, is a row boundary too. Only
-  inside a grid the rules make, of two rows and two columns or more: an
-  edge never makes a table where the rules make none, nor parts a chart's
-  frame, its legend boxed over the plot, into rows.
+- **In the grid.** A band across nine tenths of a table's width, from one
+  of its edges to the other or hanging from one of its lines (a header band
+  from the top rule, a shaded row from the rule above it), whose edge falls
+  inside a row, a cell's height from its lines and through no line of text,
+  is a row boundary too. A band drawn a cell at a time, one fill a column on
+  one line, is one band: a spec table's section bands (`Performance`,
+  `Power Management`) have no rule over or under them. Such a band, hanging
+  from no line, parts a row from it only where that row holds text: a
+  heading's band set in the blank between two field lists (`Dimensions`)
+  parts nothing, and the blank stays the gap between the two tables. A
+  band from edge to edge set just over the table's first rule, a row at
+  most between them, is the table's top where it names two of the table's
+  columns or more, each name a run of text inside its column: its header
+  shaded, its rules drawn only under the rows below. A title band over a
+  table (`Technical data`) is one run of text, however many columns its
+  words fall across, and stays its title. Only inside a grid the rules make, of two rows and two columns or
+  more: an edge never makes a table where the rules make none, nor parts a
+  chart's frame, its legend boxed over the plot, into rows.
 - **In the merges.** Where a rule is drawn under some columns of a row
   boundary, a fill ending on that line over the others closes them. Its
   sides must stand on column edges, as a cell's shading does, not a
@@ -657,10 +687,29 @@ So the edge of a fill parts rows as a rule there would, in two places:
 An edge counts only where the shading stops. A column shaded as one block is
 often drawn a fill to a row, edge to edge, and the seams are not seen: a fill
 butted on to another across the line parts nothing. A background laid under
-the whole table is no such fill, and the band on it still shows. And only a
-table shaded once: one band across it, under half its height, is a header or
-a row set apart, while a table striped row by row has many, whose edges are
-no rules, and is left to the rules it draws.
+the whole table is no such fill, and the band on it still shows. And not a
+table striped row by row: its bands are a row or so apart, their edges are
+no rules, and it is left to the rules it draws. Bands set rows apart are a
+header or sections, and part rows.
+
+A path that fills a table's shaded cells, drawn as one, is a fill each.
+Read whole, its box was the size of the table, and the bands it shades were
+none. Only cells: every rectangle too thick either way to be a rule, set
+beside another on its line touching it, none inside another, and the bands
+they make rows apart, a table's sections or its header. A chart's bars stand
+apart, a glyph's `=` is two bars, a frame is a rectangle inside a rectangle,
+and stripes down a table, drawn a cell at a time, are a row apart: all are
+read whole, as before.
+
+A table ruled with horizontals only is read from its text, its rules' ends
+not taken for columns, unless it is ruled row by row: a line at every
+boundary between its bands, and no band holding two rows of their own. The
+edge of a band shaded across the table, edge to edge, is such a line, as
+plain as a rule; stripes are not, nor a row of cells a group's cell beside it
+leaves short. And a band whose values each wrap under themselves under a
+labelled line (`1.47 lb (.67 kg)` over `±10%`), the first column left empty,
+holds one row, not two; lines with no label under none (a statement's
+header, years over units) are lines of their own.
 
 ## Tables split by a page break
 
