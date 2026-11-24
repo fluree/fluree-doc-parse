@@ -309,16 +309,34 @@ pub fn assemble_columns_with_rules(
     if let Some(banded) = ruler_banded(glyphs, rules, page) {
         return banded;
     }
-    let cols = crate::column::detect(glyphs);
+    lines_in_columns(glyphs, &crate::column::detect(glyphs))
+}
+
+/// As [`assemble_columns_with_rules`], given the columns
+/// [`crate::column::detect`] already found on these glyphs, for a caller
+/// that needs them too.
+pub fn assemble_columns_in(
+    glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
+    page: usize,
+    cols: &[crate::column::Column],
+) -> Vec<Vec<Line>> {
+    if let Some(banded) = ruler_banded(glyphs, rules, page) {
+        return banded;
+    }
+    lines_in_columns(glyphs, cols)
+}
+
+fn lines_in_columns(glyphs: &[Glyph], cols: &[crate::column::Column]) -> Vec<Vec<Line>> {
     if cols.len() <= 1 {
         return vec![assemble(glyphs)];
     }
-    let mut per_col: Vec<Vec<Line>> = crate::column::partition(glyphs, &cols)
+    let mut per_col: Vec<Vec<Line>> = crate::column::partition(glyphs, cols)
         .iter()
         .map(|part| assemble(part))
         .collect();
     if std::env::var("FDOC_NO_REJOIN").is_err() {
-        rejoin_spanning_lines(&mut per_col, &cols);
+        rejoin_spanning_lines(&mut per_col, cols);
     }
     per_col
 }

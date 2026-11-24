@@ -4908,7 +4908,7 @@ type Field = (usize, Vec<usize>, Vec<usize>);
 /// either side) never makes a row of two cells, and a list that sets no
 /// colon after its labels (`CP | Polished Chrome`) has nothing there to
 /// show it is one. Here a list is looked for between the page's gutters
-/// ([`crate::column::detect`]): it starts at a row whose label opens its
+/// (`columns`, as [`crate::column::detect`] finds them on `glyphs`): it starts at a row whose label opens its
 /// column, the value beside it reaching to the next gutter, and goes on
 /// down every row that puts a label where it did and a value where its
 /// first value starts or ends (values set right, `Yes` and `#142, 143`).
@@ -4923,7 +4923,11 @@ type Field = (usize, Vec<usize>, Vec<usize>);
 /// The table comes out read: each cell holds its own glyphs (indices into
 /// `glyphs`) and it has no header, since its first row is a field like the
 /// others.
-pub fn field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
+pub fn field_lists(
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    columns: &[crate::column::Column],
+) -> Vec<Grid> {
     struct Seg {
         x0: f64,
         x1: f64,
@@ -4980,11 +4984,10 @@ pub fn field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
         })
         .collect();
     let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
-    let cuts: Vec<f64> = crate::column::detect(glyphs)
-        .iter()
-        .skip(1)
-        .map(|c| c.x0)
-        .collect();
+    let cuts: Vec<f64> = columns.iter().skip(1).map(|c| c.x0).collect();
+    let spaces = Spaces::new(glyphs);
+    // Runs that share rows share their cells: each cell's text is read once.
+    let mut read: std::collections::HashMap<Vec<usize>, String> = Default::default();
     let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
     let mut out = Vec::new();
     for i in 0..rows.len() {
@@ -5074,9 +5077,29 @@ pub fn field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
                 taken.push((j, inside.clone()));
                 last = baseline(j);
             }
-            if let Some(g) = field_grid(glyphs, &fields, page) {
-                let texts = g.layout.as_ref().unwrap().texts(glyphs, 2);
-                let n = fields.len();
+            let n = fields.len();
+            // Under three rows a list is read on its colons alone, and
+            // every label must hold one.
+            if n < MIN_PLAIN_FIELDS
+                && fields
+                    .iter()
+                    .any(|f| !f.1.iter().any(|&i| glyphs[i].text.contains(':')))
+            {
+                continue;
+            }
+            if let Some(g) = field_grid(glyphs, &fields, page, &spaces) {
+                let texts: Vec<String> = g
+                    .layout
+                    .as_ref()
+                    .unwrap()
+                    .cells
+                    .iter()
+                    .map(|ids| {
+                        read.entry(ids.clone())
+                            .or_insert_with(|| cell_text(glyphs, ids))
+                            .clone()
+                    })
+                    .collect();
                 // Labels on both sides (`Conf: | Conf:`) are two blocks of
                 // fields side by side, not one.
                 let paired = texts
@@ -5111,7 +5134,12 @@ pub fn field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
 /// The grid of a field list found by [`field_lists`]: two columns parted
 /// between the labels' right edge and the values' left, a row per field,
 /// and the cells read from the glyphs each field holds.
-fn field_grid(glyphs: &[crate::glyph::Glyph], fields: &[Field], page: usize) -> Option<Grid> {
+fn field_grid(
+    glyphs: &[crate::glyph::Glyph],
+    fields: &[Field],
+    page: usize,
+    spaces: &Spaces,
+) -> Option<Grid> {
     let bb = |i: usize| glyphs[i].bbox.unwrap();
     let span = |ids: &[usize]| {
         ids.iter().fold((f64::MAX, f64::MIN), |(a, b), &i| {
@@ -5152,24 +5180,9 @@ fn field_grid(glyphs: &[crate::glyph::Glyph], fields: &[Field], page: usize) -> 
     ys.push(bottom.max(ys[ys.len() - 1] + 0.1));
     // The spaces between a cell's words are its own: on its baseline,
     // within its ink.
-    // A space is often drawn with no box, where its pen position says
-    // where it is.
-    let spaces: Vec<usize> = (0..glyphs.len())
-        .filter(|&i| glyphs[i].text.trim().is_empty())
-        .collect();
-    let centre = |i: usize| match glyphs[i].bbox {
-        Some(b) => (b.x0 + b.x1) / 2.0,
-        None => glyphs[i].origin.0 + glyphs[i].advance.unwrap_or(0.0) / 2.0,
-    };
     let with_spaces = |ids: &Vec<usize>| {
-        let (x0, x1) = span(ids);
-        let g0 = &glyphs[ids[0]];
-        let tol = g0.font_size.max(1.0) as f64 * ROW_BASELINE_TOLERANCE;
         let mut out = ids.clone();
-        out.extend(spaces.iter().copied().filter(|&i| {
-            let c = centre(i);
-            (glyphs[i].origin.1 - g0.origin.1).abs() < tol && c > x0 && c < x1
-        }));
+        out.extend(spaces.within(glyphs, ids[0], span(ids)));
         out
     };
     let cells: Vec<Vec<usize>> = fields
@@ -5202,6 +5215,59 @@ fn field_grid(glyphs: &[crate::glyph::Glyph], fields: &[Field], page: usize) -> 
             claimed,
         })),
     })
+}
+
+/// A page's space glyphs by baseline, for [`field_grid`] to give each cell
+/// its own.
+struct Spaces {
+    /// `(baseline, glyph)`, in baseline order.
+    at: Vec<(f64, usize)>,
+}
+
+impl Spaces {
+    fn new(glyphs: &[crate::glyph::Glyph]) -> Self {
+        let mut at: Vec<(f64, usize)> = (0..glyphs.len())
+            .filter(|&i| glyphs[i].text.trim().is_empty())
+            .map(|i| (glyphs[i].origin.1, i))
+            .collect();
+        at.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Spaces { at }
+    }
+
+    /// The spaces on `first`'s baseline whose centre is inside `(x0, x1)`,
+    /// in page order. A space is often drawn with no box, where its pen
+    /// position says where it is.
+    fn within(
+        &self,
+        glyphs: &[crate::glyph::Glyph],
+        first: usize,
+        (x0, x1): (f64, f64),
+    ) -> Vec<usize> {
+        let g0 = &glyphs[first];
+        let tol = g0.font_size.max(1.0) as f64 * ROW_BASELINE_TOLERANCE;
+        let centre = |i: usize| match glyphs[i].bbox {
+            Some(b) => (b.x0 + b.x1) / 2.0,
+            None => glyphs[i].origin.0 + glyphs[i].advance.unwrap_or(0.0) / 2.0,
+        };
+        let from = self.at.partition_point(|s| s.0 <= g0.origin.1 - tol);
+        let mut out: Vec<usize> = self.at[from..]
+            .iter()
+            .take_while(|s| s.0 < g0.origin.1 + tol)
+            .map(|s| s.1)
+            .filter(|&i| {
+                let c = centre(i);
+                (glyphs[i].origin.1 - g0.origin.1).abs() < tol && c > x0 && c < x1
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+}
+
+/// A cell's text from its glyphs, as [`TableLayout::texts`] reads it.
+fn cell_text(glyphs: &[crate::glyph::Glyph], ids: &[usize]) -> String {
+    let gs: Vec<crate::glyph::Glyph> = ids.iter().map(|&i| glyphs[i].clone()).collect();
+    join_cell_lines(crate::line::assemble(&gs).iter().map(|l| l.text.as_str()))
 }
 
 /// A list of fields whose labels end in no colon: `CP | Polished Chrome`,
@@ -7827,7 +7893,7 @@ mod tests {
                 Some(400),
             ));
         }
-        let lists = field_lists(&gl, 0);
+        let lists = field_lists(&gl, 0, &crate::column::detect(&gl));
         assert_eq!(lists.len(), 1, "got {lists:?}");
         assert_eq!((lists[0].rows(), lists[0].cols()), (5, 2));
         assert_eq!(lists[0].layout.as_ref().unwrap().header_rows, 0);
@@ -7862,7 +7928,7 @@ mod tests {
             gl.push(word(260.0, r + 3, label, None));
             gl.push(word(290.0, r + 3, value, None));
         }
-        let lists = field_lists(&gl, 0);
+        let lists = field_lists(&gl, 0, &crate::column::detect(&gl));
         assert_eq!(lists.len(), 1, "got {lists:?}");
         let cells = field_texts(&lists[0], &gl);
         assert_eq!(
@@ -7898,7 +7964,7 @@ mod tests {
             b.x1 = x0 + w;
             g.origin.0 = x0;
         }
-        assert!(field_lists(&gl, 0).is_empty());
+        assert!(field_lists(&gl, 0, &crate::column::detect(&gl)).is_empty());
     }
 
     #[test]
