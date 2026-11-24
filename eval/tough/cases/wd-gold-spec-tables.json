@@ -1,0 +1,54 @@
+{
+  "document": {
+    "file": "wd-gold-datasheet.pdf",
+    "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-gold/data-sheet-wd-gold-hdd.pdf",
+    "sha256": "341f32848640e76bc71a507b17aa0635608ad2191b58dec742df80b3481159e4",
+    "about": "Western Digital WD Gold data sheet (4 pages). Pp2–4 each set a spec table of six columns ruled with horizontals alone, drawn a column at a time, under a header and section bands shaded a cell at a time with no rule over or under them."
+  },
+  "notes": [
+    "2026-11-24 (#133): the spec tables came out as fragments and loose paragraphs. The logo's strokes at the page foot trimmed the page-wide grid to its last rows; the bands, drawn as one fill path, were one fill the size of the table, so the grid lumped rows and was read from its text; and the shaded header over the first rule was left out."
+  ],
+  "checks": [
+    {
+      "id": "capacity-under-its-model",
+      "found": "2026-11-24",
+      "issue": "#133: `Formatted capacity 1` was a paragraph apart from its values.",
+      "cell": {
+        "value": "26TB",
+        "column": "WD261KRYZ",
+        "row": "Formatted capacity 1"
+      }
+    },
+    {
+      "id": "words-in-their-rows",
+      "found": "2026-11-24",
+      "issue": "#133: `3.5-inch`, `Helium` and the other words were loose paragraphs.",
+      "cell": {
+        "value": "3.5-inch",
+        "column": "WD261KRYZ",
+        "row": "Form factor"
+      }
+    },
+    {
+      "id": "warranty-under-its-band",
+      "found": "2026-11-24",
+      "issue": "#133: every `5 years` was a loose paragraph.",
+      "cell": {
+        "value": "5 years",
+        "column": "WD261KRYZ",
+        "row": "Limited Warranty 3",
+        "section": "Reliability"
+      }
+    },
+    {
+      "id": "page-4-capacity",
+      "found": "2026-11-24",
+      "issue": "#133: as above, on p4, where labels were fused with values (`Formatted capacity 1 8TB`).",
+      "cell": {
+        "value": "8TB",
+        "column": "WD8005FRYZ",
+        "row": "Formatted capacity 1"
+      }
+    }
+  ]
+}

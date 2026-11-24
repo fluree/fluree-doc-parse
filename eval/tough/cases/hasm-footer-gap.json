@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hasm-hex-socket-cap-screws.pdf",
+    "url": "https://hasmnorthamerica.com/wp-content/uploads/2019/07/dimensions-of-hexagon-socket-head-cap-screws-07292019.pdf",
+    "sha256": "1d3535a504e4e787ee00dc0599067625b3990a1318eef9eb04a8601c8ed44b0c",
+    "about": "HASM dimensions of hexagon socket head cap screws (3 landscape pages). Each page titles a table whose header row is filled dark green cell by cell."
+  },
+  "notes": [
+    "#130: the footer pads the note at the left margin and the page number at the right with 166 space glyphs, whose advances walk the pen across; the ink gap is 451pt."
+  ],
+  "checks": [
+    {
+      "id": "note-apart-from-page-number",
+      "found": "2026-11-24",
+      "issue": "The footer read `NOTE: ALL DIMENSIONS ARE IN INCHES Page 3 of 3`.",
+      "no_text": "ARE IN INCHES Page"
+    }
+  ]
+}
