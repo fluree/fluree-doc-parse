@@ -1,0 +1,274 @@
+//! Compact CUDA readback without modifying the recognizer's graph/fusions.
+use crate::core::inference::OrtInfer;
+use crate::processors::CTCArgmaxOutput;
+use ort::{
+    ep,
+    session::Session,
+    value::{Tensor, TensorElementType, ValueType},
+};
+use std::sync::Mutex;
+
+// ONNX IR 8 / opset 13, float x[B,T,V]:
+// reversed = Slice(x, starts=[-1], ends=[i64::MIN], axes=[2], steps=[-1]);
+// indices = ArgMax(reversed, axis=2, keepdims=0); // first on reverse = last on x
+// maxima = ReduceMax(x, axes=[2], keepdims=0);
+// sums = ReduceSum(x, axes=[2], keepdims=0).
+// select_last_index=1 forces ORT ArgMax onto CPU; reversing keeps all nodes on
+// CUDA. Sum is only an exception sentinel, never a returned confidence.
+const GRAPH: &[u8] = include_bytes!("ctc_reduce.onnx");
+// Bound the extra reversed-logits buffer beside the recognizer's allocations.
+const MAX_DEVICE_LOGITS_BYTES: usize = 1280 * 1024 * 1024;
+
+#[derive(Debug, Default)]
+pub(super) struct CtcReducer {
+    session: Mutex<Option<Session>>,
+    output_shape: Option<[i64; 2]>,
+}
+
+fn output_shape(dtype: &ValueType) -> Option<[i64; 2]> {
+    let ValueType::Tensor {
+        ty: TensorElementType::Float32,
+        shape,
+        ..
+    } = dtype
+    else {
+        return None;
+    };
+    let [_, time, vocab] = shape.as_ref() else {
+        return None;
+    };
+    (*vocab > 0).then_some([*time, *vocab])
+}
+
+fn fits_device(batch: usize, time: usize, vocab: usize) -> bool {
+    batch > 0
+        && time > 0
+        && vocab > 0
+        && batch
+            .saturating_mul(time)
+            .saturating_mul(vocab)
+            .saturating_mul(size_of::<f32>())
+            <= MAX_DEVICE_LOGITS_BYTES
+}
+
+impl CtcReducer {
+    pub(super) fn new(inference: &OrtInfer) -> Self {
+        let shape = inference.get_session(0).ok().and_then(|session| {
+            (session.outputs().len() == 1)
+                .then(|| output_shape(session.outputs()[0].dtype()))
+                .flatten()
+        });
+        Self {
+            session: Mutex::new(None),
+            output_shape: shape,
+        }
+    }
+
+    pub(super) fn allows(&self, batch: usize, width: usize) -> bool {
+        self.output_shape.is_some_and(|[time, vocab]| {
+            // Shipped Paddle recognizers: two ceil-halvings, then floor-halving.
+            let time = if time >= 0 {
+                time as usize
+            } else {
+                width.saturating_add(3) / 8
+            };
+            fits_device(batch, time, vocab as usize)
+        })
+    }
+
+    // None requests a fresh CPU-output forward, never a Tensor::to transfer.
+    pub(super) fn reduce(
+        &self,
+        input: &Tensor<f32>,
+        device: i32,
+    ) -> ort::Result<Option<CTCArgmaxOutput>> {
+        let shape = input.shape();
+        let [batch, time, vocab] = shape.as_ref() else {
+            return Err(ort::Error::new("expected CTC output [batch, time, vocab]"));
+        };
+        let (batch, time, vocab) = (*batch as usize, *time as usize, *vocab as usize);
+        // The width estimate is not a contract for arbitrary user models.
+        if !fits_device(batch, time, vocab) {
+            return Ok(None);
+        }
+        let mut guard = self
+            .session
+            .lock()
+            .map_err(|_| ort::Error::new("CTC reducer lock poisoned"))?;
+        if guard.is_none() {
+            *guard = Some(
+                Session::builder(&crate::core::inference::initialize_ort_environment()?)?
+                    .with_intra_threads(1)?
+                    .with_inter_threads(1)?
+                    .with_execution_providers([ep::CUDA::default()
+                        .with_device_id(device)
+                        .build()
+                        .error_on_failure()])?
+                    .with_disable_cpu_fallback()?
+                    .commit_from_memory(GRAPH)?,
+            );
+        }
+        let session = guard.as_mut().expect("initialized reducer");
+        // The reverse buffer can be hundreds of MB. Return its idle arena
+        // allocations after reduction rather than retaining them beside the
+        // structure pipeline's other model sessions.
+        let mut options = ort::session::RunOptions::new()?;
+        options.set(
+            "memory.enable_memory_arena_shrinkage",
+            format!("gpu:{device}"),
+        )?;
+        let outputs = session.run_with_options(ort::inputs![input], &options)?;
+        let (_, indices) = outputs["indices"].try_extract_tensor::<i64>()?;
+        let (_, probabilities) = outputs["maxima"].try_extract_tensor::<f32>()?;
+        let (_, sums) = outputs["sums"].try_extract_tensor::<f32>()?;
+        // Host SIMD NaN and signed-zero confidence semantics are target dependent.
+        // CUDA ReduceMax also seeds some reductions with -FLT_MAX, not -infinity.
+        // Conservatively retain the unchanged host path for the whole batch if
+        // any row has a nonfinite sum or zero maximum. Overflow may over-trigger
+        // this fallback, but healthy softmax probabilities do not overflow.
+        if sums.iter().any(|v| !v.is_finite()) || probabilities.contains(&0.0) {
+            return Ok(None);
+        }
+        Ok(Some(CTCArgmaxOutput {
+            batch_size: batch,
+            sequence_length: time,
+            indices: indices
+                .iter()
+                .map(|&index| vocab - 1 - index as usize)
+                .collect(),
+            probabilities: probabilities.to_vec(),
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::processors::CTCLabelDecode;
+    use ort::memory::AllocationDevice;
+
+    #[test]
+    fn routing_bounds_logits_and_requires_valid_metadata() {
+        let dtype = |ty, shape: &[i64]| ValueType::Tensor {
+            ty,
+            shape: shape.into(),
+            dimension_symbols: ort::value::SymbolicDimensions::empty(shape.len()),
+        };
+        assert_eq!(
+            output_shape(&dtype(TensorElementType::Float32, &[-1, -1, 18710])),
+            Some([-1, 18710])
+        );
+        for invalid in [
+            dtype(TensorElementType::Float32, &[-1, -1, -1]),
+            dtype(TensorElementType::Float32, &[-1, 18710]),
+            dtype(TensorElementType::Float16, &[-1, -1, 18710]),
+        ] {
+            assert!(output_shape(&invalid).is_none());
+        }
+        let reducer = CtcReducer {
+            output_shape: Some([-1, 18710]),
+            ..Default::default()
+        };
+        assert!(reducer.allows(64, 320));
+        assert!(reducer.allows(64, 2244)); // T280 fits; T281 does not.
+        assert!(!reducer.allows(64, 2245));
+        assert!(!fits_device(64, 281, 18710)); // Also guards underestimated output.
+        assert!(!fits_device(usize::MAX, 40, 18710));
+        let fixed = CtcReducer {
+            output_shape: Some([40, 18710]),
+            ..Default::default()
+        };
+        assert!(fixed.allows(64, 4000));
+        assert!(!CtcReducer::default().allows(1, 320));
+    }
+
+    #[test]
+    fn cuda_ctc_reduction_matches_host_bits() -> ort::Result<()> {
+        use ort::ep::ExecutionProvider;
+        let env = crate::core::inference::initialize_ort_environment()?;
+        let mut builder = Session::builder(&env)?;
+        let probe = Tensor::from_array(([1], vec![0.0_f32]))?;
+        if ep::CUDA::default().register(&mut builder).is_err()
+            || probe.to(AllocationDevice::CUDA, 0).is_err()
+        {
+            eprintln!("skipping CUDA CTC parity: no CUDA device");
+            return Ok(());
+        }
+        let decoder = CTCLabelDecode::new(None, false);
+        let reducer = CtcReducer::default();
+        for width in [1, 7, 8, 9, 16, 17, 32, 18708] {
+            let mut rows: Vec<Vec<f32>> = (0..32)
+                .map(|seed| {
+                    (0..width)
+                        .map(|i| ((i * 37 + seed * 11) % 41) as f32 - 20.0)
+                        .collect()
+                })
+                .collect();
+            rows.extend([
+                vec![f32::NEG_INFINITY; width],
+                vec![f32::INFINITY; width],
+                vec![f32::from_bits(1); width],
+                vec![-f32::from_bits(1); width],
+                (0..width)
+                    .map(|i| if i % 2 == 0 { -0.0 } else { 0.0 })
+                    .collect(),
+                vec![f32::from_bits(0x7fc01234); width],
+            ]);
+            for pos in [0, width / 2, width - 1] {
+                let mut row = vec![5.0; width];
+                row[0] = 9.0;
+                row[pos] = f32::NAN;
+                rows.push(row);
+            }
+            let subnormals: Vec<Vec<f32>> = [1u32, 7, 0x7fffff, 0x800000, 0x80000001, 0x807fffff]
+                .into_iter()
+                .map(|bits| {
+                    let mut row = vec![-f32::MIN_POSITIVE; width];
+                    row[width / 2] = f32::from_bits(bits);
+                    row
+                })
+                .collect();
+            // Separate finite and exceptional batches so the test exercises both
+            // the device reduction and the conservative full-batch fallback.
+            for (group, rows) in [&rows[..32], subnormals.as_slice(), &rows[32..]]
+                .into_iter()
+                .enumerate()
+            {
+                let data: Vec<_> = rows.iter().flatten().copied().collect();
+                let view = ndarray::ArrayView3::from_shape((1, rows.len(), width), &data).unwrap();
+                let expected = decoder.argmax_predictions(&view);
+                let input = Tensor::from_array(([1, rows.len(), width], data))?
+                    .to(AllocationDevice::CUDA, 0)?;
+                let actual = reducer.reduce(&input, 0)?;
+                if group == 2 {
+                    assert!(
+                        actual.is_none(),
+                        "exceptional batch must request CPU output"
+                    );
+                }
+                let Some(actual) = actual else {
+                    assert!(
+                        group != 0 || width == 1,
+                        "finite nonzero maxima must reduce on CUDA"
+                    );
+                    continue;
+                };
+                assert_eq!(actual.indices, expected.indices, "width={width}");
+                assert_eq!(
+                    actual
+                        .probabilities
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .collect::<Vec<_>>(),
+                    expected
+                        .probabilities
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .collect::<Vec<_>>(),
+                    "width={width}"
+                );
+            }
+        }
+        Ok(())
+    }
+}

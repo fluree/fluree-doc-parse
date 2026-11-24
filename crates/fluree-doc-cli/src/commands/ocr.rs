@@ -19,18 +19,69 @@ pub(crate) const OCR_REASONS: [&str; 5] = [
     "small_region",
 ];
 
-/// Open an engine on an assets directory.
+/// How the engine runs, as the command line, the environment and the config
+/// set it.
+pub(crate) struct EngineSettings {
+    pub threads: usize,
+    pub sizing: fluree_doc_vision::sizing::OcrSizing,
+    /// Bytes the passes read at once may take; the engine's default if
+    /// none.
+    pub memory: Option<u64>,
+}
+
+impl EngineSettings {
+    /// `ocr.threads`; the pixel cap a pass reads, `flag` over
+    /// `FDOC_OCR_MAX_MEGAPIXELS` over `ocr.max_megapixels` over the default;
+    /// and the memory budget, `FDOC_OCR_MAX_MEMORY` over `ocr.max_memory`
+    /// (MiB) over the engine's default.
+    pub(crate) fn of(flag: Option<f64>, config: &crate::config::Ocr) -> Result<Self, String> {
+        let var = |name: &str| std::env::var(name).ok().filter(|s| !s.trim().is_empty());
+        let memory =
+            match var("FDOC_OCR_MAX_MEMORY") {
+                Some(v) => Some(v.trim().parse::<u64>().map_err(|_| {
+                    format!("FDOC_OCR_MAX_MEMORY={v:?} is not a whole number of MiB")
+                })?),
+                None => config.max_memory,
+            };
+        if memory == Some(0) {
+            return Err("ocr.max_memory: 0 MiB leaves the engine nothing to read with".into());
+        }
+        let env = var("FDOC_OCR_MAX_MEGAPIXELS");
+        let mpx = match (flag, env) {
+            (Some(m), _) => m,
+            (None, Some(v)) => v.trim().parse::<f64>().map_err(|_| {
+                format!("FDOC_OCR_MAX_MEGAPIXELS={v:?} is not a number of megapixels")
+            })?,
+            (None, None) => config
+                .max_megapixels
+                .unwrap_or(fluree_doc_vision::sizing::DEFAULT_MAX_MEGAPIXELS),
+        };
+        Ok(EngineSettings {
+            threads: config.threads.unwrap_or(1),
+            sizing: fluree_doc_vision::sizing::OcrSizing::megapixels(mpx)
+                .map_err(|e| format!("ocr.max_megapixels: {e}"))?,
+            memory: memory.map(|mib| mib.saturating_mul(1 << 20)),
+        })
+    }
+}
+
+/// Open an engine on an assets directory. What it has to say about a
+/// reading (an image shrunk to fit) goes to stderr as a warning.
 #[cfg(feature = "ocr")]
 pub(crate) fn open_engine(
     name: OcrEngineName,
     models: &Path,
-    threads: usize,
+    settings: &EngineSettings,
 ) -> Result<Arc<dyn OcrEngine>, String> {
     match name {
         OcrEngineName::OarOcr => {
+            let defaults = fluree_doc_vision::oar::OarOptions::default();
             let opts = fluree_doc_vision::oar::OarOptions {
-                threads,
-                ..Default::default()
+                threads: settings.threads,
+                sizing: settings.sizing,
+                memory: settings.memory.unwrap_or(defaults.memory),
+                notices: Some(Arc::new(|msg: &str| eprintln!("warning: {msg}"))),
+                ..defaults
             };
             let engine = fluree_doc_vision::oar::OarEngine::open(models, &opts)?;
             Ok(Arc::new(engine))
@@ -42,7 +93,7 @@ pub(crate) fn open_engine(
 pub(crate) fn open_engine(
     _name: OcrEngineName,
     _models: &Path,
-    _threads: usize,
+    _settings: &EngineSettings,
 ) -> Result<Arc<dyn OcrEngine>, String> {
     Err("this build has no OCR engine (built without the `ocr` feature); use --ocr-words".into())
 }
@@ -54,6 +105,7 @@ pub(crate) fn open_engine(
 pub(crate) fn engine_for_convert(
     flag: Option<OcrEngineName>,
     models: Option<&Path>,
+    max_megapixels: Option<f64>,
     config: &crate::config::Ocr,
 ) -> Result<Option<Arc<dyn OcrEngine>>, String> {
     let named = match flag {
@@ -74,7 +126,8 @@ pub(crate) fn engine_for_convert(
     };
     let dir = models_dir(models, config)
         .ok_or("an OCR engine needs its assets: --models DIR (or FDOC_OCR_MODELS, or ocr.models in the config)")?;
-    open_engine(name, &dir, config.threads.unwrap_or(1)).map(Some)
+    let settings = EngineSettings::of(max_megapixels, config)?;
+    open_engine(name, &dir, &settings).map(Some)
 }
 
 fn parse_engine(s: &str) -> Result<OcrEngineName, String> {
@@ -186,7 +239,9 @@ pub fn run(args: &OcrArgs, verbose: bool, quiet: bool) -> i32 {
     }
     // The assets before anything is written: a run that cannot read leaves
     // no empty output directory behind.
-    let engine = match open_engine(args.engine, &dir, config.ocr.threads.unwrap_or(1)) {
+    let engine = match EngineSettings::of(args.max_megapixels, &config.ocr)
+        .and_then(|settings| open_engine(args.engine, &dir, &settings))
+    {
         Ok(e) => e,
         Err(e) => {
             eprintln!("error: {e}");
@@ -315,12 +370,36 @@ mod tests {
     }
 
     #[test]
+    fn the_pixel_cap_comes_from_the_flag_then_the_config() {
+        if std::env::var_os("FDOC_OCR_MAX_MEGAPIXELS").is_some() {
+            return;
+        }
+        let mut config = crate::config::Ocr::default();
+        let px = |flag, config: &crate::config::Ocr| {
+            EngineSettings::of(flag, config).map(|s| s.sizing.max_pixels())
+        };
+        assert_eq!(px(None, &config), Ok(12_500_000));
+        config.max_megapixels = Some(8.0);
+        assert_eq!(px(None, &config), Ok(8_000_000));
+        assert_eq!(px(Some(20.0), &config), Ok(20_000_000));
+        let e = px(Some(0.1), &config).unwrap_err();
+        assert!(e.starts_with("ocr.max_megapixels: "), "{e}");
+        if std::env::var_os("FDOC_OCR_MAX_MEMORY").is_none() {
+            config.max_memory = Some(2048);
+            let s = EngineSettings::of(None, &config).unwrap();
+            assert_eq!(s.memory, Some(2 << 30));
+            config.max_memory = Some(0);
+            assert!(EngineSettings::of(None, &config).is_err());
+        }
+    }
+
+    #[test]
     fn an_engine_without_assets_is_an_error() {
         let config = crate::config::Ocr::default();
         if std::env::var_os("FDOC_OCR_MODELS").is_some() {
             return;
         }
-        let e = engine_for_convert(Some(OcrEngineName::OarOcr), None, &config)
+        let e = engine_for_convert(Some(OcrEngineName::OarOcr), None, None, &config)
             .err()
             .unwrap();
         assert!(e.contains("--models"), "{e}");

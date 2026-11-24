@@ -133,12 +133,19 @@ ocr::mark_provenance(&mut analysis.elements, &pass.injected);
 `read_pages` reads the same crops `--ocr-words` expects (`ocr::ocr_jobs`):
 pages whose text is pixels, whole, and the unread raster regions of the
 others, small ones included. It renders one page at a time, at most four
-times for its crops (plus one per crop held to its long-edge cap), and reads
+times for its crops, and reads
 each crop as it is cut, so a long scan holds one render of one page and one
 crop at a time, and a crop the engine cannot read is reported in
 `pass.failed` while the rest is read. The engine is `Send + Sync`: share one
 across threads. Any other engine plugs in by implementing
 `fluree_doc_vision::OcrEngine`.
+
+`OarOptions` sets how images are sized (`sizing`: at most 12.5 Mpx a pass by
+default, `OcrSizing::megapixels` for another cap), the memory the passes read
+at once may take (`memory`, 8 GiB by default, counted at
+`oar::BYTES_PER_PIXEL`), and whom the engine tells of an image it shrank
+(`notices`; nobody by default). `OarEngine::memory_held` says what the passes
+being read hold now.
 
 A bare image (PNG, JPEG, TIFF) is one call, decoded upright and laid out as a
 scanned page:

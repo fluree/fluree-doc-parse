@@ -68,11 +68,12 @@ pub const VLM_RENDER_SCALE: f32 = 2.0;
 
 /// The finest a crop rendered for its stored resolution is drawn: 300 dpi.
 /// Past it, an OCR engine reads no better and costs more.
+///
+/// There is no cap on a crop's size beyond this and the page's
+/// ([`MAX_PAGE_PIXELS`]): the OCR engine reads a crop larger than one pass
+/// holds in strips ([`fluree_doc_vision::sizing`]). A cap of 4,000 px on the
+/// long edge once drew a tall capture at a tenth fewer lines read.
 pub const MAX_STORED_PPI: f64 = 300.0;
-
-/// The longest edge, in pixels, of a crop rendered for its stored
-/// resolution, so a poster-sized page does not render at 300 dpi.
-pub const MAX_LONG_EDGE_PX: f64 = 4000.0;
 
 /// The most pixels a page is rendered with for crops at their stored
 /// resolution: 64 million, 256 MB of RGBA, held once (the crops are cut from
@@ -89,17 +90,20 @@ pub const MAX_PAGE_PIXELS: f64 = 64.0e6;
 /// in 16 bits, and a page drawn wider loses what lies past the edge.
 pub const MAX_RENDER_SIDE: f64 = 65_535.0;
 
-/// The most renders of one page its crops are cut from, plus one per crop
-/// held to its long-edge cap that no shared render fits. Crops at their
+/// The most renders of one page its crops are cut from. Crops at their
 /// stored resolution each ask for their own scale, and a page of hundreds of
 /// captures would be rendered hundreds of times; past this many scales,
-/// crops share the next scale up, so none is drawn coarser than it asks,
-/// nor past its long-edge cap ([`MAX_LONG_EDGE_PX`]): such a crop, when none
-/// of the shared scales lies between its own and its cap, keeps its own
-/// render. It takes a crop over about 960 points long, so it is rare.
+/// crops share the next scale up, so none is drawn coarser than it asks.
 pub const MAX_RENDERS_PER_PAGE: usize = 4;
 
-/// How a crop is rendered.
+/// How a crop is rendered: for the reader it goes to, whose costs differ.
+///
+/// A model bills by the call and the image, so its crops are drawn at the
+/// one scale measured to read as well as any ([`CropScale::Model`]). The
+/// OCR engine runs on this machine, so its crops are drawn at the
+/// resolution they hold ([`CropScale::Stored`]) and the engine plans how to
+/// read them within its pixel cap ([`fluree_doc_vision::sizing`]). Encoding
+/// a model's crops (grey, JPEG, a byte budget) would be the model's policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CropScale {
     /// [`VLM_RENDER_SCALE`] whatever is under the crop: what a model reads,
@@ -122,9 +126,8 @@ pub enum CropScale {
 /// page when `region` is `None`.
 ///
 /// With [`CropScale::Stored`] it is the resolution of the image the crop
-/// shows, clamped between the model scale and [`MAX_STORED_PPI`] and held
-/// back toward the model scale (never below it) by [`MAX_LONG_EDGE_PX`] on
-/// the crop's long edge; the model scale where no image is under it, or the
+/// shows, clamped between the model scale and [`MAX_STORED_PPI`]; the model
+/// scale where no image is under it, or the
 /// image is one-bit or its resolution unknown. Whichever it is, the page it
 /// is cut from is then drawn within [`MAX_PAGE_PIXELS`] and
 /// [`MAX_RENDER_SIDE`], below the model scale if need be. It is not rounded:
@@ -192,20 +195,15 @@ pub fn crop_scale(page: &crate::extract::Page, region: Option<&BBox>, mode: Crop
     let Some(ppi) = image.ppi.filter(|_| !image.bitonal) else {
         return held(base);
     };
-    let long_edge = (area.x1 - area.x0).max(area.y1 - area.y0).max(1.0);
-    let scale = (ppi / 72.0)
-        .min(MAX_STORED_PPI / 72.0)
-        .min(MAX_LONG_EDGE_PX / long_edge);
+    let scale = (ppi / 72.0).min(MAX_STORED_PPI / 72.0);
     held(scale.max(base))
 }
 
-/// The scales a page is rendered at for crops asking for `scales`, each at
-/// most `most[k]`: each crop's own while there are at most
-/// [`MAX_RENDERS_PER_PAGE`] distinct ones, else that many, each crop rendered
-/// at the smallest of them not below its own and not above its most (a
-/// crop held to [`MAX_LONG_EDGE_PX`] keeps its own scale if none fits). The
-/// result is, for each crop, the scale it is cut at.
-fn render_scales(scales: &[f32], most: &[f32]) -> Vec<f32> {
+/// The scales a page is rendered at for crops asking for `scales`: each
+/// crop's own while there are at most [`MAX_RENDERS_PER_PAGE`] distinct
+/// ones, else that many, each crop rendered at the smallest of them not
+/// below its own. The result is, for each crop, the scale it is cut at.
+fn render_scales(scales: &[f32]) -> Vec<f32> {
     let mut distinct = scales.to_vec();
     distinct.sort_by(f32::total_cmp);
     distinct.dedup();
@@ -220,13 +218,7 @@ fn render_scales(scales: &[f32], most: &[f32]) -> Vec<f32> {
         .collect();
     scales
         .iter()
-        .zip(most)
-        .map(|(s, m)| {
-            kept.iter()
-                .copied()
-                .find(|k| k >= s && *k <= m.max(*s))
-                .unwrap_or(*s)
-        })
+        .map(|s| kept.iter().copied().find(|k| k >= s).unwrap_or(*s))
         .collect()
 }
 
@@ -802,8 +794,8 @@ pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, f: impl FnMut(RawCrop)) {
 
 /// As [`for_each_crop`], each crop at the scale `scale_of(page, region)`
 /// gives it (see [`crop_scale`]). A page is rendered once per scale its
-/// crops ask for (at most [`MAX_RENDERS_PER_PAGE`] times, plus one per crop
-/// held to its long-edge cap), one render at a time, and each crop is handed
+/// crops ask for (at most [`MAX_RENDERS_PER_PAGE`] times), one render at a
+/// time, and each crop is handed
 /// over as soon as it is cut: a page's crops come in the order of its
 /// renders, coarsest first, and in the jobs' order within each.
 /// [`crop_order`] gives the jobs' order back.
@@ -899,20 +891,11 @@ fn cut_crops(
                 // One render per scale the page's crops ask for, each dropped
                 // once its crops are cut: never more than one render held,
                 // and each crop handed over as cut, never held past it.
-                // A crop shares a finer render only within its long-edge cap.
-                let most: Vec<f32> = regions
-                    .iter()
-                    .map(|(_, b)| {
-                        let long = (b.x1 - b.x0).max(b.y1 - b.y0) + 2.0 * CROP_MARGIN;
-                        (MAX_LONG_EDGE_PX / long.max(1.0)) as f32
-                    })
-                    .collect();
                 let scales = render_scales(
                     &regions
                         .iter()
                         .map(|(_, b)| scale_of(*page_idx, Some(b)))
                         .collect::<Vec<_>>(),
-                    &most,
                 );
                 let mut distinct = scales.clone();
                 distinct.sort_by(f32::total_cmp);
@@ -1536,29 +1519,11 @@ mod tests {
     }
 
     #[test]
-    fn a_crop_held_to_the_long_edge_is_not_drawn_past_it() {
-        // Eight small crops asking 2.1 .. 4.15, and one large crop held to
-        // 3.38 by its long edge: it would share the 3.9 render, past 4,000 px.
-        let mut scales: Vec<f32> = (0..8).map(|i| 2.1 + i as f32 * 0.29).collect();
-        scales.push(3.38);
-        let mut most = vec![f32::MAX; 8];
-        most.push(3.38);
-        let at = render_scales(&scales, &most);
-        assert_eq!(at[8], 3.38);
-        assert!(scales.iter().zip(&at).all(|(asked, got)| got >= asked));
-    }
-
-    #[test]
     fn a_page_of_many_scales_renders_a_few_times_none_coarser() {
         let few = [2.5f32, 3.0, 2.5, 4.0];
-        let free = [f32::MAX; 300];
-        assert_eq!(
-            render_scales(&few, &free[..4]),
-            few,
-            "a few scales are each their own"
-        );
+        assert_eq!(render_scales(&few), few, "a few scales are each their own");
         let many: Vec<f32> = (0..300).map(|i| 2.0 + (i % 97) as f32 * 0.02).collect();
-        let at = render_scales(&many, &free);
+        let at = render_scales(&many);
         let mut distinct = at.clone();
         distinct.sort_by(f32::total_cmp);
         distinct.dedup();
@@ -1673,9 +1638,10 @@ mod tests {
     }
 
     #[test]
-    fn a_large_page_is_held_to_the_long_edge_cap() {
-        // A poster 2,000 points high, all one 300-ppi image: 300 dpi would
-        // draw 8,333 px, the cap allows 4,000.
+    fn a_large_page_is_drawn_at_its_resolution_within_the_page_budget() {
+        // A poster 2,000 points high, all one 300-ppi image: drawn at 300
+        // dpi, 5,833 × 8,333 px, within the page's 64 Mpx; the OCR engine
+        // reads it in strips. It was once held to 4,000 px on its long edge.
         let mut p = imaged(
             BBox {
                 x0: 0.0,
@@ -1689,10 +1655,7 @@ mod tests {
         p.width = 1400.0;
         p.height = 2000.0;
         let s = crop_scale(&p, None, CropScale::Stored);
-        assert!(
-            (f64::from(s) - MAX_LONG_EDGE_PX / 2000.0).abs() < 1e-3,
-            "{s}"
-        );
+        assert!((f64::from(s) - 300.0 / 72.0).abs() < 1e-5, "{s}");
     }
 
     #[test]

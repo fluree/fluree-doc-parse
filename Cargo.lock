@@ -2113,8 +2113,6 @@ dependencies = [
 [[package]]
 name = "oar-ocr-core"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0744c4a4795f98a00b7eda9022061bf3876d3a972a9d1a3cfbb5b8f64903a14"
 dependencies = [
  "clipper2-rust",
  "image",
