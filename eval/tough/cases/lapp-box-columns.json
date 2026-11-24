@@ -1,0 +1,20 @@
+{
+  "document": {
+    "file": "lapp-innovation-catalogue.pdf",
+    "url": "https://lappespana.lappgroup.com/fileadmin/DAM/Lapp_Espana/1R_05_DESCARGAS/Catalogos_y_folletos/PDF/lapp_innovation-catalogue_spring26_en.pdf",
+    "sha256": "23355150efc339a27675fe73bf66a881292ef6bb9a858e9dd5ee0f93c1a3af24",
+    "about": "LAPP innovation catalogue, spring 2026 (36 pages). Its product pages share one template: box headings and the close of a standard description stand at the same place on page after page, and a thumb index runs down the side margin."
+  },
+  "notes": [
+    "#131, #132: each product page sets its Benefits and Application ranges boxes in two columns, under a lead paragraph across them, beside a side tab of turned labels at the page’s edge."
+  ],
+  "checks": [
+    {
+      "id": "benefit-read-whole",
+      "found": "2026-11-24",
+      "issue": "The box’s two columns were read line by line in turn, so each item ran into the other column’s lines.",
+      "text": "Kits for the production of a rectangular connector with optimally matched components to reduce ordering effort and avoid incorrect orders.",
+      "count": 9
+    }
+  ]
+}

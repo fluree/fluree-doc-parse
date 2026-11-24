@@ -1,0 +1,21 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series PLC digest catalogue (28 pages): feature lists numbered in the item's own text, dimension drawings with hole callouts, and a date and web address on the cover and the back page. Page 20's product table gives each control unit's number of I/O points (`10`, `14`, `16`, `32`), a figure alone in its cell."
+  },
+  "notes": [
+    "#130: page 5's two columns were joined sentence to sentence through a space glyph."
+  ],
+  "checks": [
+    {
+      "id": "column-sentence-apart",
+      "found": "2026-11-24",
+      "issue": "`The motion can be started without a preset target value.` ran on into the next column's `Pulses input in a specified period…`.",
+      "element": {
+        "text": "The motion can be started without a preset target value."
+      }
+    }
+  ]
+}

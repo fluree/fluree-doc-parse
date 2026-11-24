@@ -1,0 +1,53 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal. Its test-data tables set a property in the first column over the sub-properties it groups, in a second column the ruling does not part from the first, each sub-property ruled off with a dotted rule that stops short of the property's column."
+  },
+  "notes": [
+    "2026-11-24 (#162): a sub-property under its group's first row was read across both columns into the first, `Smoke developed` in the property's place, and the span down the first column was dropped. The flag that the second column carries on the first stayed on rows where each held a value of its own, so DoCO joined them and wrote no second column."
+  ],
+  "checks": [
+    {
+      "id": "sub-property-under-its-property",
+      "found": "2026-11-24",
+      "issue": "#162: `Smoke developed` was read into the property column.",
+      "cell": {
+        "value": "Smoke developed",
+        "column": "Property",
+        "row": "Surface-burning characteristics"
+      }
+    },
+    {
+      "id": "value-named-by-property-and-sub-property",
+      "found": "2026-11-24",
+      "issue": "#162: the row was named `Smoke developed` alone.",
+      "cell": {
+        "value": "0",
+        "column": "USG Sheetrock® Brand Gypsum Panels",
+        "row": "Surface-burning characteristics / Smoke developed"
+      }
+    },
+    {
+      "id": "first-sub-property-is-a-cell",
+      "found": "2026-11-24",
+      "issue": "#162: `Flame spread` was joined to its property and no second column was written.",
+      "cell": {
+        "value": "Flame spread",
+        "column": "Property",
+        "row": "Surface-burning characteristics"
+      }
+    },
+    {
+      "id": "last-sub-property-named-by-both",
+      "found": "2026-11-24",
+      "issue": "#162: as above, `Perpendicular` alone.",
+      "cell": {
+        "value": "C473 (B)",
+        "column": "ASTM Test Method",
+        "row": "Flexural strength / Perpendicular"
+      }
+    }
+  ]
+}

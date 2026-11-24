@@ -1,0 +1,50 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its physical-properties tables footnote a value given in brackets, with the note's number raised right after the closing bracket."
+  },
+  "notes": [
+    "2026-11-24 (#124): side heads set in a narrow strip beside their text were read as a column of their own before it, so every head was an empty section and the text fell under the last of them."
+  ],
+  "checks": [
+    {
+      "id": "real-title",
+      "found": "2026-11-24",
+      "issue": "The head strip's corner tag read first and was taken for the title; the 30pt title was a second h1.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "USG SHEETROCK® BRAND GYPSUM PANELS",
+        "evidence": "title"
+      }
+    },
+    {
+      "id": "description-holds-its-text",
+      "found": "2026-11-24",
+      "issue": "DESCRIPTION was an empty section, its text under the next heading.",
+      "under": {
+        "text": "Available in 1/4 in. (6.4 mm) and 3/8 in. (9.5 mm) thicknesses, USG Sheetrock® Brand Gypsum Panels feature a noncombustible gypsum core that is encased in 100% recycled face and back papers that form a high strength composite design. The face paper is folded around the long edges to reinforce and protect the core, and the ends are cut square and even. The long edges of the panels are tapered, allowing joints to be reinforced and concealed with USG Sheetrock® Brand joint treatment systems.",
+        "section": "DESCRIPTION"
+      }
+    },
+    {
+      "id": "intended-for-holds-its-list",
+      "found": "2026-11-24",
+      "issue": "As above, for INTENDED FOR.",
+      "under": {
+        "text": "Commercial or residential applications where 1/4 in. (6.4 mm) or 3/8 in. (9.5 mm) panels are desired",
+        "section": "INTENDED FOR"
+      }
+    },
+    {
+      "id": "page-2-head-holds-its-text",
+      "found": "2026-11-24",
+      "issue": "On page 2, FINISHING AND DECORATING was empty and its six paragraphs sat under TEST DATA.",
+      "under": {
+        "text": "For high-quality finishing results, USG recommends USG Sheetrock® Brand finishing products.",
+        "section": "FINISHING AND DECORATING"
+      }
+    }
+  ]
+}
