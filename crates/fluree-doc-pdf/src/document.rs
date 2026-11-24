@@ -2584,8 +2584,31 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                 // backup` rules.
                                 if r_end - r > 1 && c_end - c > 1 {
                                     let glyphs = &raw.pages[pi].glyphs;
+                                    // Where the top row sets the group label
+                                    // and a value of its own beside it, apart,
+                                    // a row below with nothing under the label
+                                    // and its text in one cell beside it sets
+                                    // that cell's value, and it stays there:
+                                    // `Smoke developed` under `Surface-burning
+                                    // characteristics`, beside `Flame spread`.
+                                    let filled = |row: &[String]| {
+                                        (c..c_end)
+                                            .filter(|&k| !row[k].trim().is_empty())
+                                            .collect::<Vec<_>>()
+                                    };
+                                    let top = filled(&rows[r]);
+                                    let split = top.len() >= 2
+                                        && top[0] == c
+                                        && g.region_text(glyphs, &merges, r..r + 1, c..c_end)
+                                            .is_none();
                                     for (i, row) in rows.iter_mut().enumerate().take(r_end).skip(r)
                                     {
+                                        if split
+                                            && i > r
+                                            && matches!(filled(row).as_slice(), [k] if *k > c)
+                                        {
+                                            continue;
+                                        }
                                         let open = |k: usize| {
                                             merges.continues_left[i * cols + k]
                                                 && (k < c_end
@@ -2620,6 +2643,33 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                         (c..ce).for_each(|k| taken[i * cols + k] = true);
                                         unspanned.extend((c..ce).map(|k| i * cols + k));
                                     }
+                                }
+                                // A cell left holding text of its own beside
+                                // another's is a value, not the rest of the
+                                // cell to its left, unless the two read as one
+                                // across the cut: `Flame spread` beside its
+                                // group label, `Apt. no.` beside an address
+                                // label the cut runs through.
+                                let glyphs = &raw.pages[pi].glyphs;
+                                let mut apart: Vec<usize> = Vec::new();
+                                for (i, row) in rows.iter().enumerate().take(r_end).skip(r) {
+                                    let mut prev: Option<usize> = None;
+                                    for (k, cell) in row.iter().enumerate().take(c_end).skip(c) {
+                                        if cell.trim().is_empty() {
+                                            continue;
+                                        }
+                                        let joined = prev.is_some_and(|p| {
+                                            g.region_text(glyphs, &merges, i..i + 1, p..k + 1)
+                                                .is_some()
+                                        });
+                                        if k > c && !joined {
+                                            apart.push(i * cols + k);
+                                        }
+                                        prev = Some(k);
+                                    }
+                                }
+                                for k in apart {
+                                    merges.continues_left[k] = false;
                                 }
                                 continue;
                             }
