@@ -14,7 +14,7 @@ use crate::geom::BBox;
 
 /// Thickness at or below which a shape is a rule rather than a fill, in PDF
 /// units. Hairlines are often 0.5pt; 3pt is a heavy rule but still a rule.
-const MAX_RULE_THICKNESS: f64 = 3.0;
+pub(crate) const MAX_RULE_THICKNESS: f64 = 3.0;
 
 /// A rule must be at least this many times longer than it is thick, so a small
 /// square is not mistaken for a very short line.
@@ -191,6 +191,22 @@ pub enum Shape {
     Rule(Rule),
     Fill(Fill),
 }
+
+/// Is a filled shape a dot or a small square: a drawn bullet's size and
+/// shape? Smaller than a checkbox, larger than a speck, and about as wide
+/// as it is tall.
+pub fn is_dot(b: &BBox) -> bool {
+    let (w, h) = (b.width(), b.height());
+    let (small, large) = (w.min(h), w.max(h));
+    small >= DOT_MIN && large < CHECKBOX_MIN && small >= large * DOT_SQUARENESS
+}
+
+/// Smallest side, in points, of a drawn bullet: a 1.5pt square is one; a
+/// hairline's end or a speck of a drawing is not.
+const DOT_MIN: f64 = 1.0;
+
+/// Shortest side of a drawn bullet against its longest.
+const DOT_SQUARENESS: f64 = 0.7;
 
 /// Smallest and largest side, in points, of a fill that can be a checkbox.
 /// Sized against body text: a box beside 9pt type runs 6-8pt, and one drawn

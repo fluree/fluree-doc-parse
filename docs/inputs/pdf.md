@@ -131,6 +131,14 @@ broke, and reads as the word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
+A table cell needs one more piece of evidence. A narrow column breaks a
+compound at its own hyphen (`long-` over `term`) far more often than prose
+does, and the letters alone cannot tell the two apart. So a cell's word
+broken that way reads whole only where the document prints it whole on a
+line somewhere else: `Fluo-` over `rescent` is `Fluorescent` in a sheet whose
+title says `Fluorescent`. A word the document prints hyphenated, or nowhere
+else, keeps its hyphen.
+
 **Bold inside the text.** A heading set in bold is bold from its first word
 to its last, so a line reads as bold only when it is: most of its glyphs
 bold, and its first and last words. A face that declares no weight counts
@@ -163,6 +171,62 @@ with a plain bullet or a box to tick is never a heading, whatever its size
 or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
 or a diamond is set before headings as often as before items (`❖ Gene` over
 a guideline's subsection), so there the heading pass decides.
+
+**Drawn bullets.** Some producers draw a list's bullets as small filled dots
+or squares and leave no bullet in the text. A filled mark under a checkbox's
+size, set just left of a line and level with it, opens a list item, as long
+as another such mark at the same place opens another line. A list draws a
+bullet for each item, in a column. A seal's ring of dots or a chart's
+scatter is level with a line of text only by chance.
+The item's marker is `•`. Each item starts where its bullet is, however
+closely the items are spaced.
+
+**Dashes and arrows.** A line opening with a dash or an arrow and a space
+(`—`, `–`, `-`, `→`) is a list item when another line nearby opens with the
+same mark at the same place. The lines between two such lines must hang
+under the item's text or be a word or two (`or`). The mark is the item's
+marker, as a bullet is, and wrapped lines hang under the item's text. A lone
+line so opening, among lines of prose at the same place, is a range, a minus
+or a dialogue's dash, and stays as it reads.
+
+**Numbered lists.** A feature or safety list often sets each item's number
+in the item's own text, `2. PostureFit SL®`, with a line or two of
+description under it. Such a list is read as a list, each item's title and
+description one item, when:
+
+- the numbers count off from 1 at one left edge, at least three of them;
+- each has only a few short lines under it, none opening with a number of
+  its own;
+- the count stops with the list;
+- the list sits inside a section, below a heading other than the document's
+  title.
+
+A list carried on in the next column is the same list. The following stay
+headings, because they are the document's sections:
+
+- numbering that carries on to a later page;
+- numbering that has clauses numbered `1.1` under its numbers;
+- numbers set straight under the title (`1. SCOPE OF SERVICES`, `2. TERM`).
+
+So does a numbered line that the PDF's outline names. In Markdown such an item is written with
+its own number (`3. FAQ`), not after a bullet.
+
+**Items one per line.** Limitations and table notes often number their
+items with nothing between them but the line spacing, each item's wrapped
+lines hanging under its text. A line opening with `2.` set where the line
+opening with `1.` is starts the next item, and the lines under it stay with
+it; a run of such items is an ordered list, even across a slightly wider
+space between two of them. A list of entries set one per line, a standard
+or a code on each, reads one entry per paragraph when every line stops well
+short of the column's width and none goes on in lower case. And a
+paragraph ended on a short line, followed at the same spacing by a line
+opening with a capital, is two paragraphs: the short line stops more than
+the next line's first word and two ems short of the lines around it.
+Wrapped text, even with a designer's rag, never does. The other way round,
+a sentence that runs on stays one paragraph across a slightly wider line
+spacing, as footnotes set at a generous leading have, or across a change to
+bold capitals within the paragraph: the line is full, ends without a full
+stop, and the next goes on in lower case or in the same capitals.
 
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
@@ -208,6 +272,42 @@ title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
 
+**Side heads.** Some data sheets set each section's heading in a narrow strip
+at the left, level with the first line of its text in the wide column beside
+it. Such a strip is read with that column, each head just before the text it
+is level with, so each section holds its own text. The strip qualifies when:
+
+- it is narrower than the column beside it;
+- most of its blocks are short lines, at least two of them;
+- each of those starts level with the top of a block or a table in that
+  column.
+
+A block of the strip level with nothing, such as a tag in the corner of the
+page, is read where its height puts it.
+
+**Regions.** Pages rarely run their columns from top to foot. A title band
+sits over two columns, two sections share one pair of columns, a box of
+text in two columns sits under full-width text, a picture's caption spans
+two of four columns. So a page is first parted into regions, at what runs
+across its text: a title across the columns, a rule or a table across them,
+or a stretch of white space wider than a paragraph's. Each region is read
+column by column before the next. A cut never runs through a paragraph: a
+caption, rule or table that spans only some of the columns leaves the
+paragraphs beside it whole, and a link's underline is part of its line. Two
+charts or cards side by side, each opening with a title on one row, are each
+read whole before the next. A box set in two columns of running text under
+full-width text is read one column after the other, even where the page as a
+whole has no gutter there. A field list keeps each value with its label, and
+a side tab's turned labels at the page's edge are not weighed.
+
+**Columns run together.** Many producers write the space after a word as a
+glyph that puts no ink down. Where the next glyph on the line stands across a
+gutter, the gap is measured from the last glyph that put ink down, so a
+column's line and a callout, or the next column's line, are read apart. A
+justified line's stretched space stays a space: the lines of its paragraph
+run across it. A number or a label set off from its text by a tab, `3.1 ⇥
+Results` or `Note 3. ⇥ Business Segment`, stays with its text.
+
 **Drop caps.** A paragraph's first letter set large, its top at the top of
 the first line and its foot on the second's, third's or fourth's baseline,
 is read at the head of the first line and joined to its word: `This report
@@ -216,6 +316,30 @@ defines`, not `T` on its own, nor `T of those stories` two lines down.
 **Registered and trademark signs.** `®`, `™`, `©`, `℠` and `℗` belong to
 the word before them at any size: a 28pt title's `®` at 8.4pt, or a 3.5pt
 `®` after a 10pt `ProCat`, which came out `ProCat .` with the sign lost.
+Producers often set a space glyph after the sign, at the sign's size, at
+the next word's, or on the baseline of a smaller line beside the title. A
+space draws nothing, so it never decides which line a sign is on, and it
+goes with the sign: `Comfortboard® 80`, not `Comfortboard 80` with a `®`
+heading the header line beside it. A sign alone on a line is never taken
+for a list's bullet.
+
+The line goes on past the sign from the word the sign marks. A 32pt
+title's `®` raised 19pt, to the cap height, is far above the baseline its
+title's next word is set on, and the title broke there: `PROCAT®` and
+`PROFESSIONAL`, two lines on one baseline. A sign is measured by its own
+size, not by the space set after it: a `™` with a space at the 17pt title's
+size behind it is the title's sign, `Emerald® Symmetry™`, not a run of text
+as large as the title. The same holds in running text: `Truebeam® 2.0
+linear accelerator` is one line.
+
+**Display titles over several lines.** A title set in display type and
+broken over several lines, each line centred or right-aligned, is one
+block: `PROCAT® PROFESSIONAL INSULATION SYSTEM`, not four headings. Such
+lines start where their length puts them, so their left edges differ by
+design. Display type means larger than the body text of the page's prose,
+measured without the page's tables. Lines set at body size that share a
+centre, an address ended by hand, stay apart, and so does a line opening
+with a list's number.
 
 **Text the producer states.** Where a PDF wraps what it draws in marked
 content with `/ActualText`, that text stands for the glyphs inside: a browser
@@ -237,6 +361,72 @@ glyph offsets and text offsets. See [normalization](../formats/text.md#normaliza
 Measured Unicode resolution: **99.97%** on a 200-document Latin corpus,
 **99.73%** on CJK, with **zero** replacement characters on Japanese and
 Chinese government documents.
+
+## Charts and diagrams
+
+A chart's text extracts perfectly and still means the wrong thing read in
+page order: a donut's region names and percentages interleave by position,
+and half the pairings a reader would make are wrong. So the text of a drawn
+chart or diagram comes out as `doco:Figure` elements, each carrying its
+figure's identifier, with evidence `fills`. Nothing is moved or dropped; the
+elements say these fragments belong together, here.
+
+**What a drawing is.** Drawings are found from the shapes a page draws, not
+from its text:
+
+- A filled shape is measured by what can be seen of it. A polar chart that
+  strokes whole circles and clips them to a quarter, or artwork drawn past
+  the page edge, counts only where it shows.
+- A shape with text set on it to be read is that text's background, not part
+  of a drawing. That covers a panel behind a paragraph, a band behind a
+  specification row, a callout box, a side tab, a form's boxes and a table's
+  shaded cells, along with the strips along a panel's edges. A table's cells
+  go together: a cell holding a number, or nothing, that abuts one holding
+  words in its row or its column is a cell too, and shading set as cells in
+  rows and columns is a table's, however it is grouped. A plot's background,
+  holding the bars and scattered labels, is part of its chart. A diagram's
+  boxes hold labels set well under the page's text, and are part of the
+  diagram.
+- A background as large as the page joins nothing. Drawings set close
+  together are found as separate drawings, rather than lost as one shape too
+  large to be a drawing.
+
+**What a figure's text is.** A figure holds the text set inside its drawing,
+and the labels around it:
+
+- text beside, above or below the drawing and near it, or set smaller than
+  the page's prose and near it or near another label;
+- never further from the drawing than the drawing's own size.
+
+A list item, a sentence of more than fifteen words, and a block too wide to be
+a label stay the page's, however close they are set. Text at the prose's
+size is a label only as wide as the drawing, give or take half again: a
+chart's title, legend or axis name. Two lines of prose beside a small QR
+code or an icon run well past it, and stay the page's. So does a line that runs
+on, at the same size and left edge, from text the figure did not take, such
+as the last of a column of notes or the first bullets of a list. The rectangle
+around a drawing and its labels is not part of the figure. A paragraph or
+heading inside it that was not taken as a label keeps its type.
+
+**Headings near drawings.** A heading set larger than the body that the
+figure took as a label keeps its type when the document sets headings at
+that size and weight away from any drawing: `Operation` over a drawing of the
+control it describes is the document's heading. A caption (`Figure 3: …`) is
+the figure's, and so is a title set in bold at the body's size, which is how
+charts set theirs. Inside the drawing, a numbered line such as `4-M4` is a
+callout and not a section.
+
+**Grids inside drawings.** Labels a diagram sets in rows can line up as a
+table. A grid inside a drawing is emitted as that figure's text, not as a
+`doco:Table`. So is a grid whose text lines up with no rules of its own,
+when half of it lies on a drawing, and a ruled grid whose strokes stand at
+many more places than its rows and columns: the outlines of a unit's
+terminals, or a drawing's dimension and extension lines. A table drawn over
+a drawing, ruled at its rows and columns and mostly filled, stays a table.
+
+**Body text size.** The size headings are measured against is taken from the
+text outside drawings. A diagram's many small labels do not make every
+caption beside it "larger than body".
 
 ## When PDF is hard
 

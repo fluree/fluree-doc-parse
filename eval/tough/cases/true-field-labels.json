@@ -1,0 +1,24 @@
+{
+  "document": {
+    "file": "true-t49-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-49-HC.pdf",
+    "sha256": "2d7a6c5a42bc79311b0ffc2fc3978af63272b935e234afe61c2fd35290235b62",
+    "about": "True Manufacturing T-49-HC reach-in refrigerator spec sheet (2 pages). Its dimensions are mixed numbers typeset with no space before the fraction, three ways: the font's own fraction figures in the text and the table, a numerator set smaller and raised in the drawing, and halves the font draws whole."
+  },
+  "notes": [
+    "2026-11-24 (#151): a label ending in a colon, its value set beside it on its row, was a section title on size alone.",
+    "2026-11-24: the label's check asks only that it be no section. Since its document's leading is read from its body (p2's features are prose), `Model #:` 1.65 em below joins its paragraph; a stacked field list is #9's ground."
+  ],
+  "checks": [
+    {
+      "id": "item-label-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The order block's `Item #: Qty:` label was a level-6 section.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Item #: Qty:"
+      },
+      "count": 0
+    }
+  ]
+}

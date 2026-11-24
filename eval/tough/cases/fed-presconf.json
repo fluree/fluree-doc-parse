@@ -12,12 +12,13 @@
     {
       "id": "running-header-kept-once",
       "found": "2026-11-18",
-      "issue": "The header repeated on every page was removed from all of them, so the text never said FINAL.",
+      "issue": "The header repeated on every page was removed from all of them, so the text never said FINAL. Its three groups across the page's top read as three lines since #130.",
       "element": {
         "type": "doco:Paragraph",
-        "text": "January 31, 2024 Chair Powell’s Press Conference FINAL",
+        "text": "FINAL",
         "evidence": "header"
-      }
+      },
+      "count": 1
     },
     {
       "id": "running-header-not-on-every-page",

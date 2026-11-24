@@ -6,26 +6,65 @@
     "about": "MF Supply hex cap screws, grades 5 and 8 (2 pages). Page 2 sets each grade's properties as a list of fields: a bold label column, shaded, beside plain values that set a phrase bold here and there, ruled under every row, over a watermark drawn behind the page."
   },
   "notes": [
-    "2026-11-23: both lists' first rows were read as headers, so every value was named after the grade's description (#51). A bold label column with nothing else bold already read as fields; here the shaded labels and the watermark read as shaded rows, and the bold phrases in the grade 8 values as bold cells."
+    "2026-11-23: both lists' first rows were read as headers, so every value was named after the grade's description (#51). A bold label column with nothing else bold already read as fields; here the shaded labels and the watermark read as shaded rows, and the bold phrases in the grade 8 values as bold cells.",
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it.",
+    "2026-11-24 (#137): the table title `HEX CAP SCREWS` is set in small capitals, and its word was dealt to the grid's columns letter by letter (`S Crew S`) where it crossed two of them. A run that crosses two columns is dealt by its words now, and a word whose letters touch stays whole. Its case is still the drawn codes' (`SCrewS`): the page is drawn as a layer, and the ActualText inside optional content is not read."
   ],
   "checks": [
     {
       "id": "grade-5-description-is-a-row",
       "found": "2026-11-23",
       "issue": "The grade 5 description was taken for the table's header and was not a row of it.",
-      "row": {"#0": "Description", "#1": "A cap screw made from medium carbon steel and heat-treated."}
+      "row": {
+        "#0": "Description",
+        "#1": "A cap screw made from medium carbon steel and heat-treated."
+      }
     },
     {
       "id": "grade-8-description-is-a-row",
       "found": "2026-11-23",
       "issue": "As above, for grade 8, whose values set their diameters bold.",
-      "row": {"#0": "Description", "#1": "A cap screw made from medium carbon alloy steel and heat-treated."}
+      "row": {
+        "#0": "Description",
+        "#1": "A cap screw made from medium carbon alloy steel and heat-treated."
+      }
     },
     {
       "id": "no-description-names-a-column",
       "found": "2026-11-23",
       "issue": "Every value carried its grade's description as its column name.",
       "no_column_header": "A cap screw made from"
+    },
+    {
+      "id": "email-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The e-mail address in the contact band was a level-4 heading on both pages.",
+      "no_section": "sales@"
+    },
+    {
+      "id": "category-line-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The 15pt category line above the 23pt title banner was an empty level-3 section ahead of it.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "CAP SCREWS & BOLTS"
+      }
+    },
+    {
+      "id": "title-word-whole",
+      "found": "2026-11-24",
+      "issue": "The title's last word was cut into three cells, `S Crew S`.",
+      "no_column_header": "S Crew S"
+    },
+    {
+      "id": "title-in-its-own-case",
+      "found": "2026-11-24",
+      "status": "open",
+      "issue": "The title's codes mix capitals and lower case, and the ActualText that states its case is inside a layer, whose marks are not read.",
+      "cell": {
+        "column": "Hex Cap Screws ASME B18.2.1-2012"
+      }
     }
   ]
 }

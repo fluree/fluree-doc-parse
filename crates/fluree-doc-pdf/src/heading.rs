@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// body prose runs 9-10pt, so a bare "larger than modal" test promoted 320
 /// paragraph fragments to headings. Font size only counts alongside the length
 /// and line-count limits below.
-const HEADING_SIZE_MARGIN: f64 = 0.15;
+pub(crate) const HEADING_SIZE_MARGIN: f64 = 0.15;
 
 /// Shortest word that can end a sentence inside a heading candidate. Below this
 /// the dot is abbreviating (`vs.`, `Sec.`, `Fig.`), not terminating.
@@ -52,6 +52,18 @@ const MAX_HEADING_CHARS: usize = 200;
 
 /// Headings are short in *words*, not only characters.
 const MAX_HEADING_WORDS: usize = 12;
+
+/// Most words of a heading that more than its shape vouches for
+/// ([`vouched_for`]). `3. Perspective of supply and demand
+/// balance of wood pellets and cost structure in Japan` is 15 words.
+pub(crate) const MAX_LONG_HEADING_WORDS: usize = 20;
+const MAX_LONG_HEADING_CHARS: usize = 160;
+
+/// Size, against the body, of type set clearly larger than it.
+const DISPLAY_HEADING_RATIO: f64 = 1.5;
+
+/// Size, against the body, of a numbered line set larger than it.
+const NUMBERED_HEADING_RATIO: f64 = 1.1;
 
 /// Tighter limits for the typography-only path, where there is no outline or
 /// numbering to corroborate.
@@ -108,6 +120,32 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// Whether a block's text is a title the outline declares, as the outline
+/// match in [`detect`] reads one.
+pub fn outline_names(outline: &[OutlineItem]) -> impl Fn(&str) -> bool {
+    let titles: std::collections::HashSet<String> = outline
+        .iter()
+        .map(|it| norm(&it.title))
+        .filter(|k| !k.is_empty())
+        .collect();
+    move |text: &str| titles.contains(&norm(text))
+}
+
+/// Whether a heading other than the document's title comes before block
+/// `block` of page `page`: the block is inside a section of the document,
+/// not straight under its title.
+pub fn in_section(headings: &[Heading]) -> impl Fn(usize, usize) -> bool {
+    let mut at: Vec<(usize, usize, Evidence)> = headings
+        .iter()
+        .map(|h| (h.page, h.block_index, h.evidence))
+        .collect();
+    at.sort_by_key(|&(p, b, _)| (p, b));
+    move |page: usize, block: usize| {
+        let before = at.partition_point(|&(p, b, _)| (p, b) < (page, block));
+        before > 0 && at[before - 1].2 != Evidence::Title
+    }
+}
+
 /// Parse a leading section number and return its depth: `5.` → 1,
 /// `5.3` → 2, `6.3.1` → 3. Returns `None` when the block does not start with
 /// one, so ordinary prose beginning with a figure is not mistaken for a heading.
@@ -131,6 +169,15 @@ fn numbering_depth(text: &str) -> Option<usize> {
 
     let (head, rest) = split_label(text)?;
     if rest.is_empty() || !rest.chars().next().is_some_and(|c| c.is_alphabetic()) {
+        return None;
+    }
+    // A number hyphenated to the word after it is part of that word, not a
+    // label: `3-Way Wiring`, `2-Pole`, a drawing's `4-M4` hole callout. The
+    // dash separators above are set with a space after them.
+    let mut after = text[head.len()..].chars();
+    if matches!(after.next(), Some('-' | '\u{2010}' | '\u{2011}'))
+        && after.next().is_some_and(|c| !c.is_whitespace())
+    {
         return None;
     }
     // Section labels introduce titles, not sentence continuations. Applying
@@ -159,6 +206,17 @@ fn numbering_depth(text: &str) -> Option<usize> {
     if parts.is_empty() || parts.len() > MAX_LEVEL {
         return None;
     }
+    // Initials, not a section number: `U.S.A. FOODSERVICE DIVISION`, `U.S.
+    // Department of…`. Lettered numbering sets a letter at its first level
+    // only (`B.1`, `A.2.3`), so a label of single letters alone is an
+    // abbreviation, unless it opens with a roman numeral an outline counts
+    // with (`I.A`, `V.C`).
+    if parts.len() >= 2
+        && parts.iter().all(|p| single_letter(p))
+        && !matches!(parts[0], "I" | "V" | "X")
+    {
+        return None;
+    }
 
     // Each component is a decimal section number, a roman numeral, or a single
     // letter (appendix style: `B.1 Large Language Models`). Mixed forms are
@@ -171,7 +229,7 @@ fn numbering_depth(text: &str) -> Option<usize> {
             }
             continue;
         }
-        if is_roman(p) || (p.len() == 1 && p.chars().all(|c| c.is_ascii_uppercase())) {
+        if is_roman(p) || single_letter(p) {
             saw_alpha = true;
             continue;
         }
@@ -198,6 +256,25 @@ fn numbering_depth(text: &str) -> Option<usize> {
         return None;
     }
     Some(parts.len())
+}
+
+fn single_letter(p: &str) -> bool {
+    p.len() == 1 && p.chars().all(|c| c.is_ascii_uppercase())
+}
+
+/// The letter a block opens with as a label, `B.` followed by a space.
+fn letter_label(text: &str) -> Option<char> {
+    let mut head = text.split_whitespace().next()?.chars();
+    match (head.next(), head.next(), head.next()) {
+        (Some(c), Some('.'), None) if c.is_ascii_uppercase() => Some(c),
+        _ => None,
+    }
+}
+
+/// The letter of a lettered section label, `B. Related Works`, or of an
+/// initial set the same way, `J. Example`; the caller tells them apart.
+fn single_letter_label(text: &str) -> Option<char> {
+    letter_label(text).filter(|_| numbering_depth(text).is_some())
 }
 
 /// Uppercase roman numeral, used for appendix and front-matter sections
@@ -263,6 +340,45 @@ fn has_bare_number_label(text: &str) -> bool {
             .is_some_and(|w| w.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Whether more than a heading's shape vouches for it, so that it may run
+/// longer, on at most two lines: section numbering on a line set larger
+/// than the body, or type set clearly larger than it. A line at the body
+/// size keeps the ordinary limits, numbered or bold: a long numbered line
+/// there is a list's item or a note's (`1. When changing objectives …
+/// the following changes will occur:`), and a sentence set bold is no
+/// heading.
+///
+/// And only a title's shape: a long line ending as a sentence ends (`We've
+/// cut overall product energy use … since 2008.`, `Want to learn more…?`)
+/// or holding a list (`Leticia Morales*1, Beatriz Ricardo 1, Adán Bolaños
+/// 1, …`) is no title, and a bare number is a form's question
+/// (`12 Did you explain to the taxpayer…`), not a section's label. Nor is a
+/// formula (`GFR (mL/min/1.73m²) = 141 x …`) or a bulleted line.
+fn vouched_for(text: &str, b: &Block, body: f32) -> bool {
+    let size = b.font_size as f64 / (body as f64).max(1.0);
+    let t = text.trim();
+    let shaped = !t.ends_with(['.', '?', '!'])
+        && t.matches(',').count() < 2
+        && !t.contains('=')
+        && !t
+            .chars()
+            .next()
+            .is_some_and(|c| block::is_bullet(c) || c == '\u{25CB}');
+    let labelled = numbering_depth(t).is_some() && !has_bare_number_label(t);
+    b.lines.len() <= MAX_FONTSIZE_HEADING_LINES
+        && shaped
+        && ((labelled && size >= NUMBERED_HEADING_RATIO) || size >= DISPLAY_HEADING_RATIO)
+}
+
+/// The most words a block may hold and still be a heading.
+fn word_limit(text: &str, b: &Block, body: f32) -> usize {
+    if vouched_for(text, b, body) {
+        MAX_LONG_HEADING_WORDS
+    } else {
+        MAX_HEADING_WORDS
+    }
+}
+
 /// Shape tests every heading candidate must pass, regardless of which signal
 /// proposed it.
 ///
@@ -277,9 +393,14 @@ fn has_bare_number_label(text: &str) -> bool {
 /// — two sections merge — far more than a spurious one, which merely splits a
 /// section.
 fn title_like(text: &str) -> bool {
+    title_like_within(text, MAX_HEADING_WORDS)
+}
+
+/// [`title_like`], with room for `max_words` words.
+fn title_like_within(text: &str, max_words: usize) -> bool {
     let t = text.trim();
     let words = t.split_whitespace().count();
-    if !(1..=MAX_HEADING_WORDS).contains(&words) {
+    if !(1..=max_words).contains(&words) {
         return false;
     }
     if !(4..=MAX_HEADING_CHARS).contains(&t.chars().count()) {
@@ -299,7 +420,100 @@ fn title_like(text: &str) -> bool {
     if runs_into_prose(t) {
         return false;
     }
+    // Where to look, write or call, set bold or large at the foot of a
+    // data sheet: `seagate.com`, `Learn more at thermofisher.com/centrifuges`,
+    // `For technical service call: 1-800-248-9606`. No section is titled
+    // with an address.
+    if ends_with_contact(t) {
+        return false;
+    }
     !starts_like_list_item(t)
+}
+
+/// The line closes with a web address, a domain, an e-mail address or a
+/// phone number, alone or after a few words leading in to it.
+fn ends_with_contact(text: &str) -> bool {
+    let tokens: Vec<&str> = text
+        .split_whitespace()
+        .map(|w| w.trim_end_matches(['.', ',', ';', ':', ')', '\u{AE}', '\u{2122}']))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let Some(last) = tokens.last() else {
+        return false;
+    };
+    web_address(last) || phone_number(&tokens)
+}
+
+/// Common top-level domains. A bare domain must end in one of them, so a
+/// product name with a dot in it (`Node.js`) is not an address.
+const TOP_LEVEL_DOMAINS: &[&str] = &[
+    "com", "org", "net", "gov", "edu", "mil", "int", "info", "biz", "io", "co", "us", "uk", "ca",
+    "de", "fr", "eu", "es", "it", "nl", "be", "ch", "at", "se", "dk", "fi", "no", "ie", "pl", "pt",
+    "cz", "jp", "cn", "kr", "in", "au", "nz", "br", "mx",
+];
+
+/// `https://…`, `www.…`, `name@host.tld`, or a lowercase host with a known
+/// top-level domain and an optional path (`hermanmiller.com/aeron-chair`).
+/// Lowercase, because a capitalised `ASP.NET` is a name.
+fn web_address(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("www.") {
+        return true;
+    }
+    let (user, host) = match token.split_once('@') {
+        Some((user, host)) => (Some(user), host),
+        None => (None, token),
+    };
+    if user.is_some_and(str::is_empty) {
+        return false;
+    }
+    let host = host.split('/').next().unwrap_or("");
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|l| {
+            !l.is_empty()
+                && l.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        })
+        && labels[labels.len() - 2].chars().count() >= 2
+        && TOP_LEVEL_DOMAINS.contains(labels.last().unwrap_or(&""))
+}
+
+/// A phone number closing the line: `1-800-248-9606`, `(636)272-2408`,
+/// `800.424.8783`, a vanity `1-800-GET-PINK`, or an international number
+/// opening with `+`. North American numbers end in a group of three and a
+/// group of four, which a date (`2019-07-25`), a standard's year
+/// (`2043-2013`) or a count (`COVID-19`) does not.
+fn phone_number(tokens: &[&str]) -> bool {
+    let phoneish = |t: &str| {
+        t.chars().any(|c| c.is_ascii_digit())
+            && t.chars()
+                .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase() || "()+-./".contains(c))
+    };
+    let run = tokens.iter().rev().take_while(|t| phoneish(t)).count();
+    if run == 0 {
+        return false;
+    }
+    let run = &tokens[tokens.len() - run..];
+    let groups: Vec<&str> = run
+        .iter()
+        .flat_map(|t| t.split(['(', ')', '+', '-', '.', '/']))
+        .filter(|g| !g.is_empty())
+        .collect();
+    let digit_group = |g: &str| g.chars().all(|c| c.is_ascii_digit());
+    let letter_group = |g: &str| g.chars().all(|c| c.is_ascii_uppercase());
+    if !groups.iter().all(|g| digit_group(g) || letter_group(g)) || !digit_group(groups[0]) {
+        return false;
+    }
+    let digits: usize = groups.iter().map(|g| g.len()).sum();
+    if run[0].starts_with('+') {
+        return digits >= 8;
+    }
+    // Two groups must come from one token, `272-2408`: two numbers set
+    // apart by a space are not a phone number.
+    let joined = groups.len() >= 3 || run.len() == 1;
+    let n = groups.len();
+    joined && n >= 2 && digits >= 7 && groups[n - 1].len() == 4 && groups[n - 2].len() == 3
 }
 
 /// A bold run-in lead-in, not a heading: `**Filtered task names.** We present
@@ -340,13 +554,13 @@ fn runs_into_prose(text: &str) -> bool {
 /// caption. The label word plus a number is the test; a heading that merely
 /// *mentions* a figure mid-phrase does not start with the pattern.
 ///
-/// **Not wired into heading detection.** Measured twice (all evidence paths,
-/// then bold-only): −0.0004 overall both times, because this corpus' ground
-/// truth blesses prominent captions as headings often enough that MHS's
-/// recall bias punishes the exclusion. Kept for the DoCO emitter, where
-/// doco:Caption is simply the truth regardless of the benchmark's taste.
-#[allow(dead_code)]
-fn is_caption(text: &str) -> bool {
+/// A caption is never a heading on bold or size evidence
+/// ([`not_a_typographic_heading`]), and is the figure's where a figure has
+/// taken it as its label, whatever its style. The benchmark's ground truth
+/// keeps some prominent captions as headings, so the exclusion costs a
+/// little there (−0.0004 when first measured, and −0.0005 on one page whose
+/// real heading was missed, the caption standing in for it).
+pub(crate) fn is_caption(text: &str) -> bool {
     let mut words = text.split_whitespace();
     let Some(first) = words.next() else {
         return false;
@@ -370,11 +584,13 @@ fn is_caption(text: &str) -> bool {
     if !label {
         return false;
     }
-    // The next token is a number or dotted number ("2.1", "3", "B.2").
+    // The next token is a number, dotted or hyphenated by chapter ("2.1",
+    // "3", "B.2", "5-1").
     words.next().is_some_and(|w| {
         let w = w.trim_end_matches([':', '.', ',']);
         !w.is_empty()
-            && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '.')
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '\u{2013}'))
             && w.chars().any(|c| c.is_ascii_digit())
     })
 }
@@ -437,11 +653,25 @@ fn style_of(b: &Block) -> Style {
 /// Weighting by lines rather than blocks stops a page of one-line captions
 /// from redefining what "body" means.
 pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
+    body_font_size_outside(pages, &[])
+}
+
+/// The body size, over the blocks `drawn` does not mark: the text of
+/// drawings, by page and block, is set aside. A diagram is many one-line
+/// labels, and 64 of them outweighed a 25-line column of prose. With
+/// nothing left once drawings are set aside, every block counts.
+pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
+    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
     let mut hist: HashMap<i32, usize> = HashMap::new();
-    for blocks in pages {
-        for b in blocks {
-            *hist.entry((b.font_size * 4.0).round() as i32).or_default() += b.lines.len();
+    for (p, blocks) in pages.iter().enumerate() {
+        for (i, b) in blocks.iter().enumerate() {
+            if !is_drawn(p, i) {
+                *hist.entry((b.font_size * 4.0).round() as i32).or_default() += b.lines.len();
+            }
         }
+    }
+    if hist.is_empty() && !drawn.is_empty() {
+        return body_font_size(pages);
     }
     hist.iter()
         .max_by(|(size_a, count_a), (size_b, count_b)| {
@@ -488,7 +718,11 @@ fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
 
 /// Detect headings across a document.
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
-    let body = body_font_size(pages);
+    detect_with_body(pages, outline, body_font_size(pages))
+}
+
+/// Detect headings across a document whose body size is known.
+pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32) -> Vec<Heading> {
     // Numbered lines that recur, by their text; see the check in the loop
     // below. Counted as occurrences rather than pages: a form answers
     // several items on one page with the same code. A contents entry does
@@ -497,7 +731,12 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
     let repeated_numbered: std::collections::HashSet<String> = {
         let mut seen: HashMap<String, usize> = HashMap::new();
         for b in pages.iter().flatten() {
-            let text = b.text();
+            // A list's item gathered with its description repeats a
+            // numbered line by its own first line, `1) Zero-Shot`.
+            let text = match b.lines.first() {
+                Some(l) if block::counts_off(b) => l.text.clone(),
+                _ => b.text(),
+            };
             if numbering_depth(&text).is_some() {
                 *seen.entry(norm(&text)).or_default() += 1;
             }
@@ -528,6 +767,27 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             .map(|(label, _)| label)
             .collect()
     };
+    // Letters that open a block as a label somewhere in the document, a
+    // heading's or a run-in paragraph's (`A. COMMON STOCK. The
+    // Corporation…`). A lettered section has a neighbour in its sequence,
+    // `A.` before `B.`; an initial, `J. Example`, has none. I, V and X stand
+    // alone as roman numerals often enough (`I. Introduction`) to keep their
+    // reading.
+    let letter_labels: std::collections::HashSet<char> = pages
+        .iter()
+        .flatten()
+        .filter_map(|b| letter_label(&b.text()))
+        .collect();
+    let initial = |text: &str| -> bool {
+        single_letter_label(text).is_some_and(|c| {
+            let near = |d: i32| char::from_u32((c as i32 + d) as u32);
+            !matches!(c, 'I' | 'V' | 'X')
+                && ![near(-1), near(1)]
+                    .iter()
+                    .flatten()
+                    .any(|n| letter_labels.contains(n))
+        })
+    };
     let coded = |text: &str| -> bool {
         has_bare_number_label(text)
             && text
@@ -543,7 +803,10 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             .take(4)
             // Once ordinary prose starts, a later isolated equation lead-in
             // is not the document title.
-            .take_while(|b| b.text().split_whitespace().count() <= MAX_HEADING_WORDS)
+            .take_while(|b| {
+                let text = b.text();
+                text.split_whitespace().count() <= word_limit(&text, b, body)
+            })
             .enumerate()
             .filter(|(i, b)| {
                 let text = b.text();
@@ -555,9 +818,22 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                 let inked: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
                 let letters = inked.iter().filter(|c| c.is_alphabetic()).count();
                 let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
+                // A title stands alone on its row. One of two one-line
+                // groups set across a row, a course's name at the left and
+                // its code at the right, is a running head's part. A cover
+                // title stacked beside its description is not.
+                let shares_row = b.lines.len() == 1
+                    && blocks.iter().any(|o| {
+                        !std::ptr::eq(o, *b)
+                            && o.lines.len() == 1
+                            && o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0)
+                                > o.bbox.height().min(b.bbox.height()) * 0.5
+                            && (o.bbox.x1 <= b.bbox.x0 || b.bbox.x1 <= o.bbox.x0)
+                    });
                 if b.marker.is_some()
+                    || shares_row
                     || (b.lines.len() > 3 && !stacked)
-                    || !title_like(&text)
+                    || !title_like_within(&text, word_limit(&text, b, body))
                     || (numbering_depth(&text).is_some()
                         && repeated_numbered.contains(&norm(&text)))
                 {
@@ -709,7 +985,10 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                 });
                 continue;
             }
-            if !title_like(&text) {
+            // An ordered list's item, its number set in its own text: the
+            // list counts off from one item to the next, which a section
+            // number never does on its own page.
+            if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
                 continue;
             }
             // A numbered title occurs once in a document: sections are not
@@ -740,7 +1019,7 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             }
             // 3. Numbering states its own depth — unless the block is a
             // list's item, whose number counts off from the item before it.
-            if let Some(depth) = numbering_depth(&text) {
+            if let Some(depth) = numbering_depth(&text).filter(|_| !initial(&text)) {
                 if b.marker.is_some()
                     || !bare_numbering_is_corroborated(&text, b, body)
                     || coded(&text)
@@ -756,6 +1035,11 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
                     evidence: Evidence::Numbering,
                     style: style_of(b),
                 });
+                continue;
+            }
+            // Typography alone does not make a heading of a caption or of a
+            // field's label with its value beside it.
+            if not_a_typographic_heading(&text, b, blocks) {
                 continue;
             }
             // 4. Bold, at body size. Documents very commonly set section
@@ -780,7 +1064,13 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             }
             // 5. Typography, for documents with neither. Uncorroborated, so
             // it must also look like a heading: short, and not a paragraph.
-            if n_chars > MAX_FONTSIZE_HEADING_CHARS
+            // Display type may run longer.
+            let char_limit = if b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO {
+                MAX_LONG_HEADING_CHARS
+            } else {
+                MAX_FONTSIZE_HEADING_CHARS
+            };
+            if n_chars > char_limit
                 || b.lines.len() > MAX_FONTSIZE_HEADING_LINES
                 || starts_like_list_item(&text)
             {
@@ -806,8 +1096,122 @@ pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
             // put the introduced list adjacent. Rejected; see MHS_ANALYSIS.
         }
     }
+    drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out);
     out
+}
+
+/// Widest gap, in ems, between a field's label and its value beside it.
+const MAX_LABEL_GAP: f64 = 8.0;
+
+/// A block that bold or size would make a heading but that is something
+/// else:
+///
+/// - a caption, `Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
+///   Functions`: the figure's or the table's, never a section's title. The
+///   benchmark's ground truth keeps some prominent captions as headings,
+///   so this costs a little there;
+/// - a label ending in a colon with its value set beside it on its row,
+///   `Color:`: a field.
+///
+/// A row of cells set side by side is not tested: a slide's card titles
+/// stand side by side as often as a table's header cells do.
+fn not_a_typographic_heading(text: &str, b: &Block, page: &[Block]) -> bool {
+    if is_caption(text) {
+        return true;
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    text.trim_end().ends_with(':')
+        && page.iter().any(|o| {
+            !std::ptr::eq(o, b)
+                && (o.bbox.y0 - b.bbox.y0).abs() <= fs * 0.5
+                && o.bbox.x0 >= b.bbox.x1
+                && o.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP
+        })
+}
+
+/// A kicker is not a section: a category, series name or tagline set in
+/// smaller type directly above the title (`Scalable. Responsive.
+/// Innovative.` over `Exos X16`, `Centrifugation` over `Thermo Scientific
+/// M Series Centrifuges`). The title is level 1, so the kicker ranks below
+/// it, and a deeper section opened just ahead of the title closes at the
+/// title with nothing in it. Read as text, it stays where the page sets it.
+///
+/// Only typography makes a kicker a heading, and only blocks with no text
+/// between them and the title, and smaller than it, are kickers.
+fn drop_kickers(out: &mut Vec<Heading>, pages: &[Vec<Block>], title: Option<usize>) {
+    let (Some(t), Some(blocks)) = (title, pages.first()) else {
+        return;
+    };
+    let Some(title_block) = blocks.get(t) else {
+        return;
+    };
+    for k in (0..t).rev() {
+        let b = &blocks[k];
+        let Some(pos) = out
+            .iter()
+            .position(|h| h.page == title_block.page && h.block_index == k)
+        else {
+            break;
+        };
+        if !matches!(out[pos].evidence, Evidence::FontSize | Evidence::Bold)
+            || b.font_size >= title_block.font_size
+        {
+            break;
+        }
+        // A division's label over its title is the title's own, `Chapter
+        // 3` over `Numerical differentiation`: a heading at the title's
+        // level, not text.
+        if division_label(&b.text()) {
+            out[pos].evidence = Evidence::Title;
+            out[pos].level = 1;
+            continue;
+        }
+        out.remove(pos);
+    }
+}
+
+/// Words that name a division of a document, in the languages the corpus
+/// sets them in.
+const DIVISION_WORDS: &[&str] = &[
+    "chapter",
+    "part",
+    "section",
+    "unit",
+    "lesson",
+    "module",
+    "appendix",
+    "annex",
+    "book",
+    "volume",
+    "chapitre",
+    "partie",
+    "annexe",
+    "capítulo",
+    "capitulo",
+    "parte",
+    "sección",
+    "seccion",
+    "anexo",
+    "kapitel",
+    "teil",
+    "abschnitt",
+    "anhang",
+];
+
+/// A division's label alone: a division word and its number, a roman
+/// numeral or a single letter (`Chapter 3`, `PART II`, `Appendix B`).
+pub(crate) fn division_label(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let (Some(word), Some(number), None) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    let number = number.trim_end_matches(['.', ':']);
+    DIVISION_WORDS.contains(&word.to_lowercase().as_str())
+        && !number.is_empty()
+        && (number.chars().all(|c| c.is_ascii_digit()) && number.len() <= 3
+            || is_roman(&number.to_ascii_uppercase())
+            || (number.chars().count() == 1 && number.chars().all(|c| c.is_alphabetic())))
 }
 
 /// Visual style of a heading, for ranking depth.
@@ -1091,6 +1495,194 @@ mod tests {
     }
 
     #[test]
+    fn a_number_hyphenated_into_a_word_is_not_a_label() {
+        assert_eq!(
+            numbering_depth("3-Way Wiring (Using 3-Way Mechanical Switch)"),
+            None
+        );
+        assert_eq!(numbering_depth("4-M4 M0.16"), None);
+        assert_eq!(numbering_depth("2-Pole Breakers"), None);
+        // A dash set off by a space still separates the label.
+        assert_eq!(numbering_depth("02- Prepare Your Content"), Some(1));
+        assert_eq!(
+            numbering_depth("01 - Find Open Educational Resources"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn initials_are_not_lettered_numbering() {
+        assert_eq!(numbering_depth("U.S.A. FOODSERVICE DIVISION"), None);
+        assert_eq!(numbering_depth("U.S. Department of Energy"), None);
+        assert_eq!(numbering_depth("E.U. Regulation"), None);
+        // A letter after a roman numeral, or a number after a letter, is an
+        // outline.
+        assert_eq!(numbering_depth("I.A. Purpose"), Some(2));
+        assert_eq!(numbering_depth("B.1 Large Language Models"), Some(2));
+        assert_eq!(single_letter_label("J. Example"), Some('J'));
+        assert_eq!(single_letter_label("B. Related Works"), Some('B'));
+        assert_eq!(single_letter_label("B.1 Large Language Models"), None);
+        assert_eq!(single_letter_label("Results"), None);
+    }
+
+    #[test]
+    fn a_lone_initial_is_not_a_section_but_a_lettered_sequence_is() {
+        let page = vec![
+            blk("Prepared by:", 10.0, 1),
+            blk("J. Example", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+        ];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().all(|h| h.text != "J. Example"), "{hs:?}");
+        let page = vec![
+            blk("A. Purpose", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+            blk("B. Scope", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+        ];
+        let hs = detect(&[page], &[]);
+        assert_eq!(
+            hs.iter().map(|h| h.text.as_str()).collect::<Vec<_>>(),
+            ["A. Purpose", "B. Scope"]
+        );
+        let page = vec![
+            blk("I. Introduction", 10.0, 1),
+            blk("Some body text that runs on for a while here.", 10.0, 1),
+        ];
+        assert_eq!(detect(&[page], &[]).len(), 1);
+    }
+
+    #[test]
+    fn a_kicker_above_the_title_is_not_a_section() {
+        let page = vec![
+            blk("DATA SHEET", 6.0, 1),
+            blk("Scalable. Responsive. Innovative.", 12.7, 1),
+            blk("Exos X16", 20.2, 1),
+            blk(
+                "Seagate manufactures hard drives for the hyperscale market and more.",
+                9.0,
+                3,
+            ),
+            blk("Best-Fit Applications", 12.7, 1),
+            blk(
+                "Seagate manufactures hard drives for the hyperscale market and more.",
+                9.0,
+                3,
+            ),
+        ];
+        let hs = detect(&[page], &[]);
+        let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["Exos X16", "Best-Fit Applications"], "{hs:?}");
+    }
+
+    fn body() -> Block {
+        blk(
+            "Some body text that runs on for a while here and more.",
+            10.0,
+            3,
+        )
+    }
+
+    #[test]
+    fn a_divisions_label_over_its_title_stays_a_heading_at_its_level() {
+        let page = vec![
+            blk("Chapter 3", 14.0, 1),
+            blk("Numerical differentiation", 24.0, 1),
+            body(),
+            blk("3.1 Introduction", 14.0, 1),
+            body(),
+        ];
+        let hs = detect(&[page], &[]);
+        let got: Vec<(&str, usize)> = hs.iter().map(|h| (h.text.as_str(), h.level)).collect();
+        assert_eq!(got[0], ("Chapter 3", 1), "{hs:?}");
+        assert_eq!(got[1], ("Numerical differentiation", 1), "{hs:?}");
+        assert!(division_label("PART II"));
+        assert!(division_label("Appendix B"));
+        assert!(division_label("Capítulo 12"));
+        assert!(!division_label("Chapter 3 Numerical differentiation"));
+        assert!(!division_label("Scalable. Responsive."));
+        assert!(!division_label("Section"));
+    }
+
+    #[test]
+    fn a_caption_or_a_field_label_is_no_heading_by_typography() {
+        let mut caption = blk("Figure 5-1. Low-Level Output Voltage", 10.0, 1);
+        caption.bold = true;
+        let mut head = blk("Typical Characteristics", 10.0, 1);
+        head.bold = true;
+        let page = vec![head, body(), caption, body()];
+        let hs = detect(&[page], &[]);
+        let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["Typical Characteristics"], "{hs:?}");
+        // A label with its value beside it on its row.
+        let mut label = blk("Color:", 10.0, 1);
+        label.bold = true;
+        let mut value = blk("Most colors", 10.0, 1);
+        value.bbox.x0 = label.bbox.x1 + 10.0;
+        value.bbox.x1 = value.bbox.x0 + 60.0;
+        value.bbox.y0 = label.bbox.y0;
+        value.bbox.y1 = label.bbox.y1;
+        let page = vec![label.clone(), value];
+        assert!(not_a_typographic_heading("Color:", &label, &page));
+        assert!(!not_a_typographic_heading("Color:", &label, &page[..1]));
+    }
+
+    #[test]
+    fn a_long_title_is_a_heading_when_numbered_and_set_larger_or_set_as_display() {
+        let long = "3. Perspective of supply and demand balance of wood pellets and cost structure in Japan";
+        let page = vec![blk(long, 13.0, 1), body(), body(), body()];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().any(|h| h.text == long), "{hs:?}");
+        // Numbered at the body size: a list's item or a note's.
+        let item = "1. When changing objectives from scanning power to lower power to high power the following changes will occur:";
+        let page = vec![blk("Steps", 14.0, 1), body(), blk(item, 10.0, 1), body()];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().all(|h| h.text != item), "{hs:?}");
+        // Display type: a slide's statement.
+        let statement = "Upstage offers 3 AI packs that process unstructured information and data, making a tangible impact";
+        let page = vec![
+            blk("AI Pack", 13.0, 1),
+            blk(statement, 22.0, 1),
+            body(),
+            body(),
+        ];
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().any(|h| h.text == statement), "{hs:?}");
+    }
+
+    #[test]
+    fn contact_lines_are_not_title_like() {
+        for t in [
+            "seagate.com",
+            "hermanmiller.com/aeron-chair",
+            "Learn more at thermofisher.com/centrifuges",
+            "Your local distributor: www.eppendorf.com/contact",
+            "2016.02 panasonic.net/id/pidsx/global",
+            "sales@example.com",
+            "For technical service call: 1-800-248-9606",
+            "Customer Service 1-800-346-1272 | Help Line 1-800-GET-PINK\u{AE}",
+            "Fax (636) 272-2408",
+            "Phone 800.424.8783",
+            "Telefon +49 40 538 01-0",
+            "https://example.org/report",
+        ] {
+            assert!(!title_like(t), "{t}");
+        }
+        for t in [
+            "Introduction to ASP.NET",
+            "Node.js Guide",
+            "Meeting Minutes 2019-07-25",
+            "UL 2043-2013 Compliance",
+            "COVID-19",
+            "Highlights 2023 2024",
+            "Route 101 2024",
+            "T-49-HC",
+        ] {
+            assert!(title_like(t), "{t}");
+        }
+    }
+
+    #[test]
     fn numbering_ignores_prose_starting_with_a_number() {
         // A year or quantity opening a sentence must not become a heading.
         assert_eq!(
@@ -1286,6 +1878,7 @@ mod tests {
         ));
         assert!(is_caption("Table 3 Results of the second survey"));
         assert!(is_caption("Diagram 4 Distribution of Instagram Content"));
+        assert!(is_caption("Figure 5-1. Low-Level Output Voltage"));
         assert!(!is_caption("Figures of speech in modern prose"));
         assert!(!is_caption("The Table Mountain region"));
         assert!(!is_caption("2. General Profile of MSMEs"));
@@ -1310,6 +1903,29 @@ mod tests {
         assert!(!runs_into_prose("Results vs. Baseline Methods"));
         assert!(!runs_into_prose("See Fig. 3 for details"));
         assert!(!runs_into_prose("Method of Doe et al. Revisited"));
+    }
+
+    #[test]
+    fn one_group_of_a_row_is_not_the_title() {
+        // A running head set as two groups across the page's top row: the
+        // college at the left, the course's code larger at the right.
+        let at = |mut b: Block, x0: f64, y0: f64, x1: f64| {
+            let h = b.bbox.height();
+            b.bbox = BBox {
+                x0,
+                y0,
+                x1,
+                y1: y0 + h,
+            };
+            b
+        };
+        let pages = vec![vec![
+            at(blk("MOHAVE COMMUNITY COLLEGE", 9.8, 1), 72.0, 39.0, 200.0),
+            at(blk("BIO181", 12.0, 1), 489.0, 41.0, 530.0),
+            at(blk("body text", 10.0, 20), 72.0, 74.0, 530.0),
+        ]];
+        let h = detect(&pages, &[]);
+        assert!(h.iter().all(|h| h.evidence != Evidence::Title), "{h:?}");
     }
 
     #[test]

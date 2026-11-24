@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "sherwin-williams-pds.pdf",
+    "url": "https://www.sherwin-williams.com/document/PDS/en/790417048503/",
+    "sha256": "6b0b5a593bfb3075c36c8819e6450983f5b787daac3797fb92a22c617a469219",
+    "about": "Sherwin-Williams product data sheet. Its first page sets three columns of prose under CHARACTERISTICS, COMPLIANCE and SPECIFICATIONS, parted by two full-height rules."
+  },
+  "notes": [
+    "The column rules and the headings' underlines made a ruled grid whose second row held each column's whole text."
+  ],
+  "checks": [
+    {
+      "id": "no-layout-table",
+      "found": "2026-11-24",
+      "issue": "#108: every paragraph of the page was a cell under `CHARACTERISTICS` or `COMPLIANCE`.",
+      "no_column_header": "CHARACTERISTICS"
+    }
+  ]
+}
