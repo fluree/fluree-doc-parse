@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "sherwin-williams-emerald-pds.pdf",
+    "url": "https://www.sherwin-williams.com/document/PDS/en/790417048503/",
+    "sha256": "6b0b5a593bfb3075c36c8819e6450983f5b787daac3797fb92a22c617a469219",
+    "about": "Sherwin-Williams Emerald interior paint product data sheet (2 pages). Page 2's text is read as a ruled table whose left edge falls inside its first column of text, through the first letters of a lead warning's lines."
+  },
+  "notes": [
+    "#169: the warning sets its middle sentences in bold capitals, within the paragraph."
+  ],
+  "checks": [
+    {
+      "id": "warning-whole",
+      "found": "2026-11-24",
+      "issue": "The WARNING paragraph parted at `LEAD IS` / `TOXIC.` and `AVOID` / `EXPOSURE.`, where its bold capitals begin and end.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "WARNING! If you scrape, sand or remove old paint, you may release lead dust. LEAD IS TOXIC. EXPOSURE TO LEAD DUST CAN CAUSE SERIOUS ILLNESS, SUCH AS BRAIN DAMAGE, ESPECIALLY IN CHILDREN. PREGNANT WOMEN SHOULD ALSO AVOID EXPOSURE. Wear a NIOSH-approved respirator to control lead exposure. Clean up carefully with a HEPA vacuum and a wet mop. Before you start, find out how to protect yourself and your family by contacting the National Lead Information Hotline at 1-800-424-LEAD or log on to www.epa.gov/lead."
+      }
+    }
+  ]
+}

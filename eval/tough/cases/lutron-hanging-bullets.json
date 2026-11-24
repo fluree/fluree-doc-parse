@@ -6,7 +6,8 @@
     "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
   },
   "notes": [
-    "A wrapped line starts right of the line it wraps from, and the bullet line is short of the column's edge, so the shift was read as a new paragraph: in DoCO each item lost its wrapped lines to a paragraph of their own. Markdown hid it, setting the paragraph on the line under the item, where a renderer joins the two."
+    "A wrapped line starts right of the line it wraps from, and the bullet line is short of the column's edge, so the shift was read as a new paragraph: in DoCO each item lost its wrapped lines to a paragraph of their own. Markdown hid it, setting the paragraph on the line under the item, where a renderer joins the two.",
+    "2026-11-24 (#129): a number hyphenated into the word after it was read as a section number."
   ],
   "checks": [
     {
@@ -48,6 +49,28 @@
         "text": "UL Listed to control:",
         "evidence": "bullet"
       }
+    },
+    {
+      "id": "3-way-not-numbered",
+      "found": "2026-11-24",
+      "issue": "`3-Way` was read as section number 3, so the sub-head was a level-1 section beside Wiring Diagrams.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "3-Way Wiring (Using 3-Way Mechanical Switch)",
+        "evidence": "numbering"
+      },
+      "count": 0
+    },
+    {
+      "id": "4-way-not-numbered",
+      "found": "2026-11-24",
+      "issue": "As above, for `4-Way` on page 5.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "4-Way Wiring (Using MA-R Companion Dimmer)",
+        "evidence": "numbering"
+      },
+      "count": 0
     }
   ]
 }

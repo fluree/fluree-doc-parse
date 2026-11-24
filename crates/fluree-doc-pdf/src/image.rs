@@ -226,6 +226,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
             rules: Vec::new(),
             routing: None,
             fills: Vec::new(),
+            dots: Vec::new(),
             width,
             height,
             rotation: 0,

@@ -6,7 +6,8 @@
     "about": "INSEE Informations rapides no. 269, industrial production index for September 2026 (Licence Ouverte), printed from a browser. The space at each place a line wraps is drawn after the line's last word, at a position inside an earlier word of it."
   },
   "notes": [
-    "pdftotext reads the words whole. The stray spaces are drawn out of turn and set on a letter's ink, which a space between two words never is."
+    "pdftotext reads the words whole. The stray spaces are drawn out of turn and set on a letter's ink, which a space between two words never is.",
+    "2026-11-24 (#135): the page number, worded in French (`3 sur 3`), counted as naming something, since only English paging words were known. The last page's copy was kept as the document's footer and the first page's put in its running text."
   ],
   "checks": [
     {
@@ -19,7 +20,11 @@
       "id": "header-whole",
       "found": "2026-11-23",
       "issue": "Août and Septembre read A oût and Septembr e in the column headers.",
-      "cell": {"value": "-0,1", "column": "Septembre 2026 / Août 2026", "row": "(F43) Travaux de construction spécialisés"}
+      "cell": {
+        "value": "-0,1",
+        "column": "Septembre 2026 / Août 2026",
+        "row": "(F43) Travaux de construction spécialisés"
+      }
     },
     {
       "id": "no-split-words",
@@ -32,6 +37,16 @@
       "found": "2026-11-23",
       "issue": "As above, for vapeur.",
       "no_text": "vapeu r"
+    },
+    {
+      "id": "page-number-not-kept-as-footer",
+      "found": "2026-11-24",
+      "issue": "`3 sur 3` was kept as the document's footer.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "3 sur 3"
+      },
+      "count": 0
     }
   ]
 }

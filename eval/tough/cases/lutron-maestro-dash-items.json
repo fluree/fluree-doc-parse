@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
+  },
+  "notes": [
+    "#120: items opening with a dash were never list items, and runs of them fused: page 1's five sub-items under `UL Listed to control:` came out as two paragraphs with the dashes run through them."
+  ],
+  "checks": [
+    {
+      "id": "em-dash-item",
+      "found": "2026-11-24",
+      "issue": "A sub-item led by an em dash was run into the next.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Dimmable LEDs",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "wrapped-em-dash-item",
+      "found": "2026-11-24",
+      "issue": "A dash-led item wrapped under its text, read whole.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Dimmable compact fluorescent lamps (CFLs) with integrated ballast",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "hyphen-item",
+      "found": "2026-11-24",
+      "issue": "Page 3's `- Tap off` was a paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Tap off",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

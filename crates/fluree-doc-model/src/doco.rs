@@ -585,18 +585,76 @@ pub fn table_copies(e: &Element) -> Copies {
     let names = header_names(e, raw, n_header, &subs);
     let header: Vec<u64> = names.iter().map(|h| text_cost(h)).collect();
     let width = record_width(&names).unwrap_or(cols).max(1);
+    // A row restated partway down names the columns beneath it, each label
+    // under the header's upper rows' (`K25W951 / By wt`): at most that
+    // much, or the header's own name where the row leaves it empty.
+    let slash = text_cost(" / ");
+    let upper: Vec<u64> = if n_header > 1 {
+        header_names(e, raw, n_header - 1, &subs)
+            .iter()
+            .map(|h| text_cost(h))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut restated_rows = vec![false; n];
+    for &s in e
+        .restated_headers
+        .iter()
+        .flatten()
+        .filter(|&&s| s >= n_header && s < n)
+    {
+        restated_rows[s] = true;
+    }
+    let mut restated: Option<usize> = None;
+    let column_label = |c: usize, restated: Option<usize>| {
+        let own = header.get(c).copied().unwrap_or(0);
+        match restated.map(|s| d.get(s * cols + c).copied().unwrap_or(0)) {
+            Some(label) if label > 0 => own.max(
+                upper
+                    .get(c)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(slash)
+                    .saturating_add(label),
+            ),
+            _ => own,
+        }
+    };
+    let flag = |m: &Option<Vec<bool>>, i: usize| {
+        m.as_ref().and_then(|m| m.get(i)).copied().unwrap_or(false)
+    };
+    // A band no data row follows is a row of its own, written as one.
+    let last_data = (0..n).rposition(|r| !subs[r]);
     // The nodes: each cell below the header, outside a band, that holds
-    // text once the merges are read; each with its labels.
+    // text once the merges are read; each with its labels. The bands over a
+    // row are joined from the top down, a group's over its sub-group's.
     let mut nodes = 0u64;
     let mut section = 0u64;
     for r in 0..n {
-        if subs[r] {
-            section = d[r * cols];
-            continue;
-        }
         if r < n_header {
             continue;
         }
+        if subs[r] {
+            let above = if r > n_header && subs[r - 1] {
+                section
+            } else {
+                0
+            };
+            let own = d[r * cols];
+            section = match (above, own) {
+                (0, x) | (x, 0) => x,
+                (a, x) => a.saturating_add(slash).saturating_add(x),
+            };
+            if last_data.is_some_and(|l| l > r) {
+                continue;
+            }
+        }
+        if restated_rows[r] {
+            restated = Some(r);
+            continue;
+        }
+        let section_here = if subs[r] { 0 } else { section };
         let cost = |c: usize| {
             if c < cols {
                 d[r * cols + c]
@@ -612,12 +670,25 @@ pub fn table_copies(e: &Element) -> Copies {
             }
             nodes += 1;
             let first = c - c % width;
-            let labels = header
-                .get(c)
-                .copied()
-                .unwrap_or(0)
-                .saturating_add(if c > first { cost(first) } else { 0 })
-                .saturating_add(section);
+            // A group spanning down the first column names the row with the
+            // row's own label: `group / own`.
+            let spans = |r: usize| r < n && flag(&e.merged_down, r * cols + first);
+            let stacked = c > first + 1
+                && first + 1 < first + width
+                && ((r > n_header && spans(r)) || spans(r + 1))
+                && cost(first) > 0
+                && cost(first + 1) > 0;
+            let row_header = if c > first { cost(first) } else { 0 };
+            let row_header = if stacked {
+                row_header
+                    .saturating_add(slash)
+                    .saturating_add(cost(first + 1))
+            } else {
+                row_header
+            };
+            let labels = column_label(c, restated)
+                .saturating_add(row_header)
+                .saturating_add(section_here);
             text = text.saturating_add(labels);
         }
     }
@@ -1396,28 +1467,129 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         ),
                     };
                     let subs = e.sub_header_rows(rows.len());
+                    // A row set like the header, partway down, names the
+                    // columns of the rows beneath it in the header's place:
+                    // its labels stand for the header's lowest row, under
+                    // any rows above that one (`K25W951 / By wt`).
+                    let restated = e.restated_headers.clone().unwrap_or_default();
+                    let upper = if head.len() > 1 {
+                        let n = head.len() - 1;
+                        let left = head_left.get(..n * ncols).unwrap_or(&[]);
+                        column_headers(&head[..n], n, Some(left))
+                    } else {
+                        Vec::new()
+                    };
+                    let restated_header = |s: usize| -> Vec<String> {
+                        (0..ncols)
+                            .map(|c| {
+                                let label = rows[s].get(c).map_or("", |t| t.trim());
+                                if label.is_empty() {
+                                    return header.get(c).cloned().unwrap_or_default();
+                                }
+                                match upper.get(c).map(|u| u.trim()).filter(|u| !u.is_empty()) {
+                                    Some(u) if u != label => format!("{u} / {label}"),
+                                    _ => label.to_string(),
+                                }
+                            })
+                            .collect()
+                    };
+                    let mut is_restated = vec![false; rows.len()];
+                    for &s in restated
+                        .iter()
+                        .filter(|&&s| s >= n_header && s < rows.len())
+                    {
+                        is_restated[s] = true;
+                    }
                     // A table wrapped into side-by-side copies of its columns
                     // holds one record per copy on each row.
                     let width = record_width(&header).unwrap_or(ncols).max(1);
-                    // The last band above the row being written, carried
-                    // down the table rather than searched for at each row.
-                    let mut band = subs[..n_header].iter().rposition(|&s| s);
+                    // A band labels the rows beneath it: no data row follows
+                    // the last band, or the band is a row of its own.
+                    let last_data = (0..rows.len()).rposition(|r| !subs[r]);
+                    let data_after = |s: usize| last_data.is_some_and(|d| d > s);
+                    // Carried down the table rather than searched for at each
+                    // row: the header restated last, and the bands over the
+                    // rows below the last band, joined once per band.
+                    let mut restated_now: Option<Vec<String>> = None;
+                    let mut section_now: Option<String> = None;
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
                         // `doc:sectionLabel` so every cell entity carries
-                        // the section it belongs to.
+                        // the section it belongs to. A band no data row
+                        // follows labels nothing, and is a cell of its own:
+                        // a table's closing notes.
                         if subs[r] {
-                            band = Some(r);
+                            // The bands over a row: the nearest above it,
+                            // and each band set directly over that one, a
+                            // group over its sub-group (`Power Management`
+                            // over `Average power requirements (W)`), joined
+                            // from the top down as a stacked header's labels
+                            // are.
+                            let mut joined = if r > n_header && subs[r - 1] {
+                                section_now.take().unwrap_or_default()
+                            } else {
+                                String::new()
+                            };
+                            if let Some(label) =
+                                rows[r].first().map(|t| t.trim()).filter(|t| !t.is_empty())
+                            {
+                                if !joined.is_empty() {
+                                    joined.push_str(" / ");
+                                }
+                                joined.push_str(label);
+                            }
+                            section_now = Some(joined);
+                            if data_after(r) {
+                                continue;
+                            }
+                        }
+                        if is_restated[r] {
+                            restated_now = Some(restated_header(r));
                             continue;
                         }
-                        let section = band
-                            .and_then(|s| rows[s].first())
-                            .map(|t| t.trim())
+                        let header = restated_now.as_ref().unwrap_or(&header);
+                        let section = (!subs[r])
+                            .then_some(section_now.as_deref())
+                            .flatten()
                             .filter(|t| !t.is_empty());
+                        // A group label set down the first column, a span
+                        // over the rows it groups, beside each row's own
+                        // label: the row is named by both, group first
+                        // (`Vertical Angle / 55°`).
+                        // The span lies in the body: a first cell carrying
+                        // on the header's is no group.
+                        let spans_down = |r: usize, c: usize| {
+                            let at = |r: usize| {
+                                e.merged_down
+                                    .as_ref()
+                                    .and_then(|m| m.get(r * ncols + c))
+                                    .copied()
+                                    .unwrap_or(false)
+                            };
+                            (r > n_header && at(r)) || (r + 1 < rows.len() && at(r + 1))
+                        };
+                        // A row's own label, not a figure (`55°` is one,
+                        // `158,571` is not).
+                        let figure = |t: &str| {
+                            t.chars().any(|c| c.is_ascii_digit())
+                                && t.chars().all(|c| {
+                                    c.is_ascii_digit() || ",.$€£¥%()-+\u{2212} ".contains(c)
+                                })
+                        };
                         for (c, cell) in row.iter().enumerate() {
                             let first = c - c % width;
-                            let row_header = row.get(first).map(|t| t.trim()).unwrap_or("");
+                            let group = row.get(first).map(|t| t.trim()).unwrap_or("");
+                            let own = row.get(first + 1).map(|t| t.trim()).unwrap_or("");
+                            let stacked = (c > first + 1
+                                && first + 1 < first + width
+                                && spans_down(r, first)
+                                && !group.is_empty()
+                                && !own.is_empty()
+                                && !figure(own)
+                                && own != group)
+                                .then(|| format!("{group} / {own}"));
+                            let row_header = stacked.as_deref().unwrap_or(group);
                             let value = cell.trim();
                             if value.is_empty() {
                                 continue;
@@ -1789,6 +1961,45 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn a_band_over_a_band_or_closing_the_table_reaches_a_cell() {
+        // A group band over its sub-band over the rows they label, and a
+        // notes band no data row follows.
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Model", "26TB", "24TB"],
+                ["Power Management", "", ""],
+                ["Average power requirements (W)", "", ""],
+                ["Read/Write", "8.4", "8.0"],
+                ["Idle", "5.8", "5.6"],
+                ["Notes: helium drive.", "", ""],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        t.sub_headers = Some(vec![1, 2, 5]);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let idle = cells.iter().find(|c| c["doc:cellValue"] == "5.8").unwrap();
+        assert_eq!(
+            idle["doc:sectionLabel"],
+            "Power Management / Average power requirements (W)"
+        );
+        let notes = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "Notes: helium drive.")
+            .expect("the closing band is a cell");
+        assert_eq!(notes["doc:columnIndex"], json!(0));
+        assert!(notes.get("doc:sectionLabel").is_none());
+        // A band with data under it is no cell of its own.
+        assert!(!cells
+            .iter()
+            .any(|c| c["doc:cellValue"] == "Power Management"));
+    }
+
     fn row_header_of<'a>(cells: &'a [Value], value: &str) -> &'a Value {
         &cells.iter().find(|c| c["doc:cellValue"] == value).unwrap()["doc:rowHeader"]
     }
@@ -2028,9 +2239,15 @@ mod tests {
             system["doc:rowHeader"], "Baseline noise",
             "the cut cell is above the break"
         );
+        // A value beyond the cause is named by the problem spanning its
+        // rows and its own cause, group first.
         assert_eq!(
             row_of(tables[1], "Purge it")["doc:rowHeader"],
-            "Baseline noise"
+            "Baseline noise / Detector needs purging"
+        );
+        assert_eq!(
+            row_of(tables[1], "Clean the system")["doc:rowHeader"],
+            "Baseline noise / Dirty system"
         );
         assert_eq!(
             row_of(tables[1], "Replace it")["doc:rowHeader"],
@@ -2047,6 +2264,41 @@ mod tests {
             let want = n.get("nif:isString").or(n.get("doc:cellValue")).unwrap();
             assert_eq!(&slice, want.as_str().unwrap());
         }
+    }
+
+    #[test]
+    fn a_row_restating_the_header_names_the_rows_under_it() {
+        let mut t = el("doco:Table", "", None);
+        t.id = "elem-00001".into();
+        t.cells = Some(vec![
+            vec!["".into(), "K25W951".into(), "".into()],
+            vec!["".into(), "LB/Gal".into(), "g/L".into()],
+            vec!["Coating Density".into(), "11.95".into(), "1432".into()],
+            vec!["".into(), "By wt".into(), "By vol".into()],
+            vec!["Total Volatiles".into(), "39.0%".into(), "55.7%".into()],
+            vec!["Water".into(), "39.0%".into(), "55.6%".into()],
+        ]);
+        t.header_rows = Some(2);
+        let mut ml = vec![false; 18];
+        ml[2] = true; // `K25W951` spans both columns
+        t.merged_left = Some(ml);
+        t.restated_headers = Some(vec![3]);
+        let g = graph(&[t]);
+        let cell = |value: &str| -> Vec<Value> {
+            g.iter()
+                .filter(|n| n["doc:cellValue"] == value)
+                .cloned()
+                .collect()
+        };
+        assert_eq!(cell("11.95")[0]["doc:columnHeader"], "K25W951 / LB/Gal");
+        assert_eq!(cell("55.7%")[0]["doc:columnHeader"], "K25W951 / By vol");
+        assert!(
+            cell("39.0%")
+                .iter()
+                .all(|c| c["doc:columnHeader"] == "K25W951 / By wt"),
+            "every row under it until the next"
+        );
+        assert!(cell("By wt").is_empty(), "the row itself is not data");
     }
 
     #[test]
@@ -2848,8 +3100,9 @@ mod tests {
 
     #[test]
     fn the_copies_counted_are_never_fewer_than_those_written() {
-        // Tables of every shape a small grid takes: merges each way, bands,
-        // stacked headers, texts with spaces and escapes.
+        // Tables of every shape a small grid takes: merges each way, bands
+        // and stacks of them, headers stacked or restated partway down,
+        // texts with spaces and escapes.
         let mut seed = 0x2545_f491_4f6c_dd1du64;
         let mut next = |m: u64| {
             seed ^= seed << 13;
@@ -2876,6 +3129,7 @@ mod tests {
             t.merged_down = flags(40, &mut next);
             t.merged_left = flags(30, &mut next);
             t.sub_headers = (next(3) == 0).then(|| (0..n).filter(|_| next(3) == 0).collect());
+            t.restated_headers = (next(4) == 0).then(|| (0..n).filter(|_| next(4) == 0).collect());
             t.header_rows = [None, Some(0), Some(1), Some(2), Some(3)][next(5) as usize];
             let raw: u64 = t
                 .cells
