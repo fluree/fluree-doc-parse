@@ -119,9 +119,29 @@ class Reading:
             (title(s), s.get("doc:sectionLevel"), title(held_by[s["@id"]]) if s["@id"] in held_by else None)
             for s in sections
         ]
+        # The title of the section each element falls in, through any list
+        # or figure that holds it.
+        parent = {c: n["@id"] for n in graph for c in n.get("po:contains", [])}
+
+        def section_of(eid):
+            seen = set()
+            while eid in parent and eid not in seen:
+                seen.add(eid)
+                eid = parent[eid]
+                if self.nodes[eid].get("@type") == "doco:Section":
+                    return title(self.nodes[eid])
+            return None
+
+        self.section_of = section_of
         # Each page's printed number, by its place in the file from 1.
         pages = next((n["doc:pages"]["@value"] for n in graph if "doc:pages" in n), [])
         self.folios = {p["pageIndex"] + 1: p.get("folio") for p in pages}
+        # The lines read as running text: heads and feet the pages repeat,
+        # kept out of the body and listed once on the document.
+        running = next((n["doc:runningText"] for n in graph if "doc:runningText" in n), [])
+        if isinstance(running, dict):
+            running = running.get("@value", [])
+        self.running = [norm(t) for t in running]
 
     def offsets(self):
         """Elements whose string is not what their offsets cut."""
@@ -160,6 +180,12 @@ def run_check(check, reading):
         want = {keys[k]: norm(v) for k, v in check["cell"].items()}
         ok = any(all(norm(c.get(k, "")) == v for k, v in want.items()) for c in reading.cells)
         return ok, None if ok else "no such cell"
+    if "running" in check:
+        # A line read as running text, exactly `count` times where one is
+        # given: `0` for a body line that must not be taken.
+        hits = reading.running.count(norm(check["running"]))
+        ok = hits == check["count"] if "count" in check else hits > 0
+        return ok, None if ok else f"running text: {reading.running}"
     if "text" in check:
         # Where a count is given, exactly that many times: a line kept once
         # fails as surely by coming back on every page as by going.
@@ -206,6 +232,19 @@ def run_check(check, reading):
             return True, None
         near = [s for s in reading.sections if s[0] == want["title"]]
         return False, f"as (title, level, within): {near[:2]}" if near else "no section has this title"
+    if "under" in check:
+        # An element with exactly this string in the section with this
+        # title: what a reader takes the text to be about. A table cell is
+        # matched by its value, and is in its table's section.
+        want = check["under"]
+        found = [
+            reading.section_of(i)
+            for i, n in reading.nodes.items()
+            if n.get("nif:isString", n.get("doc:cellValue")) == want["text"]
+            and n.get("@type") != "doco:SectionTitle"
+        ]
+        ok = want["section"] in found
+        return ok, None if ok else f"in sections {found[:3]}" if found else "no element has this string"
     if "folio" in check:
         # The page, by its place in the file from 1, carries this printed
         # number, or none where `value` is null: what a reader reassembling

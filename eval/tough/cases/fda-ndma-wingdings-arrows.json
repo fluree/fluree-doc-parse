@@ -6,7 +6,8 @@
     "about": "US FDA, Combined Direct Injection NDMA and NDEA Impurity Assay by GC/MS (6 pages, made from Word). Its MRM transitions and oven program join their values with a Wingdings arrow, which the text map gives as the private-use code U+F0E0."
   },
   "notes": [
-    "2026-11-23 (#86): a glyph drawn in Symbol or Wingdings now reads as the character the font shows."
+    "2026-11-23 (#86): a glyph drawn in Symbol or Wingdings now reads as the character the font shows.",
+    "2026-11-24 (#136): a degree set as a raised `o` read as the letter after an earlier one in the same run (`→250oC`)."
   ],
   "checks": [
     {
@@ -20,6 +21,12 @@
       "found": "2026-11-23",
       "issue": "As above, in the oven program: 0.5min\\uf0e0200°C.",
       "text": "for 0.5min→200°C"
+    },
+    {
+      "id": "second-degree-in-a-run",
+      "found": "2026-11-24",
+      "issue": "The oven program's second temperature read `250oC`.",
+      "text": "20°C/min→250°C at 60°C/min"
     }
   ]
 }

@@ -197,6 +197,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
             images: vec![ImagePlacement { bbox, texty: true }],
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             width,
             height,
             rotation: 0,

@@ -1,0 +1,57 @@
+{
+  "document": {
+    "file": "cree-cr4t-downlight.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet (Canada). Page 1 sets its specification rows on alternating grey bands beside a line drawing of the fixture; page 2 a column of headed bullet lists beside a polar candela chart drawn as whole circles clipped to a quarter."
+  },
+  "notes": [
+    "#114: the grey bands carried the rows' words, and grouped with the fixture drawing beside them they made one drawing of the page's text: the headings, the description and all ten rows were typed doco:Figure.",
+    "#116: the chart's outer circles were measured whole, reaching off the page and across the text column, and the column's headings and bullets were typed as the chart's labels."
+  ],
+  "checks": [
+    {
+      "id": "heading-over-the-bands",
+      "found": "2026-11-24",
+      "issue": "`Performance Summary`, set over the grey bands, was typed as a drawing's label.",
+      "section": {
+        "title": "Performance Summary"
+      }
+    },
+    {
+      "id": "row-on-a-band",
+      "found": "2026-11-24",
+      "issue": "A specification row on a grey band was typed as a drawing's label.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Initial Delivered Lumens: 790 lumens"
+      }
+    },
+    {
+      "id": "description-between-labels",
+      "found": "2026-11-24",
+      "issue": "The description paragraph, too wide to be a label, was typed doco:Figure because it lay inside the box around the drawing's labels.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "The new CR4T LED downlight delivers 790 lumens while achieving over 75 lumens per watt. This breakthrough performance is achieved by combining the high efficacy and high-quality 90 CRI light. The CR4T is available in 3000K, 3500K and 4000K color temperatures, and easily installs into most standard four-inch recessed IC or non-IC housings."
+      }
+    },
+    {
+      "id": "column-heading-beside-the-chart",
+      "found": "2026-11-24",
+      "issue": "The text column's headings were typed as labels of the candela chart, whose clipped circles reached across them.",
+      "section": {
+        "title": "CONSTRUCTION & MATERIALS"
+      }
+    },
+    {
+      "id": "bullet-beside-the-chart",
+      "found": "2026-11-24",
+      "issue": "As above, for the column's bullets, which kept their `•`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Suitable for insulated and non-insulated ceilings"
+      }
+    }
+  ]
+}

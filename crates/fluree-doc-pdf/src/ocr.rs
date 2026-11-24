@@ -1590,6 +1590,7 @@ mod tests {
             images,
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             width: 612.0,
             height: 792.0,
             rotation: 0,

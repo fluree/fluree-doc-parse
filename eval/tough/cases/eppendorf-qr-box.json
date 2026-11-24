@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "eppendorf-multipette-e3.pdf",
+    "url": "https://www.eppendorf.com/product-media/doc/en/148063/Eppendorf_Liquid-Handling_Technical-data_MultipetteE3-E3x_Combitips-advanced_Multipette-E3-E3x-Combitips-advanced-Performance-Data-Sheet.pdf",
+    "sha256": "2d4b6e0e628c0d56eedcc72a7b4e52ec50a3f27ce67b7eb222fcc1c35b48b45e",
+    "about": "Eppendorf Multipette E3/E3x performance data sheet (2 pages). Its technical specifications are a list of fields, `Label | value` down two columns, ruled under every row and set in one face throughout, with no header row."
+  },
+  "notes": [
+    "Page 2 sets a tinted box at its foot: two lines of prose at the left, a QR code drawn as shapes at the right."
+  ],
+  "checks": [
+    {
+      "id": "box-prose-beside-the-code",
+      "found": "2026-11-24",
+      "issue": "Read as one paragraph, the box’s two lines ended within the QR code’s reach and were typed as its label.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "For more information and article numbers, visit www.eppendorf.com/E3"
+      }
+    }
+  ]
+}
