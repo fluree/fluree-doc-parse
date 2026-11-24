@@ -1,0 +1,44 @@
+{
+  "document": {
+    "file": "owens-corning-procat-es.pdf",
+    "url": "https://www.owenscorning.com/dms/10022387",
+    "sha256": "345e63875e3423784ec67db4a0151241ad2215787bf5b0c9ead46925f3fc977f",
+    "about": "Owens Corning ProCat insulation data sheet, Spanish (2 pages). The cover sets a 28 pt title, PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL, at the left of a three-line 10 pt description, and its body text marks the product name with a 3.5 pt ®."
+  },
+  "notes": [
+    "The title's size set the baseline and gutter tolerances for the description beside it, so the description's middle line was read into the title's line: PROCAT suelto que no es adherible… SISTEMA DE, the description cut in three. The title's ® was then read as a list marker, and the small ® in the text was lost (ProCat .)."
+  ],
+  "checks": [
+    {
+      "id": "cover-title-whole",
+      "found": "2026-11-23",
+      "issue": "#88: the title was split around a line of the description, two of its lines headings and the first a paragraph with the description in it.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL"
+      }
+    },
+    {
+      "id": "description-whole",
+      "found": "2026-11-23",
+      "issue": "#88: the description was three elements, its first line typed doco:Figure as the logo's label.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "El aislamiento ProCat® es un aislamiento térmico fiberglas™ suelto que no es adherible. Está diseñado para usarse exclusivamente con una máquina ProCat®.",
+        "evidence": "layout"
+      }
+    },
+    {
+      "id": "title-takes-no-body-line",
+      "found": "2026-11-23",
+      "issue": "#88: as above.",
+      "no_text": "PROCAT suelto"
+    },
+    {
+      "id": "small-sign-kept",
+      "found": "2026-11-23",
+      "issue": "#88: a 3.5 pt ® after the product name was lost from its word.",
+      "no_text": "ProCat ."
+    }
+  ]
+}

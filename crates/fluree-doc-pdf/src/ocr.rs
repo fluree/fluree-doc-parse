@@ -2941,6 +2941,50 @@ mod tests {
     }
 
     #[test]
+    fn a_margin_note_read_on_every_scanned_page_stays_in_the_text() {
+        // A form copied per applicant, scanned: the same note runs down the
+        // left margin of every page, beside the text and on none of it, as a
+        // watermark turned up the margin does. It was read, and it is the
+        // page's.
+        let note = "Form MX-100 Rev 2026 Office copy";
+        let mut pages = Vec::new();
+        for m in 0..3 {
+            let mut p = page(Vec::new(), vec![full_page_image()]);
+            p.index = m;
+            pages.push(p);
+        }
+        let mut doc = Document { pages };
+        let readings: Vec<(usize, Crop, WordReading)> = (0..3)
+            .map(|m| {
+                let mut w = Vec::new();
+                for (l, name) in ["Ann Mitchell", "Bo Lindqvist", "Chen Wu"]
+                    .iter()
+                    .enumerate()
+                {
+                    let y = 200.0 + 40.0 * l as f64;
+                    w.extend(run_words(
+                        &format!("Applicant {m}.{l} {name}"),
+                        90.0,
+                        y,
+                        10.0,
+                        5.0,
+                    ));
+                }
+                // Boxed before its turn about its centre: x 25-35, y 250-410
+                // once turned.
+                let mut v = word(note, [-50.0, 325.0, 110.0, 335.0]);
+                v.angle = Some(-90.0);
+                w.push(v);
+                (m, Crop::Page, page_units(w))
+            })
+            .collect();
+        let r = inject(&mut doc, &readings);
+        let all = texts(&mut doc, &r).join("\n");
+        assert_eq!(all.matches(note).count(), 3, "{all}");
+        assert!(all.contains("Applicant 2.1 Bo Lindqvist"), "{all}");
+    }
+
+    #[test]
     fn stacked_lines_on_a_skewed_sheet_do_not_interleave() {
         // A tightly set form photographed at -1.8°: labels over values, one
         // row spanning the page and the next only its left side.

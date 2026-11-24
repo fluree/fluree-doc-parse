@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "ti-ne555.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/ne555.pdf",
+    "sha256": "a3756e59fd06d0ba736edf9ffe71d99d2aae33fb7e49fedc86165a241179f4a6",
+    "about": "Texas Instruments NE555 timer datasheet. Every page carries its part numbers, document number and date in the header and its copyright and feedback links in the footer, several lines of running text that repeat across the whole document."
+  },
+  "notes": [
+    "The running text was gathered in the order a hash map visited its lines, so the same binary gave a different `doc:runningText` on each run: six runs, five different DoCO graphs, the Markdown the same each time."
+  ],
+  "checks": [
+    {
+      "id": "doco-same-every-run",
+      "found": "2026-11-23",
+      "issue": "Converted again, the same binary gave a different DoCO graph: the running text in another order.",
+      "same_every_run": 5
+    }
+  ]
+}
