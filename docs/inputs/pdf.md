@@ -211,6 +211,23 @@ headings, because they are the document's sections:
 So does a numbered line that the PDF's outline names. In Markdown such an item is written with
 its own number (`3. FAQ`), not after a bullet.
 
+**Items one per line.** Limitations and table notes often number their
+items with nothing between them but the line spacing, each item's wrapped
+lines hanging under its text. A line opening with `2.` set where the line
+opening with `1.` is starts the next item, and the lines under it stay with
+it; a run of such items is an ordered list, even across a slightly wider
+space between two of them. A list of entries set one per line, a standard
+or a code on each, reads one entry per paragraph when every line stops well
+short of the column's width and none goes on in lower case. And a
+paragraph ended on a short line, followed at the same spacing by a line
+opening with a capital, is two paragraphs: the short line stops more than
+the next line's first word and two ems short of the lines around it.
+Wrapped text, even with a designer's rag, never does. The other way round,
+a sentence that runs on stays one paragraph across a slightly wider line
+spacing, as footnotes set at a generous leading have, or across a change to
+bold capitals within the paragraph: the line is full, ends without a full
+stop, and the next goes on in lower case or in the same capitals.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
