@@ -329,8 +329,8 @@ impl Row<'_> {
             return Ok(());
         }
         self.budget.spend_cells(self.empty as u64 + 1)?;
-        // A cell that holds text, at what the output makes of it.
-        self.budget.spend_cell_texts([field.as_str()])?;
+        // A cell that holds text, at what the output makes of a record's.
+        self.budget.spend_csv_cell_texts([field.as_str()])?;
         self.spent += self.empty as u64 + 1;
         self.fields
             .extend(std::iter::repeat_n(String::new(), self.empty));
@@ -369,7 +369,7 @@ fn one_line(s: &str) -> String {
 mod tests {
     use super::*;
     use fluree_doc_model::budget::{
-        converting_to, Output, CELL_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
+        converting_to, Output, CELL_BYTES, CSV_CELL_BYTES, FLAT_ELEMENT_BYTES, TEXT_BYTES,
     };
 
     fn table(bytes: &[u8]) -> Element {
@@ -527,7 +527,7 @@ mod tests {
     fn budget(tables: u64, filled: u64, cells: u64, text: u64) -> Budget {
         Budget::new(
             tables * FLAT_ELEMENT_BYTES
-                + filled * FLAT_CELL_BYTES
+                + filled * CSV_CELL_BYTES
                 + cells * CELL_BYTES
                 + text * TEXT_BYTES,
             0,
@@ -617,11 +617,11 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_costs_what_it_does_in_a_sheet() {
+    fn a_cell_costs_what_a_records_cell_takes() {
         // 100,000 records of 15 fields, 14 MB: 1.5 million cells, each
         // written once in a row of Markdown (about 130 bytes a cell were
-        // measured, the reader through the output), counted as a sheet's
-        // cell is, rather than as a paragraph.
+        // measured, the reader through the output), counted as a record's
+        // cell, rather than as a paragraph.
         let mut f = (0..15)
             .map(|c| format!("col{c}"))
             .collect::<Vec<_>>()
@@ -641,6 +641,31 @@ mod tests {
         // DoCO writes each cell as a node of its own, with its labels:
         // about 2.9 KB a cell were measured, 4.4 GB for these.
         assert!(matches!(parse(f.as_bytes()), Err(CsvError::TooLarge(_))));
+    }
+
+    #[test]
+    fn an_ordinary_file_of_a_million_records_fits_the_budget() {
+        // A million records of five six-byte fields (39 MB) take 0.6 GB as
+        // Markdown and 1.2 GB as the text, and fit the budget. A tenth of
+        // them, against a tenth of it: counted as a sheet's cell, 712 B
+        // each, they were refused at four times what they take.
+        let mut f = String::from("id,name,date,amount,code");
+        for i in 0..100_000 {
+            f.push_str(&format!(
+                "\n{i:06},Gamma,26-05-17,{:06},C{:05}",
+                i * 7 % 999_999,
+                i % 999
+            ));
+        }
+        let tenth = fluree_doc_model::budget::MAX_MEMORY / 10;
+        for output in [Output::Flat, Output::Text] {
+            let mut budget = Budget::new(tenth, 0).for_output(output);
+            let e = parse_within(f.as_bytes(), None, &mut budget).unwrap();
+            assert_eq!(e[0].cells.as_ref().unwrap().len(), 100_001);
+        }
+        // As DoCO, each a node of its own, they are refused.
+        let mut budget = Budget::new(tenth, 0);
+        assert!(parse_within(f.as_bytes(), None, &mut budget).is_err());
     }
 
     #[test]

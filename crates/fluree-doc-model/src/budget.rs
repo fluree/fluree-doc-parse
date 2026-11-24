@@ -111,10 +111,23 @@ pub const FLAT_ELEMENT_BYTES: u64 = 2 << 10;
 /// DoCO writes it as a node of its own, at [`ELEMENT_BYTES`]. A one-digit
 /// cell of an `.xlsx` sheet was measured at about 750 B in all, from the
 /// reader through Markdown, of which its slots and text count about 460 B:
-/// with this, 980 B. A `.csv` record's cell takes about 110 B, a Markdown
-/// table's 200 B with the parser's tree, an HTML table's 500 B with the
-/// page's.
+/// with this, 980 B. A `.csv` record's cell takes about 110 B (counted at
+/// [`CSV_CELL_BYTES`] instead), a Markdown table's 200 B with the parser's
+/// tree, an HTML table's 500 B with the page's.
 pub const FLAT_CELL_BYTES: u64 = 512;
+
+/// What a `.csv` record's cell that holds text costs when the output writes
+/// it once, beyond its slot and its text: the CSV reader keeps nothing but
+/// the cell's string, so a cell was measured, from the reader through the
+/// output, at about 100 B in all as Markdown and 216 B as the text (ten
+/// million one-digit cells, 0.99 and 2.16 GB), and 120 and 236 B with
+/// six-byte cells (a million records of five, 0.6 and 1.18 GB). Counted at
+/// [`FLAT_CELL_BYTES`], such a file of a million records was refused at
+/// four times what it takes; with this, a one-digit cell counts 268 B and
+/// a six-byte one 328 B, so the budget holds about 8 million of these, 1.6
+/// million records of five. DoCO writes it as a node of its own, at
+/// [`ELEMENT_BYTES`] (2.9 KB measured).
+pub const CSV_CELL_BYTES: u64 = 128;
 
 /// What a document is converted to, which sets what its elements cost and
 /// which copies of its tables' cells are made ([`Budget::spend_copies`]).
@@ -148,6 +161,15 @@ impl Output {
             Output::Text | Output::Flat => FLAT_CELL_BYTES,
         }
     }
+
+    /// What one `.csv` record's cell that holds text costs, its slot and
+    /// its text apart ([`CSV_CELL_BYTES`]).
+    pub fn csv_cell_bytes(self) -> u64 {
+        match self {
+            Output::Doco => ELEMENT_BYTES,
+            Output::Text | Output::Flat => CSV_CELL_BYTES,
+        }
+    }
 }
 
 /// What a table cell that holds `text` costs at `output` beyond its slot
@@ -159,12 +181,21 @@ impl Output {
 /// copies its cells, a Markdown table's parser builds a tree), so the same
 /// table may still be refused from one format and not from another.
 pub fn filled_cell_bytes(output: Output, text: &str) -> u64 {
+    filled_at(output.text_cell_bytes(), text)
+}
+
+/// [`filled_cell_bytes`] for a `.csv` record's cell, at
+/// [`Output::csv_cell_bytes`]: the CSV reader keeps nothing of a cell but
+/// its text, and a cell costs it a fraction of a sheet's.
+pub fn filled_csv_cell_bytes(output: Output, text: &str) -> u64 {
+    filled_at(output.csv_cell_bytes(), text)
+}
+
+fn filled_at(cell: u64, text: &str) -> u64 {
     if text.is_empty() {
         return 0;
     }
-    output
-        .text_cell_bytes()
-        .saturating_add(text_cost(text).saturating_mul(TEXT_BYTES))
+    cell.saturating_add(text_cost(text).saturating_mul(TEXT_BYTES))
 }
 
 thread_local! {
@@ -379,6 +410,19 @@ impl Budget {
         let n = texts
             .into_iter()
             .fold(0u64, |n, t| n.saturating_add(filled_cell_bytes(output, t)));
+        self.spend_memory("cells", n, 1)
+    }
+
+    /// [`Budget::spend_cell_texts`] for a `.csv` record's cells, at
+    /// [`filled_csv_cell_bytes`].
+    pub fn spend_csv_cell_texts<'a>(
+        &mut self,
+        texts: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), TooLarge> {
+        let output = self.output;
+        let n = texts.into_iter().fold(0u64, |n, t| {
+            n.saturating_add(filled_csv_cell_bytes(output, t))
+        });
         self.spend_memory("cells", n, 1)
     }
 

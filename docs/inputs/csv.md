@@ -46,7 +46,11 @@ document's budget ([limits on what one document may make](../reference/limits.md
 as the table is read, before they are allocated, and so are the copies DoCO
 writes of them (each cell's column header and row label); past it the file
 is refused (`CsvError::TooLarge`): one very wide row over a million short
-ones would otherwise ask for a trillion cells. The
+ones would otherwise ask for a trillion cells. A record's cell is counted at
+what it takes, a fraction of a sheet's, so an ordinary file of five columns
+converts up to about 1.6 million records to Markdown, JSON or the text, and
+about 100,000 to DoCO, which writes each cell as a node of its own
+([A CSV's records](../reference/limits.md#a-csvs-records)). The
 empty fields of a record are counted, not held, until one that holds
 something follows them, so a line of nothing but delimiters, which is no
 row, costs nothing however long it is.

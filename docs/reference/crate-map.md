@@ -94,13 +94,14 @@ own, so they are listed here.
   spent from the budget instead.
 - `fluree_doc_html::MAX_DEPTH` (`usize`, 512) is new: what nests deeper is
   set beside its ancestor at that depth.
-- `fluree_doc_model::budget` gains `Output` (with `element_bytes` and
-  `text_cell_bytes`), `converting_to` and `output` (the output a document
+- `fluree_doc_model::budget` gains `Output` (with `element_bytes`,
+  `text_cell_bytes` and `csv_cell_bytes`), `converting_to` and `output` (the output a document
   is converted to, whose costs it is counted at), `within` (a share of the
-  budget, for a file read beside another), `filled_cell_bytes`, `scaled`
+  budget, for a file read beside another), `filled_cell_bytes`,
+  `filled_csv_cell_bytes`, `scaled`
   (a `const fn`), `char_cost`, `FLAT_ELEMENT_BYTES`, `FLAT_CELL_BYTES`,
-  `PART_BYTES`, and `Budget::for_output`, `spend_text_cells`,
-  `spend_cell_texts`, `spend_text_cost`, `spend_links`, `memory_left` and
+  `CSV_CELL_BYTES`, `PART_BYTES`, and `Budget::for_output`, `spend_text_cells`,
+  `spend_cell_texts`, `spend_csv_cell_texts`, `spend_text_cost`, `spend_links`, `memory_left` and
   `spend_bytes`.
 - `Budget::default()` is no longer always `MAX_MEMORY` at DoCO's costs:
   it reads what the thread was given, the output inside `converting_to`

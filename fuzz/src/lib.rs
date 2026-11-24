@@ -6,8 +6,8 @@
 //! libFuzzer reports those itself (`-timeout`, `-rss_limit_mb`).
 
 use fluree_doc_model::budget::{
-    converting_to, filled_cell_bytes, output, text_cost, Output, CELL_BYTES, ELEMENT_BYTES,
-    MAX_MEMORY, TEXT_BYTES,
+    converting_to, filled_cell_bytes, filled_csv_cell_bytes, output, text_cost, Output, CELL_BYTES,
+    ELEMENT_BYTES, MAX_MEMORY, TEXT_BYTES,
 };
 use fluree_doc_model::doco::table_copies;
 use fluree_doc_model::{DocoOptions, Element, Notes};
@@ -38,7 +38,8 @@ pub fn reading<R>(data: &[u8], read: impl FnOnce() -> R) -> R {
 /// The memory `elements` stand for at the budget's costs for `output`
 /// (`fluree_doc_model::budget`): an element at the output's element cost,
 /// each cell slot at `CELL_BYTES`, a cell that holds text at what every
-/// reader spends for one (`filled_cell_bytes`, its text included), each
+/// reader spends for one (`filled_cell_bytes`, its text included; a
+/// `.csv` record's at `filled_csv_cell_bytes`), each
 /// other byte of text at `TEXT_BYTES` times what it may take in the worst
 /// output. A table's text is its cells' (the cost of a byte covers the
 /// copies made of it), so it is counted once, through its cells, and then
@@ -63,11 +64,18 @@ pub fn estimated_memory(elements: &[Element], output: Output) -> u64 {
         if e.cells.is_none() {
             cost = cost.saturating_add(text_cost(&e.text).saturating_mul(TEXT_BYTES));
         }
+        // A `.csv` record's cell costs less than another table's: its
+        // reader keeps nothing of it but its text.
+        let filled = if e.provenance == "csv" {
+            filled_csv_cell_bytes
+        } else {
+            filled_cell_bytes
+        };
         for row in e.cells.iter().flatten() {
             for cell in row {
                 cost = cost
                     .saturating_add(CELL_BYTES)
-                    .saturating_add(filled_cell_bytes(output, cell));
+                    .saturating_add(filled(output, cell));
             }
         }
     }
