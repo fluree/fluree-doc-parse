@@ -279,11 +279,12 @@ fn detect_all(
     }
 
     // The page-number line that covers the most pages supplies the folios.
-    // A page it leaves without one takes it from another line that counts
-    // the pages: a guide in three languages words its `1 of 3` three ways.
+    // A page it leaves without one takes it from another: a guide in three
+    // languages words its `1 of 3` three ways. Each must be a page's number
+    // (see [`FolioSource`]); the widest line is no more one for its width.
     folio_sources.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    for (k, (_, values, counts)) in folio_sources.into_iter().enumerate() {
-        if k > 0 && !counts {
+    for (_, values, numbers_pages) in folio_sources {
+        if !numbers_pages {
             continue;
         }
         let bare: Vec<bool> = folios.iter().map(Option::is_none).collect();
@@ -305,14 +306,41 @@ fn detect_all(
 
 /// A page-number line the folios may come from: (pages it covers, distinct
 /// values of its varying run), the per-page values, and whether its number
-/// counts the pages (see [`advances`]).
+/// is a page's.
+///
+/// A line whose digits vary near the top or foot of page after page is not
+/// a page's number for that alone. A data sheet's spec table opens each
+/// page with its drives' capacities (`26TB`, `16TB`, `8TB`), and a
+/// catalogue's year ranges (`1991-1998`) stand at its foot, several to a
+/// page; each was taken for the folio on every page it reached. A page's
+/// number either counts the pages (see [`advances`]) or says it is one
+/// (see [`says_page`]): a chart whose pages were shuffled and printed again
+/// numbers them `Page 352` where they now stand seventh, and reassembling
+/// such a chart is what folios are for.
 type FolioSource = ((usize, usize), Vec<(usize, String)>, bool);
 
 /// Offer a page-number line's occurrences as a folio source.
 fn offer_folios(sources: &mut Vec<FolioSource>, covers: usize, stable: &[(usize, &str)]) {
     if let Some((distinct, values)) = folio_run(stable) {
-        sources.push(((covers, distinct), values, advances(stable)));
+        let numbers_pages = advances(stable) || stable.iter().all(|(_, t)| says_page(t));
+        sources.push(((covers, distinct), values, numbers_pages));
     }
+}
+
+/// Whether a line names its number a page's: `Page 3`, `p. 3`, `Pg 3`,
+/// `3 of 15`, `Página 3`, `Seite 3`.
+fn says_page(text: &str) -> bool {
+    const PAGE: &[&str] = &["page", "pg", "p", "pp", "pag", "pagina", "página", "seite"];
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let number = |w: &str| w.chars().all(|c| c.is_ascii_digit());
+    words.iter().any(|w| PAGE.contains(&w.as_str()))
+        || words
+            .windows(3)
+            .any(|w| number(&w[0]) && w[1] == "of" && number(&w[2]))
 }
 
 /// A running line's copies: page, line index, text.
@@ -797,6 +825,68 @@ mod tests {
     }
 
     #[test]
+    fn a_tables_figures_near_the_top_are_no_folio() {
+        // A data sheet's spec table opens each page after the first with
+        // its largest drive: the figures vary, and fall.
+        let pages = doc(4, |i| match i {
+            0 => vec![line("Data sheet", 40.0)],
+            _ => vec![line(&format!("{}TB", [26, 16, 8][i - 1]), 160.0)],
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        assert!(folios.iter().all(Option::is_none), "got {folios:?}");
+    }
+
+    #[test]
+    fn year_ranges_at_the_foot_leave_the_footer_its_folio() {
+        // Year ranges stand at the foot several to a page and on more
+        // pages than either form of the footer; the footer counts the
+        // pages and is the folio.
+        let pages = doc(12, |i| {
+            let n = i + 37;
+            let footer = if n % 2 == 1 {
+                format!("© Example 2012/2013 | {n}")
+            } else {
+                format!("{n} | © Example 2012/2013")
+            };
+            vec![
+                line(&format!("{}-{}", 1990 + i, 1998 + i), 900.0),
+                line(&format!("{}-{}", 1991 + i, 2002 + i), 900.5),
+                line(&footer, 960.0),
+            ]
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        assert_eq!(folios[2].as_deref(), Some("39"));
+        assert_eq!(folios[3].as_deref(), Some("40"));
+    }
+
+    #[test]
+    fn a_shuffled_charts_page_numbers_are_its_folios() {
+        // Pages shuffled and some printed twice: the numbers do not count
+        // the pages, but each says it is a page's.
+        let order = [12, 3, 3, 40, 7, 19, 2, 19, 25, 8];
+        let pages = doc(order.len(), |i| {
+            vec![line(&format!("Page {}", order[i]), 960.0)]
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        let got: Vec<Option<&str>> = folios.iter().map(|f| f.as_deref()).collect();
+        let want: Vec<Option<String>> = order.iter().map(|n| Some(n.to_string())).collect();
+        assert_eq!(got, want.iter().map(|w| w.as_deref()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_page_says_it_is_one() {
+        assert!(says_page("Page 3"));
+        assert!(says_page("MRN-2093471 | ACCT-40218563 Page 352"));
+        assert!(says_page("p. 14"));
+        assert!(says_page("3 of 15"));
+        assert!(says_page("Página 4"));
+        assert!(!says_page("26TB"));
+        assert!(!says_page("1991-1998"));
+        assert!(!says_page("© Example 2012/2013 | 39"));
+        assert!(!says_page("Table 3 of the report"));
+    }
+
+    #[test]
     fn a_document_without_page_numbers_has_no_folios() {
         let pages = doc(10, |_| vec![line("Running head", 20.0)]);
         let (_, folios) = detect_with_folios(&pages);
@@ -1183,35 +1273,37 @@ mod tests {
 /// cells. Furniture whose digits vary across pages (page numbers) matches
 /// digit-insensitively: each digit run in the pattern matches any digit run
 /// in the cell.
+///
+/// A page number alone in a cell has no text to match on; see
+/// [`is_folio_cell`].
 pub fn scrub_cell(cell: &str, furniture: &[(String, bool)]) -> String {
-    scrub(cell, furniture, true)
+    scrub_with(cell, furniture, false)
 }
 
 /// As [`scrub_cell`], for text that already went through positional furniture
-/// removal.
-///
-/// The difference is the bare-number rule. A cell holding nothing but digits
-/// the width of the running folio is taken to *be* the folio, because a grid
-/// took its glyphs before furniture detection ran and nothing else can tell.
-/// A block did not: a running number was removed from it by position, and a
-/// bare number that survived that is content.
-///
-/// A table of contents is where this matters. Its page references are the
-/// same width as the folio and are numbers by nature — every one of them was
-/// being deleted, so a contents page came out as a list of titles pointing
-/// nowhere.
-///
-/// And only at the block's start or end, where a header or footer merged
-/// into it sits: a running header is often a phrase the document uses in
-/// its sentences too, and stripping it wherever it occurs cut
+/// removal, and only at the block's start or end, where a header or footer
+/// merged into it sits: a running header is often a phrase the document uses
+/// in its sentences too, and stripping it wherever it occurs cut
 /// `Federal Open Market Committee` out of every sentence of the minutes
 /// that bore it as their header.
 pub fn scrub_block(text: &str, furniture: &[(String, bool)]) -> String {
-    scrub_with(text, furniture, false, true)
+    scrub_with(text, furniture, true)
 }
 
-fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: bool) -> String {
-    scrub_with(cell, furniture, bare_number_is_furniture, false)
+/// Whether a table cell holding `cell` is its page's number, taken in by a
+/// grid that reaches into the top or foot of the page: the page's own folio
+/// alone, in the cell, where page numbers are printed. `rel_y` is the
+/// cell's middle as a share of the page's height.
+///
+/// A grid takes its glyphs before furniture is read, so a folio it took in
+/// is not removed by position, and a page number has no text to match a
+/// cell's on. Matching by width alone emptied every cell as wide as the
+/// page numbers: an accessory list's `CARTON COUNT | 1` and a catalogue's
+/// column of I/O points, `10`, `14`, `32`. A cell's figure is the folio
+/// only where it is the page's and stands where the folio does.
+pub fn is_folio_cell(cell: &str, folio: Option<&str>, rel_y: f64) -> bool {
+    let t = cell.trim();
+    !t.is_empty() && folio == Some(t) && !(EDGE_BAND..=1.0 - EDGE_BAND).contains(&rel_y)
 }
 
 /// Longest furniture string, in characters other than spaces, that is
@@ -1247,12 +1339,7 @@ fn whole(out: &str, i: usize, j: usize) -> bool {
 /// block's `DATE:` and `DATE`, a cell `DATE: -` loses `DATE:`, and the `-`
 /// left is a pattern of its own. What is left does not depend on the order
 /// the patterns were found in.
-fn scrub_with(
-    cell: &str,
-    furniture: &[(String, bool)],
-    bare_number_is_furniture: bool,
-    ends_only: bool,
-) -> String {
+fn scrub_with(cell: &str, furniture: &[(String, bool)], ends_only: bool) -> String {
     let mut out = cell.to_string();
     let at_end = |out: &str, start: usize, end: usize| {
         !ends_only || out[..start].trim().is_empty() || out[end..].trim().is_empty()
@@ -1311,29 +1398,9 @@ fn scrub_with(
             // literal text to anchor on, so digit-insensitive matching would
             // strip the leading digit run out of *any* cell it is applied to: a
             // financial statement's `85,159` became `,159`, silently changing
-            // the figure. With nothing to anchor, the only safe reading is that
-            // the whole cell is that page number.
-            //
-            // "All digits" alone is not enough to conclude that. Patterns are
-            // deduplicated by digit *shape*, so this list holds one representative
-            // per page-number width (`1`, `10`, `100`) rather than every value —
-            // and matching on shape alone deleted every all-digit block in the
-            // document. A bar chart's `2024` and `2023` axis labels went that way,
-            // leaving four figures with no years attached. Width is the evidence
-            // the pattern actually carries: a four-digit label is not a
-            // three-digit page number.
+            // the figure. It matches nothing here; a cell that is a page's
+            // number is told by where it stands (see [`is_folio_cell`]).
             if segs.iter().all(|s| s.is_empty()) {
-                if !bare_number_is_furniture {
-                    continue;
-                }
-                let t = out.trim();
-                let width = pat.chars().filter(char::is_ascii_digit).count();
-                if !t.is_empty()
-                    && t.chars().all(|c| c.is_ascii_digit())
-                    && t.chars().count() == width
-                {
-                    out = String::new();
-                }
                 continue;
             }
             let mut from = 0;
@@ -1547,29 +1614,23 @@ fn a_bare_page_number_never_truncates_a_figure() {
     assert_eq!(scrub_cell("85,159", &furn), "85,159");
     assert_eq!(scrub_cell("$88,821", &furn), "$88,821");
     assert_eq!(scrub_cell("27,471", &furn), "27,471");
-    // A cell that is only the page number, at that width, is still furniture.
-    assert_eq!(scrub_cell("85", &furn).trim(), "");
-    assert_eq!(scrub_cell(" 12 ", &furn).trim(), "");
+    // Nor does a cell that is only a number of that width: whether it is
+    // the page's number is told by where it stands.
+    assert_eq!(scrub_cell("85", &furn), "85");
+    assert_eq!(scrub_cell(" 12 ", &furn).trim(), "12");
 }
 
 #[test]
-fn a_page_number_pattern_does_not_delete_a_wider_number() {
-    // Patterns are deduplicated by digit *shape*, so the list holds one
-    // representative per page-number width -- `1`, `10`, `100` for a
-    // 140-page document -- not every value. Deleting any all-digit cell
-    // regardless of width therefore removed real content: a bar chart's
-    // `2024` and `2023` axis labels matched a two-digit page number and
-    // were dropped, leaving `$16.7 $15.1 18.8% 17.7%` with no years.
-    //
-    // Width is the evidence the pattern carries. A four-digit label is not
-    // a two-digit page number, and nothing else here can tell them apart.
-    let furn = vec![("85".to_string(), true)];
-    assert_eq!(scrub_cell("2024", &furn), "2024");
-    assert_eq!(scrub_cell("2023", &furn), "2023");
-    // Every width the document actually shows still scrubs, because every
-    // width present produces its own pattern.
-    let widths = vec![("1".to_string(), true), ("10".to_string(), true)];
-    assert_eq!(scrub_cell("7", &widths).trim(), "");
-    assert_eq!(scrub_cell("29", &widths).trim(), "");
-    assert_eq!(scrub_cell("2024", &widths), "2024");
+fn a_cell_is_the_folio_only_as_the_pages_own_number_where_it_stands() {
+    // A grid reaching the foot of page 85 took its folio in.
+    assert!(is_folio_cell("85", Some("85"), 0.95));
+    assert!(is_folio_cell(" 85 ", Some("85"), 0.04));
+    // An accessory list's `CARTON COUNT | 1` on page 3, at the foot or in
+    // the middle of the page, is a count.
+    assert!(!is_folio_cell("1", Some("3"), 0.95));
+    assert!(!is_folio_cell("3", Some("3"), 0.5));
+    // On a page with no folio, no cell is one.
+    assert!(!is_folio_cell("3", None, 0.95));
+    // A wider figure is no page number.
+    assert!(!is_folio_cell("2024", Some("24"), 0.95));
 }

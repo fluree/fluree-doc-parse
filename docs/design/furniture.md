@@ -121,6 +121,16 @@ that held it: `Serrer les vis à 30 po-lb (3,3 Nm)` read `0 po-lb ( , Nm)`,
 and an OCR'd newspaper whose stray letters were furniture lost every `r`
 and `e` from its table.
 
+A page number alone has no text to match a cell's on. A grid that reaches
+into the foot of the page takes its folio in, so a cell is emptied as the
+page's number when it holds that page's own folio and nothing else, and
+stands in the top or bottom band where page numbers are printed. Its width
+is no evidence: matched by width alone, every cell as wide as the page
+numbers was emptied, an accessory list's `CARTON COUNT | 1`, a catalogue's
+column of I/O points (`10`, `14`, `32`), and the minimum and typical columns
+of a datasheet's electrical tables, whose maximums then stood under the
+wrong headings.
+
 Paragraphs are scrubbed too, for a header or footer that merged into a line of
 its own block on one page. There the match is held to where such a leak can
 be: the start or end of a block that reaches into the page's top or bottom
@@ -228,9 +238,18 @@ that change on nearly every page are the folio; the MRN and account number
 beside them, which never change, are not, and a flow sheet's `16:00` row
 label — which repeats at a stable position on hundreds of pages and takes six
 values between them — is a clock. The page-number line that covers the most
-pages supplies it. A page it leaves without one takes its folio from another
-page-number line that counts the pages: a guide in three languages words its
-`1 of 3` three ways.
+pages supplies it. A page it leaves without one takes its folio from another:
+a guide in three languages words its `1 of 3` three ways.
+
+A line is a source only if its number is a page's. Digits that vary at the top
+or foot of page after page are not one for that alone: a data sheet's spec
+table opens each page with its largest drive (`26TB`, `16TB`, `8TB`), a parts
+catalogue sets year ranges (`1991-1998`) at the foot several to a page, and a
+translation of a declaration ends each page on an article's number. Each was
+the folio of every page it reached. A page's number counts the pages, going up
+by as many pages as lie between, or says it is one (`Page 352`, `3 of 15`).
+The second is what keeps a shuffled chart's folios, which count nothing in the
+order the pages now stand.
 
 The folio is read from the page's edges over *every* glyph, not from the
 lines left after grids took theirs. A form's key/value grid that runs down

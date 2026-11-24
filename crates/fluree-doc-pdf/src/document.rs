@@ -1496,12 +1496,32 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
         for (gi, g) in layout.grids.iter().enumerate() {
+            // A folio the grid took in, rows `r0..r1` holding it: the page's
+            // own number where page numbers stand (`furniture::is_folio_cell`).
+            let page_h = raw.pages[pi].height.max(1.0);
+            let unfolio = |t: String, r0: usize, r1: usize| {
+                let last = g.ys.len().saturating_sub(1);
+                let mid = (g.ys[r0.min(last)] + g.ys[r1.min(last)]) / 2.0 / page_h;
+                if furniture::is_folio_cell(&t, folios[pi].as_deref(), mid) {
+                    String::new()
+                } else {
+                    t
+                }
+            };
+            let cols = g.cols().max(1);
             let flat: Vec<String> = match g.layout.as_deref() {
                 Some(lay) => lay.texts(&raw.pages[pi].glyphs, g.cols()),
                 None => g.cell_texts(&raw.pages[pi].glyphs),
             }
             .into_iter()
-            .map(|c| furniture::scrub_cell(&c, &scrub_texts))
+            .enumerate()
+            .map(|(i, c)| {
+                unfolio(
+                    furniture::scrub_cell(&c, &scrub_texts),
+                    i / cols,
+                    i / cols + 1,
+                )
+            })
             .collect();
             if layout.demoted_tables[gi] {
                 // Judged non-table by the layout arbiter: same reading
@@ -1549,8 +1569,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             let cols = g.cols();
             let mut rows = rows;
             for &r in &layout.spanning_rows[gi] {
-                rows[r][0] =
-                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts);
+                rows[r][0] = unfolio(
+                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts),
+                    r,
+                    r + 1,
+                );
                 for (c, cell) in rows[r].iter_mut().enumerate().skip(1) {
                     cell.clear();
                     merges.continues_left[r * cols + c] = true;
@@ -1650,7 +1673,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => furniture::scrub_cell(&t, &scrub_texts),
+                            Some(t) => unfolio(furniture::scrub_cell(&t, &scrub_texts), r, r_end),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
                             None => continue,
                         };

@@ -6,7 +6,8 @@
     "about": "Western Digital WD Gold data sheet (4 pages). Its body text footnotes capacities and workloads with a note number raised right after the quantity."
   },
   "notes": [
-    "2026-11-23 (#79): a raised number after a quantity stayed in it, so 26TB with note 1 read 26TB1. After a quantity it is a note, unless it squares or cubes a unit of length."
+    "2026-11-23 (#79): a raised number after a quantity stayed in it, so 26TB with note 1 read 26TB1. After a quantity it is a note, unless it squares or cubes a unit of length.",
+    "2026-11-24 (#100): each page's first capacity in its spec table, `26TB`, `16TB`, `8TB`, was taken for its folio. The sheet prints no page numbers."
   ],
   "checks": [
     {
@@ -27,6 +28,33 @@
       "found": "2026-11-23",
       "issue": "As above.",
       "no_text": "26TB1"
+    },
+    {
+      "id": "no-folio-on-page-2",
+      "found": "2026-11-24",
+      "issue": "A drive capacity was the page's folio.",
+      "folio": {
+        "page": 2,
+        "value": null
+      }
+    },
+    {
+      "id": "no-folio-on-page-3",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "folio": {
+        "page": 3,
+        "value": null
+      }
+    },
+    {
+      "id": "no-folio-on-page-4",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "folio": {
+        "page": 4,
+        "value": null
+      }
     }
   ]
 }
