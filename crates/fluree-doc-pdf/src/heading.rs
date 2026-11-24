@@ -1201,7 +1201,7 @@ const DIVISION_WORDS: &[&str] = &[
 
 /// A division's label alone: a division word and its number, a roman
 /// numeral or a single letter (`Chapter 3`, `PART II`, `Appendix B`).
-fn division_label(text: &str) -> bool {
+pub(crate) fn division_label(text: &str) -> bool {
     let mut words = text.split_whitespace();
     let (Some(word), Some(number), None) = (words.next(), words.next(), words.next()) else {
         return false;

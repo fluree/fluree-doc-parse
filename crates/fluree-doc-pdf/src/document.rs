@@ -547,7 +547,8 @@ const STACKED_LABELS: usize = 3;
 ///   read across. That is a table's header cells left out of its grid
 ///   (`Date | Description`), or an answer scale (`OFTEN`, `SOMETIMES`,
 ///   `RARELY`, `NEVER`). Card titles set side by side on a slide are never
-///   a run, because each is followed by its own text.
+///   a run, because each is followed by its own text. Nor is a division's
+///   label beside its title (`Part I`, then its title, on one line).
 /// - **A run of three lines or more set one under another:** a list of
 ///   names, a chart's legend words, a form's labels. Its last line is
 ///   followed by text, and keeps the heading.
@@ -586,7 +587,12 @@ fn demote_empty_bold_heads(elements: &mut [Element]) {
             None => true,
             Some(next) => bold(next) && level(next) < lvl,
         };
-        let row = (i + 1..=j).any(|k| same_row(&elements[k - 1], &elements[k]));
+        // A division's label beside its title (`Part I | Annual and Monthly
+        // Contribution Amount`) is one heading set in two blocks, not a row.
+        let row = (i + 1..=j).any(|k| {
+            same_row(&elements[k - 1], &elements[k])
+                && !heading::division_label(&elements[k - 1].text)
+        });
         if heads_nothing || row {
             demote.extend(i..=j);
         } else if j + 1 - i >= STACKED_LABELS {
@@ -2983,6 +2989,17 @@ mod tests {
         ];
         demote_empty_bold_heads(&mut paper);
         assert_eq!(heads(&paper), ["Materials and Methods", "Apiary selection"]);
+        // A division's label beside its title, over its table: one heading.
+        let mut form = vec![
+            head("Part I", 100.0, 50.0),
+            head("Annual and Monthly Contribution Amount", 100.0, 140.0),
+            text("1 Tax family size", 115.0),
+        ];
+        demote_empty_bold_heads(&mut form);
+        assert_eq!(
+            heads(&form),
+            ["Part I", "Annual and Monthly Contribution Amount"]
+        );
         // A heading of another kind after a bold line says nothing of it.
         let mut outlined = vec![
             head("Sectors of primary focus", 100.0, 50.0),

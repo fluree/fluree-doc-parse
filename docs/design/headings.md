@@ -129,7 +129,9 @@ between them are looked at as a run. Three kinds of run are read as text:
   read across. This is a table's header cells left out of its grid, or an
   answer scale (`OFTEN`, `SOMETIMES`, `RARELY`, `NEVER`). Card titles set
   side by side on a slide are never a run, because each is followed by its
-  own text.
+  own text. A division's label set beside its title (`Part I`, then
+  `Annual and Monthly Contribution Amount` on the same line) is one heading
+  in two blocks, not a row.
 - **Three lines or more set one under another.** This is a list of names, a
   chart's legend or a map's labels, or a form's labels. The last line is
   followed by text and stays a heading.
