@@ -149,6 +149,15 @@ fn md_text(text: &str, opens_block: bool) -> String {
     out
 }
 
+/// Text that opens with an ordered list's marker as Markdown reads one: up
+/// to nine digits, then `.` or `)`, then a space.
+fn opens_with_ordinal(text: &str) -> bool {
+    let digits = text.chars().take_while(|c| c.is_ascii_digit()).count();
+    (1..=9).contains(&digits)
+        && matches!(text[digits..].chars().next(), Some('.' | ')'))
+        && text[digits + 1..].starts_with(' ')
+}
+
 /// A recording offset as a clock reading: `04:32`, or `1:04:32` past the
 /// hour.
 fn clock(ms: u64) -> String {
@@ -633,6 +642,12 @@ pub fn to_markdown_with_options(
                     // structure (spans included), which markdown cannot.
                     out.push_str(&format!("\n{}\n\n", e.text));
                 }
+            }
+            // An ordered list's item that carries its own number, `3. FAQ`:
+            // the number is the item's Markdown marker, and a bullet before
+            // it would set a numbered line inside a bulleted item.
+            "doc:ListItem" if opens_with_ordinal(&e.text) => {
+                out.push_str(&format!("{}\n", md_linked(e, opts)))
             }
             "doc:ListItem" => out.push_str(&format!("- {}\n", md_linked(e, opts))),
             _ => match (&e.turn, &e.message) {

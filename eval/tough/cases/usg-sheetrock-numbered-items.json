@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its physical-properties tables footnote a value given in brackets, with the note's number raised right after the closing bracket."
+  },
+  "notes": [
+    "#164: LIMITATIONS and the tables' notes number their items, each wrapped line hanging under its text, at the paragraph's leading."
+  ],
+  "checks": [
+    {
+      "id": "limitation-item-whole",
+      "found": "2026-11-24",
+      "issue": "LIMITATIONS 1 to 3 read as one paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "2. Avoid exposure to excessive, repetitive or continuous moisture before, during and after installation. Eliminate sources of moisture immediately.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "table-note-item",
+      "found": "2026-11-24",
+      "issue": "As above, for notes 2 to 4 under page 2’s table.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "3. 1/4 in. (6.4 mm) panels are not recommended on ceilings to receive water-based texture material.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "second-note-of-two",
+      "found": "2026-11-24",
+      "issue": "As above, for notes 7 and 8 on page 3.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "8. Represents approximate weight for design and shipping purposes. For specific product weight in your area, contact your local USG representative or call the Customer Service Center at 800 950-3839.",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

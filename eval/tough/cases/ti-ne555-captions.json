@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "ti-ne555.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/ne555.pdf",
+    "sha256": "a3756e59fd06d0ba736edf9ffe71d99d2aae33fb7e49fedc86165a241179f4a6",
+    "about": "Texas Instruments NE555 timer datasheet. Its tables and figures carry bold captions numbered by chapter (`Table 4-1. Pin Functions`, `Figure 5-1. Low-Level Output Voltage`)."
+  },
+  "notes": [
+    "2026-11-24 (#151): a bold caption was a section title on weight alone, so the text after a figure nested under its caption. Captions numbered with a hyphen by chapter were not read as captions at all."
+  ],
+  "checks": [
+    {
+      "id": "table-caption-not-a-section",
+      "found": "2026-11-24",
+      "issue": "The pin table's caption was a level-1 section.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Table 4-1. Pin Functions"
+      }
+    },
+    {
+      "id": "figure-caption-not-a-section",
+      "found": "2026-11-24",
+      "issue": "Each typical-characteristics figure's caption was a section.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Figure 5-1. Low-Level Output Voltage"
+      }
+    },
+    {
+      "id": "no-figure-caption-sections",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "no_section": "Figure 5-"
+    }
+  ]
+}
