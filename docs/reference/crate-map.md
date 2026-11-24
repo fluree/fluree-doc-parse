@@ -40,7 +40,7 @@ PDF layout.
 |---|---|
 | `fluree-doc-model` | `Element`, `Link`, `Target`, `Turn`, `Message`, `Mailbox`, `DocumentInfo`, `Attachment`, `Media` (an image placed in the flow) and `read_pictures`, the loop every container's pictures are read through, each once within a document's `Allowance`, `UnreadPage` and `UnreadImage` (what nothing read), `BBox`, `PageSize`, the Markdown/XHTML/DoCO/text emitters, merge denormalization, `outline::infer_headings` (headings shown by keyword and number); `budget`, what one document may make ([Limits](limits.md)) |
 | `fluree-doc-markdown` | `parse(&str) -> Result<Vec<Element>, TooLarge>` |
-| `fluree-doc-text` | `parse(&str) -> Vec<Element>`; `decode(&[u8])`; `is_markdown` |
+| `fluree-doc-text` | `parse(&str) -> Result<Vec<Element>, TooLarge>`; `decode(&[u8])`; `is_markdown` |
 | `fluree-doc-html` | `parse(&str) -> Result<Vec<Element>, TooLarge>`, via html5ever; `parse_with_quote_depth`, a message's body, its own images (`cid:`) as figures; `cid_ids`, the content ids its HTML shows; `parse_message`, both from one parse |
 | `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them, a part read whole within the document's budget (`read_within`) or a bound (`read_capped`); `Relations` (a part's relationships by id, each found in one lookup), `PartNames` (a relationship's image, found as the format finds it), `read_media` (an image part of an opened `Package`, capped), `read_pictures` (each image once within a per-document `Allowance`), `alt_text` |
 | `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
@@ -66,8 +66,9 @@ The per-document budget ([Limits](limits.md), issue #6) changed these
 public items; the workspace is still at 0.1.0, with no changelog of its
 own, so they are listed here.
 
-- `fluree_doc_markdown::parse` returns `Result<Vec<Element>, TooLarge>`:
-  a document past its budget is refused rather than made.
+- `fluree_doc_markdown::parse` and `fluree_doc_text::parse` return
+  `Result<Vec<Element>, TooLarge>`: a document past its budget is refused
+  rather than made.
 - `fluree_doc_html::parse`, `parse_with_quote_depth` and `parse_message`
   return a `Result` whose error is `TooLarge` (`parse_message`'s value is
   `MessageBody`); `fluree_doc_email::EmailError` has a new variant,

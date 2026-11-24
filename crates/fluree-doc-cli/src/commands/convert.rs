@@ -535,6 +535,7 @@ fn read_source(
                     .map_err(|e| format!("Markdown document too large: {e}"))?
             } else {
                 fluree_doc_text::parse(&text)
+                    .map_err(|e| format!("text document too large: {e}"))?
             };
             (elements, fluree_doc_model::Notes::default())
         }

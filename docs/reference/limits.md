@@ -7,7 +7,7 @@ Word file that all point at the same text, a table whose first row is
 thousands of cells wide over rows of one, a cell merged down over thousands
 of rows: a file of a few kilobytes can describe gigabytes. So the readers
 of the office formats (`.csv`, `.xls`, `.xlsb`, `.xlsx`, `.ods`, `.doc`,
-`.docx`, `.odt`, `.ppt`, `.pptx`, `.odp`, `.rtf`), of Markdown and of HTML
+`.docx`, `.odt`, `.ppt`, `.pptx`, `.odp`, `.rtf`), of Markdown, of plain text and of HTML
 (a page, or an email's HTML body), their parsers' trees included, are each
 handed one budget for the document
 (`fluree_doc_model::budget::Budget`) and spend it *before* they allocate. Past it, the document is refused with an
@@ -251,7 +251,8 @@ gathered once, then spent with the table, as a sheet's are; a page's
 
 ## A Markdown document's tree
 
-A Markdown document (and a `.txt`, read as one) is parsed by pulldown-cmark,
+A Markdown document (and a `.txt` that writes Markdown's markup, read as
+one) is parsed by pulldown-cmark,
 which builds the tree of the whole document, its blocks and the marks of
 their inline markup, before the reader sees its first event, and holds it
 while the elements are made. So the tree is spent first, from the

@@ -18,7 +18,12 @@
 //! a sentence wrapped across two lines.
 //!
 //! There is no geometry, and no pages: `bbox` is `None` and `page` is 0.
+//!
+//! What a text makes is counted against the document's [`Budget`] before
+//! it is kept: each line's text as it is read into its paragraph, and each
+//! element. Past it, the text is refused ([`TooLarge`]).
 
+use fluree_doc_model::budget::{Budget, TooLarge};
 use fluree_doc_model::{outline, Element};
 
 /// Decode a text file's bytes. A byte-order mark decides; then UTF-8, when
@@ -97,28 +102,48 @@ fn table_rule(t: &str) -> bool {
         })
 }
 
-/// Parse plain text into elements in reading order.
-pub fn parse(src: &str) -> Vec<Element> {
+/// Parse plain text into elements in reading order, or say why it makes
+/// more than one document may.
+pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
+    parse_within(src, Budget::default())
+}
+
+/// [`parse`], against `budget`.
+fn parse_within(src: &str, mut budget: Budget) -> Result<Vec<Element>, TooLarge> {
     // Windows ends a line with CR LF and the classic Mac OS, as Word still
     // exports, with CR alone.
     let src = src.replace("\r\n", "\n").replace('\r', "\n");
     let src = src.strip_prefix('\u{feff}').unwrap_or(&src);
     let mut out = Vec::new();
-    let mut block: Vec<&str> = Vec::new();
+    // The block of lines read since the last blank one, as the bytes of
+    // `src` it spans: held as a list of its lines, a block of a hundred
+    // million short ones took 1.6 GB before it was read.
+    let mut block: Option<(usize, usize)> = None;
+    let mut at = 0;
     for line in src.split('\n') {
+        let start = at;
+        at += line.len() + 1;
         if line.trim().is_empty() {
-            read_block(&block, &mut out);
-            block.clear();
+            if let Some((b, e)) = block.take() {
+                read_block(&src[b..e], &mut out, &mut budget)?;
+            }
         } else {
-            block.push(line);
+            // Spent as it is read: the line, and the line break its
+            // paragraph keeps after it.
+            budget.spend_text(line)?;
+            budget.spend_text_cost(1)?;
+            let end = start + line.len();
+            block = Some((block.map_or(start, |(b, _)| b), end));
         }
     }
-    read_block(&block, &mut out);
+    if let Some((b, e)) = block {
+        read_block(&src[b..e], &mut out, &mut budget)?;
+    }
     outline::infer_headings(&mut out);
     for (i, e) in out.iter_mut().enumerate() {
         e.id = format!("elem-{:05}", i + 1);
     }
-    out
+    Ok(out)
 }
 
 /// The text after a list marker at the start of a line: `- `, `* `, `• `,
@@ -137,46 +162,56 @@ fn item(line: &str) -> Option<&str> {
         .then(|| t.trim())
 }
 
-/// The elements of one block of lines with no blank line between them.
-fn read_block(lines: &[&str], out: &mut Vec<Element>) {
-    let mut lines = lines;
+/// The elements of one block of lines with no blank line between them,
+/// each spent as it is made; its lines' text was spent as they were read.
+fn read_block(block: &str, out: &mut Vec<Element>, budget: &mut Budget) -> Result<(), TooLarge> {
+    let mut lines = block.split('\n').peekable();
     // A heading opening the block is a paragraph of its own, and so is a
     // heading straight under it (`TITLE 11. LAW` over `DIVISION 6.`). One
     // further down is left in its paragraph: there it is more likely a
     // reference wrapped onto a line of its own (`… as set out in` /
     // `Article 11.`).
-    while let Some((first, rest)) = lines.split_first() {
-        if !outline::is_heading(first) || item(first).is_some() {
-            break;
-        }
+    while let Some(first) = lines.next_if(|l| outline::is_heading(l) && item(l).is_none()) {
+        budget.spend_elements(1)?;
         out.push(paragraph(first.trim().to_string()));
-        lines = rest;
     }
-    let mut text: Vec<&str> = Vec::new();
+    // The paragraph or item being read, its lines joined as they come.
+    let mut text = String::new();
     let mut in_item = false;
-    let flush = |text: &mut Vec<&str>, in_item: bool, out: &mut Vec<Element>| {
+    let flush = |text: &mut String,
+                 in_item: bool,
+                 out: &mut Vec<Element>,
+                 budget: &mut Budget|
+     -> Result<(), TooLarge> {
         if !text.is_empty() {
-            let joined = text.join("\n");
+            budget.spend_elements(1)?;
+            let joined = std::mem::take(text);
             out.push(if in_item {
                 element("doc:ListItem", joined)
             } else {
                 paragraph(joined)
             });
-            text.clear();
         }
+        Ok(())
+    };
+    let join = |text: &mut String, line: &str| {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(line);
     };
     for line in lines {
         if let Some(rest) = item(line) {
-            flush(&mut text, in_item, out);
+            flush(&mut text, in_item, out, budget)?;
             in_item = true;
             if !rest.is_empty() {
-                text.push(rest);
+                join(&mut text, rest);
             }
             continue;
         }
-        text.push(line.trim());
+        join(&mut text, line.trim());
     }
-    flush(&mut text, in_item, out);
+    flush(&mut text, in_item, out, budget)
 }
 
 fn paragraph(text: String) -> Element {
@@ -192,7 +227,11 @@ mod tests {
     use super::*;
 
     fn read(src: &str) -> Vec<(String, String)> {
-        parse(src).into_iter().map(|e| (e.kind, e.text)).collect()
+        parse(src)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.kind, e.text))
+            .collect()
     }
 
     fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -208,7 +247,8 @@ mod tests {
         let els = parse(
             "CHAPTER IV\nController and processor\n\nArticle 30\nRecords of processing activities\n\n\
              1. Each controller shall maintain a record.\n",
-        );
+        )
+        .unwrap();
         let got: Vec<(&str, &str, Option<usize>)> = els
             .iter()
             .map(|e| (e.kind.as_str(), e.text.as_str(), e.level))
@@ -306,5 +346,22 @@ mod tests {
         assert_eq!(decode(b"\x93caf\xe9\x94"), "\u{201c}café\u{201d}");
         // Classic Mac line ends.
         assert_eq!(read("one\rtwo\r\rthree").len(), 2);
+    }
+
+    #[test]
+    fn lines_past_the_budget_are_refused_before_they_are_made() {
+        use fluree_doc_model::budget::{ELEMENT_BYTES, TEXT_BYTES};
+        // A block of 10,000 lines of `abcd`, each held before the block is
+        // read: its text and line breaks, and the one paragraph it makes.
+        let src = "abcd\n".repeat(10_000);
+        let need = 10_000 * 5 * TEXT_BYTES + ELEMENT_BYTES;
+        let within = |memory: u64| parse_within(&src, Budget::new(memory, u64::MAX));
+        assert_eq!(within(need).unwrap().len(), 1);
+        let err = within(need - 1).unwrap_err().to_string();
+        assert!(err.contains("past"), "{err}");
+        // Refused as the lines are read, before the block is: a budget the
+        // lines pass is not reached by the paragraph.
+        let lines = within(10_000 * 5 * TEXT_BYTES - 1).unwrap_err().to_string();
+        assert!(lines.starts_with("text past"), "{lines}");
     }
 }

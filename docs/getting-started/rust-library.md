@@ -392,5 +392,5 @@ build them.
 `std::error::Error`, so they compose with `?`, `Box<dyn Error>` and `anyhow`.
 
 `fluree_doc_markdown::parse`, `fluree_doc_text::parse` and
-`fluree_doc_html::parse` are infallible — each format is defined so that every
-byte sequence is a valid parse.
+`fluree_doc_html::parse` read every byte sequence; they fail only past the
+document's budget, returning the `fluree_doc_model::budget::TooLarge` itself.

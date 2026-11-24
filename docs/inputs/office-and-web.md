@@ -754,7 +754,10 @@ A file is decoded by its byte-order mark, then as UTF-8 when it is valid
 UTF-8, then as Windows-1252. Windows (CR LF) and classic Mac (CR) line ends
 are read as line ends.
 
-Infallible: any sequence of bytes is some text.
+Any sequence of bytes is some text. Each line, as it is read into its
+paragraph, and each element are spent from the document's budget ([limits on
+what one document may make](../reference/limits.md)) first; a text past it
+fails as too large (`fluree_doc_text::parse` returns `TooLarge`).
 
 ## Why convert Markdown at all
 
