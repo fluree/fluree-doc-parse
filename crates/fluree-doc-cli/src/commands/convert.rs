@@ -529,7 +529,7 @@ fn read_source(
         // is not code and a row of `=` makes no heading. Markdown saved
         // under a text file's name is told by its markup and read as such.
         SourceKind::Text => {
-            let text = fluree_doc_text::decode(&data);
+            let text = fluree_doc_text::decode(data);
             let elements = if fluree_doc_text::is_markdown(&text) {
                 fluree_doc_markdown::parse(&text)
                     .map_err(|e| format!("Markdown document too large: {e}"))?

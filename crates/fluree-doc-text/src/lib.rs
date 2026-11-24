@@ -29,16 +29,24 @@ use fluree_doc_model::{outline, Element};
 /// Decode a text file's bytes. A byte-order mark decides; then UTF-8, when
 /// the bytes are valid UTF-8; then Windows-1252, the commonest encoding of
 /// text that is not.
-pub fn decode(bytes: &[u8]) -> String {
-    if let Some((enc, bom)) = encoding_rs::Encoding::for_bom(bytes) {
-        return enc
-            .decode_without_bom_handling(&bytes[bom..])
-            .0
-            .into_owned();
+///
+/// Bytes handed over owned that are UTF-8 become the string as they are,
+/// not copied: a file read whole is then held once.
+pub fn decode(bytes: impl Into<Vec<u8>>) -> String {
+    let mut bytes = bytes.into();
+    if let Some((enc, bom)) = encoding_rs::Encoding::for_bom(&bytes) {
+        if let std::borrow::Cow::Owned(s) = enc.decode_without_bom_handling(&bytes[bom..]).0 {
+            return s;
+        }
+        // UTF-8 after its mark: the bytes, less the mark.
+        bytes.drain(..bom);
     }
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_owned(),
-        Err(_) => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
+    match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(e) => encoding_rs::WINDOWS_1252
+            .decode(e.as_bytes())
+            .0
+            .into_owned(),
     }
 }
 
@@ -110,19 +118,13 @@ pub fn parse(src: &str) -> Result<Vec<Element>, TooLarge> {
 
 /// [`parse`], against `budget`.
 fn parse_within(src: &str, mut budget: Budget) -> Result<Vec<Element>, TooLarge> {
-    // Windows ends a line with CR LF and the classic Mac OS, as Word still
-    // exports, with CR alone.
-    let src = src.replace("\r\n", "\n").replace('\r', "\n");
-    let src = src.strip_prefix('\u{feff}').unwrap_or(&src);
+    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
     let mut out = Vec::new();
     // The block of lines read since the last blank one, as the bytes of
     // `src` it spans: held as a list of its lines, a block of a hundred
     // million short ones took 1.6 GB before it was read.
     let mut block: Option<(usize, usize)> = None;
-    let mut at = 0;
-    for line in src.split('\n') {
-        let start = at;
-        at += line.len() + 1;
+    for (start, line) in lines(src) {
         if line.trim().is_empty() {
             if let Some((b, e)) = block.take() {
                 read_block(&src[b..e], &mut out, &mut budget)?;
@@ -146,6 +148,29 @@ fn parse_within(src: &str, mut budget: Budget) -> Result<Vec<Element>, TooLarge>
     Ok(out)
 }
 
+/// The lines of `s`, each with the byte it starts at. Windows ends a line
+/// with CR LF and the classic Mac OS, as Word still exports, with CR alone:
+/// each is a line's end, as LF is. They are told apart in place, where the
+/// text with its ends rewritten to LF took two more copies of it.
+fn lines(s: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut at = Some(0);
+    std::iter::from_fn(move || {
+        let start = at?;
+        let rest = &s[start..];
+        let Some(end) = rest.find(['\r', '\n']) else {
+            at = None;
+            return Some((start, rest));
+        };
+        let ending = if rest[end..].starts_with("\r\n") {
+            2
+        } else {
+            1
+        };
+        at = Some(start + end + ending);
+        Some((start, &rest[..end]))
+    })
+}
+
 /// The text after a list marker at the start of a line: `- `, `* `, `• `,
 /// `1. `, `2) `. A bullet is dropped; a number is kept, since a clause's
 /// number is how it is cited.
@@ -165,7 +190,7 @@ fn item(line: &str) -> Option<&str> {
 /// The elements of one block of lines with no blank line between them,
 /// each spent as it is made; its lines' text was spent as they were read.
 fn read_block(block: &str, out: &mut Vec<Element>, budget: &mut Budget) -> Result<(), TooLarge> {
-    let mut lines = block.split('\n').peekable();
+    let mut lines = lines(block).map(|(_, line)| line).peekable();
     // A heading opening the block is a paragraph of its own, and so is a
     // heading straight under it (`TITLE 11. LAW` over `DIVISION 6.`). One
     // further down is left in its paragraph: there it is more likely a
@@ -344,8 +369,42 @@ mod tests {
         assert_eq!(decode(b"\xef\xbb\xbfcaf\xc3\xa9"), "café");
         assert_eq!(decode("café".as_bytes()), "café");
         assert_eq!(decode(b"\x93caf\xe9\x94"), "\u{201c}café\u{201d}");
+        assert_eq!(decode(vec![0xef, 0xbb, 0xbf, b'a']), "a");
+        // UTF-8 handed over owned is the string, not a copy of it.
+        for bytes in [b"text".to_vec(), b"\xef\xbb\xbftext".to_vec()] {
+            let at = bytes.as_ptr();
+            let text = decode(bytes);
+            assert_eq!(text.as_ptr(), at);
+        }
+        assert_eq!(decode(b"\xff\xfea\x00".to_vec()), "a");
         // Classic Mac line ends.
         assert_eq!(read("one\rtwo\r\rthree").len(), 2);
+    }
+
+    #[test]
+    fn a_line_ends_at_lf_cr_lf_or_cr_alone() {
+        let got: Vec<(usize, &str)> = lines("a\r\nbc\rd\n\r\r\ne\r\r\n").collect();
+        assert_eq!(
+            got,
+            [
+                (0, "a"),
+                (3, "bc"),
+                (6, "d"),
+                (8, ""),
+                (9, ""),
+                (11, "e"),
+                (13, ""),
+                (15, "")
+            ]
+        );
+        assert_eq!(lines("").collect::<Vec<_>>(), [(0, "")]);
+        // Read as the text with its ends rewritten to LF reads.
+        let src = "Dear Ada,\r\rThe pilot\r\nruns.\r\n\r\n- one\r- two\r\n  more\rEnd";
+        assert_eq!(
+            read(src),
+            read(&src.replace("\r\n", "\n").replace('\r', "\n"))
+        );
+        assert_eq!(read(src).len(), 4);
     }
 
     #[test]

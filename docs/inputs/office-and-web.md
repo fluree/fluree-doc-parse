@@ -757,7 +757,10 @@ are read as line ends.
 Any sequence of bytes is some text. Each line, as it is read into its
 paragraph, and each element are spent from the document's budget ([limits on
 what one document may make](../reference/limits.md)) first; a text past it
-fails as too large (`fluree_doc_text::parse` returns `TooLarge`).
+fails as too large (`fluree_doc_text::parse` returns `TooLarge`). The file
+itself is held once beside the budget: valid UTF-8 is read in place, and
+line ends are told apart in it rather than rewritten into a copy. A 300 MB
+file of one-letter lines, refused, peaks at 0.3 GB.
 
 ## Why convert Markdown at all
 
