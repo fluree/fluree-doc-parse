@@ -643,11 +643,12 @@ pub fn assemble_in_measure(
         // the geometry reads, and a fill's edge is a row's edge.
         if mark(i).is_none()
             && band[i] == band[i - 1]
-            && continues(cur.last().unwrap(), l, leading, &edge, !led[i])
+            && (continues(cur.last().unwrap(), l, leading, &edge, !led[i])
+                || runs_on(&cur, l, leading))
         {
             cur.push(l.clone());
         } else {
-            blocks.extend(split_hard_breaks(build(std::mem::take(&mut cur))));
+            blocks.extend(finish(build(std::mem::take(&mut cur)), &edge));
             if let Some(m) = mark(i) {
                 marked.push((blocks.len(), m));
             }
@@ -655,7 +656,7 @@ pub fn assemble_in_measure(
         }
     }
     if !cur.is_empty() {
-        blocks.extend(split_hard_breaks(build(cur)));
+        blocks.extend(finish(build(cur), &edge));
     }
     for (i, m) in marked {
         if let Some(b) = blocks.get_mut(i) {
@@ -664,6 +665,7 @@ pub fn assemble_in_measure(
     }
 
     let mut blocks = stack_display(blocks);
+    count_on(&mut blocks);
 
     // Vertical gap above each block, for the isolation signal.
     for i in 1..blocks.len() {
@@ -1083,6 +1085,328 @@ fn ordinal_prefix(text: &str) -> Option<(u32, &str)> {
     }
     let label = &t[..t.len() - rest.len()];
     Some((t[..digits].parse().ok()?, label))
+}
+
+/// A block as assembled, parted where its lines were ended by hand: one
+/// field or entry per line ([`split_hard_breaks`], [`split_entries`]), one
+/// numbered item per line run ([`split_counted`]).
+fn finish(b: Block, edge: &Edge) -> Vec<Block> {
+    split_hard_breaks(b)
+        .into_iter()
+        .flat_map(split_counted)
+        .flat_map(|b| split_ended(b, edge))
+        .flat_map(|b| split_entries(b, edge))
+        .collect()
+}
+
+/// Part a block before each line its paragraph was ended by hand ahead of;
+/// see [`ended_by_hand`].
+fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
+    if b.lines.len() < 2 || !edge.agreed {
+        return vec![b];
+    }
+    let cuts: Vec<usize> = {
+        let mut cuts = Vec::new();
+        let mut reach = b.lines[0].bbox.x1;
+        for i in 1..b.lines.len() {
+            if ended_by_hand(&b.lines[i - 1], reach, &b.lines[i], edge) {
+                cuts.push(i);
+                reach = b.lines[i].bbox.x1;
+            } else {
+                reach = reach.max(b.lines[i].bbox.x1);
+            }
+        }
+        cuts
+    };
+    if cuts.is_empty() {
+        return vec![b];
+    }
+    let Block {
+        lines,
+        marker,
+        gap_above,
+        ..
+    } = b;
+    let mut out: Vec<Block> = Vec::new();
+    let mut cur: Vec<Line> = Vec::new();
+    for (i, l) in lines.into_iter().enumerate() {
+        if cuts.contains(&i) {
+            out.push(build(std::mem::take(&mut cur)));
+        }
+        cur.push(l);
+    }
+    out.push(build(cur));
+    out[0].marker = marker;
+    out[0].gap_above = gap_above;
+    out
+}
+
+/// Does the sentence plainly run on from `cur`'s last line into `next`,
+/// across a step in the leading or a weight change? The line is full
+/// against the lines at hand and ends without terminal punctuation, and
+/// either
+///
+/// - the next opens in lower case: `…to see improved` over `performance in
+///   4Kn fomat.`, in footnotes set at twice their size's leading; or
+/// - the break falls inside a run of capitals the weight change belongs to:
+///   `…lead dust. LEAD IS` over the bold `TOXIC. EXPOSURE…`, in a warning
+///   set narrower than its column, whose measure says nothing of where the
+///   warning wraps. A heading in bold capitals stands alone, with no line
+///   of its paragraph above it, and its text opens in lower and upper case.
+///
+/// Only at one size, from one left edge, one line under the other within a
+/// paragraph's spacing, a quarter again for a lower-case continuation; a
+/// bullet or a number opening the next line begins an item whatever its
+/// sentence does, and a contents entry's leader runs to its page number.
+fn runs_on(cur: &[Line], next: &Line, leading: f64) -> bool {
+    let Some(prev) = cur.last() else {
+        return false;
+    };
+    let fs = prev.font_size.max(next.font_size).max(1.0) as f64;
+    let dy = (next.bbox.y0 - prev.bbox.y0) / fs;
+    if prev.rotation_bucket != next.rotation_bucket
+        || prev.bbox.x1.min(next.bbox.x1) - prev.bbox.x0.max(next.bbox.x0) <= 0.0
+        || (prev.font_size - next.font_size).abs() as f64 / fs > FONT_SIZE_TOLERANCE
+        || (prev.bbox.x0 - next.bbox.x0).abs() > fs * INDENT_TOLERANCE
+        || dy <= 0.0
+        || strip_leading_bullet(&next.text).is_some()
+        || ordinal_prefix(&next.text).is_some()
+        || has_leader(&prev.text)
+        || prev.text.trim_end().ends_with(['.', '!', '?', ':', ';'])
+    {
+        return false;
+    }
+    let reach = cur.iter().map(|l| l.bbox.x1).fold(next.bbox.x1, f64::max);
+    if reach - prev.bbox.x1 >= first_word_width(next) {
+        return false;
+    }
+    let first = next
+        .text
+        .trim_start()
+        .trim_start_matches(['(', '[', '"', '\'', '“', '‘']);
+    if first.chars().next().is_some_and(char::is_lowercase) {
+        return dy <= leading * PARAGRAPH_FACTOR * RUN_ON_LEADING;
+    }
+    let capitals = |w: Option<&str>| {
+        w.is_some_and(|w| {
+            let letters: Vec<char> = w.chars().filter(|c| c.is_alphabetic()).collect();
+            letters.len() >= 2 && letters.iter().all(|c| c.is_uppercase())
+        })
+    };
+    prev.bold != next.bold
+        && cur.len() >= 2
+        && dy <= leading * PARAGRAPH_FACTOR
+        && capitals(prev.text.split_whitespace().last())
+        && capitals(first.split_whitespace().next())
+}
+
+/// How far past a paragraph's spacing a sentence that plainly runs on may
+/// still go on; see [`runs_on`]. A blank line's worth, twice the leading,
+/// parts paragraphs whatever their sentences do.
+const RUN_ON_LEADING: f64 = 1.25;
+
+/// Does `next` open with a capital letter, past an opening bracket or
+/// quote: a new sentence, a new entry?
+fn opens_capital(next: &Line) -> bool {
+    next.text
+        .trim_start()
+        .trim_start_matches(['(', '[', '"', '\'', '“', '‘'])
+        .chars()
+        .next()
+        .is_some_and(char::is_uppercase)
+}
+
+/// Was a paragraph ended by hand at `prev`, before `next`, at the same
+/// leading? Its last line stops short of where its lines and the next one
+/// reach by more than the next line's first word and [`BY_HAND_ROOM`], and
+/// the next opens with a capital: a typesetter wrapping the text would have
+/// set that word there.
+/// A paragraph's last line before the next paragraph, `…lo antes posible.`
+/// over `El aislamiento ProCat®…`, or an entry before a longer one.
+///
+/// Measured against the lines at hand, not the column: text set narrower
+/// than its column, in a box or beside a picture, wraps at its own edge.
+/// Only where the column's text shows a wrap margin at all: lines with no
+/// text around them, a title broken by hand, are left whole.
+/// Display type, a weight change, a hyphen or a comma at the line's end,
+/// and lines that do not start at one left edge are left to the other
+/// tests.
+///
+/// `reach` is where the paragraph's lines up to `prev` reach.
+fn ended_by_hand(prev: &Line, reach: f64, next: &Line, edge: &Edge) -> bool {
+    let fs = prev.font_size.max(next.font_size).max(1.0) as f64;
+    if prev.font_size as f64 >= edge.body * DISPLAY_LINE_RATIO
+        || next.font_size as f64 >= edge.body * DISPLAY_LINE_RATIO
+        || prev.bold != next.bold
+        || (prev.bbox.x0 - next.bbox.x0).abs() > fs
+        || prev.text.trim_end().ends_with(['-', '\u{AD}', ','])
+        || !opens_capital(next)
+    {
+        return false;
+    }
+    reach.max(next.bbox.x1) - prev.bbox.x1 > first_word_width(next) + fs * BY_HAND_ROOM
+}
+
+/// Room, in ems past the next line's first word, a line must leave to have
+/// been ended by hand. Typesetters that break a paragraph's lines together,
+/// and designers setting a rag, end a line a word short of where a greedy
+/// break would; a line ended by hand stops well before.
+const BY_HAND_ROOM: f64 = 2.0;
+
+/// Split a block of entries set one per line, `ASME A112.18.1/CSA B125.1`
+/// over `NSF/ANSI/CAN 372`, into one block per line.
+///
+/// Entries of about one length agree on a right edge of their own, so the
+/// test [`split_hard_breaks`] makes against the block's edge sees no line
+/// end early. Against the column they all do: each stops short of the
+/// measure the column's text wraps at by more than the next line's first
+/// word, which a typesetter wrapping the text would have set there, and
+/// none goes on in lower case, as a wrapped line of a narrow box's text
+/// does. Display type and bold lines, a stacked title, are left whole.
+fn split_entries(b: Block, edge: &Edge) -> Vec<Block> {
+    if b.lines.len() < 2 || !edge.agreed || b.marker.is_some() {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let left = b.lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let set = b.lines.iter().all(|l| {
+        l.bbox.x0 - left <= fs
+            && !l.bold
+            && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
+            && !l.text.trim_end().ends_with(['-', '\u{AD}', ','])
+    });
+    let ended = b.lines.windows(2).all(|w| {
+        opens_capital(&w[1]) && edge.right - w[0].bbox.x1 > first_word_width(&w[1]) + fs * 0.5
+    });
+    if !set || !ended {
+        return vec![b];
+    }
+    let Block {
+        lines, gap_above, ..
+    } = b;
+    let mut out: Vec<Block> = lines.into_iter().map(|l| build(vec![l])).collect();
+    out[0].gap_above = gap_above;
+    out
+}
+
+/// Carry a count across blocks: a block opening with `n.` set where the
+/// item `n−1.` before it opens is that list's next item, and a block
+/// opening with `n−1.` set where the item `n.` after it opens is the one
+/// before. A list whose items stand a little further apart than its lines
+/// parts into blocks between some items and not others.
+fn count_on(blocks: &mut [Block]) {
+    let ordinal = |b: &Block| {
+        b.lines
+            .first()
+            .and_then(|l| ordinal_prefix(&l.text))
+            .map(|(n, label)| (n, label.to_string()))
+    };
+    let item = |b: &Block| {
+        let o = ordinal(b)?;
+        (b.marker.as_deref() == Some(o.1.as_str())).then_some(o.0)
+    };
+    let beside = |a: &Block, z: &Block| {
+        let fs = (a.font_size.max(z.font_size) as f64).max(1.0);
+        (a.bbox.x0 - z.bbox.x0).abs() <= fs * 0.5
+            && (a.font_size - z.font_size).abs() <= 0.5
+            && z.bbox.y0 > a.bbox.y0
+    };
+    loop {
+        let mut changed = false;
+        for k in 1..blocks.len() {
+            let (a, z) = (&blocks[k - 1], &blocks[k]);
+            if !beside(a, z) {
+                continue;
+            }
+            if let (Some(m), None, Some((n, label))) = (item(a), z.marker.as_ref(), ordinal(z)) {
+                if n == m + 1 {
+                    blocks[k].marker = Some(label);
+                    changed = true;
+                    continue;
+                }
+            }
+            let (a, z) = (&blocks[k - 1], &blocks[k]);
+            if let (None, Some(n), Some((m, label))) = (a.marker.as_ref(), item(z), ordinal(a)) {
+                if n == m + 1 {
+                    blocks[k - 1].marker = Some(label);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// Split a block where its lines count off, `1. Avoid exposure…` and,
+/// after a line or two hanging under it, `2. Avoid exposure…` set where the
+/// `1.` is: an ordered list's items printed one after another at the
+/// paragraph's leading. Each starts its own block and carries its label as
+/// its marker, as [`split_hard_breaks`] marks a hand-broken list's steps;
+/// the lines it wraps onto hang under it and stay with it. Text before the
+/// first item is a block of its own.
+fn split_counted(b: Block) -> Vec<Block> {
+    if b.lines.len() < 2 {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let ordinals: Vec<Option<(u32, String)>> = b
+        .lines
+        .iter()
+        .map(|l| ordinal_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
+        .collect();
+    let mut counted: Vec<Option<String>> = vec![None; b.lines.len()];
+    let mut prev: Option<(usize, u32)> = None;
+    for (i, o) in ordinals.iter().enumerate() {
+        let Some((n, label)) = o else { continue };
+        if let Some((j, m)) = prev {
+            let (a, z) = (&b.lines[j], &b.lines[i]);
+            if *n == m + 1
+                && (a.bbox.x0 - z.bbox.x0).abs() <= fs * 0.5
+                && b.lines[j + 1..i]
+                    .iter()
+                    .all(|l| l.bbox.x0 >= a.bbox.x0 - fs * 0.5)
+            {
+                counted[i] = Some(label.clone());
+                if counted[j].is_none() {
+                    counted[j] = ordinals[j].as_ref().map(|(_, l)| l.clone());
+                }
+            }
+        }
+        prev = Some((i, *n));
+    }
+    if counted.iter().all(Option::is_none) {
+        return vec![b];
+    }
+    let Block {
+        lines,
+        marker,
+        gap_above,
+        ..
+    } = b;
+    let mut out: Vec<Block> = Vec::new();
+    let mut cur: Vec<Line> = Vec::new();
+    let mut label: Option<String> = None;
+    for (i, l) in lines.into_iter().enumerate() {
+        if counted[i].is_some() && !cur.is_empty() {
+            let mut piece = build(std::mem::take(&mut cur));
+            piece.marker = label.take();
+            out.push(piece);
+        }
+        if counted[i].is_some() {
+            label = counted[i].clone();
+        }
+        cur.push(l);
+    }
+    let mut piece = build(cur);
+    piece.marker = label;
+    out.push(piece);
+    if out[0].marker.is_none() {
+        out[0].marker = marker;
+    }
+    out[0].gap_above = gap_above;
+    out
 }
 
 /// Split a block whose lines were ended by hand into one block per line.
@@ -2994,6 +3318,253 @@ mod tests {
             assert!(b.iter().all(|b| b.marker.is_none()), "{mark}");
             assert!(b.iter().any(|b| b.text().contains(mark)), "{mark}");
         }
+    }
+
+    /// `text` from `x0` to `x1` on the row at `y`, 8pt.
+    fn row(text: &str, x0: f64, y: f64, x1: f64) -> Line {
+        let mut line = l(text, x0, y, 8.0);
+        line.bbox.x1 = x1;
+        line
+    }
+
+    /// A column's measure: full lines from 40 to 300.
+    fn measure(y: f64) -> Vec<Line> {
+        (0..4)
+            .map(|i| {
+                row(
+                    "the column's running text set full to its edge",
+                    40.0,
+                    y + 10.0 * i as f64,
+                    300.0,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_sentence_runs_on_past_a_wide_leading() {
+        // Footnotes at nearly twice their size's leading: the first wraps.
+        let note = |t: &str, y: f64, x1: f64| {
+            let mut n = l(t, 40.0, y, 5.0);
+            n.bbox.x1 = x1;
+            n
+        };
+        let lines = vec![
+            note(
+                "1 Models ship in one format. Data must be aligned to see improved",
+                0.0,
+                560.0,
+            ),
+            note("performance in that format.", 9.8, 110.0),
+            note(
+                "2 Drives available through franchised partners only.",
+                19.6,
+                300.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        assert_eq!(
+            b.len(),
+            2,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        assert!(b[0].text().ends_with("that format."));
+    }
+
+    #[test]
+    fn a_sentence_runs_on_into_bold_capitals() {
+        let mut lines = vec![
+            row(
+                "WARNING! If you scrape, sand or remove old",
+                36.0,
+                0.0,
+                205.0,
+            ),
+            row(
+                "paint, you may release lead dust. LEAD IS",
+                36.0,
+                9.2,
+                208.0,
+            ),
+            row("TOXIC. EXPOSURE TO LEAD DUST CAN", 36.0, 18.4, 200.0),
+        ];
+        lines[2].bold = true;
+        let b = assemble(&lines, 1.2);
+        assert_eq!(
+            b.len(),
+            1,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // A bold heading in capitals over its text stands alone.
+        let mut h = row("7.2. DETERMINATION OF THE COEFFICIENT", 36.0, 0.0, 208.0);
+        h.bold = true;
+        let body = row("If the coefficient is assumed constant", 36.0, 9.2, 180.0);
+        assert_eq!(assemble(&[h, body], 1.2).len(), 2);
+    }
+
+    #[test]
+    fn numbered_items_with_hanging_lines_part_at_each_number() {
+        let lines = vec![
+            row(
+                "1. Avoid exposure to sustained temperatures.",
+                40.0,
+                0.0,
+                220.0,
+            ),
+            row(
+                "2. Avoid exposure to excessive, repetitive or continuous",
+                40.0,
+                10.0,
+                300.0,
+            ),
+            row(
+                "moisture before, during and after installation.",
+                49.0,
+                20.0,
+                250.0,
+            ),
+            row(
+                "3. Must be stored off the ground and under cover in",
+                40.0,
+                30.0,
+                298.0,
+            ),
+            row(
+                "accordance with the association's guide.",
+                49.0,
+                40.0,
+                200.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        let marks: Vec<Option<&str>> = b.iter().map(|b| b.marker.as_deref()).collect();
+        assert_eq!(
+            marks,
+            [Some("1."), Some("2."), Some("3.")],
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        assert_eq!(b[1].lines.len(), 2);
+        // One numbered line alone counts off from nothing.
+        let one = vec![
+            row(
+                "2. Avoid exposure to excessive, repetitive or continuous",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row(
+                "moisture before, during and after installation.",
+                49.0,
+                10.0,
+                250.0,
+            ),
+        ];
+        assert!(assemble(&one, 1.2).iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
+    fn a_count_carries_from_block_to_block() {
+        // Item 3 stands a little further from item 2 than its lines do.
+        let lines = vec![
+            row(
+                "1. Avoid exposure to sustained temperatures.",
+                40.0,
+                0.0,
+                220.0,
+            ),
+            row(
+                "2. Avoid exposure to excessive moisture.",
+                40.0,
+                10.0,
+                210.0,
+            ),
+            row("3. Must be stored off the ground.", 40.0, 30.0, 180.0),
+        ];
+        let b = assemble(&lines, 1.0);
+        assert_eq!(
+            b.last().unwrap().marker.as_deref(),
+            Some("3."),
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_paragraph_ended_by_hand_parts_from_the_next() {
+        let mut lines = measure(0.0);
+        lines.push(row("posible.", 40.0, 40.0, 75.0));
+        lines.push(row(
+            "El aislamiento está clasificado como material del",
+            40.0,
+            50.0,
+            299.0,
+        ));
+        lines.push(row("tipo uno por la norma.", 40.0, 60.0, 140.0));
+        let b = assemble_with_marks(&lines, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(
+            b.len(),
+            2,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        assert!(b[1].text().starts_with("El aislamiento"));
+    }
+
+    #[test]
+    fn a_line_a_word_short_is_a_rag_not_an_end() {
+        // A designer's rag ends a line a word short of a greedy break: here
+        // `Harmonic` and a space would have fit, with a little to spare.
+        let mut lines = measure(0.0);
+        lines.push(row(
+            "like PostureFit SL, 8Z Pellicle, and",
+            40.0,
+            40.0,
+            232.0,
+        ));
+        lines.push(row(
+            "Harmonic 2 Tilt enable the sitter to the",
+            40.0,
+            50.0,
+            299.0,
+        ));
+        let b = assemble_with_marks(&lines, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(
+            b.len(),
+            1,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn entries_set_one_per_line_part() {
+        let entries = vec![
+            row("ASME A112.18.1/CSA B125.1", 40.0, 100.0, 150.0),
+            row("NSF/ANSI/CAN 372", 40.0, 110.0, 115.0),
+            row("NSF/ANSI/CAN 61", 40.0, 120.0, 110.0),
+        ];
+        let mut column = measure(0.0);
+        column.extend(entries.clone());
+        let b = assemble_in_measure(&entries, &column, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(
+            b.len(),
+            3,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // A narrow box's prose goes on in lower case, and stays whole.
+        let prose = vec![
+            row("Install this product according", 40.0, 100.0, 150.0),
+            row("to the instructions included", 40.0, 110.0, 145.0),
+            row("with the faucet.", 40.0, 120.0, 100.0),
+        ];
+        let mut column = measure(0.0);
+        column.extend(prose.clone());
+        let b = assemble_in_measure(&prose, &column, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(b.len(), 1);
     }
 
     #[test]

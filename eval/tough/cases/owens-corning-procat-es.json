@@ -66,8 +66,14 @@
       "issue": "The disclaimer paragraph, set small beside a logo, was typed as the logo's label.",
       "element": {
         "type": "doco:Paragraph",
-        "text": "La información técnica que se incluye aquí se provee sin cargo ni obligación y se ofrece a riesgo exclusivo de quien la recibe. Puesto que las condiciones de uso pueden variar y están fuera de nuestro control, Owens Corning no realiza declaraciones ni es responsable legalmente por la exactitud y la confiabilidad de los datos asociados con usos particulares de cualquier producto que aquí se describa. SCS Global Services provee una verificación independiente del contenido reciclado en los materiales de construcción y verifica los reclamos de contenidos reciclados que hacen los fabricantes. Para obtener más información, visite www.SCSglobalservices.com. Los productos certificados por GREENGUARD cumplen con las normas de GREENGUARD como productos de bajas emisiones químicas en aire interior durante el uso de los productos. Para obtener más información, visite ul.com/gg. Esta marca de aprobación ecológica de Home Innovation Research Labs Green le garantiza que su producto es elegible para obtener la Certificación de Construcción Ecológica Nacional. Para obtener más información, visite www.GreenApprovedProducts.com."
+        "text": "La información técnica que se incluye aquí se provee sin cargo ni obligación y se ofrece a riesgo exclusivo de quien la recibe. Puesto que las condiciones de uso pueden variar y están fuera de nuestro control, Owens Corning no realiza declaraciones ni es responsable legalmente por la exactitud y la confiabilidad de los datos asociados con usos particulares de cualquier producto que aquí se describa."
       }
+    },
+    {
+      "id": "paragraph-ended-by-hand",
+      "found": "2026-11-24",
+      "issue": "#164: a paragraph ended on a short line, `…lo antes posible.`, and the next began at the same leading; the two read as one.",
+      "element": {"type": "doco:Paragraph", "text": "El aislamiento ProCat® está clasificado como material Tipo I (para aplicación neumática) por la norma ASTM C764, sección 4.1. Se le considera no combustible, según pruebas realizadas de acuerdo con la norma ASTM E136, y se permite su uso en todos los tipos de construcciones de edificios definidas en el Código de Construcción de ICC Intl. (IBC)."}
     }
   ]
 }
