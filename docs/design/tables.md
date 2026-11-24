@@ -60,6 +60,70 @@ two crossed bands, because in a table ruled with horizontals alone every band
 is uncrossed, and splitting on those alone turns a ruled table of contents into
 one table per entry.
 
+## Each box is read on its own
+
+Read all at once, a page's rules make one grid before it is cut into tables.
+Two tables side by side then share their row lines, a chart's axis or the
+page's column divider that lines up with a table's rows becomes one of its
+columns, and a small table's rules fall short of the coverage a grid line
+needs, measured against the whole page's ruling, so it loses its first and
+last rows.
+
+So the rules that touch one another are read first as one drawing each: a
+box. A box takes in the loose rules inside it that run between two of its
+own lines, stopping a hair short of each (a row drawn short of the
+verticals), but not one ending in the open (a link's underline under a
+cell's words). Inner boxes are read before the frames round them.
+
+- **Where a box rules a grid,** its own reading replaces the page-wide grid
+  over it. The rules no box took are read again within that page-wide grid's
+  bounds, which keeps a table ruled with horizontals only beside it: such a
+  table has no touching rules at all.
+- **Where the two readings find the same grid,** the page-wide one stands.
+- **A break in a box's verticals is a row's line unless the row runs on
+  across it.** A table drawn with verticals segmented row by row and nothing
+  between its rows says where they part only by where its verticals break.
+  In a table that rules its rows with horizontals, a break with no rule and
+  no shaded band's edge there is the same row's second line when every
+  vertical breaks there, the first column (which names each row) sets text
+  just above it and none just below, and in every column with text either
+  side the two lines are a paragraph's leading apart: `54 1/8` over `1375`,
+  the model named once. Rows set further apart than a line (`Stir stressed`
+  over `Light stressed`, beside a protein centred across them) stay rows.
+- **Where the page-wide reading found no table,** a box is a table only as a
+  table would be: three rows or more, two columns or more, and text in half
+  its cells. A form's strip of field boxes, a chart's legend and a
+  schematic's outlines are boxes too.
+- **A box ruling a single column** is left to the page-wide reading, which
+  has its own tests for a one-column list. A sidebar parted by a rule is as
+  often one.
+- **Boxes side by side that one shaded band runs across** are one table. A
+  table can leave a column unruled, a value spanning every row in the open
+  between two ruled blocks, and its rules then touch in two sets. The header
+  band, shaded across the whole table, says they are one. Two tables side by
+  side shade their own headers, and a band is a row's height, not a panel
+  behind both.
+
+## Column rules drawn in some rows
+
+A spec table gives most rows one value across several columns, and rules the
+line between two of them only in the rows where they differ: `35` beside `40`,
+one `>1500` across both. Such a line falls short of the coverage a grid line
+needs. A vertical that stands on the table's row lines at both ends, and
+crosses two rows or more, is a column boundary however few rows draw it; the
+rows it is missing from span it. Pieces drawn a few points apart in different
+rows, never two in one row, are one line, because a word processor sizes each
+row's cells on its own.
+
+## The table's outer edge
+
+A first column of labels that each span several rows (`Ceilings` over four)
+leaves those rows ruled from the second column on. Only the rules round each
+group reach the table's left edge, too few for their ends to make it a
+boundary. Where a table's first and last rules end together, that is its
+edge. This is read from one table's rules only: across a whole page, the
+first and last rules are as often its running head and foot.
+
 ## Tables drawn with characters
 
 A line printer, and the systems that still print like one, has no ruling. It

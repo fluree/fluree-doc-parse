@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "owenscorning-procat-accessories.pdf",
+    "url": "https://www.owenscorning.com/dms/10015771",
+    "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
+    "about": "Owens Corning ProCat accessory list. Each product has a field list ruled between its rows, with no rule over the first or under the last."
+  },
+  "notes": [
+    "The first and last rows are closed only by the ends of the column rule, which fell short of a grid line against the page's ruling; one list was welded to the table below it."
+  ],
+  "checks": [
+    {
+      "id": "attic-hatch-first-row",
+      "found": "2026-11-24",
+      "issue": "#102: `PRODUCT CODE` was a heading over the table.",
+      "cell": {
+        "value": "1445343",
+        "row": "PRODUCT CODE"
+      }
+    },
+    {
+      "id": "garage-door-first-row",
+      "found": "2026-11-24",
+      "issue": "#102: as above, on the Garage Door kit.",
+      "cell": {
+        "value": "1445357",
+        "row": "PRODUCT CODE"
+      }
+    },
+    {
+      "id": "garage-door-no-header",
+      "found": "2026-11-24",
+      "issue": "#102: welded to the table below, `SHORT CODE | GD1` was the column header.",
+      "no_column_header": "GD1"
+    }
+  ]
+}

@@ -837,7 +837,8 @@ pub(crate) fn tables(pdf: &Path, page: Option<usize>) {
         dedup::remove_faux_bold(&mut p.glyphs, 8);
         let frames = fluree_doc_pdf::textart::draw_rules(&mut p.glyphs, &mut p.rules, p.index);
         dedup::remove_struck_underlines(&mut p.glyphs);
-        let mut grids = fluree_doc_pdf::table::detect_framed(&p.rules, p.index, &frames);
+        let mut grids =
+            fluree_doc_pdf::table::detect_framed(&p.rules, &p.fills, &p.glyphs, p.index, &frames);
         total += grids.len();
         if page != Some(p.index) {
             continue;

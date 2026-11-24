@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series digest catalogue. Its specification tables rule model columns apart only where the models differ, and leave some columns unruled under a shaded header."
+  },
+  "notes": [
+    "A column rule drawn in a few rows fell short of a grid line, so two models read as one column.",
+    "A table whose middle column is unruled touches in two sets of rules; only its header band joins them."
+  ],
+  "checks": [
+    {
+      "id": "c10-apart",
+      "found": "2026-11-24",
+      "issue": "#103: C10 and C14 read `10 points 14 points` in one cell.",
+      "cell": {
+        "value": "10 points (Input: 6, Output: 4)",
+        "column": "C10 (Relay output type only)"
+      }
+    },
+    {
+      "id": "c14-apart",
+      "found": "2026-11-24",
+      "issue": "#103: as above.",
+      "cell": {
+        "value": "14 points (Input: 8, Output: 6)",
+        "column": "C14 (Relay output type only)"
+      }
+    },
+    {
+      "id": "fp2sh-whole",
+      "found": "2026-11-24",
+      "issue": "#102: the FP2SH table's header and first row were loose paragraphs.",
+      "cell": {
+        "value": "From 0.03 μs",
+        "column": "Operation speed",
+        "row": "32 k Standard type"
+      }
+    }
+  ]
+}
