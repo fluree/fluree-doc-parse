@@ -215,7 +215,7 @@ fn ruler_banded(
         .iter()
         .map(|g| g.bbox.unwrap().x1)
         .fold(f64::MIN, f64::max);
-    let r = crate::column::ruler(rules, page, (min_x, max_x))?;
+    let r = crate::column::ruler(rules, page, (min_x, max_x), &boxed)?;
 
     // The band is the run of rows around the rank where its gutters are
     // clear. Bounded both ways: a title above and a footer below both cross

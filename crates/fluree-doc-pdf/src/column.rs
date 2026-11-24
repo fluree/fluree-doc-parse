@@ -337,6 +337,10 @@ const RULER_LENGTH_RATIO: f64 = 0.5;
 /// Most uneven the gaps may be before the rank is decoration, not a grid.
 const RULER_GAP_RATIO: f64 = 3.0;
 
+/// How far under a line's baseline, in ems of its type, a rule is that
+/// line's underline: within its descenders.
+const UNDERLINE_DEPTH: f64 = 0.5;
+
 /// A rank of rules drawn under column headings, and the columns it states.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ruler {
@@ -362,8 +366,16 @@ pub struct Ruler {
 /// Deliberately unwilling, because the same shape is drawn by things that are
 /// not columns. Each test rejects a real page seen in evaluation: short
 /// segments are tick marks and legend swatches, uneven gaps are decoration,
-/// and a rank that does not span the measure is an equation's fraction bars.
-pub fn ruler(rules: &[crate::rule::Rule], page: usize, text: (f64, f64)) -> Option<Ruler> {
+/// a rank that does not span the measure is an equation's fraction bars, and
+/// a rank under one line of text that runs on through its gaps is that
+/// line's links, underlined (see [`underlines_a_line`]). `glyphs` are the
+/// page's inked glyphs.
+pub fn ruler(
+    rules: &[crate::rule::Rule],
+    page: usize,
+    text: (f64, f64),
+    glyphs: &[&Glyph],
+) -> Option<Ruler> {
     let text_width = text.1 - text.0;
     if text_width <= 0.0 {
         return None;
@@ -407,6 +419,9 @@ pub fn ruler(rules: &[crate::rule::Rule], page: usize, text: (f64, f64)) -> Opti
         {
             continue;
         }
+        if underlines_a_line(&segs, axis, glyphs) {
+            continue;
+        }
         // Cut at each gutter's midpoint, as the projection does.
         let found = Ruler {
             axis,
@@ -421,6 +436,77 @@ pub fn ruler(rules: &[crate::rule::Rule], page: usize, text: (f64, f64)) -> Opti
         }
     }
     best
+}
+
+/// Whether a rank's rules are the underlines of one line of text.
+///
+/// A report underlines its links, and a line citing three sources in a row,
+/// `(Ma and Pender 2022b; Baum, Payea, and Steele 2009; Protopsaltis and`,
+/// draws three rules under it, as long and as evenly spaced as a rank under
+/// three column headings, across the measure. Read as columns, they cut the
+/// page in three, and the paragraph in two at that line. What tells them
+/// apart is the line itself: it runs on through every gap, which holds the
+/// `; ` between two citations, where a column's gutter is clear. So a rank
+/// is a line's underlines when, in each gap, a mark stands on the line the
+/// rules run under (within its descenders), and that line's text goes on
+/// through the gap with no space wider than an em, from before it to after
+/// it. A chart's panels can set a tick label in the gap between their rules,
+/// on the same baseline as the labels of the panels beside it, but those
+/// are a panel apart, not a space; and a speck of another size is no
+/// mark of the line.
+fn underlines_a_line(segs: &[(f64, f64)], axis: f64, glyphs: &[&Glyph]) -> bool {
+    // The glyphs whose descenders the rank runs through.
+    let over: Vec<&Glyph> = glyphs
+        .iter()
+        .copied()
+        .filter(|g| {
+            let below = axis - g.origin.1;
+            g.bbox.is_some() && below >= 0.0 && below <= UNDERLINE_DEPTH * g.font_size as f64
+        })
+        .collect();
+    segs.windows(2).all(|w| {
+        let (g0, g1) = (w[0].1, w[1].0);
+        over.iter().any(|m| {
+            let b = m.bbox.unwrap();
+            b.x1 > g0 + 0.5 && b.x0 < g1 - 0.5 && runs_through(m, g0, g1, &over)
+        })
+    })
+}
+
+/// Whether the line `m` is set on runs on through the gap from `g0` to
+/// `g1`: from a glyph ending within an em before the gap to one starting at
+/// its far side, with no space between them wider than an em.
+fn runs_through(m: &Glyph, g0: f64, g1: f64, over: &[&Glyph]) -> bool {
+    let em = m.font_size as f64;
+    let same_line = |g: &Glyph| {
+        let size = g.font_size.max(m.font_size) as f64;
+        (g.origin.1 - m.origin.1).abs() < 0.2 * size
+            && g.font_size.min(m.font_size) as f64 > 0.8 * size
+    };
+    let mut line: Vec<(f64, f64)> = over
+        .iter()
+        .filter(|g| same_line(g))
+        .filter_map(|g| g.bbox.map(|b| (b.x0, b.x1)))
+        .collect();
+    line.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let Some(mut reach) = line
+        .iter()
+        .filter(|(_, x1)| *x1 <= g0 + 0.5 && *x1 >= g0 - em)
+        .map(|(_, x1)| *x1)
+        .reduce(f64::max)
+    else {
+        return false;
+    };
+    for &(x0, x1) in line.iter().filter(|(_, x1)| *x1 > g0 + 0.5) {
+        if x0 > reach + em {
+            return false;
+        }
+        if x0 >= g1 - 0.5 {
+            return true;
+        }
+        reach = reach.max(x1);
+    }
+    false
 }
 
 /// Detect column regions on a page. Returns a single full-width column when the
@@ -442,7 +528,7 @@ pub fn detect_with_rules(
         .collect();
     if !boxed.is_empty() {
         let (min_x, max_x, _, _) = extent(&boxed);
-        if let Some(r) = ruler(rules, page, (min_x, max_x)) {
+        if let Some(r) = ruler(rules, page, (min_x, max_x), &boxed) {
             let mut cols = Vec::with_capacity(r.cuts.len() + 1);
             let mut left = min_x;
             for c in r.cuts {
@@ -878,7 +964,7 @@ mod tests {
         .iter()
         .map(|(a, b)| hrule(*a, *b, 309.0))
         .collect();
-        let r = ruler(&rules, 0, (48.0, 566.0)).expect("a column ruler");
+        let r = ruler(&rules, 0, (48.0, 566.0), &[]).expect("a column ruler");
         assert_eq!(r.cuts.len(), 4, "four gutters between five columns");
         assert_eq!(r.gutters.len(), 4);
         assert!((r.axis - 309.0).abs() < 1.0);
@@ -892,9 +978,83 @@ mod tests {
             .flat_map(|y| spans.iter().map(move |(a, b)| hrule(*a, *b, *y)))
             .collect();
         for _ in 0..8 {
-            let r = ruler(&rules, 0, (48.0, 340.0)).expect("a column ruler");
+            let r = ruler(&rules, 0, (48.0, 340.0), &[]).expect("a column ruler");
             assert!((r.axis - 309.0).abs() < 1.0);
         }
+    }
+
+    /// A glyph of `size` on the baseline `y`, from `x0` to `x1`.
+    fn mark(text: &str, x0: f64, x1: f64, y: f64, size: f32) -> Glyph {
+        Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 0.7 * size as f64,
+                x1,
+                y1: y + 0.2 * size as f64,
+            }),
+            origin: (x0, y),
+            font_size: size,
+            ..g(x0, y, x1 - x0)
+        }
+    }
+
+    /// A line's words between `from` and `to` on the baseline `y`, a glyph
+    /// a word, with `; ` standing in the given gaps.
+    fn citing(from: f64, to: f64, y: f64, gaps: &[(f64, f64)]) -> Vec<Glyph> {
+        let mut out = Vec::new();
+        let mut x = from;
+        for &(g0, g1) in gaps.iter().chain([(to, to)].iter()) {
+            out.push(mark("word", x, g0 - 0.2, y, 10.75));
+            if g1 > g0 {
+                out.push(mark(";", g0 + 0.3, g0 + 1.8, y, 10.75));
+            }
+            x = g1 + 0.2;
+        }
+        out
+    }
+
+    #[test]
+    fn links_underlined_on_one_line_are_not_a_ruler() {
+        // Three citations in a row, each a link underlined just under the
+        // baseline, `; ` between them: the rank of a page in three columns.
+        let rules: Vec<_> = [(58.0, 158.0), (165.0, 303.0), (310.0, 381.0)]
+            .iter()
+            .map(|(a, b)| hrule(*a, *b, 234.4))
+            .collect();
+        let line = citing(54.0, 381.0, 231.4, &[(158.0, 165.0), (303.0, 310.0)]);
+        let glyphs: Vec<&Glyph> = line.iter().collect();
+        assert_eq!(ruler(&rules, 0, (54.0, 384.0), &glyphs), None);
+        // Under three headings, each over its own column, the same rank is a
+        // ruler: nothing of the headings' line stands in the gaps.
+        let heads = [
+            mark("Approach", 60.0, 110.0, 231.4, 10.75),
+            mark("Results", 170.0, 215.0, 231.4, 10.75),
+            mark("Notes", 315.0, 345.0, 231.4, 10.75),
+        ];
+        let glyphs: Vec<&Glyph> = heads.iter().collect();
+        assert!(ruler(&rules, 0, (54.0, 384.0), &glyphs).is_some());
+    }
+
+    #[test]
+    fn a_charts_tick_labels_in_its_gutters_do_not_unmake_a_ruler() {
+        // Three chart panels, each under its own rule, their top tick labels
+        // on the rule: the middle and right panels' labels stand in the
+        // gaps, on one baseline with the left panel's, a panel apart. And a
+        // speck of a glyph set at a point's size in the first gap.
+        let rules: Vec<_> = [(53.0, 163.0), (182.0, 271.0), (288.0, 383.0)]
+            .iter()
+            .map(|(a, b)| hrule(*a, *b, 410.8))
+            .collect();
+        let marks = [
+            mark("124.5", 54.7, 72.0, 410.0, 7.1),
+            mark("1", 163.6, 164.1, 410.6, 0.8),
+            mark("14", 169.5, 177.0, 410.0, 7.1),
+            mark("1 6", 272.0, 284.0, 410.0, 7.1),
+            mark("5", 300.0, 304.0, 410.0, 7.1),
+        ];
+        let glyphs: Vec<&Glyph> = marks.iter().collect();
+        assert!(ruler(&rules, 0, (53.0, 383.0), &glyphs).is_some());
     }
 
     #[test]
@@ -905,7 +1065,7 @@ mod tests {
             .iter()
             .map(|(a, b)| hrule(*a, *b, 603.0))
             .collect();
-        assert_eq!(ruler(&rules, 0, (57.0, 558.0)), None);
+        assert_eq!(ruler(&rules, 0, (57.0, 558.0), &[]), None);
     }
 
     #[test]
@@ -920,7 +1080,7 @@ mod tests {
         .iter()
         .map(|(a, b)| hrule(*a, *b, 457.0))
         .collect();
-        assert_eq!(ruler(&rules, 0, (43.0, 558.0)), None);
+        assert_eq!(ruler(&rules, 0, (43.0, 558.0), &[]), None);
     }
 
     #[test]
@@ -929,6 +1089,6 @@ mod tests {
             .iter()
             .map(|(a, b)| hrule(*a, *b, 309.0))
             .collect();
-        assert_eq!(ruler(&rules, 0, (48.0, 566.0)), None);
+        assert_eq!(ruler(&rules, 0, (48.0, 566.0), &[]), None);
     }
 }
