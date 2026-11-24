@@ -68,8 +68,8 @@ enlarged only twice. Text under about 6 px is not read at any size.
 
 Shrinking an image to a fixed size loses its small text without a word: a
 capture 1,200 × 9,000 shrunk to 2,000 px read none of its 220 rows of 13 px
-text, and a 2,400 × 9,000 one none of 1,600; read at their own size, in strips,
-all but a handful. So the cap is on the pixels a pass holds, which is what a
+text, and a 2,400 × 9,000 one none of 1,600; read at their own size, all 220,
+and 1,560 of the 1,600 in strips. So the cap is on the pixels a pass holds, which is what a
 reading costs, and not on a side.
 
 ### Memory and speed
