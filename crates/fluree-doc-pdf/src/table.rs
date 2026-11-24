@@ -1528,6 +1528,7 @@ pub(crate) fn is_numeric_cell(s: &str) -> bool {
 
 /// One grid line: rules sharing a perpendicular-axis position, with the span
 /// they collectively cover.
+#[derive(Clone)]
 struct GridLine {
     axis: f64,
     lo: f64,
@@ -1873,7 +1874,13 @@ struct ColumnGroup {
 }
 
 /// Detect one table grid from a related set of ruling lines.
-fn detect_group(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
+fn detect_group(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+) -> Vec<Grid> {
     let hs: Vec<&Rule> = rules
         .iter()
         .filter(|r| r.orientation == Orientation::Horizontal)
@@ -1930,9 +1937,16 @@ fn detect_group(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
     // top and start again at its bottom. Two ruled tables set a margin
     // apart (`margin: 10px`, 7.9pt) leave exactly that band, and without
     // it the second table's top rule is dropped and the two read as one.
+    let xs = boundaries(&v_lines, &h_lines, span_y, span_x);
+    let first = (xs.len() >= 2).then_some(xs.as_slice());
     let ys = {
         let mut out: Vec<f64> = Vec::new();
-        for y in boundary_candidates(&h_lines, &v_lines, span_x, span_y) {
+        for y in boundary_candidates(
+            &h_lines,
+            &row_breakers(&h_lines, &v_lines, span_x, fills, glyphs, first),
+            span_x,
+            span_y,
+        ) {
             match out.last() {
                 Some(&prev) if y - prev < MIN_CELL_EXTENT => {
                     let mid = (prev + y) / 2.0;
@@ -1950,7 +1964,6 @@ fn detect_group(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
         }
         out
     };
-    let xs = boundaries(&v_lines, &h_lines, span_y, span_x);
     if ys.len() < 2 || xs.len() < 2 {
         return Vec::new();
     }
@@ -1997,6 +2010,139 @@ fn detect_group(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
     // border rule sitting alongside a cell edge, which produced a spurious
     // empty first column on one such table.
     split_row_bands(xs, ys, rules, page, frames)
+}
+
+/// The verticals whose ends say where rows part.
+///
+/// A table drawn with verticals segmented row by row and nothing between
+/// its rows says where they part only by where its verticals break. A table
+/// that rules its rows with horizontals says it with those: a break in a
+/// vertical with no horizontal there is the drawing's own (each line of a
+/// two-line cell drawn as a piece), not a row. Its verticals' outer ends
+/// still close the first and last rows.
+fn row_breakers(
+    h_lines: &[GridLine],
+    v_lines: &[GridLine],
+    span_x: f64,
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    first: Option<&[f64]>,
+) -> Vec<GridLine> {
+    let ruled: Vec<f64> = h_lines
+        .iter()
+        .filter(|g| (g.hi - g.lo) >= span_x * MIN_LINE_COVERAGE)
+        .map(|g| g.axis)
+        .collect();
+    let (top, bottom) = v_lines
+        .iter()
+        .fold((f64::MAX, f64::MIN), |(t, b), g| (t.min(g.lo), b.max(g.hi)));
+    let interior = ruled
+        .iter()
+        .filter(|&&y| y > top + EDGE_TOLERANCE && y < bottom - EDGE_TOLERANCE)
+        .count();
+    let (left, right) = v_lines.iter().fold((f64::MAX, f64::MIN), |(l, r), g| {
+        (l.min(g.axis), r.max(g.axis))
+    });
+    // The line under the break goes on the row above it where every
+    // vertical breaks there, the first column, which names each row, sets
+    // text just above the break and none just below (`54 1/8` over `1375`,
+    // the model named once), and the lines either side are one cell's.
+    let continues_row = |e: f64| {
+        let Some(cols) = first else {
+            return false;
+        };
+        let (x0, x1) = (cols[0], cols[1]);
+        let near = |below: bool| {
+            glyphs.iter().any(|g| {
+                let Some(b) = g.bbox else {
+                    return false;
+                };
+                let cx = (b.x0 + b.x1) / 2.0;
+                let reach = 2.0 * g.font_size as f64;
+                let dy = g.origin.1 - e;
+                g.is_horizontal()
+                    && !g.text.trim().is_empty()
+                    && cx > x0
+                    && cx < x1
+                    && if below {
+                        dy > 0.0 && dy < reach
+                    } else {
+                        dy < 0.0 && -dy < reach
+                    }
+            })
+        };
+        // Every vertical breaks there: a span across the line (a label
+        // centred over three samples) runs on through it, and the break is
+        // only the samples' own.
+        let all_break = !v_lines.iter().any(|g| {
+            g.ends
+                .chunks(2)
+                .any(|s| s.len() == 2 && s[0] < e - EDGE_TOLERANCE && s[1] > e + EDGE_TOLERANCE)
+        });
+        // And in every column with text either side, the lines either side
+        // are a paragraph's leading apart: each cell's two lines, where rows
+        // are set further apart (`Stir stressed` over `Light stressed`
+        // beside a formulation wrapped across them).
+        let tight = || {
+            let mut any = false;
+            for w in cols.windows(2) {
+                let line = |below: bool| {
+                    glyphs
+                        .iter()
+                        .filter(|g| {
+                            g.bbox.is_some()
+                                && g.is_horizontal()
+                                && !g.text.trim().is_empty()
+                                && g.origin.0 >= w[0]
+                                && g.origin.0 < w[1]
+                                && if below {
+                                    g.origin.1 > e && g.origin.1 - e < 2.0 * g.font_size as f64
+                                } else {
+                                    g.origin.1 < e && e - g.origin.1 < 2.0 * g.font_size as f64
+                                }
+                        })
+                        .map(|g| (g.origin.1, g.font_size as f64))
+                        .reduce(|p, q| if (q.0 > p.0) != below { q } else { p })
+                };
+                if let (Some((a, fa)), Some((b, fb))) = (line(false), line(true)) {
+                    if b - a > PARAGRAPH_LEADING * fa.max(fb) {
+                        return false;
+                    }
+                    any = true;
+                }
+            }
+            any
+        };
+        all_break && near(false) && !near(true) && tight()
+    };
+    if interior == 0 {
+        return v_lines.to_vec();
+    }
+    v_lines
+        .iter()
+        .map(|g| GridLine {
+            axis: g.axis,
+            lo: g.lo,
+            hi: g.hi,
+            ends: g
+                .ends
+                .iter()
+                .copied()
+                .filter(|&e| {
+                    (e - g.lo).abs() <= EDGE_TOLERANCE
+                        || (e - g.hi).abs() <= EDGE_TOLERANCE
+                        || h_lines.iter().any(|h| (h.axis - e).abs() <= EDGE_TOLERANCE)
+                        || fills.iter().any(|f| {
+                            f.bbox.x1 > left
+                                && f.bbox.x0 < right
+                                && ((f.bbox.y0 - e).abs() <= EDGE_TOLERANCE
+                                    || (f.bbox.y1 - e).abs() <= EDGE_TOLERANCE)
+                        })
+                        || !continues_row(e)
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Column boundaries for one row band, from the rules that lie within it.
@@ -2051,8 +2197,115 @@ fn band_columns(ys: &[f64], rules: &[Rule]) -> Option<Vec<f64>> {
     if span_x <= 0.0 || span_y <= 0.0 {
         return None;
     }
-    let xs = boundaries(&v_lines, &h_lines, span_y, span_x);
-    (xs.len() >= 2).then_some(xs)
+    let xs = with_outer_edges(
+        boundaries(&v_lines, &h_lines, span_y, span_x),
+        &h_lines,
+        span_x,
+    );
+    (xs.len() >= 2).then(|| with_partial_columns(xs, ys, &vs))
+}
+
+/// `xs`, with the table's outer edges where its first and last rules end.
+///
+/// A first column of labels each spanning several rows (`Ceilings` over
+/// four) leaves those rows ruled from the second column on: only the rules
+/// round each group reach the table's edge, too few for the edge to be a
+/// boundary by the rules' ends. The first and last rules ending together
+/// say where the table's box is. One table's rules only: across a page, the
+/// first and last are as often its running head and foot.
+fn with_outer_edges(xs: Vec<f64>, h_lines: &[GridLine], span_x: f64) -> Vec<f64> {
+    let wide: Vec<&GridLine> = h_lines
+        .iter()
+        .filter(|g| (g.hi - g.lo) >= span_x * MIN_LINE_COVERAGE)
+        .collect();
+    let [first, .., last] = wide.as_slice() else {
+        return xs;
+    };
+    let mut out = xs;
+    for (a, b) in [(first.lo, last.lo), (first.hi, last.hi)] {
+        let edge = (a + b) / 2.0;
+        if (a - b).abs() <= EDGE_TOLERANCE
+            && !out.iter().any(|x| (x - edge).abs() <= EDGE_TOLERANCE)
+        {
+            out.push(edge);
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    drop_degenerate(out, MIN_CELL_EXTENT)
+}
+
+/// `xs`, with the column boundaries a table rules in only some of its rows.
+///
+/// A spec table gives most rows one value across several columns and rules
+/// the line between two of them only in the rows where they differ (`35 µm`
+/// beside `40 µm`, one `>1500` across both). Such a line falls short of the
+/// coverage a grid line needs, and the rows that draw it read both values as
+/// one. A vertical that stands on the table's row lines at both ends and
+/// crosses two rows or more is a cell's edge however few rows draw it; the
+/// rows it is missing from span it. Pieces drawn a few points apart in
+/// different rows, never two in one row, are one line: a word processor
+/// sizes each row's cells on its own.
+fn with_partial_columns(xs: Vec<f64>, ys: &[f64], vs: &[&Rule]) -> Vec<f64> {
+    if ys.len() < 3 {
+        return xs;
+    }
+    let (lo, hi) = (xs[0], xs[xs.len() - 1]);
+    let on_row_line = |y: f64| ys.iter().any(|r| (r - y).abs() <= EDGE_TOLERANCE);
+    // Each candidate line: its position and the rows it crosses.
+    let mut lines: Vec<(f64, Vec<usize>)> = Vec::new();
+    for r in vs {
+        let x = r.axis_pos();
+        if x <= lo + MIN_CELL_EXTENT
+            || x >= hi - MIN_CELL_EXTENT
+            || xs.iter().any(|b| (b - x).abs() <= EDGE_TOLERANCE)
+            || !on_row_line(r.bbox.y0)
+            || !on_row_line(r.bbox.y1)
+        {
+            continue;
+        }
+        let rows: Vec<usize> = ys
+            .windows(2)
+            .enumerate()
+            .filter(|(_, w)| {
+                let mid = (w[0] + w[1]) / 2.0;
+                r.bbox.y0 <= mid && r.bbox.y1 >= mid
+            })
+            .map(|(k, _)| k)
+            .collect();
+        match lines
+            .iter_mut()
+            .find(|(at, _)| (at - x).abs() <= AXIS_TOLERANCE)
+        {
+            Some((_, have)) => have.extend(rows),
+            None => lines.push((x, rows)),
+        }
+    }
+    lines.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Lines a few points apart that never share a row are one.
+    let mut merged: Vec<(f64, Vec<usize>, usize)> = Vec::new();
+    for (x, mut rows) in lines {
+        rows.sort_unstable();
+        rows.dedup();
+        match merged.last_mut() {
+            Some((at, have, n))
+                if x - *at <= 2.0 * EDGE_TOLERANCE && !rows.iter().any(|k| have.contains(k)) =>
+            {
+                *at = (*at * *n as f64 + x) / (*n as f64 + 1.0);
+                *n += 1;
+                have.extend(rows);
+            }
+            _ => merged.push((x, rows, 1)),
+        }
+    }
+    let mut out = xs;
+    out.extend(
+        merged
+            .into_iter()
+            .filter(|(_, rows, _)| rows.len() >= 2)
+            .map(|(x, _, _)| x),
+    );
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    drop_degenerate(out, MIN_CELL_EXTENT)
 }
 
 /// Is this single row of cells a banner — a letterhead or title block?
@@ -2353,18 +2606,330 @@ fn split_row_bands(
 /// geometry components. The latter prevents an unrelated page rule from
 /// inflating the span and making a real table's local dividers look too short.
 pub fn detect(rules: &[Rule], page: usize) -> Vec<Grid> {
-    detect_framed(rules, page, &[])
+    detect_framed(rules, &[], &[], page, &[])
 }
 
 /// [`detect`], knowing the frames of the tables the page draws with
 /// characters ([`crate::textart`]), whose every band between rules is a
 /// row however tall.
-pub fn detect_framed(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
-    let whole = detect_group(rules, page, frames);
-    if !whole.is_empty() {
+pub fn detect_framed(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+) -> Vec<Grid> {
+    let whole = detect_group(rules, fills, glyphs, page, frames);
+    if whole.is_empty() {
+        return detect_components(rules, fills, glyphs, page, frames);
+    }
+    let boxed = detect_boxes(rules, fills, glyphs, page, frames);
+    if boxed.grids.is_empty() {
         return whole;
     }
-    detect_components(rules, page, frames)
+    // The page-wide reading stands where no box is. Where it ran over a
+    // box, the box is read on its own, and the rules no box took are read
+    // again within that grid's bounds: what the page-wide grid had folded
+    // in beside the box, a table ruled with horizontals only.
+    // A box where the page-wide reading found no table is one only as a
+    // table would be: rows and columns, mostly filled. A form's strip of
+    // field boxes, a chart's legend and a schematic's outlines are boxes
+    // too.
+    //
+    // Where the two readings find the same grid, the page-wide one stands.
+    let same = |a: &Grid, b: &Grid| {
+        a.xs.len() == b.xs.len()
+            && a.ys.len() == b.ys.len()
+            && a.xs
+                .iter()
+                .zip(&b.xs)
+                .all(|(p, q)| (p - q).abs() <= EDGE_TOLERANCE)
+            && a.ys
+                .iter()
+                .zip(&b.ys)
+                .all(|(p, q)| (p - q).abs() <= EDGE_TOLERANCE)
+    };
+    let mut out: Vec<Grid> = boxed
+        .grids
+        .into_iter()
+        .filter(|b| whole.iter().any(|w| overlaps(&w.bbox, &b.bbox)) || reads_as_table(b, glyphs))
+        .map(|b| whole.iter().find(|w| same(w, &b)).cloned().unwrap_or(b))
+        .collect();
+    for w in whole {
+        if !out.iter().any(|b| overlaps(&b.bbox, &w.bbox)) {
+            out.push(w);
+            continue;
+        }
+        let within = |r: &Rule| {
+            r.bbox.x0 >= w.bbox.x0 - EDGE_TOLERANCE
+                && r.bbox.x1 <= w.bbox.x1 + EDGE_TOLERANCE
+                && r.bbox.y0 >= w.bbox.y0 - EDGE_TOLERANCE
+                && r.bbox.y1 <= w.bbox.y1 + EDGE_TOLERANCE
+        };
+        let rest: Vec<Rule> = rules
+            .iter()
+            .zip(&boxed.used)
+            .filter(|(r, used)| !**used && within(r))
+            .map(|(r, _)| *r)
+            .collect();
+        for g in detect_group(&rest, fills, glyphs, page, frames) {
+            if !out.iter().any(|b| overlaps(&b.bbox, &g.bbox)) {
+                out.push(g);
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.bbox
+            .y0
+            .partial_cmp(&b.bbox.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.bbox
+                    .x0
+                    .partial_cmp(&b.bbox.x0)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    out
+}
+
+/// A grid found on its own holds a table: three rows or more, two columns
+/// or more, and text in half its cells, counting a merged cell once.
+fn reads_as_table(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    let mut g = g.clone();
+    g.trim_to_content(glyphs);
+    if g.rows() < 3 || g.cols() < 2 {
+        return false;
+    }
+    let cells = g.cell_texts(glyphs);
+    let held = cells.iter().filter(|c| !c.trim().is_empty()).count();
+    held * 2 >= cells.len()
+}
+
+/// Two boxes share some area.
+fn overlaps(a: &BBox, b: &BBox) -> bool {
+    a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+}
+
+/// The grids a page's boxes draw, and which rules they took.
+struct Boxes {
+    grids: Vec<Grid>,
+    used: Vec<bool>,
+}
+
+/// The tables a page draws as boxes: each set of touching rules read on its
+/// own, with the loose rules inside it, where it rules a grid by itself.
+///
+/// A page's rules are not one grid. Read all at once, two tables side by
+/// side share their row lines, a chart's axis or the page's column divider
+/// that lines up with a table's rows becomes one of its columns, and a small
+/// table's rules fall short of the page-wide coverage a grid line needs.
+/// A box is its own evidence: the rules that touch one another are one
+/// drawing. Its loose rules — interior rows drawn short of the verticals —
+/// lie inside it. Inner boxes are read first, so a frame round the page or
+/// round a panel takes only the rules no box inside it has.
+///
+/// Rules no box claims are left to the page-wide reading: a table ruled with
+/// horizontals only has no touching rules at all.
+fn detect_boxes(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+) -> Boxes {
+    let comps = component_indices(rules);
+    let mut used = vec![false; rules.len()];
+    let mut grids: Vec<Grid> = Vec::new();
+    let bbox_of = |idx: &[usize]| {
+        idx.iter().fold(
+            BBox {
+                x0: f64::MAX,
+                y0: f64::MAX,
+                x1: f64::MIN,
+                y1: f64::MIN,
+            },
+            |b, &i| BBox {
+                x0: b.x0.min(rules[i].bbox.x0),
+                y0: b.y0.min(rules[i].bbox.y0),
+                x1: b.x1.max(rules[i].bbox.x1),
+                y1: b.y1.max(rules[i].bbox.y1),
+            },
+        )
+    };
+    let loose: Vec<bool> = {
+        let mut l = vec![false; rules.len()];
+        for c in &comps {
+            if c.len() < MIN_GRID_LINES {
+                c.iter().for_each(|&i| l[i] = true);
+            }
+        }
+        l
+    };
+    let comps: Vec<Vec<usize>> = comps
+        .into_iter()
+        .filter(|c| c.len() >= MIN_GRID_LINES)
+        .collect();
+    let comps = bound_by_bands(comps, fills, &bbox_of);
+    let mut boxes: Vec<(&Vec<usize>, BBox)> = comps.iter().map(|c| (c, bbox_of(c))).collect();
+    let area = |b: &BBox| (b.x1 - b.x0) * (b.y1 - b.y0);
+    boxes.sort_by(|a, b| {
+        area(&a.1)
+            .partial_cmp(&area(&b.1))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (comp, bb) in boxes {
+        let inside = |r: &Rule| {
+            r.bbox.x0 >= bb.x0 - EDGE_TOLERANCE
+                && r.bbox.x1 <= bb.x1 + EDGE_TOLERANCE
+                && r.bbox.y0 >= bb.y0 - EDGE_TOLERANCE
+                && r.bbox.y1 <= bb.y1 + EDGE_TOLERANCE
+        };
+        // A loose rule is the box's own where it runs between two of the
+        // box's lines, stopping short of each by a hair: a row drawn short
+        // of the verticals. A rule ending in the open is something else on
+        // the box's ground, a link's underline under a cell's words.
+        let lines_across = |o: Orientation| -> Vec<f64> {
+            let mut at: Vec<f64> = comp
+                .iter()
+                .map(|&i| &rules[i])
+                .filter(|r| r.orientation == o)
+                .map(|r| r.axis_pos())
+                .collect();
+            match o {
+                Orientation::Vertical => at.extend([bb.x0, bb.x1]),
+                Orientation::Horizontal => at.extend([bb.y0, bb.y1]),
+            }
+            at
+        };
+        let (verticals, horizontals) = (
+            lines_across(Orientation::Vertical),
+            lines_across(Orientation::Horizontal),
+        );
+        let meets =
+            |at: &[f64], end: f64| at.iter().any(|a| (a - end).abs() <= 2.0 * EDGE_TOLERANCE);
+        let spans = |r: &Rule| match r.orientation {
+            Orientation::Horizontal => meets(&verticals, r.bbox.x0) && meets(&verticals, r.bbox.x1),
+            Orientation::Vertical => {
+                meets(&horizontals, r.bbox.y0) && meets(&horizontals, r.bbox.y1)
+            }
+        };
+        let mut idx: Vec<usize> = comp.clone();
+        idx.extend(
+            (0..rules.len())
+                .filter(|&i| loose[i] && !used[i] && inside(&rules[i]) && spans(&rules[i])),
+        );
+        let rs: Vec<Rule> = idx.iter().map(|&i| rules[i]).collect();
+        let got = detect_group(&rs, fills, glyphs, page, frames);
+        // A box ruling one column is as often a sidebar parted by a rule
+        // as a list, and is left to the page-wide reading's tests for one.
+        if got.iter().all(|g| g.cols() < 2)
+            || got
+                .iter()
+                .any(|g| grids.iter().any(|t| overlaps(&t.bbox, &g.bbox)))
+        {
+            continue;
+        }
+        idx.iter().for_each(|&i| used[i] = true);
+        grids.extend(got);
+    }
+    Boxes { grids, used }
+}
+
+/// Boxes set side by side that one shaded band runs across are one table.
+///
+/// A table can leave a column unruled — a label or a value spanning every
+/// row, standing in the open between two ruled blocks — and its rules then
+/// touch in two sets with the open column between them. The shading of the
+/// header band, run across the whole table, says they are one. Two tables
+/// side by side shade their own headers. A band is a row's height, not a
+/// panel behind both boxes.
+fn bound_by_bands(
+    comps: Vec<Vec<usize>>,
+    fills: &[crate::rule::Fill],
+    bbox_of: &dyn Fn(&[usize]) -> BBox,
+) -> Vec<Vec<usize>> {
+    let boxes: Vec<BBox> = comps.iter().map(|c| bbox_of(c)).collect();
+    let mut owner: Vec<usize> = (0..comps.len()).collect();
+    fn root(owner: &mut [usize], mut i: usize) -> usize {
+        while owner[i] != i {
+            owner[i] = owner[owner[i]];
+            i = owner[i];
+        }
+        i
+    }
+    for a in 0..boxes.len() {
+        for b in 0..boxes.len() {
+            let (l, r) = (&boxes[a], &boxes[b]);
+            if a == b || l.x1 >= r.x0 {
+                continue;
+            }
+            let height = |x: &BBox| x.y1 - x.y0;
+            let shared = l.y1.min(r.y1) - l.y0.max(r.y0);
+            if shared < 0.5 * height(l).min(height(r)) {
+                continue;
+            }
+            let banded = fills.iter().any(|f| {
+                let fb = &f.bbox;
+                fb.y1 - fb.y0 <= 0.5 * height(l).min(height(r))
+                    && fb.x0 < l.x1 - EDGE_TOLERANCE
+                    && fb.x1 > r.x0 + EDGE_TOLERANCE
+                    && fb.y0 < l.y1.min(r.y1)
+                    && fb.y1 > l.y0.max(r.y0)
+            });
+            if banded {
+                let (ra, rb) = (root(&mut owner, a), root(&mut owner, b));
+                owner[ra.max(rb)] = ra.min(rb);
+            }
+        }
+    }
+    let mut joined: Vec<Vec<usize>> = vec![Vec::new(); comps.len()];
+    for (i, c) in comps.into_iter().enumerate() {
+        let r = root(&mut owner, i);
+        joined[r].extend(c);
+    }
+    joined
+        .into_iter()
+        .filter(|c| !c.is_empty())
+        .map(|mut c| {
+            c.sort_unstable();
+            c
+        })
+        .collect()
+}
+
+/// The page's rules in touching sets, as indices.
+fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
+    let mut remaining: Vec<usize> = (0..rules.len()).collect();
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    while let Some(seed) = remaining.pop() {
+        let mut component = vec![seed];
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let mut i = 0;
+            while i < remaining.len() {
+                let candidate = rules[remaining[i]];
+                let connected = component.iter().any(|&k| {
+                    let r = rules[k];
+                    r.bbox.x1 + EDGE_TOLERANCE >= candidate.bbox.x0
+                        && candidate.bbox.x1 + EDGE_TOLERANCE >= r.bbox.x0
+                        && r.bbox.y1 + EDGE_TOLERANCE >= candidate.bbox.y0
+                        && candidate.bbox.y1 + EDGE_TOLERANCE >= r.bbox.y0
+                });
+                if connected {
+                    component.push(remaining[i]);
+                    remaining.swap_remove(i);
+                    changed = true;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        component.sort_unstable();
+        components.push(component);
+    }
+    components
 }
 
 /// A table region whose detected structure should not be trusted.
@@ -2572,16 +3137,28 @@ fn row_height(g: &Grid) -> f64 {
 /// unconditionally is wrong: on ordinary one-table pages it fragments the
 /// grid, measured at TEDS −0.040.
 pub fn detect_by_component(rules: &[Rule], page: usize) -> Vec<Grid> {
-    detect_components(rules, page, &[])
+    detect_components(rules, &[], &[], page, &[])
 }
 
 /// [`detect_by_component`], knowing the frames as [`detect_framed`] does.
-pub fn detect_by_component_framed(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
-    detect_components(rules, page, frames)
+pub fn detect_by_component_framed(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+) -> Vec<Grid> {
+    detect_components(rules, fills, glyphs, page, frames)
 }
 
 /// Group the rules into touching components and detect a grid in each.
-fn detect_components(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> {
+fn detect_components(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+) -> Vec<Grid> {
     let mut remaining: Vec<usize> = (0..rules.len()).collect();
     let mut components: Vec<Vec<Rule>> = Vec::new();
     while let Some(seed) = remaining.pop() {
@@ -2613,7 +3190,7 @@ fn detect_components(rules: &[Rule], page: usize, frames: &[BBox]) -> Vec<Grid> 
     let mut out: Vec<Grid> = components
         .iter()
         .filter(|component| component.len() >= MIN_GRID_LINES)
-        .flat_map(|component| detect_group(component, page, frames))
+        .flat_map(|component| detect_group(component, fills, glyphs, page, frames))
         .collect();
     out.sort_by(|a, b| {
         a.bbox
@@ -4469,6 +5046,191 @@ mod header_tests {
             }
         }
         rules
+    }
+
+    #[test]
+    fn boxes_side_by_side_are_two_tables() {
+        // Two tables set side by side share their row lines, and read all
+        // at once they were one grid of both their columns.
+        let mut rules = ruled(&[0.0, 40.0, 80.0, 120.0], &[0.0, 20.0, 40.0, 60.0]);
+        rules.extend(ruled(&[160.0, 200.0, 240.0], &[0.0, 20.0, 40.0, 60.0]));
+        let grids = detect(&rules, 0);
+        assert_eq!(grids.len(), 2, "got {grids:?}");
+        assert_eq!(grids[0].cols(), 3);
+        assert_eq!(grids[1].cols(), 2);
+    }
+
+    #[test]
+    fn a_small_box_keeps_the_rows_its_column_rule_closes() {
+        // A field list ruled between its rows, with no rule over the first
+        // or under the last: the column rule's ends close them. Measured
+        // against the page's ruling, the column rule fell short of a grid
+        // line and the first and last rows were lost.
+        let mut rules: Vec<Rule> = [20.0, 40.0, 60.0]
+            .iter()
+            .map(|&y| h(0.0, 200.0, y))
+            .collect();
+        rules.push(v(0.0, 80.0, 100.0));
+        // Elsewhere on the page: a long divider and a rule across it.
+        rules.push(v(100.0, 700.0, 400.0));
+        rules.push(h(300.0, 600.0, 500.0));
+        let grids = detect(&rules, 0);
+        let g = grids
+            .iter()
+            .find(|g| g.bbox.x1 <= 210.0)
+            .expect("the field list");
+        assert_eq!(g.rows(), 4, "got {:?}", g.ys);
+        assert_eq!(g.cols(), 2);
+    }
+
+    #[test]
+    fn boxes_one_band_runs_across_are_one_table() {
+        // A table leaves a column unruled (60-90), so its rules touch in two
+        // sets; its header band is shaded across the whole table.
+        let mut rules = ruled(&[0.0, 60.0], &[0.0, 20.0, 40.0, 60.0]);
+        rules.extend(ruled(&[90.0, 130.0, 170.0], &[0.0, 20.0, 40.0, 60.0]));
+        let band = crate::rule::Fill {
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 170.0,
+                y1: 20.0,
+            },
+            page: 0,
+        };
+        let grids = detect_framed(&rules, &[band], &[], 0, &[]);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert_eq!(grids[0].xs.len(), 5, "got {:?}", grids[0].xs);
+        // Each set shades its own header: two tables.
+        let bands = [
+            crate::rule::Fill {
+                bbox: BBox {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 60.0,
+                    y1: 20.0,
+                },
+                page: 0,
+            },
+            crate::rule::Fill {
+                bbox: BBox {
+                    x0: 90.0,
+                    y0: 0.0,
+                    x1: 170.0,
+                    y1: 20.0,
+                },
+                page: 0,
+            },
+        ];
+        let grids = detect_framed(&rules, &bands, &[], 0, &[]);
+        assert!(
+            grids.iter().all(|g| g.bbox.x1 <= 61.0 || g.bbox.x0 >= 89.0),
+            "got {grids:?}"
+        );
+    }
+
+    #[test]
+    fn a_link_underlined_in_a_cell_is_not_a_row() {
+        // The underline lies loose in the box, ending in the open.
+        let mut rules = ruled(&[0.0, 100.0, 200.0, 400.0], &[0.0, 20.0, 50.0]);
+        rules.push(h(205.0, 330.0, 40.0));
+        let grids = detect(&rules, 0);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert_eq!(grids[0].rows(), 2, "got {:?}", grids[0].ys);
+    }
+
+    #[test]
+    fn a_label_column_spanning_rows_is_inside_the_table() {
+        // No left border, and each label spans three rows: only the rules
+        // round each group reach the table's left edge.
+        let mut rules = Vec::new();
+        for (y, full) in [
+            (0.0, true),
+            (20.0, true),
+            (40.0, false),
+            (60.0, false),
+            (80.0, false),
+            (100.0, true),
+            (120.0, false),
+            (140.0, false),
+            (160.0, false),
+            (180.0, true),
+        ] {
+            rules.push(h(if full { 0.0 } else { 50.0 }, 300.0, y));
+        }
+        for x in [50.0, 150.0, 300.0] {
+            rules.push(v(0.0, 180.0, x));
+        }
+        let grids = detect(&rules, 0);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert!((grids[0].xs[0] - 0.0).abs() < 1.0, "got {:?}", grids[0].xs);
+        assert_eq!(grids[0].cols(), 3);
+    }
+
+    #[test]
+    fn a_table_ruling_its_rows_is_not_parted_where_its_verticals_break() {
+        // Rows ruled with horizontals, the verticals drawn in pieces that
+        // break inside the two data rows.
+        let xs = [0.0, 100.0, 200.0, 300.0];
+        let mut rules: Vec<Rule> = [0.0, 20.0, 60.0, 100.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        for x in xs {
+            rules.push(v(0.0, 20.0, x));
+            for (a, b) in [(20.0, 40.0), (40.0, 60.0), (60.0, 80.0), (80.0, 100.0)] {
+                rules.push(v(a, b, x));
+            }
+        }
+        // The first row names its model once, over a second line of values
+        // a line's leading under the first (`54 1/8` over `1375`); the
+        // second row's break has a new row named under it.
+        let glyphs = vec![
+            gly(10.0, 38.0, 30.0, "T-49"),
+            gly(110.0, 38.0, 30.0, "54"),
+            gly(110.0, 48.0, 30.0, "1375"),
+            gly(10.0, 77.0, 30.0, "R1"),
+            gly(10.0, 92.0, 30.0, "R2"),
+        ];
+        let grids = detect_framed(&rules, &[], &glyphs, 0, &[]);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert_eq!(grids[0].ys.len(), 5, "got {:?}", grids[0].ys);
+        assert!(
+            !grids[0].ys.iter().any(|y| (y - 40.0).abs() < 1.0),
+            "got {:?}",
+            grids[0].ys
+        );
+        // Where a shaded band ends at the break, the band parts the rows.
+        let band = crate::rule::Fill {
+            bbox: BBox {
+                x0: 0.0,
+                y0: 20.0,
+                x1: 300.0,
+                y1: 40.0,
+            },
+            page: 0,
+        };
+        let grids = detect_framed(&rules, &[band], &glyphs, 0, &[]);
+        assert_eq!(grids[0].ys.len(), 6, "got {:?}", grids[0].ys);
+    }
+
+    #[test]
+    fn a_column_rule_drawn_in_some_rows_is_a_column() {
+        let ys: Vec<f64> = (0..=10).map(|k| k as f64 * 20.0).collect();
+        let mut rules = ruled(&[0.0, 100.0, 200.0, 300.0], &ys);
+        // Ruled apart in two rows of ten; in a third a few points over, as a
+        // word processor sizes each row's cells on its own.
+        rules.push(v(20.0, 40.0, 150.0));
+        rules.push(v(40.0, 60.0, 150.0));
+        rules.push(v(80.0, 100.0, 154.0));
+        // In one row only: no column.
+        rules.push(v(60.0, 80.0, 250.0));
+        let grids = detect(&rules, 0);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        let xs = &grids[0].xs;
+        assert_eq!(xs.len(), 5, "got {xs:?}");
+        assert!(xs.iter().any(|x| (x - 151.0).abs() < 2.0), "got {xs:?}");
+        assert!(!xs.iter().any(|x| (x - 250.0).abs() < 2.0), "got {xs:?}");
     }
 
     #[test]

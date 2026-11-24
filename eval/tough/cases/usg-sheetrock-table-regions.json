@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet. Its framing tables set group labels in a first column with no left border; its test-data and product-data tables are stacked with a note and a heading between them."
+  },
+  "notes": [
+    "The location labels each span four rows, and the rules between those rows start at the second column, so the table began there.",
+    "The two stacked tables were one grid, and the product data's column rule, measured against both, was dropped."
+  ],
+  "checks": [
+    {
+      "id": "location-column",
+      "found": "2026-11-24",
+      "issue": "#104: `Location`, `Ceilings` and `Walls` were read outside the table.",
+      "cell": {
+        "value": "Ceilings",
+        "column": "Location"
+      }
+    },
+    {
+      "id": "product-data-columns",
+      "found": "2026-11-24",
+      "issue": "#102, #103: the product data read `1/4 in. (6.4 mm) 3/8 in. (9.5 mm)` in one cell, as rows of the test-data table.",
+      "cell": {
+        "value": "1/4 in. (6.4 mm)",
+        "row": "Thickness"
+      }
+    }
+  ]
+}

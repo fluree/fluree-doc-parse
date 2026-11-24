@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "sherwin-williams-eds.pdf",
+    "url": "https://www.sherwin-williams.com/document/EDS/en/790417048503/",
+    "sha256": "fdb65ebef0a2b38b63cbee91c73c48752af5e2370370e42c63fe80a6266007ee",
+    "about": "Sherwin-Williams environmental data sheet. Each page sets small ruled VOC tables under larger ones and under full-width section banners."
+  },
+  "notes": [
+    "Against the page's ruling, the small tables' rules fell short of grid lines; they were read from their text, without their label column."
+  ],
+  "checks": [
+    {
+      "id": "eu-table-labels",
+      "found": "2026-11-24",
+      "issue": "#102: the EU Directive table lost its labels to paragraphs.",
+      "cell": {
+        "value": "39.1%",
+        "column": "K25W951 / By wt",
+        "row": "Total Volatiles"
+      }
+    }
+  ]
+}

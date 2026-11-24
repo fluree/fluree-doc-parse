@@ -788,13 +788,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .sum()
         };
         let mut grids = timed(&mut timings.tables, || {
-            trim(table::detect_framed(&p.rules, p.index, &char_frames))
+            trim(table::detect_framed(
+                &p.rules,
+                &p.fills,
+                &p.glyphs,
+                p.index,
+                &char_frames,
+            ))
         });
         let mut grid_sources = vec![GridSource::Ruled; grids.len()];
         if !grids.is_empty() {
             let parts = timed(&mut timings.tables, || {
                 trim(table::detect_by_component_framed(
                     &p.rules,
+                    &p.fills,
+                    &p.glyphs,
                     p.index,
                     &char_frames,
                 ))
@@ -1014,7 +1022,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut aligned = timed(&mut timings.tables, || {
             table::detect_aligned(&prose, &p.rules, &p.fills, p.index)
         });
-        aligned.retain(|g| g.rows() >= 2 && g.cols() >= 2);
+        // Its glyphs are the prose's, outside every grid; but a run of them
+        // either side of a grid can line up into a table laid over it.
+        aligned.retain(|g| {
+            g.rows() >= 2
+                && g.cols() >= 2
+                && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
+        });
         if !aligned.is_empty() {
             // Withhold their glyphs from prose too, and re-assemble what is left.
             let remaining = glyphs_outside_grids(&prose, &aligned);
