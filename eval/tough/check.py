@@ -119,6 +119,20 @@ class Reading:
             (title(s), s.get("doc:sectionLevel"), title(held_by[s["@id"]]) if s["@id"] in held_by else None)
             for s in sections
         ]
+        # The title of the section each element falls in, through any list
+        # or figure that holds it.
+        parent = {c: n["@id"] for n in graph for c in n.get("po:contains", [])}
+
+        def section_of(eid):
+            seen = set()
+            while eid in parent and eid not in seen:
+                seen.add(eid)
+                eid = parent[eid]
+                if self.nodes[eid].get("@type") == "doco:Section":
+                    return title(self.nodes[eid])
+            return None
+
+        self.section_of = section_of
         # Each page's printed number, by its place in the file from 1.
         pages = next((n["doc:pages"]["@value"] for n in graph if "doc:pages" in n), [])
         self.folios = {p["pageIndex"] + 1: p.get("folio") for p in pages}
@@ -206,6 +220,17 @@ def run_check(check, reading):
             return True, None
         near = [s for s in reading.sections if s[0] == want["title"]]
         return False, f"as (title, level, within): {near[:2]}" if near else "no section has this title"
+    if "under" in check:
+        # An element with exactly this string in the section with this
+        # title: what a reader takes the text to be about.
+        want = check["under"]
+        found = [
+            reading.section_of(i)
+            for i, n in reading.nodes.items()
+            if n.get("nif:isString") == want["text"] and n.get("@type") != "doco:SectionTitle"
+        ]
+        ok = want["section"] in found
+        return ok, None if ok else f"in sections {found[:3]}" if found else "no element has this string"
     if "folio" in check:
         # The page, by its place in the file from 1, carries this printed
         # number, or none where `value` is null: what a reader reassembling

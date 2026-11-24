@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "hermanmiller-aeron.pdf",
+    "url": "https://www.hermanmiller.com/content/dam/hermanmiller/documents/product_literature/product_sheets/aeron_chairs_product_sheet.pdf",
+    "sha256": "7adcc6c3eb4b6217a894af9abea1558038cf8acf2c6b7e9eb5e83cf0add391f3",
+    "about": "Herman Miller Aeron chair product sheet (2 pages). Page 2 sets product photos with numbered callouts beside columns of side-headed text."
+  },
+  "notes": [
+    "2026-11-24 (#124): side heads set in a narrow strip beside their text were read as a column of their own before it, so every head was an empty section and the text fell under the last of them."
+  ],
+  "checks": [
+    {
+      "id": "warranty-holds-its-text",
+      "found": "2026-11-24",
+      "issue": "Warranty, Materials, Sustainability and 3D Models were empty sections; their text sat under 3D Models.",
+      "under": {
+        "text": "12-year, 3-shift",
+        "section": "Warranty"
+      }
+    }
+  ]
+}
