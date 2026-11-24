@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "mfsupply-hex-cap-screws.pdf",
+    "url": "https://www.mfsupply.com/v/vspfiles/assets/Hex-Head-Cap-Screws-Grade-5-%26-8.pdf",
+    "sha256": "37c91036346a1b8bc859912edfa17b386fa19c8398441e8e841430749c038cf4",
+    "about": "MF Supply hex cap screws, grades 5 and 8 (2 pages). Page 2 sets each grade's properties as a list of fields: a bold label column, shaded, beside plain values that set a phrase bold here and there, ruled under every row, over a watermark drawn behind the page."
+  },
+  "notes": [
+    "2026-11-23: both lists' first rows were read as headers, so every value was named after the grade's description (#51). A bold label column with nothing else bold already read as fields; here the shaded labels and the watermark read as shaded rows, and the bold phrases in the grade 8 values as bold cells."
+  ],
+  "checks": [
+    {
+      "id": "grade-5-description-is-a-row",
+      "found": "2026-11-23",
+      "issue": "The grade 5 description was taken for the table's header and was not a row of it.",
+      "row": {"#0": "Description", "#1": "A cap screw made from medium carbon steel and heat-treated."}
+    },
+    {
+      "id": "grade-8-description-is-a-row",
+      "found": "2026-11-23",
+      "issue": "As above, for grade 8, whose values set their diameters bold.",
+      "row": {"#0": "Description", "#1": "A cap screw made from medium carbon alloy steel and heat-treated."}
+    },
+    {
+      "id": "no-description-names-a-column",
+      "found": "2026-11-23",
+      "issue": "Every value carried its grade's description as its column name.",
+      "no_column_header": "A cap screw made from"
+    }
+  ]
+}

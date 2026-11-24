@@ -1,0 +1,44 @@
+{
+  "document": {
+    "file": "owenscorning-procat-es.pdf",
+    "url": "https://www.owenscorning.com/dms/10022387",
+    "sha256": "345e63875e3423784ec67db4a0151241ad2215787bf5b0c9ead46925f3fc977f",
+    "about": "Owens Corning ProCat blowing insulation data sheet, Spanish (2 pages). Its coverage tables give areas in square feet, PIES², with the 2 set small and raised after the unit."
+  },
+  "notes": [
+    "2026-11-23 (#77): a raised number after a word of four letters or more was read as a note's, so every header with the unit read as footnote 2. A raised 2 or 3 after a unit of length is its power, kept raised."
+  ],
+  "checks": [
+    {
+      "id": "square-feet-per-thousand",
+      "found": "2026-11-23",
+      "issue": "The unit's power was parted from it as a note: BOLSAS POR CADA 1000 PIES 2.",
+      "text": "BOLSAS POR CADA 1000 PIES²",
+      "count": 2
+    },
+    {
+      "id": "square-feet-after-comma",
+      "found": "2026-11-23",
+      "issue": "As above, where nothing before the unit marks it as one: COBERTURA NETA MÁXIMA, PIES 2.",
+      "text": "COBERTURA NETA MÁXIMA, PIES²"
+    },
+    {
+      "id": "square-feet-after-slash",
+      "found": "2026-11-23",
+      "issue": "As above, after a slash and a space: PESO MÍNIMO/ PIES 2.",
+      "text": "PESO MÍNIMO/ PIES²"
+    },
+    {
+      "id": "pounds-per-square-foot",
+      "found": "2026-11-23",
+      "issue": "The power was read flat into its unit: LB/PIES2.",
+      "text": "LB/PIES²"
+    },
+    {
+      "id": "no-parted-power",
+      "found": "2026-11-23",
+      "issue": "As above, everywhere the unit is used.",
+      "no_text": "PIES 2"
+    }
+  ]
+}

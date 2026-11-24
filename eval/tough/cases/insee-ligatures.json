@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "insee-IR275_EFT_3T2026.pdf",
+    "url": "https://www.insee.fr/fr/statistiques/fichier/version-html/9134708/IR275_EFT_3T2026.pdf",
+    "sha256": "cb99563b6503e85b6458824879f3756584100aa084adf8806833aeacc60fd335",
+    "about": "INSEE Informations rapides no. 275, tourist accommodation in the third quarter of 2026 (Licence Ouverte): its ff and fi ligatures are set in fonts of their own, subsets with no names or character map, and mapped to U+FFFD."
+  },
+  "notes": [
+    "Every reader of the text layer reads d’a�aires. The ligatures are read by their shape, against the same family's letters drawn elsewhere."
+  ],
+  "checks": [
+    {
+      "id": "ff-ligature-read",
+      "found": "2026-11-23",
+      "issue": "The ff ligature came out as U+FFFD inside the word.",
+      "text": "Nuitées d’affaires (en millions)"
+    },
+    {
+      "id": "fi-ligature-read",
+      "found": "2026-11-23",
+      "issue": "As above, for fi.",
+      "text": "bénéficie"
+    },
+    {
+      "id": "no-replacement-character",
+      "found": "2026-11-23",
+      "issue": "Sixteen words held U+FFFD.",
+      "no_text": "�"
+    }
+  ]
+}

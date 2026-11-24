@@ -1,0 +1,37 @@
+{
+  "document": {
+    "path": "../fixtures/chrome-text-layer.pdf",
+    "sha256": "1230bdc5b7f541208fbf421a63b74361616e6f0569ca92d5393aea6bc24f799f",
+    "about": "Three invented lines printed to PDF by headless Chrome on macOS (fixtures/chrome-text-layer.html): Helvetica as CID TrueType, PingFang SC as Type 3 fonts, each with ToUnicode. Wide forms, the micro sign, a fraction and trade marks; a CJK ideograph whose glyph the font's ToUnicode names as a radical, with the ideograph stated in /ActualText; zero-width spaces before a word."
+  },
+  "notes": [
+    "Reprint with: Chrome --headless --no-pdf-header-footer --print-to-pdf=chrome-text-layer.pdf chrome-text-layer.html, then update the sha256.",
+    "The zero-width-space split was fixed by the out-of-turn space rule (insee-stray-spaces) before this case was written; it is checked here on the shape it was reported on."
+  ],
+  "checks": [
+    {
+      "id": "printed-characters-kept",
+      "found": "2026-11-23",
+      "issue": "Text was NFKC-folded: （台号 ３７） read (台号 37), µ read μ, ½ read 1⁄2, ™ and ℠ read TM and SM. Ligatures still read as letters.",
+      "text": "Note （台号 ３７） film 23 µm, panel 2.5 m², tank 750 cm³, ½ pallet, Example™ and Example℠ service, final offer."
+    },
+    {
+      "id": "actual-text-states-the-ideograph",
+      "found": "2026-11-23",
+      "issue": "The glyph for 青 was read by its ToUnicode, the radical ⻘ U+2ED8, and the span's ActualText ignored.",
+      "text": "颜色：青色"
+    },
+    {
+      "id": "no-radical",
+      "found": "2026-11-23",
+      "issue": "As above.",
+      "no_text": "⻘"
+    },
+    {
+      "id": "word-after-zero-width-spaces-whole",
+      "found": "2026-11-23",
+      "issue": "A space was read inside the word after two zero-width spaces: T his.",
+      "text": "12.4. Counterparts. This note may be signed in counterparts."
+    }
+  ]
+}

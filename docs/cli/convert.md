@@ -6,7 +6,7 @@ Convert documents to Markdown, XHTML, JSON, DoCO JSON-LD or plain text.
 fdoc convert <FILE|DIR|->... [options]
 ```
 
-Reads PDF, Markdown, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip transcripts,
+Reads PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, WebVTT and SubRip transcripts,
 and email (`.eml`, `.msg`). PDF structure is inferred from layout; the others declare theirs
 and carry no geometry. See [Input formats](../inputs/README.md).
 
@@ -24,6 +24,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | Option | Description |
 |--------|-------------|
 | `-f`, `--format <FMT>` | `md` (default), `xhtml`, `json`, `doco`, `text`. See [Output formats](../formats/README.md) |
+| `--md-links <MODE>` | how `-f md` writes links: `inline` (default) as `[words](address)`, `text` as the words alone. See [Links](../formats/markdown.md#links) |
 | `-o`, `--output <FILE>` | write to a file; single input only. Conflicts with `--out-dir` |
 | `--out-dir <DIR>` | write one output file per input into this directory |
 | `--pages <RANGES>` | restrict to 1-based pages: `3`, `1-5`, `1,4,9-12` |

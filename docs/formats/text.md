@@ -34,25 +34,32 @@ page — the failure mode that looks like a rendering bug and is not.
 
 ## Normalization
 
-Text is NFKC-normalized, so ligatures are decomposed:
+Text keeps the characters the document prints, in every input format: `µm`,
+`½`, `™`, `（２）`, `m³/h` and `H₂O` come out as they are, so the same
+document gives the same text whether it arrives as PDF, HTML or DOCX. A
+PDF's text is put in NFC, so a letter and the accent a PDF draws after it
+read as one character (`é`).
+
+A PDF also draws some characters as glyph forms no other format carries, and
+those are read as the letters they stand for:
 
 ```
 raw  : reﬂect ﬁnd reﬁne proﬁle ofﬁcer signiﬁcant
-NFKC : reflect find refine profile officer significant
+text : reflect find refine profile officer significant
 ```
 
-Superscripts and subscripts are kept as printed: `m³/h` stays `m³/h` rather
-than folding to `m3/h`.
+- ligatures and the other presentation forms (Latin and Hebrew ligatures,
+  Arabic contextual forms, vertical and small CJK punctuation);
+- Kangxi radicals a font's character map names for the ideograph they look
+  like (`⾊` for `色`);
+- a character set for a degree sign that is not one: the ordinal `º`, the
+  ring `˚`, a superscript `⁰`, a ring operator `∘` or a white bullet `◦`
+  before a temperature's unit (`25 ºC` → `25 °C`), and the ring or ring
+  operator after a number (`45˚` → `45°`). An ordinal stays an ordinal: `1º`
+  and `Nº` are kept.
 
-Without this, searching for `profile` finds one occurrence in six. Offsets are
-in **characters** of the normalized string, not bytes.
-
-A character set for a degree sign that is not one reads as `°`: the ordinal
-`º`, the ring `˚`, a superscript `⁰`, a ring operator `∘` or a white bullet
-`◦` before a temperature's unit (`25 ºC` → `25 °C`), and the ring or ring operator after a
-number (`45˚` → `45°`). NFKC would turn `º` into the letter `o` and `˚` into a
-space and a combining mark. An ordinal stays an ordinal: `1º` and `Nº` fold as
-NFKC folds them.
+Without the first, searching for `profile` finds one occurrence in six.
+Offsets are in **characters** of this text, not bytes.
 
 ## Tables
 

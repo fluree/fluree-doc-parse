@@ -16,6 +16,7 @@
 
 use crate::geom::BBox;
 use crate::glyph::Glyph;
+use fluree_doc_model::marks;
 
 /// Gap, as a fraction of font size, above which we insert a synthetic space —
 /// the *fallback* when a document's own gap distribution is not clearly
@@ -53,6 +54,14 @@ fn is_spaceless_script(c: char) -> bool {
         '\u{F900}'..='\u{FAFF}' |   // CJK compat
         '\u{FF00}'..='\u{FF60}' |   // full-width forms
         '\u{AC00}'..='\u{D7AF}') // hangul
+}
+
+/// A script that sets no spaces between its words and so wraps a line
+/// between any two of its characters: Chinese and Japanese, with their
+/// punctuation and full-width forms. Not Korean, which spaces its words and
+/// wraps at the spaces.
+pub(crate) fn wraps_anywhere(c: char) -> bool {
+    is_spaceless_script(c) && !('\u{AC00}'..='\u{D7AF}').contains(&c)
 }
 
 /// Baseline separation above which two glyphs are on different lines, as a
@@ -116,8 +125,12 @@ pub struct Line {
     pub glyphs: Vec<usize>,
     /// Median font size — the primary heading signal downstream.
     pub font_size: f32,
-    /// True when most of the line's glyphs are bold.
+    /// Set in bold throughout: most of its glyphs bold, and its first and
+    /// last words with letters.
     pub bold: bool,
+    /// Its first word with a letter is bold: a bold line, or one opening on
+    /// a run-in label (`PUMP: With stainless steel pump…`).
+    pub opens_bold: bool,
     /// The first inked glyph is a superscript or subscript: a footnote's
     /// number, an affiliation mark. Set from the glyph sizes at assembly,
     /// where the fact is still visible — the text reads `95 Ibid.` either
@@ -927,8 +940,269 @@ fn adaptive_space_ratio(glyphs: &[Glyph], groups: &[(Vec<usize>, i32, bool)]) ->
     }
 }
 
+/// The run of raised, smaller glyphs that `idxs[k]` begins, as text, where
+/// it follows a glyph of the line's own size: a superscript, which may be a
+/// note's mark. With it, the first character after the run that is not
+/// whitespace. `None` mid-run, and on a vertical line.
+fn raised_mark(
+    glyphs: &[Glyph],
+    idxs: &[usize],
+    k: usize,
+    adv: Advance,
+) -> Option<(String, Option<char>)> {
+    if adv.vertical() {
+        return None;
+    }
+    let g = &glyphs[idxs[k]];
+    let base = idxs[..k]
+        .iter()
+        .rev()
+        .map(|&i| &glyphs[i])
+        .find(|p| p.bbox.is_some())?;
+    let size = base.font_size.max(1.0) as f64;
+    let ratio = g.font_size as f64 / size;
+    // Raised: its baseline above the word's, in page space where y grows
+    // downward.
+    let raised = base.origin.1 - g.origin.1 >= size * MARK_RAISE;
+    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) || !raised {
+        return None;
+    }
+    // A word that holds a script of its own is a formula's term (`cₚhᵖ`),
+    // and what is raised after it is an index or a power.
+    let word = idxs[..k]
+        .iter()
+        .rev()
+        .map(|&i| &glyphs[i])
+        .take_while(|p| p.bbox.is_some() && !p.text.trim().is_empty());
+    let scripted = word.into_iter().any(|p| {
+        (p.font_size as f64) <= size * SCRIPT_SIZE_RATIO
+            || (p.origin.1 - base.origin.1).abs() >= size * MARK_RAISE
+    });
+    if scripted {
+        return None;
+    }
+    let mut mark = String::new();
+    let mut end = idxs.len();
+    for (j, &i) in idxs.iter().enumerate().skip(k) {
+        let m = &glyphs[i];
+        let same = m.bbox.is_some()
+            && (m.font_size - g.font_size).abs() <= g.font_size * 0.1
+            && (m.origin.1 - g.origin.1).abs() < g.font_size.max(1.0) as f64 * 0.2;
+        if !same {
+            end = j;
+            break;
+        }
+        mark.push_str(&m.text);
+    }
+    let next = idxs[end..]
+        .iter()
+        .flat_map(|&i| glyphs[i].text.chars())
+        .find(|c| !c.is_whitespace());
+    Some((mark, next))
+}
+
+/// The fraction `idxs[k]` begins, set against the whole number before it:
+/// the index of its last glyph.
+///
+/// A mixed number is typeset with no space between its parts: `22⅜` as `22`,
+/// a numerator set small and high, a slash, and a denominator set small.
+/// The text layer gives the digits alone, and read as one number `22 3/8`
+/// was `223/8`. Small is the ink's height against the whole number's
+/// figures, which a fraction's figures share whether a smaller size sets
+/// them or the font's own fraction figures do. High is the numerator's foot
+/// above the whole number's baseline: old-style figures are as short and
+/// stand on it.
+fn fraction_at(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Option<usize> {
+    if adv.vertical() {
+        return None;
+    }
+    let figure = |g: &Glyph| !g.text.is_empty() && g.text.chars().all(|c| c.is_ascii_digit());
+    let whole = idxs[..k]
+        .iter()
+        .rev()
+        .map(|&i| &glyphs[i])
+        .find(|p| p.bbox.is_some() || !p.text.trim().is_empty())?;
+    let ink = whole.bbox.filter(|_| figure(whole))?;
+    // A fraction the font draws whole, `½`, which its text map spells out.
+    let spelled = glyphs[idxs[k]]
+        .text
+        .split_once(['/', '\u{2044}'])
+        .is_some_and(|(n, d)| {
+            [n, d]
+                .iter()
+                .all(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+        });
+    if spelled {
+        return Some(k);
+    }
+    let small = |g: &Glyph| {
+        figure(g)
+            && g.bbox
+                .is_some_and(|b| b.height() <= ink.height() * FRACTION_FIGURE)
+    };
+    let run = |from: usize| {
+        (from..idxs.len())
+            .take_while(|&j| small(&glyphs[idxs[j]]))
+            .last()
+    };
+    let numerator = run(k)?;
+    let high = idxs[k..=numerator].iter().all(|&i| {
+        glyphs[i]
+            .bbox
+            .is_some_and(|b| ink.y1 - b.y1 >= ink.height() * FRACTION_RAISE)
+    });
+    let slash = numerator + 1;
+    if !high
+        || !idxs
+            .get(slash)
+            .is_some_and(|&i| matches!(glyphs[i].text.as_str(), "/" | "\u{2044}"))
+    {
+        return None;
+    }
+    let denominator = run(slash + 1)?;
+    let ends = idxs
+        .get(denominator + 1)
+        .is_none_or(|&i| !glyphs[i].text.starts_with(|c: char| c.is_ascii_digit()));
+    ends.then_some(denominator)
+}
+
+/// Tallest a fraction's figure stands, against the whole number's.
+const FRACTION_FIGURE: f64 = 0.8;
+
+/// Least height, against the whole number's figures, of a numerator's foot
+/// above their baseline.
+const FRACTION_RAISE: f64 = 0.25;
+
+/// Signs a power may carry beside its digits.
+const POWER_SIGNS: &[char] = &['-', '+', '\u{2212}', '\u{2013}'];
+
+/// A power's character as Unicode sets it raised.
+fn superscript(c: char) -> char {
+    match c {
+        '0' => '\u{2070}',
+        '1' => '\u{00B9}',
+        '2' => '\u{00B2}',
+        '3' => '\u{00B3}',
+        '4'..='9' => char::from_u32(0x2070 + (c as u32 - '0' as u32)).unwrap_or(c),
+        '+' => '\u{207A}',
+        '-' | '\u{2212}' | '\u{2013}' => '\u{207B}',
+        _ => c,
+    }
+}
+
+/// Least rise, as a share of the word's size, of a superscript's baseline.
+const MARK_RAISE: f64 = 0.15;
+
 /// Word gaps in letter-spaced text sit this far above the letter gaps.
 const TRACKING_WORD_FACTOR: f64 = 1.5;
+
+/// The explicit space at `idxs[k]` is a stray: drawn out of turn, and set
+/// on a mark's ink rather than between two marks.
+///
+/// A space stands where the pen stops after one word and before the next.
+/// A browser printing a page draws the space at each place it wrapped a
+/// line, and one producer draws that space after the line's last word but
+/// at a position inside an earlier word of it: `Produits` read `Pro
+/// duits`, `papier` read `papi er`, because the space sorted in between the
+/// letters it was set on. Such a space parts nothing, and the word reads
+/// whole.
+///
+/// Both tests are needed. A space drawn in turn, between the marks it sits
+/// between on the line, is where the pen stopped, however close the next
+/// mark begins: a justified line closes its word gaps up, and a run set in
+/// another size starts where the space does. And a space drawn out of turn
+/// in a gap is still a gap: some producers draw a line's words and then
+/// its spaces. On ink means inside the advance of the mark ahead of it,
+/// well short of where that mark's pen stops, or where the mark after it
+/// begins. Not behind the mark ahead: a line that runs on into the next row
+/// jumps back to its start, and the space there parts the two rows.
+fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool {
+    let space = &glyphs[idxs[k]];
+    let at = adv.at(space.origin);
+    let drawn = |i: &&usize| glyphs[**i].bbox.is_some();
+    let before = idxs[..k].iter().rev().find(drawn).map(|&i| &glyphs[i]);
+    let after = idxs[k + 1..].iter().find(drawn).map(|&i| &glyphs[i]);
+    let width = |g: &Glyph| match (g.advance, g.bbox) {
+        (Some(a), _) => a,
+        (None, Some(b)) => adv.end(&b) - adv.at(g.origin),
+        (None, None) => 0.0,
+    };
+    let em = space.font_size.max(1.0) as f64;
+    // In turn: drawn between its neighbours on the line, in whichever
+    // direction the line was drawn; or drawn just after a mark, where that
+    // mark's pen stopped. A chart sets its labels' marks among each other's
+    // on one line, and a label's own space is still where its pen stopped.
+    let between = match (before, after) {
+        (Some(b), Some(a)) => {
+            let (lo, hi) = if b.draw_index <= a.draw_index {
+                (b.draw_index, a.draw_index)
+            } else {
+                (a.draw_index, b.draw_index)
+            };
+            lo < space.draw_index && space.draw_index < hi
+        }
+        _ => true,
+    };
+    let follows = idxs.iter().map(|&i| &glyphs[i]).any(|p| {
+        p.bbox.is_some()
+            && p.draw_index + 1 == space.draw_index
+            && (adv.at(p.origin) + width(p) - at).abs() <= SPACE_INSIDE * em
+    });
+    if between || follows {
+        return false;
+    }
+    let same = SPACE_SAME_PLACE * em;
+    before.is_some_and(|b| {
+        let start = adv.at(b.origin);
+        at >= start - same && at < start + width(b) - SPACE_INSIDE * em
+    }) || after.is_some_and(|a| (adv.at(a.origin) - at).abs() < same)
+}
+
+/// How far, in ems, a space must sit short of the pen's stop after the mark
+/// ahead of it to be inside that mark: further than a kern moves a space.
+const SPACE_INSIDE: f64 = 0.15;
+
+/// Marks this close, in ems, begin at the same place.
+const SPACE_SAME_PLACE: f64 = 0.02;
+
+/// The weight of one word of a line, from the glyphs of it that put ink
+/// down. A face that declares no weight counts as regular.
+#[derive(Default)]
+struct Word {
+    inked: usize,
+    heavy: usize,
+    letters: usize,
+    heavy_letters: usize,
+    /// Holds a letter or a digit.
+    spells: bool,
+    /// Set after a gap the line pass parts columns at ([`BLOCK_GAP_RATIO`]),
+    /// which a space that puts no ink down kept from parting this line.
+    parted: bool,
+}
+
+impl Word {
+    fn add(&mut self, g: &Glyph) {
+        let heavy = usize::from(g.weight.is_some_and(|w| w >= 600));
+        self.inked += 1;
+        self.heavy += heavy;
+        if g.text.chars().any(char::is_alphabetic) {
+            self.letters += 1;
+            self.heavy_letters += heavy;
+        }
+        self.spells |= g.text.chars().any(char::is_alphanumeric);
+    }
+
+    /// Mostly bold, by its letters where it has any. A bold face's digits
+    /// and signs are often set from another face that declares no weight
+    /// (`E3/E3x`, every letter 700 and neither `3` nor `/`).
+    fn bold(&self) -> bool {
+        if self.letters > 0 {
+            self.heavy_letters * 2 > self.letters
+        } else {
+            self.heavy * 2 > self.inked
+        }
+    }
+}
 
 fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -> Option<Line> {
     if idxs.is_empty() {
@@ -980,8 +1254,13 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
     let mut sizes: Vec<f32> = Vec::new();
+    // A power being read: its size and baseline.
+    let mut exponent: Option<(f32, f64)> = None;
+    // The last glyph of a mixed number's fraction being read.
+    let mut fraction: Option<usize> = None;
+    let mut words: Vec<Word> = Vec::new();
 
-    for &i in idxs {
+    for (k, &i) in idxs.iter().enumerate() {
         let g = &glyphs[i];
         sizes.push(g.font_size);
         match g.bbox {
@@ -989,6 +1268,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 // Prefer the pen position over the glyph box for the *start*
                 // too, so a left side bearing does not manufacture a gap.
                 let start = adv.start(&b).min(adv.at(g.origin));
+                let gap = prev_end.map(|pe| start - pe);
                 // Geometric fallback: many PDFs position words without emitting
                 // a space character at all, so a wide gap has to become one.
                 if let Some(pe) = prev_end {
@@ -1015,6 +1295,54 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                         text.push(' ');
                     }
                 }
+                // A mixed number's fraction parts from its whole number:
+                // `22 3/8`, not `223/8`.
+                if fraction.is_none_or(|end| k > end) && !text.ends_with(' ') {
+                    fraction = fraction_at(glyphs, idxs, k, adv);
+                    if fraction.is_some() {
+                        text.push(' ');
+                    }
+                }
+                let in_fraction = fraction.is_some_and(|end| k <= end);
+                // A note's mark raised after a word parts from it:
+                // `Acrylonitrile` and its `a`, not `Acrylonitrilea`.
+                let raised = if text.ends_with(' ') || in_fraction {
+                    None
+                } else {
+                    raised_mark(glyphs, idxs, k, adv)
+                };
+                // A degree set as a raised `o` or `0` reads as one: `145°`.
+                let degree = raised
+                    .as_ref()
+                    .is_some_and(|(m, next)| marks::degree(&text, m, *next));
+                let raised = raised.filter(|_| !degree).map(|(m, _)| m);
+                if raised
+                    .as_deref()
+                    .is_some_and(|m| marks::note_mark(&text, m))
+                {
+                    text.push(' ');
+                }
+                // A power raised after a number keeps its place: `10⁶` and
+                // `10⁻³` as superscripts, never flattened into the number as
+                // `106` and `10-3`. So does a unit's: `m²`, `PIES²`.
+                let continues = exponent.is_some_and(|(size, y): (f32, f64)| {
+                    (g.font_size - size).abs() <= size * 0.1
+                        && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
+                });
+                if in_fraction {
+                    exponent = None;
+                } else if !continues {
+                    exponent = raised
+                        .as_deref()
+                        .filter(|m| {
+                            let power = text.ends_with(|c: char| c.is_ascii_digit())
+                                && m.chars().any(|c| c.is_ascii_digit())
+                                && m.chars()
+                                    .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c));
+                            power || marks::unit_power(&text, m)
+                        })
+                        .map(|_| (g.font_size, g.origin.1));
+                }
                 // End of the previous glyph in *pen* space, not ink space.
                 // A right overhang (`f`, `y`, `r`) makes the ink box extend
                 // past where the pen actually stops, shrinking the measured gap
@@ -1029,7 +1357,24 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(acc) => acc.union(&b),
                     None => b,
                 });
-                text.push_str(&g.text);
+                if text.is_empty() || text.ends_with(' ') {
+                    let parted =
+                        gap.is_some_and(|d| d > g.font_size.max(1.0) as f64 * BLOCK_GAP_RATIO);
+                    words.push(Word {
+                        parted,
+                        ..Word::default()
+                    });
+                }
+                if let Some(w) = words.last_mut() {
+                    w.add(g);
+                }
+                if degree {
+                    text.push('\u{00B0}');
+                } else if exponent.is_some() {
+                    text.extend(g.text.chars().map(superscript));
+                } else {
+                    text.push_str(&g.text);
+                }
             }
             None => {
                 // Outline-less but text-bearing: an explicit space. Emit it and
@@ -1037,7 +1382,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 // the last *visible* mark, not from a zero-width position.
                 // On a tracked line the explicit spaces ARE the tracking, so
                 // the geometric decision above takes over instead.
-                if !tracked && !text.is_empty() && !text.ends_with(' ') {
+                if !tracked
+                    && !text.is_empty()
+                    && !text.ends_with(' ')
+                    && !stray_space(glyphs, idxs, k, adv)
+                {
                     text.push(' ');
                 }
             }
@@ -1045,10 +1394,10 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     }
 
     let bbox = bbox?;
-    // NFKC here (super- and subscripts kept) so line text is directly usable
-    // by NER and search. The raw offsets that resolve to bounding boxes live
-    // in `glyphs`, so normalizing the display text costs us nothing (T1.4 in
-    // eval/TEST_PLAN.md).
+    // Normalized here (ligatures read as letters; see `text::fold`) so line
+    // text is directly usable by NER and search. The raw offsets that resolve
+    // to bounding boxes live in `glyphs`, so normalizing the display text
+    // costs us nothing (T1.4 in eval/TEST_PLAN.md).
     let text = crate::text::normalize(text.trim());
     if text.is_empty() {
         return None;
@@ -1057,14 +1406,42 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let font_size = sizes[sizes.len() / 2];
 
-    // Most, not any: a single bold word inside a sentence does not make the
-    // line a heading.
-    let weighted = idxs.iter().filter(|&&i| glyphs[i].weight.is_some()).count();
-    let heavy = idxs
+    // Bold throughout, not in part: a bold word inside a sentence, or a
+    // bold label opening a paragraph, does not make the line a heading.
+    //
+    // Most of the glyphs that put ink down are bold, a face that declares
+    // no weight counting as regular. Many documents declare one for the
+    // bold face alone, and counting only the glyphs that declare one made a
+    // run-in label (`PUMP: With stainless steel pump…`) most of its line.
+    //
+    // And the line opens and closes on bold words. A label long enough to
+    // fill most of its line still ends in the plain text it introduces
+    // (`MICROCOMPUTER CONTROL SYSTEM: Hobart`), and one wrapped from the
+    // line above opens it plain (`Sani-Dwell. Chemical Sanitizing (65 racks
+    // per hour) – 50`). Words with letters decide: a number may open a
+    // heading in another face (`3.2`), a sign may stand at either end
+    // (`®`), and a chart's bold labels may take every figure from a face
+    // that declares no weight (`October 2020`).
+    let (inked, heavy) = words
         .iter()
-        .filter(|&&i| glyphs[i].weight.unwrap_or(400) >= 600)
-        .count();
-    let bold = weighted > 0 && heavy * 2 > weighted;
+        .fold((0, 0), |(n, h), w| (n + w.inked, h + w.heavy));
+    //
+    // The last word is the last before a gutter. A space that puts no ink
+    // down keeps the line pass from parting columns at it, and a heading
+    // ran on into the next column's plain text (`9.5. Adapting to the New
+    // Normal: Changing` and, across the gutter, `demand during COVID-19;`)
+    // read as ending plain.
+    let first = words.iter().position(|w| w.letters > 0);
+    let own = first.map_or(words.len(), |f| {
+        words[f + 1..]
+            .iter()
+            .position(|w| w.parted)
+            .map_or(words.len(), |p| f + 1 + p)
+    });
+    let opens = first.map(|f| &words[f]);
+    let closes = words[..own].iter().rev().find(|w| w.letters > 0);
+    let bold = heavy * 2 > inked && opens.is_none_or(Word::bold) && closes.is_none_or(Word::bold);
+    let opens_bold = opens.is_some_and(Word::bold);
     let opens_with_script = idxs
         .iter()
         .map(|&i| &glyphs[i])
@@ -1079,6 +1456,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         glyphs: idxs.to_vec(),
         font_size,
         bold,
+        opens_bold,
         opens_with_script,
     })
 }
@@ -1128,7 +1506,7 @@ mod tests {
     }
 
     /// `text` laid a glyph per character from `x`.
-    fn word(text: &str, x: f64, baseline: f64, size: f32) -> Vec<Glyph> {
+    fn sized_word(text: &str, x: f64, baseline: f64, size: f32) -> Vec<Glyph> {
         text.chars()
             .enumerate()
             .map(|(i, c)| {
@@ -1147,7 +1525,7 @@ mod tests {
         // A 30-point section number centred on a 10-point title, its
         // baseline 7 points below the title's: one line, as drawn.
         let mut v = vec![sized_at("1", 40.0, 107.0, 30.0)];
-        v.extend(word("Introduction", 70.0, 100.0, 10.0));
+        v.extend(sized_word("Introduction", 70.0, 100.0, 10.0));
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].text.starts_with('1') && lines[0].text.ends_with("Introduction"));
@@ -1157,9 +1535,9 @@ mod tests {
     fn a_small_raised_mark_stays_on_its_line() {
         // A registered mark at 4 points, raised 2.5 points after a word set
         // at 10.
-        let mut v = word("Widget", 40.0, 100.0, 10.0);
+        let mut v = sized_word("Widget", 40.0, 100.0, 10.0);
         v.push(sized_at("®", 73.0, 97.5, 4.0));
-        v.extend(word("is", 80.0, 100.0, 10.0));
+        v.extend(sized_word("is", 80.0, 100.0, 10.0));
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].text.contains("Widget®"), "{}", lines[0].text);
@@ -1192,6 +1570,105 @@ mod tests {
     fn splits_on_new_line() {
         let v = vec![g("a", 0.0, 0.0, 5.0, 0.0), g("b", 0.0, 20.0, 5.0, 0.0)];
         assert_eq!(assemble(&v).len(), 2);
+    }
+
+    /// `word` set from `x` in the given weight, one 5-wide glyph a letter.
+    fn weighted(word: &str, x: f64, weight: Option<u32>) -> Vec<Glyph> {
+        word.chars()
+            .enumerate()
+            .map(|(k, c)| Glyph {
+                weight,
+                ..g(&c.to_string(), x + 5.0 * k as f64, 0.0, 5.0, 0.0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_bold_label_beside_a_face_declaring_no_weight_is_not_a_bold_line() {
+        // Only the bold face declares a weight; the regular one declares
+        // none. The label is 5 glyphs of 25.
+        let mut v = weighted("PUMP:", 0.0, Some(700));
+        v.extend(weighted("Withstainless", 30.0, None));
+        v.extend(weighted("steel", 100.0, None));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].bold, "{}", lines[0].text);
+    }
+
+    #[test]
+    fn a_bold_line_with_a_sign_in_another_face_stays_bold() {
+        let mut v = weighted("Features", 0.0, Some(700));
+        v.extend(weighted("®", 40.0, None));
+        assert!(assemble(&v)[0].bold);
+        // Digits and signs from a face that declares no weight, between
+        // bold letters.
+        let mut v = weighted("Multipette", 0.0, Some(700));
+        for (k, (c, w)) in [
+            ("E", 700),
+            ("3", 0),
+            ("/", 0),
+            ("E", 700),
+            ("3", 0),
+            ("x", 700),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            v.extend(weighted(c, 55.0 + 5.0 * k as f64, (w > 0).then_some(w)));
+        }
+        let line = &assemble(&v)[0];
+        assert_eq!(line.text, "Multipette E3/E3x");
+        assert!(line.bold);
+    }
+
+    #[test]
+    fn a_label_filling_most_of_its_line_is_not_a_bold_line() {
+        // Bold to the colon, then the first plain word of the paragraph.
+        let mut v = weighted("CONTROLSYSTEM:", 0.0, Some(700));
+        v.extend(weighted("Hobart", 75.0, Some(400)));
+        assert!(!assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_figure_from_a_face_declaring_no_weight_does_not_end_a_bold_line() {
+        // A chart's bold labels, every digit from another face.
+        let mut v = weighted("October", 0.0, Some(700));
+        v.extend(weighted("2020", 40.0, None));
+        assert!(assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_label_opening_mid_line_is_not_a_bold_line() {
+        let mut v = weighted("Sani-Dwell.", 0.0, Some(400));
+        v.extend(weighted("ChemicalSanitizing", 60.0, Some(700)));
+        assert!(!assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_heading_numbered_in_another_face_stays_bold() {
+        let mut v = weighted("3.2", 0.0, Some(400));
+        v.extend(weighted("Results", 20.0, Some(700)));
+        assert!(assemble(&v)[0].bold);
+    }
+
+    #[test]
+    fn a_heading_run_on_across_a_gutter_ends_where_its_column_does() {
+        // A bold heading, a space that puts no ink down, then the next
+        // column's plain text 3.5 ems on: the space keeps the line whole.
+        let mut v = weighted("Adapting", 0.0, Some(700));
+        v.push(Glyph {
+            bbox: None,
+            advance: Some(2.5),
+            ..g(" ", 40.0, 0.0, 2.5, 0.0)
+        });
+        v.extend(weighted("demand", 75.0, None));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].bold, "{}", lines[0].text);
+        // Without the gutter, the plain word ends it.
+        let mut v = weighted("Adapting", 0.0, Some(700));
+        v.extend(weighted("demand", 45.0, None));
+        assert!(!assemble(&v)[0].bold);
     }
 
     /// A glyph set at `size` with its baseline at `baseline`, cap height
@@ -1234,7 +1711,7 @@ mod tests {
             1,
             "the exponent must stay on its line: {lines:?}"
         );
-        assert_eq!(lines[0].text, "cm3/s");
+        assert_eq!(lines[0].text, "cm³/s");
         assert_eq!(
             lines[0].font_size, 10.0,
             "one small glyph does not move the median"
@@ -1477,14 +1954,14 @@ mod tests {
     #[test]
     fn no_geometric_spaces_between_cjk_characters() {
         // Full-width glyphs advance wider than the Latin word threshold; a
-        // space here would corrupt `（別紙２）` into `( 別 紙 2 )`.
+        // space here would corrupt `（別紙２）` into `（ 別 紙 ２ ）`.
         let v = vec![
             g("\u{FF08}", 0.0, 0.0, 9.0, 0.0),
             g("\u{5225}", 12.0, 0.0, 9.0, 0.0),
             g("\u{7D19}", 24.0, 0.0, 9.0, 0.0),
         ];
         let lines = assemble(&v);
-        assert_eq!(lines[0].text, "(別紙", "no spaces between CJK chars");
+        assert_eq!(lines[0].text, "（別紙", "no spaces between CJK chars");
     }
 
     #[test]
@@ -1520,8 +1997,234 @@ mod tests {
         assert_eq!(lines[0].text, "a b");
     }
 
+    /// `text` set letter by letter from `x`, pen to pen, 5pt a letter,
+    /// drawn in order from `first`.
+    fn run(text: &str, x: f64, first: usize) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut l = g(&c.to_string(), x + 5.0 * i as f64, 0.0, 4.5, 0.0);
+                l.advance = Some(5.0);
+                l.draw_index = first + i;
+                l
+            })
+            .collect()
+    }
+
+    /// An explicit space at `x`, drawn `nth`.
+    fn space(x: f64, nth: usize) -> Glyph {
+        let mut sp = g(" ", x, 0.0, 0.0, 0.0);
+        sp.bbox = None;
+        sp.advance = Some(2.0);
+        sp.draw_index = nth;
+        sp
+    }
+
     #[test]
-    fn line_text_is_nfkc_normalized() {
+    fn a_space_drawn_out_of_turn_on_a_letter_parts_nothing() {
+        // `Produits`, and a space drawn after the line's last word at the
+        // `o`'s own position: where a browser put the space of a line it
+        // wrapped.
+        let mut v = run("Produits", 100.0, 0);
+        v.push(space(110.0, 20));
+        assert_eq!(assemble(&v)[0].text, "Produits");
+        // Drawn first, sorting ahead of the letter it sits on.
+        let mut v = vec![space(110.0, 20)];
+        v.extend(run("Produits", 100.0, 0));
+        assert_eq!(assemble(&v)[0].text, "Produits");
+        // Or inside a letter's advance.
+        let mut v = run("Produits", 100.0, 0);
+        v.push(space(111.5, 20));
+        assert_eq!(assemble(&v)[0].text, "Produits");
+    }
+
+    #[test]
+    fn a_space_drawn_in_turn_is_kept_however_close_the_next_word() {
+        // Pen to pen: the space glyph is the only sign of the boundary.
+        let mut v = run("of", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("the", 12.0, 3));
+        assert_eq!(assemble(&v)[0].text, "of the");
+        // `the` begins just past where the space does: a justified line
+        // closed up, or a run in another size set where the space is.
+        let mut v = run("of", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("the", 10.1, 3));
+        assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    #[test]
+    fn a_space_drawn_out_of_turn_in_a_gap_is_kept() {
+        // A line's words drawn first and its spaces after them.
+        let mut v = run("of", 0.0, 0);
+        v.extend(run("the", 12.0, 2));
+        v.push(space(10.0, 9));
+        assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    /// `text` at 10pt from `x`, 5pt a letter, pen to pen; `raised` sets it
+    /// at 6pt, 3.5pt above the baseline, as a superscript.
+    fn word(text: &str, x: f64, raised: bool) -> Vec<Glyph> {
+        let (size, adv, lift) = if raised {
+            (6.0, 3.0, 3.5)
+        } else {
+            (10.0, 5.0, 0.0)
+        };
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let cx = x + adv * i as f64;
+                let mut l = g(&c.to_string(), cx, -lift, adv - 0.5, 0.0);
+                l.font_size = size;
+                l.advance = Some(adv);
+                l
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_note_mark_raised_after_a_word_parts_from_it() {
+        let mut v = word("Acrylonitrile", 0.0, false);
+        v.extend(word("a", 65.0, true));
+        assert_eq!(assemble(&v)[0].text, "Acrylonitrile a");
+        let mut v = word("Revenue", 0.0, false);
+        v.extend(word("12", 35.0, true));
+        assert_eq!(assemble(&v)[0].text, "Revenue 12");
+    }
+
+    #[test]
+    fn raised_text_of_the_word_stays_in_it() {
+        // An exponent, an ordinal's ending.
+        for (base, raised) in [("1", "st"), ("e", "x")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, format!("{base}{raised}"));
+        }
+        // A unit's power, raised: `PIES²` is the Spanish square foot.
+        for (base, raised, want) in [("cm", "3", "cm³"), ("1000 PIES", "2", "1000 PIES²")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+    }
+
+    #[test]
+    fn a_degree_set_as_a_raised_o_reads_as_one() {
+        for (base, raised, after, want) in [
+            ("~ 145", "o", "", "~ 145°"),
+            ("25", "o", "C", "25°C"),
+            ("5", "0", "C", "5°C"),
+            ("1", "o", "", "1o"),
+        ] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            v.extend(word(after, 5.0 * base.len() as f64 + 3.0, false));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+    }
+
+    #[test]
+    fn a_note_number_after_a_bracket_or_a_quantity_parts_from_it() {
+        for (base, raised, want) in [("(49 N)", "5", "(49 N) 5"), ("26TB", "1", "26TB 1")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+    }
+
+    #[test]
+    fn a_power_raised_after_a_number_keeps_its_place() {
+        // `kg/10⁶ dscm`, `4.0x10⁻³`: read flat, the unit is a hundredfold
+        // off and the value a different number.
+        for (base, raised, want) in [("kg/10", "6", "kg/10⁶"), ("4.0x10", "-3", "4.0x10⁻³")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+        // A note's letters after a value stand apart, a list after any.
+        for (base, raised, want) in [("110", "e", "110 e"), ("66", "e,h", "66 e,h")] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+    }
+
+    /// Figures from `x`, each 5 wide, at `size`, with their ink from `top`
+    /// down to `foot` over a baseline at 10.
+    fn figures(text: &str, x: f64, size: f32, top: f64, foot: f64) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let cx = x + 5.0 * i as f64;
+                let mut f = g(&c.to_string(), cx, 0.0, 4.5, 0.0);
+                f.bbox = Some(BBox {
+                    x0: cx,
+                    y0: top,
+                    x1: cx + 4.5,
+                    y1: foot,
+                });
+                f.font_size = size;
+                f.advance = Some(5.0);
+                f
+            })
+            .collect()
+    }
+
+    /// A whole number, then a numerator, a slash and a denominator, each
+    /// with its ink at `(top, foot)`; the whole number's figures stand 3 to
+    /// 10, and the slash runs their height.
+    fn mixed(whole: &str, num: (&str, f64, f64), den: (&str, f64, f64)) -> String {
+        let mut v = figures(whole, 0.0, 10.0, 3.0, 10.0);
+        let mut x = 5.0 * whole.len() as f64;
+        v.extend(figures(num.0, x, 10.0, num.1, num.2));
+        x += 5.0 * num.0.len() as f64;
+        v.extend(figures("/", x, 10.0, 3.0, 10.0));
+        v.extend(figures(den.0, x + 5.0, 10.0, den.1, den.2));
+        assemble(&v)[0].text.clone()
+    }
+
+    #[test]
+    fn a_mixed_numbers_fraction_parts_from_its_whole_number() {
+        // The font's fraction figures: the numerator short and high, the
+        // denominator short on the baseline.
+        assert_eq!(mixed("22", ("3", 3.0, 7.0), ("8", 6.0, 10.0)), "22 3/8");
+        // The whole fraction set small and raised.
+        assert_eq!(mixed("21", ("13", 3.0, 6.5), ("16", 3.0, 6.5)), "21 13/16");
+        // A fraction the font draws whole, which its text map spells out.
+        let mut v = figures("2", 0.0, 10.0, 3.0, 10.0);
+        v.extend(figures("x", 5.0, 10.0, 3.0, 10.0));
+        v[1].text = "1/2".into();
+        assert_eq!(assemble(&v)[0].text, "2 1/2");
+    }
+
+    #[test]
+    fn a_numerator_set_raised_is_no_power() {
+        // A numerator set smaller and raised, read as `78⁵/16` by the rule
+        // that keeps a power raised.
+        let mut v = figures("78", 0.0, 10.0, 3.0, 10.0);
+        let mut num = word("5", 10.0, true);
+        num[0].bbox = Some(BBox {
+            x0: 10.0,
+            y0: 3.0,
+            x1: 12.5,
+            y1: 6.5,
+        });
+        v.extend(num);
+        v.extend(figures("/", 13.0, 10.0, 3.0, 10.0));
+        v.extend(figures("16", 18.0, 6.0, 6.0, 10.0));
+        assert_eq!(assemble(&v)[0].text, "78 5/16");
+    }
+
+    #[test]
+    fn short_figures_on_the_baseline_or_over_full_ones_are_no_fraction() {
+        // Old-style figures are as short, and stand on the baseline.
+        assert_eq!(mixed("20", ("12", 6.0, 10.0), ("13", 6.0, 10.0)), "2012/13");
+        // A power over a whole number is no fraction's numerator.
+        assert_eq!(mixed("10", ("5", 3.0, 7.0), ("16", 3.0, 10.0)), "105/16");
+    }
+
+    #[test]
+    fn line_text_reads_ligatures_as_letters() {
         let v = vec![
             g("pro", 0.0, 0.0, 15.0, 0.0),
             g("\u{FB01}", 15.0, 0.0, 5.0, 0.0),
@@ -1562,6 +2265,7 @@ mod tests {
             font_size: size,
             bold: false,
             opens_with_script: false,
+            opens_bold: false,
         }
     }
 

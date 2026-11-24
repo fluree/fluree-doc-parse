@@ -938,6 +938,7 @@ dependencies = [
  "fluree-doc-model",
  "fluree-doc-pdf",
  "fluree-doc-pptx",
+ "fluree-doc-text",
  "fluree-doc-transcript",
  "fluree-doc-vision",
  "fluree-doc-xlsx",
@@ -1020,6 +1021,7 @@ dependencies = [
  "hayro-syntax",
  "kurbo",
  "png 0.17.16",
+ "read-fonts",
  "serde",
  "serde_json",
  "unicode-normalization",
@@ -1033,6 +1035,14 @@ dependencies = [
  "fluree-doc-ooxml",
  "quick-xml",
  "zip",
+]
+
+[[package]]
+name = "fluree-doc-text"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "fluree-doc-model",
 ]
 
 [[package]]
