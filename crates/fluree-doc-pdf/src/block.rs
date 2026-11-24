@@ -364,6 +364,11 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     if l.text.chars().any(says_something) && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
         return false;
     }
+    // A list's marker is set at most a little larger than its item, never
+    // as display type beside it: a margin title's `III.` beside a column.
+    if l.font_size as f64 >= nb.font_size as f64 * DISPLAY_RATIO {
+        return false;
+    }
     let smaller = (l.font_size as f64) < nb.font_size as f64 * 0.92;
     let outdented = l.bbox.x1 <= nb.bbox.x0 + 1.0;
     smaller || outdented
@@ -489,6 +494,8 @@ pub fn assemble_with_marks(
         }
     }
 
+    let mut blocks = stack_display(blocks);
+
     // Vertical gap above each block, for the isolation signal.
     for i in 1..blocks.len() {
         let fs = blocks[i].font_size.max(1.0) as f64;
@@ -550,6 +557,61 @@ fn marker_beside(m: &Line, l: &Line) -> bool {
 
 /// `hang`: whether `next` may go on as the wrapped line of a bulleted item
 /// above it, which a line with a marker of its own may not.
+/// Size ratio from which text is display type beside the text next to it.
+const DISPLAY_RATIO: f64 = 2.0;
+
+/// Most blocks of another column that may stand between two stacked lines
+/// of a display title in reading order.
+const STACK_WINDOW: usize = 8;
+
+/// Join the lines of a display title stacked beside a column of smaller
+/// text.
+///
+/// Where the page is read as one column, a title set in its margin beside
+/// the text is read line by line with the text: `Executive`, a line of the
+/// text, another, `Summary`. Each title line was a block of its own, and
+/// came out a heading of its own. Two blocks at one display size, one under
+/// the other at their own leading, with only smaller text set beside them
+/// in between, are one block, in the first's place, whatever their weight.
+fn stack_display(mut blocks: Vec<Block>) -> Vec<Block> {
+    let mut i = 0;
+    while i < blocks.len() {
+        let mut j = i + 1;
+        while j < blocks.len() && j <= i + STACK_WINDOW {
+            let (a, b) = (&blocks[i], &blocks[j]);
+            let size = a.font_size.max(b.font_size).max(1.0) as f64;
+            // Weight may change: a bold number over its title (`III.`
+            // over `Regulatory cholesterol`).
+            let same = (a.font_size - b.font_size).abs() as f64 / size <= FONT_SIZE_TOLERANCE;
+            let shares_width = a.bbox.x1.min(b.bbox.x1) > a.bbox.x0.max(b.bbox.x0);
+            let gap = b.bbox.y0 - a.bbox.y1;
+            let stacked = gap > -size * 0.2 && gap <= size * 0.75;
+            let between_beside = blocks[i + 1..j].iter().all(|m| {
+                m.bbox.x1.min(a.bbox.x1.max(b.bbox.x1)) <= m.bbox.x0.max(a.bbox.x0.min(b.bbox.x0))
+                    && (m.font_size as f64) * DISPLAY_RATIO <= size
+            });
+            // An item of a list is not a title's next line: a slide's
+            // bullets at display size, one under the other.
+            let item =
+                b.marker.is_some() || b.text().trim_start().chars().next().is_some_and(is_bullet);
+            if same && shares_width && stacked && between_beside && !item && j > i + 1 {
+                let b = blocks.remove(j);
+                let a = &mut blocks[i];
+                a.lines.extend(b.lines);
+                a.bbox = a.bbox.union(&b.bbox);
+                continue;
+            }
+            // The next block of this title's size settles it either way.
+            if same {
+                break;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    blocks
+}
+
 fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge, hang: bool) -> bool {
     if prev.rotation_bucket != next.rotation_bucket {
         return false;
@@ -1405,6 +1467,65 @@ mod tests {
             at("A note set well in from the list", 80.0, 135.0, 330.0),
         ];
         assert_eq!(assemble(&lines, 1.27).len(), 2);
+    }
+
+    #[test]
+    fn a_display_title_stacked_beside_a_column_is_one_block() {
+        // Read as one column, the margin title's lines alternate with the
+        // column's: `Executive`, two lines of text, `Summary`.
+        let at = |text: &str, x: f64, y: f64, x1: f64, fs: f32| {
+            let mut line = l(text, x, y, fs);
+            line.bbox.x1 = x1;
+            line
+        };
+        let lines = vec![
+            at("Executive", 99.0, 97.2, 231.5, 34.0),
+            at("India suffers from regulatory", 306.0, 115.0, 491.0, 10.5),
+            at("cholesterol that is getting in", 339.0, 131.0, 490.0, 10.5),
+            at("Summary", 99.0, 141.2, 235.7, 34.0),
+            at("the way of doing business. The", 339.0, 147.0, 491.0, 10.5),
+        ];
+        let b = assemble(&lines, 1.52);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert!(
+            texts.contains(&"Executive Summary".to_string()),
+            "{texts:?}"
+        );
+        // Two headings one under the other with text of their own size in
+        // between are two.
+        let lines = vec![
+            at("Results", 99.0, 97.2, 231.5, 34.0),
+            at("A line of the same size", 306.0, 115.0, 491.0, 34.0),
+            at("Methods", 99.0, 141.2, 235.7, 34.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 3);
+    }
+
+    #[test]
+    fn a_slides_bullets_at_display_size_are_not_one_title() {
+        let at = |text: &str, x: f64, y: f64, x1: f64, fs: f32| {
+            let mut line = l(text, x, y, fs);
+            line.bbox.x1 = x1;
+            line
+        };
+        let lines = vec![
+            at("• Faster setup on site", 99.0, 97.2, 231.5, 34.0),
+            at("a note in the column beside", 306.0, 115.0, 491.0, 10.5),
+            at("• Lower running costs", 99.0, 141.2, 235.7, 34.0),
+        ];
+        assert_eq!(assemble(&lines, 1.52).len(), 3);
+    }
+
+    #[test]
+    fn display_type_is_not_a_list_marker() {
+        // `III.` at 36pt in the margin beside a 10.5pt column.
+        let mut num = l("III.", 102.0, 100.7, 36.0);
+        num.bbox.x1 = 141.0;
+        let mut text = l("his report defines", 306.0, 115.5, 10.5);
+        text.bbox.x1 = 491.0;
+        let b = assemble(&[num, text], 1.5);
+        assert!(b.iter().all(|x| x.marker.is_none()), "{b:?}");
+        assert!(b.iter().any(|x| x.text() == "III."));
     }
 
     #[test]

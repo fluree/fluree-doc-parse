@@ -355,9 +355,11 @@ pub fn doubt(elements: &[fluree_doc_model::Element], page: usize) -> Option<Doub
 /// beside a column of short blocks, and walked from block to block the
 /// region crossed the page: a fact sheet's paragraphs and table titles, a
 /// sell sheet's headings and bullets, all typed as the logo's labels. Text
-/// at prose size is the drawing's only when it is near the drawing itself;
-/// a label set smaller, as tick labels, legends and source notes are, may
-/// be reached through the labels already taken.
+/// at prose size is the drawing's only when it is near the drawing itself,
+/// and beside, above or below it rather than off a corner: a cover's
+/// description set clear of its logo's corner was typed as the logo's
+/// label. A label set smaller, as tick labels, legends and source notes
+/// are, may be reached through the labels already taken.
 ///
 /// The reach is the drawing's own size throughout, so the walk does not
 /// compound. Only short blocks are absorbed, so a paragraph beside the
@@ -396,6 +398,12 @@ pub fn attach(
             let dy = (b.y0 - r.y1).max(r.y0 - b.y1).max(0.0);
             dx <= reach && dy <= reach
         };
+        // Beside, above or below the drawing: sharing its height or its
+        // width. Text off one of its corners is the page's.
+        let beside = |b: &BBox| {
+            b.x1.min(drawing.x1) > b.x0.max(drawing.x0)
+                || b.y1.min(drawing.y1) > b.y0.max(drawing.y0)
+        };
         loop {
             let mut grew = false;
             for (b, size, _) in blocks {
@@ -403,7 +411,7 @@ pub fn attach(
                     continue;
                 }
                 let label = *size < prose * LABEL_SIZE;
-                if !near(b, &drawing) && !(label && near(b, &f.bbox)) {
+                if !(near(b, &drawing) && (label || beside(b))) && !(label && near(b, &f.bbox)) {
                     continue;
                 }
                 let grown = f.bbox.union(b);
@@ -658,6 +666,28 @@ mod tests {
             "figure grew to {:.0}pt of a 792pt page",
             grown.height()
         );
+    }
+
+    #[test]
+    fn prose_off_a_drawings_corner_is_not_its_label() {
+        // A cover's logo, and the description set clear of its corner, at
+        // the page's prose size; a caption under it at prose size is the
+        // logo's.
+        let mut figs = vec![Figure {
+            bbox: bb(222.0, 78.0, 277.0, 126.0),
+            page: 0,
+            shapes: 15,
+        }];
+        let blocks = vec![(
+            bb(294.0, 150.0, 548.0, 181.0),
+            10.0,
+            "The insulation is a loose-fill thermal fiberglass",
+        )];
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
+        assert_eq!(figs[0].bbox.x1, 277.0, "the description stays prose");
+        let blocks = vec![(bb(230.0, 132.0, 270.0, 142.0), 10.0, "Logo")];
+        attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
+        assert_eq!(figs[0].bbox.y1, 142.0, "the caption under it is its label");
     }
 
     #[test]

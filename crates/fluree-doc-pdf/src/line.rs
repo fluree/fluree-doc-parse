@@ -80,6 +80,23 @@ const SCRIPT_SIZE_RATIO: f64 = 0.85;
 /// whose baseline sits well within the display word's shift tolerance.
 const SCRIPT_MIN_RATIO: f64 = 0.45;
 
+/// Smallest size, as a fraction of its word's, at which a registered,
+/// trademark or copyright sign is still that word's. A sign annotates the
+/// word before it and nothing else, and is set as small as suits the word:
+/// a 28pt cover title's `®` at 8.4pt. Below [`SCRIPT_MIN_RATIO`] it was a
+/// line of its own, read as a list marker, and given to the text beside
+/// the title.
+const SIGN_MIN_RATIO: f64 = 0.15;
+
+/// A registered, trademark, service-mark, copyright or sound-recording
+/// sign, alone.
+fn is_sign(text: &str) -> bool {
+    matches!(
+        text.trim(),
+        "\u{00AE}" | "\u{2122}" | "\u{2120}" | "\u{00A9}" | "\u{2117}"
+    )
+}
+
 /// Furthest a script glyph's baseline may sit from its neighbour's, in the
 /// neighbour's font-size units. Superscripts are raised a third to a half of
 /// the size; subscripts are lowered about a quarter.
@@ -472,6 +489,8 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 _ => clusters.push(vec![g]),
             }
         }
+        let clusters = loose_signs(clusters, glyphs, adv);
+        let (mut clusters, caps) = drop_caps(clusters, glyphs, adv);
         attach_scripts(&mut clusters, glyphs, vertical, adv);
         for c in &mut clusters {
             c.sort_by(|&a, &b| {
@@ -488,8 +507,32 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 continue;
             }
             let prev = *cur.last().unwrap();
-            if joins_line(&glyphs[prev], &glyphs[i], vertical, adv)
+            // Between display type and body text the gutter is measured in
+            // the body text's size, as the baseline is ([`shares_baseline`]):
+            // a margin title's last letter stood 40pt from the column beside
+            // it, under 1.5 of its own ems and nearly four of the column's
+            // (`Regulatory the three arms of the State`). Measured from the
+            // last glyph that put ink down, past an explicit space.
+            let display_gap = cur
+                .iter()
+                .rev()
+                .copied()
+                .find(|&j| glyphs[j].bbox.is_some())
+                .is_some_and(|k| {
+                    let (a, b) = (&glyphs[k], &glyphs[i]);
+                    let big = a.font_size.max(b.font_size) as f64;
+                    let small = a.font_size.min(b.font_size).max(1.0) as f64;
+                    let gap = match (a.bbox, b.bbox) {
+                        (Some(ba), Some(bb)) => adv.start(&bb) - adv.end(&ba),
+                        _ => return false,
+                    };
+                    big >= small * DISPLAY_RATIO && gap > small * BLOCK_GAP_RATIO
+                });
+            // A drop cap heads the line it was put in, its baseline lines
+            // below.
+            if (caps.contains(&prev) || joins_line(&glyphs[prev], &glyphs[i], vertical, adv))
                 && !block_gap(&glyphs[prev], &glyphs[i], adv)
+                && !display_gap
             {
                 cur.push(i);
             } else {
@@ -509,6 +552,8 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
             lines.push(l);
         }
     }
+
+    let mut lines = label_display(lines, glyphs, ratio);
 
     // Restore document order across buckets. This is a provisional order —
     // real reading order (XY-Cut++) is a later pass over blocks, not lines.
@@ -602,6 +647,16 @@ impl Advance {
 }
 
 /// Two glyphs sit on one baseline, within jitter.
+///
+/// Jitter is measured in the larger size, except between display type and
+/// the text beside it: a glyph at least [`DISPLAY_RATIO`] times the other's
+/// size is measured in the smaller one. Text set at two sizes on one line
+/// shares its baseline to the point, and a script is attached by its own
+/// rule ([`attach_scripts`]), so the larger size's tolerance only ever
+/// took in lines of the smaller text. A data sheet sets a 28pt cover title
+/// beside a 10pt description, and the description's middle line, 5pt from
+/// the title's baseline, was read into the title's line: `PROCAT suelto
+/// que no es adherible…`, the paragraph cut around it.
 fn shares_baseline(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     // Compare baselines, not boxes.
     let delta = if vertical {
@@ -609,9 +664,88 @@ fn shares_baseline(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     } else {
         a.origin.1 - b.origin.1
     };
-    let scale = a.font_size.max(b.font_size).max(1.0) as f64;
+    let (big, small) = (
+        a.font_size.max(b.font_size).max(1.0) as f64,
+        a.font_size.min(b.font_size).max(1.0) as f64,
+    );
+    let scale = if big >= small * DISPLAY_RATIO {
+        small
+    } else {
+        big
+    };
     delta.abs() < scale * BASELINE_TOLERANCE
 }
+
+/// Join a label set small right against display type to the display
+/// type's line: a form's `Form`, at 6pt and a little raised, before its 18pt
+/// number `7004`.
+///
+/// Their baselines are measured in the label's size, as display type's
+/// are against any text beside it ([`shares_baseline`]), and the label sat
+/// off the number's by more than that. A label ends within an em of its own
+/// size before the display line begins, inside its height, and is the only
+/// line of small text that does: a logo with two lines of its name set
+/// beside its last letter is left as it is.
+fn label_display(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> {
+    let n = lines.len();
+    let against = |a: &Line, b: &Line| {
+        let small = (a.font_size.max(1.0)) as f64;
+        a.rotation_bucket == 0
+            && b.rotation_bucket == 0
+            && b.font_size as f64 >= small * DISPLAY_RATIO
+            && a.bbox.x1 <= b.bbox.x0 + small * 0.5
+            && b.bbox.x0 - a.bbox.x1 <= small
+            && a.bbox.y0 >= b.bbox.y0 - small * 0.5
+            && a.bbox.y1 <= b.bbox.y1 + small * 0.5
+            && a.text.split_whitespace().count() <= 3
+    };
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for j in 0..n {
+        let labels: Vec<usize> = (0..n)
+            .filter(|&i| i != j && against(&lines[i], &lines[j]))
+            .collect();
+        if let [i] = labels[..] {
+            pairs.push((i, j));
+        }
+    }
+    if pairs.is_empty() {
+        return lines;
+    }
+    let mut taken = vec![false; n];
+    let mut joined: Vec<Option<Line>> = vec![None; n];
+    for (i, j) in pairs {
+        if taken[i] || taken[j] {
+            continue;
+        }
+        let mut idxs: Vec<usize> = lines[i]
+            .glyphs
+            .iter()
+            .chain(&lines[j].glyphs)
+            .copied()
+            .collect();
+        idxs.sort_by(|&a, &b| cmp(glyphs[a].origin.0, glyphs[b].origin.0));
+        if let Some(l) = build_line(glyphs, &idxs, 0, ratio) {
+            taken[i] = true;
+            taken[j] = true;
+            joined[j] = Some(l);
+        }
+    }
+    lines
+        .into_iter()
+        .enumerate()
+        .filter_map(|(k, l)| match joined[k].take() {
+            Some(m) => Some(m),
+            None if taken[k] => None,
+            None => Some(l),
+        })
+        .collect()
+}
+
+/// Size ratio from which the larger of two glyphs is display type beside
+/// the smaller, and their baselines are compared in the smaller size. A
+/// cover or margin title is set at three times its text or so; a form's
+/// rule of 5pt underscores beside its 10pt labels is no display type.
+const DISPLAY_RATIO: f64 = 2.5;
 
 /// Consecutive glyphs belong to one line: on one baseline, or a script
 /// beside the text it annotates.
@@ -646,6 +780,132 @@ fn script_adjacent(a: &Glyph, b: &Glyph, adv: Advance) -> bool {
     gap >= -size * SCRIPT_OVERHANG && gap <= size * SCRIPT_REACH
 }
 
+/// Take out of its cluster each sign ([`is_sign`]) that no glyph of the
+/// cluster stands beside, into a cluster of its own after it, so that
+/// [`attach_scripts`] can give it to the word it follows.
+///
+/// A raised sign can sit on the baseline of a line it has nothing to do
+/// with: a cover title's `®`, raised against the 28pt word, lands within a
+/// fraction of a point of the first line of the 10pt text beside the title,
+/// and was read as that line's first glyph and then as its list marker.
+fn loose_signs(clusters: Vec<Vec<usize>>, glyphs: &[Glyph], adv: Advance) -> Vec<Vec<usize>> {
+    let mut out = Vec::with_capacity(clusters.len());
+    for c in clusters {
+        let loose = |&g: &usize| {
+            is_sign(&glyphs[g].text)
+                && !c.iter().any(|&o| {
+                    o != g
+                        && (script_adjacent(&glyphs[o], &glyphs[g], adv)
+                            || script_adjacent(&glyphs[g], &glyphs[o], adv))
+                })
+        };
+        let (signs, rest): (Vec<usize>, Vec<usize>) = c.iter().copied().partition(loose);
+        if signs.is_empty() || rest.is_empty() {
+            out.push(c);
+            continue;
+        }
+        out.push(rest);
+        out.extend(signs.into_iter().map(|g| vec![g]));
+    }
+    out
+}
+
+/// Smallest size, against the text beside it, of a drop cap.
+const DROP_CAP_RATIO: f64 = 2.5;
+
+/// Put each drop cap at the head of the first line it stands beside.
+///
+/// A drop cap is a paragraph's first letter set large, its top at the top
+/// of the paragraph's first line and its foot on the baseline of the second,
+/// third or fourth. Its baseline is the last spanned line's, so it was read
+/// into that line, or by the large glyph's own baseline tolerance into the
+/// one above it: `T of those stories`, `ndia suffers from` with the `I` two
+/// lines down. Reading order then broke too, as the line carrying the cap
+/// took its top and sorted first.
+///
+/// A single letter at [`DROP_CAP_RATIO`] times the size of the text beside
+/// it or more, with two or more lines starting just right of it whose
+/// baselines fall between its top and its foot, is moved into the cluster
+/// of the topmost. Returns the clusters and the caps moved.
+fn drop_caps(
+    mut clusters: Vec<Vec<usize>>,
+    glyphs: &[Glyph],
+    adv: Advance,
+) -> (Vec<Vec<usize>>, std::collections::HashSet<usize>) {
+    let mut caps = std::collections::HashSet::new();
+    if adv != Advance::Right {
+        return (clusters, caps);
+    }
+    let mut moves: Vec<(usize, usize, usize)> = Vec::new();
+    for (ci, c) in clusters.iter().enumerate() {
+        for &g in c {
+            let cap = &glyphs[g];
+            let Some(cb) = cap.bbox else { continue };
+            let mut chars = cap.text.chars();
+            if !(chars.next().is_some_and(char::is_alphabetic) && chars.next().is_none()) {
+                continue;
+            }
+            let size = cap.font_size as f64;
+            // A drop cap opens its word: no letter of its size stands
+            // right before it, as one does before a logo's last letter
+            // (`JNER` beside a journal's name).
+            let opens = !glyphs.iter().any(|o| {
+                o.font_size as f64 >= size * 0.5
+                    && o.bbox.is_some_and(|ob| {
+                        ob.x1 <= cb.x0 + size * 0.1
+                            && ob.x1 >= cb.x0 - size * 0.3
+                            && ob.y1 > cb.y0
+                            && ob.y0 < cb.y1
+                    })
+            });
+            if !opens {
+                continue;
+            }
+            // The clusters it stands beside: each one's first glyph past
+            // the cap, and that glyph's baseline.
+            let beside: Vec<(usize, f64)> = clusters
+                .iter()
+                .enumerate()
+                .filter_map(|(cj, d)| {
+                    // Right of the cap: a line can share its row with
+                    // text on the cap's other side, a title in the margin.
+                    let first = d
+                        .iter()
+                        .filter(|&&i| i != g)
+                        .map(|&i| &glyphs[i])
+                        .filter(|o| {
+                            o.bbox
+                                .is_some_and(|b| b.x0 >= cb.x1 - o.font_size.max(1.0) as f64 * 0.5)
+                        })
+                        .min_by(|a, b| cmp(a.bbox.unwrap().x0, b.bbox.unwrap().x0))?;
+                    let fs = first.font_size.max(1.0) as f64;
+                    let x0 = first.bbox.unwrap().x0;
+                    let y = first.origin.1;
+                    (size >= fs * DROP_CAP_RATIO
+                        && x0 >= cb.x1 - fs * 0.5
+                        && x0 <= cb.x1 + fs * 2.0
+                        && y > cb.y0
+                        && y <= cap.origin.1 + fs * 0.5)
+                        .then_some((cj, y))
+                })
+                .collect();
+            if beside.len() < 2 {
+                continue;
+            }
+            let (top, _) = beside.iter().copied().min_by(|a, b| cmp(a.1, b.1)).unwrap();
+            if top != ci {
+                moves.push((ci, g, top));
+            }
+        }
+    }
+    for (from, g, to) in moves {
+        clusters[from].retain(|&i| i != g);
+        clusters[to].push(g);
+        caps.insert(g);
+    }
+    (clusters, caps)
+}
+
 /// Move script runs into the cluster of the text they annotate.
 ///
 /// A cluster holds one baseline, so a line's superscripts form a cluster
@@ -666,13 +926,18 @@ fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool,
             continue;
         }
         let small = size_of(&clusters[s]) as f64;
+        let min_ratio = if clusters[s].iter().all(|&i| is_sign(&glyphs[i].text)) {
+            SIGN_MIN_RATIO
+        } else {
+            SCRIPT_MIN_RATIO
+        };
         let lo = s.saturating_sub(SCRIPT_WINDOW);
         let hi = (s + SCRIPT_WINDOW).min(clusters.len() - 1);
         let bases: Vec<usize> = (lo..=hi)
             .filter(|&b| b != s && !clusters[b].is_empty())
             .filter(|&b| {
                 let big = size_of(&clusters[b]) as f64;
-                (SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&(small / big.max(1.0)))
+                (min_ratio..=SCRIPT_SIZE_RATIO).contains(&(small / big.max(1.0)))
             })
             .collect();
         if bases.is_empty() {
@@ -730,7 +995,12 @@ fn script_attached(a: &Glyph, b: &Glyph, vertical: bool) -> bool {
     };
     let size = big.font_size.max(1.0) as f64;
     let ratio = small.font_size as f64 / size;
-    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) {
+    let min_ratio = if is_sign(&small.text) {
+        SIGN_MIN_RATIO
+    } else {
+        SCRIPT_MIN_RATIO
+    };
+    if !(min_ratio..=SCRIPT_SIZE_RATIO).contains(&ratio) {
         return false;
     }
     let (baseline, shift, ink) = if vertical {
@@ -1202,6 +1472,18 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     // The last glyph of a mixed number's fraction being read.
     let mut fraction: Option<usize> = None;
     let mut words: Vec<Word> = Vec::new();
+    // A drop cap at the head of the line ([`drop_caps`]) is its first
+    // word's first letter, set apart from the rest by the cap's indent
+    // alone: `This`, not `T his`.
+    let cap_head = adv == Advance::Right && {
+        let mut sz: Vec<f64> = idxs.iter().map(|&i| glyphs[i].font_size as f64).collect();
+        sz.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut bl: Vec<f64> = idxs.iter().map(|&i| glyphs[i].origin.1).collect();
+        bl.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let (fs, base) = (sz[sz.len() / 2].max(1.0), bl[bl.len() / 2]);
+        let g0 = &glyphs[idxs[0]];
+        g0.font_size as f64 >= fs * DROP_CAP_RATIO && g0.origin.1 - base > fs * 0.8
+    };
 
     for (k, &i) in idxs.iter().enumerate() {
         let g = &glyphs[i];
@@ -1233,7 +1515,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     } else {
                         space_ratio
                     };
-                    if !both_cjk && start - pe > g.font_size as f64 * ratio && !text.ends_with(' ')
+                    let after_cap = cap_head && text.chars().count() == 1;
+                    if !both_cjk
+                        && !after_cap
+                        && start - pe > g.font_size as f64 * ratio
+                        && !text.ends_with(' ')
                     {
                         text.push(' ');
                     }
@@ -1348,6 +1634,33 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     // Median, not mean: robust to a stray oversized glyph (drop cap, symbol).
     sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let font_size = sizes[sizes.len() / 2];
+    // A drop cap at the head of the line reaches down beside the lines
+    // under it, and the line is as tall as its own text: taking the cap's
+    // height put the line's top far above the next line's and parted the
+    // paragraph there (see [`drop_caps`]).
+    let bbox = {
+        let mut base: Vec<f64> = idxs.iter().map(|&i| glyphs[i].origin.1).collect();
+        base.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let base = base[base.len() / 2];
+        let fs = font_size.max(1.0) as f64;
+        let capped =
+            |g: &Glyph| g.font_size as f64 >= fs * DROP_CAP_RATIO && g.origin.1 - base > fs * 0.8;
+        let own = idxs
+            .iter()
+            .map(|&i| &glyphs[i])
+            .filter(|g| !capped(g))
+            .filter_map(|g| g.bbox)
+            .reduce(|a, b| a.union(&b));
+        match own {
+            Some(o) if adv == Advance::Right && o != bbox => BBox {
+                x0: bbox.x0,
+                x1: bbox.x1,
+                y0: o.y0,
+                y1: o.y1,
+            },
+            _ => bbox,
+        }
+    };
 
     // Bold throughout, not in part: a bold word inside a sentence, or a
     // bold label opening a paragraph, does not make the line a heading.
@@ -1630,6 +1943,124 @@ mod tests {
         ];
         let lines = assemble(&v);
         assert_eq!(lines.len(), 2, "{lines:?}");
+    }
+
+    /// A word set glyph by glyph at one size, from `x`.
+    fn sized_word(text: &str, x: f64, baseline: f64, size: f32) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                sized(
+                    &c.to_string(),
+                    x + i as f64 * size as f64 * 0.5,
+                    baseline,
+                    size,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_body_line_beside_display_type_keeps_to_its_own_line() {
+        // A 28pt cover title beside a 10pt description: the description's
+        // middle line sits 5pt from the title's baseline, inside a 28pt
+        // glyph's jitter but not a 10pt one's.
+        let mut v = sized_word("PROCAT", 181.0, 173.8, 28.0);
+        v.extend(sized_word("El", 294.0, 157.5, 10.0));
+        v.extend(sized_word("suelto", 294.0, 168.5, 10.0));
+        v.extend(sized_word("exclusivamente", 294.0, 179.5, 10.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        assert!(texts.iter().any(|t| t == "PROCAT"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "suelto"), "{texts:?}");
+        // Text set at two sizes on one baseline is still one line.
+        let mut v = sized_word("PRICE", 0.0, 100.0, 24.0);
+        v.extend(sized_word("each", 70.0, 100.0, 10.0));
+        assert_eq!(assemble(&v).len(), 1);
+    }
+
+    #[test]
+    fn a_drop_cap_heads_the_first_line_beside_it() {
+        // A 53pt `T` whose foot sits on the third line's baseline.
+        let mut v = vec![sized("T", 66.0, 224.1, 53.0)];
+        v.extend(sized_word("his", 99.0, 197.1, 10.5));
+        v.extend(sized_word("broad", 99.0, 210.6, 10.5));
+        v.extend(sized_word("of", 99.0, 224.1, 10.5));
+        v.extend(sized_word("tales", 66.0, 237.6, 10.5));
+        let lines = assemble(&v);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts[0], "This", "{texts:?}");
+        assert_eq!(&texts[1..], ["broad", "of", "tales"]);
+        // The line is as tall as its own text, not the cap.
+        assert!(lines[0].bbox.y0 > 189.0, "{:?}", lines[0].bbox);
+        // A large letter beside a single line is no drop cap.
+        let mut v = vec![sized("A", 66.0, 210.0, 40.0)];
+        v.extend(sized_word("grade", 99.0, 197.1, 10.5));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(!texts.iter().any(|t| t.starts_with("Agrade")), "{texts:?}");
+    }
+
+    #[test]
+    fn a_logos_last_letter_is_no_drop_cap() {
+        // `JNER` at 40pt, the journal's name in two lines beside the `R`.
+        let mut v = sized_word("JNE", 20.0, 60.0, 40.0);
+        v.push(sized("R", 80.0, 60.0, 40.0));
+        v.extend(sized_word("JOURNAL", 104.0, 40.0, 9.0));
+        v.extend(sized_word("AND", 104.0, 52.0, 9.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(
+            !texts.iter().any(|t| t.starts_with("RJOURNAL")),
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    fn a_margin_title_stops_at_the_column_beside_it() {
+        // A 33pt title word, 40pt clear of a 10.5pt column whose line sits
+        // 3pt from its baseline: under 1.5 of the title's ems, but nearly
+        // four of the column's.
+        let mut v = sized_word("Regulatory", 100.0, 168.3, 33.0);
+        v.push(Glyph {
+            bbox: None,
+            text: " ".into(),
+            ..sized(" ", 266.0, 168.3, 33.0)
+        });
+        v.extend(sized_word("the", 306.6, 171.2, 10.5));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    #[test]
+    fn a_label_set_small_against_display_type_shares_its_line() {
+        // A form's `Form` at 6pt, raised a little, right before its 18pt
+        // number.
+        let mut v = sized_word("Form", 36.5, 48.7, 5.9);
+        v.extend(sized_word("7004", 53.2, 52.0, 17.9));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["Form 7004"]);
+    }
+
+    #[test]
+    fn a_trademark_sign_is_its_words_at_any_size() {
+        // The title's sign, raised and a third its size, lands on the
+        // baseline of the body text beside the title.
+        let mut v = sized_word("PROCAT", 181.0, 173.8, 28.0);
+        v.push(sized("\u{00AE}", 266.0, 157.8, 8.4));
+        v.extend(sized_word("El", 294.0, 157.5, 10.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(texts.iter().any(|t| t == "PROCAT\u{00AE}"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "El"), "{texts:?}");
+        // In running text, a 3.5pt sign after a 10pt word.
+        let mut v = sized_word("ProCat", 0.0, 100.0, 10.0);
+        v.push(sized("\u{00AE}", 30.5, 95.5, 3.5));
+        v.extend(sized_word("es", 36.0, 100.0, 10.0));
+        let lines = assemble(&v);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].text.starts_with("ProCat\u{00AE}"),
+            "{:?}",
+            lines[0].text
+        );
     }
 
     #[test]
