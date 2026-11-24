@@ -8,7 +8,8 @@
   "notes": [
     "2026-11-23: the photos' figure regions walked across the page, and 80 of its 87 elements were typed doco:Figure, the side-heads among them (#50).",
     "2026-11-24 (#81): the callouts on the chair photos still reached up over the page title and the heading set over them, and down over the key set under them. Numbered callouts drawn on a photograph now take only their own marks.",
-    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large."
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#115): the side-head level with the chair drawing's top, and `Benefits` off its corner, were typed as the drawing's labels: one taken as a label, the other inside the box around the labels."
   ],
   "checks": [
     {
@@ -74,6 +75,22 @@
       "found": "2026-11-24",
       "issue": "The link line at the foot of page 1 was a level-4 heading.",
       "no_section": "hermanmiller.com"
+    },
+    {
+      "id": "side-head-beside-the-drawing",
+      "found": "2026-11-24",
+      "issue": "`Statement of line overview`, set as the page's other side-heads are, was typed as the drawing's label.",
+      "section": {
+        "title": "Statement of line overview"
+      }
+    },
+    {
+      "id": "side-head-off-the-drawings-corner",
+      "found": "2026-11-24",
+      "issue": "`Benefits` was typed doco:Figure, inside the box around the drawing's labels.",
+      "section": {
+        "title": "Benefits"
+      }
     }
   ]
 }

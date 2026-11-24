@@ -744,7 +744,13 @@ pub(crate) fn figures(pdf: &Path, page: Option<usize>) {
     for p in &doc.pages {
         let mut fills = p.fills.clone();
         fluree_doc_pdf::rule::strip_highlights(&mut fills, &p.glyphs);
-        let found = fluree_doc_pdf::figure::detect(&fills, &p.rules, p.index, (p.width, p.height));
+        let found = fluree_doc_pdf::figure::detect(
+            &fills,
+            &p.rules,
+            &p.glyphs,
+            p.index,
+            (p.width, p.height),
+        );
         total += found.len();
         if page.is_some() && page != Some(p.index) {
             continue;

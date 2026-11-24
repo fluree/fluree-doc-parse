@@ -233,6 +233,9 @@ pub fn modal_leading(pages: &[Vec<Line>]) -> f64 {
 /// been set inside the text.
 const MARKER_OUTDENT_TOLERANCE: f64 = 2.0;
 
+/// The marker a block opened by a drawn box carries: `☐`.
+pub(crate) const CHECKBOX_MARKER: &str = "\u{2610}";
+
 /// True when the text could be a bullet, list number or footnote reference —
 /// as opposed to a short *word*.
 ///
@@ -491,7 +494,7 @@ pub fn assemble_with_marks(
     }
     for i in marked {
         if let Some(b) = blocks.get_mut(i) {
-            b.marker = Some("\u{2610}".into());
+            b.marker = Some(CHECKBOX_MARKER.into());
         }
     }
 

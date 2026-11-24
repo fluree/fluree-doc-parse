@@ -1,0 +1,79 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet (5 pages). A ratings table with a grey header panel, a drawing of the control with callouts, wiring diagrams in ruled frames, and a submittal form on every page."
+  },
+  "notes": [
+    "#114/#115: the table's grey panels, and the form's boxes, were taken for drawings; the headings around the table and three of six notes over the form were typed as their labels.",
+    "#117: the wiring diagrams on page 4 stand close enough to join into one group too large to be a drawing, and had no region: their labels became paragraphs, list items (a screw terminal drawn as a small circle read as a checkbox) and tables."
+  ],
+  "checks": [
+    {
+      "id": "heading-over-the-panel",
+      "found": "2026-11-24",
+      "issue": "`Multigang and Mixed-Bulb-Type Ratings`, over the table's grey header panel, was typed as a drawing's label.",
+      "section": {
+        "title": "Multigang and Mixed-Bulb-Type Ratings"
+      }
+    },
+    {
+      "id": "heading-over-the-drawing",
+      "found": "2026-11-24",
+      "issue": "`Operation`, set over the drawing of the control as the page sets its other headings, was typed as the drawing's label.",
+      "section": {
+        "title": "Operation"
+      }
+    },
+    {
+      "id": "note-over-the-form",
+      "found": "2026-11-24",
+      "issue": "Notes 4-6, set like notes 1-3, were typed as labels of the submittal form under them.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "4 For 3-way and 4-way dimming, use Maestro companion dimmers."
+      }
+    },
+    {
+      "id": "terminal-label-no-list-item",
+      "found": "2026-11-24",
+      "issue": "A wiring diagram's terminal label `Blue` was a list item, its screw terminal read as a checkbox.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Blue"
+      },
+      "count": 0
+    },
+    {
+      "id": "no-table-of-labels-1",
+      "found": "2026-11-24",
+      "issue": "A table built from page 4's wiring labels.",
+      "element": {
+        "type": "doco:Table",
+        "text": "Hot Black\t\tDifferent Color\t\tHot\tDifferent\t\t\tBlack\n\t\tDifferent Color\t\t\tColor\t\t\tBlack"
+      },
+      "count": 0
+    },
+    {
+      "id": "no-table-of-labels-2",
+      "found": "2026-11-24",
+      "issue": "A table built from page 4's wiring labels.",
+      "element": {
+        "type": "doco:Table",
+        "text": "Dimmer 3-Way\tDimmer 3-Way\nLine Side Mechanical\tLoad Side Mechanical\nDimmer Switch*\tSwitch* Dimmer\nBrass Blue No connect\tNo connect Brass Blue\nLine / Hot Black Different Color\tLine / Hot Different Black Color\n120 V~ Green Green Lighting\t120 V~ Green Green Lighting\n60 Hz Load\t60 Hz Load\nNeutral\tNeutral"
+      },
+      "count": 0
+    },
+    {
+      "id": "no-table-of-labels-3",
+      "found": "2026-11-24",
+      "issue": "A table built from page 4's wiring labels.",
+      "element": {
+        "type": "doco:Table",
+        "text": "Hot B\tlac\tk\t\tBlack\t\t\tHot\t\tBlack\t\t\t\tBlack\n120 V~\t\tGreen\t\tBlack\tGreen\tLighting\t120\tV~\tGreen\t\t\t\tGreen"
+      },
+      "count": 0
+    }
+  ]
+}

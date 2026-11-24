@@ -175,6 +175,10 @@ struct Collector {
     /// doubled the document ("we extract everything and filter later" — this
     /// is the later).
     page_box: BBox,
+    /// The area the clips in force let paint reach, innermost last, each
+    /// already cut to the one outside it. A shape is measured by the part of
+    /// it this shows, not by its whole path; see [`Collector::visible`].
+    clips: Vec<BBox>,
     /// Per-glyph `(font identity, ink ratio)`, parallel to `glyphs`, for the
     /// weight inference in [`infer_weights`]. Kept alongside rather than on
     /// `Glyph` because it is scaffolding: once weights are resolved it has no
@@ -252,6 +256,27 @@ fn is_punctuation(c: char) -> bool {
 }
 
 impl Collector {
+    /// The part of a drawn shape's box that can be painted: the box cut to
+    /// the clips in force and to the page, or `None` when none of it shows.
+    ///
+    /// A PDF often draws more than it shows. A polar chart strokes whole
+    /// circles and clips them to its quarter; artwork larger than the page is
+    /// clipped to it; a wiring diagram's wires run past its frame. Measured
+    /// by its whole path, one such circle reached 70pt above a spec sheet's
+    /// page and across its text column, and one page-sized path joined every
+    /// shape on a catalogue page into a single cluster, too large to be a
+    /// drawing, so the page's five dimension drawings had no region at all.
+    fn visible(&self, b: BBox) -> Option<BBox> {
+        let area = self.clips.last().copied().unwrap_or(self.page_box);
+        let cut = BBox {
+            x0: b.x0.max(area.x0).max(self.page_box.x0),
+            y0: b.y0.max(area.y0).max(self.page_box.y0),
+            x1: b.x1.min(area.x1).min(self.page_box.x1),
+            y1: b.y1.min(area.y1).min(self.page_box.y1),
+        };
+        // A hairline has no area, so the test is on each side, not on area.
+        (cut.x1 >= cut.x0 && cut.y1 >= cut.y0).then_some(cut)
+    }
     /// Read the glyphs drawn in Symbol or Wingdings as the characters the
     /// font shows.
     ///
@@ -373,7 +398,8 @@ impl<'a> Device<'a> for Collector {
         // segments; curve detail is irrelevant and expensive to keep.
         let path = transform * path.clone();
         let r: Rect = path.bounding_box();
-        if !self.page_box.intersects(&crate::geom::from_kurbo(r)) {
+        let drawn = crate::geom::from_kurbo(r);
+        if !self.page_box.intersects(&drawn) {
             return;
         }
         // One path can carry many rules. A financial statement strokes every
@@ -390,13 +416,30 @@ impl<'a> Device<'a> for Collector {
             );
             return;
         }
-        match rule::classify(crate::geom::from_kurbo(r), self.page) {
+        // A rule is kept as drawn: table structure reads a grid's ruling
+        // whole, and a table broken by the page foot draws its next row's
+        // rules on under the clip. A filled shape is measured by what shows
+        // of it; see [`Collector::visible`].
+        match rule::classify(drawn, self.page) {
             Some(rule::Shape::Rule(x)) => self.rules.push(x),
-            Some(rule::Shape::Fill(x)) => self.fills.push(x),
+            Some(rule::Shape::Fill(x)) => {
+                if let Some(bbox) = self.visible(x.bbox) {
+                    self.fills.push(rule::Fill { bbox, ..x });
+                }
+            }
             None => {}
         }
     }
-    fn push_clip_path(&mut self, _c: &hayro_interpret::ClipPath) {}
+    fn push_clip_path(&mut self, c: &hayro_interpret::ClipPath) {
+        let outer = self.clips.last().copied().unwrap_or(self.page_box);
+        let b = crate::geom::from_kurbo(c.path.bounding_box());
+        self.clips.push(BBox {
+            x0: outer.x0.max(b.x0),
+            y0: outer.y0.max(b.y0),
+            x1: outer.x1.min(b.x1),
+            y1: outer.y1.min(b.y1),
+        });
+    }
     fn push_transparency_group(
         &mut self,
         _o: f32,
@@ -437,7 +480,9 @@ impl<'a> Device<'a> for Collector {
             texty,
         });
     }
-    fn pop_clip_path(&mut self) {}
+    fn pop_clip_path(&mut self) {
+        self.clips.pop();
+    }
     fn pop_transparency_group(&mut self) {}
 
     fn begin_marked_content(&mut self, tag: &[u8], mcid: Option<i32>) {
@@ -1053,6 +1098,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             open: Vec::new(),
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
+            clips: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -1479,6 +1525,7 @@ mod actual_text_tests {
                 x1: 600.0,
                 y1: 800.0,
             },
+            clips: Vec::new(),
             ink: Vec::new(),
             letters: crate::ligature::Letters::default(),
             unread: Vec::new(),
@@ -1493,6 +1540,60 @@ mod actual_text_tests {
             inked,
         });
         c.glyphs.into_iter().map(|g| g.text).collect()
+    }
+
+    #[test]
+    fn a_shape_is_measured_by_what_its_clip_lets_show() {
+        // A polar chart's outer circle, drawn whole and clipped to the
+        // chart's quarter, centred on its corner and reaching off the page.
+        let mut c = Collector {
+            page: 0,
+            glyphs: Vec::new(),
+            images: Vec::new(),
+            rules: Vec::new(),
+            fills: Vec::new(),
+            page_box: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 612.0,
+                y1: 792.0,
+            },
+            clips: Vec::new(),
+            ink: Vec::new(),
+            letters: crate::ligature::Letters::default(),
+            unread: Vec::new(),
+            marks: crate::marked::Marks::default(),
+            open: Vec::new(),
+            symbol_fonts: std::collections::HashMap::new(),
+            symbols: Vec::new(),
+        };
+        let circle = BBox {
+            x0: 133.0,
+            y0: -71.0,
+            x1: 490.0,
+            y1: 285.0,
+        };
+        // Unclipped, the page is the limit.
+        assert_eq!(c.visible(circle).unwrap().y0, 0.0);
+        c.push_clip_path(&hayro_interpret::ClipPath {
+            path: Rect::new(298.0, 98.0, 420.0, 236.0).to_path(0.1),
+            fill: hayro_interpret::FillRule::NonZero,
+        });
+        let seen = c.visible(circle).unwrap();
+        assert_eq!(
+            (seen.x0, seen.y0, seen.x1, seen.y1),
+            (298.0, 98.0, 420.0, 236.0)
+        );
+        // A shape wholly outside the clip shows nothing.
+        let outside = BBox {
+            x0: 40.0,
+            y0: 300.0,
+            x1: 200.0,
+            y1: 400.0,
+        };
+        assert!(c.visible(outside).is_none());
+        c.pop_clip_path();
+        assert!(c.visible(outside).is_some());
     }
 
     #[test]

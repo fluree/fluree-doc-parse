@@ -7,7 +7,8 @@
   },
   "notes": [
     "The title's size set the baseline and gutter tolerances for the description beside it, so the description's middle line was read into the title's line: PROCAT suelto que no es adherible… SISTEMA DE, the description cut in three. The title's ® was then read as a list marker, and the small ® in the text was lost (ProCat .).",
-    "2026-11-24 (#122, #123): a contact line no longer counts as a bold heading candidate, so the five bold heads on page 1 no longer push the document past its bold cap."
+    "2026-11-24 (#122, #123): a contact line no longer counts as a bold heading candidate, so the five bold heads on page 1 no longer push the document past its bold cap.",
+    "2026-11-24 (#115): page 2's fine print walked from the drawing in the page's corner through the footnote and the table beside it, and the disclaimer by a logo was taken as its label."
   ],
   "checks": [
     {
@@ -57,6 +58,15 @@
       "section": {
         "title": "Fibra de vidrio y formación de moho",
         "within": "PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL"
+      }
+    },
+    {
+      "id": "disclaimer-is-prose",
+      "found": "2026-11-24",
+      "issue": "The disclaimer paragraph, set small beside a logo, was typed as the logo's label.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "La información técnica que se incluye aquí se provee sin cargo ni obligación y se ofrece a riesgo exclusivo de quien la recibe. Puesto que las condiciones de uso pueden variar y están fuera de nuestro control, Owens Corning no realiza declaraciones ni es responsable legalmente por la exactitud y la confiabilidad de los datos asociados con usos particulares de cualquier producto que aquí se describa. SCS Global Services provee una verificación independiente del contenido reciclado en los materiales de construcción y verifica los reclamos de contenidos reciclados que hacen los fabricantes. Para obtener más información, visite www.SCSglobalservices.com. Los productos certificados por GREENGUARD cumplen con las normas de GREENGUARD como productos de bajas emisiones químicas en aire interior durante el uso de los productos. Para obtener más información, visite ul.com/gg. Esta marca de aprobación ecológica de Home Innovation Research Labs Green le garantiza que su producto es elegible para obtener la Certificación de Construcción Ecológica Nacional. Para obtener más información, visite www.GreenApprovedProducts.com."
       }
     }
   ]

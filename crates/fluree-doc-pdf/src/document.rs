@@ -339,13 +339,28 @@ fn prose_size(blocks: &[Block]) -> f32 {
         .map_or(0.0, |(s, _)| s)
 }
 
-/// Fraction of a block that must lie inside a figure's box for the block to
-/// belong to it. High enough that a paragraph brushing the drawing's margin
-/// stays prose, low enough that a caption tucked under the axis comes along.
+/// Share of a ruled grid's cells that must hold text for it to be a table
+/// drawn over a drawing, rather than the drawing's own lines around its
+/// labels.
+const RULED_TABLE_FILL: f64 = 0.5;
+
+/// Fraction of a block that must lie inside a figure's drawing for the
+/// block to belong to it without being taken as a label. High enough that a
+/// paragraph brushing the drawing's margin stays prose.
 const FIGURE_CONTAINMENT: f64 = 0.6;
 
-fn heading_yields_to_figure(evidence: Evidence, in_figure: bool) -> bool {
-    in_figure && matches!(evidence, Evidence::FontSize | Evidence::Bold)
+/// Does a heading give way to the figure it is in? Relative typography does
+/// wherever the figure took it: chart titles, legends and axis labels are
+/// set larger or bolder than body text. A number or a place in a sequence
+/// does only inside the drawing itself, where `4-M4` is a dimension's
+/// callout and not a section; a numbered heading the figure took from
+/// beside it keeps its number's evidence. A title and the outline never do.
+fn heading_yields_to_figure(evidence: Evidence, in_figure: bool, in_drawing: bool) -> bool {
+    match evidence {
+        Evidence::FontSize | Evidence::Bold => in_figure,
+        Evidence::Numbering | Evidence::Sequence => in_drawing,
+        Evidence::Title | Evidence::Outline => false,
+    }
 }
 
 fn heading_fragments_join(a: &Element, b: &Element) -> bool {
@@ -675,6 +690,113 @@ impl StageTimings {
 }
 
 /// Run `f`, adding its wall clock to `slot`.
+/// Is block `i` a caption's title, set on one line with the caption's label
+/// as a block of its own (`FIGURE 17`, then `Renewable energy purchasing…`)?
+fn labelled_caption(blocks: &[Block], i: usize) -> bool {
+    let b = &blocks[i];
+    blocks.iter().enumerate().any(|(j, l)| {
+        let text = l.text();
+        j != i
+            && text.split_whitespace().count() <= 2
+            && heading::is_caption(&text)
+            && l.bbox.y1 > b.bbox.y0
+            && l.bbox.y0 < b.bbox.y1
+            && l.bbox.x1 <= b.bbox.x0 + 1.0
+    })
+}
+
+/// Each page's figures, and the figure each block belongs to, if any: the
+/// labels its figure took, and whatever lies mostly inside the drawing
+/// itself.
+fn find_figures(
+    pages: &[Page],
+    blocks_per_page: &[Vec<Block>],
+) -> Vec<(Vec<figure::Figure>, Vec<Option<usize>>)> {
+    let mut page_figures = Vec::with_capacity(blocks_per_page.len());
+    for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        // Chart and diagram regions. Text inside one is real and its *order*
+        // is not: a donut's labels and percentages interleave by position on
+        // the page, so emitting them as consecutive paragraphs invites a
+        // reader to pair them, and half of those pairings are wrong. They are
+        // gathered into one figure instead, which says what is known (these
+        // fragments belong together, here) without asserting what is not.
+        let page = &pages[pi];
+        let mut figures = figure::detect(
+            &page.fills,
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+        );
+        // The drawing does not contain its own labels; take them, and grow
+        // each region over them. A list item is not a label: a bulleted
+        // list set under a drawing is the page's. A box drawn beside a line
+        // is not a bullet, though: by a chart it is a legend's swatch, and
+        // the line its label.
+        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
+        let candidates: Vec<usize> = (0..blocks.len())
+            .filter(|&i| {
+                blocks[i]
+                    .marker
+                    .as_deref()
+                    .is_none_or(|m| m == block::CHECKBOX_MARKER)
+                    && block::strip_leading_bullet(&block_texts[i]).is_none()
+            })
+            .collect();
+        let block_boxes: Vec<(crate::geom::BBox, f32, &str)> = candidates
+            .iter()
+            .map(|&i| (blocks[i].bbox, blocks[i].font_size, block_texts[i].as_str()))
+            .collect();
+        let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
+        let taken = figure::attach(
+            &mut figures,
+            &block_boxes,
+            &images,
+            (page.width, page.height),
+            prose_size(blocks),
+        );
+        // Which figure each block belongs to, if any: the labels its figure
+        // took, and whatever lies mostly inside the drawing itself. The
+        // rectangle around a drawing and its labels is not membership: a
+        // paragraph or a heading inside it that was never taken as a label
+        // is the page's.
+        //
+        // Region and heading evidence arbitrate rather than one always
+        // winning. Outline/title/numbering evidence is authoritative enough
+        // to survive an over-grown figure region. Relative typography is not:
+        // chart legends and axis labels are commonly bold or larger than body
+        // text, and treating every one as a section is the dominant
+        // over-promotion failure on the benchmark.
+        let mut member: Vec<Option<usize>> = vec![None; blocks.len()];
+        for (fi, t) in taken.iter().enumerate() {
+            for &k in t {
+                member[candidates[k]].get_or_insert(fi);
+            }
+        }
+        for (i, b) in blocks.iter().enumerate() {
+            if member[i].is_none() {
+                member[i] = figures
+                    .iter()
+                    .position(|f| figure::share_inside(&b.bbox, &f.drawing) >= FIGURE_CONTAINMENT);
+            }
+        }
+        page_figures.push((figures, member));
+    }
+    page_figures
+}
+
+/// The blocks a figure holds, by page: they do not count toward the body
+/// size. The body is the text set as running prose. A wiring diagram's
+/// one-line labels, or a catalogue's drawings, outnumber a page's lines of
+/// prose, and measured over them the body came out at the labels' 4pt:
+/// every caption over it was "larger than body", and a heading.
+fn drawn(page_figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]) -> Vec<Vec<bool>> {
+    page_figures
+        .iter()
+        .map(|(_, member)| member.iter().map(Option::is_some).collect())
+        .collect()
+}
+
 fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
     let start = std::time::Instant::now();
     let out = f();
@@ -1359,18 +1481,25 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         blocks_per_page.push(out);
     }
 
+    // Each page's figures, and the figure each block belongs to: worked out
+    // before headings are, since the text of drawings is no measure of the
+    // body's size, and before any element is typed, since whether a heading
+    // yields to a figure depends on how the document sets its headings
+    // elsewhere. Gathering a numbered list rewrites the blocks, so the
+    // figures follow it.
+    let mut page_figures = find_figures(&raw.pages, &blocks_per_page);
+    let mut body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
     let headings = timed(&mut timings.headings, || {
-        let first = heading::detect(&blocks_per_page, outline);
+        let first = heading::detect_with_body(&blocks_per_page, outline, body_font);
         let named = heading::outline_names(outline);
         let in_section = heading::in_section(&first);
         if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
-            heading::detect(&blocks_per_page, outline)
+            page_figures = find_figures(&raw.pages, &blocks_per_page);
+            body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
+            heading::detect_with_body(&blocks_per_page, outline, body_font)
         } else {
             first
         }
-    });
-    let body_font = timed(&mut timings.headings, || {
-        heading::body_font_size(&blocks_per_page)
     });
 
     // Heading lookup by source block. Text is not an identity: repeated chart
@@ -1394,58 +1523,54 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // Each table's column edges and whether it opens with a styled row,
     // for joining a table the page break split.
     let mut frames: Vec<TableFrame> = Vec::new();
+    // The styles the document sets its headings in away from any figure.
+    // A heading in one of them that a figure took as a label is the
+    // document's heading, set near a drawing — `Operation` over a drawing
+    // of the control it describes, a side-head level with a chair's — and
+    // not a chart's title or legend, whose style is the chart's own.
+    let heading_style = |b: &Block| {
+        (
+            (b.font_size * 2.0).round() as i32,
+            b.lines.iter().all(|l| l.bold),
+        )
+    };
+    let mut free_styles: std::collections::HashSet<(i32, bool)> = Default::default();
+    for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        for (bi, b) in blocks.iter().enumerate() {
+            if is_heading.contains_key(&(pi, bi)) && page_figures[pi].1[bi].is_none() {
+                free_styles.insert(heading_style(b));
+            }
+        }
+    }
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         let mut page_elements = Vec::new();
-        // Chart and diagram regions. Text inside one is real and its *order*
-        // is not: a donut's labels and percentages interleave by position on
-        // the page, so emitting them as consecutive paragraphs invites a
-        // reader to pair them, and half of those pairings are wrong. They are
-        // gathered into one figure instead, which says what is known (these
-        // fragments belong together, here) without asserting what is not.
-        let page = &raw.pages[pi];
-        let mut figures = figure::detect(&page.fills, &page.rules, pi, (page.width, page.height));
-        // The drawing does not contain its own labels; grow each region to
-        // reach them before deciding which blocks belong to it.
-        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
-        let block_boxes: Vec<(crate::geom::BBox, f32, &str)> = blocks
-            .iter()
-            .zip(&block_texts)
-            .map(|(b, t)| (b.bbox, b.font_size, t.as_str()))
-            .collect();
-        let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
-        figure::attach(
-            &mut figures,
-            &block_boxes,
-            &images,
-            (page.width, page.height),
-            prose_size(blocks),
-        );
-        // Which figure each block falls in, if any. A block counts as inside
-        // when most of it is: a caption sitting just below the drawing is
-        // part of the figure, a paragraph merely overlapping its margin is
-        // not.
-        //
-        // Region and heading evidence arbitrate rather than one always
-        // winning. Outline/title/numbering evidence is authoritative enough
-        // to survive an over-grown figure region. Relative typography is not:
-        // chart legends and axis labels are commonly bold or larger than body
-        // text, and treating every one as a section is the dominant
-        // over-promotion failure on the benchmark.
-        let in_figure = |b: &Block| -> Option<usize> {
-            figures.iter().position(|f| {
-                let bx = b.bbox;
-                let w = (bx.x1.min(f.bbox.x1) - bx.x0.max(f.bbox.x0)).max(0.0);
-                let h = (bx.y1.min(f.bbox.y1) - bx.y0.max(f.bbox.y0)).max(0.0);
-                let area = (bx.width() * bx.height()).max(1.0);
-                w * h / area >= FIGURE_CONTAINMENT
-            })
-        };
+        let (figures, member) = &page_figures[pi];
+        let in_figure = |i: usize| member[i];
         for (block_idx, b) in blocks.iter().enumerate() {
             let text = b.text();
             let heading = is_heading.get(&(pi, block_idx));
-            let figure_idx = in_figure(b);
-            let weak_heading_in_figure =
-                heading.is_some_and(|(_, ev)| heading_yields_to_figure(*ev, figure_idx.is_some()));
+            let figure_idx = in_figure(block_idx);
+            let in_drawing = figure_idx.is_some_and(|fi| {
+                figure::share_inside(&b.bbox, &figures[fi].drawing) >= FIGURE_CONTAINMENT
+            });
+            // Only a size tier is a style of its own, whichever evidence
+            // found the heading: bold at the body's size is how a chart sets
+            // its title too, and the document's other charts, drawn as
+            // pictures, set theirs away from any figure. A caption is its
+            // figure's, in whatever style it is set, and so is a title set
+            // on one line with a caption's label: `FIGURE 17` small, then
+            // the chart's title large.
+            let larger =
+                b.font_size as f64 > body_font as f64 * (1.0 + heading::HEADING_SIZE_MARGIN);
+            let documents_heading = !in_drawing
+                && larger
+                && free_styles.contains(&heading_style(b))
+                && !heading::is_caption(&text)
+                && !labelled_caption(blocks, block_idx);
+            let weak_heading_in_figure = heading.is_some_and(|(_, ev)| {
+                heading_yields_to_figure(*ev, figure_idx.is_some(), in_drawing)
+                    && !documents_heading
+            });
             let figure_of = figure_idx
                 .filter(|_| heading.is_none() || weak_heading_in_figure)
                 .map(|fi| format!("figure-{pi}-{fi}"));
@@ -1508,8 +1633,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if scrubbed.is_empty() || residue {
                 continue;
             }
+            // A bullet is a list's mark wherever its block ends up: a list
+            // item set inside a drawing is the drawing's, and its bullet is
+            // no part of what it says.
             let text = match block::strip_leading_bullet(&scrubbed) {
-                Some(without) if kind == "doc:ListItem" => without.to_string(),
+                Some(without) if matches!(kind, "doc:ListItem" | "doco:Figure") => {
+                    without.to_string()
+                }
                 _ => scrubbed,
             };
             page_elements.push(Element {
@@ -1552,7 +1682,24 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 )
             })
             .collect();
-            if layout.demoted_tables[gi] {
+            // A grid inside a drawing is the drawing's labels in rows: a
+            // wiring diagram's wires rule its terminal names into a "table",
+            // and a chart's ticks and legend line up as one. A grid drawn as
+            // a table is one whatever is drawn under it — a watermark behind
+            // a catalogue's table, a table's own grey cells: ruled at every
+            // row and every column, and at least half of it filled. Wires
+            // and dimension lines rule a few of a label grid's boundaries,
+            // or rule it everywhere and leave most of it empty.
+            let drawn_as_table = layout.grid_sources[gi] == GridSource::Ruled && {
+                let (occ, vertical, horizontal) =
+                    table_confidence_signals(g, &raw.pages[pi].glyphs, &raw.pages[pi].rules);
+                occ >= RULED_TABLE_FILL && horizontal > g.rows() && vertical > g.cols()
+            };
+            let drawn_in = figures
+                .iter()
+                .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= FIGURE_CONTAINMENT)
+                .filter(|_| !drawn_as_table);
+            if layout.demoted_tables[gi] || drawn_in.is_some() {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
                 let text = (0..g.rows())
@@ -1566,10 +1713,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .filter(|t| !t.is_empty())
                     .collect::<Vec<_>>()
                     .join("\n");
-                table_elements.push(Element {
-                    page: pi,
-                    bbox: Some(g.bbox),
-                    ..Element::new("doco:Paragraph", text, "rust", "layout-demoted")
+                table_elements.push(match drawn_in {
+                    Some(fi) => Element {
+                        page: pi,
+                        bbox: Some(g.bbox),
+                        figure: Some(format!("figure-{pi}-{fi}")),
+                        ..Element::new("doco:Figure", text, "rust", "fills")
+                    },
+                    None => Element {
+                        page: pi,
+                        bbox: Some(g.bbox),
+                        ..Element::new("doco:Paragraph", text, "rust", "layout-demoted")
+                    },
                 });
                 continue;
             }
@@ -2512,13 +2667,19 @@ mod tests {
 
     #[test]
     fn only_weak_typography_yields_to_figure_membership() {
-        assert!(heading_yields_to_figure(Evidence::Bold, true));
-        assert!(heading_yields_to_figure(Evidence::FontSize, true));
-        assert!(!heading_yields_to_figure(Evidence::Numbering, true));
-        assert!(!heading_yields_to_figure(Evidence::Sequence, true));
-        assert!(!heading_yields_to_figure(Evidence::Title, true));
-        assert!(!heading_yields_to_figure(Evidence::Outline, true));
-        assert!(!heading_yields_to_figure(Evidence::Bold, false));
+        assert!(heading_yields_to_figure(Evidence::Bold, true, false));
+        assert!(heading_yields_to_figure(Evidence::FontSize, true, false));
+        assert!(!heading_yields_to_figure(Evidence::Numbering, true, false));
+        assert!(!heading_yields_to_figure(Evidence::Sequence, true, false));
+        assert!(!heading_yields_to_figure(Evidence::Title, true, true));
+        assert!(!heading_yields_to_figure(Evidence::Outline, true, true));
+        assert!(!heading_yields_to_figure(Evidence::Bold, false, false));
+    }
+
+    #[test]
+    fn a_number_inside_a_drawing_is_a_callout() {
+        assert!(heading_yields_to_figure(Evidence::Numbering, true, true));
+        assert!(heading_yields_to_figure(Evidence::Sequence, true, true));
     }
 
     #[test]

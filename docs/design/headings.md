@@ -20,6 +20,37 @@ tells you how far down the ladder it came from.
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
+## The body size
+
+"Larger than body" is measured against one body size per document: the size
+set on the most lines. Drawings' text is left out of that count: the blocks a
+figure region holds, its labels and the text inside its drawing, are found
+before headings are. A wiring diagram is dozens of one-line labels, and on a
+submittal sheet 64 of them at 4.25pt outnumbered a 25-line column at 10pt. The
+body came out at the labels' size and every photo caption became a
+`font-size` heading. With nothing left once drawings are set aside, every
+block counts.
+
+Tables the table pass did not take are still counted. In a catalogue whose
+specification tables outnumber its prose, the body still comes out at the
+tables' size.
+
+## Headings beside drawings
+
+A heading inside a figure region yields to it when its evidence is
+typographic (`bold`, `font-size`): chart titles, legends and axis labels are
+set larger or bolder than body text. Two exceptions:
+
+- A `font-size` heading the figure took from beside its drawing keeps its
+  type when the document sets headings at that size and weight away from any
+  figure. `Operation` over a drawing of the control, or a side-head level with
+  a chair drawing's top, is the document's. A caption keeps yielding, and so
+  does bold at the body's size, because that is how charts set their titles.
+  A report whose other charts are pictures sets those titles away from any
+  region.
+- `numbering` and `sequence` evidence yields too, but only inside the drawing
+  itself, where `4-M4` is a dimension's callout.
+
 ## Bold, throughout
 
 `bold` reads a line's weight, so a line must be set in bold, not hold some:

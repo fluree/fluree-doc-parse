@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "kohler-k-r33912.pdf",
+    "url": "https://techcomm.kohler.com/techcomm/pdf/K-R33912_spec_US-CA_Kohler_en.pdf",
+    "sha256": "b61768a2ab19e9621bb575f793c025f254f2b2f4af35aad473e34b861dd7c214",
+    "about": "Kohler K-R33912 kitchen faucet specification sheet (3 pages, printed by Chrome). The first page opens on a title block; the two after it run the same two lines small at their top right."
+  },
+  "notes": [
+    "#115: page 3's heading and the bullets under the faucet's dimension drawing were typed doco:Figure: the heading because the box around the drawing's labels stretched over it, the bullets as labels within the drawing's reach. The third bullet, past the size bound, stayed a paragraph."
+  ],
+  "checks": [
+    {
+      "id": "heading-under-the-drawing",
+      "found": "2026-11-24",
+      "issue": "`Installation`, set as `Installation Notes` is, was typed as the drawing's label.",
+      "section": {
+        "title": "Installation"
+      }
+    },
+    {
+      "id": "bullet-under-the-drawing",
+      "found": "2026-11-24",
+      "issue": "The first two bullets under the drawing were typed as its labels; the third, run on from them, was not.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Installs with 1- or 3-hole sink (escutcheon plate included)"
+      }
+    }
+  ]
+}
