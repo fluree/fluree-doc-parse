@@ -1010,8 +1010,42 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             // put the introduced list adjacent. Rejected; see MHS_ANALYSIS.
         }
     }
+    drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out);
     out
+}
+
+/// A kicker is not a section: a category, series name or tagline set in
+/// smaller type directly above the title (`Scalable. Responsive.
+/// Innovative.` over `Exos X16`, `Centrifugation` over `Thermo Scientific
+/// M Series Centrifuges`). The title is level 1, so the kicker ranks below
+/// it, and a deeper section opened just ahead of the title closes at the
+/// title with nothing in it. Read as text, it stays where the page sets it.
+///
+/// Only typography makes a kicker a heading, and only blocks with no text
+/// between them and the title, and smaller than it, are kickers.
+fn drop_kickers(out: &mut Vec<Heading>, pages: &[Vec<Block>], title: Option<usize>) {
+    let (Some(t), Some(blocks)) = (title, pages.first()) else {
+        return;
+    };
+    let Some(title_block) = blocks.get(t) else {
+        return;
+    };
+    for k in (0..t).rev() {
+        let b = &blocks[k];
+        let Some(pos) = out
+            .iter()
+            .position(|h| h.page == title_block.page && h.block_index == k)
+        else {
+            break;
+        };
+        if !matches!(out[pos].evidence, Evidence::FontSize | Evidence::Bold)
+            || b.font_size >= title_block.font_size
+        {
+            break;
+        }
+        out.remove(pos);
+    }
 }
 
 /// Visual style of a heading, for ranking depth.
@@ -1350,6 +1384,29 @@ mod tests {
             blk("Some body text that runs on for a while here.", 10.0, 1),
         ];
         assert_eq!(detect(&[page], &[]).len(), 1);
+    }
+
+    #[test]
+    fn a_kicker_above_the_title_is_not_a_section() {
+        let page = vec![
+            blk("DATA SHEET", 6.0, 1),
+            blk("Scalable. Responsive. Innovative.", 12.7, 1),
+            blk("Exos X16", 20.2, 1),
+            blk(
+                "Seagate manufactures hard drives for the hyperscale market and more.",
+                9.0,
+                3,
+            ),
+            blk("Best-Fit Applications", 12.7, 1),
+            blk(
+                "Seagate manufactures hard drives for the hyperscale market and more.",
+                9.0,
+                3,
+            ),
+        ];
+        let hs = detect(&[page], &[]);
+        let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["Exos X16", "Best-Fit Applications"], "{hs:?}");
     }
 
     #[test]

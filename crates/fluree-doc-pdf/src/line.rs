@@ -90,7 +90,7 @@ const SIGN_MIN_RATIO: f64 = 0.15;
 
 /// A registered, trademark, service-mark, copyright or sound-recording
 /// sign, alone.
-fn is_sign(text: &str) -> bool {
+pub(crate) fn is_sign(text: &str) -> bool {
     matches!(
         text.trim(),
         "\u{00AE}" | "\u{2122}" | "\u{2120}" | "\u{00A9}" | "\u{2117}"
@@ -507,17 +507,29 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 continue;
             }
             let prev = *cur.last().unwrap();
+            // A space the producer set at a raised sign's size and baseline
+            // says nothing about where the line goes on: the line goes on
+            // from the sign.
+            let inked = cur
+                .iter()
+                .rev()
+                .copied()
+                .find(|&j| !glyphs[j].text.trim().is_empty())
+                .filter(|&j| glyphs[prev].text.trim().is_empty() && is_sign(&glyphs[j].text))
+                .unwrap_or(prev);
             // Between display type and body text the gutter is measured in
             // the body text's size, as the baseline is ([`shares_baseline`]):
             // a margin title's last letter stood 40pt from the column beside
             // it, under 1.5 of its own ems and nearly four of the column's
             // (`Regulatory the three arms of the State`). Measured from the
-            // last glyph that put ink down, past an explicit space.
+            // last glyph that put ink down, past an explicit space, and past
+            // a sign raised on the word: a title's `®` is the word's, and
+            // the title goes on after it at the title's size.
             let display_gap = cur
                 .iter()
                 .rev()
                 .copied()
-                .find(|&j| glyphs[j].bbox.is_some())
+                .find(|&j| glyphs[j].bbox.is_some() && !is_sign(&glyphs[j].text))
                 .is_some_and(|k| {
                     let (a, b) = (&glyphs[k], &glyphs[i]);
                     let big = a.font_size.max(b.font_size) as f64;
@@ -530,7 +542,9 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 });
             // A drop cap heads the line it was put in, its baseline lines
             // below.
-            if (caps.contains(&prev) || joins_line(&glyphs[prev], &glyphs[i], vertical, adv))
+            if (caps.contains(&prev)
+                || joins_line(&glyphs[prev], &glyphs[i], vertical, adv)
+                || joins_line(&glyphs[inked], &glyphs[i], vertical, adv))
                 && !block_gap(&glyphs[prev], &glyphs[i], adv)
                 && !display_gap
             {
@@ -791,10 +805,13 @@ fn script_adjacent(a: &Glyph, b: &Glyph, adv: Advance) -> bool {
 fn loose_signs(clusters: Vec<Vec<usize>>, glyphs: &[Glyph], adv: Advance) -> Vec<Vec<usize>> {
     let mut out = Vec::with_capacity(clusters.len());
     for c in clusters {
+        // A space beside the sign draws nothing, and stands beside it
+        // wherever the producer set it.
         let loose = |&g: &usize| {
             is_sign(&glyphs[g].text)
                 && !c.iter().any(|&o| {
                     o != g
+                        && !glyphs[o].text.trim().is_empty()
                         && (script_adjacent(&glyphs[o], &glyphs[g], adv)
                             || script_adjacent(&glyphs[g], &glyphs[o], adv))
                 })
@@ -804,8 +821,21 @@ fn loose_signs(clusters: Vec<Vec<usize>>, glyphs: &[Glyph], adv: Advance) -> Vec
             out.push(c);
             continue;
         }
-        out.push(rest);
-        out.extend(signs.into_iter().map(|g| vec![g]));
+        // A sign and the space after it go together.
+        let space_after = |s: usize, o: usize| {
+            glyphs[o].text.trim().is_empty() && script_adjacent(&glyphs[s], &glyphs[o], adv)
+        };
+        let (taken, rest): (Vec<usize>, Vec<usize>) = rest
+            .into_iter()
+            .partition(|&o| signs.iter().any(|&s| space_after(s, o)));
+        if !rest.is_empty() {
+            out.push(rest);
+        }
+        for s in signs {
+            let mut sign = vec![s];
+            sign.extend(taken.iter().copied().filter(|&o| space_after(s, o)));
+            out.push(sign);
+        }
     }
     out
 }
@@ -930,6 +960,21 @@ fn drop_caps(
 /// line that merely sits near a large one touches none of its glyphs and
 /// stays where it is.
 fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool, adv: Advance) {
+    // A space draws nothing: a raised `®` set with a space after it is
+    // still a sign alone. Only glyphs that put ink down decide, where a
+    // cluster has any.
+    let inked = |c: &[usize]| -> Vec<usize> {
+        let ink: Vec<usize> = c
+            .iter()
+            .copied()
+            .filter(|&i| !glyphs[i].text.trim().is_empty())
+            .collect();
+        if ink.is_empty() {
+            c.to_vec()
+        } else {
+            ink
+        }
+    };
     let size_of = |c: &[usize]| {
         c.iter()
             .map(|&i| glyphs[i].font_size)
@@ -940,15 +985,24 @@ fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool,
             continue;
         }
         let small = size_of(&clusters[s]) as f64;
-        let min_ratio = if clusters[s].iter().all(|&i| is_sign(&glyphs[i].text)) {
+        let min_ratio = if inked(&clusters[s])
+            .iter()
+            .all(|&i| is_sign(&glyphs[i].text))
+        {
             SIGN_MIN_RATIO
         } else {
             SCRIPT_MIN_RATIO
         };
         let lo = s.saturating_sub(SCRIPT_WINDOW);
         let hi = (s + SCRIPT_WINDOW).min(clusters.len() - 1);
+        // A cluster of spaces alone is no text to annotate.
         let bases: Vec<usize> = (lo..=hi)
             .filter(|&b| b != s && !clusters[b].is_empty())
+            .filter(|&b| {
+                clusters[b]
+                    .iter()
+                    .any(|&i| !glyphs[i].text.trim().is_empty())
+            })
             .filter(|&b| {
                 let big = size_of(&clusters[b]) as f64;
                 (min_ratio..=SCRIPT_SIZE_RATIO).contains(&(small / big.max(1.0)))
@@ -975,15 +1029,56 @@ fn attach_scripts(clusters: &mut [Vec<usize>], glyphs: &[Glyph], vertical: bool,
         for run in runs {
             let first = &glyphs[run[0]];
             let last = &glyphs[*run.last().unwrap()];
-            let base = bases.iter().copied().find(|&b| {
+            // A raised sign is a word's: a base whose ink it stands beside
+            // comes before one it reaches only through a space, which the
+            // producer may have set on another line's baseline.
+            let signed = run
+                .iter()
+                .all(|&i| is_sign(&glyphs[i].text) || glyphs[i].text.trim().is_empty());
+            let beside = |b: usize, inked_only: bool| {
                 clusters[b].iter().any(|&i| {
                     let g = &glyphs[i];
+                    if inked_only && g.text.trim().is_empty() {
+                        return false;
+                    }
                     (script_attached(g, first, vertical) && script_adjacent(g, first, adv))
                         || (script_attached(last, g, vertical) && script_adjacent(last, g, adv))
                 })
-            });
+            };
+            let base = bases
+                .iter()
+                .copied()
+                .find(|&b| signed && beside(b, true))
+                .or_else(|| bases.iter().copied().find(|&b| beside(b, false)));
             match base {
-                Some(b) => clusters[b].extend(run),
+                Some(b) => {
+                    // The space set right after a raised sign is the sign's,
+                    // on whatever baseline the producer gave it: it parts
+                    // the word from the next (`Comfortboard® 80`).
+                    if signed {
+                        for o in lo..=hi {
+                            if o == b || o == s {
+                                continue;
+                            }
+                            if let Some(k) = clusters[o].iter().position(|&i| {
+                                let g = &glyphs[i];
+                                let across = if vertical {
+                                    (g.origin.0 - last.origin.0).abs()
+                                } else {
+                                    (g.origin.1 - last.origin.1).abs()
+                                };
+                                g.text.trim().is_empty()
+                                    && across < g.font_size.min(last.font_size * 2.0) as f64 * 0.7
+                                    && script_adjacent(last, g, adv)
+                            }) {
+                                let space = clusters[o].remove(k);
+                                clusters[b].push(space);
+                                break;
+                            }
+                        }
+                    }
+                    clusters[b].extend(run)
+                }
                 None => kept.extend(run),
             }
         }
@@ -2126,6 +2221,43 @@ mod tests {
             "{:?}",
             lines[0].text
         );
+    }
+
+    #[test]
+    fn a_sign_keeps_its_word_whatever_space_the_producer_sets_after_it() {
+        let space = |x: f64, baseline: f64, size: f32| Glyph {
+            bbox: None,
+            ..sized(" ", x, baseline, size)
+        };
+        // A space at the sign's own size and raised baseline.
+        let mut v = sized_word("Comfortboard", 72.0, 79.07, 36.0);
+        v.push(sized("\u{00AE}", 290.0, 60.08, 10.49));
+        v.push(space(295.2, 60.08, 10.49));
+        v.extend(sized_word("80", 300.0, 79.07, 36.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(texts, ["Comfortboard\u{00AE} 80"]);
+        // A space at another size, on a baseline of its own.
+        let mut v = sized_word("PROCAT", 157.5, 149.2, 28.0);
+        v.push(sized("\u{00AE}", 242.0, 131.94, 5.71));
+        v.push(space(245.0, 125.88, 16.32));
+        v.extend(sized_word("PROFESSIONAL", 80.7, 182.2, 28.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(
+            texts.iter().any(|t| t.starts_with("PROCAT\u{00AE}")),
+            "{texts:?}"
+        );
+        // A space on the baseline of a smaller line beside the title.
+        let mut v = sized_word("Comfortboard", 36.0, 48.28, 26.0);
+        v.push(sized("\u{00AE}", 192.5, 34.95, 7.58));
+        v.push(space(196.3, 38.62, 11.66));
+        v.extend(sized_word("80", 200.0, 48.28, 26.0));
+        v.extend(sized_word("Technical", 400.0, 38.62, 9.0));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(
+            texts.contains(&"Comfortboard\u{00AE} 80".to_string()),
+            "{texts:?}"
+        );
+        assert!(texts.contains(&"Technical".to_string()), "{texts:?}");
     }
 
     #[test]
