@@ -416,7 +416,12 @@ A row is named by its first column. Where that column is a group label set
 down the rows it groups, a span (`Vertical Angle` turned beside the rows of
 angles, a `Problem` over its causes), the rows under it are told apart by the
 column beside it. A value further along is named by both, group first:
-`Vertical Angle / 55°`.
+`Vertical Angle / 55°`. Only a label beside the group tells its rows apart. A
+figure there is the row's value (`158,571`, two figures a slash parts,
+`0 / 0`, or a bound, `<5%`), and the row is named by the group alone. Whether the
+column beside carries a header of its own says nothing either way: a
+`Probable Cause` column under its own header names its rows as surely as a
+sub-property column under its property's.
 
 A table ruled with horizontals only groups its columns another way. Each
 group's label (`2024`, `2023`, `Percent Change`) is set over a rule drawn
