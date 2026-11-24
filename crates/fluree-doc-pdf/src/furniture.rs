@@ -376,6 +376,8 @@ type Copies<'a> = Vec<(usize, usize, &'a str)>;
 ///   same words somewhere, as a title page sets its running head as its
 ///   title. Two signature pages at the end of an agreement repeat their
 ///   block line for line, and the agreement's first page says none of it.
+///   A page number's words differ on every page, so no page could restate
+///   them: it counts the pages instead, which a signature block does not.
 /// - **Apart from the text beside it**, or set with lines that repeat too.
 ///   A paragraph's first line goes on, at its size and leading, into a
 ///   second that differs from page to page: a legal text opens two
@@ -411,8 +413,15 @@ fn exact_running<'a>(
             .collect::<Vec<_>>()
             .join(" ")
     };
+    let mut texts: Vec<&str> = hits.iter().map(|h| h.3.as_str()).collect();
+    texts.sort_unstable();
+    texts.dedup();
+    let digits_vary = texts.len() > 1;
+    // A page number's words change from page to page, so the page left out
+    // cannot print them: a cover with no number before `Page 2 of 3` and
+    // `Page 3 of 3`. It counts the pages instead (below).
     let says: String = hits[0].3.split_whitespace().collect::<Vec<_>>().join(" ");
-    if (0..pages.len()).any(|pi| !on.contains(&pi) && !words(pi).contains(&says)) {
+    if !digits_vary && (0..pages.len()).any(|pi| !on.contains(&pi) && !words(pi).contains(&says)) {
         return None;
     }
     for h in &hits {
@@ -430,10 +439,6 @@ fn exact_running<'a>(
             }
         }
     }
-    let mut texts: Vec<&str> = hits.iter().map(|h| h.3.as_str()).collect();
-    texts.sort_unstable();
-    texts.dedup();
-    let digits_vary = texts.len() > 1;
     if digits_vary {
         let numbers: Vec<(usize, &str)> = hits.iter().map(|h| (h.0, h.3.as_str())).collect();
         if texts.iter().any(|t| names_something(t)) || !advances(&numbers) {
@@ -1069,6 +1074,31 @@ mod tests {
         // A number that does not go up with the page is not its number.
         let pages = doc(2, |i| vec![line(&format!("{}", 5 - i), 40.0)]);
         assert!(detect(&pages).iter().all(|m| m.is_empty()));
+    }
+
+    #[test]
+    fn a_short_documents_cover_need_not_print_its_page_number() {
+        // Three pages, the first a cover with no number: the page left out
+        // cannot restate a number that changes, and the number counts.
+        let pages = doc(3, |i| match i {
+            0 => vec![line("Annual Review", 300.0)],
+            _ => vec![
+                line(&format!("Body text of page {}", i + 1), 400.0),
+                line(&format!("Page {} of 3", i + 1), 950.0),
+            ],
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(marks[1].get(&1), Some(&Furniture::PageNumber));
+        assert_eq!(marks[2].get(&1), Some(&Furniture::PageNumber));
+        assert_eq!(folios[1].as_deref(), Some("2"));
+        assert_eq!(folios[2].as_deref(), Some("3"));
+        assert_eq!(folios[0], None);
+        // A number that falls is no page's, cover or not.
+        let pages = doc(3, |i| match i {
+            0 => vec![line("Annual Review", 300.0)],
+            _ => vec![line(&format!("Page {} of 3", 4 - i), 950.0)],
+        });
+        assert!(detect_with_folios(&pages).1.iter().all(Option::is_none));
     }
 
     #[test]

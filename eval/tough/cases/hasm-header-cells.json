@@ -6,7 +6,8 @@
     "about": "HASM dimensions of hexagon socket head cap screws (3 landscape pages). Each page titles a table whose header row is filled dark green cell by cell."
   },
   "notes": [
-    "#114: the green header cells clustered into a drawing, and on pages 2 and 3 the page title over the table was typed as its label."
+    "#114: the green header cells clustered into a drawing, and on pages 2 and 3 the page title over the table was typed as its label.",
+    "2026-11-24 (#134): a page-number line on two of the three pages was never read as one, since a short document's running line had to be restated on the page left out, and a page number's words change from page to page. Page 3's number is fused into the note beside it, `NOTE: ALL DIMENSIONS ARE IN INCHES Page 3 of 3` (#130)."
   ],
   "checks": [
     {
@@ -18,6 +19,34 @@
         "text": "Dimensions of Hexagon Socket Head Cap Screws"
       },
       "count": 3
+    },
+    {
+      "id": "folio-on-page-1",
+      "found": "2026-11-24",
+      "issue": "No page had a folio.",
+      "folio": {
+        "page": 1,
+        "value": "1"
+      }
+    },
+    {
+      "id": "folio-on-page-2",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "folio": {
+        "page": 2,
+        "value": "2"
+      }
+    },
+    {
+      "id": "folio-on-page-3",
+      "found": "2026-11-24",
+      "status": "open",
+      "issue": "#130: the page number is read in one line with the note beside it, joined by a run of spaces, and no folio comes of it.",
+      "folio": {
+        "page": 3,
+        "value": "3"
+      }
     }
   ]
 }
