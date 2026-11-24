@@ -9,9 +9,9 @@
 //! The detector's settings are the ones the corpus benchmark measured
 //! (detection sized on the image's short side at 736 px, at most 2,000 px on
 //! the long one): each word box this engine gives is a detected line, turned
-//! upright about its center, with the line's angle. An image so tall that
-//! strips of it are read much larger than the whole (a long capture, never a
-//! page) is read in overlapping strips ([`strips`]), and its lines kept once.
+//! upright about its center, with the line's angle. An image the detector
+//! shrinks until its text is too small to be seen ([`text_too_small`]) is
+//! read again in overlapping strips ([`strips`]), and its lines kept once.
 
 use crate::assets::{Assets, Runtime};
 use crate::{Coords, OcrEngine, OcrWord, Pixels, WordReading};
@@ -244,16 +244,18 @@ impl OcrEngine for OarEngine {
     fn read(&self, image: &Pixels) -> Result<WordReading, String> {
         // oar-ocr reads RGB: a grey image is spread to three channels, and
         // a crop's transparent pixels are composited over white paper.
-        let img = image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
-            .ok_or("the image's buffer does not match its size")?;
+        let rgb = || {
+            image::RgbImage::from_raw(image.width, image.height, image.to_rgb())
+                .ok_or("the image's buffer does not match its size")
+        };
         let bands = strips(image.width, image.height);
         let lease = self.pipes.take(|| self.pipeline())?;
-        let words = if bands.is_empty() {
-            read_one(&lease, img, 0)?
-                .into_iter()
-                .map(|(w, _)| w)
-                .collect()
-        } else {
+        let whole = read_one(&lease, rgb()?, 0)?;
+        // Read whole first: only an image the detector shrinks until its
+        // text is too small to be seen is read again, in strips, and that
+        // reading kept.
+        let words = if !bands.is_empty() && text_too_small(image.width, image.height, &whole) {
+            let img = rgb()?;
             let mut read = Vec::new();
             for &(top, bottom) in &bands {
                 let strip =
@@ -261,6 +263,8 @@ impl OcrEngine for OarEngine {
                 read.push((top, bottom, read_one(&lease, strip, top)?));
             }
             merge_strips(read, image.height)
+        } else {
+            whole.into_iter().map(|(w, _)| w).collect()
         };
         drop(lease);
         Ok(WordReading {
@@ -283,21 +287,66 @@ const DET_LONG_SIDE: u32 = 2000;
 /// read whole.
 const MIN_STRIP: u32 = 200;
 
-/// How many times larger than whole the strips must read an image for it
-/// to be cut: what tiling gains, the image's height over a strip's length.
-///
-/// A page is under it, Legal (8.5 × 14 in) the longest at 1.65, and is read
-/// whole: cut, it is read twice for no line more, at another scale, and a
-/// line running down it longer than the strips' overlap is lost. A capture
-/// of short rows, 13 px high, loses rows read whole once the detector
-/// shrinks it under about 0.6, so tiling pays as soon as it reads it much
-/// larger: whole, 1,000 × 3,600 loses 3 rows of 163 (1.8 times), 1,000 ×
-/// 3,800 7 of 172, 2,000 × 4,000 12 of 181; 1,000 × 3,400 (1.7) only 1.
-const STRIP_GAIN: f64 = 1.75;
+/// The scale the detector reads an image of `width` × `height` at (see
+/// [`OarEngine::pipeline`]): up to [`DET_SHORT_SIDE`] on its short side,
+/// then down to [`DET_LONG_SIDE`] on its long one.
+fn det_scale(width: u32, height: u32) -> f64 {
+    let (short, long) = (width.min(height).max(1) as f64, width.max(height) as f64);
+    let up = (DET_SHORT_SIDE as f64 / short).max(1.0);
+    up.min(DET_LONG_SIDE as f64 / long)
+}
 
-/// The rows a tall image is read in, `(top, bottom)` each, when strips read
-/// it at least [`STRIP_GAIN`] times larger than whole; empty to read it
-/// whole.
+/// The thickness of a detected line, in the pixels the detector sees, under
+/// which it starts to miss lines: an image whose lines read whole are
+/// thinner than this, at the median, is read again in strips.
+///
+/// The detector draws a box at least about 9 px thick around any line it
+/// finds, so the thickness it gives a line of small text is at that floor.
+/// Measured on 172 synthetic captures (lines in DejaVu Sans at 1.6 em, 6 to
+/// 16 px high, 736 to 2,000 px wide, 2,600 to 5,000 tall, and pages of 16
+/// to 30 px text at 200 and 300 dpi). Of the 134 whose lines came out under
+/// 10 px, or with no line, strips read more lines in 123 (up to a fifth at
+/// 10 to 16 px, every line where the whole reading found none) and fewer in
+/// 5, all 2,000 px wide with 6 to 9 px text. Of the 38 at 10 px or over,
+/// the pages among them at 11.5 to 28 px, the whole reading lost one line,
+/// in one image. Over all 172, the lines read: whole, 66 %; in strips, 92 %;
+/// by this rule, 92 %, with no page cut.
+const SMALL_TEXT: f64 = 10.0;
+
+/// Whether an image of `width` × `height`, read whole into `whole`, has text
+/// too small for the detector to see at the scale it read it: the median
+/// thickness of its detected lines, times [`det_scale`], is under
+/// [`SMALL_TEXT`].
+///
+/// Only a line at least twice as long as thick, and covering less than half
+/// the image, is counted. Text shrunk below what the detector resolves is
+/// found, if at all, as one box over the whole image, read as a few
+/// characters of noise: a 1,000 × 4,000 capture of 7 px lines gives a single
+/// box 1,000 thick. An image where no line is counted has text too small,
+/// or none: it is read in strips too, at the cost of one more detection.
+///
+/// It is the text's size, not the image's shape, that says whether a shrunk
+/// image loses lines. A page scanned at 300 dpi is shrunk to 0.6, and its
+/// 30 px lines are still 18 px to the detector; a capture of the same shape
+/// with 10 px text loses a quarter of its lines.
+fn text_too_small(width: u32, height: u32, whole: &[(OcrWord, Bounds)]) -> bool {
+    let area = width as f64 * height as f64;
+    let mut thick: Vec<f64> = whole
+        .iter()
+        .map(|(w, _)| (w.bbox[2] - w.bbox[0], w.bbox[3] - w.bbox[1]))
+        .filter(|&(len, t)| len >= 2.0 * t && len * t < area / 2.0)
+        .map(|(_, t)| t)
+        .collect();
+    if thick.is_empty() {
+        return true;
+    }
+    thick.sort_by(f64::total_cmp);
+    thick[thick.len() / 2] * det_scale(width, height) < SMALL_TEXT
+}
+
+/// The rows a tall image is read in, `(top, bottom)` each, when strips
+/// would read it larger than whole; empty when they would not. Whether it
+/// is read in them is [`text_too_small`]'s call, on a reading of the whole.
 ///
 /// Read whole, a capture 1,200 pixels wide and 9,000 tall is shrunk to 267 ×
 /// 2,000 for detection, and its short rows go unseen. Cut across its height,
@@ -315,7 +364,7 @@ fn strips(width: u32, height: u32) -> Vec<(u32, u32)> {
     } else {
         (DET_LONG_SIDE as u64 * width as u64 / DET_SHORT_SIDE as u64) as u32
     };
-    if (height as f64) < STRIP_GAIN * len as f64 || len < MIN_STRIP {
+    if height <= len || len < MIN_STRIP {
         return Vec::new();
     }
     let step = len - len / 5;
@@ -405,7 +454,7 @@ type StripReading = (u32, u32, Vec<(OcrWord, Bounds)>);
 /// pieces in two strips are not both kept. One longer than the strips'
 /// overlap (a fifth of a strip, 400 rows for a strip of 2,000) is whole in
 /// no strip: it is lost, or kept cut short where the detector's box stops a
-/// few pixels before the cut. A page is not cut ([`STRIP_GAIN`]), so this
+/// few pixels before the cut. A page is not cut ([`text_too_small`]), so this
 /// is a tall capture's sideways text.
 fn merge_strips(read: Vec<StripReading>, height: u32) -> Vec<OcrWord> {
     // Each word kept so far: its strip, how far inside it it lies, its
@@ -526,31 +575,103 @@ mod tests {
         assert_eq!(pipes.built(), 1);
     }
 
+    /// A whole reading of `n` level lines `thick` pixels thick, each twenty
+    /// times as long, as [`read_one`] gives it.
+    fn lines(n: usize, thick: f64) -> Vec<(OcrWord, Bounds)> {
+        (0..n)
+            .map(|i| {
+                let y = i as f64 * thick * 1.6;
+                let bbox = [10.0, y, 10.0 + 20.0 * thick, y + thick];
+                let word = OcrWord {
+                    text: format!("line {i}"),
+                    bbox,
+                    angle: Some(0.0),
+                    conf: Some(0.99),
+                };
+                (word, bbox)
+            })
+            .collect()
+    }
+
     #[test]
     fn a_scanned_page_is_read_whole() {
-        // Letter, A4, A3 and Legal, at 200 to 600 dpi, upright or turned.
-        for (w, h) in [
-            (1700, 2200),
-            (2550, 3300),
-            (5100, 6600),
-            (1654, 2339),
-            (2481, 3508),
-            (3508, 4961),
-            (1700, 2800),
-            (2550, 4200),
-            (3400, 5600),
+        // Letter, A4, A3 and Legal, at 200 to 600 dpi, upright or turned:
+        // 10 pt body text, its detected lines 1.2 em thick, is 20 px or
+        // more to the detector, however much the page is shrunk.
+        for (w, h, dpi) in [
+            (1700, 2200, 200.0),
+            (2550, 3300, 300.0),
+            (5100, 6600, 600.0),
+            (1654, 2339, 200.0),
+            (2481, 3508, 300.0),
+            (3508, 4961, 300.0),
+            (1700, 2800, 200.0),
+            (2550, 4200, 300.0),
+            (3400, 5600, 400.0),
         ] {
-            assert!(strips(w, h).is_empty(), "{w} × {h} is read whole");
-            assert!(strips(h, w).is_empty(), "{h} × {w} is read whole");
+            let body = lines(40, 1.2 * 10.0 / 72.0 * dpi);
+            assert!(!text_too_small(w, h, &body), "{w} × {h} is read whole");
+            assert!(!text_too_small(h, w, &body), "{h} × {w} is read whole");
         }
-        // A capture strips read 1.8 times larger is cut, one they read 1.7
-        // times larger is not; for a narrow one, after it is scaled up.
+        // Its 6 pt footnotes too.
+        assert!(!text_too_small(
+            2550,
+            3300,
+            &lines(40, 1.2 * 6.0 / 72.0 * 300.0)
+        ));
+    }
+
+    #[test]
+    fn a_capture_of_small_text_is_read_again_in_strips() {
+        // 10 px lines, their boxes 12 px thick: shrunk to 0.77 for 1,000 ×
+        // 2,600, they are 9.2 px to the detector, which misses some.
+        assert!(text_too_small(1000, 2600, &lines(150, 12.0)));
+        // 13 px lines, 15 px boxes: 11.5 px, all seen.
+        assert!(!text_too_small(1000, 2600, &lines(120, 15.0)));
+        // The same 12 px boxes in a capture 1,400 wide, read at the same
+        // scale, are as small; at 1,000 × 2,000, read at full size, not.
+        assert!(text_too_small(1400, 2600, &lines(150, 12.0)));
+        assert!(!text_too_small(1000, 2000, &lines(150, 12.0)));
+        // The median decides: a few large headings do not hide the body.
+        let mut mixed = lines(100, 12.0);
+        mixed.extend(lines(20, 40.0));
+        assert!(text_too_small(1000, 2600, &mixed));
+    }
+
+    #[test]
+    fn a_capture_where_no_line_is_seen_is_read_in_strips() {
+        assert!(text_too_small(1000, 4000, &[]), "nothing detected");
+        // Text the detector cannot resolve comes back as one box over the
+        // whole image, read as noise: no line.
+        let all = [0.0, 0.0, 1000.0, 4000.0];
+        let blob = |bbox: [f64; 4]| OcrWord {
+            text: "WNm".into(),
+            bbox,
+            angle: Some(90.0),
+            conf: Some(0.2),
+        };
+        // Upright about its center, as [`quad_box`] sets a tall quad.
+        let upright = [-1500.0, 1500.0, 2500.0, 2500.0];
+        assert!(text_too_small(1000, 4000, &[(blob(upright), all)]));
+        // Nor is a box as thick as it is long.
+        let square = [100.0, 100.0, 400.0, 400.0];
+        assert!(text_too_small(1000, 4000, &[(blob(square), square)]));
+    }
+
+    #[test]
+    fn strips_are_offered_wherever_they_read_an_image_larger() {
+        // Strips 2,000 long for a capture 736 to 2,000 wide: one a row
+        // taller is cut, in two.
+        assert!(strips(1000, 2000).is_empty());
+        assert_eq!(strips(1000, 2001), [(0, 2000), (1, 2001)]);
         assert_eq!(strips(1000, 3600), [(0, 2000), (1600, 3600)]);
-        assert!(strips(1000, 3400).is_empty());
-        assert!(!strips(2000, 3500).is_empty());
-        assert!(strips(2000, 3400).is_empty());
-        assert!(!strips(368, 1750).is_empty(), "strips of 1,000 rows");
-        assert!(strips(368, 1700).is_empty());
+        // As long as the image is wide from 2,000 on, so a page is offered
+        // them, and read whole on its text's size.
+        assert!(!strips(2550, 3300).is_empty());
+        assert!(strips(3300, 2550).is_empty());
+        // Scaled up to 736 across first.
+        assert!(strips(368, 1000).is_empty());
+        assert!(!strips(368, 1001).is_empty(), "strips of 1,000 rows");
     }
 
     #[test]
