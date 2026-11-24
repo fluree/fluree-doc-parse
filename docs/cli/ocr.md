@@ -42,20 +42,27 @@ structure already has its text, and a table crop asks about structure; both are
 left for a model. Given image files (PNG, JPEG, TIFF, …), it reads them all.
 
 The detector reads an image at most 2,000 px on its long side, and scales one
-under 736 px wide up to that first. An image so tall that strips of it are
-read at least 1.75 times larger than the whole is read in strips that overlap
-by a fifth, each line kept once, rather than shrunk: a 1,200 × 9,000 capture
-of 220 rows 13 px high read none of them shrunk, and all of them in strips.
-A strip of an image 2,000 px wide or more is as long as the image is wide, so
-the detector still shrinks it, less than the whole.
+under 736 px wide up to that first. Shrunk, an image's small text can fall
+under what the detector sees, and its lines are lost without a word. So an
+image the detector shrinks is read whole first, and the thickness of the lines
+it found, at the median and at the scale the detector read them, says whether
+that reading is kept: under 10 px, or with no line found, the image is read
+again in strips that overlap by a fifth, each line kept once, and that reading
+is kept. Read whole, captures 3,400 to 5,000 px tall lost up to a fifth of
+their 10 to 16 px lines, and a 1,200 × 9,000 one of 220 rows 13 px high read
+none of them; in strips, all of them. Only such an image pays for the second
+reading, which took 1.2 to 4 times as long as the first, twice at the median. A
+strip of an image 2,000 px wide or more is as long as the image is wide, so the
+detector still shrinks it, less than the whole.
 
-A scanned page is never cut: Legal (8.5 × 14 in), the longest, is 1.65 times
-as tall as wide. Read in strips, a page took two detections for no line more,
-and lost a line running down it longer than the strips' overlap; read whole,
-a page at 300 dpi or more is shrunk, and its text still read. A tall capture
-is cut, so a sideways line in one longer than the overlap (400 px for strips
-of 2,000) is lost or cut short. A wide image is still shrunk, since a cut
-across it would cut its lines.
+It is the text's size, not the image's shape, that decides: a scanned page is
+shrunk too, but its body text, 10 pt at any resolution, is 20 px or more to the
+detector, and the page is read whole, once. Measured on 172 synthetic captures
+and pages, the lines read whole were 66 %, in strips 92 %, and by this rule
+92 %, with no page cut. Cut, a page would take two readings for no line more,
+and lose a line running down it longer than the strips' overlap. A capture read
+in strips loses such a line too, or keeps it cut short (400 px for strips of
+2,000). A wide image is never cut, since a cut across it would cut its lines.
 
 ## Options
 
