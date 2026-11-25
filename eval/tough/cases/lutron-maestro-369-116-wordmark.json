@@ -12,20 +12,12 @@
     {
       "id": "form-title-is-text",
       "found": "2026-11-25",
-      "issue": "`SPECIFICATION SUBMITTAL P/N 369-116 Rev. A` was a Figure, read as the diagrams' label.",
-      "element": {
-        "text": "SPECIFICATION SUBMITTAL P/N 369-116 Rev. A"
-      }
-    },
-    {
-      "id": "form-title-not-figure",
-      "found": "2026-11-25",
       "issue": "`SPECIFICATION SUBMITTAL P/N 369-116 Rev. A` was a Figure.",
       "element": {
-        "type": "doco:Figure",
-        "text": "SPECIFICATION SUBMITTAL P/N 369-116 Rev. A"
-      },
-      "count": 0
+        "type": "doco:Paragraph",
+        "text": "SPECIFICATION SUBMITTAL P/N 369-116 Rev. A",
+        "evidence": "layout"
+      }
     }
   ]
 }

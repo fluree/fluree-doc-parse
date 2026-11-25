@@ -488,6 +488,92 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     }
 }
 
+/// Which cells start a run of merged cells whose value is set across it:
+/// row-major, the run's first cell `true`.
+///
+/// A value centred across two models' columns (`2 years` under `M17
+/// Series` and `M21 Series`) is each column's; a run the ruling merely
+/// leaves open (a statement's `$ 11,452` under its first column, the next
+/// columns unruled on that row) holds its value in its first column. So a
+/// run is spread when its only text, in its first cell, is centred on the
+/// run, and narrower than most of it: a row of figures the grid failed to
+/// part runs the run's whole width, and is no one value. Only a value with
+/// a word in it: figures alone across columns are the grid's cuts off the
+/// page's.
+fn spread_runs(
+    g: &table::Grid,
+    glyphs: &[Glyph],
+    rows: &[Vec<String>],
+    left: &[bool],
+) -> Vec<bool> {
+    let cols = g.cols();
+    let n = rows.len();
+    let mut out = vec![false; n * cols];
+    if cols < 2 || left.len() != n * cols || g.xs.len() != cols + 1 {
+        return out;
+    }
+    let mut homes: Option<Vec<Option<usize>>> = None;
+    for (r, row) in rows.iter().enumerate() {
+        let mut c = 1;
+        while c < cols {
+            let mut end = c + 1;
+            while end < cols && left[r * cols + end] {
+                end += 1;
+            }
+            let value = row[c].trim();
+            let only_first =
+                !value.is_empty() && row[c + 1..end].iter().all(|t| t.trim().is_empty());
+            // A value with no word in it, figures and signs alone, set across
+            // columns stands in one of them, the grid's cuts off the page's:
+            // no datasheet sets one `5.5` for its MIN and its NOM, and a row
+            // of figures the grid failed to part is the columns' values.
+            let worded = value.chars().any(char::is_alphabetic);
+            if end > c + 1 && only_first && worded {
+                let cells: Vec<usize> = (c..end).map(|k| r * cols + k).collect();
+                let ids: Vec<usize> = match g.layout.as_deref() {
+                    Some(lay) => cells
+                        .iter()
+                        .filter_map(|&i| lay.cells.get(i))
+                        .flatten()
+                        .copied()
+                        .collect(),
+                    None => {
+                        let homes = homes.get_or_insert_with(|| g.glyph_cells(glyphs));
+                        homes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, h)| h.is_some_and(|i| cells.contains(&i)))
+                            .map(|(j, _)| j)
+                            .collect()
+                    }
+                };
+                let ink = ids
+                    .iter()
+                    .filter_map(|&j| glyphs.get(j))
+                    .filter(|gl| !gl.text.trim().is_empty())
+                    .filter_map(|gl| gl.bbox)
+                    .reduce(|a, b| a.union(&b));
+                if let Some(ink) = ink {
+                    let (x0, x1) = (g.xs[c], g.xs[end]);
+                    let width = (x1 - x0).max(1.0);
+                    let mid = (ink.x0 + ink.x1) / 2.0;
+                    out[r * cols + c] = (mid - (x0 + x1) / 2.0).abs() <= width * SPREAD_CENTRE
+                        && ink.x1 - ink.x0 <= width * SPREAD_WIDTH;
+                }
+            }
+            c = end;
+        }
+    }
+    out
+}
+
+/// How far a spread value's middle may stand from its run's, as a share of
+/// the run's width.
+const SPREAD_CENTRE: f64 = 0.15;
+
+/// Widest a spread value's ink runs, as a share of its run's width.
+const SPREAD_WIDTH: f64 = 0.8;
+
 /// Drop the columns no cell starts in, from every part of a table.
 ///
 /// A column whose cell on every row is empty and the rest of the one to its
@@ -569,6 +655,7 @@ fn drop_merged_columns(elements: &mut [Element]) {
             }
             e.merged_left = e.merged_left.as_ref().map(squeeze);
             e.merged_down = e.merged_down.as_ref().map(squeeze);
+            e.spread_left = e.spread_left.as_ref().map(squeeze);
             if let Some(rows) = e.cells.as_ref() {
                 e.text = rows
                     .iter()
@@ -770,7 +857,7 @@ const STACKED_LABELS: usize = 3;
 /// more than its weight does. Only bold lines end a run, because a bold
 /// line's level says nothing beside another kind of heading's.
 fn demote_empty_bold_heads(elements: &mut [Element]) {
-    let bold = |e: &Element| e.kind == "doco:SectionTitle" && unflagged(e.evidence) == "bold";
+    let bold = |e: &Element| e.kind == "doco:SectionTitle" && e.evidence == "bold";
     let level = |e: &Element| e.level.unwrap_or(6);
     let same_row = |a: &Element, b: &Element| match (a.bbox, b.bbox) {
         (Some(a_box), Some(b_box)) if a.page == b.page => {
@@ -1053,34 +1140,13 @@ fn heading_yields_to_figure(evidence: Evidence, in_figure: bool, in_drawing: boo
     }
 }
 
-/// Evidence a heading set as a form's text carries until runs of bold
-/// heads are judged: the evidence it would have, with this prefix.
-const FORM_TEXT: &str = "form-";
-
-/// A heading's evidence, without the mark of a form's text.
-fn unflagged(evidence: &'static str) -> &'static str {
-    evidence.strip_prefix(FORM_TEXT).unwrap_or(evidence)
-}
-
-/// A form's text, kept a heading while runs of bold heads were judged
-/// ([`heading::Heading::form_text`]), is read as text from here on.
-fn read_form_text(elements: &mut [Element]) {
-    for e in elements.iter_mut() {
-        if e.kind == "doco:SectionTitle" && e.evidence.starts_with(FORM_TEXT) {
-            e.kind = "doco:Paragraph".into();
-            e.level = None;
-            e.evidence = "layout";
-        }
-    }
-}
-
 fn heading_fragments_join(a: &Element, b: &Element) -> bool {
     if a.kind != "doco:SectionTitle"
         || b.kind != "doco:SectionTitle"
         || a.page != b.page
         || a.level != b.level
-        || unflagged(a.evidence) != unflagged(b.evidence)
-        || !matches!(unflagged(a.evidence), "font-size" | "bold")
+        || a.evidence != b.evidence
+        || !matches!(a.evidence, "font-size" | "bold")
         || !b
             .text
             .chars()
@@ -1103,11 +1169,6 @@ fn coalesce_heading_fragments(elements: &mut Vec<Element>) {
             if heading_fragments_join(previous, &e) {
                 previous.text.push(' ');
                 previous.text.push_str(&e.text);
-                // Joined, the heading is a form's text only if both parts
-                // were: a line that stopped mid-phrase has found its end.
-                if !e.evidence.starts_with(FORM_TEXT) {
-                    previous.evidence = unflagged(previous.evidence);
-                }
                 if let (Some(a), Some(b)) = (previous.bbox.as_mut(), e.bbox) {
                     a.x0 = a.x0.min(b.x0);
                     a.y0 = a.y0.min(b.y0);
@@ -2585,12 +2646,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // one occurrence is structurally a heading.
     let mut is_heading: std::collections::HashMap<(usize, usize), (usize, Evidence)> =
         Default::default();
-    let mut form_text: std::collections::HashSet<(usize, usize)> = Default::default();
     for h in &headings {
         is_heading.insert((h.page, h.block_index), (h.level, h.evidence));
-        if h.form_text {
-            form_text.insert((h.page, h.block_index));
-        }
     }
 
     let mut elements = Vec::new();
@@ -2660,16 +2717,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 Some((l, ev)) if !weak_heading_in_figure => (
                     "doco:SectionTitle",
                     Some(*l),
-                    match (ev, form_text.contains(&(pi, block_idx))) {
-                        (Evidence::Outline, _) => "outline",
-                        (Evidence::Title, _) => "title",
-                        (Evidence::Sequence, _) => "sequence",
-                        (Evidence::Numbering, false) => "numbering",
-                        (Evidence::FontSize, false) => "font-size",
-                        (Evidence::Bold, false) => "bold",
-                        (Evidence::Numbering, true) => "form-numbering",
-                        (Evidence::FontSize, true) => "form-font-size",
-                        (Evidence::Bold, true) => "form-bold",
+                    match ev {
+                        Evidence::Outline => "outline",
+                        Evidence::Title => "title",
+                        Evidence::Numbering => "numbering",
+                        Evidence::Sequence => "sequence",
+                        Evidence::FontSize => "font-size",
+                        Evidence::Bold => "bold",
                     },
                 ),
                 _ if figure_of.is_some() => ("doco:Figure", None, "fills"),
@@ -3250,6 +3304,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     &raw.pages[pi].fills,
                 ),
             };
+            let spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
             tables += 1;
             let text = rows
                 .iter()
@@ -3259,6 +3314,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             table_elements.push(Element {
                 page: pi,
                 bbox: Some(g.bbox),
+                spread_left: spread.iter().any(|x| *x).then_some(spread),
                 cells: Some(rows),
                 header_rows: Some(header_rows),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
@@ -3389,7 +3445,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     link_continued_tables(&mut elements, &frames);
     drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
-    read_form_text(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -3639,27 +3694,6 @@ mod tests {
             .filter(|e| e.kind == "doco:SectionTitle")
             .map(|e| e.text.as_str())
             .collect()
-    }
-
-    #[test]
-    fn a_forms_text_stays_in_its_run_of_bold_heads_until_judged() {
-        let head = |t: &str, ev: &'static str, y: f64| {
-            line_at("doco:SectionTitle", t, ev, Some(2), y, 50.0)
-        };
-        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
-        // A grid's caption, its keys, and another caption, stacked: a run
-        // of three, all but the last text. Dropped first, the keys would
-        // leave a run of two, both kept.
-        let mut grid = vec![
-            head("Description of property", "bold", 100.0),
-            head("(a) (b)", "form-bold", 112.0),
-            head("Gain or (loss)", "bold", 124.0),
-            text("Example 100 sh. XYZ Co.", 140.0),
-        ];
-        demote_empty_bold_heads(&mut grid);
-        read_form_text(&mut grid);
-        assert_eq!(heads(&grid), ["Gain or (loss)"]);
-        assert!(grid.iter().all(|e| !e.evidence.starts_with(FORM_TEXT)));
     }
 
     #[test]

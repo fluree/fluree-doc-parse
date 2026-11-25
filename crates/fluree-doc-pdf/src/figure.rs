@@ -1155,132 +1155,19 @@ pub fn attach_beside(
         // text's: a list of notes set above a form, a drawing's neighbour
         // in a column of bullets. Its first lines were out of reach and its
         // last were in, and the lines are one run all the same.
-        //
-        // And text in a column of its own beside the drawing, sharing its
-        // rows, is the page's: a heading and a note set flush with the
-        // page's paragraphs in the column beside a drawing's box (`FCC`,
-        // `CAUTION: …`), or a run of instructions wrapped from line to line
-        // (`a. … connect the black fixture lead to the` over `voltage
-        // supply …`). A label is terse, and stands among the drawing's.
-        let outside = |t: usize| share_inside(&blocks[t].0, &drawing) < MARK_INSIDE;
-        let beside_rows = |t: usize| {
-            let b = &blocks[t].0;
-            b.y1.min(drawing.y1) > b.y0.max(drawing.y0)
-                && (b.x1 <= drawing.x0 + 1.0 || b.x0 >= drawing.x1 - 1.0)
-        };
-        let wraps = |a: usize, b: usize| {
-            let ((ba, sa, ta), (bb, sb, tb)) = (blocks[a], blocks[b]);
-            let line = sa.max(sb).max(1.0) as f64;
-            let gap = bb.y0 - ba.y1;
-            // Lines of running text, a few words each: a diagram's labels
-            // (`psbT` over `nR`) say a word.
-            (-0.3 * line..=line * RUN_GAP).contains(&gap)
-                && (sa - sb).abs() <= RUN_SIZE
-                && (bb.x0 - ba.x0).abs() <= line * 2.0
-                && words(ta) >= RUN_WORDS
-                && words(tb) >= RUN_WORDS
-                && !ends_sentence(ta)
-                && opens_lower(tb)
-        };
-        let wrapped: Vec<usize> = taken
-            .iter()
-            .copied()
-            .filter(|&a| outside(a) && beside_rows(a))
-            .flat_map(|a| {
-                taken
-                    .iter()
-                    .copied()
-                    .filter(move |&b| b != a && wraps(a, b))
-                    .flat_map(move |b| [a, b])
-            })
-            .collect();
-        let mut released: Vec<usize> = Vec::new();
-        // Two wraps in one column, not one: a diagram's label can break
-        // over two lines.
-        for &w in &wrapped {
-            let x = blocks[w].0.x0;
-            let line = blocks[w].1.max(1.0) as f64;
-            let pairs = wrapped
-                .iter()
-                .filter(|&&o| (blocks[o].0.x0 - x).abs() <= line * 2.0)
-                .count()
-                / 2;
-            if pairs >= 2 && !released.contains(&w) {
-                released.push(w);
-            }
-        }
-        taken.retain(|t| !released.contains(t));
-        let paragraph = |j: usize| blocks[j].2.split_whitespace().count() > LABEL_MAX_WORDS;
         loop {
             let free = |j: usize, taken: &[usize]| !taken.contains(&j);
-            // Set in a column with the page's text: flush with a paragraph
-            // the drawing did not take, or with a line already released.
-            let column = |t: usize, j: usize| {
+            let released = taken.iter().position(|&t| {
                 let (b, size, _) = blocks[t];
-                let (o, osize, _) = blocks[j];
-                let line = size.max(osize).max(1.0) as f64;
-                let gap = (o.y0 - b.y1).max(b.y0 - o.y1);
-                // A line released with its column says a few words too: a
-                // chart's ticks and axis's name stand by its plot, whoever
-                // stands beside them.
-                gap <= line * COLUMN_GAP
-                    && if released.contains(&j) {
-                        (o.x0 - b.x0).abs() <= line * 2.0 && words(blocks[t].2) >= RUN_WORDS
-                    } else {
-                        paragraph(j) && beside_rows(j) && (o.x0 - b.x0).abs() <= RUN_ALIGN
-                    }
-            };
-            // The line introducing a list, on its colon, over the list's
-            // first item set in under it, wherever it stands by the
-            // drawing.
-            let introduces = |t: usize, j: usize| {
-                let (b, size, text) = blocks[t];
-                let (o, osize, _) = blocks[j];
-                let line = size.max(osize).max(1.0) as f64;
-                text.trim_end().ends_with(':')
-                    && (paragraph(j) || released.contains(&j))
-                    && (0.0..=line * COLUMN_GAP).contains(&(o.y0 - b.y1))
-                    && (0.0..=line * 6.0).contains(&(o.x0 - b.x0))
-            };
-            let next = taken.iter().position(|&t| {
-                let (b, size, _) = blocks[t];
-                outside(t)
-                    && (0..blocks.len()).any(|j| {
-                        free(j, &taken)
-                            && (runs_on(&b, size, &blocks[j].0, blocks[j].1)
-                                || (beside_rows(t) && column(t, j))
-                                || introduces(t, j))
-                    })
+                share_inside(&b, &drawing) < MARK_INSIDE
+                    && (0..blocks.len())
+                        .any(|j| free(j, &taken) && runs_on(&b, size, &blocks[j].0, blocks[j].1))
             });
-            match next {
+            match released {
                 Some(k) => {
-                    released.push(taken.remove(k));
+                    taken.remove(k);
                 }
                 None => break,
-            }
-        }
-        // A label taken only through others that are released goes with
-        // them: the line introducing a run of instructions, set off the
-        // drawing's corner.
-        if !released.is_empty() {
-            loop {
-                let orphan = taken.iter().position(|&t| {
-                    let (b, size, _) = blocks[t];
-                    let label = size < prose * LABEL_SIZE;
-                    let fits = b.width() <= drawing.width() * PROSE_LABEL_WIDTH;
-                    let own = gap(&b, &drawing) <= reach && (label || (beside(&b) && fits));
-                    outside(t)
-                        && !own
-                        && !taken
-                            .iter()
-                            .any(|&u| u != t && gap(&b, &blocks[u].0) <= reach)
-                });
-                match orphan {
-                    Some(k) => {
-                        released.push(taken.remove(k));
-                    }
-                    None => break,
-                }
             }
         }
         f.bbox = taken.iter().fold(drawing, |r, &t| r.union(&blocks[t].0));
@@ -1328,34 +1215,6 @@ fn runs_on(a: &BBox, a_size: f32, b: &BBox, b_size: f32) -> bool {
         && (a.x0 - b.x0).abs() <= RUN_ALIGN
         && gap >= -size * 0.5
         && gap <= size * RUN_GAP
-}
-
-/// Most space, in lines, between text in a column beside a drawing and the
-/// page's paragraph it is set with.
-const COLUMN_GAP: f64 = 2.5;
-
-/// Fewest words in a line of running text, as against a label's.
-const RUN_WORDS: usize = 3;
-
-/// The words `text` says.
-fn words(text: &str) -> usize {
-    text.split_whitespace().count()
-}
-
-/// `text` ends a sentence: a full stop, a question or exclamation mark, or
-/// a colon, inside any closing bracket or quote.
-fn ends_sentence(text: &str) -> bool {
-    text.trim_end()
-        .trim_end_matches(['"', '\'', '\u{201D}', '\u{2019}', ')'])
-        .ends_with(['.', '!', '?', ':'])
-}
-
-/// `text` opens in lower case: its first letter is small.
-fn opens_lower(text: &str) -> bool {
-    text.trim_start()
-        .chars()
-        .find(|c| c.is_alphabetic())
-        .is_some_and(char::is_lowercase)
 }
 
 /// How far apart, in points, two blocks' sizes and left edges may be and the
@@ -2176,68 +2035,6 @@ mod tests {
         let mut figs = fig();
         let taken = attach(&mut figs, &blocks, &[], (612.0, 792.0), 9.0);
         assert_eq!(taken[0], [0, 1], "{taken:?}");
-    }
-
-    #[test]
-    fn a_column_of_the_pages_text_beside_a_drawing_is_the_pages() {
-        // A drawing in a box, and in the column beside it a heading and a
-        // note set flush with the page's paragraph above them.
-        let fig = |d: BBox| {
-            vec![Figure {
-                bbox: d,
-                drawing: d,
-                page: 0,
-                shapes: 7,
-                frame: None,
-            }]
-        };
-        let para = "This product can be adjusted for wattage from fifty to seventy five watts by adjusting the three position switch on the back housing.";
-        let blocks = vec![
-            (bb(391.0, 40.0, 560.0, 85.0), 8.0, para),
-            (bb(391.4, 99.0, 410.0, 108.0), 9.0, "FCC"),
-            (
-                bb(391.0, 114.0, 560.0, 132.0),
-                8.0,
-                "CAUTION: Changes or modifications could void your authority.",
-            ),
-            (bb(150.0, 330.0, 170.0, 338.0), 8.0, "5"),
-        ];
-        let mut figs = fig(bb(37.0, 37.0, 354.0, 325.0));
-        let taken = attach(&mut figs, &blocks, &[], (612.0, 792.0), 8.0);
-        assert_eq!(taken[0], [3], "{taken:?}");
-        // A run of steps wrapped from line to line in the column beside a
-        // wiring diagram, under the line introducing them.
-        let blocks = vec![
-            (
-                bb(47.5, 481.0, 270.0, 489.0),
-                7.5,
-                "Make the following Electrical Connections to supply cord:",
-            ),
-            (
-                bb(74.0, 504.5, 300.0, 512.5),
-                7.5,
-                "a. For 120/277/347V connect the black fixture lead to the",
-            ),
-            (
-                bb(87.2, 514.4, 290.0, 522.4),
-                7.5,
-                "voltage supply or Hot 1 (for 208/240/480V wiring).",
-            ),
-            (
-                bb(74.0, 528.0, 300.0, 536.0),
-                7.5,
-                "b. For 120/277/347V connect the white fixture lead to the",
-            ),
-            (
-                bb(87.2, 538.0, 290.0, 546.0),
-                7.5,
-                "neutral supply or Hot 2 (for 208/240/480V wiring).",
-            ),
-            (bb(340.0, 470.0, 380.0, 477.0), 6.0, "LINE"),
-        ];
-        let mut figs = fig(bb(319.0, 459.0, 567.0, 735.0));
-        let taken = attach(&mut figs, &blocks, &[], (612.0, 792.0), 8.0);
-        assert_eq!(taken[0], [5], "{taken:?}");
     }
 
     #[test]
