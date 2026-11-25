@@ -3246,6 +3246,21 @@ pub fn detect_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
+    with_header_band_edges(
+        detect_framed_rules(rules, fills, glyphs, page, frames),
+        fills,
+        glyphs,
+    )
+}
+
+/// [`detect_framed`]'s grids, as the rules alone give them.
+fn detect_framed_rules(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+) -> Vec<Grid> {
     let whole = detect_group(rules, fills, glyphs, page, frames);
     if whole.is_empty() {
         return detect_components(rules, fills, glyphs, page, frames);
@@ -3951,7 +3966,85 @@ pub fn detect_by_component_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
-    detect_components(rules, fills, glyphs, page, frames)
+    with_header_band_edges(
+        detect_components(rules, fills, glyphs, page, frames),
+        fills,
+        glyphs,
+    )
+}
+
+/// `grids`, each widened to the edge of the header shaded across its first
+/// row where the band runs on past its rules over a column of labels (see
+/// [`with_header_band_edge`]); not onto another grid.
+fn with_header_band_edges(
+    mut grids: Vec<Grid>,
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+) -> Vec<Grid> {
+    for i in 0..grids.len() {
+        let Some(wider) = with_header_band_edge(&grids[i], fills, glyphs) else {
+            continue;
+        };
+        if !grids
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != i && overlaps(&o.bbox, &wider.bbox))
+        {
+            grids[i] = wider;
+        }
+    }
+    grids
+}
+
+/// `g` widened to the edge of the header shaded across its first row, where
+/// the band runs on past its rules over a column of labels.
+///
+/// A catalogue's product table shades its header row across every column
+/// but rules its rows only from the second column on: each product's name
+/// spans its group of rows, and only the rules between groups reach the
+/// table's left edge, too few for the edge to be a boundary by their ends
+/// and none of them its first or last (`FP0R-E8 Expansion Unit` beside six
+/// rows). The header band says where the table's box is, where its text
+/// stands over the strip it adds (`Product name`) and words stand in the
+/// strip in the rows below. A band wider than its table with no name over
+/// the strip, or no words under it, says nothing.
+fn with_header_band_edge(
+    g: &Grid,
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+) -> Option<Grid> {
+    if g.ys.len() < 3 || g.xs.len() < 2 {
+        return None;
+    }
+    let (left, right) = (g.xs[0], g.xs[g.xs.len() - 1]);
+    let (top, bottom) = (g.ys[0], g.ys[g.ys.len() - 1]);
+    let on_line = |y: f64| g.ys.iter().any(|o| (o - y).abs() <= EDGE_TOLERANCE);
+    // Some glyph wholly inside the strip between `x0` and the grid's edge,
+    // its middle between `y0` and `y1`.
+    let ink = |x0: f64, y0: f64, y1: f64| {
+        glyphs.iter().any(|gl| {
+            !gl.text.trim().is_empty()
+                && gl.bbox.is_some_and(|b| {
+                    let cy = (b.y0 + b.y1) / 2.0;
+                    b.x0 >= x0 && b.x1 <= left && cy > y0 && cy < y1
+                })
+        })
+    };
+    // The band may be drawn a cell at a time.
+    let band = join_bands(fills).into_iter().map(|f| f.bbox).find(|b| {
+        (b.y0 - top).abs() <= EDGE_TOLERANCE
+            && on_line(b.y1)
+            && b.y1 < bottom - MIN_CELL_EXTENT
+            && b.x1 >= right - EDGE_TOLERANCE
+            && b.x0 < left - MIN_CELL_EXTENT
+    })?;
+    if !(ink(band.x0, band.y0, band.y1) && ink(band.x0, band.y1, bottom)) {
+        return None;
+    }
+    let mut wider = g.clone();
+    wider.xs.insert(0, band.x0);
+    wider.bbox.x0 = band.x0;
+    Some(wider)
 }
 
 /// Group the rules into touching components and detect a grid in each.
@@ -7142,6 +7235,58 @@ mod header_tests {
         assert_eq!(grids.len(), 1, "got {grids:?}");
         assert!((grids[0].xs[0] - 0.0).abs() < 1.0, "got {:?}", grids[0].xs);
         assert_eq!(grids[0].cols(), 3);
+    }
+
+    #[test]
+    fn a_header_band_over_a_label_column_is_the_tables_edge() {
+        // A product table shaded across its header row, its rows ruled
+        // from the second column on: only the rule between the two groups
+        // reaches the label column, too few for its edge.
+        let mut rules: Vec<Rule> = [10.0, 20.0, 40.0, 50.0, 60.0]
+            .iter()
+            .map(|&y| h(100.0, 300.0, y))
+            .collect();
+        rules.push(h(0.0, 300.0, 30.0));
+        for x in [100.0, 200.0, 300.0] {
+            rules.push(v(0.0, 60.0, x));
+        }
+        let band = [fill(0.0, 0.0, 300.0, 10.0)];
+        let header = gly(20.0, 8.0, 50.0, "Product");
+        let labels = [
+            gly(5.0, 18.0, 60.0, "Unit A"),
+            gly(5.0, 38.0, 60.0, "Unit B"),
+        ];
+        let text: Vec<_> = std::iter::once(header.clone())
+            .chain(labels.iter().cloned())
+            .chain([gly(120.0, 18.0, 40.0, "Input")])
+            .collect();
+        let grids = detect_framed(&rules, &band, &text, 0, &[]);
+        assert_eq!(grids.len(), 1, "got {grids:?}");
+        assert!(grids[0].xs[0].abs() < 1.0, "got {:?}", grids[0].xs);
+        assert_eq!(grids[0].cols(), 3);
+        // No name over the strip: the band is only wider than its table.
+        let unnamed: Vec<_> = labels.iter().cloned().collect();
+        let grids = detect_framed(&rules, &band, &unnamed, 0, &[]);
+        assert!(
+            (grids[0].xs[0] - 100.0).abs() < 1.0,
+            "got {:?}",
+            grids[0].xs
+        );
+        // No labels under it.
+        let grids = detect_framed(&rules, &band, std::slice::from_ref(&header), 0, &[]);
+        assert!(
+            (grids[0].xs[0] - 100.0).abs() < 1.0,
+            "got {:?}",
+            grids[0].xs
+        );
+        // A band short of the table's far edge is no header across it.
+        let short = [fill(0.0, 0.0, 250.0, 10.0)];
+        let grids = detect_framed(&rules, &short, &text, 0, &[]);
+        assert!(
+            (grids[0].xs[0] - 100.0).abs() < 1.0,
+            "got {:?}",
+            grids[0].xs
+        );
     }
 
     #[test]
