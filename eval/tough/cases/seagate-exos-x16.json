@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
-    "2026-11-24 (#128): a kicker or tagline set in smaller type directly above the title opened an empty, deeper section ahead of it."
+    "2026-11-24 (#128): a kicker or tagline set in smaller type directly above the title opened an empty, deeper section ahead of it.",
+    "2026-11-24 (#191): the rules the benefits column draws between its items stand level with the drive photo in the left column, where it has no text; read as clear, they cut the page, and `Best-Fit Applications` was read in the middle of the benefits."
   ],
   "checks": [
     {
@@ -23,6 +24,15 @@
       "element": {
         "type": "doco:Paragraph",
         "text": "Scalable. Responsive. Innovative."
+      }
+    },
+    {
+      "id": "benefits-under-their-heading",
+      "found": "2026-11-24",
+      "issue": "`Maximum Storage Capacity for Highest Rack Space Efficiency` held only its first 2 benefits; the other 7 came after `Best-Fit Applications` and its list.",
+      "under": {
+        "text": "PowerBalance™ feature optimizes Watts/TB",
+        "section": "Maximum Storage Capacity for Highest Rack Space Efficiency"
       }
     }
   ]

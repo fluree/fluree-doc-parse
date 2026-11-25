@@ -80,8 +80,7 @@ pub struct Analysis {
 /// Most words of a table's title band.
 const MAX_TABLE_TITLE_WORDS: usize = 12;
 
-/// A ruled or aligned grid whose first row is the table's title rather
-/// than its header: one label alone in the row, as one cell across the
+/// A grid whose first row is the table's title rather than its header: one label alone in the row, as one cell across the
 /// whole table (`Hex Cap Screws ASME B18.2.1-2012`, a section band
 /// `Mission Critical (10K rpm)`) or as the only text in the first of a row
 /// of empty cells (a caption the run took in, `Thermo Scientific™ M Series
@@ -96,8 +95,11 @@ fn table_title(
     scrub: &[(String, bool)],
     spanning: bool,
 ) -> Option<(String, table::Grid)> {
-    if g.layout.is_some() || g.rows() < 3 || g.cols() < 2 {
+    if g.rows() < 3 || g.cols() < 2 {
         return None;
+    }
+    if let Some(lay) = g.layout.as_deref() {
+        return layout_title(g, lay, page, scrub);
     }
     let cols = g.cols();
     let flat = g.cell_texts(&page.glyphs);
@@ -175,6 +177,117 @@ fn table_title(
     let mut trimmed = g.clone();
     trimmed.ys.remove(0);
     trimmed.bbox.y0 = trimmed.ys[0];
+    Some((text, trimmed))
+}
+
+/// [`table_title`] for a table read from its text ([`crate::textgrid`]):
+/// its first row is one label read whole across the row, set as a title
+/// (opening on a capital or a figure, with no colon, at the table's left
+/// edge or centred on it), over a row with text in two columns or more,
+/// and the only row the reading took for the header. A catalogue's
+/// band (`ENGINE BEARINGS` over `Rod Bearing | 2001-2002 | …`) opens a
+/// table the page cut at it, and the reading took the band for the header.
+///
+/// The table goes on from the row under it, its layout moved up a row: its
+/// spans, the labels set down its rows and its row bands with it. The
+/// header the reading found under the band stays the header.
+fn layout_title(
+    g: &table::Grid,
+    lay: &table::TableLayout,
+    page: &crate::extract::Page,
+    scrub: &[(String, bool)],
+) -> Option<(String, table::Grid)> {
+    let (rows, cols) = (g.rows(), g.cols());
+    if lay.cells.len() != rows * cols {
+        return None;
+    }
+    let texts = lay.texts(&page.glyphs, cols);
+    let filled = |r: usize| {
+        (0..cols)
+            .filter(|&c| !texts[r * cols + c].trim().is_empty())
+            .count()
+    };
+    // One cell across the whole row. A first cell alone in its row is, in a
+    // table read from its text, as often a line wrapped from the header
+    // above (`share before cumulative`) or a value cut off its row.
+    let across = lay
+        .spans
+        .iter()
+        .any(|&(r, c0, c1)| r == 0 && c0 == 0 && c1 >= cols);
+    if !across || filled(0) != 1 || texts[0].trim().is_empty() || filled(1) < 2 {
+        return None;
+    }
+    // A banner over the column names the reading found under it heads the
+    // header (`December 31, 2017` over `2017 | 2016`), not the table.
+    if lay.header_rows > 1 {
+        return None;
+    }
+    // Set where a title is: at the table's left edge, or centred on it. A
+    // line cut off a row's cell and read across the row sits where that
+    // cell's text does.
+    let ink: Vec<crate::geom::BBox> = lay.cells[..cols]
+        .iter()
+        .flatten()
+        .filter_map(|&i| page.glyphs.get(i).and_then(|gl| gl.bbox))
+        .collect();
+    let (x0, x1) = ink.iter().fold((f64::MAX, f64::MIN), |(a, b), bb| {
+        (a.min(bb.x0), b.max(bb.x1))
+    });
+    let size = lay.cells[0]
+        .first()
+        .and_then(|&i| page.glyphs.get(i))
+        .map_or(10.0, |gl| gl.font_size.max(1.0) as f64);
+    let width = g.bbox.x1 - g.bbox.x0;
+    let at_edge = (x0 - g.bbox.x0).abs() <= size * 1.5;
+    let centred = ((x0 + x1) / 2.0 - (g.bbox.x0 + g.bbox.x1) / 2.0).abs() <= width * 0.1;
+    if ink.is_empty() || !(at_edge || centred) {
+        return None;
+    }
+    let text = furniture::scrub_cell(
+        texts[0]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+        scrub,
+    );
+    let words = text.split_whitespace().count();
+    // Set as a title is: opening on a capital or a figure, and not a field
+    // or a line run on (`Grand Total:$459.72`, `from operating activities:`).
+    let titled = text.starts_with(|c: char| c.is_uppercase() || c.is_ascii_digit())
+        && !text.ends_with([':', ','])
+        && !text.contains(':');
+    if words == 0
+        || words > MAX_TABLE_TITLE_WORDS
+        || !titled
+        || table::is_numeric_cell(&text)
+        || !text.chars().any(char::is_alphabetic)
+    {
+        return None;
+    }
+    let up = |r: usize| r.checked_sub(1);
+    let mut trimmed = g.clone();
+    trimmed.ys.remove(0);
+    trimmed.bbox.y0 = trimmed.ys[0];
+    trimmed.layout = Some(std::sync::Arc::new(table::TableLayout {
+        header_rows: lay.header_rows.saturating_sub(1),
+        spans: lay
+            .spans
+            .iter()
+            .filter_map(|&(r, c0, c1)| up(r).map(|r| (r, c0, c1)))
+            .collect(),
+        downs: lay
+            .downs
+            .iter()
+            .filter_map(|&(r0, c, r1)| {
+                let (r0, r1) = (r0.saturating_sub(1), up(r1)?);
+                (r1 > r0 + 1).then_some((r0, c, r1))
+            })
+            .collect(),
+        sub_headers: lay.sub_headers.iter().filter_map(|&r| up(r)).collect(),
+        cells: lay.cells[cols..].to_vec(),
+        claimed: lay.claimed.clone(),
+    }));
     Some((text, trimmed))
 }
 
