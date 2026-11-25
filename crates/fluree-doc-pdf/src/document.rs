@@ -2189,7 +2189,7 @@ fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
 /// glyph, rasterises image coverage onto a grid, and tests glyph containment
 /// once per candidate region. Computing a verdict nobody consumes is the
 /// clearest kind of waste, even where the corpus is too noisy to time it.
-fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
+pub fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
     opts.emit_anchors || opts.layout_prefix.is_some()
 }
 
