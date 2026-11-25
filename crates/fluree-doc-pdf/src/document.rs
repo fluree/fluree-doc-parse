@@ -2646,13 +2646,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // to prefer over a ruled table holding a paragraph in a cell.
         aligned_full.retain(|g| !table::reads_as_prose(g, &p.glyphs));
         let aligned_preferred = prefer_aligned_over_ruled(&grids, &aligned_full, &p.glyphs);
+        // Where alignment reads the page's one coarse grid better, that grid
+        // is still read from its text if it is ruled with horizontals only:
+        // a journal's table between its top and bottom rules, a group's mid
+        // rule across it, comes out of alignment in pieces (the rows under
+        // one group, the header and the rest as text). Which reading stands
+        // is settled below.
+        let seeded_anyway = aligned_preferred && {
+            let lines = crate::textgrid::lines(&p.glyphs);
+            !crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines).is_empty()
+        };
         // Tables ruled with horizontals only, or by nothing but the rules
         // under their figures, are read from their text: their bands are
         // not rows and their rules' ends are not columns. See `textgrid`.
-        // Where alignment already reads the page's one coarse grid, it
-        // keeps it.
         let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
-        if !aligned_preferred {
+        if !aligned_preferred || seeded_anyway {
             timed(&mut timings.tables, || {
                 let lines = crate::textgrid::lines(&p.glyphs);
                 let mut read: Vec<Grid> = Vec::new();
@@ -2723,7 +2731,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .filter(|g| table::typed_layout(g, &outside))
                     .map(|g| g.bbox)
                     .collect();
-                for region in crate::textgrid::figure_runs(&lines, &p.rules, &taken) {
+                // Where alignment was preferred, only the seed is read again:
+                // alignment reads the runs of figures there.
+                for region in crate::textgrid::figure_runs(&lines, &p.rules, &taken)
+                    .into_iter()
+                    .filter(|_| !aligned_preferred)
+                {
                     if typed.iter().any(|t| overlap_area(t, &region) > 0.0) {
                         continue;
                     }
@@ -2804,7 +2817,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 grid_sources = out_sources;
             });
         }
-        let read_from_text = grid_sources.contains(&GridSource::Text);
+        let mut read_from_text = grid_sources.contains(&GridSource::Text);
+        // Where alignment was preferred, the seed's reading from its text
+        // stands only where it holds more of the table than alignment does:
+        // both read the same table, and the better leaves less of it out.
+        if read_from_text && seeded_anyway {
+            let held = |gs: &[Grid]| -> usize {
+                gs.iter()
+                    .flat_map(|g| g.cell_texts(&p.glyphs))
+                    .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
+                    .sum()
+            };
+            if held(&grids) <= held(&aligned_full) {
+                read_from_text = false;
+                beside_prose.clear();
+            }
+        }
 
         if read_from_text {
         } else if aligned_preferred {

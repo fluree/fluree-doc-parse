@@ -47,6 +47,11 @@ const BASELINE_TOLERANCE: f64 = 0.5;
 /// rows are set further apart, or the row beside it carries values.
 const WRAP_LEADING: f64 = 1.35;
 
+/// Baseline distance, in font sizes, up to which a line is the next one
+/// under another: set at a body's leading, 1.2 to 1.5 of its size. A line
+/// with a blank line between stands twice that below.
+const NEXT_LINE: f64 = 1.6;
+
 /// Vertical gap between consecutive lines, in font sizes, that ends a table.
 const MAX_ROW_GAP: f64 = 2.6;
 
@@ -1017,7 +1022,10 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             ) {
                 break;
             }
-            if value_row(l) || ruled_row(l, &clipped[band[j - 1]]) {
+            if value_row(l)
+                || ruled_row(l, &clipped[band[j - 1]])
+                || carries_on(&cols0, &clipped[band[j - 1]], l)
+            {
                 end = band[j];
                 labels = 0;
             } else if label_row(l) && labels < 3 {
@@ -1054,7 +1062,10 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             ) {
                 break;
             }
-            if value_row(next) || ruled_row(next, &clipped[last]) {
+            if value_row(next)
+                || ruled_row(next, &clipped[last])
+                || carries_on(&cols0, &clipped[last], next)
+            {
                 last += 1;
                 continue;
             }
@@ -1136,7 +1147,29 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                         && column_of(&cols0, c) == Some(0)
                         && set_as_title(&c.text))
             }) || above.chunks.first().is_some_and(|c| is_caption(&c.text));
-            if prose {
+            // A caption wrapped over the table: its lines after the first,
+            // each the next line under the one before and running on from
+            // it, are the caption's.
+            let caption_tail = {
+                let mut k = first - 1;
+                let mut tail = false;
+                while k > 0 && first - 1 - k < 3 {
+                    let (up, l) = (&clipped[k - 1], &clipped[k]);
+                    let runs = l.chunks.len() == 1
+                        && l.base - up.base <= l.fs.max(up.fs) * NEXT_LINE
+                        && up.chunks.last().is_some_and(|a| runs_on(a, &l.chunks[0]));
+                    if !runs {
+                        break;
+                    }
+                    if up.chunks.first().is_some_and(|c| is_caption(&c.text)) {
+                        tail = true;
+                        break;
+                    }
+                    k -= 1;
+                }
+                tail
+            };
+            if prose || caption_tail {
                 break;
             }
             crossed += between;
@@ -1305,6 +1338,39 @@ fn continues(l: &Line, n: &Line) -> bool {
     let (Some(a), Some(b)) = (l.chunks.first(), n.chunks.first()) else {
         return false;
     };
+    runs_on(a, b)
+}
+
+/// A line that carries on the cells of the line above it: the next line
+/// under it ([`NEXT_LINE`]), nothing in the stub column and no figure,
+/// each of its words in a column the line above fills, running on from what
+/// stands there ([`runs_on`]). A name or a description wrapped onto a second
+/// line, its row's other cells done on the first.
+fn carries_on(cols: &[(f64, f64)], above: &Line, l: &Line) -> bool {
+    let fs = l.fs.max(above.fs);
+    let d = l.base - above.base;
+    d > 0.0
+        && d <= fs * NEXT_LINE
+        && !l.chunks.is_empty()
+        && fits(cols, l)
+        && l.chunks.iter().all(|c| {
+            let Some(k) = column_of(cols, c).filter(|&k| k > 0) else {
+                return false;
+            };
+            !is_figure(&c.text)
+                && above
+                    .chunks
+                    .iter()
+                    .filter(|a| column_of(cols, a) == Some(k))
+                    .next_back()
+                    .is_some_and(|a| runs_on(a, c))
+        })
+}
+
+/// Whether text `b`, on the next line, runs on from `a`: it starts
+/// mid-phrase, or `a` ends on a word or mark that wants more; not after a
+/// colon, and not from a bold line into a plain one (a heading).
+fn runs_on(a: &Chunk, b: &Chunk) -> bool {
     let t = a.text.trim_end();
     if t.ends_with(':') || (a.bold && !b.bold) {
         return false;
@@ -1337,6 +1403,13 @@ fn continues(l: &Line, n: &Line) -> bool {
                 | "under"
                 | "over"
                 | "than"
+                | "through"
+                | "between"
+                | "within"
+                | "without"
+                | "during"
+                | "across"
+                | "via"
         )
 }
 
@@ -1715,6 +1788,15 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 continue;
             }
             body_rows.push((vec![l], i + 1 < body.len()));
+            i += 1;
+            continue;
+        }
+        // A cell wrapped onto this line: the row above's.
+        if body_rows
+            .last()
+            .is_some_and(|(prev, section)| !section && carries_on(&cols, prev.last().unwrap(), l))
+        {
+            body_rows.last_mut().unwrap().0.push(l);
             i += 1;
             continue;
         }
@@ -2867,6 +2949,102 @@ mod tests {
             "without the rule the labels are taken in: {open:?}"
         );
         assert!(parted.iter().all(|g| g.bbox.x0 > 150.0), "got {parted:?}");
+    }
+
+    #[test]
+    fn a_captions_second_line_is_no_header() {
+        // A caption set in from the table and wrapped onto a second line,
+        // 15pt apart, its second line reaching over two columns; then the
+        // header 20pt under it, its heads coded with digits as enzymes are,
+        // and three rows of figures 15pt apart.
+        let mut gl = set(
+            "Table 3. Potency of the compound on the enzymes in rat and",
+            30.0,
+            40.0,
+        );
+        gl.extend(set("human liver samples.", 30.0, 55.0));
+        for (k, t) in ["IC50", "1A2", "2C9", "3A4"].iter().enumerate() {
+            gl.extend(set(t, 20.0 + 70.0 * k as f64, 75.0));
+        }
+        for (i, row) in [
+            ["Rat", "12.5", "3.1", "40.2"],
+            ["Human", "11.0", "2.9", "38.7"],
+            ["Mouse", "13.4", "3.6", "41.9"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, 20.0 + 70.0 * k as f64, 95.0 + 15.0 * i as f64));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 68.0,
+            x1: 320.0,
+            y1: 130.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(texts.iter().any(|t| t == "IC50"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("liver")), "{texts:?}");
+    }
+
+    #[test]
+    fn a_cell_wrapped_onto_the_next_line_stays_in_its_row() {
+        // Four rows, a symbol, a figure and a name; one name runs onto a
+        // second line. Rows and the wrapped line are set 12pt apart alike.
+        let mut gl = Vec::new();
+        let rows = [
+            ("ALPHA", "0.65", "Coronin, actin binding"),
+            ("BETA", "0.61", "Splicing factor, small nuclear"),
+            ("", "", "ribonucleoprotein associated"),
+            ("GAMMA", "0.67", "Lyn substrate 1"),
+            ("DELTA", "-0.60", "Plastin 3"),
+        ];
+        for (i, (sym, fig, name)) in rows.iter().enumerate() {
+            let y = 50.0 + 12.0 * i as f64;
+            gl.extend(set(sym, 20.0, y));
+            gl.extend(set(fig, 100.0, y));
+            gl.extend(set(name, 160.0, y));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 350.0,
+            y1: 115.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "Splicing factor, small nuclear ribonucleoprotein associated"),
+            "{texts:?}"
+        );
+        // A row with nothing in its first column, its name a new one: a row
+        // of its own, not the tail of the one above.
+        let mut list = Vec::new();
+        for (i, (kind, n, name)) in [
+            ("Fruit", "12", "Apple"),
+            ("", "14", "Banana"),
+            ("Root", "9", "Carrot"),
+            ("", "11", "Turnip"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 50.0 + 12.0 * i as f64;
+            list.extend(set(kind, 20.0, y));
+            list.extend(set(n, 100.0, y));
+            list.extend(set(name, 160.0, y));
+        }
+        let grids = read(&lines(&list), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
     }
 
     /// A table of three groups, a size and its colour set once over three
