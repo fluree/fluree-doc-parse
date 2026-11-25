@@ -302,7 +302,9 @@ build them.
   what the PDF interpreter reported while reading it. A `Page` literal needs
   both. `ImagePlacement` gains `key`, what the image shows (`None` when not
   known, or when its box shows more or less than the image: a glyph, a path
-  or another image overlapping it, a clip cutting it).
+  or another image overlapping it, a clip cutting it). Its `texty` is an
+  `Option<bool>`: `None` when extraction did not probe the image
+  (`ExtractOptions::probe_images` off, `extract_bytes_with`).
 - `fluree_doc_model::DocoOptions` and `Notes` gain `unread_regions` and
   `warnings`. `Notes` is no longer `Eq`, only `PartialEq`: a region's box is
   floating-point.
@@ -313,8 +315,10 @@ build them.
   `MIN_FRAGMENTS_CONFIDENCE`; `fluree_doc_vision::texty::lines_of_text`.
 - Changed behaviour: `doc:unreadPages` calls a page that is one large
   image with next to no text layer `Scanned`, where it was `NearBlank`; the
-  graph gains `doc:unreadRegions` (`Region`, `Small`, `NotTexty`) and
-  `doc:parseWarnings`.
+  graph gains `doc:unreadRegions` (`Region`, `Small`, `NotTexty`,
+  `Unprobed`) and `doc:parseWarnings`. `fdoc convert` decodes no image
+  unless it escalates, reads with OCR, emits anchors, reads layout
+  sidecars or is given `--probe-images`.
 - New in this release, nothing to change from main: `ocr::ocr_jobs` and
   `ocr::read_pages` read the small texty regions after the routed ones, and
   an image drawn again at its size, with nothing else in its box, once; a
