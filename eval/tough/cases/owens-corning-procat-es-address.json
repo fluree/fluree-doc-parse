@@ -28,6 +28,25 @@
         "text": "One Owens Corning Parkway Toledo, OH 43659 USA"
       },
       "count": 0
+    },
+    {
+      "id": "phone-line-no-item",
+      "found": "2026-11-25",
+      "issue": "Released, `1-800-GET-PINK® www.owenscorning.com` was a list item, a square of the logo beside it read as a box to tick.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "1-800-GET-PINK® www.owenscorning.com",
+        "evidence": "layout"
+      }
+    },
+    {
+      "id": "company-line-no-heading",
+      "found": "2026-11-25",
+      "issue": "Released, `Owens Corning Insulating Systems, LLC`, the address's first line, was a level-2 heading over the address.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Owens Corning Insulating Systems, LLC"
+      }
     }
   ]
 }

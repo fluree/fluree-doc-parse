@@ -1030,12 +1030,47 @@ fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
         .starts_with(['-', '\u{2013}', '\u{2014}']);
     let ends_sentence = ends_sentence(prev);
     let opens_sentence = opens_sentence(next);
-    (strip_leading_bullet(&prev.text).is_some() || run_lead(prev).is_some())
+    // An item opened by a letter (`a. For 120/277/347V
+    // connect the black fixture lead to the` over `voltage supply …`)
+    // hangs its wrapped lines too, where its sentence plainly goes on, in
+    // lower case: a heading over an indented paragraph does not.
+    // Nor does a line opening an item of its own, a sub-item's `i.`.
+    let enumerated = enumerated_item(&prev.text) && !opens_sentence && !opens_item(&next.text);
+    (strip_leading_bullet(&prev.text).is_some() || run_lead(prev).is_some() || enumerated)
         && !prev.text.trim_end().ends_with(':')
         && !opens_list
         && shift > HANG_SHIFT
         && shift <= HANGING_INDENT
         && (!(ends_sentence && opens_sentence) || edge.ran_out_of_room(prev, next))
+}
+
+/// `text` opens with an item's letter: `a.`, `b)`, `(c)`. Numbered items
+/// are counted and joined to their lines by passes of their own.
+fn enumerated_item(text: &str) -> bool {
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
+    let core = first.trim_start_matches('(');
+    let Some(core) = core.strip_suffix(['.', ')']) else {
+        return false;
+    };
+    core.chars().count() == 1 && core.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// `text` opens with an item's letter, number or roman numeral: `a.`,
+/// `(b)`, `12.`, `iv)`.
+fn opens_item(text: &str) -> bool {
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
+    let core = first.trim_start_matches('(');
+    let Some(core) = core.strip_suffix(['.', ')']) else {
+        return false;
+    };
+    let letter = core.chars().count() == 1 && core.chars().all(|c| c.is_ascii_alphabetic());
+    let number = (1..=3).contains(&core.len()) && core.chars().all(|c| c.is_ascii_digit());
+    let roman = (1..=4).contains(&core.len()) && core.chars().all(|c| matches!(c, 'i' | 'v' | 'x'));
+    letter || number || roman
 }
 
 /// `l` ends on a sentence's full stop, or a question or exclamation mark,
@@ -2828,6 +2863,69 @@ mod tests {
             1.5,
         );
         assert!(b.iter().all(|x| !x.text().starts_with("67")), "{b:?}");
+    }
+
+    #[test]
+    fn a_lettered_items_wrapped_line_hangs_under_its_text() {
+        let at = |text: &str, x: f64, y: f64, x1: f64| {
+            let mut line = l(text, x, y, 8.0);
+            line.bbox.x1 = x1;
+            line
+        };
+        // Steps beside a wiring diagram: each wrapped line an em and a half
+        // in from its letter, its sentence going on. The column runs on
+        // past them, to the diagram's labels, so none of them is full.
+        let lines = vec![
+            at(
+                "Make the following connections to the supply cord, and see the diagram beside them:",
+                47.5,
+                481.0,
+                560.0,
+            ),
+            at(
+                "a. For 120/277/347V connect the black fixture lead to the",
+                74.0,
+                504.5,
+                300.0,
+            ),
+            at(
+                "voltage supply or Hot 1 (for 208/240/480V wiring).",
+                87.2,
+                514.4,
+                290.0,
+            ),
+            at(
+                "b. For 120/277/347V connect the white fixture lead to the",
+                74.4,
+                529.0,
+                300.0,
+            ),
+            at(
+                "neutral supply or Hot 2 (for 208/240/480V wiring).",
+                87.9,
+                538.9,
+                290.0,
+            ),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.24).iter().map(Block::text).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("a. For") && t.ends_with("wiring).")),
+            "{texts:?}"
+        );
+        // A lettered heading over a paragraph set in under it opens no
+        // item: the paragraph opens a sentence of its own.
+        let lines = vec![
+            at("A. Introduction", 74.0, 504.5, 150.0),
+            at(
+                "The study measured the effect of three treatments.",
+                87.2,
+                514.4,
+                290.0,
+            ),
+        ];
+        assert_eq!(assemble(&lines, 1.24).len(), 2);
     }
 
     #[test]

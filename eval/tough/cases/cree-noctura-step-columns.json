@@ -40,14 +40,13 @@
       "count": 0
     },
     {
-      "id": "first-step-not-figure",
+      "id": "first-step-whole",
       "found": "2026-11-25",
-      "issue": "The electrical steps a–f beside the wiring diagram were Figures.",
+      "issue": "The electrical steps a–f beside the wiring diagram were Figures, one per line; released, each wrapped line was its own paragraph.",
       "element": {
-        "type": "doco:Figure",
-        "text": "a. For 120/277/347V connect the black fixture lead to the"
-      },
-      "count": 0
+        "type": "doco:Paragraph",
+        "text": "a. For 120/277/347V connect the black fixture lead to the voltage supply or Hot 1 (for 208/240/480V wiring)."
+      }
     },
     {
       "id": "spanish-intro-not-figure",

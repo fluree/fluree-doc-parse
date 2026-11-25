@@ -282,6 +282,12 @@ number is never a heading, however it is set. Examples: `seagate.com`,
 and as headings they open a section that the legal text or the order table
 below falls into.
 
+Nor is the line an address opens with, a company's or a person's name set
+bold over it: `Owens Corning Insulating Systems, LLC` over the street and
+over `1-800-GET-PINK® www.owenscorning.com`, the lines set flush under it,
+each within a line and a half of the last, reaching one that closes on a
+phone number or a web address within three lines.
+
 A bare domain needs a lowercase host and a common top-level domain, so a
 name such as `ASP.NET` is not one. A phone number ends in a group of three
 digits and a group of four, or opens with `+`. A date, a standard's year

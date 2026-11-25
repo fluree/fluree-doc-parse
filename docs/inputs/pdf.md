@@ -171,8 +171,12 @@ even below a line that runs to the edge. A list with a hanging indent sets
 its bullets at the margin and each line of an item's text in from them, so
 an item's wrapped line starts an em or two right of the bullet line above
 it: up to three ems, it goes on with that item rather than starting a
-paragraph. A line that opens with a dash, or follows an item ending on a
-colon, starts a list of its own under the item.
+paragraph. An item opened by a letter or a number (`a. For 120/277/347V
+connect the black fixture lead to the` over `voltage supply …`) hangs its
+wrapped lines the same way where its sentence plainly goes on: the next
+line opens in lower case, or the item ran out of room. A line that opens
+with a dash, or follows an item ending on a colon, starts a list of its own
+under the item.
 
 **Bold or large, but no heading.** Size and weight do not make a heading
 of a field (`CRI: 90+` at the body's size, or a label with its value
@@ -463,7 +467,9 @@ from its text:
   under its wiring diagrams no longer joins them by reach, and text set
   beside the wordmark on its row (`SPECIFICATION SUBMITTAL …`) is no label
   of the diagrams. Its letters are no boxes to tick either, and neither are
-  a table row's shaded cells set side by side.
+  a table row's shaded cells set side by side, nor a drawing's pieces: a
+  small square of a logo's illustration, lying in a shape that holds other
+  pieces or overlapping one part way, set beside an address.
 - A background as large as the page joins nothing. Drawings set close
   together are found as separate drawings, rather than lost as one shape too
   large to be a drawing.
