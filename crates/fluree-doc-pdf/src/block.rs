@@ -516,6 +516,11 @@ const RUN_ALIGN: f64 = 1.5;
 /// A list draws a bullet for each item, in a column; a seal or a chart
 /// draws its dots in rings and scatters, and only by chance is one level
 /// with a line of text.
+///
+/// A list of one item draws one bullet. It marks its line when the page's
+/// lists draw theirs alike: a dot of their size, as far from text of their
+/// items' size as theirs, `K-23723 Faucet cleaner` under a heading of its
+/// own.
 pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
     let marks: Vec<(BBox, usize)> = dots
         .iter()
@@ -526,16 +531,55 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
                 .map(|i| (*d, i))
         })
         .collect();
-    marks
+    let listed: Vec<&(BBox, usize)> = marks
         .iter()
         .filter(|(d, i)| {
             marks
                 .iter()
                 .any(|(o, j)| j != i && (o.x0 - d.x0).abs() <= 1.0 && (o.x1 - d.x1).abs() <= 1.0)
         })
+        .collect();
+    let gap = |d: &BBox, i: usize| lines[i].bbox.x0 - d.x1;
+    let alike = |d: &BBox, i: usize| {
+        let em = (lines[i].font_size as f64).max(1.0);
+        listed.iter().any(|(o, j)| {
+            let size = o.width().max(o.height()).max(0.1);
+            let item = lines[*j].font_size as f64;
+            (o.width() - d.width()).abs() <= size * DOT_LIKE
+                && (o.height() - d.height()).abs() <= size * DOT_LIKE
+                && (gap(o, *j) - gap(d, i)).abs() <= em * DOT_GAP_LIKE
+                // Beside text at the list items' size, and they phrases: a
+                // drawing's labels, a word or two beside its terminals' dots
+                // set in columns, are no list a lone dot can join.
+                && (em - item).abs() <= item * SAME_SIZE
+                && lines[*j].text.split_whitespace().count() >= LIST_WORDS
+        })
+    };
+    marks
+        .iter()
+        .filter(|(d, i)| listed.iter().any(|(o, j)| o == d && j == i) || alike(d, *i))
         .map(|(d, _)| *d)
         .collect()
 }
+
+/// Fewest words a list's item says for a lone bullet to join its list: an
+/// item is a phrase, where a drawing's label names a part in a word or two.
+const LIST_WORDS: usize = 3;
+
+/// Widest difference between the width or the height of two bullets drawn
+/// alike, as a share of the listed bullet's size. One routine draws a
+/// list's bullets, so they differ only by the rounding of their outline's
+/// coordinates, a few hundredths of a point on a bullet of one or two; a
+/// fifth of its size takes that and stops short of a dot drawn another
+/// size, which is another mark.
+const DOT_LIKE: f64 = 0.2;
+
+/// Widest difference, in ems of the item's text, between how far two
+/// bullets drawn alike stand from their text. A list sets one indent for
+/// all its items; a tenth of an em takes the rounding of where the text is
+/// set, and stops short of a word space, a quarter of an em, by which a dot
+/// set elsewhere would differ.
+const DOT_GAP_LIKE: f64 = 0.1;
 
 /// Furthest a drawn bullet stands left of its line's text, in the line's
 /// size: a bullet's own width and the space after it.
@@ -794,7 +838,7 @@ pub fn assemble_in_measure(
         }
     }
 
-    let mut blocks = stack_display(blocks);
+    let mut blocks = rejoin_broken_items(stack_display(blocks), &markers);
     count_on(&mut blocks);
 
     // Vertical gap above each block, for the isolation signal.
@@ -1214,6 +1258,96 @@ fn counts_on_note(opens: Option<(u32, f64)>, next: Option<(u32, f64)>, size: f32
         (Some((m, x)), Some((n, y))) if n == m + 1 && (y - x).abs() <= 0.5 * (size as f64).max(1.0)
     )
 }
+
+/// Is the block a list's item: marked, opening with a bullet, a dash or an
+/// arrow set in its text, or with a marker the text layer set apart beside
+/// its first line?
+fn is_item(b: &Block, markers: &[Line]) -> bool {
+    b.marker.is_some()
+        || b.lines.first().is_some_and(|l| {
+            strip_leading_bullet(&l.text).is_some()
+                || run_lead(l).is_some()
+                || markers.iter().any(|m| marker_beside(m, l))
+        })
+}
+
+/// Put back an item a line was broken off by hand: `Lifetime guaranteed
+/// recessed door handles.` over `Each door fitted with 12" (305 mm) long
+/// recessed handle …`, set at the item's hanging indent, at its size and
+/// leading, between it and the next item of the list. [`hangs_under`]
+/// leaves a line opening a sentence under an item that ended one, for the
+/// paragraph a word processor sets after a list where the items' text is;
+/// one the list goes on after is the item's.
+fn rejoin_broken_items(blocks: Vec<Block>, markers: &[Line]) -> Vec<Block> {
+    let mut out: Vec<Block> = Vec::with_capacity(blocks.len());
+    let mut rest = blocks.into_iter().peekable();
+    while let Some(b) = rest.next() {
+        let joins = out.last().is_some_and(|p: &Block| {
+            let (Some(first), Some(last), Some(head)) =
+                (p.lines.first(), p.lines.last(), b.lines.first())
+            else {
+                return false;
+            };
+            let fs = (p.font_size as f64).max(1.0);
+            let shift = (head.bbox.x0 - first.bbox.x0) / fs;
+            // Set where the item's bullet is: within the rounding of where
+            // a list sets its marks, well short of a sub-list's indent.
+            let level = |x: f64| (x - first.bbox.x0).abs() <= fs * ITEM_ALIGN;
+            let next_item = rest.peek().is_some_and(|n| {
+                is_item(n, markers) && n.lines.first().is_some_and(|l| level(l.bbox.x0))
+            });
+            // Not under an item ending on a colon, which a list of its own
+            // follows, nor a line opening an item of its own: a number, a
+            // letter, or the `o` and rings word processors set as a second
+            // level's bullets (`o Class A`).
+            let opens_own = opens_item(&head.text)
+                || head
+                    .text
+                    .trim_start()
+                    .starts_with(['o', '\u{25CB}', '\u{25E6}'])
+                    && head.text.trim_start().chars().nth(1) == Some(' ');
+            is_item(p, markers)
+                && !is_item(&b, markers)
+                && next_item
+                && !last.text.trim_end().ends_with(':')
+                && !opens_own
+                && !head.bold
+                // At the item's size and style, where one style sets both.
+                && ((b.font_size - p.font_size).abs() as f64) <= fs * SAME_SIZE
+                && shift > HANG_SHIFT
+                && shift <= HANGING_INDENT
+                && b.lines
+                    .iter()
+                    .all(|l| (l.bbox.x0 - head.bbox.x0).abs() <= fs * ITEM_ALIGN)
+                // At the list's leading: an em at most between the lines, a
+                // paragraph's space more.
+                && head.bbox.y0 - last.bbox.y1 <= fs
+        });
+        if joins {
+            let p = out.pop().expect("an item to join");
+            let (marker, gap_above) = (p.marker.clone(), p.gap_above);
+            let mut lines = p.lines;
+            lines.extend(b.lines);
+            let mut joined = build(lines);
+            joined.marker = marker;
+            joined.gap_above = gap_above;
+            out.push(joined);
+        } else {
+            out.push(b);
+        }
+    }
+    out
+}
+
+/// Widest difference, in ems, between where two items of one list, or two
+/// lines of one hanging text, start: the rounding of where text is set,
+/// well short of the em or more a list nested under an item is set in by.
+const ITEM_ALIGN: f64 = 0.5;
+
+/// Widest difference between two sizes one style sets, as a share of the
+/// size: the rounding of a font's scale in the content stream, well short
+/// of the step between a text's size and a heading's or a note's.
+const SAME_SIZE: f64 = 0.05;
 
 /// Least shift, in ems, of a line out of an item's hang: the margin
 /// [`hangs_under`] takes a wrapped line in by.
@@ -2605,6 +2739,102 @@ mod tests {
         let b = assemble_in_measure(&lines, &measure, 1.2, &[], &dots, &[], 9.0, &[]);
         assert_eq!(b.len(), 1, "one item, got {b:?}");
         assert_eq!(b[0].marker.as_deref(), Some(BULLET_MARKER));
+    }
+
+    #[test]
+    fn a_lone_bullet_like_the_pages_others_marks_its_item() {
+        // A list of three at the margin, and a list of one further down
+        // under a heading of its own, its square bullet drawn alike, as far
+        // from its 10pt text.
+        let square = |x: f64, y: f64| BBox {
+            x0: x,
+            y0: y + 3.0,
+            x1: x + 3.0,
+            y1: y + 6.0,
+        };
+        let lines = vec![
+            l("Opening paragraph item", 80.0, 0.0, 10.0),
+            l("Second item of the list", 80.0, 14.0, 10.0),
+            l("Third item of the list", 80.0, 28.0, 10.0),
+            l("The one item of a list", 80.0, 120.0, 10.0),
+        ];
+        let listed = [square(70.0, 0.0), square(70.0, 14.0), square(70.0, 28.0)];
+        let mut dots = listed.to_vec();
+        dots.push(square(70.0, 120.0));
+        assert_eq!(marking_dots(&lines, &dots).len(), 4);
+        // Drawn half as large again, as far from its text, it is another
+        // mark.
+        let mut dots = listed.to_vec();
+        dots.push(BBox {
+            x0: 68.5,
+            y0: 122.0,
+            x1: 73.0,
+            y1: 126.5,
+        });
+        assert_eq!(marking_dots(&lines, &dots).len(), 3);
+        // Beside a drawing's small label, a terminal's dot drawn alike is
+        // none of the list's.
+        let mut small = lines.clone();
+        small[3] = l("Terminal", 130.0, 120.0, 5.0);
+        let mut dots = listed.to_vec();
+        dots.push(square(120.0, 120.0));
+        assert_eq!(marking_dots(&small, &dots).len(), 3);
+        // Nor are a drawing's terminals, dots in a column beside one-word
+        // labels at the items' size, a list a lone dot can join; the same
+        // dot beside a list of phrases joins it.
+        let labels = vec![
+            l("Red", 80.0, 0.0, 10.0),
+            l("Black", 80.0, 14.0, 10.0),
+            l("White", 80.0, 28.0, 10.0),
+            l("Blue", 90.0, 120.0, 10.0),
+        ];
+        let mut dots = listed.to_vec();
+        dots.push(square(80.0, 120.0));
+        assert_eq!(marking_dots(&labels, &dots).len(), 3);
+        let mut phrases = lines.clone();
+        phrases[3] = l("The one item of a list", 90.0, 120.0, 10.0);
+        assert_eq!(marking_dots(&phrases, &dots).len(), 4);
+        // Set a word space further out, it is no bullet of that list.
+        let mut dots = listed.to_vec();
+        dots.push(square(67.5, 120.0));
+        assert_eq!(marking_dots(&lines, &dots).len(), 3);
+    }
+
+    #[test]
+    fn a_line_broken_off_an_item_by_hand_goes_on_with_it() {
+        // The item ended a sentence, and its next sentence, at its hanging
+        // indent, read as a paragraph: the list goes on after it.
+        let item = build(vec![l(
+            "\u{2022} The cover comes off without tools.",
+            202.4,
+            0.0,
+            8.1,
+        )]);
+        let broken = build(vec![
+            l(
+                "Each door fitted with 12\" long recessed handle",
+                211.6,
+                10.0,
+                8.1,
+            ),
+            l("springs back when it is let go.", 211.6, 20.0, 8.1),
+        ]);
+        let next = build(vec![l(
+            "\u{2022} The base takes a standard fitting.",
+            202.4,
+            30.0,
+            8.1,
+        )]);
+        let b = rejoin_broken_items(vec![item.clone(), broken.clone(), next], &[]);
+        assert_eq!(
+            b.len(),
+            2,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        assert_eq!(b[0].lines.len(), 3);
+        // The paragraph after a list's last item is the page's.
+        assert_eq!(rejoin_broken_items(vec![item, broken], &[]).len(), 2);
     }
 
     #[test]
@@ -4083,15 +4313,15 @@ mod tests {
     fn a_tick_label_marks_no_other() {
         // A chart's tick labels side by side on a row, at the column's
         // margin: neither is the other's number.
-        let mut tick = l("2.4\u{2212}", 419.1, 169.3, 6.2);
-        tick.bbox.x1 = 430.0;
-        let next = l("2.6\u{2212}", 458.9, 169.3, 6.2);
-        assert!(!is_marker(&tick, None, Some(&next), 419.1));
+        let mut tick = l("1.5", 300.0, 80.0, 7.0);
+        tick.bbox.x1 = 309.0;
+        let next = l("3.0", 330.0, 80.0, 7.0);
+        assert!(!is_marker(&tick, None, Some(&next), 300.0));
         // A number beside the item it opens still marks it.
-        let mut number = l("2.", 10.0, 169.3, 6.2);
-        number.bbox.x1 = 16.0;
-        let item = l("Ergonomic one-button tip ejector", 22.0, 169.3, 6.2);
-        assert!(is_marker(&number, None, Some(&item), 10.0));
+        let mut number = l("4.", 50.0, 80.0, 7.0);
+        number.bbox.x1 = 56.0;
+        let item = l("Check the seal before each use", 62.0, 80.0, 7.0);
+        assert!(is_marker(&number, None, Some(&item), 50.0));
     }
 
     #[test]
@@ -4355,38 +4585,46 @@ mod tests {
     #[test]
     fn a_lowercase_line_hanging_under_an_item_goes_on_with_it() {
         let at = |t: &str, x0: f64, y: f64, x1: f64, bold: bool| {
-            let mut n = l(t, x0, y, 11.0);
+            let mut n = l(t, x0, y, 10.0);
             n.bbox.x1 = x1;
             n.bold = bold;
             n
         };
-        // An item of two lines, its second the shorter, over a bold `or`
-        // set at the item's hanging indent, then the next item.
+        // An item of two lines, its second the shorter, over a lowercase
+        // line set in another weight at the item's hanging indent, then the
+        // next item. Every line opens a little right of where the item's
+        // dash stands.
         let lines = vec![
             at(
-                "- Mixed bulb type per Multigang and Mixed Bulb",
-                45.5,
-                256.6,
-                290.0,
+                "- First choice of the kind described in the guide",
+                60.0,
+                400.0,
+                320.0,
                 false,
             ),
-            at("Type Ratings table (see page 3)", 52.1, 270.5, 210.0, false),
-            at("or", 53.5, 286.6, 63.0, true),
             at(
-                "- 250 W Lutron LTEA Hi-lume 1% forward-phase",
-                45.5,
-                298.5,
-                288.0,
+                "under its own heading (see below)",
+                68.0,
+                413.0,
+                230.0,
+                false,
+            ),
+            at("and", 69.0, 428.0, 85.0, true),
+            at(
+                "- Second choice set the same way",
+                60.0,
+                441.0,
+                250.0,
                 false,
             ),
         ];
         let b = assemble(&lines, 1.2);
         let texts: Vec<String> = b.iter().map(Block::text).collect();
         assert!(
-            texts.iter().any(|t| t.ends_with("(see page 3) or")),
+            texts.iter().any(|t| t.ends_with("(see below) and")),
             "{texts:?}"
         );
-        assert!(texts.iter().all(|t| t != "or"), "{texts:?}");
+        assert!(texts.iter().all(|t| t != "and"), "{texts:?}");
     }
 
     #[test]

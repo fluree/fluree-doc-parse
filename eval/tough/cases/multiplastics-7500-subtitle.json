@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "multiplastics-7500.pdf",
+    "url": "https://multi-plastics.com/wp-content/uploads/2016/07/Sell_Sheet_7500.pdf",
+    "sha256": "ba567968030a0029552e911c79ec47e6977829ba0834066eea4dad47957159c5",
+    "about": "Multi-Plastics 7500 PLA film sell sheet (1 page). A product photo stands beside a column of headings, a description and property bullets, all set at the size of the page's text."
+  },
+  "notes": [
+    "#267: the sheet's subtitle is set over two centred lines, both 12pt bold, and came out as two headings, the first empty and the second over all four content sections."
+  ],
+  "checks": [
+    {
+      "id": "subtitle-one-heading",
+      "found": "2026-11-25",
+      "issue": "The two centred lines `Poly-Lactic-Acid` and `FDA Compliant for direct food contact` were two h3s.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Poly-Lactic-Acid FDA Compliant for direct food contact"
+      }
+    },
+    {
+      "id": "no-empty-first-line",
+      "found": "2026-11-25",
+      "issue": "As above: the first line alone was an empty heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Poly-Lactic-Acid"
+      },
+      "count": 0
+    }
+  ]
+}
