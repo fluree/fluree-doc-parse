@@ -492,6 +492,7 @@ pub(crate) fn ocr_readings(
 /// readings for the three-way veto) into the element stream. The readings
 /// of the region crops named in `screens` ([`pasted_regions`]) are a
 /// screen's, their headings read as paragraphs ([`screen_blocks`]).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_tiers(
     tier_results: Option<&Path>,
     structure_results: Option<&Path>,
