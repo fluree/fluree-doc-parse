@@ -10,6 +10,7 @@ use crate::glyph::Glyph;
 use crate::rule::{self, Fill, Rule};
 use fluree_doc_model::symbols;
 use hayro_interpret::font::Glyph as HGlyph;
+use hayro_interpret::hayro_syntax::object::ObjectIdentifier;
 use hayro_interpret::hayro_syntax::Pdf;
 use hayro_interpret::util::TransformExt;
 use hayro_interpret::{interpret_page, Context, Device, InterpreterCache, InterpreterSettings};
@@ -33,6 +34,10 @@ pub struct ImagePlacement {
     /// two documents with near-identical image coverage can still diverge
     /// sharply — the AI-routed reference engine *loses* 0.38 on one and
     /// *gains* 0.62 on the other.
+    ///
+    /// Measured only where the router reads it: a raster image too small to
+    /// be routed as a region, under a tenth of the page, is not decoded and
+    /// reads false.
     pub texty: bool,
 }
 
@@ -253,6 +258,93 @@ struct Collector {
     faces: crate::faces::Faces,
     /// The weight each font's glyphs are read at, once found.
     weights: std::collections::HashMap<u128, Option<u32>>,
+    /// The document's image probes so far; see [`Probes`].
+    probes: Probes,
+}
+
+/// What [`looks_like_text`] found for each image XObject the document has
+/// drawn, so that an image drawn on many pages — a letterhead, a page's
+/// background — is decoded once.
+///
+/// An image XObject decodes the same wherever it is drawn but for one input
+/// the graphics state supplies, a transfer function; a found result is
+/// reused only once the document is known to set none (`plain`). That is
+/// asked of the document the first time an image is drawn again, so a
+/// document that draws each image once never pays for the question. Inline
+/// images have no object and are always decoded.
+#[derive(Default)]
+struct Probes {
+    found: std::collections::HashMap<ObjectIdentifier, bool>,
+    /// No dictionary in the document sets a transfer function; `None` until
+    /// `again` asked it.
+    plain: Option<bool>,
+    /// An image was drawn again before `plain` was known.
+    again: bool,
+}
+
+impl Probes {
+    /// Whether the image's pixels look like text, decoding it unless the
+    /// document has drawn it before.
+    fn texty(&mut self, image: &hayro_interpret::RasterImage<'_>) -> bool {
+        let id = image.stream().dict().obj_id();
+        if let Some(found) = id.and_then(|id| self.found.get(&id)) {
+            if self.plain == Some(true) {
+                return *found;
+            }
+            self.again = true;
+        }
+        let mut texty = false;
+        // A low-resolution decode is plenty for a structure probe, where
+        // the format offers one.
+        image.with_rgba(
+            |data, _| texty = looks_like_text(&data),
+            Some((PROBE_DIM, PROBE_DIM)),
+        );
+        if let Some(id) = id.filter(|_| self.plain != Some(false)) {
+            self.found.insert(id, texty);
+        }
+        texty
+    }
+
+    /// Ask the document whether it sets a transfer function, once an image
+    /// has been drawn again.
+    fn settle(&mut self, pdf: &Pdf) {
+        if self.again && self.plain.is_none() {
+            self.plain = Some(!sets_transfer(pdf));
+        }
+    }
+}
+
+/// Whether any dictionary in the document has a transfer function entry
+/// (`/TR`, `/TR2`), the graphics state's one say in how an image decodes.
+/// Every object is read, and every dictionary written inside one.
+fn sets_transfer(pdf: &Pdf) -> bool {
+    use hayro_interpret::hayro_syntax::object::{MaybeRef, Object};
+    for object in pdf.objects() {
+        let mut open = vec![object];
+        while let Some(o) = open.pop() {
+            let dict = match o {
+                Object::Dict(d) => d,
+                Object::Stream(s) => s.dict().clone(),
+                Object::Array(a) => {
+                    open.extend(a.raw_iter().filter_map(|m| match m {
+                        MaybeRef::NotRef(v) => Some(v),
+                        MaybeRef::Ref(_) => None,
+                    }));
+                    continue;
+                }
+                _ => continue,
+            };
+            if dict.contains_key(b"TR") || dict.contains_key(b"TR2") {
+                return true;
+            }
+            open.extend(dict.entries().filter_map(|(_, m)| match m {
+                MaybeRef::NotRef(v) => Some(v),
+                MaybeRef::Ref(_) => None,
+            }));
+        }
+    }
+    false
 }
 
 /// Marked content whose ActualText stands for the glyphs drawn inside it.
@@ -604,30 +696,34 @@ impl<'a> Device<'a> for Collector {
         if !self.page_box.intersects(&b) {
             return;
         }
+        let bbox = BBox {
+            x0: b.x0.max(self.page_box.x0),
+            y0: b.y0.max(self.page_box.y0),
+            x1: b.x1.min(self.page_box.x1),
+            y1: b.y1.min(self.page_box.y1),
+        };
         let texty = match &i {
             hayro_interpret::Image::Raster(ri) => {
-                let mut texty = false;
-                // A low-resolution decode is plenty for a structure probe and
-                // keeps the cost per image at microseconds.
-                ri.with_rgba(
-                    |data, _| texty = looks_like_text(&data),
-                    Some((PROBE_DIM, PROBE_DIM)),
-                );
-                texty
+                // Only the router reads the probe, and only of an image big
+                // enough to be a region; decoding a logo or an icon to ask
+                // was most of the probe's cost. The margin keeps the test on
+                // the near side of the router's own, which is made after the
+                // page may have been turned.
+                let page_area = ((self.page_box.x1 - self.page_box.x0)
+                    * (self.page_box.y1 - self.page_box.y0))
+                    .max(1.0);
+                let area = (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0);
+                if area < 0.99 * crate::route::MIN_REGION_FRACTION * page_area {
+                    false
+                } else {
+                    self.probes.texty(ri)
+                }
             }
             // Stencils are 1-bit masks — the format scanned text and line art
             // arrive in. Treat as text-bearing.
             hayro_interpret::Image::Stencil(_) => true,
         };
-        self.images.push(ImagePlacement {
-            bbox: BBox {
-                x0: b.x0.max(self.page_box.x0),
-                y0: b.y0.max(self.page_box.y0),
-                x1: b.x1.min(self.page_box.x1),
-                y1: b.y1.min(self.page_box.y1),
-            },
-            texty,
-        });
+        self.images.push(ImagePlacement { bbox, texty });
     }
     fn pop_clip_path(&mut self) {
         self.clips.pop();
@@ -1021,10 +1117,12 @@ fn subpath_fills(path: &kurbo::BezPath) -> Option<Vec<crate::geom::BBox>> {
 }
 
 fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
-    let (w, h, luma): (usize, usize, Vec<u8>) = match data {
-        hayro_interpret::ImageData::Luma(l) => {
-            (l.width as usize, l.height as usize, l.data.clone())
-        }
+    let (w, h, luma): (usize, usize, std::borrow::Cow<'_, [u8]>) = match data {
+        hayro_interpret::ImageData::Luma(l) => (
+            l.width as usize,
+            l.height as usize,
+            std::borrow::Cow::Borrowed(&l.data),
+        ),
         hayro_interpret::ImageData::Rgb(r) => (
             r.width as usize,
             r.height as usize,
@@ -1038,17 +1136,17 @@ fn looks_like_text(data: &hayro_interpret::ImageData) -> bool {
         return false;
     }
 
-    let bimodal = luma.iter().filter(|&&v| !(64..192).contains(&v)).count();
+    let (mut bimodal, mut lo, mut hi) = (0usize, u8::MAX, u8::MIN);
+    for &v in luma.iter() {
+        bimodal += usize::from(!(64..192).contains(&v));
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
     if (bimodal as f64) < MIN_BIMODAL_FRACTION * luma.len() as f64 {
         return false;
     }
 
     // Binarise at the luminance midpoint and count row transitions.
-    let (mut lo, mut hi) = (u8::MAX, u8::MIN);
-    for &v in &luma {
-        lo = lo.min(v);
-        hi = hi.max(v);
-    }
     if hi - lo < 64 {
         return false; // near-uniform: a wash of colour, not marks on ground
     }
@@ -1410,6 +1508,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
     let mut faces = crate::faces::Faces::default();
     let mut weights = std::collections::HashMap::new();
+    let mut probes = Probes::default();
 
     for (index, page) in pdf.pages().iter().enumerate() {
         let (w, h) = page.render_dimensions();
@@ -1432,6 +1531,7 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             cased: Vec::new(),
             faces: std::mem::take(&mut faces),
             weights: std::mem::take(&mut weights),
+            probes: std::mem::take(&mut probes),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -1458,6 +1558,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         letters = std::mem::take(&mut dev.letters);
         faces = std::mem::take(&mut dev.faces);
         weights = std::mem::take(&mut dev.weights);
+        probes = std::mem::take(&mut dev.probes);
+        probes.settle(&pdf);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let mut page = Page {
             index,
@@ -1993,6 +2095,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            probes: Probes::default(),
         };
         c.speak(Spoken {
             text: said.into(),
@@ -2039,6 +2142,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            probes: Probes::default(),
         };
         for &(start, end, said) in spans {
             let span = Spoken {
@@ -2115,6 +2219,7 @@ mod actual_text_tests {
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
+            probes: Probes::default(),
         };
         let circle = BBox {
             x0: 133.0,
@@ -2322,5 +2427,33 @@ mod lookalike_tests {
         // Tall (0.6 aspect) single contour — thorn-like proportions.
         let p = BezPath::from_svg("M0,0 L400,0 L400,660 L0,660 Z").unwrap();
         assert_eq!(lookalike_repair("þ", &p), None);
+    }
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::sets_transfer;
+    use hayro_interpret::hayro_syntax::Pdf;
+    use std::sync::Arc;
+
+    /// A one-page document whose page states `gs` as a graphics state of
+    /// its own, written inside its resources.
+    fn with_state(gs: &str) -> Pdf {
+        let body = format!(
+            "%PDF-1.4\n\
+             1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+             2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+             3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] \
+             /Resources << /ExtGState << /G0 << {gs} >> >> >> >> endobj\n\
+             trailer << /Root 1 0 R /Size 4 >>\n%%EOF\n"
+        );
+        Pdf::new(Arc::new(body.into_bytes())).expect("pdf")
+    }
+
+    #[test]
+    fn a_transfer_function_written_inside_a_page_is_found() {
+        assert!(sets_transfer(&with_state("/TR /Identity")));
+        assert!(sets_transfer(&with_state("/TR2 [/Default]")));
+        assert!(!sets_transfer(&with_state("/CA 0.5 /ca 0.5")));
     }
 }

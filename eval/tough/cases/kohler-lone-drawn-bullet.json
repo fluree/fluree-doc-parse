@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "kohler-k-r33912.pdf",
+    "url": "https://techcomm.kohler.com/techcomm/pdf/K-R33912_spec_US-CA_Kohler_en.pdf",
+    "sha256": "b61768a2ab19e9621bb575f793c025f254f2b2f4af35aad473e34b861dd7c214",
+    "about": "Kohler K-R33912 spec sheet. Its Recommended Products/Accessories section lists one item beside a drawn bullet, the same size and as far from its text as the page's other lists' bullets."
+  },
+  "notes": [
+    "#275: a drawn dot marked a line only where another dot at the same place marked another, so a list of one item read as a paragraph."
+  ],
+  "checks": [
+    {
+      "id": "lone-item",
+      "found": "2026-11-25",
+      "issue": "#275: `K-23723 Faucet cleaner`, one item beside its drawn bullet, was a paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "K-23723 Faucet cleaner",
+        "evidence": "marker"
+      }
+    }
+  ]
+}
