@@ -1949,7 +1949,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let (marks, exact) = timed(&mut timings.furniture, || {
+    let (mut marks, exact) = timed(&mut timings.furniture, || {
         furniture::detect_with_exact(&flat_lines)
     });
     // The folio is read from the page's edges over *every* glyph, not from
@@ -1972,8 +1972,31 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 (line::assemble_page(&edge), p.height)
             })
             .collect();
-        furniture::detect_with_folios(&edges).1
+        furniture::detect_folio_places(&edges)
     });
+    let (folios, folio_places): (Vec<Option<String>>, Vec<Option<f64>>) =
+        folios.into_iter().unzip();
+    // A page's folio standing as a line of its own where the folio's line
+    // stands is the page's number, though too few pages left it among
+    // their lines for repetition to tell: a table reaching the foot takes it
+    // on the others, and the first and last pages kept theirs in the body.
+    for (pi, folio) in folios.iter().enumerate() {
+        let (Some(folio), Some(place), Some((lines, height))) =
+            (folio.as_deref(), folio_places[pi], flat_lines.get(pi))
+        else {
+            continue;
+        };
+        if *height <= 0.0 {
+            continue;
+        }
+        for (li, l) in lines.iter().enumerate() {
+            if furniture::is_folio_line(&l.text, folio, l.bbox.y0 / height, place) {
+                marks[pi]
+                    .entry(li)
+                    .or_insert(furniture::Furniture::PageNumber);
+            }
+        }
+    }
     let mut furniture_marks: Vec<(usize, String, furniture::Furniture)> = Vec::new();
     for (pi, m) in marks.iter().enumerate() {
         for (li, kind) in m {
@@ -2452,12 +2475,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 None => (g, 0),
             };
             // A folio the grid took in, rows `r0..r1` holding it: the page's
-            // own number where page numbers stand (`furniture::is_folio_cell`).
+            // own number where page numbers stand (`furniture::is_folio_cell`),
+            // in the grid's row nearest that edge. A table's own figure in a
+            // row above its last can match the page's number, as a tax
+            // table's line 111 does on page 111.
             let page_h = raw.pages[pi].height.max(1.0);
             let unfolio = |t: String, r0: usize, r1: usize| {
                 let last = g.ys.len().saturating_sub(1);
                 let mid = (g.ys[r0.min(last)] + g.ys[r1.min(last)]) / 2.0 / page_h;
-                if furniture::is_folio_cell(&t, folios[pi].as_deref(), mid) {
+                let edge_row = if mid > 0.5 { r1 >= last } else { r0 == 0 };
+                if edge_row && furniture::is_folio_cell(&t, folios[pi].as_deref(), mid) {
                     String::new()
                 } else {
                     t
