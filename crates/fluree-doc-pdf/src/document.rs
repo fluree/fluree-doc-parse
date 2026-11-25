@@ -2146,6 +2146,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // A reviewer's highlighting is drawn as fills fitted to the lines it
         // marks, and is not the page's structure.
         crate::rule::strip_highlights(&mut p.fills, &p.glyphs);
+        // The page's glyphs are final from here: each grid's cells are read
+        // from them once.
+        let _cells = crate::cells::pin(&p.glyphs);
         // `Deterministic` is the right stand-in when nobody asks: both
         // consumers act only on `VlmRegions`, and both are unreachable in the
         // configurations that skip the call.
@@ -2320,6 +2323,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut taken: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
                 taken.extend(read.iter().map(|g| g.bbox));
                 let outside = glyphs_outside_grids(&p.glyphs, &grids);
+                let _outside_cells = crate::cells::pin(&outside);
                 let accepted = table::detect_aligned(&outside, &p.rules, &p.fills, p.index);
                 let typed: Vec<crate::geom::BBox> = accepted
                     .iter()
@@ -2453,6 +2457,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let prose = timed(&mut timings.columns, || {
             glyphs_outside_grids(&p.glyphs, &grids)
         });
+        let _prose_cells = crate::cells::pin(&prose);
 
         // The prose's columns, which the field lists below look between too.
         // A table read from its text for the labels beside it stands in a
@@ -3060,6 +3065,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        let _cells = crate::cells::pin(&raw.pages[pi].glyphs);
         let mut page_elements = Vec::new();
         let (figures, member) = &page_figures[pi];
         let in_figure = |i: usize| member[i];
