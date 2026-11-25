@@ -26,6 +26,12 @@
       "element": {
         "text": "Mixed bulb type per Multigang and Mixed Bulb Type Ratings table (see page 3) or"
       }
+    },
+    {
+      "id": "url-whole-across-its-break",
+      "found": "2026-11-25",
+      "issue": "#281: the warranty address broken at its slash was read with a space after the slash, `…TechnicalDocumentLibrary/ 369-119_Wallbox_Warranty.pdf`.",
+      "no_text": "TechnicalDocumentLibrary/ 369-119"
     }
   ]
 }

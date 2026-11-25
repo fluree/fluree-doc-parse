@@ -469,7 +469,13 @@ open under it. When the row beneath names each spanned column with a label of
 its own (`Primary Method` over `NISTmAb | Amgen mAb`), the two rows are one
 header and each column is named by both. The labels must differ from each
 other and hold no numbers, because data under a banner repeats itself
-(`Short | Short`). Each must be a cell of its own: a value run across the
+(`Short | Short`). Keys in figures name the columns as surely
+(`Horizontal Angle` over `0° | 45° | 90°`, `Total` over `2025 | 2026`,
+`Component` over `1 | 2 | 3`) where the row's own stub is empty and the rows
+under it have one: a row of the data names its row in the stub. A span the
+ruling leaves open over the stub's column, empty in both rows, names the
+columns from where its label stands; a span with no label over it names
+nothing. Each must be a cell of its own: a value run across the
 banner's columns (`3.1 mg in 2 mL` under `Strength`) names nothing. And where
 the label above spans every column it is as often a band titling the rows
 beneath (`Monotherapy` over `Adult patients with …`) as a header over the
@@ -617,6 +623,13 @@ columns are read as fields, with no header row, when:
   under it. A label column set bold beside plain values is a field list, and
   so is one whose values set a phrase bold here and there;
 - a label stands in the first column of every row.
+
+A list of fields can set more than its names bold: a field's name and the
+size each value is for (`PRODUCT CODE | 8′2" | 1198826`), both bold on every
+row beside values bold on none. Leading columns bold on every row, the rest
+bold on none, the first row's included, make a list of fields whatever their
+number. A header row names every column in its weight, the values' too, and
+keeps its place.
 
 A header set no differently from its rows still names its column, and in
 fewer words than any value under it. `Settings | Recommendations` over

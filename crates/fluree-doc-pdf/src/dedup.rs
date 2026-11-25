@@ -82,10 +82,11 @@ fn remove_redrawn_by(
     glyphs: &mut Vec<Glyph>,
     mut overprints: impl FnMut(&Glyph, &Glyph) -> bool,
 ) -> usize {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
     let band = |y: f64| (y / 2.0).floor() as i64;
     // Each text's glyphs on each band, by where they start.
-    let mut seen: HashMap<(&str, i64), BTreeMap<OrderedX, Vec<usize>>> = HashMap::new();
+    let mut seen: rustc_hash::FxHashMap<(&str, i64), BTreeMap<OrderedX, Vec<usize>>> =
+        Default::default();
     let mut keep = vec![true; glyphs.len()];
     for i in 0..glyphs.len() {
         let g = &glyphs[i];

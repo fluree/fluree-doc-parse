@@ -332,7 +332,8 @@ pub mod watermark;
 
 pub use block::Block;
 pub use extract::{
-    extract_bytes, extract_file, extract_pdf, Document, ExtractError, ImagePlacement, Page,
+    extract_bytes, extract_bytes_with, extract_file, extract_pdf, extract_pdf_with, Document,
+    ExtractError, ExtractOptions, ImagePlacement, Page,
 };
 pub use furniture::Furniture;
 pub use geom::BBox;
