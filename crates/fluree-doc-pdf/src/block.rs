@@ -4197,38 +4197,46 @@ mod tests {
     #[test]
     fn a_lowercase_line_hanging_under_an_item_goes_on_with_it() {
         let at = |t: &str, x0: f64, y: f64, x1: f64, bold: bool| {
-            let mut n = l(t, x0, y, 11.0);
+            let mut n = l(t, x0, y, 10.0);
             n.bbox.x1 = x1;
             n.bold = bold;
             n
         };
-        // An item of two lines, its second the shorter, over a bold `or`
-        // set at the item's hanging indent, then the next item.
+        // An item of two lines, its second the shorter, over a lowercase
+        // line set in another weight at the item's hanging indent, then the
+        // next item. Every line opens a little right of where the item's
+        // dash stands.
         let lines = vec![
             at(
-                "- Mixed bulb type per Multigang and Mixed Bulb",
-                45.5,
-                256.6,
-                290.0,
+                "- First choice of the kind described in the guide",
+                60.0,
+                400.0,
+                320.0,
                 false,
             ),
-            at("Type Ratings table (see page 3)", 52.1, 270.5, 210.0, false),
-            at("or", 53.5, 286.6, 63.0, true),
             at(
-                "- 250 W Lutron LTEA Hi-lume 1% forward-phase",
-                45.5,
-                298.5,
-                288.0,
+                "under its own heading (see below)",
+                68.0,
+                413.0,
+                230.0,
+                false,
+            ),
+            at("and", 69.0, 428.0, 85.0, true),
+            at(
+                "- Second choice set the same way",
+                60.0,
+                441.0,
+                250.0,
                 false,
             ),
         ];
         let b = assemble(&lines, 1.2);
         let texts: Vec<String> = b.iter().map(Block::text).collect();
         assert!(
-            texts.iter().any(|t| t.ends_with("(see page 3) or")),
+            texts.iter().any(|t| t.ends_with("(see below) and")),
             "{texts:?}"
         );
-        assert!(texts.iter().all(|t| t != "or"), "{texts:?}");
+        assert!(texts.iter().all(|t| t != "and"), "{texts:?}");
     }
 
     #[test]

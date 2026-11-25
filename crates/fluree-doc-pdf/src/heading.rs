@@ -818,7 +818,13 @@ fn claim_outline(
 }
 
 /// How far, in points, two copies of a line may stand from each other's
-/// place and still be one running line.
+/// place and still be one running line. A running head is placed by the
+/// page template, so its copies coincide to within rounding of the
+/// coordinates, a small fraction of a point; two points allow for a page
+/// box shifted slightly between pages and for glyph boxes that differ with
+/// the letters. A fixed amount, not a share of the type: the template, not
+/// the line's size, sets where it stands. Well under any line's height, so
+/// two lines set one under the other never match.
 const RUNNING_SLOT: f64 = 2.0;
 
 /// Choose which of several same-titled bookmarks this block is.

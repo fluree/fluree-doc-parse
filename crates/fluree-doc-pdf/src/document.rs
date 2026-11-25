@@ -1306,6 +1306,11 @@ fn heading_fragments_join(a: &Element, b: &Element) -> bool {
     if lower {
         return (ab.x0 - bb.x0).abs() <= height;
     }
+    // Centred: the two lines' midpoints within half a line's height, what a
+    // centred setting's rounding and a trailing space leave between them.
+    // From different left edges, by more than a line's height: two lines of
+    // different lengths, not a left-aligned pair whose midpoints happen to
+    // agree.
     let centre = |x: &crate::geom::BBox| (x.x0 + x.x1) / 2.0;
     unflagged(a.evidence) == "font-size"
         && (centre(&ab) - centre(&bb)).abs() <= height * 0.5
@@ -4139,40 +4144,35 @@ mod tests {
         let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
         // A slide's kicker over its title, set larger.
         let mut deck = vec![
-            head("Data residency", "title", 1, 40.0),
-            text("Where each copy of the data lives.", 60.0),
-            head("LEVEL 2 · DERIVED", "bold", 4, 80.0),
-            head(
-                "Some capabilities keep what they derive",
-                "font-size",
-                2,
-                100.0,
-            ),
-            text("Derived indexes stay in the region…", 115.0),
+            head("Quarterly review", "title", 1, 30.0),
+            text("A short note under the title.", 52.0),
+            head("PART 2 · OUTLOOK", "bold", 4, 74.0),
+            head("What the next quarter asks of us", "font-size", 2, 92.0),
+            text("Text the slide sets under its title…", 110.0),
         ];
         demote_empty_bold_heads(&mut deck);
         assert_eq!(
             heads(&deck),
-            ["Data residency", "Some capabilities keep what they derive"]
+            ["Quarterly review", "What the next quarter asks of us"]
         );
         // The document's first heading may be its title over a larger date.
         let mut transcript = vec![
-            head("Transcript of the Press Conference", "bold", 4, 80.0),
-            head("April 29, 2026", "font-size", 2, 100.0),
-            text("CHAIR POWELL. Good afternoon.", 115.0),
+            head("Record of the Annual Meeting", "bold", 4, 70.0),
+            head("March 3, 2031", "font-size", 2, 88.0),
+            text("THE CHAIR. The meeting will come to order.", 106.0),
         ];
         demote_empty_bold_heads(&mut transcript);
         assert_eq!(heads(&transcript).len(), 2);
-        // A caution's bold last line, at its leading, over the next head.
-        let mut caution = vec![
-            head("CAUTION", "bold", 5, 60.0),
-            text("Dust may cause irritation…", 72.0),
-            head("KEEP OUT OF REACH OF CHILDREN", "bold", 5, 84.0),
-            head("TRADEMARKS", "bold", 5, 100.0),
-            text("The trademarks USG…", 112.0),
+        // A warning's bold last line, at its leading, over the next head.
+        let mut warning = vec![
+            head("WARNING", "bold", 5, 200.0),
+            text("Handle with gloves and wash hands after use…", 212.0),
+            head("STORE IN A DRY PLACE", "bold", 5, 224.0),
+            head("DISPOSAL", "bold", 5, 241.0),
+            text("Dispose of in line with local rules.", 253.0),
         ];
-        demote_empty_bold_heads(&mut caution);
-        assert_eq!(heads(&caution), ["CAUTION", "TRADEMARKS"]);
+        demote_empty_bold_heads(&mut warning);
+        assert_eq!(heads(&warning), ["WARNING", "DISPOSAL"]);
         // Set apart from the paragraph above, a section opening on its
         // first subsection keeps both heads.
         let mut paper = vec![
@@ -4197,29 +4197,23 @@ mod tests {
             });
             e
         };
+        // A subtitle over two centred lines, about a page centre of 300.
         let mut subtitle = vec![
-            centred("Poly-Lactic-Acid", 262.0, 350.0, 193.5),
-            centred("FDA Compliant for direct food contact", 200.0, 412.0, 207.4),
+            centred("Recycled Fibre Board", 250.0, 350.0, 140.0),
+            centred("Rated for use in damp interiors", 205.0, 395.0, 155.0),
         ];
         coalesce_heading_fragments(&mut subtitle);
         assert_eq!(
             heads(&subtitle),
-            ["Poly-Lactic-Acid FDA Compliant for direct food contact"]
+            ["Recycled Fibre Board Rated for use in damp interiors"]
         );
         // Cells of a table no grid took, centred in their column, with
         // their row's other cells beside them.
         let mut cells = vec![
-            line_at(
-                "doco:Paragraph",
-                "Program memory",
-                "layout",
-                None,
-                300.0,
-                40.0,
-            ),
-            centred("32 k steps", 280.0, 320.0, 300.0),
-            line_at("doco:Paragraph", "Data memory", "layout", None, 314.0, 40.0),
-            centred("4,096 points (256 words)", 262.0, 338.0, 314.0),
+            line_at("doco:Paragraph", "Capacity", "layout", None, 420.0, 60.0),
+            centred("12 litres", 330.0, 370.0, 420.0),
+            line_at("doco:Paragraph", "Weight", "layout", None, 434.0, 60.0),
+            centred("2.5 kg (empty)", 320.0, 380.0, 434.0),
         ];
         coalesce_heading_fragments(&mut cells);
         assert_eq!(heads(&cells).len(), 2);
