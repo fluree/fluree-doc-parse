@@ -134,6 +134,14 @@ broke, and reads as the word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
+**Dashes and addresses at a line's end.** A line ending in an em or en dash
+set closed against the word before it joins the next with no space, as the
+text's own hyphen does: `restore—` over `D2D` is `restore—D2D`, `10–` over
+`20` is `10–20`. A dash with a space before it was set apart and keeps its
+space. A web address broken at a slash (one with `://` or opening `www.`)
+runs on into the next line whole; a slash ending any other word may have
+had a space after it on the line the break took, and keeps it.
+
 A table cell needs one more piece of evidence. A narrow column breaks a
 compound at its own hyphen (`long-` over `term`) far more often than prose
 does, and the letters alone cannot tell the two apart. So a cell's word
