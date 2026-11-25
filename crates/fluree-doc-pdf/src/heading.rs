@@ -685,6 +685,28 @@ pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 
         .unwrap_or(10.0)
 }
 
+/// Whether the size most of the document's glyphs are set at is set mostly
+/// bold, over all of them: its tables' text and figures as much as its
+/// paragraphs'. What the tables leave of a page is no measure of it: a
+/// form's bold labels, a statement's bold title. `None` without glyphs.
+pub fn body_is_bold<'a>(glyphs: impl IntoIterator<Item = &'a crate::glyph::Glyph>) -> Option<bool> {
+    let mut by_size: HashMap<i32, (usize, usize)> = HashMap::new();
+    for g in glyphs {
+        if g.text.trim().is_empty() {
+            continue;
+        }
+        let (all, bold) = by_size
+            .entry((g.font_size * 4.0).round() as i32)
+            .or_default();
+        *all += 1;
+        *bold += usize::from(g.weight.is_some_and(|w| w >= 600));
+    }
+    by_size
+        .into_iter()
+        .max_by_key(|(size, (all, _))| (*all, std::cmp::Reverse(*size)))
+        .map(|(_, (all, bold))| bold * 2 > all)
+}
+
 /// Choose which of several same-titled bookmarks this block is.
 ///
 /// Nearest page first, then nearest stated position. An entry naming no page
@@ -733,11 +755,18 @@ const SAME_TITLE_SIZE: f32 = 0.25;
 const LATE_TITLE_RATIO: f32 = 1.1;
 
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
-    detect_with_body(pages, outline, body_font_size(pages))
+    detect_with_body(pages, outline, body_font_size(pages), None)
 }
 
 /// Detect headings across a document whose body size is known.
-pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32) -> Vec<Heading> {
+/// Detect headings over a body size, and over what the page's glyphs say of
+/// whether the body is set bold. Without that, it is read from the blocks.
+pub fn detect_with_body(
+    pages: &[Vec<Block>],
+    outline: &[OutlineItem],
+    body: f32,
+    body_bold: Option<bool>,
+) -> Vec<Heading> {
     // Numbered lines that recur, by their text; see the check in the loop
     // below. Counted as occurrences rather than pages: a form answers
     // several items on one page with the same code. A contents entry does
@@ -971,14 +1000,18 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
     let bold_is_structural = bold_candidates <= MAX_BOLD_HEADINGS_PER_PAGE * pages.len().max(1);
 
     // If most body text is already bold, weight carries no information.
-    let bold_lines: usize = pages
-        .iter()
-        .flatten()
-        .filter(|b| b.bold)
-        .map(|b| b.lines.len())
-        .sum();
-    let all_lines: usize = pages.iter().flatten().map(|b| b.lines.len()).sum();
-    let body_is_bold = all_lines > 0 && bold_lines * 2 > all_lines;
+    // Read from the blocks only where the glyphs were not consulted: what
+    // the tables leave of a form is mostly its bold labels, a dozen lines.
+    let body_is_bold = body_bold.unwrap_or_else(|| {
+        let bold_lines: usize = pages
+            .iter()
+            .flatten()
+            .filter(|b| b.bold)
+            .map(|b| b.lines.len())
+            .sum();
+        let all_lines: usize = pages.iter().flatten().map(|b| b.lines.len()).sum();
+        all_lines > 0 && bold_lines * 2 > all_lines
+    });
 
     let mut out = Vec::new();
     for (page_idx, blocks) in pages.iter().enumerate() {
@@ -2634,6 +2667,49 @@ mod tests {
         assert_eq!(hs[1].evidence, Evidence::FontSize);
         assert_eq!(hs[2].evidence, Evidence::Bold);
         assert!(hs[1].level < hs[2].level, "{hs:?}");
+    }
+
+    #[test]
+    fn the_body_is_bold_where_most_glyphs_at_its_size_are() {
+        let glyph = |text: &str, size: f32, weight: u32| crate::glyph::Glyph {
+            text: text.into(),
+            bbox: None,
+            page: 0,
+            origin: (0.0, 0.0),
+            rotation_deg: 0.0,
+            font_size: size,
+            weight: Some(weight),
+            advance: None,
+            draw_index: 0,
+        };
+        let run = |n: usize, size: f32, weight: u32| (0..n).map(move |_| glyph("a", size, weight));
+        // A form: its lines and figures in regular type, read as tables,
+        // its bold labels, and larger bold titles. Spaces are not counted.
+        let form: Vec<_> = run(400, 9.0, 400)
+            .chain((0..300).map(|_| glyph("1", 9.0, 400)))
+            .chain(run(500, 9.0, 700))
+            .chain((0..900).map(|_| glyph(" ", 9.0, 700)))
+            .chain(run(300, 14.0, 700))
+            .collect();
+        assert_eq!(body_is_bold(&form), Some(false));
+        let bold: Vec<_> = run(300, 10.0, 700).chain(run(100, 10.0, 400)).collect();
+        assert_eq!(body_is_bold(&bold), Some(true));
+        assert_eq!(body_is_bold(&[glyph(" ", 9.0, 700)]), None);
+        // Passed in, the glyphs' answer stands over the blocks': a page of
+        // short bold labels beside fewer regular lines keeps its bold titles.
+        let mut part = blk("Part I Additional Income", 9.0, 1);
+        part.bold = true;
+        let mut label = blk("Your social security number", 9.0, 1);
+        label.bold = true;
+        let pages = vec![vec![part, label, blk("Note: report the amounts", 9.0, 1)]];
+        assert!(detect(&pages, &[])
+            .iter()
+            .all(|h| h.evidence != Evidence::Bold));
+        let hs = detect_with_body(&pages, &[], 9.0, Some(false));
+        assert!(
+            hs.iter().any(|h| h.text == "Part I Additional Income"),
+            "{hs:?}"
+        );
     }
 
     #[test]
