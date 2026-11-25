@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "niosh-nmam-3900.pdf",
+    "url": "https://www.cdc.gov/niosh/docs/2003-154/pdfs/3900.pdf",
+    "sha256": "79870f90761d1ed10d2c88683070a6164fecdb4330c45f4963a5ee4045202eae",
+    "about": "NIOSH Manual of Analytical Methods, method 3900: volatile organic compounds, canister method (Word-made, 14 pages). The host refuses scripted downloads; fetch it in a browser."
+  },
+  "notes": [
+    "2026-11-25 (#242): its tables rule under their column heads and not over them (`OSHA` over `TWA`, `NIOSH` over `STEL`, a heavy rule under them), each row ruled and shaded every other row. The grid began at the rule under the heads: they were read as text, `TWA STEL` as a heading, and the first, shaded row (`ethanol | 1000 | - | 1000`) was taken for the header."
+  ],
+  "checks": [
+    {
+      "id": "limit-under-its-heads",
+      "found": "2026-11-25",
+      "issue": "#242: the column heads over the exposure-limit table's top rule were left outside it.",
+      "cell": {
+        "value": "1000",
+        "column": "OSHA TWA",
+        "row": "ethanol"
+      }
+    },
+    {
+      "id": "stel-under-its-heads",
+      "found": "2026-11-25",
+      "issue": "#242: as above; `500` was named by the first row's `-`.",
+      "cell": {
+        "value": "500",
+        "column": "NIOSH STEL",
+        "row": "2-propanol"
+      }
+    },
+    {
+      "id": "lod-table-heads",
+      "found": "2026-11-25",
+      "issue": "#242: the limits-of-detection table's heads, likewise.",
+      "cell": {
+        "value": "0.4",
+        "column": "LOD (ppb)",
+        "row": "ethanol"
+      }
+    },
+    {
+      "id": "heads-no-heading",
+      "found": "2026-11-25",
+      "issue": "#242: the heads were read as text, the bold line a heading.",
+      "no_section": "TWA STEL"
+    }
+  ]
+}

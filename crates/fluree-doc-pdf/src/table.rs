@@ -1219,7 +1219,14 @@ impl Grid {
         if row0.iter().all(|c| c.trim().is_empty()) {
             return 0;
         }
-        let run = self.leading_fill_run(fills);
+        let mut run = self.leading_fill_run(fills);
+        // The run's last row is the body's first stripe where the rows from
+        // it on are shaded every other row and it holds figures as they do:
+        // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
+        // header's own cells, the next row bare, the one after shaded.
+        if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
+            run -= 1;
+        }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
@@ -1796,6 +1803,13 @@ impl Grid {
             .take_while(|r| self.band_has_fill(fills, *r))
             .count()
     }
+
+    /// Whether the rows from `r` on are shaded every other row, `r` first:
+    /// two shaded rows at least, a bare one between.
+    fn stripes_from(&self, fills: &[crate::rule::Fill], r: usize) -> bool {
+        let n = self.rows();
+        r + 2 < n && (r..n.min(r + 5)).all(|k| self.band_has_fill(fills, k) == ((k - r) % 2 == 0))
+    }
     /// Cell index containing a point, as (row, col).
     pub fn cell_at(&self, x: f64, y: f64) -> Option<(usize, usize)> {
         let c = self.xs.windows(2).position(|w| x >= w[0] && x < w[1])?;
@@ -1803,6 +1817,9 @@ impl Grid {
         Some((r, c))
     }
 }
+
+/// Most words a column head's line holds in one column: more is a sentence.
+const MAX_HEAD_WORDS: usize = 8;
 
 /// Baseline-to-baseline distance, in font sizes, up to which two lines are
 /// one wrapped label rather than the values of two rows. Wrapped lines sit
@@ -1976,6 +1993,28 @@ fn reads_as_quantity(s: &str) -> bool {
 /// A cell that reads as a quantity: digits with currency/percent/grouping
 /// dressing and nothing alphabetic. Bare 4-digit years are *not* numeric for
 /// header purposes — `2023 | 2024` over money columns is a header row.
+/// A row of figures past its label: every value cell with text holds
+/// figures and their signs alone (`1000`, `0.25 – 21.4`, `±17.0`) or a
+/// dash, one at least a figure.
+fn figures_row(row: &[String]) -> bool {
+    let figures = |t: &str| {
+        t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().all(|c| {
+                c.is_ascii_digit() || c.is_whitespace() || ".,%-−–—+±×/()$€£<>≤≥*".contains(c)
+            })
+    };
+    let values: Vec<&str> = row
+        .iter()
+        .skip(1)
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    values.iter().any(|t| figures(t))
+        && values
+            .iter()
+            .all(|t| figures(t) || t.chars().all(|c| "-–—".contains(c)))
+}
+
 pub(crate) fn is_numeric_cell(s: &str) -> bool {
     if s.is_empty() || !s.chars().any(|c| c.is_ascii_digit()) {
         return false;
@@ -2267,6 +2306,205 @@ impl Grid {
         }
         let labelled = groups.iter().all(|g| taken.iter().any(|b| within(b, g)));
         if taken.is_empty() || !labelled {
+            return;
+        }
+        let y0 = taken.iter().map(|b| b.y0).fold(f64::MAX, f64::min) - 1.0;
+        self.ys.insert(0, y0);
+        self.bbox.y0 = y0;
+    }
+
+    /// Take in the column heads set over the grid's top rule, the table open
+    /// above them.
+    ///
+    /// A table ruled under its header and not over it (an exposure-limit
+    /// table's `OSHA` over `TWA`, `NIOSH` over `STEL`, each over its column,
+    /// a heavy rule under them) begins its grid at that rule: the heads
+    /// were left outside it, read as text, the bold ones as headings, and
+    /// no value was named. The lines over the rule are the grid's top row
+    /// when the nearest sits within a line of it and each line reads as a
+    /// row of heads: every run of text on it stands within one column, one
+    /// run to a column, inside the table's width, in two columns or more.
+    /// A line further up is taken while it is set as close as a head's
+    /// wrapped lines are and stands in the columns alike. One run alone
+    /// there is a head's wrapped line over a column past the first; over
+    /// the first, only where it starts where the head under it does, in its
+    /// size and weight (`Supp. Figure 3I: Levels of α-KG` over `with WT or
+    /// mutant IDH1`, beside `Mean | SD | N`): a table's title set close over
+    /// its stub's head is set apart from it.
+    ///
+    /// What stops the header, and is left outside:
+    ///
+    /// - a line across a column's edge or past the table: a title, a
+    ///   caption or prose;
+    /// - two runs in one column: the heads part where the grid does not,
+    ///   and it is no grid of theirs (two tables side by side read as one,
+    ///   a statement read with half its columns);
+    /// - a row of data: a label in the first column with figures beside it,
+    ///   a year apart (`South East | 57,384 | 37,525`), or a field, its
+    ///   label ending in a colon (`APPLICABILITY: | The working range is …`);
+    /// - a sentence: a head runs to a few words;
+    /// - a line set much smaller than the table's text: a running head over
+    ///   the page's rule, a note.
+    pub fn take_column_heads(&mut self, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) {
+        let cols = self.cols();
+        if cols < 2 || self.xs.len() != cols + 1 || self.ys.len() < 3 {
+            return;
+        }
+        let (left, right, top) = (self.xs[0], self.xs[cols], self.ys[0]);
+        let width = right - left;
+        // The top is a rule across the table.
+        let at_top = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Horizontal
+                    && (r.axis_pos() - top).abs() <= EDGE_TOLERANCE
+            })
+            .map(|r| (r.bbox.x0, r.bbox.x1));
+        if span_coverage(at_top, left, right) < 0.9 * width {
+            return;
+        }
+        // The size the table's own text is set in.
+        let mut inside: Vec<f64> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter(|g| {
+                g.bbox.is_some_and(|b| {
+                    let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                    cx > left && cx < right && cy > top && cy < self.bbox.y1
+                })
+            })
+            .map(|g| g.font_size as f64)
+            .collect();
+        inside.sort_by(f64::total_cmp);
+        let Some(&body) = inside.get(inside.len() / 2) else {
+            return;
+        };
+        // Each mark over the top: baseline, size, ink, weight, text.
+        let mut over: Vec<(f64, f64, BBox, bool, &str)> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter_map(|g| {
+                let bold = g.weight.is_some_and(|w| w >= 600);
+                Some((
+                    g.origin.1,
+                    g.font_size.max(1.0) as f64,
+                    g.bbox?,
+                    bold,
+                    g.text.as_str(),
+                ))
+            })
+            .filter(|(_, _, b, _, _)| b.y1 <= top + 1.0 && b.y1 > top - 8.0 * MIN_CELL_EXTENT)
+            .collect();
+        // Nearest first, then a line at a time by baseline.
+        over.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let column_of = |x0: f64, x1: f64| {
+            (0..cols).find(|&c| x0 >= self.xs[c] - 1.0 && x1 <= self.xs[c + 1] + 1.0)
+        };
+        let year = |t: &str| {
+            t.len() == 4
+                && t.chars().all(|c| c.is_ascii_digit())
+                && (t.starts_with("19") || t.starts_with("20"))
+        };
+        let mut taken: Vec<BBox> = Vec::new();
+        // The runs of the line last taken: start, column, size, weight.
+        let mut under: Vec<(f64, usize, f64, bool)> = Vec::new();
+        let mut below = top;
+        let mut i = 0;
+        while i < over.len() {
+            let (base, fs, _, _, _) = over[i];
+            let end = (i..over.len())
+                .find(|&k| base - over[k].0 > 0.3 * fs)
+                .unwrap_or(over.len());
+            let mut marks: Vec<(BBox, f64, bool, &str)> =
+                over[i..end].iter().map(|o| (o.2, o.1, o.3, o.4)).collect();
+            i = end;
+            let first = taken.is_empty();
+            let reach = if first { 1.0 } else { 1.6 };
+            if below - base > reach * fs {
+                break;
+            }
+            // Text of the line the table does not reach: prose beside it.
+            if marks
+                .iter()
+                .all(|m| m.0.x1 <= left - 1.0 || m.0.x0 >= right + 1.0)
+            {
+                continue;
+            }
+            if marks
+                .iter()
+                .any(|m| m.0.x0 < left - 1.0 || m.0.x1 > right + 1.0)
+            {
+                break;
+            }
+            let mut sizes: Vec<f64> = marks.iter().map(|m| m.1).collect();
+            sizes.sort_by(f64::total_cmp);
+            if sizes[sizes.len() / 2] < 0.75 * body {
+                break;
+            }
+            // Runs of text: glyphs a word space apart or closer, each with
+            // its first glyph's size and weight, and its text.
+            marks.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
+            let mut runs: Vec<(f64, f64, f64, bool, String)> = Vec::new();
+            for (b, size, bold, text) in &marks {
+                match runs.last_mut() {
+                    Some(r) if b.x0 - r.1 <= 0.6 * fs => {
+                        if b.x0 - r.1 > 0.15 * fs {
+                            r.4.push(' ');
+                        }
+                        r.4.push_str(text);
+                        r.1 = r.1.max(b.x1);
+                    }
+                    _ => runs.push((b.x0, b.x1, *size, *bold, text.to_string())),
+                }
+            }
+            let Some(homes) = runs
+                .iter()
+                .map(|r| column_of(r.0, r.1))
+                .collect::<Option<Vec<usize>>>()
+            else {
+                break;
+            };
+            let mut columns = homes.clone();
+            columns.dedup();
+            let label = runs.first().filter(|_| homes[0] == 0).map(|r| r.4.trim());
+            let data = label.is_some_and(|l| {
+                l.ends_with(':')
+                    || (l.chars().any(char::is_alphabetic)
+                        && runs[1..].iter().any(|r| {
+                            let t = r.4.trim();
+                            is_numeric_cell(t) && !year(t)
+                        }))
+            });
+            if columns.len() < homes.len()
+                || data
+                || runs
+                    .iter()
+                    .any(|r| r.4.split_whitespace().count() > MAX_HEAD_WORDS)
+            {
+                break;
+            }
+            let close = !first && below - base <= PARAGRAPH_LEADING * fs;
+            let wrapped = close
+                && columns.len() == 1
+                && (columns[0] > 0
+                    || under.iter().any(|&(x0, c, size, bold)| {
+                        c == 0
+                            && (x0 - runs[0].0).abs() <= 1.0
+                            && (size - runs[0].2).abs() <= 0.25
+                            && bold == runs[0].3
+                    }));
+            if columns.len() < 2 && !wrapped {
+                break;
+            }
+            under = runs
+                .iter()
+                .zip(&homes)
+                .map(|(r, &c)| (r.0, c, r.2, r.3))
+                .collect();
+            taken.extend(marks.iter().map(|m| m.0));
+            below = base;
+        }
+        if taken.is_empty() {
             return;
         }
         let y0 = taken.iter().map(|b| b.y0).fold(f64::MAX, f64::min) - 1.0;
@@ -8042,6 +8280,109 @@ mod header_tests {
             ys,
             bbox,
         }
+    }
+
+    #[test]
+    fn heads_set_over_a_tables_top_rule_are_its_top_row() {
+        let grid = || {
+            plain_grid(
+                vec![0.0, 100.0, 200.0, 300.0],
+                vec![100.0, 120.0, 140.0, 160.0],
+            )
+        };
+        let rules = |from: f64| vec![h(from, 300.0, 100.0)];
+        // Heads on two lines, each in its column, over the rule.
+        let heads = vec![
+            gly(5.0, 96.0, 40.0, "Substance"),
+            gly(110.0, 96.0, 30.0, "TWA"),
+            gly(210.0, 96.0, 30.0, "STEL"),
+            gly(110.0, 86.0, 30.0, "OSHA"),
+            gly(210.0, 86.0, 30.0, "NIOSH"),
+        ];
+        // The table's own text, at the heads' size.
+        let cells = [
+            gly(5.0, 115.0, 30.0, "ethanol"),
+            gly(110.0, 115.0, 20.0, "1000"),
+            gly(210.0, 115.0, 10.0, "-"),
+        ];
+        let heads = [heads, cells.to_vec()].concat();
+        let mut g = grid();
+        g.take_column_heads(&rules(0.0), &heads);
+        assert_eq!(g.rows(), 4);
+        assert_eq!(g.ys[0], 77.0);
+        // A title over them stays out.
+        let mut titled = [&heads[..3], &cells[..]].concat();
+        titled.push(gly(5.0, 86.0, 250.0, "TABLE 3. EXPOSURE LIMITS"));
+        let mut g = grid();
+        g.take_column_heads(&rules(0.0), &titled);
+        assert_eq!(g.ys[0], 87.0);
+        // A line across the columns' edges is no row of heads.
+        let mut g = grid();
+        let mut across = cells.to_vec();
+        across.push(gly(5.0, 96.0, 250.0, "TABLE 3. LIMITS"));
+        g.take_column_heads(&rules(0.0), &across);
+        assert_eq!(g.rows(), 3);
+        // Nor is one head alone.
+        let mut g = grid();
+        g.take_column_heads(&rules(0.0), &[&heads[..1], &cells[..]].concat());
+        assert_eq!(g.rows(), 3);
+        // Nor a row of data over the rule: a label and its figures.
+        let mut g = grid();
+        let mut data = cells.to_vec();
+        data.extend([
+            gly(5.0, 96.0, 40.0, "South East"),
+            gly(110.0, 96.0, 30.0, "57,384"),
+        ]);
+        g.take_column_heads(&rules(0.0), &data);
+        assert_eq!(g.rows(), 3);
+        // Nor two heads in one column: the grid is not theirs.
+        let mut g = grid();
+        let mut two = cells.to_vec();
+        two.extend([
+            gly(5.0, 96.0, 40.0, "Item"),
+            gly(110.0, 96.0, 20.0, "2014"),
+            gly(160.0, 96.0, 20.0, "2013"),
+        ]);
+        g.take_column_heads(&rules(0.0), &two);
+        assert_eq!(g.rows(), 3);
+        // A top ruled over part of the table is no top rule.
+        let mut g = grid();
+        g.take_column_heads(&rules(150.0), &heads);
+        assert_eq!(g.rows(), 3);
+    }
+
+    #[test]
+    fn a_shaded_first_row_of_figures_starting_stripes_is_data() {
+        let rows: Vec<Vec<String>> = [
+            ["Substance", "TWA", "STEL"],
+            ["ethanol", "1000", "-"],
+            ["2-propanol", "400", "500"],
+            ["acetone", "1000", "-"],
+            ["butanedione", "0.005", "0.025"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(figures_row(&rows[1]));
+        assert!(!figures_row(&rows[0]));
+        assert!(figures_row(&[
+            "ethanol".to_string(),
+            "0.25 – 21.4".to_string(),
+            "±17.0".to_string()
+        ]));
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            (0..6).map(|k| k as f64 * 20.0).collect(),
+        );
+        // Heads shaded, then every other row from the first.
+        let shaded = [
+            fill(0.0, 0.0, 300.0, 20.0),
+            fill(0.0, 20.0, 300.0, 40.0),
+            fill(0.0, 60.0, 300.0, 80.0),
+        ];
+        assert_eq!(g.leading_fill_run(&shaded), 2);
+        assert!(g.stripes_from(&shaded, 1));
+        assert_eq!(g.header_rows(&rows, &[], &[], &shaded), 1);
     }
 
     #[test]

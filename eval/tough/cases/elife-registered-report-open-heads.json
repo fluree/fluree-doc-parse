@@ -1,0 +1,35 @@
+{
+  "document": {
+    "file": "pmc4521140.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4521140/",
+    "sha256": "7629ec19f60f51051a5851ae2d771c5f74752ef0b0fca1e5c45a294765083d61",
+    "about": "eLife registered report (Reproducibility Project: Cancer Biology), 'Oncometabolite 2-hydroxyglutarate is a competitive inhibitor of α-ketoglutarate-dependent dioxygenases', 27 pages, PMC4521140. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#242): its reagent and summary tables rule under their column heads and not over them. The grids began at that rule: `Reagent` was read as a heading, and the summary tables' values had no column header. The stub's head over a summary table wraps onto two lines (`Supp. Figure 3I: Levels of α-KG` over `with WT or mutant IDH1`), set as the head under it is."
+  ],
+  "checks": [
+    {
+      "id": "reagent-heads-taken",
+      "found": "2026-11-25",
+      "issue": "#242: the reagent table's heads were left over its top rule, `Reagent` read as a heading.",
+      "no_section": "Reagent"
+    },
+    {
+      "id": "summary-value-named",
+      "found": "2026-11-25",
+      "issue": "#242: the summary table's `Mean | SD | N` were left over its top rule; no value had a column header.",
+      "cell": {
+        "value": "120",
+        "column": "Mean",
+        "row": "WT IDH-transfected U-87 MG cells"
+      }
+    },
+    {
+      "id": "stub-head-whole",
+      "found": "2026-11-25",
+      "issue": "#242: the stub's head wraps onto two lines; taking the lower alone left the upper a heading.",
+      "no_section": "Supp. Figure 3I: Levels of α-KG"
+    }
+  ]
+}

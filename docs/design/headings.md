@@ -137,6 +137,12 @@ Tables the table pass did not take are still counted. In a catalogue whose
 specification tables outnumber its prose, the body still comes out at the
 tables' size.
 
+A document whose prose runs to fewer than eight lines has too little to say
+its body by: a page that is a label, a title and a folio over a table. Its
+prose alone counts the title's two lines against one of each other size, so
+the title came out as the body and was no heading. There the tables' text
+counts too, each of their lines once at its size.
+
 ## Headings beside drawings
 
 A heading inside a figure region yields to it when its evidence is

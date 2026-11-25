@@ -531,9 +531,31 @@ Only one kind of line is taken: within a line of the rules, every mark on it
 over a rule, each group's label one run of text. A line that also stands
 over a column no rule runs under, such as a label over the row labels, says
 the header above is more than one line of group labels. Taking part of it
-would leave a fragment, so none of it is taken. A rule across the whole
-table is the table's top edge, and what stands over it is its title. A table
-that draws its columns bounds its header's cells itself and is left alone.
+would leave a fragment, so none of it is taken. A table that draws its
+columns bounds its header's cells itself and is left alone.
+
+A rule across the whole table is its top edge, and what stands over it is
+its title, unless it is the table's column heads. A table can rule under its
+header and not over it: an exposure-limit table's `OSHA` over `TWA` and
+`NIOSH` over `STEL`, each over its column, a heavy rule under them. Its grid
+begins at that rule, and the heads were read as text, the bold ones as
+headings, with no value named. The lines just over such a rule are the
+table's top row when the nearest sits within a line of it, and every run of
+text on each line stands within one column, inside the table's width, in
+two columns or more. Lines further up come with them while they are set as
+close as a head's wrapped lines and stand in the columns the same way. A
+single run there is a head wrapped onto two lines: over a column past the
+first, or over the first where it starts where the head under it does, in
+its size and weight (`Supp. Figure 3I: Levels of α-KG` over `with WT or
+mutant IDH1`, the stub's head beside `Mean | SD | N`). A line that runs
+across a column's edge or past the table, a title, a caption or prose,
+stops the header there.
+
+Such a table often shades its header's cells and then every other row from
+the first. The shaded run at the top then takes in the first row of data
+as well. Where the rows from the run's last row on are shaded every other
+row, and that row holds figures as the rows under it do (`ethanol | 1000 |
+- | 1000`), it is the body's first stripe, and the header ends above it.
 
 A row that holds only a label in its first column, drawn as cells of the
 table rather than a band across it, labels the rows beneath it when the row
