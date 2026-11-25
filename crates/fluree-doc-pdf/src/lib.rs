@@ -54,6 +54,7 @@
 pub mod annot;
 pub mod arbiter;
 pub mod block;
+pub(crate) mod cells;
 pub mod column;
 pub mod dedup;
 pub mod doco;

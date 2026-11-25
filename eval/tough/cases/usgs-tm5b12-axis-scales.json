@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "usgs-tm5b12.pdf",
+    "url": "https://pubs.usgs.gov/tm/05/b12/tm5b12.pdf",
+    "sha256": "2b6979e8f6bcc38044511117e9993eaf0270f85a00b6323e8b3d98c27e461492",
+    "about": "USGS Techniques and Methods 5-B12, a laboratory method for volatile organic compounds in water. Its recovery charts set each panel's y-axis scale, `160` down to `0`, against tick marks along the axis."
+  },
+  "notes": [
+    "#241: a chart's y-axis scale, ruled by its tick marks, was a one-column table of its numbers.",
+    "Open: where two panels stand side by side their scales and titles line up into a two-column text table, as in the later recovery charts; a column of evenly stepped numbers under a title is also how a conversion table reads, so text alone does not settle it."
+  ],
+  "checks": [
+    {
+      "id": "y-scale-no-table",
+      "found": "2026-11-25",
+      "issue": "#241: the recovery charts' y-axis scales on page 43 were one-column tables.",
+      "element": {
+        "type": "doco:Table",
+        "text": "160\n140 120 100\n80 60 40 20 0"
+      },
+      "count": 0
+    },
+    {
+      "id": "y-scale-kept",
+      "found": "2026-11-25",
+      "issue": "#241: as above; the scale's numbers stay, as the chart's text.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "160\n140 120 100\n80 60 40 20 0"
+      }
+    },
+    {
+      "id": "split-y-scale-no-table",
+      "found": "2026-11-25",
+      "issue": "#241: as above, a scale whose last number fell to a row of its own.",
+      "element": {
+        "type": "doco:Table",
+        "text": "160\n140 120\n100 80 60 40 20\n0"
+      },
+      "count": 0
+    }
+  ]
+}
