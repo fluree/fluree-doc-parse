@@ -1528,6 +1528,126 @@ pub fn release_lead_ins(
     }
 }
 
+/// Give back to the page each label set outside its drawing with a list's
+/// item between the two: a column's heading over its bullets, the drawing
+/// under them (`CABINET CONSTRUCTION` over its items, over a cabinet's
+/// drawing). A list item is no label, so the reach went over it to the
+/// heading beyond; a drawing's title or axis name stands against it, with
+/// nothing of the page's between. `items` are the page's list items.
+pub fn release_behind_items(
+    taken: &mut [Vec<usize>],
+    figures: &[Figure],
+    blocks: &[(BBox, f32, &str)],
+    items: &[BBox],
+) {
+    for (labels, f) in taken.iter_mut().zip(figures) {
+        let d = f.drawing;
+        labels.retain(|&k| {
+            let b = blocks[k].0;
+            if share_inside(&b, &d) >= MARK_INSIDE {
+                return true;
+            }
+            let across = |o: &BBox| o.x1.min(b.x1) > o.x0.max(b.x0);
+            let level = |o: &BBox| o.y1.min(b.y1) > o.y0.max(b.y0);
+            !items.iter().any(|o| {
+                (b.y1 <= d.y0 && across(o) && o.y0 >= b.y1 && o.y1 <= d.y0)
+                    || (b.y0 >= d.y1 && across(o) && o.y1 <= b.y0 && o.y0 >= d.y1)
+                    || (b.x1 <= d.x0 && level(o) && o.x0 >= b.x1 && o.x1 <= d.x0)
+                    || (b.x0 >= d.x1 && level(o) && o.x1 <= b.x0 && o.x0 >= d.x1)
+            })
+        });
+    }
+}
+
+/// How much larger than the prose a drawing's title is set, at least, for
+/// [`reassign_between`]: the step the heading rules take for display type.
+const TITLE_SIZE: f64 = 1.15;
+
+/// Give each title set between two drawings, under one and over the other
+/// and across both, to the one it stands nearer, measured to the drawing
+/// with its other labels: a diagram's title under the diagram above it
+/// heads the one below, whose labels start a line under the title. Even,
+/// it goes to the lower: a title stands over what it names. Where the lower
+/// drawing is framed, and the label stands outside its frame and is no
+/// caption or note, it is the page's, as a title over a framed drawing is
+/// (see the frame rule in [`attach`]).
+pub fn reassign_between(
+    taken: &mut [Vec<usize>],
+    figures: &[Figure],
+    blocks: &[(BBox, f32, &str)],
+    prose: f32,
+) {
+    // A figure's drawing with the labels it alone took: a label both took,
+    // an axis's ticks within either's reach, says nothing of which it is.
+    let region = |taken: &[Vec<usize>], fi: usize, other: usize, skip: usize| {
+        taken[fi]
+            .iter()
+            .filter(|&&t| t != skip && !taken[other].contains(&t))
+            .fold(figures[fi].drawing, |r, &t| r.union(&blocks[t].0))
+    };
+    let across = |a: &BBox, b: &BBox| a.x1.min(b.x1) > a.x0.max(b.x0);
+    for a in 0..figures.len() {
+        let mut moves: Vec<(usize, usize)> = Vec::new();
+        for &k in &taken[a] {
+            let b = blocks[k].0;
+            let upper = figures[a].drawing;
+            // Display titles only: set larger than the prose, in words, and
+            // no caption. An axis's ticks and name under a panel are the
+            // panel's however close the next panel's labels stand, and a
+            // paper sets its figure's caption under the figure.
+            let (_, size, text) = blocks[k];
+            let title = (size as f64) > prose as f64 * TITLE_SIZE
+                && text.chars().filter(|c| c.is_alphabetic()).count() >= 2
+                && !crate::heading::is_caption(text);
+            if b.y0 < upper.y1 || !across(&b, &upper) || !title {
+                continue;
+            }
+            let lower = (0..figures.len())
+                .filter(|&o| {
+                    o != a && figures[o].drawing.y0 >= b.y1 && across(&b, &figures[o].drawing)
+                })
+                .map(|o| {
+                    let r = region(taken, o, a, k);
+                    (o, (r.y0 - b.y1).max(0.0))
+                })
+                .min_by(|x, y| x.1.total_cmp(&y.1));
+            // To the upper, from the lowest of its own that stand over the
+            // label: its drawing, or a label of its own between the two.
+            let own_above = lower.map_or(upper.y1, |(o, _)| {
+                taken[a]
+                    .iter()
+                    .filter(|&&t| t != k && !taken[o].contains(&t))
+                    .map(|&t| blocks[t].0)
+                    .filter(|r| r.y1 <= b.y0)
+                    .fold(upper.y1, |y, r| y.max(r.y1))
+            });
+            let above = (b.y0 - own_above).max(0.0);
+            if let Some((o, below)) = lower {
+                if below <= above {
+                    // Framed as the frame rule frames it: every label it took
+                    // is inside the frame, or a caption or a note.
+                    let framed_out = figures[o].frame.is_some_and(|fr| {
+                        let outside = |t: usize| {
+                            share_inside(&blocks[t].0, &fr) < MARK_INSIDE
+                                && !crate::heading::is_caption(blocks[t].2)
+                                && !note_label(blocks[t].2)
+                        };
+                        outside(k) && !taken[o].iter().any(|&t| outside(t))
+                    });
+                    moves.push((k, if framed_out { usize::MAX } else { o }));
+                }
+            }
+        }
+        for (k, o) in moves {
+            taken[a].retain(|&t| t != k);
+            if o != usize::MAX && !taken[o].contains(&k) {
+                taken[o].push(k);
+                taken[o].sort_unstable();
+            }
+        }
+    }
+}
+
 /// Most space, in lines, between a framed figure's caption or note and the
 /// frame, or the caption before it.
 const CAPTION_GAP: f64 = 2.5;
@@ -2871,6 +2991,65 @@ mod tests {
             attach(&mut figs, &title, &[], (612.0, 792.0), 10.0),
             vec![vec![0]]
         );
+    }
+
+    #[test]
+    fn a_heading_over_a_list_over_a_drawing_is_no_label() {
+        // A column's heading, its bulleted items under it, and a drawing
+        // under them; a title set against the drawing stays its own.
+        let figs = vec![Figure {
+            bbox: bb(300.0, 400.0, 500.0, 560.0),
+            drawing: bb(300.0, 400.0, 500.0, 560.0),
+            page: 0,
+            shapes: 12,
+            frame: None,
+        }];
+        let blocks = vec![
+            (bb(300.0, 300.0, 420.0, 310.0), 9.0, "HOUSING"),
+            (bb(300.0, 386.0, 440.0, 396.0), 9.0, "Side elevation"),
+        ];
+        let items = vec![bb(300.0, 314.0, 520.0, 370.0)];
+        let mut taken = vec![vec![0, 1]];
+        release_behind_items(&mut taken, &figs, &blocks, &items);
+        assert_eq!(taken, vec![vec![1]]);
+    }
+
+    #[test]
+    fn a_title_between_two_drawings_heads_the_lower() {
+        // A title under one drawing, its labels a line under it heading the
+        // next: the lower drawing's, or the page's where a frame bounds it.
+        let fig = |y0: f64, y1: f64, frame: Option<BBox>| Figure {
+            bbox: bb(100.0, y0, 400.0, y1),
+            drawing: bb(100.0, y0, 400.0, y1),
+            page: 0,
+            shapes: 10,
+            frame,
+        };
+        let blocks = vec![
+            (bb(100.0, 330.0, 300.0, 341.0), 11.0, "Second arrangement"),
+            (bb(110.0, 352.0, 150.0, 358.0), 6.0, "Valve"),
+        ];
+        let figs = vec![fig(100.0, 300.0, None), fig(370.0, 500.0, None)];
+        let mut taken = vec![vec![0], vec![1]];
+        reassign_between(&mut taken, &figs, &blocks, 9.0);
+        assert_eq!(taken, vec![vec![], vec![0, 1]]);
+        // Framed, the lower drawing takes nothing over its frame but a
+        // caption: the title is the page's.
+        let framed = bb(95.0, 345.0, 405.0, 505.0);
+        let figs = vec![fig(100.0, 300.0, None), fig(370.0, 500.0, Some(framed))];
+        let mut taken = vec![vec![0], vec![1]];
+        reassign_between(&mut taken, &figs, &blocks, 9.0);
+        assert_eq!(taken, vec![vec![], vec![1]]);
+        // Nearer the drawing above, a note under it stays its own.
+        let note = vec![(
+            bb(100.0, 304.0, 300.0, 312.0),
+            7.0,
+            "Shown without its cover",
+        )];
+        let figs = vec![fig(100.0, 300.0, None), fig(370.0, 500.0, None)];
+        let mut taken = vec![vec![0], vec![]];
+        reassign_between(&mut taken, &figs, &note, 9.0);
+        assert_eq!(taken, vec![vec![0], vec![]]);
     }
 
     #[test]

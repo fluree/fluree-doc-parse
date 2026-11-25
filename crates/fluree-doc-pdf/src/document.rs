@@ -1979,6 +1979,9 @@ fn find_figures(
             .map(|i| (blocks[i].bbox, blocks[i].font_size))
             .collect();
         figure::release_lead_ins(&mut taken, &block_boxes, &items);
+        let item_boxes: Vec<crate::geom::BBox> = items.iter().map(|(b, _)| *b).collect();
+        figure::release_behind_items(&mut taken, &figures, &block_boxes, &item_boxes);
+        figure::reassign_between(&mut taken, &figures, &block_boxes, prose_size(blocks));
         // Which figure each block belongs to, if any: the labels its figure
         // took, and whatever lies mostly inside the drawing itself. The
         // rectangle around a drawing and its labels is not membership: a
