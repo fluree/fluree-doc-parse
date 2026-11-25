@@ -173,6 +173,13 @@ pub(crate) fn renumber(elements: &mut [Element]) {
     }
 }
 
+/// An element the analysis minted as an address for a reader's text (a
+/// routed region, a table to confirm, a table the layout found and the
+/// rules did not), not content of the page.
+fn is_splice_anchor(e: &Element) -> bool {
+    matches!(e.evidence, "route" | "table-confidence" | "table-missing")
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the
@@ -192,6 +199,12 @@ pub(crate) fn renumber(elements: &mut [Element]) {
 /// part is then nothing but header, and the second opens with a bold row
 /// of labels. That row finishes the header and stays one, so the columns
 /// are named by both.
+///
+/// A splice anchor between the parts is not something between them: it is
+/// an address the reader's text lands at, and the splice drops it. A
+/// table's anchor goes in just before the table, so with anchors on the
+/// second part follows its own anchor, not the first part, and comparing
+/// neighbours alone lost the link on every run that minted anchors.
 fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     let frame = |e: &Element| {
         frames
@@ -204,9 +217,16 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .zip(b)
                 .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
     };
-    for i in 1..elements.len() {
+    let mut last = None;
+    for i in 0..elements.len() {
+        if is_splice_anchor(&elements[i]) {
+            continue;
+        }
+        let Some(p) = last.replace(i) else {
+            continue;
+        };
         let (before, after) = elements.split_at_mut(i);
-        let (prev, next) = (&before[i - 1], &mut after[0]);
+        let (prev, next) = (&before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
         }
@@ -2134,6 +2154,44 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_splice_anchor_between_the_parts_keeps_them_one_table() {
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["Name", "Value"], &["alpha", "1"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (b, fb) = part(
+            "elem-00003",
+            1,
+            &[&["beta", "2"], &["gamma", "3"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        // The second part's own anchor, ordered just before it.
+        let anchor = Element {
+            id: "elem-00002".into(),
+            page: 1,
+            bbox: b.bbox,
+            ..Element::new(
+                "doco:Figure",
+                "[[VLMTAB:p1:t0]]",
+                "rust",
+                "table-confidence",
+            )
+        };
+        let mut els = vec![a, anchor, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[2].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[2].header_rows, Some(0));
     }
 
     #[test]
