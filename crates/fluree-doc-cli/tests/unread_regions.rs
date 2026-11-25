@@ -195,7 +195,7 @@ fn a_plain_run_reports_an_image_it_did_not_examine() {
     assert!(
         stderr.contains(
             "warning: memo: fluree-doc-parse: 1 image on page 1 was not examined: a parse \
-             that probes images (OCR or escalation) can tell whether it holds text."
+             that probes images (--probe-images, or OCR) can tell whether it holds text."
         ),
         "{stderr}"
     );

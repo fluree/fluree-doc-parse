@@ -318,10 +318,12 @@ pub enum Declined {
     /// chart, an illustration. Nothing reads it, neither a model nor an OCR
     /// engine: it is listed, for a caller to judge.
     NotTexty,
-    /// Not examined: the parse decoded no image
+    /// Not examined: the parse did not decode the image
     /// ([`crate::ExtractOptions::probe_images`] off, as a deterministic run
-    /// that neither escalates nor reads with an OCR engine sets it), so
-    /// nothing tells a capture of text from a photograph. Listed at any
+    /// that neither escalates nor reads with an OCR engine sets it, or
+    /// [`crate::ExtractOptions::probe_small_images`] off for one under a
+    /// tenth of the page, as a run without OCR sets it), so nothing tells a
+    /// capture of text from a photograph. Listed at any
     /// share of the page, from [`MIN_SMALL_REGION_SIDE`] on its longer side:
     /// a run that probes may find text in it.
     Unprobed,
