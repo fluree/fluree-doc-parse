@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "lutron-maestro-369-116.pdf",
+    "url": "https://assets.lutron.com/a/documents/369-116_maestro_120v_multi-location_fluorescent_smart_dimmer.pdf",
+    "sha256": "94c8a1723c49c88c65b9458d21f8be68911a87db0f7a49e5accdcad36a4c1f57",
+    "about": "Lutron Maestro fluorescent multi-location dimmer submittal sheet. Page 1 sets two wiring diagrams one over the other, and under them, in its footer, the LUTRON wordmark drawn as shapes beside the form's title."
+  },
+  "notes": [
+    "#201: the wordmark's letters joined the diagrams by reach, and the region took the form's title, `SPECIFICATION SUBMITTAL P/N 369-116 Rev. A`, as the diagrams' label; with the wordmark apart, its last letter read as a checkbox before the title."
+  ],
+  "checks": [
+    {
+      "id": "form-title-is-text",
+      "found": "2026-11-25",
+      "issue": "`SPECIFICATION SUBMITTAL P/N 369-116 Rev. A` was a Figure.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "SPECIFICATION SUBMITTAL P/N 369-116 Rev. A",
+        "evidence": "layout"
+      }
+    }
+  ]
+}

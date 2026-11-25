@@ -323,19 +323,22 @@ pub fn detect(
     }
 
     let mut out = Vec::new();
-    let all: Vec<usize> = (0..boxes.len()).collect();
     let fit = |b: &BBox| !page_scale(b);
-    split(
-        &boxes,
-        &all,
-        cluster_reach(&boxes),
-        &fit,
-        &mut |group, b| {
+    let reach = cluster_reach(&boxes);
+    // A word drawn as shapes, a logo's lettering, is grouped on its own: a
+    // submittal's wordmark under its wiring diagrams joined them by reach,
+    // and the region took the form's title under it as their label.
+    let marks = wordmarks(&boxes);
+    let rest: Vec<usize> = (0..boxes.len())
+        .filter(|i| !marks.iter().any(|m| m.contains(i)))
+        .collect();
+    for part in marks.iter().chain(std::iter::once(&rest)) {
+        split(&boxes, part, reach, &fit, &mut |group, b| {
             if let Some(f) = judge(&boxes, group, b, rules, page, size) {
                 out.push(f);
             }
-        },
-    );
+        });
+    }
     // A box drawn around a drawing frames it: the smallest panel its shapes
     // lie within, and larger than they are.
     for f in &mut out {
@@ -355,6 +358,74 @@ pub fn detect(
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
+    }
+    out
+}
+
+/// Words drawn as shapes: three or more set on one baseline at one height,
+/// each no wider than two of its height, side by side as letters are, and
+/// standing clear of every other shape by more than their height. A
+/// stacked bar's segments and a diagram's row of boxes stand among the
+/// rest of their drawing.
+fn wordmarks(boxes: &[BBox]) -> Vec<Vec<usize>> {
+    let mut used = vec![false; boxes.len()];
+    let mut out = Vec::new();
+    for i in 0..boxes.len() {
+        if used[i] {
+            continue;
+        }
+        let a = boxes[i];
+        let h = a.height();
+        if h <= 0.0 {
+            continue;
+        }
+        let mut row: Vec<usize> = (0..boxes.len())
+            .filter(|&j| {
+                let b = boxes[j];
+                !used[j]
+                    && (b.y1 - a.y1).abs() <= 1.5
+                    && (b.height() - h).abs() <= h * 0.2
+                    && b.width() <= h * 2.0
+            })
+            .collect();
+        row.sort_by(|&p, &q| {
+            boxes[p]
+                .x0
+                .partial_cmp(&boxes[q].x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        // Side by side as letters: each starting within its height of the
+        // last one's end.
+        let mut chain: Vec<usize> = Vec::new();
+        for &j in &row {
+            match chain.last() {
+                Some(&k) if boxes[j].x0 - boxes[k].x1 > h => {
+                    if chain.contains(&i) {
+                        break;
+                    }
+                    chain = vec![j];
+                }
+                _ => chain.push(j),
+            }
+        }
+        if chain.len() < 3 || !chain.contains(&i) {
+            continue;
+        }
+        let hull = chain
+            .iter()
+            .fold(boxes[chain[0]], |r, &j| r.union(&boxes[j]));
+        let apart = (0..boxes.len()).filter(|j| !chain.contains(j)).all(|j| {
+            let o = boxes[j];
+            let dx = (o.x0 - hull.x1).max(hull.x0 - o.x1);
+            let dy = (o.y0 - hull.y1).max(hull.y0 - o.y1);
+            dx.max(dy) > h
+        });
+        if apart {
+            for &j in &chain {
+                used[j] = true;
+            }
+            out.push(chain);
+        }
     }
     out
 }
@@ -847,6 +918,40 @@ pub fn attach(
     page: (f64, f64),
     prose: f32,
 ) -> Vec<Vec<usize>> {
+    attach_beside(figures, blocks, images, page, prose, &[])
+}
+
+/// The page's words drawn as shapes, a logo's lettering: each run of letters
+/// [`wordmarks`] finds among `fills`, by its extent.
+pub fn marks(fills: &[Fill]) -> Vec<BBox> {
+    let mut boxes: Vec<BBox> = Vec::new();
+    for f in fills {
+        let b = f.bbox;
+        if !boxes.iter().any(|o| {
+            (o.x0 - b.x0).abs() < 0.5
+                && (o.y0 - b.y0).abs() < 0.5
+                && (o.x1 - b.x1).abs() < 0.5
+                && (o.y1 - b.y1).abs() < 0.5
+        }) {
+            boxes.push(b);
+        }
+    }
+    wordmarks(&boxes)
+        .iter()
+        .map(|m| m.iter().fold(boxes[m[0]], |r, &j| r.union(&boxes[j])))
+        .collect()
+}
+
+/// As [`attach`], leaving to it the text set beside a logo's lettering,
+/// `marks`, on its row.
+pub fn attach_beside(
+    figures: &mut [Figure],
+    blocks: &[(BBox, f32, &str)],
+    images: &[BBox],
+    page: (f64, f64),
+    prose: f32,
+    marks: &[BBox],
+) -> Vec<Vec<usize>> {
     let (page_width, page_height) = page;
     let max_w = page_width * LABEL_MAX_WIDTH;
     // The same bound detection applies: a region this large is the page, not a
@@ -1025,6 +1130,15 @@ pub fn attach(
                 if !(near && (label || (beside(b) && fits))) && !chained {
                     continue;
                 }
+                // Text set beside a logo's lettering on its row is the
+                // logo's company: a form's title beside the wordmark in a
+                // footer, under the page's diagrams, is none of theirs.
+                if marks.iter().any(|m| {
+                    m.y1.min(b.y1) > m.y0.max(b.y0)
+                        && (b.x0 - m.x1).max(m.x0 - b.x1) <= *size as f64 * MARK_REACH
+                }) {
+                    continue;
+                }
                 let grown = f.bbox.union(b);
                 if too_big(&grown) {
                     continue;
@@ -1129,6 +1243,10 @@ const LABEL_SIZE: f32 = 0.95;
 /// Widest, against its drawing, text at the prose's size may be and still
 /// be the drawing's label.
 const PROSE_LABEL_WIDTH: f64 = 1.5;
+
+/// Furthest, in its own ems, text may stand from a logo's lettering on its
+/// row and be set beside it.
+const MARK_REACH: f64 = 3.0;
 
 /// Is the drawing a photograph's numbered callouts, rather than a chart?
 ///
@@ -1862,6 +1980,61 @@ mod tests {
         ];
         let got = detect(&fills(&marks), &[], &glyphs, 0, (612.0, 792.0));
         assert!(got.iter().all(|f| f.drawing.x1 < 300.0), "{got:?}");
+    }
+
+    #[test]
+    fn a_wordmark_under_diagrams_is_grouped_alone() {
+        // Two wiring diagrams' shapes, and a logo's letters 41pt under them,
+        // within the reach that groups the diagrams.
+        let mut shapes = vec![
+            bb(76.9, 509.7, 112.9, 563.7),
+            bb(96.9, 524.8, 145.8, 533.9),
+            bb(56.9, 544.1, 145.8, 560.9),
+            bb(76.3, 595.7, 112.3, 649.7),
+            bb(121.5, 595.7, 157.4, 649.7),
+            bb(56.6, 630.3, 236.0, 651.8),
+        ];
+        for k in 0..6 {
+            let x = 65.1 + 9.4 * k as f64;
+            shapes.push(bb(x, 693.5, x + 9.0, 702.1));
+        }
+        let got = detect(&fills(&shapes), &[], &[], 0, (612.0, 792.0));
+        assert!(!got.is_empty(), "the diagrams are a figure");
+        assert!(got.iter().all(|f| f.drawing.y1 < 660.0), "{got:?}");
+    }
+
+    #[test]
+    fn text_beside_a_wordmark_is_not_a_drawings_label() {
+        // A form's title beside the wordmark in a footer, 41pt under the
+        // page's diagrams: within their reach, but the logo's company.
+        let fig = || {
+            vec![Figure {
+                bbox: bb(56.0, 510.0, 287.0, 652.0),
+                drawing: bb(56.0, 510.0, 287.0, 652.0),
+                page: 0,
+                shapes: 32,
+                frame: None,
+            }]
+        };
+        let blocks = vec![
+            (
+                bb(56.0, 497.0, 200.0, 506.0),
+                9.0,
+                "Single-Pole Wiring Diagram",
+            ),
+            (
+                bb(129.0, 693.0, 380.0, 704.0),
+                11.5,
+                "SPECIFICATION SUBMITTAL P/N 369-116",
+            ),
+        ];
+        let mark = bb(65.1, 693.5, 121.4, 702.1);
+        let mut figs = fig();
+        let taken = attach_beside(&mut figs, &blocks, &[], (612.0, 792.0), 9.0, &[mark]);
+        assert_eq!(taken[0], [0], "{taken:?}");
+        let mut figs = fig();
+        let taken = attach(&mut figs, &blocks, &[], (612.0, 792.0), 9.0);
+        assert_eq!(taken[0], [0, 1], "{taken:?}");
     }
 
     #[test]

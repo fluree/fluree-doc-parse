@@ -224,6 +224,36 @@ const CHECKBOX_SQUARENESS: f64 = 2.5;
 /// vector art — so without this every `☐ Cured` / `☐ Paid-off` option reads
 /// as running prose and the whole list collapses into one paragraph.
 pub fn checkboxes(fills: &[Fill]) -> Vec<BBox> {
+    // A letter of a word drawn as shapes, a logo's `O` or `N`, stands in a
+    // run of three letters or more, each abutting the next on their
+    // baseline; a box to tick stands apart, or beside one other.
+    let lettered = |b: &BBox| {
+        let mut row: Vec<BBox> = fills
+            .iter()
+            .map(|f| f.bbox)
+            .filter(|o| {
+                (o.y1 - b.y1).abs() <= 1.5 && (o.height() - b.height()).abs() <= b.height() * 0.2
+            })
+            .collect();
+        row.sort_by(|p, q| p.x0.partial_cmp(&q.x0).unwrap_or(std::cmp::Ordering::Equal));
+        row.dedup_by(|p, q| (p.x0 - q.x0).abs() < 0.5 && (p.x1 - q.x1).abs() < 0.5);
+        let Some(at) = row.iter().position(|o| o == b) else {
+            return false;
+        };
+        let abuts = |p: &BBox, q: &BBox| {
+            let gap = q.x0 - p.x1;
+            (-0.5..=b.height() * 0.5).contains(&gap)
+        };
+        let mut lo = at;
+        while lo > 0 && abuts(&row[lo - 1], &row[lo]) {
+            lo -= 1;
+        }
+        let mut hi = at;
+        while hi + 1 < row.len() && abuts(&row[hi], &row[hi + 1]) {
+            hi += 1;
+        }
+        hi - lo + 1 >= 3
+    };
     fills
         .iter()
         .map(|f| f.bbox)
@@ -232,6 +262,7 @@ pub fn checkboxes(fills: &[Fill]) -> Vec<BBox> {
             (CHECKBOX_MIN..=CHECKBOX_MAX).contains(&w)
                 && (CHECKBOX_MIN..=CHECKBOX_MAX).contains(&h)
                 && (w - h).abs() <= CHECKBOX_SQUARENESS
+                && !lettered(b)
         })
         .collect()
 }
@@ -574,6 +605,24 @@ mod tests {
     fn a_small_square_is_neither() {
         // Aspect ratio too low to be a rule, too small to be a background.
         assert!(classify(bb(10.0, 10.0, 12.0, 12.0), 0).is_none());
+    }
+
+    #[test]
+    fn a_wordmarks_letters_are_no_checkboxes() {
+        let f = |x0, y0, x1, y1| Fill {
+            bbox: bb(x0, y0, x1, y1),
+            page: 0,
+        };
+        // A logo's lettering, its squarish letters abutting, and a box to
+        // tick beside a line of its own.
+        let mut fills: Vec<Fill> = (0..5)
+            .map(|k| {
+                let x = 65.0 + 9.5 * k as f64;
+                f(x, 693.5, x + 9.0, 702.2)
+            })
+            .collect();
+        fills.push(f(40.0, 511.0, 47.0, 518.0));
+        assert_eq!(checkboxes(&fills), [bb(40.0, 511.0, 47.0, 518.0)]);
     }
 
     #[test]
