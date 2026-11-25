@@ -14,22 +14,94 @@ tells you how far down the ladder it came from.
 | 1 | document title | `title` | a one-off style in the first blocks of page 1 |
 | 2 | outline match | `outline` | the author named this heading |
 | 3 | numbering | `numbering` | `5.3.1` states its own depth |
-| 4 | weight | `bold` | bolder than body text |
+| 4 | weight | `bold` | bolder than body text, at the body's size |
 | 5 | font size | `font-size` | larger than body, in a repeated size tier |
 
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
-Weight and size never make a heading of these two:
+Bold set larger than the body is ranked by its size, not given `bold`'s one
+level. A part's 12pt bold label over 10pt bold heads stays above them, as it
+does where the face's weight cannot be read at all.
+
+Where the body itself is set bold, weight carries no information, and no
+heading is read from it. Whether it is comes from the glyphs: the size most of
+the document's letters are set at, and whether most of them are bold, its
+tables' text counted with its paragraphs'. The blocks the tables leave are no
+measure of it. On a form they are mostly its bold labels (Schedule 1 to
+Form 1040 has 9 bold lines of 16), and on a financial statement page they are
+its bold titles.
+
+Weight and size never make a heading of these:
 
 - **A caption** (`Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
   Functions`), which is the figure's or the table's.
-- **A label ending in a colon with its value set beside it on its row**
-  (`Color:`), which is a field.
+- **A field:** a label ending in a colon with its value set beside it on
+  its row (`Color:`), or after it on its line at the body's size, the
+  value a figure or short and holding one (`CRI: 90+`, `Hours: 8:30 am -
+  6:00 pm EST (Monday - Friday)`, `Initial Closing Date: May 15, 2019`). A
+  title with a subtitle states no figure, runs on past a value's length,
+  or is set larger (`Policy Rules: Limitations`, `Part II: Application of
+  Section 67 Limitation to Specific Deductions`, `Current Situation:
+  2001-2019` at 14 pt over 10).
+- **A value under its label:** a line in a lighter weight set at its bold
+  label's size on the label's next line, alone or with more such lines
+  (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
+  `MANUFACTURER'S NAME`). A section under its title is set apart from it
+  by size or a gap.
+- **A label over its value:** a bold label with a single short line under
+  it, set lighter at its size within an em, holding a figure or an
+  answer, and followed by the next label or nothing (`Date of
+  Preparation` over `Jun 5, 2026`, `Photochemically Reactive` over `No`).
+  A section's heading stands over sentences, or over more lines than one
+  (`Power and Ratings` over `120 V~ 60 Hz` and the rest of its ratings).
+- **A form's label** ending in a colon or `#` (`Location:`, `Model #:`),
+  where only its size would make it a heading: the blank beside it is
+  where its value goes.
+- **A form's grid and line captions:** column keys and answer heads, and
+  nothing else (`(a) (b)`, `Yes No`), and a line's caption between its
+  letter and its number (`b Refunded 37b`).
+- **A sentence that refers elsewhere:** `For Paperwork Reduction Act
+  Notice, see your tax return instructions.`, a form's footer. A title
+  that mentions the instructions keeps it in brackets, `Other Information
+  (see instructions)`, and stays.
+- **A chart's axis title:** a line set at an angle to the page's text, up a
+  plot's side (`Concentration of PFHpS, in ng/L`), or set directly under a
+  row of three or more bare values that reaches across it, its scale (`I -
+  Output Current - A` under `0 0.5 1 1.5 2`). A chart drawn as vectors
+  keeps its labels among the page's text when no figure region takes them.
+  On a page turned as a whole, the headings turn with the text and stay.
+  A legend's entries and a curve's labels are the figure's to take.
+- **A table's column head or stub, the table not read as one:** a line
+  standing within two and a half ems over a line of bare figures (`Total
+  assets, net` over its row's figures), or level with other short cells of
+  which one stands over such figures (`95%CI` beside `95% CI` and `%`). A
+  slide's card titles stand side by side too, but over text, not figures.
+  Where the table is found, these cells are its headers.
+- **A signature block's party:** a role or a name with a line to sign on
+  just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
+  `(Signature)`), and a signature page's label (`Signature Page to Voting
+  Agreement`). Agreements set their parties bold, a dozen to a page.
+- **A letterhead:** the sender's name, at the head of the first page, set
+  over its address and numbers, directly or over a line or two (`TRUE
+  MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE DIVISION` over its
+  street, phone and web address).
 
 A row of short blocks side by side was tried as a third test, as a table's
 header cells (`TYPE`, `NAME`, `DESCRIPTION`), and dropped: a slide's card
 titles stand side by side the same way (`Our Purpose`, `Our Mission`).
+
+A form's text and a line that stops mid-phrase stay headings until runs of
+bold heads have been judged, and are read as text after. A run of bold lines
+that heads nothing, or stands three deep, is text on the evidence of the whole
+run; taking one of its lines out first would leave the others standing as
+headings, a table's cells among them.
+
+No heading stops mid-phrase, on an article, a conjunction, `of` or `not`: a
+line that does runs on into the next, as a form's numbered caption cut at
+its first line (`5 Expenses recorded on books this year not`) or a side
+label set a word or two a line (`Tax and` over `Credits`). Only lowercase
+words count, so `Part A` and `Schedule A` stay titles.
 
 A heading holds at most 12 words. The limit rises to 20 words, on at most
 two lines, in two cases where more than its shape vouches for it:
@@ -65,6 +137,12 @@ Tables the table pass did not take are still counted. In a catalogue whose
 specification tables outnumber its prose, the body still comes out at the
 tables' size.
 
+A document whose prose runs to fewer than eight lines has too little to say
+its body by: a page that is a label, a title and a folio over a table. Its
+prose alone counts the title's two lines against one of each other size, so
+the title came out as the body and was no heading. There the tables' text
+counts too, each of their lines once at its size.
+
 ## Headings beside drawings
 
 A heading inside a figure region yields to it when its evidence is
@@ -80,6 +158,54 @@ set larger or bolder than body text. Two exceptions:
   region.
 - `numbering` and `sequence` evidence yields too, but only inside the drawing
   itself, where `4-M4` is a dimension's callout.
+
+## Where a weight comes from
+
+A glyph's weight is its font's, read once per font in this order:
+
+1. **A weight word in the font's name**, in the PDF's `/BaseFont` or the
+   program's own: whole words anywhere (`TimesNewRomanPS-BoldMT`,
+   `ArialBold`), abbreviations and German names in the style after the
+   family (`HelveticaNeueLTStd-Bd`, `-Md`, `-Lt`, URW's `-Regu` and `-Medi`,
+   `Sohne-Halbfett`, `-Kraftig`). Abbreviations are read only there, so a
+   family's own name is never one.
+2. **The descriptor's `/FontWeight`.**
+3. **The program's weight class**, for TrueType and OpenType programs.
+
+The name goes first because, in the disagreements on bold looked at across
+a corpus of 7,000 documents, the name is the source that matches the page:
+a subset of `NimbusSansL-Regu` whose program states 700 set a whole data
+sheet in bold, `CooperHewitt-Thin` declares 701, `Frutiger-Black` 400. The descriptor goes
+before the program because it describes the face as drawn: Word's
+`Arial,Bold` embeds the regular program and states 700.
+
+Then two document-wide passes:
+
+- **Mediums are weighed, and faces with no weight where the body face
+  states none,** against the body face, the one setting the most letters:
+  bold when their ink covers 15% more of their glyph boxes than the body's,
+  or, for a face setting too few letters to trust its ink, when its
+  descriptor's stems are 1.35 times the body's. Letters alone are weighed,
+  since figures and signs have ink of their own, and only the letters of a
+  face read bold this way are bold: its figures are left with no weight,
+  which neither makes a line bold nor keeps one from being. Kept medium,
+  they outvoted the letters of a header cell (`WD8005FRYZ`); read as bold,
+  they made bold lines of a table's `RCR: 0` and a paper's `doi:` line. A
+  medium is weighed because
+  its look depends on the family: Söhne's Kräftig is set as the bold beside
+  Buch, as heavy as a semibold, where other families' mediums sit close to
+  their regular. A face with no weight beside a body whose weight is stated
+  is left alone: it is mostly a chart's, a logo's or a signature's, and
+  weighing those made bold headings of signatures and axis labels. A face
+  named elsewhere in a silent document, such as a repository's cover page
+  in Frutiger Bold on a paper whose own faces state nothing, does not stop
+  the paper's faces being weighed. Nothing is weighed against a light or a
+  heavy body.
+- **A light body lifts every weight.** A document set in Light (300) uses
+  Medium (500) as its bold, so its weights are raised until the body reads
+  400: the Medium reads 600, bold. The lift is one step at most: over a
+  Thin body (200), a regular face is heavier without being bold, as a
+  sheet's tables set in Helvetica beside its text in Helvetica Neue Thin.
 
 ## Bold, throughout
 
@@ -200,6 +326,12 @@ number is never a heading, however it is set. Examples: `seagate.com`,
 and as headings they open a section that the legal text or the order table
 below falls into.
 
+Nor is the line an address opens with, a company's or a person's name set
+bold over it: `Owens Corning Insulating Systems, LLC` over the street and
+over `1-800-GET-PINK® www.owenscorning.com`, the lines set flush under it,
+each within a line and a half of the last, reaching one that closes on a
+phone number or a web address within three lines.
+
 A bare domain needs a lowercase host and a common top-level domain, so a
 name such as `ASP.NET` is not one. A phone number ends in a group of three
 digits and a group of four, or opens with `+`. A date, a standard's year
@@ -318,6 +450,19 @@ Most files write `/Fit`, which names a page and no position — of two documents
 checked, 456 of 456 bookmarks resolved to a page and none to a position. So
 the page carries this nearly always, and that is already enough: sections
 repeat across a book, not within a page.
+
+A destination may be written out or named: layout programs write the name of
+a destination (`den24-0031_Layout.indd:Appendix 1:309`), kept in the catalog's
+`/Dests` name tree or, in older files, its `/Dests` dictionary. Both are read,
+so a named bookmark lands on its page like any other.
+
+A bookmark heads one place: the copy of its title nearest where it lands, by
+page, then stated position, then the larger type, each copy taking one
+bookmark. A running head repeats its section's title at the top of every page
+the section spans (`Appendix 1. Supplemental Figures` on 32 even pages of a
+USGS report), and every copy matched the bookmark. The copies no bookmark took
+that stand where another such copy stands on another page are the running line
+itself, and no heading by weight or size either.
 
 Entries that resolve to nothing keep the old rule. A bookmark naming no
 destination cannot be placed, and promoting is still safer than burying a real

@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 1 closes on a form box: certification marks at its left end, `APPROVALS:` and `AVAILABLE AT:` along it, `1/24` and `Printed in U.S.A.` under the marks."
+  },
+  "notes": [
+    "#201: the box and the marks in its corner were taken for one drawing the size of the box, and every label on the box for its labels."
+  ],
+  "checks": [
+    {
+      "id": "approvals-is-text",
+      "found": "2026-11-24",
+      "issue": "`APPROVALS:` was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "APPROVALS:"
+      },
+      "count": 0
+    },
+    {
+      "id": "available-at-is-text",
+      "found": "2026-11-24",
+      "issue": "`AVAILABLE AT:` was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "AVAILABLE AT:"
+      },
+      "count": 0
+    },
+    {
+      "id": "printed-in-is-text",
+      "found": "2026-11-24",
+      "issue": "`Printed in U.S.A.` was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Printed in U.S.A."
+      },
+      "count": 0
+    }
+  ]
+}

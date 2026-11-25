@@ -1618,6 +1618,30 @@ fn render(
     pages: Vec<fluree_doc_model::PageSize>,
     notes: &fluree_doc_model::Notes,
 ) -> String {
+    // No source writes a stray control character into what it emits: a
+    // model's reading or another format's text can carry one as surely as a
+    // PDF's font.
+    let scrubbed: Vec<Element>;
+    let elements = if elements.iter().any(|e| {
+        e.text.chars().any(fluree_doc_model::is_stray_control)
+            || e.cells
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|c| c.chars().any(fluree_doc_model::is_stray_control))
+    }) {
+        scrubbed = elements
+            .iter()
+            .cloned()
+            .map(|mut e| {
+                e.scrub_controls();
+                e
+            })
+            .collect();
+        &scrubbed[..]
+    } else {
+        elements
+    };
     match args.format {
         Format::Md => fluree_doc_model::to_markdown_with_options(
             elements,

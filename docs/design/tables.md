@@ -67,6 +67,20 @@ Read page-wide, a grid takes in every rule on the page, and a logo's strokes
 at the page foot crossed none of a horizontals-only spec table's rows, so it
 was trimmed to its last two.
 
+A grid the trim runs down to the three lines a grid needs without finding a
+band any vertical crosses has only its rules to say where its rows are.
+Lines of text between two rules drawn over different stretches of the page,
+sharing none, are no row, and the grid is no table: two lines or more under
+one of the rules, in its stretch, are a column's paragraphs or list. Such
+rules divide the sections of a page set in two columns, one column's rule
+over the other's. Kept, the last two bands of such a page became one table,
+the end of one column's list in one cell and the next section in the other.
+Two tables set side by side, each ending on its own rule a little above or
+below the other's, leave between those rules a sliver holding nothing, or
+each table's last line, and they stand. So does a table ruled with
+horizontals only under a stroke of decoration the trim counts: its rules
+share their stretch of the page.
+
 A table ruled with horizontals only takes its columns from where its rules
 break: a rule drawn a cell at a time has pieces meeting end to end at the
 columns' edges. A rule drawn a cell at a time can run each cell's piece on
@@ -75,6 +89,30 @@ ends inside such an overlap are one column's edge, at the overlap's middle,
 not two edges with an empty column between them. Pieces a longer rule is
 drawn over whole (group underlines under a rule across all of them) keep
 their ends.
+
+### Row lines ruled alike, read together
+
+A page with two tables ruled at different columns can leave the page-wide
+reading with nothing: across the page no edge but the outer two has the
+support of half the lines, and a one-column grid with verticals inside it is
+no table. Read in touching components instead, a table ruled with
+horizontals only falls apart into lines, none touching the next. So where the
+page-wide reading finds nothing, row lines ruled alike are read together: three
+lines or more, one under the next, each with the same extent and broken at
+the same places, a vertical standing on one of the breaks (a shaded header's
+separators). Its ends are not trimmed: the lines are its rows by how they are
+drawn. It is kept as a table where:
+
+- it has two rows and two columns or more;
+- its lines part its text's lines, three to a row at most (a statement
+  ruled only under its header and its totals sets many rows between them);
+- two of its columns or more hold text in half its rows (a chart's
+  gridlines leave one column of tick labels).
+
+A band the components read inside it on its own, a shaded header whose
+separators touch its rule, is one of its rows. A statement's figures,
+underlined a column at a time, break alike too, but no vertical stands on
+their breaks.
 
 ## Each box is read on its own
 
@@ -110,6 +148,17 @@ cell's words). Inner boxes are read before the frames round them.
   table would be: three rows or more, two columns or more, and text in half
   its cells. A form's strip of field boxes, a chart's legend and a
   schematic's outlines are boxes too.
+- **Boxes stacked a hair apart are two drawings.** A spec sheet sets its
+  option tables one under another, each boxed with its own title band and
+  its own columns (`Trims` over two, `Housings` under it over two others),
+  closer than rules must be to touch. Read as one drawing, the two boxes'
+  dividers made three columns neither has. Where a line runs across the
+  whole set on either side of a gap less than a row tall, no vertical
+  crosses the gap, each side is closed at both ends, and each rules a
+  column the other does not, the set is two boxes. A header ruled off by a
+  double line, its verticals broken across it, rules the columns the rows
+  under it do, or fewer, and stays one table; so do boxes whose sides run
+  on across the gap.
 - **A box ruling a single column** is left to the page-wide reading, which
   has its own tests for a one-column list. A sidebar parted by a rule is as
   often one.
@@ -149,6 +198,20 @@ over the strip it adds (`Product name`), and words stand in that strip in
 the rows below, the band's edge is the table's. A band merely wider than
 its table, with no name over the strip or nothing under it, adds nothing,
 and no grid is widened onto another.
+
+A table left open at the top can set a band over the columns its figures
+share (`BOLSAS ADICIONALES NECESARIAS POR CADA 100 PIES DE LA LÍNEA DEL
+TECHO` over three roof pitches) and rule under it across those columns
+alone. The column of labels beside them (`VALOR-R`) stands open from the
+band's top down through the header, and its rule runs on up beside the band.
+The rules alone start the grid under the band, which then reads as a heading
+over the table, and each pitch is named by itself. Where the top rule runs
+over a group of two columns or more and leaves only edge columns open, and
+the rule at the group's open side runs on above it, the grid is raised to
+where that rule ends. The band's text must stand over the group alone: a
+title running on over the label column is the table's. The band is then the
+top of a stacked header (`BOLSAS ADICIONALES … / 4:12 INCLINACIÓN DEL
+TECHO`), and the label column a cell from the band's top down.
 
 ## Tall rows
 
@@ -402,16 +465,23 @@ row the first of the data.
 A table can name its columns afresh partway down: a VOC table's `By wt |
 By vol` under a `LB/Gal | g/L` header, or a SKU table's own header row under
 a block of fields in the same box. Such a row sets names in two cells or
-more, each its own, and no figure or part number, over two rows or more with
-something in a column it names. It is set apart from the rows under it one
-of three ways:
+more, each its own, and no figure or part number, over a row or more with
+something in a column it names. One row under a row of names is as likely
+its value, but a header set apart names one row's columns as surely as ten:
+a short VOC table's `VOC Content | LB/Gal | g/L` over its one `Total`. It is
+set apart from the rows under it one of three ways:
 
 - **Bold.** Every value cell is bold, two or more, over a row that is not. A
   first column of row labels keeps its own weight: `VOC Content` is set as
   `Total` is, beside a bold `LB/Gal | g/L`. One bold word beside a label is
   emphasis.
 - **Shaded as the header row is,** over two rows that are not; striped rows
-  alternate.
+  alternate. The row and the header are shaded by fills of their own,
+  starting and ending within them. A drawing laid under the page (a
+  watermark's grey bolts) shades neither: drawn under a table's top rows and
+  ending above the rest, it made the last row over it look like a restated
+  header. The rows under it must be unshaded by any fill: a table laid on a
+  background is shaded throughout, and no row of it stands apart.
 - **Names turned on their side** in two cells or more, as narrow columns'
   names are. A group label turned down the rows it groups runs on past the
   row, and names none.
@@ -419,6 +489,17 @@ of three ways:
 The row is not data. The rows under it, until the next such row, take its
 names in place of the header's lowest row, under any rows above that one:
 `K25W951 / By wt`. A band across the row is a section's label instead.
+
+### Rows of parameters
+
+A grid of figures can be headed by the rows of its parameters rather than by
+names. An IES coefficient-of-utilization table opens with `RC %: | 80` and
+`RW %: | 70 | 50 | 30 | 10` over `RCR: 0 | 119 | 119 | …`. Where nothing else
+heads such a table, the rows that open it with a label ending in a colon and
+only figures beside it are its header, over three rows or more, half of them
+or more figures: each value is named by its parameters (`80 / 70`). A table
+of such rows all the way down is a list of fields, each with its values, and
+none of its rows heads it.
 
 ### Row headers under a group label
 
@@ -450,9 +531,31 @@ Only one kind of line is taken: within a line of the rules, every mark on it
 over a rule, each group's label one run of text. A line that also stands
 over a column no rule runs under, such as a label over the row labels, says
 the header above is more than one line of group labels. Taking part of it
-would leave a fragment, so none of it is taken. A rule across the whole
-table is the table's top edge, and what stands over it is its title. A table
-that draws its columns bounds its header's cells itself and is left alone.
+would leave a fragment, so none of it is taken. A table that draws its
+columns bounds its header's cells itself and is left alone.
+
+A rule across the whole table is its top edge, and what stands over it is
+its title, unless it is the table's column heads. A table can rule under its
+header and not over it: an exposure-limit table's `OSHA` over `TWA` and
+`NIOSH` over `STEL`, each over its column, a heavy rule under them. Its grid
+begins at that rule, and the heads were read as text, the bold ones as
+headings, with no value named. The lines just over such a rule are the
+table's top row when the nearest sits within a line of it, and every run of
+text on each line stands within one column, inside the table's width, in
+two columns or more. Lines further up come with them while they are set as
+close as a head's wrapped lines and stand in the columns the same way. A
+single run there is a head wrapped onto two lines: over a column past the
+first, or over the first where it starts where the head under it does, in
+its size and weight (`Supp. Figure 3I: Levels of α-KG` over `with WT or
+mutant IDH1`, the stub's head beside `Mean | SD | N`). A line that runs
+across a column's edge or past the table, a title, a caption or prose,
+stops the header there.
+
+Such a table often shades its header's cells and then every other row from
+the first. The shaded run at the top then takes in the first row of data
+as well. Where the rows from the run's last row on are shaded every other
+row, and that row holds figures as the rows under it do (`ethanol | 1000 |
+- | 1000`), it is the body's first stripe, and the header ends above it.
 
 A row that holds only a label in its first column, drawn as cells of the
 table rather than a band across it, labels the rows beneath it when the row
@@ -653,6 +756,32 @@ as detected. Consumers wanting self-contained rows
 does, and the XHTML emitter expresses the merges as `rowspan`/`colspan`
 instead.
 
+A column no cell starts in is dropped once the spans are read: on every row,
+its cell is empty and the rest of the one to its left. The grid cut it where
+another row's ruling, a band over the header or a nested table, parts the
+columns, and it carries nothing of its own. An environmental data sheet's
+three-column VOC tables were ruled as six and written with an empty column
+after each, their cells in columns 0, 2 and 4. A column that is merely
+empty, its cells never merged into their neighbours', stays: the page draws
+it. A table the page break split drops a column only where every part does,
+so its parts keep one set of columns and read on as one table.
+
+A value set once across data columns that each have their own header is
+each column's, as a value spanning rows is each row's. A spec sheet centres
+`2 years` across its two models' columns, and DoCO wrote it under the first
+alone: the second model had no warranty. The reader marks such a run
+(`spread_left`) by where its value stands: its only text, worded, centred on
+the run and narrower than most of it. A run the ruling merely leaves open
+holds its value in its first column (a statement's `$ 11,452`, the next
+columns unruled on that row), and figures alone across columns are the
+grid's cuts off the page's. DoCO then writes the value under each column of
+the run, where each has a header of its own; under one shared header, or in
+a band or a restated header row, it stays one cell. Columns that are one
+stacked header's children are that header's attributes, not things of their
+own: a software product's `Terminal GTWIN CD-ROM` set across the
+`Description` group's `Screen size` to `SD memory card slot` is none of
+them, and is written once, named `Description`.
+
 ### Rows drawn but not ruled
 
 An unruled boundary is not, by itself, a merge: reading every one as a span
@@ -704,7 +833,14 @@ is a value, unless the two read as one across the cut between them (an
 address label a column cut runs through, beside its `Apt. no.`). It does not
 carry on the cell to its left, so DoCO names its row by the group and by it
 (`Surface-burning characteristics / Smoke developed`) rather than joining the
-two.
+two. Cells that do read as one are one cell, their text read whole into the
+first: a value set across two model columns beside its row's label
+(`11/12 seconds (ventilated); 10/12 seconds (refrigerated)`), in a table ruled
+with horizontals only that breaks every row line at the same edges.
+
+A row the ruling leaves open across the table is a section's band only where
+it does span: in a table ruled with horizontals only every row is left open,
+and a row whose values stand apart in their own cells is a row of values.
 
 ### Shading parts rows
 
@@ -769,6 +905,22 @@ labelled line (`1.47 lb (.67 kg)` over `±10%`), the first column left empty,
 holds one row, not two; lines with no label under none (a statement's
 header, years over units) are lines of their own.
 
+Read from its text, a table runs on through lines that carry figures in its
+columns. A line ruled off above and below, after a line ruled the same way,
+holding its label and a value that measures something, is a row too, whatever
+the value says: a list of dimensions ruled under every row keeps `Packaging
+(W x H x D) | 31.4 cm x 10.9 cm x 15.7 cm` among its lengths and weights.
+Not a header ruled off as its rows are (`(millions) | 2017 | 2016`), which
+names no measure and starts the next table, nor a header ruled above and
+below under a table ruled only round its own.
+
+A table read from its text because lines stand to its left, set as a column
+of the page's prose, stays in that column. The prose's columns are found with
+its text counted in, as it would have been had the table been prose. Read
+without it, the column it stands in can end higher on the page, and the
+prose below would be read straight across the page instead of down that
+column. Other tables are left out, as before.
+
 ## Tables split by a page break
 
 A table that runs off the foot of one page and on at the head of the next is
@@ -802,6 +954,31 @@ one of its columns. But a band reading whose first column is nothing but list
 markers is the list in a cell, read cell by cell (`a) | Change the pump
 frit`), and taking it for the table pulled the settings beside the lists out
 into a table of their own.
+
+Nor is a long cell a sign of a frame when the wider reading lies within one
+row of a ruled grid of four rows or more: that is a grid nested in the row
+(a property list whose acoustic row sets nine columns of figures in its
+Performance cell), and the ruled grid stands. A frame's table runs down
+across the frame's rows, or the frame has too few rows to tell. A reading
+with three times the ruled grid's cells still replaces it as before.
+
+### A grid nested in a ruled cell
+
+A cell of a ruled table can hold a table of its own: an acoustic row's
+Performance cell sets nine columns of figures under their own header,
+`Thickness (in.) | 125 Hz | … | SAA`. In a ruled table of four rows or
+more, most of them a table's rows (two cells or more filled, each short),
+each cell that holds twenty glyphs or more is read for alignment on its
+own. Text lined up into three columns or more over three rows or more,
+taking nearly all of the cell, its first row naming the columns over rows
+of figures, is a table of its own. A cell's figures stacked line under line
+under the outer table's header line up into columns too, but name nothing,
+and stay in the cell. It is read after the table it sits in, and the
+cell keeps only what that table does not take. A band under its header
+names the property it sits under (`Acoustical Performance`), so its cells
+carry it as their section. Wrapped prose in a cell lines up into no columns.
+A frame round a table set in one of its cells is read as before. In the
+reading order, a table set inside another's box follows it.
 
 The parts stay separate elements, because an element and its box sit on one
 page. Each later part names the one before it, and the DoCO and Markdown

@@ -54,6 +54,22 @@
         "column": "PRUEBA",
         "row": "Características de combustión superficial propagación del fuego/ desprendimiento de humo"
       }
+    },
+    {
+      "id": "denso-pitch-under-its-band",
+      "found": "2026-11-25",
+      "issue": "#200: the band over the DENSO table's three roof pitches, its rule under them alone and the table open above, was read as a heading, and each pitch column headed by its pitch alone.",
+      "cell": {
+        "value": "1.2",
+        "column": "BOLSAS ADICIONALES NECESARIAS POR CADA 100 PIES DE LA LÍNEA DEL TECHO / 4:12 INCLINACIÓN DEL TECHO",
+        "row": "30"
+      }
+    },
+    {
+      "id": "denso-band-no-heading",
+      "found": "2026-11-25",
+      "issue": "#200: as above; the band is the pitch columns' header, not a section of its own.",
+      "no_section": "BOLSAS ADICIONALES"
     }
   ]
 }

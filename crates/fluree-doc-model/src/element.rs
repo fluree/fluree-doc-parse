@@ -171,6 +171,13 @@ pub struct Element {
     /// nested table rules columns the outer rows do not have.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_left: Option<Vec<bool>>,
+    /// Row-major, same shape as `cells`: this cell's value is set across the
+    /// cells to its right that continue it (`merged_left`), centred on them,
+    /// and is each of those columns' value as much as its own: a spec
+    /// table's `2 years` set across two models' columns. A run the ruling
+    /// merely leaves open holds its value in its first column alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spread_left: Option<Vec<bool>>,
     /// The id of the table this one carries on, on a table continued from
     /// the page before.
     ///
@@ -252,7 +259,62 @@ pub struct Element {
     pub evidence: &'static str,
 }
 
+/// A C0 control character other than a tab, a line feed or a carriage
+/// return. A font that maps a symbol glyph to nothing readable can map it
+/// to one (a list's `▶` set as 0x17); it is no character a reader can show,
+/// and XML 1.0 has no place for it.
+pub fn is_stray_control(c: char) -> bool {
+    (c as u32) < 0x20 && !matches!(c, '\t' | '\n' | '\r')
+}
+
+/// `s` without its stray control characters ([`is_stray_control`]), and
+/// for each of its chars whether it was kept; `None` where it holds none.
+/// A control set as a word of its own takes the space after it along: `a
+/// \x17 b` reads `a b`.
+fn scrub_controls(s: &str) -> Option<(String, Vec<bool>)> {
+    if !s.chars().any(is_stray_control) {
+        return None;
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut kept = vec![true; chars.len()];
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if is_stray_control(c) {
+            kept[i] = false;
+            let alone = out.is_empty() || out.ends_with(' ');
+            if alone && chars.get(i + 1) == Some(&' ') {
+                kept[i + 1] = false;
+                i += 1;
+            }
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    Some((out, kept))
+}
+
 impl Element {
+    /// Take every stray control character ([`is_stray_control`]) out of
+    /// the text and the cells, and move the links' offsets with the text.
+    pub fn scrub_controls(&mut self) {
+        if let Some((text, kept)) = scrub_controls(&self.text) {
+            let before = |i: usize| kept[..i.min(kept.len())].iter().filter(|&&k| k).count();
+            for link in self.links.iter_mut().flatten() {
+                link.begin = link.begin.map(before);
+                link.end = link.end.map(before);
+            }
+            self.text = text;
+        }
+        for cell in self.cells.iter_mut().flatten().flatten() {
+            if let Some((text, _)) = scrub_controls(cell) {
+                *cell = text;
+            }
+        }
+    }
+
     /// An element of `kind` holding `text`, from the reader `provenance`
     /// names, classified by the signal `evidence` names — and nothing else:
     /// the first page, no box, no table, no links.
@@ -280,6 +342,7 @@ impl Element {
             restated_headers: None,
             merged_down: None,
             merged_left: None,
+            spread_left: None,
             continues: None,
             datums: None,
             figure: None,
@@ -765,6 +828,36 @@ fn page_runs(pages: &[usize]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stray_control_goes_and_the_links_move_with_the_text() {
+        let mut e = Element {
+            cells: Some(vec![vec!["\u{17} a".into(), "b\u{7}c".into()]]),
+            links: Some(vec![Link {
+                target: Target::Uri {
+                    uri: "https://example.com".into(),
+                },
+                // `unit`, after the control and the space set with it.
+                begin: Some(11),
+                end: Some(15),
+            }]),
+            ..Element::new(
+                "doc:ListItem",
+                "\u{17} Keep the unit dry.",
+                "rust",
+                "marker",
+            )
+        };
+        e.scrub_controls();
+        assert_eq!(e.text, "Keep the unit dry.");
+        let link = &e.links.as_ref().unwrap()[0];
+        assert_eq!(
+            &e.text.chars().collect::<Vec<_>>()[link.begin.unwrap()..link.end.unwrap()],
+            "unit".chars().collect::<Vec<_>>()
+        );
+        assert_eq!(e.cells.unwrap()[0], ["a", "bc"]);
+        assert!("tab\tand\nline".chars().all(|c| !is_stray_control(c)));
+    }
+
     use super::*;
 
     #[test]
