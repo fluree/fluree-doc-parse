@@ -662,8 +662,13 @@ many more places than its rows and columns: the outlines of a unit's
 terminals, or a drawing's dimension and extension lines. So is a ruled row
 or column holding nothing but three numbers or more that step evenly, by one
 difference (`160 140 … 0`) or one ratio (`1 10 100`): an axis's scale ruled
-by its tick marks. A table drawn over a drawing, ruled at its rows and
-columns and mostly filled, stays a table.
+by its tick marks. So is a dimension drawing's grid: its lines end in
+arrowheads, two or more of them, and its cells hold callouts alone, such as
+figures with their units (`83⁵/16"`, `(2117 mm)`), counts (`2X`) and datum
+letters, with no words but units and a dimension's notes (`TYP`, `MAX`).
+The drawing is a figure, and the callouts and view names around it are its
+labels. A table drawn over a drawing, ruled at its rows and columns and
+mostly filled, stays a table.
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows
