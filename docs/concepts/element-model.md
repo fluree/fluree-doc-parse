@@ -15,6 +15,7 @@ pub struct Element {
     pub bbox: Option<BBox>,     // absent when the source has no geometry
     pub text: String,
     pub level: Option<usize>,      // 1-6, only on doco:SectionTitle
+    pub depth: usize,              // list nesting, only on doc:ListItem; 0 at the top
     pub cells: Option<Vec<Vec<String>>>,  // row-major, only on doco:Table
     pub header_rows: Option<usize>,
     pub sub_headers: Option<Vec<usize>>,
@@ -65,6 +66,13 @@ flat list of elements needs it to say which belong to a list. In the DoCO
 graph an item is the `doco:Paragraph` it holds, and the `doco:List`
 containing it is what makes it a member, as DoCO models lists.
 
+An item's `depth` says how deeply its list is nested: 0 for a top-level
+list's item, 1 for an item of a list set inside one of those, and so on. An
+item one deeper than the item before it opens a list inside that item. Word's
+list level (`w:ilvl`), a slide paragraph's outline level, HTML lists nested in
+items and Markdown lists nested by indent all set it. A reader that can't
+tell leaves it at 0, a flat list.
+
 A `doco:Title` is a title the file declares, never one read off the page:
 Word's Title style, the title on a deck's title slide. The first is the
 document's; the emitter reads any later one as a top-level heading.
@@ -72,7 +80,8 @@ document's; the emitter reads any later one as a top-level heading.
 `doco:Caption` and `doco:FrontMatter` are **not** emitted — see the
 [vocabulary](../reference/vocabulary.md#types) for why.
 
-The flat list carries containment implicitly through order and heading level.
+The flat list carries containment implicitly through order, heading level
+and list depth.
 The [DoCO JSON-LD output](../formats/doco.md) makes it explicit as `po:contains`
 edges, deriving `doco:Section` nesting from heading levels.
 
