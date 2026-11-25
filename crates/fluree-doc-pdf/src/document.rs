@@ -5183,6 +5183,8 @@ mod tests {
                 rules,
                 fills: Vec::new(),
                 dots: Vec::new(),
+                traces: Vec::new(),
+                ticks: Vec::new(),
                 width: 600.0,
                 height: 800.0,
                 rotation: 0,
