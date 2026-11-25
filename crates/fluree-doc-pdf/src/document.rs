@@ -1736,6 +1736,101 @@ fn read_form_text(elements: &mut [Element]) {
     }
 }
 
+/// Most words in a table's column head left out above it: `2008 vs. 2007
+/// 2007 vs. 2006`, two heads read as one line. A title runs longer.
+const MAX_TABLE_HEAD_WORDS: usize = 8;
+
+/// A table's column head left out of the table, read as a heading on its
+/// weight or size: a short line set on the table's top edge, within a line's
+/// height of it with nothing between, inside its width, neither from its
+/// left edge nor centred on it, and over its value columns (past its
+/// middle) or on a row of two or more of the table's other heads. `Total
+/// SOMA` over its two years' columns, `Item` over the stub beside the period heads, `2008 vs. 2007
+/// 2007 vs. 2006` over the change columns. A table's title is set from its
+/// left edge or centred over it, and a section's heading over a table
+/// starts where the text does. Run on the final elements, where the
+/// tables are.
+fn read_table_heads(elements: &mut [Element]) {
+    let heads: Vec<usize> = (0..elements.len())
+        .filter(|&i| {
+            let e = &elements[i];
+            let Some(b) = e.bbox else {
+                return false;
+            };
+            if e.kind != "doco:SectionTitle"
+                || !matches!(e.evidence, "bold" | "font-size")
+                || e.text.split_whitespace().count() > MAX_TABLE_HEAD_WORDS
+            {
+                return false;
+            }
+            let h = b.height().max(1.0);
+            // Other heads set on its row: the row of a table's column heads.
+            // Two or more: a form's part title beside its `Part I` label is
+            // one title with its number.
+            let on_a_row = |tb: &crate::geom::BBox| {
+                elements
+                    .iter()
+                    .filter(|o| {
+                        !std::ptr::eq(*o, e)
+                            && o.page == e.page
+                            && o.kind != "doco:Table"
+                            && o.bbox.is_some_and(|ob| {
+                                (ob.y0 - b.y0).abs() <= h
+                                    && ob.x0 >= tb.x0 - h
+                                    && ob.x1 <= tb.x1 + h
+                                    && (ob.x0 >= b.x1 || ob.x1 <= b.x0)
+                            })
+                    })
+                    .count()
+                    >= 2
+            };
+            // Nothing between it and the table over its width: a heading
+            // over its own paragraph heads the paragraph, not the table
+            // after it.
+            let directly_on = |tb: &crate::geom::BBox| {
+                !elements.iter().any(|o| {
+                    !std::ptr::eq(o, e)
+                        && o.page == e.page
+                        && o.kind != "doco:Table"
+                        && o.bbox.is_some_and(|ob| {
+                            ob.y0 >= b.y1 - 0.2 * h
+                                && ob.y1 <= tb.y0 + h
+                                && ob.x1.min(b.x1) > ob.x0.max(b.x0)
+                        })
+                })
+            };
+            elements.iter().any(|t| {
+                t.kind == "doco:Table"
+                    && t.page == e.page
+                    && t.bbox.is_some_and(|tb| {
+                        // A line's height is about twice its ink's.
+                        let on_top = b.y1 <= tb.y0 + h && tb.y0 - b.y1 <= 2.0 * h;
+                        let inside = b.x0 >= tb.x0 - h && b.x1 <= tb.x1 + h;
+                        let from_edge = (b.x0 - tb.x0).abs() <= 2.0 * h;
+                        let centred = ((b.x0 + b.x1) - (tb.x0 + tb.x1)).abs() * 0.5 <= 2.0 * h;
+                        // Over the value columns, past the table's middle,
+                        // or on the row of the table's other heads. A title
+                        // set a little in from a table's edge stands alone,
+                        // over its stub.
+                        let over_values = b.x0 >= (tb.x0 + tb.x1) * 0.5;
+                        on_top
+                            && inside
+                            && !from_edge
+                            && !centred
+                            && directly_on(&tb)
+                            && (over_values || on_a_row(&tb))
+                    })
+            })
+        })
+        .collect();
+    for i in heads {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
+    }
+}
+
 /// How far past a lead-in's end, in its line heights, the items it
 /// introduces may be set in: a bullet's indent and the space after it.
 const LEAD_IN_REACH: f64 = 3.0;
@@ -4580,6 +4675,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     demote_empty_bold_heads(&mut elements);
     read_form_text(&mut elements);
     read_blank_fields(&mut elements);
+    read_table_heads(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -4821,6 +4917,46 @@ mod tests {
             }),
             ..Element::new(kind, text, "rust", evidence)
         }
+    }
+
+    #[test]
+    fn a_tables_column_head_left_above_it_is_no_heading() {
+        let table = |y0: f64| {
+            let mut t = line_at("doco:Table", "Rows | 2031 | 2030", "layout", None, y0, 60.0);
+            t.bbox = Some(BBox {
+                x0: 60.0,
+                y0,
+                x1: 540.0,
+                y1: y0 + 80.0,
+            });
+            t
+        };
+        let head = |text: &str, x0: f64, x1: f64, y0: f64| {
+            let mut e = line_at("doco:SectionTitle", text, "bold", Some(3), y0, x0);
+            e.bbox = Some(BBox {
+                x0,
+                y0,
+                x1,
+                y1: y0 + 6.0,
+            });
+            e
+        };
+        let mut elements = vec![
+            // A group's head over the two value columns at the right.
+            head("Total Holdings", 440.0, 500.0, 100.0),
+            table(110.0),
+            // A section's heading over a table, from its left edge.
+            head("Holdings by Type", 60.0, 160.0, 300.0),
+            table(310.0),
+            // A table's title centred over it.
+            head("Summary of Holdings", 250.0, 350.0, 500.0),
+            table(510.0),
+        ];
+        read_table_heads(&mut elements);
+        assert_eq!(
+            heads(&elements),
+            ["Holdings by Type", "Summary of Holdings"]
+        );
     }
 
     #[test]
