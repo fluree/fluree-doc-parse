@@ -808,6 +808,31 @@ markers is the list in a cell, read cell by cell (`a) | Change the pump
 frit`), and taking it for the table pulled the settings beside the lists out
 into a table of their own.
 
+Nor is a long cell a sign of a frame when the wider reading lies within one
+row of a ruled grid of four rows or more: that is a grid nested in the row
+(a property list whose acoustic row sets nine columns of figures in its
+Performance cell), and the ruled grid stands. A frame's table runs down
+across the frame's rows, or the frame has too few rows to tell. A reading
+with three times the ruled grid's cells still replaces it as before.
+
+### A grid nested in a ruled cell
+
+A cell of a ruled table can hold a table of its own: an acoustic row's
+Performance cell sets nine columns of figures under their own header,
+`Thickness (in.) | 125 Hz | … | SAA`. In a ruled table of four rows or
+more, most of them a table's rows (two cells or more filled, each short),
+each cell that holds twenty glyphs or more is read for alignment on its
+own. Text lined up into three columns or more over three rows or more,
+taking nearly all of the cell, its first row naming the columns over rows
+of figures, is a table of its own. A cell's figures stacked line under line
+under the outer table's header line up into columns too, but name nothing,
+and stay in the cell. It is read after the table it sits in, and the
+cell keeps only what that table does not take. A band under its header
+names the property it sits under (`Acoustical Performance`), so its cells
+carry it as their section. Wrapped prose in a cell lines up into no columns.
+A frame round a table set in one of its cells is read as before. In the
+reading order, a table set inside another's box follows it.
+
 The parts stay separate elements, because an element and its box sit on one
 page. Each later part names the one before it, and the DoCO and Markdown
 emitters read the chain as one table.
