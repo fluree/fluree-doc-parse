@@ -1155,20 +1155,37 @@ const BESIDE_HEADING_LINES: f64 = 3.0;
 /// The heading a table sits under, by its index in `content`: the nearest
 /// heading above the table's top that is in its lane (overlapping it across)
 /// or set beside it, to its left, level with its top: within
-/// [`BESIDE_HEADING_LINES`] of its own height above it.
+/// [`BESIDE_HEADING_LINES`] of its own height above it, or set on the
+/// table's first row, its top within its own height of the table's. A
+/// submittal sets its side heads in a column of their own, each level with
+/// the top of what it heads (`TEST DATA` beside the test-data table's
+/// header row). A head on the first row heads the table only where no other
+/// head stands beside its later rows: `Theory`, `Practice` and `Values`
+/// down the left of a table are its rows' labels, its label column unread.
 fn own_heading(content: &[Element], table: &Element) -> Option<usize> {
     let t = table.rect();
-    content
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.kind == "doco:SectionTitle" && e.page == table.page)
+    let heads = || {
+        content
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.kind == "doco:SectionTitle" && e.page == table.page)
+    };
+    let row_labels = |h: &crate::geom::BBox| {
+        heads().any(|(_, o)| {
+            let o = o.rect();
+            o.x1 <= t.x0 && o.y0 > h.y1 && o.y0 < t.y1
+        })
+    };
+    heads()
         .filter(|(_, e)| {
             let h = e.rect();
-            if h.y1 > t.y0 + 1.0 {
-                return false;
-            }
-            let lane = h.x1.min(t.x1) > h.x0.max(t.x0);
-            let beside = h.x1 <= t.x0 && t.y0 - h.y1 <= BESIDE_HEADING_LINES * (h.y1 - h.y0);
+            let line = h.y1 - h.y0;
+            let lane = h.x1.min(t.x1) > h.x0.max(t.x0) && h.y1 <= t.y0 + 1.0;
+            let above = h.y1 <= t.y0 + 1.0;
+            let beside = h.x1 <= t.x0
+                && h.y0 <= t.y0 + line
+                && t.y0 - h.y1 <= BESIDE_HEADING_LINES * line
+                && (above || !row_labels(&h));
             lane || beside
         })
         .max_by(|(_, a), (_, b)| a.rect().y1.total_cmp(&b.rect().y1))
@@ -1245,10 +1262,18 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
         if let Some(h) = own_heading(&content, &table).filter(|&h| insertion <= h) {
             insertion = h + 1;
             // Past what is set under the heading above the table's top too:
-            // its note (`UPS option`) beside the table's first rows.
+            // its note (`UPS option`) beside the table's first rows. And past
+            // the matter of a column read before the table's own, up to the
+            // first text in its lane: two tables side by side under one
+            // heading, each over its note, read the left table and its note
+            // before the right table and its note.
+            let own_next = first_after.filter(|&f| f >= insertion);
+            let t = table.rect();
+            let in_lane = |e: &Element| e.rect().x1.min(t.x1) > e.rect().x0.max(t.x0);
             while insertion < content.len()
                 && content[insertion].kind != "doco:SectionTitle"
-                && content[insertion].rect().y1 <= table.rect().y0
+                && (content[insertion].rect().y1 <= t.y0
+                    || own_next.is_some_and(|f| insertion < f && !in_lane(&content[insertion])))
             {
                 insertion += 1;
             }
@@ -5331,6 +5356,95 @@ mod tests {
             })
             .collect();
         assert!(!reads_as_rows(&frame, &prose));
+    }
+
+    fn head(text: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> Element {
+        Element {
+            level: Some(3),
+            kind: "doco:SectionTitle".into(),
+            ..element(text, x0, y0, x1, y1, false)
+        }
+    }
+
+    fn texts(elements: &[Element]) -> Vec<&str> {
+        elements.iter().map(|e| e.text.as_str()).collect()
+    }
+
+    #[test]
+    fn a_side_head_level_with_a_tables_top_heads_it() {
+        // Side heads in a column of their own, each set level with the top
+        // of what it heads; the main column's last paragraph above.
+        let content = vec![
+            element("the last paragraph", 210.0, 402.0, 560.0, 417.0, false),
+            head("RESULTS", 128.0, 436.0, 176.0, 442.5),
+            element("small label", 131.0, 447.0, 176.0, 453.0, false),
+        ];
+        let tables = vec![element("results table", 210.0, 436.0, 560.0, 610.0, true)];
+        assert_eq!(
+            texts(&interleave_tables(content, tables)),
+            vec![
+                "the last paragraph",
+                "RESULTS",
+                "results table",
+                "small label"
+            ]
+        );
+    }
+
+    #[test]
+    fn labels_down_a_tables_side_are_its_rows_not_its_heads() {
+        // Bold labels down the left of a table, one beside each row, its
+        // label column not read as the table's: the head over them all
+        // heads the table, not the first row's label.
+        let content = vec![
+            element("a statement", 190.0, 180.0, 470.0, 214.0, false),
+            head("Outcomes", 62.0, 262.0, 150.0, 272.0),
+            head("Theory", 62.0, 291.0, 112.0, 301.0),
+            head("Practice", 62.0, 377.0, 106.0, 386.0),
+            head("Values", 62.0, 452.0, 101.0, 461.0),
+        ];
+        let tables = vec![element("outcomes table", 188.0, 284.0, 495.0, 515.0, true)];
+        assert_eq!(
+            texts(&interleave_tables(content, tables)),
+            vec![
+                "a statement",
+                "Outcomes",
+                "outcomes table",
+                "Theory",
+                "Practice",
+                "Values"
+            ]
+        );
+    }
+
+    #[test]
+    fn two_tables_side_by_side_read_each_over_its_note() {
+        // Under one heading, a table at the left and one at the right, each
+        // titled in its grid and noted beneath; the right column's last
+        // section ends above them.
+        let content = vec![
+            element("right column text", 330.0, 402.0, 575.0, 470.0, false),
+            head("Examples", 44.0, 506.0, 140.0, 515.0),
+            element("left note", 46.0, 603.0, 250.0, 609.0, false),
+            element("right note", 333.0, 603.0, 560.0, 609.0, false),
+        ];
+        for (left_top, right_top) in [(520.0, 520.0), (520.4, 519.8)] {
+            let tables = vec![
+                element("left table", 44.0, left_top, 290.0, 598.0, true),
+                element("right table", 330.0, right_top, 575.0, 598.0, true),
+            ];
+            assert_eq!(
+                texts(&interleave_tables(content.clone(), tables)),
+                vec![
+                    "right column text",
+                    "Examples",
+                    "left table",
+                    "left note",
+                    "right table",
+                    "right note"
+                ]
+            );
+        }
     }
 
     #[test]
