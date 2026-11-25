@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "pmc1343572.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1343572/",
+    "sha256": "81d6fbcf8c34f473754315d618a9da5289a4cc2a2930f7973409d605a1fe58eb",
+    "about": "BMC Urology 2005, 5:18. Table 9, on a landscape page, sets three drug groups over `Number of | Percent with` over the column heads, then its rows in sections, each labelled (`Efficacy`, `Withdrawal`, `Adverse events`) under a rule across the table. Every rule is drawn far past the page and clipped."
+  },
+  "notes": [
+    "#290: each section band was read as a table of its own, the section labels as headings between them.",
+    "Open: the drug groups and `Number of | Percent with` over the column heads stay text; the header reaches them only across their group rules, and reading across those broke other tables (#290). A wrapped cell (`not` over `calculated`) still parts the last section."
+  ],
+  "checks": [
+    {
+      "id": "withdrawal-rows-in-their-section",
+      "found": "2026-11-25",
+      "issue": "#290: the Withdrawal band was a table of its own, `Withdrawal` a heading over it.",
+      "cell": {
+        "value": "All-cause",
+        "section": "Withdrawal"
+      }
+    },
+    {
+      "id": "efficacy-rows-in-their-section",
+      "found": "2026-11-25",
+      "issue": "#290: as above, the Efficacy band.",
+      "cell": {
+        "value": "Improved",
+        "section": "Efficacy"
+      }
+    },
+    {
+      "id": "group-names-its-columns",
+      "found": "2026-11-25",
+      "status": "open",
+      "issue": "#290: the drug group and `Number of` do not name the columns under them.",
+      "cell": {
+        "value": "5562",
+        "column": "Sildenafil (50/100 mg) / Number of / Patients"
+      }
+    }
+  ]
+}

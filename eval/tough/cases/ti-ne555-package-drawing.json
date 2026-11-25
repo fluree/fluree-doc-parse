@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "ti-ne555.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/ne555.pdf",
+    "sha256": "a3756e59fd06d0ba736edf9ffe71d99d2aae33fb7e49fedc86165a241179f4a6",
+    "about": "Texas Instruments NE555 timer datasheet. Its package outline pages draw each package with dimension lines, arrowed at their ends, and callouts in millimetres, pin numbers and counts (`2X`)."
+  },
+  "notes": [
+    "#279: a package drawing's dimension lines made a ruled grid of its pin numbers and callouts, read as a table."
+  ],
+  "checks": [
+    {
+      "id": "package-callouts-no-table",
+      "found": "2026-11-25",
+      "issue": "#279: page 36's package drawing was a table of pin numbers and `2X 1.95`.",
+      "element": {
+        "type": "doco:Table",
+        "text": "\t\t\t\t\t8\n1\t\t\t\t\t\t2X 1.95\n1\t\t\t\t2X\t\t2X 1.95\n3\t\t\t\t1.95\t\t2X 1.95\n4\t\t\t\t5"
+      },
+      "count": 0
+    }
+  ]
+}
