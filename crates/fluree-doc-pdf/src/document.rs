@@ -1307,6 +1307,45 @@ fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
         && places(false) > LINE_ART_STROKES * (g.rows() + 1)
 }
 
+/// Lines of a scale's text, at most, between an axis's scale and the plot
+/// it measures: the space ticks and their labels take, as the axis test of
+/// a scatter's values allows (see `figure::axis`).
+const SCALE_REACH: f64 = 4.0;
+
+/// Do the cells, read in order, say nothing but numbers that step evenly:
+/// three or more, by one difference (`160 140 120 … 0`) or one ratio, as a
+/// logarithmic axis steps (`1 10 100 1,000`)? A plot's scale, its tick
+/// marks drawn at each number, reads as a ruled row or column; a table's
+/// column of figures does not step so, or stands beside its labels.
+fn axis_scale(cells: &[String]) -> bool {
+    let mut values: Vec<f64> = Vec::new();
+    for token in cells.iter().flat_map(|c| c.split_whitespace()) {
+        let t = token
+            .replace(['\u{2212}', '\u{2013}'], "-")
+            .replace(',', "");
+        match t.parse::<f64>() {
+            Ok(v) => values.push(v),
+            Err(_) => return false,
+        }
+    }
+    if values.len() < 3 {
+        return false;
+    }
+    let even = |steps: Vec<f64>| {
+        let first = steps[0];
+        first.abs() > f64::EPSILON
+            && steps
+                .iter()
+                .all(|s| (s - first).abs() <= first.abs() * 0.01)
+    };
+    let differences: Vec<f64> = values.windows(2).map(|w| w[1] - w[0]).collect();
+    let ratios: Option<Vec<f64>> = values
+        .windows(2)
+        .map(|w| (w[0].abs() > f64::EPSILON).then(|| w[1] / w[0]))
+        .collect();
+    even(differences) || ratios.is_some_and(|r| r[0] > 0.0 && (r[0] - 1.0).abs() > 0.01 && even(r))
+}
+
 /// Does a heading give way to the figure it is in? Relative typography does
 /// wherever the figure took it: chart titles, legends and axis labels are
 /// set larger or bolder than body text. A number or a place in a sequence
@@ -2033,6 +2072,14 @@ fn find_figures(
             &figures,
         );
         figures.extend(labelled);
+        let plotted = figure::graticules(
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+            &figures,
+        );
+        figures.extend(plotted);
         let mut taken = figure::attach_beside(
             &mut figures,
             &block_boxes,
@@ -3348,6 +3395,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // a drawing's dimension and extension lines. A table is ruled at
             // its boundaries, however many pieces each rule is drawn in.
             let line_art = ruled && line_art(g, &raw.pages[pi].rules);
+            // An axis's scale ruled by its ticks: a row or a column of
+            // numbers stepping evenly, `160 140 … 0`, set against a plot.
+            let scale = (g.rows() == 1 || g.cols() == 1) && axis_scale(&flat);
             let drawn_as_table = ruled && !line_art && {
                 let (occ, vertical, horizontal) =
                     table_confidence_signals(g, &raw.pages[pi].glyphs, &raw.pages[pi].rules);
@@ -3365,7 +3415,40 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .iter()
                 .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= containment)
                 .filter(|_| !drawn_as_table);
-            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art {
+            // The plot a scale stands against: the figure whose drawing is
+            // nearest it, within an axis's reach.
+            let scaled = if scale && drawn_in.is_none() {
+                let mut sizes: Vec<f32> = raw.pages[pi]
+                    .glyphs
+                    .iter()
+                    .filter(|gl| {
+                        gl.bbox
+                            .is_some_and(|b| figure::share_inside(&b, &g.bbox) >= 0.5)
+                    })
+                    .map(|gl| gl.font_size)
+                    .collect();
+                sizes.sort_by(f32::total_cmp);
+                let line = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64;
+                figures
+                    .iter()
+                    .enumerate()
+                    .map(|(fi, f)| {
+                        let d = f.drawing;
+                        let gap = (d.x0 - g.bbox.x1)
+                            .max(g.bbox.x0 - d.x1)
+                            .max(d.y0 - g.bbox.y1)
+                            .max(g.bbox.y0 - d.y1)
+                            .max(0.0);
+                        (fi, gap)
+                    })
+                    .filter(|(_, gap)| *gap <= line * SCALE_REACH)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(fi, _)| fi)
+            } else {
+                None
+            };
+            let drawn_in = drawn_in.or(scaled);
+            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
                 let text = (0..g.rows())
@@ -3386,7 +3469,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         figure: Some(format!("figure-{pi}-{fi}")),
                         ..Element::new("doco:Figure", text, "rust", "fills")
                     },
-                    None if line_art => Element {
+                    None if line_art || scale => Element {
                         page: pi,
                         bbox: Some(g.bbox),
                         ..Element::new("doco:Figure", text, "rust", "fills")
@@ -4136,6 +4219,22 @@ mod tests {
             .filter(|e| e.kind == "doco:SectionTitle")
             .map(|e| e.text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn numbers_stepping_evenly_are_a_scale() {
+        let cells = |c: &[&str]| c.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        // By one difference, falling or rising, signed or with thousands.
+        assert!(axis_scale(&cells(&["90", "75", "60", "45", "30"])));
+        assert!(axis_scale(&cells(&["\u{2212}0.5", "0", "0.5", "1.0"])));
+        assert!(axis_scale(&cells(&["2,000 4,000 6,000"])));
+        // By one ratio, as a logarithmic axis steps.
+        assert!(axis_scale(&cells(&["0.1", "1", "10", "100"])));
+        // A column of counts, two numbers, a label, or no step at all.
+        assert!(!axis_scale(&cells(&["12", "7", "31", "4"])));
+        assert!(!axis_scale(&cells(&["20", "40"])));
+        assert!(!axis_scale(&cells(&["Total", "10", "20", "30"])));
+        assert!(!axis_scale(&cells(&["5", "5", "5"])));
     }
 
     #[test]
