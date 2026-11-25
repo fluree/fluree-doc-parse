@@ -106,6 +106,9 @@ struct Chunk {
     glyphs: Vec<usize>,
     /// The page's space glyphs between this chunk and the next on its line.
     trailing: Vec<usize>,
+    /// Where its dot leaders, dropped from its text, ran to: the next
+    /// column's edge. Its ink's end where it has none.
+    reach: f64,
     /// The chunk's words, each a chunk of its own with no words, so a chunk
     /// read across a gutter can be cut where its words part.
     words: Vec<Chunk>,
@@ -231,8 +234,81 @@ fn is_currency(text: &str) -> bool {
     )
 }
 
-fn is_leader(text: &str) -> bool {
+pub(crate) fn is_leader(text: &str) -> bool {
     matches!(text, "." | "·" | "…" | "․" | "‥")
+}
+
+/// Fewest dots in a run read as leaders inside a line: more than an
+/// ellipsis's three.
+pub(crate) const LEADER_DOTS: usize = 4;
+
+/// The dots a glyph adds to a run of leaders: none where it is no leader,
+/// and the run ends.
+pub(crate) fn leader_dots(text: &str) -> usize {
+    match text {
+        "…" => 3,
+        t if is_leader(t) => 1,
+        _ => 0,
+    }
+}
+
+/// A run of dot leaders read along a row, glyph by glyph. Leaders are set
+/// close: a dot more than a size past the run's last starts a run of its
+/// own, and two columns' `..` (a table's empty values) a gutter apart are
+/// no leader.
+#[derive(Default)]
+pub(crate) struct LeaderRun {
+    dots: usize,
+    end: f64,
+}
+
+impl LeaderRun {
+    /// Count `g` into the run, and say how many dots ran up to it.
+    pub(crate) fn step(&mut self, g: &Glyph) -> usize {
+        let before = self.dots;
+        match leader_dots(g.text.trim()) {
+            0 => self.dots = 0,
+            n => {
+                let fs = g.font_size.max(1.0) as f64;
+                let (x0, x1) = g.bbox.map_or((g.origin.0, g.origin.0), |b| (b.x0, b.x1));
+                self.dots = if self.dots > 0 && x0 - self.end > fs {
+                    n
+                } else {
+                    self.dots + n
+                };
+                self.end = x1;
+            }
+        }
+        before
+    }
+
+    /// Whether the run holds leaders now.
+    pub(crate) fn leads(&self) -> bool {
+        self.dots >= LEADER_DOTS
+    }
+}
+
+/// A row, left to right, that is a contents entry: its last run of dot
+/// leaders runs to a page number alone (`Scientific Method Lab ....... 6`).
+/// A contents list is no table, and its leaders part nothing.
+pub(crate) fn contents_entry(row: &[&Glyph]) -> bool {
+    let mut run = LeaderRun::default();
+    let mut after: Option<usize> = None;
+    for (i, g) in row.iter().enumerate() {
+        if run.step(g) >= LEADER_DOTS && leader_dots(g.text.trim()) == 0 {
+            after = Some(i);
+        }
+    }
+    let Some(start) = after else {
+        return false;
+    };
+    let page: String = row[start..]
+        .iter()
+        .map(|g| g.text.trim())
+        .collect::<String>();
+    let n = page.chars().count();
+    (1..=4).contains(&n) && page.chars().all(|c| c.is_ascii_digit())
+        || (1..=6).contains(&n) && page.chars().all(|c| "ivxlc".contains(c))
 }
 
 /// The page's lines, each cut into chunks, with dot leaders dropped and a
@@ -289,6 +365,7 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
             // Dot leaders, trailing or alone: a run of three dots or more.
             let mut dots = 0usize;
             let mut cut = group.len();
+            let reach = group.last().map_or(f64::MIN, |g| g.bbox.unwrap().x1);
             for (i, g) in group.iter().enumerate().rev() {
                 if is_leader(g.text.trim()) {
                     dots += if g.text.trim() == "…" { 3 } else { 1 };
@@ -341,6 +418,7 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                         bold,
                         glyphs: vec![index(g)],
                         trailing: Vec::new(),
+                        reach: b.x1,
                         words: Vec::new(),
                     }),
                 }
@@ -354,6 +432,7 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                 bold,
                 glyphs: group.iter().map(|g| index(g)).collect(),
                 trailing: Vec::new(),
+                reach: reach.max(x1),
                 words,
             });
         }
@@ -391,6 +470,7 @@ pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
                     prev.glyphs.extend(c.glyphs);
                     prev.words.extend(c.words);
                     prev.x1 = c.x1;
+                    prev.reach = c.reach;
                     prev.y0 = prev.y0.min(c.y0);
                     prev.y1 = prev.y1.max(c.y1);
                     continue;
@@ -723,6 +803,11 @@ fn split_at_gutters(cols: &[(f64, f64)], held: &[usize], l: &Line) -> Line {
                 } else {
                     Vec::new()
                 },
+                reach: if i + 1 == n {
+                    c.reach
+                } else {
+                    ws.iter().map(|w| w.x1).fold(f64::MIN, f64::max)
+                },
                 words: ws.into_iter().cloned().collect(),
             })
             .collect();
@@ -943,9 +1028,11 @@ fn read_beside(
             let picked: Vec<(&Line, &Chunk)> = lines_in
                 .iter()
                 .filter_map(|l| {
+                    // A label's leaders run up to the column beside it, and
+                    // it reaches as far as they do.
                     l.chunks
                         .iter()
-                        .filter(|c| c.x1 <= x0 + 0.5 && x0 - c.x1 < fs * 8.0)
+                        .filter(|c| c.x1 <= x0 + 0.5 && x0 - c.reach.min(x0) < fs * 8.0)
                         .filter(|c| !divided(l, c, region.x0))
                         .filter(|c| !ruled_elsewhere(c))
                         .max_by(|a, b| a.x1.total_cmp(&b.x1))
@@ -2913,6 +3000,13 @@ pub fn figure_runs(lines: &[Line], rules: &[Rule], taken: &[BBox]) -> Vec<BBox> 
 
 /// A cell's dot leaders, dropped: `Basic . . . . .` is `Basic`.
 pub fn strip_leaders(s: &str) -> String {
+    strip_leaders_of(s, 3)
+}
+
+/// [`strip_leaders`], where a run of `min` dots or more is a leader: a
+/// table read by other means than its text's columns holds sentences too,
+/// and an ellipsis closing one (`If you pay...`) is no leader.
+pub fn strip_leaders_of(s: &str, min: usize) -> String {
     let t = s.trim_end();
     let mut end = t.len();
     let mut dots = 0;
@@ -2925,7 +3019,7 @@ pub fn strip_leaders(s: &str) -> String {
         }
         end = i;
     }
-    if dots >= 3 && end > 0 {
+    if dots >= min && end > 0 {
         t[..end].trim_end().to_string()
     } else {
         s.to_string()
@@ -3031,11 +3125,54 @@ mod tests {
     }
 
     #[test]
+    fn a_label_reaches_as_far_as_its_leaders() {
+        // A label's leaders run up to the next column, and are dropped from
+        // its text; the label reaches as far as they do.
+        let glyphs = set("Kolkata, India ........      Office", 40.0, 100.0);
+        let l = &lines(&glyphs)[0];
+        let texts: Vec<&str> = l.chunks.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["Kolkata, India", "Office"]);
+        assert!(l.chunks[0].reach > l.chunks[0].x1 + 30.0);
+        assert_eq!(l.chunks[1].reach, l.chunks[1].x1);
+        // Two columns' empty values (`..`) a gutter apart are no leaders.
+        let empties = set("0·99    ..    ..", 40.0, 100.0);
+        let mut run = LeaderRun::default();
+        for g in empties.iter().filter(|g| g.bbox.is_some()) {
+            run.step(g);
+            assert!(!run.leads());
+        }
+        // A contents entry's leaders run to its page alone.
+        let entry = set("Scientific Method Lab ........ 6", 40.0, 100.0);
+        let inked: Vec<&Glyph> = entry.iter().filter(|g| g.bbox.is_some()).collect();
+        assert!(contents_entry(&inked));
+        let preface = set("Foreword ........ xii", 40.0, 100.0);
+        let inked: Vec<&Glyph> = preface.iter().filter(|g| g.bbox.is_some()).collect();
+        assert!(contents_entry(&inked));
+        // A figure after the leaders is a value, and a row of them a table's.
+        for row in [
+            "Net sales ........ 1,234",
+            "Kolkata ........ Office  Lease  800",
+        ] {
+            let g = set(row, 40.0, 100.0);
+            let inked: Vec<&Glyph> = g.iter().filter(|g| g.bbox.is_some()).collect();
+            assert!(!contents_entry(&inked), "{row}");
+        }
+    }
+
+    #[test]
     fn leaders_are_dropped_from_a_label() {
         assert_eq!(strip_leaders("Basic . . . . . . . ."), "Basic");
         assert_eq!(strip_leaders("Diluted ........"), "Diluted");
         assert_eq!(strip_leaders("U.S."), "U.S.");
         assert_eq!(strip_leaders("..."), "...");
+        assert_eq!(
+            strip_leaders_of("If you pay...", LEADER_DOTS),
+            "If you pay..."
+        );
+        assert_eq!(
+            strip_leaders_of("Revenues ........", LEADER_DOTS),
+            "Revenues"
+        );
     }
 
     /// `text` set from `x` on baseline `y` at 10pt, 5.5pt a character,

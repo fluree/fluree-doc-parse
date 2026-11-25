@@ -472,6 +472,17 @@ beside two rows of text or more on each side. So a chart's line drawn behind
 its labels parts nothing, and neither does the border between a single row's
 cells: a code and what it names stay one line.
 
+**Dot leaders.** A table's label often runs on in dot leaders up to the next
+column, a word space or less short of its text (`Kolkata, India ........
+Manufacturing`). The leaders end the label's cell: the text after them starts
+the next one, and no cell keeps its leaders. A column of labels whose leaders
+run up to the table is the table's, however far its words stand from the
+figures, and a line of leaders left between two cells is not the page's
+text. The dots must stand close together, so a table's empty values (`..`)
+in neighbouring columns are no leaders. A contents entry, whose leaders run
+to a page number alone, is left as a line of text: a contents list is not a
+table.
+
 **Columns run together.** Many producers write the space after a word as a
 glyph that puts no ink down. Where the next glyph on the line stands across a
 gutter, the gap is measured from the last glyph that put ink down, so a
