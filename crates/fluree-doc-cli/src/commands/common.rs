@@ -86,6 +86,11 @@ pub(crate) struct TierConfig {
     /// times.
     pub config: crate::config::Config,
     pub verbose: bool,
+    /// `FDOC_TABLE_CONF`: print each table's confidence signals.
+    pub table_conf_debug: bool,
+    /// `FDOC_INSERT_TABLES`: anchor the tables a layout detector found and
+    /// no grid covered.
+    pub insert_missing_tables: bool,
 }
 
 impl TierConfig {
@@ -98,6 +103,8 @@ impl TierConfig {
             escalate: false,
             config: crate::config::Config::default(),
             verbose: false,
+            table_conf_debug: std::env::var_os("FDOC_TABLE_CONF").is_some(),
+            insert_missing_tables: std::env::var_os("FDOC_INSERT_TABLES").is_some(),
         }
     }
 
@@ -119,6 +126,8 @@ impl TierConfig {
             escalate: env.escalate,
             config: env.config,
             verbose: env.verbose,
+            table_conf_debug: env.table_conf_debug,
+            insert_missing_tables: env.insert_missing_tables,
         }
     }
 
@@ -167,8 +176,8 @@ impl TierConfig {
             // anchor no reading answers, so none reaches the output unless
             // `--emit-anchors` asked for them.
             emit_anchors: self.emit_anchors || self.tier_results.is_some() || self.escalate,
-            table_conf_debug: std::env::var_os("FDOC_TABLE_CONF").is_some(),
-            insert_missing_tables: std::env::var_os("FDOC_INSERT_TABLES").is_some(),
+            table_conf_debug: self.table_conf_debug,
+            insert_missing_tables: self.insert_missing_tables,
         }
     }
 }
