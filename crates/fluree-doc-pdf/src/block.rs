@@ -549,6 +549,16 @@ const RUN_ALIGN: f64 = 1.5;
 /// items' size as theirs, `K-23723 Faucet cleaner` under a heading of its
 /// own.
 pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
+    let centre = |d: &BBox| ((d.x0 + d.x1) * 0.5, (d.y0 + d.y1) * 0.5);
+    // A drawing's dots crowd one another: a map's towns, a chart's markers.
+    // A list's bullets stand a line apart.
+    let crowded = |d: &BBox, em: f64| {
+        let (x, y) = centre(d);
+        dots.iter().any(|o| {
+            let (ox, oy) = centre(o);
+            o != d && (ox - x).hypot(oy - y) < em * DOT_CROWD
+        })
+    };
     let marks: Vec<(BBox, usize)> = dots
         .iter()
         .filter_map(|d| {
@@ -557,6 +567,7 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
                 .position(|l| dot_for(l, std::slice::from_ref(d)))
                 .map(|i| (*d, i))
         })
+        .filter(|(d, i)| !crowded(d, (lines[*i].font_size as f64).max(1.0)))
         .collect();
     let listed: Vec<&(BBox, usize)> = marks
         .iter()
@@ -588,6 +599,12 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
         .map(|(d, _)| *d)
         .collect()
 }
+
+/// Nearest, in the em of the line it marks, another dot stands to a list's
+/// bullet. A list sets its bullets a line apart, an em or more; dots
+/// closer than half that are a drawing's, set beside a heading only by
+/// chance (a district map's towns beside its district's title).
+const DOT_CROWD: f64 = 0.5;
 
 /// Fewest words a list's item says for a lone bullet to join its list: an
 /// item is a phrase, where a drawing's label names a part in a word or two.
@@ -1046,6 +1063,11 @@ fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge, hang: bool) ->
     if strip_leading_bullet(&next.text).is_some() {
         return false;
     }
+    // So does a note opened by its reference marks: `*** Zero waste…`
+    // under the full last line of the `**` note before ran into it.
+    if opens_note(&next.text) {
+        return false;
+    }
 
     // Weight change — a run-in heading. Very common in academic papers, where
     // a bold section title sits directly above body text *at the same size*, so
@@ -1104,6 +1126,23 @@ fn continues(prev: &Line, next: &Line, leading: f64, edge: &Edge, hang: bool) ->
     }
 
     true
+}
+
+/// Most reference marks a note opens with: `****` is the fourth note.
+const MAX_NOTE_MARKS: usize = 4;
+
+/// Whether a line opens a note with its reference marks: a run of
+/// asterisks, daggers or section signs, then the note's words, with a space
+/// between or not (`* Due to…`, `**Energy use…`, `† Patent pending`).
+fn opens_note(text: &str) -> bool {
+    let t = text.trim_start();
+    let marks = t.chars().take_while(|c| "*†‡§¶".contains(*c)).count();
+    if marks == 0 || marks > MAX_NOTE_MARKS {
+        return false;
+    }
+    let rest: &str = &t[t.char_indices().nth(marks).map_or(t.len(), |(i, _)| i)..];
+    let words = rest.trim_start();
+    words.chars().next().is_some_and(char::is_alphanumeric) && words.split_whitespace().count() >= 2
 }
 
 /// The size most of a page's prose lines are set in, across all its
@@ -2865,6 +2904,35 @@ mod tests {
     }
 
     #[test]
+    fn a_drawings_dots_are_no_bullets() {
+        // A two-line title at 20pt beside a scatter of markers, two of
+        // which happen to stand one above the other level with its lines:
+        // each has another marker within a few points, as a list's
+        // bullets, a line apart, never do.
+        let lines = vec![
+            l("Northern Region", 200.0, 300.0, 20.0),
+            l("Office", 200.0, 326.0, 20.0),
+        ];
+        let dot = |x: f64, y: f64| BBox {
+            x0: x,
+            y0: y,
+            x1: x + 2.0,
+            y1: y + 2.0,
+        };
+        let scatter = [
+            dot(170.0, 308.0),
+            dot(174.0, 311.0),
+            dot(167.0, 314.0),
+            dot(170.0, 334.0),
+            dot(176.0, 331.0),
+            dot(173.0, 338.0),
+        ];
+        assert!(marking_dots(&lines, &scatter).is_empty());
+        // The two in a column alone are a list's bullets.
+        assert_eq!(marking_dots(&lines, &[scatter[0], scatter[3]]).len(), 2);
+    }
+
+    #[test]
     fn a_dot_alone_is_no_bullet() {
         let dot = |y: f64| BBox {
             x0: 155.0,
@@ -4414,6 +4482,19 @@ mod tests {
         // Set apart, each keeps its space.
         assert_eq!(joined("a pause —", "then more"), "a pause — then more");
         assert_eq!(joined("Red /", "Blue"), "Red / Blue");
+    }
+
+    #[test]
+    fn a_line_opened_by_reference_marks_opens_a_note() {
+        assert!(opens_note("* Due to natural refrigerant"));
+        assert!(opens_note("**Energy use measured for a run"));
+        assert!(opens_note("†† Patent pending in the EU"));
+        // A rule of asterisks, a lone mark or one before a figure alone are
+        // no note.
+        assert!(!opens_note("*****"));
+        assert!(!opens_note("* x"));
+        assert!(!opens_note("*****Five marks is a rule"));
+        assert!(!opens_note("Values marked * differ"));
     }
 
     #[test]

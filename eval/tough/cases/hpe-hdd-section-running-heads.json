@@ -1,0 +1,93 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drives QuickSpecs. Its drive pages set a green band (Mission Critical (10K rpm), Business Critical (7.2K rpm)) over each block of fields and SKU tables."
+  },
+  "notes": [
+    "2026-11-25 (#276): each page's head names the section it is in, `Overview` over two pages, `Standard Features` over four, `Technical Specifications` over thirteen. The later copies were read as body paragraphs, and `Technical Specifications`, read as a running line, was cut together with its bookmarked heading. The first copy of each name is the section's heading and the copies after it run."
+  ],
+  "checks": [
+    {
+      "id": "overview-once",
+      "found": "2026-11-25",
+      "issue": "#276: `Overview` was read as a heading and again as a paragraph on its second page.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Overview"
+      },
+      "count": 1
+    },
+    {
+      "id": "overview-no-paragraph",
+      "found": "2026-11-25",
+      "issue": "#276: as above.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Overview"
+      },
+      "count": 0
+    },
+    {
+      "id": "standard-features-once",
+      "found": "2026-11-25",
+      "issue": "#276: `Standard Features` was read as a heading and again as a paragraph on each of its three later pages.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Standard Features"
+      },
+      "count": 1
+    },
+    {
+      "id": "standard-features-no-paragraph",
+      "found": "2026-11-25",
+      "issue": "#276: as above.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Standard Features"
+      },
+      "count": 0
+    },
+    {
+      "id": "technical-specifications-once",
+      "found": "2026-11-25",
+      "issue": "#276: `Technical Specifications` was cut from every page, the bookmarked heading on its first page too.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Technical Specifications"
+      },
+      "count": 1
+    },
+    {
+      "id": "technical-specifications-no-paragraph",
+      "found": "2026-11-25",
+      "issue": "#276: as above.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Technical Specifications"
+      },
+      "count": 0
+    },
+    {
+      "id": "summary-of-changes-once",
+      "found": "2026-11-25",
+      "issue": "#276: `Summary of Changes` was read as a heading and again as a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Summary of Changes"
+      },
+      "count": 1
+    },
+    {
+      "id": "summary-of-changes-no-paragraph",
+      "found": "2026-11-25",
+      "issue": "#276: as above.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Summary of Changes"
+      },
+      "count": 0
+    }
+  ]
+}
