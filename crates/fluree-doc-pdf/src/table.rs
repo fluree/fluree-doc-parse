@@ -346,7 +346,7 @@ impl Grid {
                 })
                 .collect()
         };
-        let suffixed: std::collections::HashSet<usize> = (0..runs.len())
+        let suffixed: rustc_hash::FxHashSet<usize> = (0..runs.len())
             .filter(|&m| after_figure(m) && !prices_next(m))
             .map(|m| line_of[m])
             .collect();
@@ -454,8 +454,7 @@ impl Grid {
         // or watermark drawn over a table runs through several cells, or
         // across text, and stays out of them.
         {
-            let occupied: std::collections::HashSet<usize> =
-                home.iter().flatten().copied().collect();
+            let occupied: rustc_hash::FxHashSet<usize> = home.iter().flatten().copied().collect();
             let mut turned: Vec<usize> = (0..glyphs.len())
                 .filter(|&i| {
                     let g = &glyphs[i];
@@ -6232,7 +6231,7 @@ pub fn field_lists_in(
     let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
     let cuts: Vec<f64> = columns.iter().skip(1).map(|c| c.x0).collect();
     // Runs that share rows share their cells: each cell's text is read once.
-    let mut read: std::collections::HashMap<Vec<usize>, String> = Default::default();
+    let mut read: rustc_hash::FxHashMap<Vec<usize>, String> = Default::default();
     let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
     let mut out = Vec::new();
     for i in 0..rows.len() {
