@@ -3076,8 +3076,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         .iter()
         .filter_map(|it| it.page.map(|pi| (pi, it.title.clone())))
         .collect();
+    let widths: Vec<f64> = raw.pages.iter().map(|p| p.width).collect();
     let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
-        furniture::detect_with_heads(&flat_lines, &bookmarks)
+        furniture::detect_with_heads(&flat_lines, &bookmarks, &widths)
     });
     // The texts kept as a section's heading on their page, though the same
     // words run as furniture on the pages after: never scrubbed there.
@@ -3110,7 +3111,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 (line::assemble_page(&edge), p.height)
             })
             .collect();
-        furniture::detect_folio_places(&edges)
+        furniture::detect_folio_places(&edges, &widths)
     });
     let (folios, folio_places): (Vec<Option<String>>, Vec<Option<f64>>) =
         folios.into_iter().unzip();
@@ -3459,6 +3460,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         for (bi, b) in blocks.iter().enumerate() {
             if is_heading.contains_key(&(pi, bi)) && page_figures[pi].1[bi].is_none() {
                 free_styles.insert(heading_style(b));
+            }
+        }
+    }
+    // A heading the template sets again over a later page, line for line,
+    // read there as running, is set in its style away from any figure: a
+    // catalogue's banner over its first page, beside a drawing, and over
+    // the facing page as its head.
+    let heading_texts: std::collections::HashSet<String> = is_heading
+        .keys()
+        .flat_map(|&(pi, bi)| blocks_per_page[pi][bi].lines.iter())
+        .map(|l| l.text.trim().to_string())
+        .collect();
+    for (pi, page_marks) in marks.iter().enumerate() {
+        for (li, kind) in page_marks {
+            let l = &flat_lines[pi].0[*li];
+            if *kind == furniture::Furniture::Header && heading_texts.contains(l.text.trim()) {
+                free_styles.insert(((l.font_size * 2.0).round() as i32, l.bold));
             }
         }
     }
