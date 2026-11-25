@@ -16,8 +16,8 @@ tiers](../integration/escalation-tiers.md).
 | `FDOC_HOME` | — | where the per-user [config](../cli/config.md) lives, overriding the platform default |
 
 Presence is what counts for the boolean ones — any value, including an empty
-string, enables them. `FDOC_ESCALATE_COLUMNS` is the one exception: `0`
-turns it off.
+string, enables them. `FDOC_ESCALATE_COLUMNS` is the one exception: `0`,
+`false`, `off` or `no`, trimmed and in any case, turn it off.
 
 ```bash
 FDOC_TITLE_BOXES=./layout \
@@ -53,8 +53,10 @@ Unstable, like [`fdoc dev`](../cli/dev.md) itself.
 
 The same switch as `escalation.on_column_doubt` in
 [the config file](../cli/config.md), for one run rather than a deployment.
-Set, it wins over the file either way: `FDOC_ESCALATE_COLUMNS=0` keeps column
-doubt off whatever the file says, any other value turns it on.
+Set, it wins over the file either way: `FDOC_ESCALATE_COLUMNS=0` (or
+`false`, `off`, `no`) keeps column doubt off whatever the file says, any other
+value turns it on; one that is not a usual yes (`1`, `true`, `on`, `yes`, or
+empty) is warned about.
 
 Off by default. When on, a page that [`column::doubt`] flags — columns that do
 not run the page's full height, which the whitespace projection cannot see — is

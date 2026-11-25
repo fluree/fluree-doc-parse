@@ -92,13 +92,30 @@ pub(crate) fn hints(doc: &Document, stem: &str, tiers: &TierConfig) -> CropHints
     }
 }
 
-/// Decides column doubt for one run over the configuration: `0` turns it
-/// off, any other value on.
+/// Decides column doubt for one run over the configuration: `0`, `false`,
+/// `off` or `no` turn it off, any other value on.
 pub(crate) const COLUMNS_ENV: &str = "FDOC_ESCALATE_COLUMNS";
 
 /// What a value of [`COLUMNS_ENV`] decides, `None` when it is unset.
+///
+/// Read as a person writes it, trimmed and in any case: `False` or `0\n`
+/// turning column doubt on would read the opposite of what was set. A value
+/// that is neither a usual yes nor a usual no turns it on, as setting the
+/// variable does for the other switches, with a warning.
 pub(crate) fn columns_override(env: Option<&OsStr>) -> Option<bool> {
-    env.map(|v| v != "0")
+    let v = env?;
+    let word = v.to_str().map(|w| w.trim().to_ascii_lowercase());
+    Some(match word.as_deref() {
+        Some("0" | "false" | "off" | "no") => false,
+        Some("" | "1" | "true" | "on" | "yes") => true,
+        _ => {
+            eprintln!(
+                "warning: {COLUMNS_ENV}={} is neither on nor off; reading it as on (0 turns it off)",
+                v.to_string_lossy()
+            );
+            true
+        }
+    })
 }
 
 /// Whether a page in column doubt is read whole: as [`COLUMNS_ENV`] says
@@ -185,6 +202,16 @@ mod tests {
         assert_eq!(columns_override(Some(OsStr::new("1"))), Some(true));
         // Presence, as for the other switches: an empty value turns it on.
         assert_eq!(columns_override(Some(OsStr::new(""))), Some(true));
+        for off in ["false", "OFF", "no", " 0", "0\n"] {
+            assert_eq!(
+                columns_override(Some(OsStr::new(off))),
+                Some(false),
+                "{off:?}"
+            );
+        }
+        for on in ["true", "Yes", "on ", "2"] {
+            assert_eq!(columns_override(Some(OsStr::new(on))), Some(true), "{on:?}");
+        }
         assert!(!escalates_columns(&tiers(false, None)));
         assert!(escalates_columns(&tiers(true, None)));
         assert!(!escalates_columns(&tiers(true, Some(false))));
