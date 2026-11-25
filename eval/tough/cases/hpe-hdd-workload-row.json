@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drives QuickSpecs. Its drive pages set a green band (Mission Critical (10K rpm), Business Critical (7.2K rpm)) over each block of fields and SKU tables."
+  },
+  "notes": [
+    "#230: the portfolio table on page 3 sets its `Class` row and its `Workload` row in HPE Graphik Medium over a Light body, which now reads as bold. The `Workload` row was taken for the header restated, and the rows under it named their columns `High`, `Medium` and `Low`."
+  ],
+  "checks": [
+    {
+      "id": "workload-row-is-data",
+      "found": "2026-11-24",
+      "issue": "`Workload | High | Medium | Low` was a restated header.",
+      "no_column_header": "High"
+    }
+  ]
+}

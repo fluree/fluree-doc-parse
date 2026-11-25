@@ -14,18 +14,44 @@ tells you how far down the ladder it came from.
 | 1 | document title | `title` | a one-off style in the first blocks of page 1 |
 | 2 | outline match | `outline` | the author named this heading |
 | 3 | numbering | `numbering` | `5.3.1` states its own depth |
-| 4 | weight | `bold` | bolder than body text |
+| 4 | weight | `bold` | bolder than body text, at the body's size |
 | 5 | font size | `font-size` | larger than body, in a repeated size tier |
 
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
-Weight and size never make a heading of these two:
+Bold set larger than the body is ranked by its size, not given `bold`'s one
+level. A part's 12pt bold label over 10pt bold heads stays above them, as it
+does where the face's weight cannot be read at all.
+
+Weight and size never make a heading of these:
 
 - **A caption** (`Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
   Functions`), which is the figure's or the table's.
-- **A label ending in a colon with its value set beside it on its row**
-  (`Color:`), which is a field.
+- **A field:** a label ending in a colon with its value set beside it on
+  its row (`Color:`), or after it on its line at the body's size, the
+  value a figure or short and holding one (`CRI: 90+`, `Hours: 8:30 am -
+  6:00 pm EST (Monday - Friday)`, `Initial Closing Date: May 15, 2019`). A
+  title with a subtitle states no figure, runs on past a value's length,
+  or is set larger (`Policy Rules: Limitations`, `Part II: Application of
+  Section 67 Limitation to Specific Deductions`, `Current Situation:
+  2001-2019` at 14 pt over 10).
+- **A value under its label:** a line in a lighter weight set at its bold
+  label's size on the label's next line, alone or with more such lines
+  (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
+  `MANUFACTURER'S NAME`). A section under its title is set apart from it
+  by size or a gap.
+- **A form's label** ending in a colon or `#` (`Location:`, `Model #:`),
+  where only its size would make it a heading: the blank beside it is
+  where its value goes.
+- **A signature block's party:** a role or a name with a line to sign on
+  just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
+  `(Signature)`), and a signature page's label (`Signature Page to Voting
+  Agreement`). Agreements set their parties bold, a dozen to a page.
+- **A letterhead:** the sender's name, at the head of the first page, set
+  over its address and numbers, directly or over a line or two (`TRUE
+  MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE DIVISION` over its
+  street, phone and web address).
 
 A row of short blocks side by side was tried as a third test, as a table's
 header cells (`TYPE`, `NAME`, `DESCRIPTION`), and dropped: a slide's card
@@ -80,6 +106,54 @@ set larger or bolder than body text. Two exceptions:
   region.
 - `numbering` and `sequence` evidence yields too, but only inside the drawing
   itself, where `4-M4` is a dimension's callout.
+
+## Where a weight comes from
+
+A glyph's weight is its font's, read once per font in this order:
+
+1. **A weight word in the font's name**, in the PDF's `/BaseFont` or the
+   program's own: whole words anywhere (`TimesNewRomanPS-BoldMT`,
+   `ArialBold`), abbreviations and German names in the style after the
+   family (`HelveticaNeueLTStd-Bd`, `-Md`, `-Lt`, URW's `-Regu` and `-Medi`,
+   `Sohne-Halbfett`, `-Kraftig`). Abbreviations are read only there, so a
+   family's own name is never one.
+2. **The descriptor's `/FontWeight`.**
+3. **The program's weight class**, for TrueType and OpenType programs.
+
+The name goes first because, in the disagreements on bold looked at across
+a corpus of 7,000 documents, the name is the source that matches the page:
+a subset of `NimbusSansL-Regu` whose program states 700 set a whole data
+sheet in bold, `CooperHewitt-Thin` declares 701, `Frutiger-Black` 400. The descriptor goes
+before the program because it describes the face as drawn: Word's
+`Arial,Bold` embeds the regular program and states 700.
+
+Then two document-wide passes:
+
+- **Mediums are weighed, and faces with no weight where the body face
+  states none,** against the body face, the one setting the most letters:
+  bold when their ink covers 15% more of their glyph boxes than the body's,
+  or, for a face setting too few letters to trust its ink, when its
+  descriptor's stems are 1.35 times the body's. Letters alone are weighed,
+  since figures and signs have ink of their own, and only the letters of a
+  face read bold this way are bold: its figures are left with no weight,
+  which neither makes a line bold nor keeps one from being. Kept medium,
+  they outvoted the letters of a header cell (`WD8005FRYZ`); read as bold,
+  they made bold lines of a table's `RCR: 0` and a paper's `doi:` line. A
+  medium is weighed because
+  its look depends on the family: Söhne's Kräftig is set as the bold beside
+  Buch, as heavy as a semibold, where other families' mediums sit close to
+  their regular. A face with no weight beside a body whose weight is stated
+  is left alone: it is mostly a chart's, a logo's or a signature's, and
+  weighing those made bold headings of signatures and axis labels. A face
+  named elsewhere in a silent document, such as a repository's cover page
+  in Frutiger Bold on a paper whose own faces state nothing, does not stop
+  the paper's faces being weighed. Nothing is weighed against a light or a
+  heavy body.
+- **A light body lifts every weight.** A document set in Light (300) uses
+  Medium (500) as its bold, so its weights are raised until the body reads
+  400: the Medium reads 600, bold. The lift is one step at most: over a
+  Thin body (200), a regular face is heavier without being bold, as a
+  sheet's tables set in Helvetica beside its text in Helvetica Neue Thin.
 
 ## Bold, throughout
 

@@ -139,6 +139,20 @@ line somewhere else: `Fluo-` over `rescent` is `Fluorescent` in a sheet whose
 title says `Fluorescent`. A word the document prints hyphenated, or nowhere
 else, keeps its hyphen.
 
+**A face's weight.** Each glyph takes its weight from its font: from a
+weight its name states (`Arial-BoldMT`, `HelveticaNeueLTStd-Bd`, `Sohne-Halbfett`,
+`NimbusSansL-Regu`), else from the `/FontWeight` its descriptor states, else
+from the font program. The name goes first because it is the source least
+often wrong: a subset whose program says bold for a regular face, or a
+descriptor that says 400 for a black one, still carries its face's name. A
+medium face is weighed by its ink against the body face, or, setting only
+a few letters, by the stem width its descriptor states, since some families
+set their medium as the bold and others barely darker than regular. So is a
+face nothing states a weight for, where the body text's face states none
+either. In a
+document set in a light face, every weight is read against it: a medium
+over a light body reads as bold.
+
 **Bold inside the text.** A heading set in bold is bold from its first word
 to its last, so a line reads as bold only when it is: most of its glyphs
 bold, and its first and last words. A face that declares no weight counts
@@ -156,6 +170,15 @@ an item's wrapped line starts an em or two right of the bullet line above
 it: up to three ems, it goes on with that item rather than starting a
 paragraph. A line that opens with a dash, or follows an item ending on a
 colon, starts a list of its own under the item.
+
+**Bold or large, but no heading.** Size and weight do not make a heading
+of a field (`CRI: 90+` at the body's size, or a label with its value
+beside it), of a value
+set under its bold label at the label's size (`K25W951` under `PRODUCT
+NUMBER`), of a form's label waiting for its value (`Location:`, `Model
+#:`), of a signature block's role and party (`INVESTOR:` over the party's name over
+`By:`) or a signature page's label, or of a letterhead's lines over the
+sender's address and numbers.
 
 **Bullets.** The typographic bullets and geometric shapes are read as
 bullets, and so are the arrows and boxes the dingbat fonts set as them
