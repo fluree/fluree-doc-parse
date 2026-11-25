@@ -661,14 +661,15 @@ fn convert_bytes(
     let opts = cfg.options_for(stem);
     // Images are probed for the router, which runs for escalation, for the
     // anchors and sidecars analysis routes for, and for OCR words, which go
-    // only where it sends a reader; and for an OCR engine, which reads the
-    // texty images too small to route. A deterministic parse has no use for
-    // the decode.
+    // only where it sends a reader. The images too small to route are
+    // probed only for OCR, which reads the texty ones: without it nothing
+    // would, and they are most of the decode. A deterministic parse has no
+    // use for any.
+    let ocr = cfg.ocr_words.is_some() || cfg.ocr.is_some();
     let mut eopts = ExtractOptions::default();
-    eopts.probe_images = cfg.escalate
-        || cfg.ocr_words.is_some()
-        || cfg.ocr.is_some()
-        || fluree_doc_pdf::document::routing_is_consulted(&opts);
+    eopts.probe_images =
+        cfg.escalate || ocr || fluree_doc_pdf::document::routing_is_consulted(&opts);
+    eopts.probe_small_images = ocr;
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
