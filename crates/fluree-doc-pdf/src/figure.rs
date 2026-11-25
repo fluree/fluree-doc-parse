@@ -197,8 +197,56 @@ pub fn detect(
     // grouped, so that it neither joins drawings into one nor dilutes the
     // tests a group is judged by.
     let ink = Ink::new(glyphs);
+    // A form's fields are no drawing's shapes: an empty box a line or two
+    // high, wide enough to write in, under or after its label's colon
+    // (`Job Name:`), and the boxes after it in its row or under it in its
+    // column at its height, a form's second line or its right half. A
+    // form's box holding them held no drawing, and with a logo set over it
+    // the form was taken for one drawing, its labels for the logo's.
+    // A form's labels are set at the text's size: a slide's title ending
+    // on a colon over its diagram is no label.
+    let colons: Vec<BBox> = glyphs
+        .iter()
+        .filter(|g| g.text.trim() == ":" && g.font_size < ink.prose * LABEL_DISPLAY)
+        .filter_map(|g| g.bbox)
+        .collect();
+    let line = (ink.prose as f64).max(1.0);
+    let shaped: Vec<bool> = boxes
+        .iter()
+        .map(|b| field_shaped(b, line) && ink.on(b).letters == 0)
+        .collect();
+    let mut fields: Vec<bool> = (0..boxes.len())
+        .map(|i| shaped[i] && labelled(&boxes[i], &colons, line))
+        .collect();
+    loop {
+        let found: Vec<BBox> = (0..boxes.len())
+            .filter(|&i| fields[i])
+            .map(|i| boxes[i])
+            .collect();
+        let mut grew = false;
+        for i in 0..boxes.len() {
+            if fields[i] || !shaped[i] {
+                continue;
+            }
+            let b = boxes[i];
+            let in_line = found.iter().any(|o| {
+                (o.height() - b.height()).abs() <= 1.0
+                    && (((o.y0 - b.y0).abs() <= 1.0
+                        && (b.x0 - o.x1).max(o.x0 - b.x1) <= line * 2.0)
+                        || ((o.x0 - b.x0).abs() <= 1.0
+                            && (b.y0 - o.y1).max(o.y0 - b.y1) <= line * 2.0))
+            });
+            if in_line {
+                fields[i] = true;
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
     let mut backgrounds: Vec<bool> = (0..boxes.len())
-        .map(|i| page_scale(&boxes[i]) || background(i, &boxes, &ink))
+        .map(|i| fields[i] || page_scale(&boxes[i]) || background(i, &boxes, &fields, &ink))
         .collect();
     // A table's cells go together. A cell set with a figure stands beside
     // a cell set with words, sharing its row's edges, or under it, sharing
@@ -457,18 +505,80 @@ fn judge(
 /// labels; a diagram's frame holds the diagram and a label here and there.
 /// And a diagram's boxes hold its labels, set well under the page's text:
 /// a wiring diagram names its devices at 4pt beside 10pt prose.
-fn background(i: usize, boxes: &[BBox], ink: &Ink) -> bool {
+fn background(i: usize, boxes: &[BBox], fields: &[bool], ink: &Ink) -> bool {
     let b = boxes[i];
     let on = ink.on(&b);
     if on.letters < TEXT_LETTERS || !ink.read_on(&on) {
         return false;
     }
     let area = b.width() * b.height();
-    let holds = boxes.iter().enumerate().any(|(j, o)| {
-        let (cx, cy) = ((o.x0 + o.x1) * 0.5, (o.y0 + o.y1) * 0.5);
-        j != i && b.contains(cx, cy) && o.width() * o.height() < area * HELD_AREA
-    });
-    !holds || on.cover >= TEXT_COVER
+    // A form's fields drawn on a box are no drawing on it.
+    let held: Vec<&BBox> = boxes
+        .iter()
+        .enumerate()
+        .filter(|(j, o)| {
+            let (cx, cy) = ((o.x0 + o.x1) * 0.5, (o.y0 + o.y1) * 0.5);
+            *j != i
+                && !fields[*j]
+                && b.contains(cx, cy)
+                && o.width() * o.height() < area * HELD_AREA
+        })
+        .map(|(_, o)| o)
+        .collect();
+    let Some(&first) = held.first() else {
+        return true;
+    };
+    // Shapes kept to one end of a box, with words set on it beside them,
+    // are a logo on a panel: a form's footer box with its certification
+    // marks at its left end and `APPROVALS:` along it. A plot's bars and a
+    // diagram's parts spread across the box that holds them, or stand in
+    // its middle with their labels round them.
+    let hull = held.iter().fold(*first, |r, o| r.union(o));
+    let beside = on.letters.saturating_sub(ink.on(&hull).letters);
+    let at_an_end =
+        hull.x0 - b.x0 <= b.width() * CORNER_END || b.x1 - hull.x1 <= b.width() * CORNER_END;
+    // A band along the page, as a footer's box is; a diagram's circle
+    // holding a mark near its edge is no panel.
+    let band = b.width() >= b.height() * BAND_ASPECT;
+    on.cover >= TEXT_COVER
+        || (band && hull.width() < b.width() * CORNER_SHARE && at_an_end && beside >= TEXT_LETTERS)
+}
+
+/// Least width, in heights, of a box that holds a logo at one end and
+/// words along the rest: a band, as a footer's form box is.
+const BAND_ASPECT: f64 = 3.0;
+
+/// Farthest, as a share of a box's width, shapes kept to one end of it
+/// stand from that end. A figure's box holding a diagram in its middle,
+/// with labels around it, holds a drawing.
+const CORNER_END: f64 = 0.1;
+
+/// Widest share of a box shapes drawn on it may span and be a logo set in
+/// its corner rather than a drawing the box holds.
+const CORNER_SHARE: f64 = 0.5;
+
+/// Size, against the page's text, from which a colon is display type's, a
+/// title's, not a form label's.
+const LABEL_DISPLAY: f32 = 1.3;
+
+/// Is `b` shaped as a form's field: a line or two high at the page's text
+/// size `size`, and at least three times as wide.
+fn field_shaped(b: &BBox, size: f64) -> bool {
+    b.height() >= size * 0.8 && b.height() <= size * 3.0 && b.width() >= b.height() * 3.0
+}
+
+/// Does a label's colon stand just before `b` on its row, or just over its
+/// start?
+fn labelled(b: &BBox, colons: &[BBox], size: f64) -> bool {
+    colons.iter().any(|c| {
+        let cy = (c.y0 + c.y1) * 0.5;
+        let before = cy >= b.y0 && cy <= b.y1 && c.x1 <= b.x0 + 1.0 && c.x1 >= b.x0 - size * 3.0;
+        let over = c.y1 <= b.y0 + 1.0
+            && c.y1 >= b.y0 - size * 2.0
+            && c.x1 >= b.x0 - size
+            && c.x1 <= b.x0 + b.width() * 0.5;
+        before || over
+    })
 }
 
 /// Is `b` drawn along an edge of panel `p`: touching it, and running the
@@ -1706,6 +1816,52 @@ mod tests {
             weight: None,
             draw_index: 0,
         }
+    }
+
+    #[test]
+    fn a_forms_box_and_fields_are_no_drawing() {
+        // A submittal's footer: a logo's letters over a form's box, the box
+        // holding six fields under or after their labels' colons.
+        let text = |t: &str, x: f64, y: f64| -> Vec<Glyph> {
+            t.chars()
+                .enumerate()
+                .filter(|(_, c)| !c.is_whitespace())
+                .map(|(k, c)| glyph(&c.to_string(), x + 5.5 * k as f64, y, 10.0))
+                .collect()
+        };
+        let mut glyphs = text("Job Name:", 54.0, 710.0);
+        glyphs.extend(text("Model Numbers:", 216.6, 710.0));
+        glyphs.extend(text("Job Number:", 54.0, 745.3));
+        let logo: Vec<BBox> = (0..6)
+            .map(|k| bb(57.8 + 10.0 * k as f64, 693.6, 66.0 + 10.0 * k as f64, 702.5))
+            .collect();
+        let mut shapes = vec![
+            bb(46.1, 706.7, 585.1, 755.5),
+            bb(51.8, 721.4, 194.0, 735.6),
+            bb(119.1, 737.9, 194.0, 752.1),
+            bb(209.9, 721.4, 392.9, 735.6),
+            bb(209.9, 739.2, 392.9, 753.4),
+            bb(397.9, 721.4, 571.3, 735.6),
+            bb(397.9, 739.2, 571.3, 753.4),
+        ];
+        shapes.extend(logo.iter().copied());
+        let got = detect(&fills(&shapes), &[], &glyphs, 0, (612.0, 792.0));
+        assert!(got.iter().all(|f| f.drawing.y1 < 705.0), "{got:?}");
+        // A box holding marks at one end, with words along it, is a panel:
+        // the marks are not a drawing the size of the box.
+        let mut glyphs = text("APPROVALS:", 328.0, 724.3);
+        glyphs.extend(text("AVAILABLE AT:", 431.5, 724.4));
+        let marks = vec![
+            bb(54.0, 721.0, 593.0, 764.0),
+            bb(59.0, 726.0, 74.0, 739.0),
+            bb(63.0, 734.0, 82.0, 747.0),
+            bb(132.0, 725.0, 154.0, 742.0),
+            bb(162.0, 730.0, 174.0, 742.0),
+            bb(183.0, 726.0, 206.0, 746.0),
+            bb(208.0, 727.0, 217.0, 745.0),
+        ];
+        let got = detect(&fills(&marks), &[], &glyphs, 0, (612.0, 792.0));
+        assert!(got.iter().all(|f| f.drawing.x1 < 300.0), "{got:?}");
     }
 
     #[test]
