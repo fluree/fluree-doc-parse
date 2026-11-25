@@ -1200,6 +1200,10 @@ fn read_beside(
                 .iter()
                 .filter(|r| r.orientation == Orientation::Horizontal && r.length() >= 0.6 * width)
                 .filter(|r| r.bbox.x0 <= x0 + width * 0.4 && r.bbox.x1 >= x1 - width * 0.4)
+                // A rule under a header's groups, over the columns past the
+                // stub and short of it, is the groups' underline, not one of
+                // the table's own rules, which run across its stub too.
+                .filter(|r| cols0.first().is_none_or(|c| r.bbox.x0 < c.1))
                 .map(|r| r.axis_pos())
                 .collect();
             ys.sort_by(f64::total_cmp);
@@ -1295,9 +1299,10 @@ fn read_beside(
                     || (cur.base - above.base <= cur.fs * WRAP_LEADING
                         && cur.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))));
             // Over a header that names the columns, only a banner (a label
-            // across some of them, or with its own rule beneath) or a label
-            // wrapped tight above one of them belongs to it; a title across
-            // the table, or a line of text across its gutters, does not.
+            // across some of them, or with its own rule beneath, however
+            // near the header under it the rule is drawn) or a label wrapped
+            // tight above one of them belongs to it; a title across the
+            // table, or a line of text across its gutters, does not.
             let ncols0 = cols0.len();
             let names_columns =
                 |l: &Line| fits(&cols0, l) && l.chunks.len() * 2 >= ncols0 && l.chunks.len() >= 2;
@@ -1307,7 +1312,7 @@ fn read_beside(
                     || rules.iter().any(|r| {
                         r.orientation == Orientation::Horizontal
                             && r.bbox.y0 >= above.base - fs * 0.2
-                            && r.bbox.y0 <= above.base + fs * 0.8
+                            && r.bbox.y0 < cur.y0
                             && r.bbox.x0 <= (c.x0 + c.x1) / 2.0
                             && r.bbox.x1 >= (c.x0 + c.x1) / 2.0
                             && r.length() >= c.width() * 1.5
@@ -2262,18 +2267,31 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         })
     };
     let mut spans: Vec<(usize, usize, usize)> = Vec::new();
+    // The header rows with a label underlined by a rule or run of its own.
+    let mut underlined: Vec<usize> = Vec::new();
     for (r, ls) in head_rows.iter().enumerate() {
         for l in ls {
             for c in &l.chunks {
                 let mut ks = covered(&cols, c);
                 let run = group_run(ls, l, c);
-                if let Some((a, b)) = run.or_else(|| rule_under(l, c)) {
+                // A rule under several labels of the row is none of theirs
+                // alone: the groups it underlines are cut between them below.
+                let shared = |&(a, b): &(f64, f64)| {
+                    ls.iter().flat_map(|o| o.chunks.iter()).any(|d| {
+                        let m = (d.x0 + d.x1) / 2.0;
+                        !std::ptr::eq(d, c) && m >= a && m <= b
+                    })
+                };
+                if let Some((a, b)) = run.or_else(|| rule_under(l, c).filter(|r| !shared(r))) {
                     let wide = Chunk {
                         x0: a,
                         x1: b,
                         ..c.clone()
                     };
                     let under = covered(&cols, &wide);
+                    if under.len() >= 2 {
+                        underlined.push(r);
+                    }
                     if under.len() > ks.len() {
                         ks = under;
                     }
@@ -2294,6 +2312,151 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 if ks.len() >= 2 {
                     spans.push((r, ks[0], ks[ks.len() - 1] + 1));
                 }
+            }
+        }
+    }
+    // Labels each set over the middle of a group of columns, two columns'
+    // width or less: groups' names centred over the runs they head (`Sex` over
+    // `Markers | Position(cM) | P-value`, `Sex + Smoking` over the next
+    // three). The groups tile the columns a rule under them all runs across,
+    // or else every column past the stub; each label is centred over its own
+    // run, within 15% of its width, as the banner passes above take a centred
+    // label. Of the cuts that centre them all, the one centring them best
+    // stands.
+    for r in 0..head_rows.len().saturating_sub(1) {
+        let mut labels: Vec<(usize, f64)> = Vec::new();
+        // The spans the labels' own words make: no more than where they
+        // stand, and given up for the groups found here.
+        let mut own: Vec<(usize, usize, usize)> = Vec::new();
+        let mut wide = false;
+        for c in head_rows[r].iter().flat_map(|l| l.chunks.iter()) {
+            let ks = covered(&cols, c);
+            if ks.len() > 2 {
+                wide = true;
+            }
+            if ks.len() == 2 {
+                own.push((r, ks[0], ks[1] + 1));
+            }
+            if let Some(k) = column_of(&cols, c) {
+                labels.push((k, (c.x0 + c.x1) / 2.0));
+            }
+        }
+        labels.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let n = labels.len();
+        // A label with an underline of its own has said what it spans, even
+        // where that is just the two columns its words reach: `September 30,
+        // 2016` underlined across `Carrying Amount | Fair Value`, with a
+        // `Level` column before it that is neither group's.
+        if wide
+            || underlined.contains(&r)
+            || n < 2
+            || n * 2 > ncols
+            || labels.iter().any(|&(k, ..)| k == 0)
+            || labels.windows(2).any(|w| w[0].0 == w[1].0)
+            || labels.iter().any(|&(k, ..)| {
+                spans
+                    .iter()
+                    .any(|sp| sp.0 == r && sp.1 <= k && k < sp.2 && !own.contains(sp))
+            })
+        {
+            continue;
+        }
+        let named_below: Vec<usize> = head_rows[r + 1]
+            .iter()
+            .flat_map(|l| l.chunks.iter())
+            .filter_map(|c| column_of(&cols, c))
+            .collect();
+        // The stretch the groups tile: under a rule drawn below every label,
+        // its columns; else every column past the stub.
+        // Below the labels' middle: an underline can sit on their baseline.
+        let base = head_rows[r]
+            .iter()
+            .map(|l| (l.y0 + l.base) / 2.0)
+            .fold(f64::MIN, f64::max);
+        let next_top = head_rows[r + 1]
+            .iter()
+            .map(|l| l.y0)
+            .fold(f64::MAX, f64::min);
+        let ruled = rules
+            .iter()
+            .filter(|ru| {
+                ru.orientation == Orientation::Horizontal
+                    && ru.axis_pos() > base
+                    && ru.axis_pos() < next_top
+                    && labels
+                        .iter()
+                        .all(|&(_, m)| ru.bbox.x0 <= m && ru.bbox.x1 >= m)
+            })
+            .map(|ru| {
+                let ks: Vec<usize> = (0..ncols)
+                    .filter(|&j| {
+                        let (a, b) = cols[j];
+                        ru.bbox.x1.min(b) - ru.bbox.x0.max(a) > (b - a) * 0.5
+                    })
+                    .collect();
+                ks
+            })
+            .find(|ks| !ks.is_empty());
+        let (lo, hi) = match ruled {
+            Some(ks) => (ks[0], ks[ks.len() - 1] + 1),
+            None => (1, ncols),
+        };
+        if labels.iter().any(|&(k, ..)| k < lo || k >= hi) {
+            continue;
+        }
+        // Each cut: the first column of every group after the first.
+        let mut best: Option<(f64, Vec<usize>)> = None;
+        let mut cut: Vec<usize> = labels[1..].iter().map(|_| 0).collect();
+        fn search(
+            i: usize,
+            labels: &[(usize, f64)],
+            cut: &mut Vec<usize>,
+            (lo, hi): (usize, usize),
+            cols: &[(f64, f64)],
+            named_below: &[usize],
+            best: &mut Option<(f64, Vec<usize>)>,
+        ) {
+            if i == cut.len() {
+                let mut bounds = vec![lo];
+                bounds.extend(cut.iter().copied());
+                bounds.push(hi);
+                let mut err = 0.0;
+                for (g, w) in bounds.windows(2).enumerate() {
+                    let (a, b) = (cols[w[0]].0, cols[w[1] - 1].1);
+                    let off = ((a + b) / 2.0 - labels[g].1).abs();
+                    if off > (b - a) * 0.15 || !(w[0]..w[1]).all(|j| named_below.contains(&j)) {
+                        return;
+                    }
+                    err += off;
+                }
+                if best.as_ref().is_none_or(|(e, _)| err < *e) {
+                    *best = Some((err, cut.clone()));
+                }
+                return;
+            }
+            let from = if i == 0 { lo } else { cut[i - 1] } + 1;
+            let from = from.max(labels[i].0 + 1);
+            for b in from..=labels[i + 1].0 {
+                cut[i] = b;
+                search(i + 1, labels, cut, (lo, hi), cols, named_below, best);
+            }
+        }
+        search(
+            0,
+            &labels,
+            &mut cut,
+            (lo, hi),
+            &cols,
+            &named_below,
+            &mut best,
+        );
+        if let Some((_, cut)) = best {
+            spans.retain(|sp| !own.contains(sp));
+            let mut bounds = vec![lo];
+            bounds.extend(cut);
+            bounds.push(hi);
+            for w in bounds.windows(2) {
+                spans.push((r, w[0], w[1]));
             }
         }
     }
@@ -2402,7 +2565,15 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             {
                 continue;
             }
-            let next = at.get(i + 1).map_or(ncols, |&(k2, _)| k2);
+            // As far as the next label, or a span given to one already.
+            let next = at.get(i + 1).map_or(ncols, |&(k2, _)| k2).min(
+                spans
+                    .iter()
+                    .filter(|&&(sr, c0, _)| sr == r && c0 > k)
+                    .map(|&(_, c0, _)| c0)
+                    .min()
+                    .unwrap_or(ncols),
+            );
             let end = (k + 1..next).take_while(|c| named_below.contains(c)).last();
             if let Some(e) = end {
                 spans.push((r, k, e + 1));
@@ -2994,6 +3165,93 @@ mod tests {
         ));
     }
     use crate::rule::Rule;
+
+    #[test]
+    fn group_labels_centred_over_their_columns_span_them() {
+        // Two groups of three columns past the stub, each named by a label
+        // centred over the middle of its three, with no rule under it.
+        let mut gl = Vec::new();
+        let xs = [20.0, 120.0, 170.0, 220.0, 290.0, 340.0, 390.0];
+        gl.extend(set("Sex", 170.0, 40.0));
+        gl.extend(set("Sex + Smoking", 340.0 - 5.5 * 4.5, 40.0));
+        for (k, t) in ["Chr", "Marker", "Pos", "P", "Marker", "Pos", "P"]
+            .iter()
+            .enumerate()
+        {
+            gl.extend(set(t, xs[k], 54.0));
+        }
+        for i in 0..4 {
+            let y = 68.0 + 12.0 * i as f64;
+            gl.extend(set(&format!("{}", 2 + i), xs[0], y));
+            for (k, &x) in xs.iter().enumerate().skip(1) {
+                let v = if k % 3 == 1 {
+                    format!("D{}S{}", i, k)
+                } else {
+                    format!("{}.{}", k, i)
+                };
+                gl.extend(set(&v, x, y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 60.0,
+            x1: 430.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let spans = &grids[0].layout.as_ref().unwrap().spans;
+        assert!(spans.contains(&(0, 1, 4)), "{spans:?}");
+        assert!(spans.contains(&(0, 4, 7)), "{spans:?}");
+    }
+
+    #[test]
+    fn underlined_group_labels_leave_a_shared_column_out() {
+        // A narrow `Level` column past the stub, then two groups of two
+        // columns, each named by a label whose words reach across both,
+        // centred over them and underlined across them. Tiling every column
+        // past the stub would hand `Level` to the first group.
+        let under = |x0: f64, x1: f64| Rule {
+            bbox: BBox {
+                x0,
+                y0: 43.0,
+                x1,
+                y1: 43.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let rules = vec![under(210.0, 334.5), under(350.0, 474.5)];
+        let mut gl = Vec::new();
+        let xs = [20.0, 170.0, 210.0, 280.0, 350.0, 420.0];
+        gl.extend(set("September 30, 2016", 223.0, 40.0));
+        gl.extend(set("September 30, 2015", 363.0, 40.0));
+        for (k, t) in ["Level", "Carrying", "Fair", "Carrying", "Fair"]
+            .iter()
+            .enumerate()
+        {
+            gl.extend(set(t, xs[k + 1], 54.0));
+        }
+        for (i, stub) in ["Cash", "Swaps", "Notes", "Loans"].iter().enumerate() {
+            let y = 68.0 + 12.0 * i as f64;
+            gl.extend(set(stub, xs[0], y));
+            gl.extend(set(&format!("{}", 1 + i % 2), xs[1], y));
+            for (k, &x) in xs.iter().enumerate().skip(2) {
+                gl.extend(set(&format!("${},{}86,99{}", k, i, k), x, y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 60.0,
+            x1: 490.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let spans = &grids[0].layout.as_ref().unwrap().spans;
+        assert!(spans.contains(&(0, 2, 4)), "{spans:?}");
+        assert!(spans.contains(&(0, 4, 6)), "{spans:?}");
+    }
 
     #[test]
     fn a_years_note_mark_and_a_samples_size() {

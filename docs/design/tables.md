@@ -629,6 +629,37 @@ bottom rule, not a group's, and the label reads the piece under its middle
 as before. So does the labels' column's own head: a run across the header
 under it would make the stub head a title over every column.
 
+### Group labels centred over their columns
+
+The walk up a text-read table's header stops at the table's own rules. A
+rule under the header's groups is not one of them. It starts past the stub
+and stops short of it, where the table's own rules run across the stub too
+(`qOLA(%)` and `Pyrosequencing (%)` over one rule, the columns of figures
+beneath it). Such a rule is the groups' underline: the walk crosses it and
+takes the labels above. It may be drawn anywhere between the labels and
+the header line under them, not only on their baseline.
+
+A rule under several labels of one row belongs to none of them alone.
+The groups it underlines are cut between the labels. So are groups whose
+labels sit over the middle of their columns with no rule at all (`Sex`
+over `Markers | Position(cM) | P-value`, `Sex + Smoking` over the next
+three). The groups tile the columns under the rule beneath them all, or,
+with none, every column past the stub. Each label must be centred over its
+own group, its middle within 15% of the group's width of the group's (as
+the banner passes take a centred label). Every column of a group must be
+named by the header row below. Of the cuts that centre every label, the one
+that centres them best stands.
+
+A row where any label has an underline of its own is left to those
+underlines. Tiling every column past the stub would hand a column that is
+neither group's to the first group: `September 30, 2016` underlined across
+`Carrying Amount | Fair Value`, after a `Level` column.
+
+A label naming the columns to its right, as far as the next label, also
+stops where a span already given in its row begins. Otherwise the two spans
+overlap (`Ecological association` beside `Herbarium accessions (all CANB)`,
+which is set over the states' columns).
+
 ### Years and sample sizes under the heads
 
 A table read from its text starts its body at its first line of figures.
