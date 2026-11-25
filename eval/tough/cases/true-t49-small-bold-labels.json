@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "true-t49-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-49-HC.pdf",
+    "sha256": "2d7a6c5a42bc79311b0ffc2fc3978af63272b935e234afe61c2fd35290235b62",
+    "about": "True T-49-HC refrigerator spec sheet. Page 1 closes on the same form box as the T-23: certification marks at its left end, `APPROVALS:` and `AVAILABLE AT:` along it."
+  },
+  "notes": [
+    "2026-11-25 (#278): the footer's logo sets `MADE WITH` / `INNOVATION` / `IN THE USA` in bold at 3.5 to 6.8pt over an 8pt body, and the footer's boxes for a dealer's stamp are headed `APPROVALS:` and `AVAILABLE AT:` with nothing under them. Each was a heading."
+  ],
+  "checks": [
+    {
+      "id": "logo-lettering-no-heading",
+      "found": "2026-11-25",
+      "issue": "#278: `IN THE USA`, 3.8pt bold, was an h6.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "IN THE USA"
+      },
+      "count": 0
+    },
+    {
+      "id": "approvals-box-no-heading",
+      "found": "2026-11-25",
+      "issue": "#278: a label over an empty box was an h6.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "APPROVALS:"
+      },
+      "count": 0
+    },
+    {
+      "id": "available-at-box-no-heading",
+      "found": "2026-11-25",
+      "issue": "#278: a label over an empty box was an h6, holding the footer's date and print line and page 2's `Model:`.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "AVAILABLE AT:"
+      },
+      "count": 0
+    }
+  ]
+}

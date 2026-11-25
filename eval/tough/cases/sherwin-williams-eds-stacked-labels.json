@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "sherwin-williams-eds.pdf",
+    "url": "https://www.sherwin-williams.com/document/EDS/en/790417048503/",
+    "sha256": "fdb65ebef0a2b38b63cbee91c73c48752af5e2370370e42c63fe80a6266007ee",
+    "about": "Sherwin-Williams environmental data sheet. Each page sets small ruled VOC tables under larger ones and under full-width section banners."
+  },
+  "notes": [
+    "2026-11-25 (#278): the sheet opens with three bold labels, each over its value set in under it at its size: `PRODUCT NUMBER` over the number, `PRODUCT NAME` over the name, `MANUFACTURER'S NAME` over the address. Set at 9.6pt over an 8pt body, the last two were h2s, and everything down to `Volatile Ingredients` nested under the manufacturer's name."
+  ],
+  "checks": [
+    {
+      "id": "product-name-no-heading",
+      "found": "2026-11-25",
+      "issue": "#278: a field label was an h2.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "PRODUCT NAME"
+      },
+      "count": 0
+    },
+    {
+      "id": "manufacturer-no-heading",
+      "found": "2026-11-25",
+      "issue": "#278: a field label was an h2, over the rest of the sheet's first part.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "MANUFACTURER'S NAME"
+      },
+      "count": 0
+    },
+    {
+      "id": "manufacturer-label-text",
+      "found": "2026-11-25",
+      "issue": "#278: as above; the label stays in the text.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "MANUFACTURER'S NAME"
+      },
+      "count": 1
+    }
+  ]
+}
