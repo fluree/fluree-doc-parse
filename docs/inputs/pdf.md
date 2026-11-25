@@ -228,6 +228,14 @@ spacing, as footnotes set at a generous leading have, or across a change to
 bold capitals within the paragraph: the line is full, ends without a full
 stop, and the next goes on in lower case or in the same capitals.
 
+**Footnotes.** A block of footnotes, each opening with its number raised at
+the margin and set at the text's leading, reads one note to a paragraph,
+each opening with its number. A line whose raised number counts on from the
+note above it (`7 1 MB/s = …` then `8 Portion of buffer…`) starts the next
+note. A raised number the text layer set apart from its line is the note's,
+not a list's marker: it stays in front of its text, where the body's note
+marks can find it.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
