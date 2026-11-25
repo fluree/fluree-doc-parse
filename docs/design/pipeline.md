@@ -121,6 +121,15 @@ widest line. Lists printed one item per line pass none of that:
   and none goes on in lower case as a wrapped line of a narrow box does: each
   line is a block. Measured against the column only here, where every line
   opens with a capital; a narrow box's prose keeps its paragraphs.
+- *Bold heads stacked.* Bold lines are left whole by the entries test, as a
+  title broken over two lines must be. Two lines, both bold, at one size
+  from the body's up to display type and set at one indent, are parted where
+  the second opens with a capital (not a bracket), and does not open on a
+  word that runs on or hold a year, its first word would have fitted on the
+  line before, and that
+  line ends on no comma, hyphen or word that runs on (`of`, `and`, `in`):
+  `Materials and methods` over `Animals` is two headings, `Effect of AZT on
+  telomerase activity in` over `HO-8910 cells` one.
 
 **And the other way: a sentence that plainly runs on.** Spacing and weight
 can part a paragraph where its sentence goes on. Footnotes set at nearly

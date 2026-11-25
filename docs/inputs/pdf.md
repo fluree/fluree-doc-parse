@@ -260,7 +260,10 @@ opening with `1.` is starts the next item, and the lines under it stay with
 it; a run of such items is an ordered list, even across a slightly wider
 space between two of them. A list of entries set one per line, a standard
 or a code on each, reads one entry per paragraph when every line stops well
-short of the column's width and none goes on in lower case. And a
+short of the column's width and none goes on in lower case. Bold lines
+stacked so, each opening with a capital that would have fitted on the line
+before, are headings one per line: `Materials and methods` over `Animals`.
+And a
 paragraph ended on a short line, followed at the same spacing by a line
 opening with a capital, is two paragraphs: the short line stops more than
 the next line's first word and two ems short of the lines around it.
