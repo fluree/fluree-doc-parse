@@ -80,11 +80,29 @@ pub fn note_mark(text_before: &str, mark: &str) -> bool {
         let roman = word.chars().count() >= 2 && word.chars().all(|c| "IVXLC".contains(c));
         return !(ordinal && roman) && (letters >= 2 || closed);
     }
-    if !mark.chars().all(|c| c.is_ascii_digit() || c == ',') || unit_power(text_before, mark) {
+    // A note's number may close on a bracket of its own, as notes are
+    // numbered in much of Europe (`series¹⁾`): what it marks is the number.
+    let numbered = mark
+        .strip_suffix(')')
+        .filter(|m| !m.is_empty())
+        .unwrap_or(mark);
+    if !numbered.chars().all(|c| c.is_ascii_digit() || c == ',')
+        || unit_power(text_before, numbered)
+    {
         return false;
+    }
+    if numbered.len() < mark.len() {
+        return true;
     }
     // A number after a word too long to be a unit (`Revenue¹`, not `km²`).
     if word.chars().all(char::is_alphabetic) && letters >= 4 {
+        return true;
+    }
+    // After a word and the stop or comma closing it, a note's number
+    // (`MTBF,⁴`, `ratings.²`): no power is raised past a word's punctuation.
+    let stem = word.trim_end_matches([',', '.', ';', ':']);
+    if stem.len() < word.len() && stem.chars().count() >= 2 && stem.chars().all(char::is_alphabetic)
+    {
         return true;
     }
     // After a compound or a code joined by hyphens, a note's number:
@@ -333,6 +351,15 @@ mod tests {
         assert!(note_mark("Acrylonitrile", "a"));
         assert!(note_mark("(vinylidene chloride)", "a"));
         assert!(note_mark("Revenue", "1"));
+        // A note's number closing on its own bracket, and one past a word's
+        // punctuation.
+        assert!(note_mark("dilution series", "1)"));
+        assert!(note_mark("Systematic error", "2)"));
+        assert!(note_mark("hours MTBF,", "4"));
+        assert!(note_mark("the ratings.", "2"));
+        assert!(!note_mark("x,", "2"));
+        assert!(!note_mark("10 m,", "2"));
+        assert!(!note_mark("f(x)", ")"));
         assert!(note_mark("Total", "*"));
         assert!(note_mark("April 2026", "r"));
         assert!(note_mark("Lee", "†"));

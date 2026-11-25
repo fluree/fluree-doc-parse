@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "fed-beigebook-2024-12.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/BeigeBook_20241204.pdf",
+    "sha256": "88df174690b1b4ce256c8877ed2eb9b7f02281aa149c07b5585befd5499973b8",
+    "about": "Federal Reserve Beige Book, December 2024. Each district's report opens on a page titled in two lines beside the district's map, and the district's name runs over its right-hand pages."
+  },
+  "notes": [
+    "2026-11-25 (#276): the map's towns, small drawn dots, stood level with the title's lines and were taken as their bullets. `Federal Reserve Bank of` / `New York` read as two items, then a paragraph and a heading, and the district's level-1 heading came only from its running copy on the page after. With that copy read as running (#319), New York's sections nested under Boston. A drawing's dots crowd one another; a list's bullets stand a line apart."
+  ],
+  "checks": [
+    {
+      "id": "title-not-split",
+      "found": "2026-11-25",
+      "issue": "#276: the title's first line was a paragraph of its own.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Federal Reserve Bank of"
+      },
+      "count": 0
+    },
+    {
+      "id": "title-not-a-subhead",
+      "found": "2026-11-25",
+      "issue": "#276: the title's second line was an h2 of its own. (`New York` heads the National Summary's paragraph on the district once, on page 5.)",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "New York"
+      },
+      "count": 1
+    },
+    {
+      "id": "district-title-whole",
+      "found": "2026-11-25",
+      "issue": "#276: as above.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Federal Reserve Bank of New York"
+      },
+      "count": 1
+    }
+  ]
+}
