@@ -1538,6 +1538,85 @@ fn axis_scale(cells: &[String]) -> bool {
     even(differences) || ratios.is_some_and(|r| r[0] > 0.0 && (r[0] - 1.0).abs() > 0.01 && even(r))
 }
 
+/// Fewest numbers a grid's column holds for it to be read as a chart's scale.
+const SCALE_VALUES: usize = 3;
+
+/// Fewest words in a line of prose, as a cell reads one.
+const PROSE_WORDS: usize = 5;
+
+/// Least share of a line's words set in lower case for it to read as prose:
+/// a chart's titles and legends are capitalised, figured or short (`All
+/// needs met by 2020`), a paragraph's line runs on in lower case (`remains
+/// much further below its pre-pandemic level`).
+const PROSE_LOWER: f64 = 0.6;
+
+/// Does the cell read as a line of prose?
+fn prose_line(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let lower = words
+        .iter()
+        .filter(|w| w.chars().next().is_some_and(char::is_lowercase))
+        .count();
+    words.len() >= PROSE_WORDS && lower as f64 >= words.len() as f64 * PROSE_LOWER
+}
+
+/// A cell's text as one number, a minus or a dash for its sign and commas
+/// for thousands: `−20`, `1,000`.
+fn scale_number(text: &str) -> Option<f64> {
+    let t = text
+        .trim()
+        .replace(['\u{2212}', '\u{2013}'], "-")
+        .replace(',', "");
+    (!t.is_empty()).then(|| t.parse::<f64>().ok()).flatten()
+}
+
+/// The chart a grid of axes belongs to, where charts set side by side line
+/// their scales up into one grid (`240 | 240` down to `0 | 0`, each panel's
+/// title over its scale). Every column holding numbers reads as a scale:
+/// [`SCALE_VALUES`] or more stepping evenly ([`axis_scale`]), each beside a
+/// chart's drawing, level with half its height or more and within an axis's
+/// reach ([`SCALE_REACH`] of the grid's text size `line`). Cells of words, a
+/// panel's title or legend, say nothing either way. A table's columns of
+/// figures step unevenly; one whose numbers do (a rank, a conversion) stands
+/// beside no chart. The nearest chart takes the grid's text.
+fn panel_axes(g: &Grid, cells: &[String], figures: &[figure::Figure], line: f64) -> Option<usize> {
+    // A line of prose among the cells is the page's text beside a chart,
+    // read into the grid with its scale: the grid is no chart's axes.
+    if cells.iter().any(|c| prose_line(c)) {
+        return None;
+    }
+    let cols = g.cols();
+    let mut nearest: Option<(usize, f64)> = None;
+    for c in 0..cols {
+        let rows: Vec<usize> = (0..g.rows())
+            .filter(|&r| scale_number(&cells[r * cols + c]).is_some())
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let values: Vec<String> = rows.iter().map(|&r| cells[r * cols + c].clone()).collect();
+        if rows.len() < SCALE_VALUES || !axis_scale(&values) {
+            return None;
+        }
+        let (x0, x1) = (g.xs[c], g.xs[c + 1]);
+        let (y0, y1) = (g.ys[rows[0]], g.ys[rows[rows.len() - 1] + 1]);
+        let beside = figures
+            .iter()
+            .enumerate()
+            .filter_map(|(fi, f)| {
+                let d = f.drawing;
+                let level = y1.min(d.y1) - y0.max(d.y0) >= 0.5 * (y1 - y0);
+                let gap = (d.x0 - x1).max(x0 - d.x1).max(0.0);
+                (level && gap <= line * SCALE_REACH).then_some((fi, gap))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        if nearest.is_none_or(|(_, gap)| beside.1 < gap) {
+            nearest = Some(beside);
+        }
+    }
+    nearest.map(|(fi, _)| fi)
+}
+
 /// Does a heading give way to the figure it is in? Relative typography does
 /// wherever the figure took it: chart titles, legends and axis labels are
 /// set larger or bolder than body text. A number or a place in a sequence
@@ -2667,6 +2746,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
                 let stacks = table::stack_columns(&p.rules, &p.fills);
+                let unbroken = table::unbroken_stacks(&p.rules);
                 let mut withheld: Vec<usize> = Vec::new();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
                     let beside =
@@ -2682,7 +2762,19 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         })
                         .collect();
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
-                        let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        // A seed drawn from some of a stack's own lines reads
+                        // as the stack does.
+                        let in_stack = unbroken.iter().any(|(b, _)| {
+                            region.x0 >= b.x0 - 1.0
+                                && region.x1 <= b.x1 + 1.0
+                                && region.y0 >= b.y0 - 1.0
+                                && region.y1 <= b.y1 + 1.0
+                        });
+                        let got = if in_stack {
+                            crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index)
+                        } else {
+                            crate::textgrid::read(&lines, &p.rules, region, p.index)
+                        };
                         // A reading across the columns a stack's rules draw
                         // is no table: neither it nor the seed stands, and
                         // its text stays text.
@@ -2716,6 +2808,58 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         }
                         read.extend(got);
                     }
+                }
+                // Row lines drawn unbroken across one stretch, four or more
+                // at an even pitch, beside another such stack: two tables
+                // ruled with horizontals alone, set side by side in a page's
+                // columns. Their lines interleave or fall level, and the
+                // page-wide reading takes neither or both as one. Each is
+                // read from its text, where all of these hold:
+                // - no grid already holds most of it: a table read another
+                //   way keeps that reading;
+                // - its bands hold text ([`crate::textgrid::bands_hold_text`]):
+                //   a chart's gridlines stand over bars, a drawing's over
+                //   nothing;
+                // - the reading stands within its lines: a stack narrower
+                //   than the table it rules is one column's lines in a wider
+                //   table. A twentieth of its width is left for a header
+                //   label hung past them.
+                let stands_beside = |r: &crate::geom::BBox| {
+                    unbroken.iter().map(|(o, _)| o).any(|o| {
+                        let shared = o.y1.min(r.y1) - o.y0.max(r.y0);
+                        (o.x1 <= r.x0 || o.x0 >= r.x1)
+                            && shared > 0.0
+                            && shared >= 0.5 * (o.y1 - o.y0).min(r.y1 - r.y0)
+                    })
+                };
+                for (region, ys) in &unbroken {
+                    let region = *region;
+                    let area = ((region.x1 - region.x0) * (region.y1 - region.y0)).max(1.0);
+                    if grids
+                        .iter()
+                        .any(|g| overlap_area(&g.bbox, &region) >= 0.5 * area)
+                        || !stands_beside(&region)
+                        || !crate::textgrid::bands_hold_text(&lines, region, ys)
+                    {
+                        continue;
+                    }
+                    let mut got =
+                        crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index);
+                    let slack = 0.05 * (region.x1 - region.x0);
+                    got.retain(|g| {
+                        g.bbox.x0 >= region.x0 - slack && g.bbox.x1 <= region.x1 + slack
+                    });
+                    if debug {
+                        eprintln!(
+                            "TEXTGRID p{} unbroken stack {:?} -> {:?}",
+                            p.index,
+                            region,
+                            got.iter()
+                                .map(|g| (g.rows(), g.cols(), g.bbox))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    read.extend(got);
                 }
                 // Runs of figures no grid holds: a statement ruled by
                 // nothing but the underlines under its figures. Not where
@@ -3786,9 +3930,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .iter()
                 .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= containment)
                 .filter(|_| !drawn_as_table);
-            // The plot a scale stands against: the figure whose drawing is
-            // nearest it, within an axis's reach.
-            let scaled = if scale && drawn_in.is_none() {
+            // The grid's text size: what an axis's reach is measured in.
+            let line = {
                 let mut sizes: Vec<f32> = raw.pages[pi]
                     .glyphs
                     .iter()
@@ -3799,7 +3942,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .map(|gl| gl.font_size)
                     .collect();
                 sizes.sort_by(f32::total_cmp);
-                let line = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64;
+                sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64
+            };
+            // The plot a scale stands against: the figure whose drawing is
+            // nearest it, within an axis's reach.
+            let scaled = if scale && drawn_in.is_none() {
                 figures
                     .iter()
                     .enumerate()
@@ -3818,7 +3965,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             } else {
                 None
             };
-            let drawn_in = drawn_in.or(scaled);
+            // Charts set side by side, their scales lined up into a grid.
+            let paneled = if drawn_in.is_none() && !scale && g.cols() >= 2 {
+                panel_axes(g, &flat, figures, line)
+            } else {
+                None
+            };
+            let drawn_in = drawn_in.or(scaled).or(paneled);
             if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
@@ -4733,6 +4886,60 @@ mod tests {
         // A label names a row: a table's. Letters alone measure nothing.
         assert!(!callouts(&c(&["Width", "31 1/4\""])));
         assert!(!callouts(&c(&["", "A", "B"])));
+    }
+
+    #[test]
+    fn charts_side_by_side_read_their_scales_as_axes() {
+        // Two panels, each a title over a scale from 60 down to 0, the
+        // scales lined up into a two-column grid; each panel's plot stands
+        // just right of its scale.
+        let grid = Grid {
+            page: 0,
+            xs: vec![70.0, 96.0, 330.0, 356.0],
+            ys: vec![100.0, 112.0, 140.0, 168.0, 196.0, 224.0],
+            bbox: BBox {
+                x0: 70.0,
+                y0: 100.0,
+                x1: 356.0,
+                y1: 224.0,
+            },
+            layout: None,
+        };
+        let row = |a: &str, b: &str| vec![a.to_string(), String::new(), b.to_string()];
+        let mut cells = row("31 Copper", "48 Zinc");
+        for v in ["60", "40", "20", "0"] {
+            cells.extend(row(v, v));
+        }
+        let plot = |x0: f64| figure::Figure {
+            bbox: BBox {
+                x0,
+                y0: 114.0,
+                x1: x0 + 190.0,
+                y1: 230.0,
+            },
+            drawing: BBox {
+                x0,
+                y0: 114.0,
+                x1: x0 + 190.0,
+                y1: 230.0,
+            },
+            page: 0,
+            shapes: 24,
+            frame: None,
+        };
+        let plots = [plot(100.0), plot(360.0)];
+        assert_eq!(panel_axes(&grid, &cells, &plots, 7.0), Some(0));
+        // With no chart beside them, the columns are a table's.
+        assert_eq!(panel_axes(&grid, &cells, &[], 7.0), None);
+        // Nor where a column's figures step unevenly: data.
+        let mut data = row("31 Copper", "48 Zinc");
+        for (a, b) in [("60", "12"), ("40", "7"), ("20", "31"), ("0", "4")] {
+            data.extend(row(a, b));
+        }
+        assert_eq!(panel_axes(&grid, &data, &plots, 7.0), None);
+        // Nor where the charts stand far off, past an axis's reach.
+        let far = [plot(160.0), plot(420.0)];
+        assert_eq!(panel_axes(&grid, &cells, &far, 7.0), None);
     }
 
     #[test]
