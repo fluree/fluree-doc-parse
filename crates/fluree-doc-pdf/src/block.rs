@@ -488,13 +488,34 @@ const RUN_LEADS: &[char] = &[
     '-', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2192}', '\u{2794}', '\u{27F6}',
 ];
 
-/// The dash or arrow a line opens with, followed by a space and words.
+/// A glyph that says nothing as text, which a list can open its items with
+/// as it does with a bullet: a code the font maps to a control character
+/// or to the private use area (a `▶` set as 0x17), or an arrow, a shape or
+/// a dingbat no list of bullets names. Taken as a mark only in a run of
+/// lines that open with it, as a dash is.
+fn mark_glyph(c: char) -> bool {
+    !is_bullet(c)
+        && (fluree_doc_model::is_stray_control(c)
+            || ('\u{E000}'..='\u{F8FF}').contains(&c)
+            || ('\u{2190}'..='\u{21FF}').contains(&c)
+            || ('\u{25A0}'..='\u{25FF}').contains(&c)
+            || ('\u{2700}'..='\u{27BF}').contains(&c))
+}
+
+/// A mark a run of lines can open a list's items with: a dash, an arrow,
+/// or a glyph that says nothing as text.
+fn leads_runs(c: char) -> bool {
+    RUN_LEADS.contains(&c) || mark_glyph(c)
+}
+
+/// The dash, arrow or mark a line opens with, followed by a space and
+/// words.
 fn run_lead(l: &Line) -> Option<char> {
     let t = l.text.trim_start();
     let mut chars = t.chars();
     let c = chars.next()?;
     let rest = chars.as_str();
-    (RUN_LEADS.contains(&c)
+    (leads_runs(c)
         && rest.starts_with([' ', '\u{00A0}', '\t'])
         && rest.chars().any(char::is_alphanumeric))
     .then_some(c)
@@ -513,9 +534,7 @@ const RUN_SEPARATOR_WORDS: usize = 3;
 /// opens with it.
 pub fn strip_run_lead<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
     let mut m = marker.chars();
-    let lead = m
-        .next()
-        .filter(|c| RUN_LEADS.contains(c) && m.next().is_none())?;
+    let lead = m.next().filter(|&c| leads_runs(c) && m.next().is_none())?;
     let rest = text.trim_start().strip_prefix(lead)?;
     let rest = rest.strip_prefix([' ', '\u{00A0}', '\t'])?.trim_start();
     (!rest.is_empty()).then_some(rest)
@@ -595,23 +614,31 @@ pub fn assemble_in_measure(
     let runs: Vec<Option<char>> = (0..lines.len())
         .map(|i| {
             let c = leads[i]?;
-            let lo = i.saturating_sub(RUN_REACH);
-            let hi = (i + RUN_REACH).min(lines.len() - 1);
-            let x = lines[i].bbox.x0;
-            let between = |a: usize, b: usize| {
-                (a + 1..b).all(|k| {
-                    lines[k].bbox.x0 > x + RUN_ALIGN
-                        || lines[k].text.split_whitespace().count() <= RUN_SEPARATOR_WORDS
-                })
+            // A mark that says nothing as text is no range or minus: its
+            // items may wrap over any number of lines hanging under them.
+            let reach = if mark_glyph(c) {
+                lines.len()
+            } else {
+                RUN_REACH
             };
-            (lo..=hi)
-                .any(|j| {
-                    j != i
-                        && leads[j] == Some(c)
-                        && (lines[j].bbox.x0 - x).abs() <= RUN_ALIGN
-                        && between(i.min(j), i.max(j))
-                })
-                .then_some(c)
+            let x = lines[i].bbox.x0;
+            // A line that can stand between two items: it hangs under the
+            // item's text, or says a word or two.
+            let between = |k: usize| {
+                lines[k].bbox.x0 > x + RUN_ALIGN
+                    || lines[k].text.split_whitespace().count() <= RUN_SEPARATOR_WORDS
+            };
+            let partner =
+                |j: usize| leads[j] == Some(c) && (lines[j].bbox.x0 - x).abs() <= RUN_ALIGN;
+            // Outward each way, as far as a line that could stand between.
+            let up = (i.saturating_sub(reach)..i)
+                .rev()
+                .find(|&j| partner(j) || !between(j))
+                .is_some_and(partner);
+            let down = (i + 1..=(i + reach).min(lines.len() - 1))
+                .find(|&j| partner(j) || !between(j))
+                .is_some_and(partner);
+            (up || down).then_some(c)
         })
         .collect();
     // Lines a marker pulled out above stands beside: each is an item of its
@@ -2203,6 +2230,53 @@ mod tests {
         assert_eq!(
             strip_run_lead(&b[1].text(), "\u{2014}"),
             Some("Dimmable compact fluorescent lamps with integrated ballast")
+        );
+    }
+
+    #[test]
+    fn a_mark_the_font_maps_to_a_control_code_leads_items() {
+        // A sidebar's `▶` bullets, mapped by the font to 0x17, each item
+        // wrapped over more lines than a dash-led list's reach.
+        let mut lines = vec![l(
+            "\u{17} Designed using the highest quality",
+            446.8,
+            0.0,
+            8.6,
+        )];
+        for k in 1..7 {
+            lines.push(l(
+                "materials and components to provide",
+                456.5,
+                9.3 * k as f64,
+                8.6,
+            ));
+        }
+        lines.push(l(
+            "\u{17} Factory engineered, self-contained,",
+            446.8,
+            70.0,
+            8.6,
+        ));
+        for k in 1..7 {
+            lines.push(l(
+                "capillary tube system using refrigerant",
+                456.2,
+                70.0 + 9.3 * k as f64,
+                8.6,
+            ));
+        }
+        lines.push(l(
+            "\u{17} High capacity, factory balanced",
+            446.8,
+            140.0,
+            8.6,
+        ));
+        let b = assemble(&lines, 1.1);
+        assert_eq!(b.len(), 3, "{b:?}");
+        assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{17}")));
+        assert_eq!(
+            strip_run_lead(&b[2].text(), "\u{17}"),
+            Some("High capacity, factory balanced")
         );
     }
 

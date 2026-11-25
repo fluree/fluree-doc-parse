@@ -3013,6 +3013,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
 
+    // A symbol the font mapped to a control character is no character a
+    // reader can show: a list's mark set as 0x17 has been read as one by
+    // now, and what is left of any other goes.
+    for e in &mut elements {
+        e.scrub_controls();
+    }
     Analysis {
         elements,
         suspect_headings,
