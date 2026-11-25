@@ -1017,12 +1017,11 @@ fn convert_bytes(
     let opts = cfg.options_for(stem);
     // Images are probed for whatever reads their pixels' verdict: the
     // router, when it runs for escalation or for the anchors and sidecars
-    // analysis routes for; the OCR word readings, asked for up to the
-    // page's routed regions; an OCR engine, which reads the texty images
-    // too small to route; and a caller who asks for the verdicts
-    // (`--probe-images`). A deterministic parse decodes none, and reports
-    // each image the text layer does not cover as not examined
-    // ([`fluree_doc_pdf::route::Declined::Unprobed`]).
+    // analysis routes for; OCR words, which go only where it sends a reader;
+    // an OCR engine, which reads the texty images too small to route; and a
+    // caller who asks for the verdicts (`--probe-images`). A deterministic
+    // parse decodes none, and reports each image the text layer does not
+    // cover as not examined ([`fluree_doc_pdf::route::Declined::Unprobed`]).
     let mut eopts = ExtractOptions::default();
     eopts.probe_images = args.probe_images
         || cfg.escalate

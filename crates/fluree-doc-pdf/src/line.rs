@@ -300,9 +300,9 @@ fn ruler_banded(
     Some(result)
 }
 
-/// Lines of the glyphs `subset` picks from `glyphs`, their glyph indices
-/// into `glyphs`, so lines of different subsets index one vector. A row is
-/// parted at `walls` as [`assemble_walled`] parts it.
+/// Lines of the glyphs `subset` picks from `glyphs`, parted at `walls` as
+/// [`assemble_walled`] parts them, their glyph indices into `glyphs`, so
+/// lines of different subsets index one vector.
 fn assemble_subset(glyphs: &[Glyph], subset: &[usize], walls: &[BBox]) -> Vec<Line> {
     let part: Vec<Glyph> = subset.iter().map(|&i| glyphs[i].clone()).collect();
     let mut lines = assemble_walled(&part, walls);
