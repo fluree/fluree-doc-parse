@@ -3817,6 +3817,110 @@ fn bound_by_bands(
         .collect()
 }
 
+/// Where a set of touching rules is two boxes stacked a hair apart: the
+/// middle of the gap between them.
+///
+/// A spec sheet sets its option tables one under another, each boxed with
+/// its own title band and its own columns (`Trims` over two, `Housings`
+/// under it over two others), two or three points apart. That is close
+/// enough for their rules to touch, and read as one drawing the two boxes'
+/// dividers made three columns neither has. The gap says they are two: a
+/// line across the whole set on either side of it, less than a row apart,
+/// and no vertical crossing between them, where every rule between a
+/// box's doubled top line crosses it. Each side is closed at both ends and
+/// rules a column the other does not. A header ruled off by a double line
+/// with the verticals broken across it rules the same columns as the rows
+/// under it, or fewer, and stays one table.
+fn stacked_boxes_gap(rs: &[&Rule]) -> Option<f64> {
+    let (hs, vs): (Vec<&Rule>, Vec<&Rule>) = rs
+        .iter()
+        .copied()
+        .partition(|r| r.orientation == Orientation::Horizontal);
+    if hs.len() < 4 || vs.len() < 4 {
+        return None;
+    }
+    let x0 = rs.iter().map(|r| r.bbox.x0).fold(f64::INFINITY, f64::min);
+    let x1 = rs
+        .iter()
+        .map(|r| r.bbox.x1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let width = x1 - x0;
+    let mut ys: Vec<f64> = hs.iter().map(|r| r.axis_pos()).collect();
+    ys.sort_by(f64::total_cmp);
+    ys.dedup_by(|a, b| (*a - *b).abs() <= 0.5);
+    // Lines run across the whole set, drawn in pieces or not.
+    let across: Vec<f64> = ys
+        .into_iter()
+        .filter(|&y| {
+            let pieces = hs
+                .iter()
+                .filter(|r| (r.axis_pos() - y).abs() <= 0.5)
+                .map(|r| (r.bbox.x0, r.bbox.x1));
+            span_coverage(pieces, x0, x1) >= 0.95 * width
+        })
+        .collect();
+    for w in across.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if b - a >= MIN_CELL_EXTENT
+            || vs
+                .iter()
+                .any(|v| v.bbox.y0 < b - 1.0 && v.bbox.y1 > a + 1.0)
+        {
+            continue;
+        }
+        let mid = (a + b) / 2.0;
+        let side = |above: bool| -> Vec<f64> {
+            vs.iter()
+                .filter(|v| ((v.bbox.y0 + v.bbox.y1) / 2.0 < mid) == above)
+                .map(|v| v.axis_pos())
+                .collect()
+        };
+        let (up, down) = (side(true), side(false));
+        let closed = |xs: &[f64]| {
+            xs.iter().any(|x| (x - x0).abs() <= EDGE_TOLERANCE)
+                && xs.iter().any(|x| (x - x1).abs() <= EDGE_TOLERANCE)
+        };
+        let inner = |xs: &[f64]| -> Vec<f64> {
+            xs.iter()
+                .copied()
+                .filter(|&x| x > x0 + EDGE_TOLERANCE && x < x1 - EDGE_TOLERANCE)
+                .collect()
+        };
+        let own = |p: &[f64], q: &[f64]| {
+            p.iter()
+                .any(|x| q.iter().all(|y| (x - y).abs() > EDGE_TOLERANCE))
+        };
+        let (iu, id) = (inner(&up), inner(&down));
+        if closed(&up) && closed(&down) && own(&iu, &id) && own(&id, &iu) {
+            return Some(mid);
+        }
+    }
+    None
+}
+
+/// `comp`, a set of touching rules, parted into the boxes stacked in it
+/// (see [`stacked_boxes_gap`]).
+fn split_stacked_boxes<T: Copy>(comp: Vec<T>, rule: impl Fn(T) -> Rule) -> Vec<Vec<T>> {
+    let mut out = Vec::new();
+    let mut todo = vec![comp];
+    while let Some(c) = todo.pop() {
+        let rs: Vec<Rule> = c.iter().map(|&t| rule(t)).collect();
+        let refs: Vec<&Rule> = rs.iter().collect();
+        match stacked_boxes_gap(&refs) {
+            Some(mid) => {
+                let (up, down): (Vec<T>, Vec<T>) = c.into_iter().partition(|&t| {
+                    let b = rule(t).bbox;
+                    (b.y0 + b.y1) / 2.0 < mid
+                });
+                todo.push(up);
+                todo.push(down);
+            }
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 /// The page's rules in touching sets, as indices.
 fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
     let mut remaining: Vec<usize> = (0..rules.len()).collect();
@@ -3846,7 +3950,7 @@ fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
             }
         }
         component.sort_unstable();
-        components.push(component);
+        components.extend(split_stacked_boxes(component, |i| rules[i]));
     }
     components
 }
@@ -4417,7 +4521,7 @@ fn detect_components(
                 }
             }
         }
-        components.push(component);
+        components.extend(split_stacked_boxes(component, |r| r));
     }
 
     let mut out: Vec<Grid> = components
@@ -7918,6 +8022,49 @@ mod header_tests {
         assert!(with_column_band(&g, &rules(true, 0.0), &band).is_none());
         // Nothing named in the band.
         assert!(with_column_band(&g, &rules(true, 40.0), &[]).is_none());
+    }
+
+    #[test]
+    fn boxes_stacked_a_hair_apart_are_two_drawings() {
+        // Two boxes 2.5 pt apart, each closed, parting their columns at
+        // different places.
+        let boxes = |second_divider: f64, joined: bool| {
+            let mut rs = vec![
+                h(0.0, 300.0, 0.0),
+                h(0.0, 300.0, 40.0),
+                v(0.0, 40.0, 100.0),
+                h(0.0, 300.0, 42.5),
+                h(0.0, 300.0, 80.0),
+                v(42.5, 80.0, second_divider),
+            ];
+            if joined {
+                rs.extend([v(0.0, 80.0, 0.0), v(0.0, 80.0, 300.0)]);
+            } else {
+                rs.extend([
+                    v(0.0, 40.0, 0.0),
+                    v(0.0, 40.0, 300.0),
+                    v(42.5, 80.0, 0.0),
+                    v(42.5, 80.0, 300.0),
+                ]);
+            }
+            rs
+        };
+        let rs = boxes(200.0, false);
+        let refs: Vec<&Rule> = rs.iter().collect();
+        let gap = stacked_boxes_gap(&refs).expect("two boxes");
+        assert!(gap > 40.0 && gap < 42.5);
+        let comps = component_indices(&rs);
+        assert_eq!(comps.len(), 2);
+        // A header ruled off by a double line, the verticals broken across
+        // it, parts its columns where the rows under it do.
+        let rs = boxes(100.0, false);
+        let refs: Vec<&Rule> = rs.iter().collect();
+        assert!(stacked_boxes_gap(&refs).is_none());
+        // Sides running on across the gap make one box.
+        let rs = boxes(200.0, true);
+        let refs: Vec<&Rule> = rs.iter().collect();
+        assert!(stacked_boxes_gap(&refs).is_none());
+        assert_eq!(component_indices(&rs).len(), 1);
     }
 
     #[test]
