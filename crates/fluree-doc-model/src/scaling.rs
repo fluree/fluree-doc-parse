@@ -24,12 +24,13 @@ pub const MIN_RUN: Duration = Duration::from_millis(25);
 ///
 /// `n` is doubled first while a run on `make(n)` takes under [`MIN_RUN`],
 /// up to 64 times; a run still under it counts as taking [`MIN_RUN`].
-/// Building the input is not timed. Each size is run twice and its faster
-/// run kept, so a pause of the machine's does not count as the work's.
+/// Building the input is not timed. Each size is run three times and its
+/// fastest run kept, so a pause of the machine's, or a test running beside
+/// this one, does not count as the work's.
 pub fn assert_linear<T>(what: &str, n: usize, make: impl Fn(usize) -> T, run: impl Fn(&T)) {
     let time = |n: usize| {
         let input = make(n);
-        (0..2)
+        (0..3)
             .map(|_| {
                 let start = Instant::now();
                 run(&input);
@@ -62,25 +63,13 @@ mod tests {
 
     #[test]
     fn linear_work_passes_and_quadratic_work_fails() {
-        let work =
-            |n: usize, k: usize| (0..n * k).fold(0u64, |a, i| std::hint::black_box(a ^ i as u64));
-        assert_linear(
-            "linear",
-            1 << 16,
-            |n| n,
-            |&n| {
-                work(n, 1);
-            },
-        );
+        // The work is a sleep as long as the work would take, so the test
+        // checks the helper's arithmetic, not the runner: a sleep is not
+        // slowed by the tests running beside this one, as counting is.
+        let sleep = |micros: usize| std::thread::sleep(Duration::from_micros(micros as u64));
+        assert_linear("linear", 30_000, |n| n, |&n| sleep(n));
         let quadratic = std::panic::catch_unwind(|| {
-            assert_linear(
-                "quadratic",
-                1 << 8,
-                |n| n,
-                |&n| {
-                    work(n, n);
-                },
-            )
+            assert_linear("quadratic", 6_000, |n| n, |&n| sleep(n * n / 1_000))
         });
         assert!(quadratic.is_err());
     }
