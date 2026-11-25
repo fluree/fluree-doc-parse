@@ -2231,12 +2231,36 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut read: Vec<Grid> = Vec::new();
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
+                let stacks = table::stack_columns(&p.rules, &p.fills);
+                let mut withheld: Vec<usize> = Vec::new();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
                     let beside = crate::textgrid::read_beside_its_labels(
                         &grids[i], &p.rules, &p.fills, &lines,
                     );
+                    // The stacks of row lines ruled alike within the seed:
+                    // the places their lines break, their columns' edges as
+                    // drawn.
+                    let within: Vec<&(crate::geom::BBox, Vec<f64>)> = stacks
+                        .iter()
+                        .filter(|(b, _)| {
+                            overlap_area(b, &grids[i].bbox)
+                                >= 0.5 * ((b.x1 - b.x0) * (b.y1 - b.y0)).max(1.0)
+                        })
+                        .collect();
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
                         let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        // A reading across the columns a stack's rules draw
+                        // is no table: neither it nor the seed stands, and
+                        // its text stays text.
+                        let (merged, got): (Vec<Grid>, Vec<Grid>) =
+                            got.into_iter().partition(|g| {
+                                within.iter().any(|(b, edges)| {
+                                    crate::textgrid::merges_drawn_columns(g, edges, b, &p.glyphs)
+                                })
+                            });
+                        if !merged.is_empty() && !withheld.contains(&i) {
+                            withheld.push(i);
+                        }
                         if beside {
                             beside_labels.extend(got.iter().map(|g| g.bbox));
                         }
@@ -2319,7 +2343,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         kept.push(g);
                     }
                 }
-                if kept.is_empty() {
+                if kept.is_empty() && withheld.is_empty() {
                     return;
                 }
                 let mut out_grids = Vec::new();
@@ -2329,6 +2353,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     // A seed that was read is replaced by its reading; another
                     // grid only where a reading covers much of it.
                     let replaced = seeded.contains(&gi)
+                        || withheld.contains(&gi)
                         || (!crate::textgrid::has_vertical(&p.rules, &g.bbox)
                             && kept
                                 .iter()
