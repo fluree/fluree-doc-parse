@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "lutron-maestro-369-116.pdf",
+    "url": "https://assets.lutron.com/a/documents/369-116_maestro_120v_multi-location_fluorescent_smart_dimmer.pdf",
+    "sha256": "94c8a1723c49c88c65b9458d21f8be68911a87db0f7a49e5accdcad36a4c1f57",
+    "about": "Lutron Maestro 369-116 specification. Page 1 sets a category strip (`Wallbox Wiring Devices`) at the top right, as large as the title at the left over the text."
+  },
+  "notes": [
+    "2026-11-24 (#204): the document title was the largest of the first blocks in reading order, so a sidebar's heading read first, or a category strip as large as the title and set above it, was taken for it."
+  ],
+  "checks": [
+    {
+      "id": "title-over-the-text",
+      "found": "2026-11-24",
+      "issue": "The category strip was the document title.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "120 V~ Multi-Location 3-Wire Fluorescent Smart Dimmer",
+        "evidence": "title"
+      }
+    }
+  ]
+}

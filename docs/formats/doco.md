@@ -275,6 +275,13 @@ A table with no header row has no `doc:columnHeader` on its cells, and
 value` is one: each value's `doc:rowHeader` is its label. See [a list of
 fields](../design/tables.md#a-list-of-fields-has-no-header-row).
 
+Where a table's first columns are labels set down the rows they group, a
+group over its sub-groups, a cell's `doc:rowHeader` names them all, group
+first, then the row's own label: `FP2 Backplane / Conventional type /
+7-module type (for master and expansion)`. A column spanning the same rows
+as the group is read as more of the group, and named as the row's label
+after it: `0.1 mL / white`.
+
 A list wrapped to fill the page sets its columns again side by side:
 `Competitor | Part no. | Competitor | Part no.`, each copy a record of its
 own. Where the copies' value columns are named alike and each copy opens

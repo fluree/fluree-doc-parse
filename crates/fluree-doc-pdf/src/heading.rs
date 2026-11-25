@@ -717,6 +717,21 @@ fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
 }
 
 /// Detect headings across a document.
+/// Smallest size, against the body's, of a numbered line read as a section
+/// heading. Notes and footnotes are numbered too, and set smaller.
+const NUMBERED_NOTE_RATIO: f64 = 0.85;
+
+/// Widest a body-size title runs per inked character, in its font size: a
+/// run of words. Wider is a label and its value set apart across the page.
+const SPREAD_ADVANCE: f64 = 0.85;
+
+/// Sizes, in points, within which two candidate titles are set alike.
+const SAME_TITLE_SIZE: f32 = 0.25;
+
+/// How much larger than the first blocks' title a title read later on the
+/// first page must be to be the document's.
+const LATE_TITLE_RATIO: f32 = 1.1;
+
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
     detect_with_body(pages, outline, body_font_size(pages))
 }
@@ -798,7 +813,58 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
 
     let document_title = pages.first().and_then(|blocks| {
         let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
-        blocks
+        let candidate = |i: usize, b: &Block| -> bool {
+            let text = b.text();
+            // At most three lines, or a few words to a line, as a cover
+            // stacks its title: `PROCAT / SISTEMA DE / AISLAMIENTO
+            // SUELTO / PROFESIONAL`.
+            // Of words: a badge's text layer stacks `a1111111111`.
+            let words = text.split_whitespace().count();
+            let inked: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+            let letters = inked.iter().filter(|c| c.is_alphabetic()).count();
+            let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
+            // A title stands alone on its row. One of two one-line
+            // groups set across a row, a course's name at the left and
+            // its code at the right, is a running head's part. A cover
+            // title stacked beside its description is not.
+            let shares_row = b.lines.len() == 1
+                && blocks.iter().any(|o| {
+                    !std::ptr::eq(o, b)
+                        && o.lines.len() == 1
+                        && o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0)
+                            > o.bbox.height().min(b.bbox.height()) * 0.5
+                        && (o.bbox.x1 <= b.bbox.x0 || b.bbox.x1 <= o.bbox.x0)
+                });
+            if b.marker.is_some()
+                || shares_row
+                || (b.lines.len() > 3 && !stacked)
+                || !title_like_within(&text, word_limit(&text, b, body))
+                || (numbering_depth(&text).is_some() && repeated_numbered.contains(&norm(&text)))
+            {
+                return false;
+            }
+            let gap_after = blocks
+                .get(i + 1)
+                .map(|next| next.bbox.y0 - b.bbox.y1)
+                .unwrap_or(0.0);
+            let prominent_size = b.font_size >= body * 1.05;
+            // At the body's size a title stands as one run of words. A
+            // label and its value set apart across the page (`Part No.`
+            // and `675 8126H250`, 170pt between) is a field.
+            let spread = b.lines.len() == 1
+                && b.bbox.width() > inked.len() as f64 * b.font_size as f64 * SPREAD_ADVANCE;
+            let isolated_largest =
+                b.font_size >= largest * 0.98 && gap_after >= b.font_size as f64 * 0.75 && !spread;
+            let normalized = text.trim().trim_end_matches(':').to_lowercase();
+            let contents_title = matches!(normalized.as_str(), "contents" | "table of contents");
+            prominent_size || isolated_largest || contents_title
+        };
+        // The page's text width, for telling two columns apart.
+        let (left, right) = blocks.iter().fold((f64::MAX, f64::MIN), |(l, r), b| {
+            (l.min(b.bbox.x0), r.max(b.bbox.x1))
+        });
+        let column_apart = (right - left) * 0.25;
+        let early = blocks
             .iter()
             .take(4)
             // Once ordinary prose starts, a later isolated equation lead-in
@@ -808,49 +874,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                 text.split_whitespace().count() <= word_limit(&text, b, body)
             })
             .enumerate()
-            .filter(|(i, b)| {
-                let text = b.text();
-                // At most three lines, or a few words to a line, as a cover
-                // stacks its title: `PROCAT / SISTEMA DE / AISLAMIENTO
-                // SUELTO / PROFESIONAL`.
-                // Of words: a badge's text layer stacks `a1111111111`.
-                let words = text.split_whitespace().count();
-                let inked: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
-                let letters = inked.iter().filter(|c| c.is_alphabetic()).count();
-                let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
-                // A title stands alone on its row. One of two one-line
-                // groups set across a row, a course's name at the left and
-                // its code at the right, is a running head's part. A cover
-                // title stacked beside its description is not.
-                let shares_row = b.lines.len() == 1
-                    && blocks.iter().any(|o| {
-                        !std::ptr::eq(o, *b)
-                            && o.lines.len() == 1
-                            && o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0)
-                                > o.bbox.height().min(b.bbox.height()) * 0.5
-                            && (o.bbox.x1 <= b.bbox.x0 || b.bbox.x1 <= o.bbox.x0)
-                    });
-                if b.marker.is_some()
-                    || shares_row
-                    || (b.lines.len() > 3 && !stacked)
-                    || !title_like_within(&text, word_limit(&text, b, body))
-                    || (numbering_depth(&text).is_some()
-                        && repeated_numbered.contains(&norm(&text)))
-                {
-                    return false;
-                }
-                let gap_after = blocks
-                    .get(i + 1)
-                    .map(|next| next.bbox.y0 - b.bbox.y1)
-                    .unwrap_or(0.0);
-                let prominent_size = b.font_size >= body * 1.05;
-                let isolated_largest =
-                    b.font_size >= largest * 0.98 && gap_after >= b.font_size as f64 * 0.75;
-                let normalized = text.trim().trim_end_matches(':').to_lowercase();
-                let contents_title =
-                    matches!(normalized.as_str(), "contents" | "table of contents");
-                prominent_size || isolated_largest || contents_title
-            })
+            .filter(|&(i, b)| candidate(i, b))
             // The largest of the candidates, not the first. A cover commonly
             // sets the publisher or programme above the title in smaller type
             // — "Arizona State University" over "Sustainability Impact
@@ -860,13 +884,41 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             // it, which reads as an inverted hierarchy to everything
             // downstream.
             //
-            // Ties keep the earlier block: where two lines share the largest
-            // style, the first is the title and the second is its subtitle.
+            // Two of one size go to the one a column further left, which
+            // the page is read from first: a category strip at the right of
+            // the page's header (`Wallbox Wiring Devices`) is as large as
+            // the title over the text, and set above it. Otherwise the
+            // earlier: where two lines share the largest style, the first
+            // is the title and the second is its subtitle.
             .fold(None, |best: Option<(usize, &Block)>, (i, b)| match best {
-                Some((_, prev)) if prev.font_size >= b.font_size => best,
+                Some((_, prev)) if (prev.font_size - b.font_size).abs() <= SAME_TITLE_SIZE => {
+                    if b.bbox.x0 < prev.bbox.x0 - column_apart {
+                        Some((i, b))
+                    } else {
+                        best
+                    }
+                }
+                Some((_, prev)) if prev.font_size > b.font_size => best,
                 _ => Some((i, b)),
+            });
+        // The page's largest title set in its upper half, read only after a
+        // sidebar or a column the reading takes first (`Highlights` at
+        // 14pt, read before the 17pt title at the right), when it is
+        // clearly larger than the first blocks' title. Where the first
+        // blocks hold no title, a large line further down is a section's
+        // or a statement's, not the document's.
+        let foot = blocks.iter().map(|b| b.bbox.y1).fold(0.0_f64, f64::max);
+        let late = blocks
+            .iter()
+            .enumerate()
+            .skip(4)
+            .filter(|&(i, b)| {
+                b.font_size >= largest * 0.98 && b.bbox.y0 < foot * 0.5 && candidate(i, b)
             })
-            .map(|(i, _)| i)
+            .find(|(_, b)| {
+                early.is_some_and(|(_, e)| b.font_size > e.font_size * LATE_TITLE_RATIO)
+            });
+        late.or(early).map(|(i, _)| i)
     });
 
     // Outline entries by normalized title. A title is not a key: one book
@@ -1020,6 +1072,20 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             // 3. Numbering states its own depth — unless the block is a
             // list's item, whose number counts off from the item before it.
             if let Some(depth) = numbering_depth(&text).filter(|_| !initial(&text)) {
+                // Set below the body's size, a numbered line is a note: a
+                // data sheet's `1) Feature only available with …` at 5pt
+                // under 7pt text, or a table's `(1)` notes. Unless set in
+                // capitals, as an agreement sets its sections in small
+                // capitals over its clauses (`6. AFFIRMATIVE COVENANTS.` at
+                // 8pt over 10pt text); a note is set in the text's case.
+                let capitals = text.chars().any(char::is_alphabetic)
+                    && text
+                        .chars()
+                        .filter(|c| c.is_alphabetic())
+                        .all(char::is_uppercase);
+                if (b.font_size as f64) < body as f64 * NUMBERED_NOTE_RATIO && !capitals {
+                    continue;
+                }
                 if b.marker.is_some()
                     || !bare_numbering_is_corroborated(&text, b, body)
                     || coded(&text)
@@ -1602,6 +1668,110 @@ mod tests {
         assert!(!division_label("Chapter 3 Numerical differentiation"));
         assert!(!division_label("Scalable. Responsive."));
         assert!(!division_label("Section"));
+    }
+
+    #[test]
+    fn a_numbered_note_set_small_is_no_heading() {
+        let page = vec![
+            blk("1. Scope", 10.0, 1),
+            body(),
+            body(),
+            body(),
+            blk("1) Feature only available with the larger model", 7.0, 1),
+            // A section set in small capitals under the text's size.
+            blk("2. AFFIRMATIVE COVENANTS.", 8.0, 1),
+            body(),
+        ];
+        let hs = detect(&[page], &[]);
+        let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["1. Scope", "2. AFFIRMATIVE COVENANTS."], "{hs:?}");
+    }
+
+    #[test]
+    fn the_title_is_picked_by_size_and_column_not_reading_order() {
+        let at = |text: &str, fs: f32, x0: f64, y0: f64, x1: f64| {
+            let mut b = blk(text, fs, 1);
+            b.bbox = BBox {
+                x0,
+                y0,
+                x1,
+                y1: y0 + fs as f64,
+            };
+            b.lines[0].bbox = b.bbox;
+            b
+        };
+        let title = |hs: &[Heading]| {
+            hs.iter()
+                .find(|h| h.evidence == Evidence::Title)
+                .map(|h| h.text.clone())
+        };
+        // A sidebar read first, its heading smaller than the title at the
+        // right, read after it.
+        let mut page = vec![at("Highlights", 14.0, 37.0, 283.0, 103.0)];
+        for k in 0..5 {
+            page.push(at(
+                "A range of capacities for demanding workloads.",
+                8.5,
+                37.0,
+                310.0 + 37.0 * k as f64,
+                180.0,
+            ));
+        }
+        page.push(at("Gold Enterprise Class Drive", 17.0, 236.0, 153.0, 543.0));
+        page.push(at(
+            "Drives provide high performance for tower workstations and more.",
+            8.5,
+            235.0,
+            199.0,
+            559.0,
+        ));
+        assert_eq!(
+            title(&detect(&[page], &[])).as_deref(),
+            Some("Gold Enterprise Class Drive")
+        );
+        // A category strip at the right, as large as the title at the left.
+        let page = vec![
+            at("Wallbox Wiring Devices", 14.0, 402.0, 46.0, 558.0),
+            at("120 V Multi-Location Smart Dimmer", 14.0, 55.0, 83.0, 430.0),
+            at(
+                "The Smart Dimmer requires a neutral wire connection here.",
+                10.0,
+                55.0,
+                120.0,
+                400.0,
+            ),
+            at(
+                "Companion dimmers cannot be used as a single-pole switch.",
+                10.0,
+                55.0,
+                140.0,
+                400.0,
+            ),
+        ];
+        assert_eq!(
+            title(&detect(&[page], &[])).as_deref(),
+            Some("120 V Multi-Location Smart Dimmer")
+        );
+        // A label and its value set apart across the page, at the body's
+        // size, is a field.
+        let page = vec![
+            at("Part No. 675 8126H250", 10.0, 71.0, 89.0, 305.0),
+            at(
+                "A wide mouth bottle of 250ml, made for the laboratory and the field, in clear plastic.",
+                10.0,
+                71.0,
+                108.0,
+                520.0,
+            ),
+            at(
+                "Each is supplied with its lid screwed on, and they are packed twelve bottles to a pack.",
+                10.0,
+                71.0,
+                128.0,
+                520.0,
+            ),
+        ];
+        assert_eq!(title(&detect(&[page], &[])), None);
     }
 
     #[test]

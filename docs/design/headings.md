@@ -169,6 +169,15 @@ text, which block assembly gathers into items before headings are read (see
 [Numbered lists](../inputs/pdf.md)). Such an item is never a heading on any
 evidence but the outline's.
 
+A numbered line set below the body's size, under 0.85 of it, is a note:
+a data sheet's `1) Feature only available with …` at 5pt under 7pt text, a
+reference list set small, a chart's numbered title, a table's `(1)` notes.
+Read as a numbered heading, such a footnote opened a level-1 section that
+the rest of the document fell into. Lines set in capitals are the exception.
+An agreement sets its sections in small capitals over clauses at the body's
+size (`6. AFFIRMATIVE COVENANTS.` at 8pt over 10pt text), and a note is set
+in the text's case.
+
 Two label shapes look like numbering and are words:
 
 - **A number hyphenated into a word**: `3-Way Wiring`, `2-Pole`, a
@@ -232,6 +241,24 @@ own either. As a heading it ranked below the title, so it opened a deeper
 section that closed at the title with nothing in it. It is read as text,
 where the page sets it. Journal banners (`Open Access`, `RESEARCH
 ARTICLE`) are kickers too.
+
+Reading order is not the page's order of size, so the first blocks can miss
+the title:
+
+- **A title read late.** A sidebar read first can hold the first large
+  line: `Highlights` at 14pt, before the 17pt product title at the right.
+  The page's largest title-shaped line in its upper half is the title when
+  it is over a tenth larger than the first blocks' pick. Where the first
+  blocks hold no title at all, a large line further down is a section's or
+  a statement's, and stays one.
+- **Two candidates of one size.** The one a column further left (by more
+  than a quarter of the page's width) is the title. A category strip at the
+  right of the header (`Wallbox Wiring Devices`) is as large as the title
+  under it at the left. Otherwise the earlier one wins, so a title keeps
+  its same-size subtitle.
+- **A field.** A line at the body's size spread wider than its words could
+  run, a label and its value set apart across the page (`Part No.` …
+  `675 8126H250`), is never the title.
 
 A division's label is not a kicker. A division word and its number, a
 roman numeral or a letter (`Chapter 3`, `PART II`, `Appendix B`) is a
