@@ -117,6 +117,12 @@ for routed region *i* — the names of the crops `fdoc dev render-routed`
 writes, with `.json` for `.png`. Other tags are ignored: a table crop is a
 question about structure, and an OCR engine reads text.
 
+A page's regions are numbered once glyphs drawn twice at one spot (faux bold)
+count once and a watermark laid over the text is taken out, as the analysis
+and its anchors number them: a label in faux bold over a capture covers it as
+drawn, not once cleaned, and `r0` is the same region for the crop, the
+reading and the anchor.
+
 An OCR engine's words, each with its box. Unlike a model reading, which
 replaces elements, these become **glyphs** before analysis, so a scanned page
 goes through the same line, column, table and heading assembly a born-digital
