@@ -481,6 +481,19 @@ from its text:
   holding the bars and scattered labels, is part of its chart. A diagram's
   boxes hold labels set well under the page's text, and are part of the
   diagram.
+- A scatter plot's points line up in rows and columns as a table's shaded
+  cells do. They are not read as a table's shading when all of these hold:
+  - they are marks smaller than a line of the page's text, and most of
+    the group's shapes;
+  - they are drawn as a few symbols;
+  - they spread both ways and fill few of the places their rows and
+    columns cross;
+  - they are plotted against an axis: three numbers or more beside them,
+    set in a column on one right edge or in a row on one baseline.
+
+  A calibration's points, at a few levels across, each at nearly the same
+  height, are such a scatter. A matrix of dots, a row of text apart, a
+  column of drawn bullets, and a seal's ring of dots are not.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that
@@ -508,6 +521,17 @@ and the labels around it:
 - text beside, above or below the drawing and near it, or set smaller than
   the page's prose and near it or near another label;
 - never further from the drawing than the drawing's own size.
+
+A line at the prose's size is no title in two cases:
+
+- It stands in the page's head band, the top 8% of the page, more than two
+  lines from the drawing. That is a running head, even one that names the
+  appendix the plots are in. A badge's small words there are labels as
+  anywhere.
+- It says three words or more and its sentence runs on into the page's
+  prose set under it, starting in lower case. That is a paragraph's line,
+  even when it was parted at a wide justified space. A legend's entry of a
+  word or two doesn't run on.
 
 A list item, a sentence of more than fifteen words, and a block too wide to be
 a label stay the page's, however close they are set. Text at the prose's

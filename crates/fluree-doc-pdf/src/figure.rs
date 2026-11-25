@@ -323,6 +323,10 @@ pub fn detect(
         return Vec::new();
     }
 
+    let text = PageText {
+        prose: ink.prose,
+        numbers: numbers(glyphs),
+    };
     let mut out = Vec::new();
     let fit = |b: &BBox| !page_scale(b);
     let reach = cluster_reach(&boxes);
@@ -335,7 +339,7 @@ pub fn detect(
         .collect();
     for part in marks.iter().chain(std::iter::once(&rest)) {
         split(&boxes, part, reach, &fit, &mut |group, b| {
-            if let Some(f) = judge(&boxes, group, b, rules, page, size) {
+            if let Some(f) = judge(&boxes, group, b, rules, page, size, &text) {
                 out.push(f);
             }
         });
@@ -466,6 +470,152 @@ fn split(
     }
 }
 
+/// What a page's text tells drawings apart by: the size of its prose, and
+/// where it sets numbers.
+struct PageText {
+    prose: f32,
+    numbers: Vec<BBox>,
+}
+
+/// The numbers a page sets, each as one box: runs of glyphs along one
+/// baseline, a space apart at most, saying digits with only a point, a
+/// comma, a sign, a percent or a currency sign between them: `1,000`,
+/// `0.04`, `−20`, `45%`.
+fn numbers(glyphs: &[Glyph]) -> Vec<BBox> {
+    let mut out = Vec::new();
+    let mut run: Option<(BBox, f64, String)> = None;
+    let number = |t: &str| {
+        t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().count() <= 10
+            && t.chars()
+                .all(|c| c.is_ascii_digit() || ".,+-\u{2212}%$".contains(c))
+    };
+    for g in glyphs {
+        let Some(b) = g.bbox else { continue };
+        let size = (g.font_size as f64).max(1.0);
+        let t = g.text.trim();
+        let joins = run.as_ref().is_some_and(|(r, y, _)| {
+            (b.y0 + b.y1) * 0.5 - y <= size * 0.3
+                && y - (b.y0 + b.y1) * 0.5 <= size * 0.3
+                && b.x0 - r.x1 <= size * 0.4
+                && b.x0 - r.x1 >= -size * 0.5
+        });
+        if !joins || t.is_empty() {
+            if let Some((r, _, s)) = run.take() {
+                if number(&s) {
+                    out.push(r);
+                }
+            }
+        }
+        if t.is_empty() {
+            continue;
+        }
+        match run.as_mut() {
+            Some((r, _, s)) => {
+                *r = r.union(&b);
+                s.push_str(t);
+            }
+            None => run = Some((b, (b.y0 + b.y1) * 0.5, t.to_string())),
+        }
+    }
+    if let Some((r, _, s)) = run {
+        if number(&s) {
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Fewest values an axis sets.
+const AXIS_VALUES: usize = 3;
+
+/// Lines of text, around a drawing, an axis's values may stand.
+const AXIS_REACH: f64 = 4.0;
+
+/// Is the drawing plotted against an axis: [`AXIS_VALUES`] numbers or
+/// more around it, within [`AXIS_REACH`] lines, set in a column on one
+/// right edge (`1,000` over `100` over `10`) or in a row on one baseline?
+fn axis(b: &BBox, numbers: &[BBox], line: f64) -> bool {
+    let reach = line * AXIS_REACH;
+    let near: Vec<&BBox> = numbers
+        .iter()
+        .filter(|n| {
+            n.x1 >= b.x0 - reach
+                && n.x0 <= b.x1 + reach
+                && n.y1 >= b.y0 - reach
+                && n.y0 <= b.y1 + reach
+        })
+        .collect();
+    near.iter().any(|a| {
+        let column = near
+            .iter()
+            .filter(|n| (n.x1 - a.x1).abs() <= 2.0 && (n.y0 - a.y0).abs() >= line * 0.5)
+            .count();
+        let row = near
+            .iter()
+            .filter(|n| {
+                ((n.y0 + n.y1) - (a.y0 + a.y1)).abs() <= 3.0 && (n.x0 - a.x0).abs() >= line * 0.5
+            })
+            .count();
+        column + 1 >= AXIS_VALUES || row + 1 >= AXIS_VALUES
+    })
+}
+
+/// Share of a scatter's marks its few symbols account for: one size to a
+/// series, a few series to a plot.
+const SYMBOL_SHARE: f64 = 0.9;
+
+/// Marks drawn as a few symbols: the three commonest sizes, to the point,
+/// account for [`SYMBOL_SHARE`] of them. A drawing's arrowheads and pieces
+/// come in many.
+fn symbols(marks: &[BBox]) -> bool {
+    let mut sizes: std::collections::BTreeMap<(i64, i64), usize> = Default::default();
+    for m in marks {
+        *sizes
+            .entry((m.width().round() as i64, m.height().round() as i64))
+            .or_default() += 1;
+    }
+    let mut counts: Vec<usize> = sizes.into_values().collect();
+    counts.sort_unstable_by(|a, b| b.cmp(a));
+    let top: usize = counts.iter().take(3).sum();
+    top as f64 >= marks.len() as f64 * SYMBOL_SHARE
+}
+
+/// Most of the places a matrix's rows and columns cross that its marks
+/// fill: a scatter's points, set at a series' values, fill few.
+const MATRIX_FILL: f64 = 0.3;
+
+/// Marks set at scattered places, not a matrix's. A matrix sets one mark
+/// to a place, in rows a line of text apart, each beside its row's label;
+/// it repeats both its coordinates, two places or more to a row and to a
+/// column on average, and fills [`MATRIX_FILL`] of the places they cross.
+/// A scatter's values run on along one axis at least, or stand closer
+/// than lines of text: a calibration's points at a few levels across,
+/// each at nearly the same height.
+fn scattered(marks: &[BBox], line: f64) -> bool {
+    let snap = |v: f64| v.round() as i64;
+    let mut rows: Vec<i64> = marks.iter().map(|m| snap(m.y0)).collect();
+    rows.sort_unstable();
+    rows.dedup();
+    let mut columns: Vec<i64> = marks.iter().map(|m| snap(m.x0)).collect();
+    columns.sort_unstable();
+    columns.dedup();
+    let mut places: Vec<(i64, i64)> = marks.iter().map(|m| (snap(m.x0), snap(m.y0))).collect();
+    places.sort_unstable();
+    places.dedup();
+    let n = places.len();
+    let (xs, ys) = (columns.len(), rows.len());
+    if xs < 3 || ys < 3 {
+        return false;
+    }
+    let mut gaps: Vec<i64> = rows.windows(2).map(|w| w[1] - w[0]).collect();
+    gaps.sort_unstable();
+    let pitch = gaps.get(gaps.len() / 2).map_or(0.0, |&g| g as f64);
+    let matrix =
+        n >= 2 * xs && n >= 2 * ys && n as f64 >= (xs * ys) as f64 * MATRIX_FILL && pitch >= line;
+    !matrix
+}
+
 /// A group of shapes judged as one drawing: the figure it is, or `None`
 /// when it is a table's shading, a band of the page, or too small.
 fn judge(
@@ -475,6 +625,7 @@ fn judge(
     rules: &[Rule],
     page: usize,
     size: (f64, f64),
+    text: &PageText,
 ) -> Option<Figure> {
     if b.width().min(b.height()) < MIN_SIDE || b.width() * b.height() < MIN_AREA {
         return None;
@@ -482,38 +633,58 @@ fn judge(
     if band(&b, size) {
         return None;
     }
-    // Row banding: most fills starting and ending at the same x.
-    let mut shared = 0usize;
-    for &i in group {
-        let a = boxes[i];
-        let n = group
-            .iter()
-            .filter(|&&j| (boxes[j].x0 - a.x0).abs() < 1.0 && (boxes[j].x1 - a.x1).abs() < 1.0)
-            .count();
-        shared = shared.max(n);
-    }
-    if shared as f64 / group.len() as f64 > MAX_SHARED_X {
-        return None;
-    }
-    // Cells, not a drawing: a table's shading set in rows and columns,
-    // each shape sharing its column's edges with one and its row's with
-    // another. A table that greys out its empty cells draws nothing else.
-    let same = |a: f64, b: f64| (a - b).abs() < 1.0;
-    let cells = group
+    // A scatter's points line up in rows and columns as a table's cells
+    // do, set at a series' values. They are marks smaller than a line of
+    // the page's text, most of the group, drawn as a few symbols, spread
+    // both ways and scattered: they fill few of the places their rows and
+    // columns cross, where a matrix's dots fill most. And they are plotted
+    // against an axis, its values set in a row or a column beside them. A
+    // table's shading holds its text, a line high at least; a column of
+    // drawn bullets, a seal's ring of dots, have no axis.
+    let line = (text.prose as f64).max(1.0);
+    let marks: Vec<BBox> = group
         .iter()
-        .filter(|&&i| {
+        .map(|&i| boxes[i])
+        .filter(|a| a.width().max(a.height()) < line)
+        .collect();
+    let scatter = marks.len() * 2 > group.len()
+        && symbols(&marks)
+        && scattered(&marks, line)
+        && axis(&b, &text.numbers, line);
+    if !scatter {
+        // Row banding: most fills starting and ending at the same x.
+        let mut shared = 0usize;
+        for &i in group {
             let a = boxes[i];
-            let column = group
+            let n = group
                 .iter()
-                .any(|&j| j != i && same(boxes[j].x0, a.x0) && same(boxes[j].x1, a.x1));
-            let row = group
-                .iter()
-                .any(|&j| j != i && same(boxes[j].y0, a.y0) && same(boxes[j].y1, a.y1));
-            column && row
-        })
-        .count();
-    if cells as f64 / group.len() as f64 > MAX_SHARED_X {
-        return None;
+                .filter(|&&j| (boxes[j].x0 - a.x0).abs() < 1.0 && (boxes[j].x1 - a.x1).abs() < 1.0)
+                .count();
+            shared = shared.max(n);
+        }
+        if shared as f64 / group.len() as f64 > MAX_SHARED_X {
+            return None;
+        }
+        // Cells, not a drawing: a table's shading set in rows and columns,
+        // each shape sharing its column's edges with one and its row's with
+        // another. A table that greys out its empty cells draws nothing else.
+        let same = |a: f64, b: f64| (a - b).abs() < 1.0;
+        let cells = group
+            .iter()
+            .filter(|&&i| {
+                let a = boxes[i];
+                let column = group
+                    .iter()
+                    .any(|&j| j != i && same(boxes[j].x0, a.x0) && same(boxes[j].x1, a.x1));
+                let row = group
+                    .iter()
+                    .any(|&j| j != i && same(boxes[j].y0, a.y0) && same(boxes[j].y1, a.y1));
+                column && row
+            })
+            .count();
+        if cells as f64 / group.len() as f64 > MAX_SHARED_X {
+            return None;
+        }
     }
     // Strips, not a drawing. A section's header panel with its accent
     // bar and the identification box beneath it are three shapes, and
@@ -1125,6 +1296,18 @@ pub fn attach_beside(
             b.x1.min(drawing.x1) > b.x0.max(drawing.x0)
                 || b.y1.min(drawing.y1) > b.y0.max(drawing.y0)
         };
+        // The page's head band holds its running heads. A line set there at
+        // the prose's size is a drawing's only when it stands against it, a
+        // title over a chart at the top of the page; a badge's small words
+        // there are labels as anywhere: a running head over a page of plots took
+        // the region to the page's top, and the plots' legend under them
+        // then grew it past the bound. A chart's source and notes stand
+        // under it, in the foot band as often as not.
+        let banded = |b: &BBox, size: f32| {
+            page_height > 0.0
+                && b.y1 <= page_height * PAGE_BAND
+                && gap(b, &drawing) > (size as f64).max(1.0) * BAND_TITLE_LINES
+        };
         loop {
             let mut grew = false;
             for (i, (b, size, text)) in blocks.iter().enumerate() {
@@ -1151,6 +1334,13 @@ pub fn attach_beside(
                 if !(near && (label || (beside(b) && fits))) && !chained {
                     continue;
                 }
+                // Nor is a line of words whose sentence runs on into the
+                // page's prose under it: a paragraph's, parted where a
+                // justified line's space falls in line with the plots'
+                // gutter. A legend's entry says a word or two.
+                if !label && words(text) >= RUN_WORDS && runs_into_lower(b, *size, blocks) {
+                    continue;
+                }
                 // Text set beside a logo's lettering on its row is the
                 // logo's company: a form's title beside the wordmark in a
                 // footer, under the page's diagrams, is none of theirs.
@@ -1158,6 +1348,9 @@ pub fn attach_beside(
                     m.y1.min(b.y1) > m.y0.max(b.y0)
                         && (b.x0 - m.x1).max(m.x0 - b.x1) <= *size as f64 * MARK_REACH
                 }) {
+                    continue;
+                }
+                if !label && banded(b, *size) {
                     continue;
                 }
                 let grown = f.bbox.union(b);
@@ -1433,6 +1626,29 @@ const PICTURE_EDGE: f64 = 0.5;
 /// A label as a picture's: a few words, no display type.
 fn picture_label(size: f32, text: &str, prose: f32) -> bool {
     text.split_whitespace().count() <= LABEL_MAX_WORDS && size < prose * FRAME_DISPLAY
+}
+
+/// Share of the page's height, at its top, its running heads stand in.
+const PAGE_BAND: f64 = 0.08;
+
+/// Lines, at most, between a drawing and a title over it in the page's head
+/// band.
+const BAND_TITLE_LINES: f64 = 2.0;
+
+/// Is the text in `b` carried on, its sentence unfinished, into the page's
+/// prose set within a line under it: more words than a label says, its
+/// first letter a small one? A chart's label wrapped onto a second line
+/// goes on in a word or two, and a panel's caption opens on its letter,
+/// `(a)`.
+fn runs_into_lower(b: &BBox, size: f32, blocks: &[(BBox, f32, &str)]) -> bool {
+    let line = (size as f64).max(1.0);
+    blocks.iter().any(|(o, osize, text)| {
+        (osize - size).abs() <= 0.5
+            && (0.0..=line).contains(&(o.y0 - b.y1))
+            && o.x1.min(b.x1) > o.x0.max(b.x0)
+            && text.chars().next().is_some_and(char::is_lowercase)
+            && text.split_whitespace().count() > LABEL_MAX_WORDS
+    })
 }
 
 /// Are two blocks one run of text: set at one size from one left edge, one
@@ -2531,6 +2747,134 @@ mod tests {
         let mut taken = vec![vec![0, 1]];
         release_lead_ins(&mut taken, &blocks, &items);
         assert_eq!(taken, vec![vec![1]]);
+    }
+
+    /// A number's glyphs, one to a digit, from `x` on a baseline at `y`.
+    fn number(t: &str, x: f64, y: f64) -> Vec<Glyph> {
+        t.chars()
+            .enumerate()
+            .map(|(i, c)| glyph(&c.to_string(), x + i as f64 * 4.4, y, 8.0))
+            .collect()
+    }
+
+    /// A calibration's points: five levels across, the replicates a few
+    /// points apart in height, so every point shares a row and a column
+    /// with others.
+    fn calibration() -> Vec<Fill> {
+        let mut v = Vec::new();
+        for x in [100.0, 120.0, 140.0, 160.0, 180.0] {
+            for k in 0..11 {
+                let y = 200.0 + 3.0 * k as f64;
+                v.push(bb(x, y, x + 5.0, y + 5.0));
+            }
+        }
+        fills(&v)
+    }
+
+    #[test]
+    fn a_scatter_plotted_against_an_axis_is_a_figure() {
+        let ticks: Vec<Glyph> = [("30", 180.0), ("20", 200.0), ("10", 220.0)]
+            .iter()
+            .flat_map(|(t, y)| number(t, 80.0, *y))
+            .collect();
+        let got = detect(&calibration(), &[], &ticks, 0, (612.0, 792.0));
+        assert_eq!(got.len(), 1);
+        // With no axis beside them, points in rows and columns are a
+        // table's shading as before.
+        assert!(detect(&calibration(), &[], &[], 0, (612.0, 792.0)).is_empty());
+    }
+
+    #[test]
+    fn a_matrix_of_dots_is_no_scatter() {
+        // A feature matrix's dots, a row of text apart, every place filled.
+        let mut v = Vec::new();
+        for x in [300.0, 320.0, 340.0, 360.0] {
+            for y in [100.0, 114.0, 128.0, 142.0] {
+                v.push(bb(x, y, x + 5.0, y + 5.0));
+            }
+        }
+        assert!(!scattered(&v, 8.0));
+        let ticks: Vec<Glyph> = [("1", 100.0), ("2", 114.0), ("3", 128.0)]
+            .iter()
+            .flat_map(|(t, y)| number(t, 280.0, *y))
+            .collect();
+        assert!(detect(&fills(&v), &[], &ticks, 0, (612.0, 792.0)).is_empty());
+        // Nor a column of drawn bullets.
+        let bullets: Vec<BBox> = (0..8)
+            .map(|i| bb(90.0, 100.0 + 13.0 * i as f64, 95.0, 105.0 + 13.0 * i as f64))
+            .collect();
+        assert!(!scattered(&bullets, 10.0));
+    }
+
+    #[test]
+    fn a_line_its_sentence_runs_on_from_is_no_title() {
+        // A paragraph's first line, parted at a justified space, over the
+        // plots: its sentence runs on into the next line, in lower case.
+        let drawing = bb(86.0, 227.0, 555.0, 529.0);
+        let mut figs = vec![Figure {
+            bbox: drawing,
+            drawing,
+            page: 0,
+            shapes: 140,
+            frame: None,
+        }];
+        let blocks = vec![
+            (
+                bb(62.0, 136.0, 260.0, 146.0),
+                10.0,
+                "This appendix contains supplementary figures for",
+            ),
+            (
+                bb(42.0, 148.0, 556.0, 182.0),
+                10.0,
+                "report. Figures 1.1 to 1.34 plot measured concentration versus expected \
+                 concentration in validation experiments for each compound in each matrix.",
+            ),
+            (
+                bb(86.0, 217.0, 177.0, 225.0),
+                9.0,
+                "A. Reagent water spikes",
+            ),
+        ];
+        let labels = attach(&mut figs, &blocks, &[], (612.0, 792.0), 10.0);
+        assert_eq!(labels, vec![vec![2]]);
+    }
+
+    #[test]
+    fn a_running_head_is_no_title_but_a_chart_title_at_the_top_is() {
+        // Plots under a running head set in the page's head band, 33pt
+        // over them; and a chart drawn at the top of a page, its title
+        // standing against it in the band.
+        let plots = bb(98.0, 86.0, 567.0, 388.0);
+        let mut figs = vec![Figure {
+            bbox: plots,
+            drawing: plots,
+            page: 0,
+            shapes: 150,
+            frame: None,
+        }];
+        let head = vec![(
+            bb(397.0, 43.0, 541.0, 53.0),
+            10.0,
+            "Appendix 1. Supplemental Figures",
+        )];
+        assert_eq!(
+            attach(&mut figs, &head, &[], (612.0, 792.0), 10.0),
+            vec![Vec::<usize>::new()]
+        );
+        let chart = bb(98.0, 58.0, 400.0, 300.0);
+        let mut figs = vec![Figure {
+            bbox: chart,
+            drawing: chart,
+            page: 0,
+            shapes: 20,
+            frame: None,
+        }];
+        let title = vec![(bb(98.0, 44.0, 260.0, 54.0), 10.0, "Figure 3. Net income")];
+        assert_eq!(
+            attach(&mut figs, &title, &[], (612.0, 792.0), 10.0),
+            vec![vec![0]]
+        );
     }
 
     #[test]
