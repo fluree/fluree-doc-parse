@@ -1,0 +1,56 @@
+{
+  "document": {
+    "file": "hobart-am15-dealer.pdf",
+    "url": "https://www.mclhospitality.com/wp-content/uploads/am15.pdf",
+    "sha256": "79c0bf9bcf3950a8ae8a135623024721c1e9b99551e8dbe28ed7ce0ef972c796",
+    "about": "Hobart AM15 specification sheet (dealer copy). Its specification page sets two columns of prose under a rule."
+  },
+  "notes": [
+    "2026-11-24 (#190): each page's title names the model, `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS`, and three pages set `DISHWASHER` alone. Those three were read as a running line, and it was cut out of the other titles, leaving `– ELECTRIC` and `– GAS`."
+  ],
+  "checks": [
+    {
+      "id": "short-title-not-running",
+      "found": "2026-11-24",
+      "issue": "#190: `DISHWASHER` was running text.",
+      "running": "DISHWASHER",
+      "count": 0
+    },
+    {
+      "id": "no-electric-fragment",
+      "found": "2026-11-24",
+      "issue": "#190: the title was cut to `– ELECTRIC`.",
+      "element": {
+        "text": "– ELECTRIC"
+      },
+      "count": 0
+    },
+    {
+      "id": "no-gas-fragment",
+      "found": "2026-11-24",
+      "issue": "#190: the title was cut to `– GAS`, an h1.",
+      "element": {
+        "text": "– GAS"
+      },
+      "count": 0
+    },
+    {
+      "id": "electric-title-whole",
+      "found": "2026-11-24",
+      "issue": "#190: as above.",
+      "element": {
+        "text": "DISHWASHER – ELECTRIC"
+      },
+      "count": 2
+    },
+    {
+      "id": "gas-title-whole",
+      "found": "2026-11-24",
+      "issue": "#190: as above.",
+      "element": {
+        "text": "DISHWASHER – GAS"
+      },
+      "count": 2
+    }
+  ]
+}
