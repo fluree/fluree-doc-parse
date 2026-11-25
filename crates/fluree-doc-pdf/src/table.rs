@@ -1247,16 +1247,25 @@ impl Grid {
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
-        // A label column — bold on every row, nothing else bold — makes a
-        // list of fields, whose first row is a field like the others.
+        // Label columns — the leading columns bold on every row, the rest
+        // bold on none, the first row's included — make a list of fields,
+        // whose first row is a field like the others: a field's name, or a
+        // name and the size each value is for (`PRODUCT CODE | 8′2" | …`). A
+        // header row names every column in its weight, the values' too.
         let bold = |(weighted, heavy): (usize, usize)| weighted > 0 && heavy * 2 > weighted;
         let weights: Vec<Vec<(usize, usize)>> = (0..self.rows())
             .map(|r| self.cell_weights(glyphs, r))
             .collect();
+        let labels = (0..self.cols())
+            .take_while(|&c| weights.iter().all(|w| bold(w[c])))
+            .count();
         let label_column = self.cols() >= 2
             && run == 0
-            && weights.iter().all(|w| bold(w[0]))
-            && weights.iter().all(|w| w[1..].iter().all(|c| !bold(*c)));
+            && labels >= 1
+            && labels < self.cols()
+            && weights
+                .iter()
+                .all(|w| w[labels..].iter().all(|c| !bold(*c)));
         // So does one whose labels a colon ends, in any weight.
         let colon_labels =
             self.cols() == 2 && rows.iter().all(|r| r.len() == 2) && colon_fields(&rows.concat());
@@ -9112,6 +9121,58 @@ mod header_tests {
         glyphs.extend(run(5.0, 135.0, "10", false));
         glyphs.extend(run(105.0, 135.0, "12", false));
         let t = rows(&[&["1", "2"], &["10", "12"], &["", ""]]);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
+    }
+
+    #[test]
+    fn two_bold_label_columns_beside_plain_values_make_no_header() {
+        // A field's name and the size each value is for, both bold on every
+        // row, the values plain: a list of fields, the first row one of them.
+        let g = plain_grid(
+            vec![0.0, 100.0, 150.0, 300.0],
+            vec![100.0, 120.0, 140.0, 160.0],
+        );
+        let run = |x: f64, y: f64, text: &str, bold: bool| -> Vec<crate::glyph::Glyph> {
+            text.chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    let mut gl = gly(x + 6.0 * i as f64, y, 5.0, &c.to_string());
+                    gl.weight = Some(if bold { 700 } else { 400 });
+                    gl
+                })
+                .collect()
+        };
+        let mut glyphs = Vec::new();
+        for (y, label, size, value) in [
+            (115.0, "Code", "4 ft", "7712"),
+            (135.0, "Count", "4 ft", "60"),
+            (155.0, "Weight", "4 ft", "12 kg"),
+        ] {
+            glyphs.extend(run(5.0, y, label, true));
+            glyphs.extend(run(105.0, y, size, true));
+            glyphs.extend(run(155.0, y, value, false));
+        }
+        let t = rows(&[
+            &["Code", "4 ft", "7712"],
+            &["Count", "4 ft", "60"],
+            &["Weight", "4 ft", "12 kg"],
+        ]);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 0);
+        // A header bold across every column, the values' too, still is one.
+        let mut glyphs = Vec::new();
+        glyphs.extend(run(5.0, 115.0, "Item", true));
+        glyphs.extend(run(105.0, 115.0, "Size", true));
+        glyphs.extend(run(155.0, 115.0, "Price", true));
+        for (y, a, b, c) in [(135.0, "Bolt", "M6", "0.40"), (155.0, "Nut", "M6", "0.10")] {
+            glyphs.extend(run(5.0, y, a, true));
+            glyphs.extend(run(105.0, y, b, true));
+            glyphs.extend(run(155.0, y, c, false));
+        }
+        let t = rows(&[
+            &["Item", "Size", "Price"],
+            &["Bolt", "M6", "0.40"],
+            &["Nut", "M6", "0.10"],
+        ]);
         assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
     }
 
