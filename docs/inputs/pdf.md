@@ -421,6 +421,13 @@ from its text:
   width, with words along the rest of it: a footer's certification logos
   beside `APPROVALS:`. A submittal's logo set over its form is a logo, and
   the form's labels are the page's.
+- A word drawn as shapes, a logo's lettering, is a drawing of its own:
+  three letters or more on one baseline at one height, side by side, clear
+  of every other shape by more than their height. A submittal's wordmark
+  under its wiring diagrams no longer joins them by reach, and text set
+  beside the wordmark on its row (`SPECIFICATION SUBMITTAL …`) is no label
+  of the diagrams. Its letters are no boxes to tick either, and neither are
+  a table row's shaded cells set side by side.
 - A background as large as the page joins nothing. Drawings set close
   together are found as separate drawings, rather than lost as one shape too
   large to be a drawing.

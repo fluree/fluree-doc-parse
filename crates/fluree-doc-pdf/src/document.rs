@@ -1511,12 +1511,13 @@ fn find_figures(
             .map(|&i| (blocks[i].bbox, blocks[i].font_size, block_texts[i].as_str()))
             .collect();
         let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
-        let taken = figure::attach(
+        let taken = figure::attach_beside(
             &mut figures,
             &block_boxes,
             &images,
             (page.width, page.height),
             prose_size(blocks),
+            &figure::marks(&page.fills),
         );
         // Which figure each block belongs to, if any: the labels its figure
         // took, and whatever lies mostly inside the drawing itself. The
