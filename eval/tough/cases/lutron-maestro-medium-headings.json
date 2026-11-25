@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
+  },
+  "notes": [
+    "#215: the sheet sets its body in Helvetica Neue Light and its headings in Medium, Type 1C fonts whose weights only their names and descriptors state. Read on the absolute scale, Medium is lighter than bold, and every heading read as body text."
+  ],
+  "checks": [
+    {
+      "id": "medium-heading-features",
+      "found": "2026-11-24",
+      "issue": "`Features`, set in Medium over a Light body, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Features",
+        "evidence": "bold"
+      }
+    },
+    {
+      "id": "medium-heading-model-number",
+      "found": "2026-11-24",
+      "issue": "`Model Number`, set in Medium over a Light body, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Model Number",
+        "evidence": "bold"
+      }
+    },
+    {
+      "id": "medium-heading-power",
+      "found": "2026-11-24",
+      "issue": "`Power and Ratings`, set in Medium over a Light body, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Power and Ratings",
+        "evidence": "bold"
+      }
+    }
+  ]
+}

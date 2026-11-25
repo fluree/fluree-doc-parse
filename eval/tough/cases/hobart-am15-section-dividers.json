@@ -1,0 +1,39 @@
+{
+  "document": {
+    "file": "hobart-am15.pdf",
+    "url": "https://www.hobart.ca/wp-content/uploads/pdfs/warewash/AM15-F40078.pdf",
+    "sha256": "bc7d11759f34b0dbab4898e14dd4088c9fb9a2bb10be7c10bf81d3e776cbd138",
+    "about": "Hobart AM15 dishwasher specification sheet. Its first page sets its sections in two columns, each section headed under a doubled rule drawn across its column."
+  },
+  "notes": [
+    "2026-11-25 (#198): the doubled rules over the sections, drawn across one column or the other, were read as one table's row lines. Trimmed of the bands no vertical crosses, down to the three lines a grid needs, it still had none crossed, and between its first two rules, one across each column, stood the end of the Standard Features list: the list's tail and the whole VOLTAGE section became its two cells. A band of text between rules that share no stretch of the page is no row."
+  ],
+  "checks": [
+    {
+      "id": "voltage-is-a-section",
+      "found": "2026-11-25",
+      "issue": "#198: VOLTAGE and its options were one cell of a table.",
+      "section": {
+        "title": "VOLTAGE"
+      }
+    },
+    {
+      "id": "features-list-stays-whole",
+      "found": "2026-11-25",
+      "issue": "#198: the Standard Features list's last ten items were one cell of a table.",
+      "under": {
+        "text": "Automatic fill",
+        "section": "STANDARD FEATURES"
+      }
+    },
+    {
+      "id": "voltages-under-voltage",
+      "found": "2026-11-25",
+      "issue": "#198: as above, the voltage options.",
+      "under": {
+        "text": "208-240/60/1",
+        "section": "VOLTAGE"
+      }
+    }
+  ]
+}

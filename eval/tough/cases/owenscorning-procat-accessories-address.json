@@ -1,0 +1,53 @@
+{
+  "document": {
+    "file": "owenscorning-procat-accessories.pdf",
+    "url": "https://www.owenscorning.com/dms/10015771",
+    "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
+    "about": "Owens Corning ProCat professional insulation system accessory list (9 pages). The last page closes on the company's address, `OWENS CORNING SALES, LLC` over its street and city and `1-800-GET-PINK®` `www.owenscorning.com`, set under the logo and beside the mascot, which are drawn as one cluster of shapes reaching over the address."
+  },
+  "notes": [
+    "#201: the address lay within the drawing's reach, under its logo, and was taken as the drawing's labels."
+  ],
+  "checks": [
+    {
+      "id": "address-company-not-figure",
+      "found": "2026-11-25",
+      "issue": "The address's company line was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "OWENS CORNING SALES, LLC"
+      },
+      "count": 0
+    },
+    {
+      "id": "address-street-not-figure",
+      "found": "2026-11-25",
+      "issue": "The address's street and city were a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "ONE OWENS CORNING PARKWAY TOLEDO, OH 43659 USA"
+      },
+      "count": 0
+    },
+    {
+      "id": "address-phone-not-figure",
+      "found": "2026-11-25",
+      "issue": "The address's phone number and web address were a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "1-800-GET-PINK® www.owenscorning.com"
+      },
+      "count": 0
+    },
+    {
+      "id": "address-company-no-heading",
+      "found": "2026-11-25",
+      "issue": "A guard: released, the company line opens the address and is no heading over it.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "OWENS CORNING SALES, LLC"
+      },
+      "count": 0
+    }
+  ]
+}

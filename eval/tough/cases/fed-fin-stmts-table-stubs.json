@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "fed-combined-fin-stmts-2023.pdf",
+    "url": "https://www.federalreserve.gov/aboutthefed/files/combinedfinstmt2023.pdf",
+    "sha256": "ef2e222446c28e78021854b1c335bd2d34a52887eb0ac7aaa014ab8ed078f460",
+    "about": "Federal Reserve Banks Combined Financial Statements for 2023 and 2022. Several of its tables are not read as tables; their bold stubs stand over the figures of the rows they name."
+  },
+  "notes": [
+    "#242: bold stubs of a table not read as one were headings: a label over a line of the table's figures."
+  ],
+  "checks": [
+    {
+      "id": "stub-over-figures",
+      "found": "2026-11-25",
+      "issue": "`Total assets, net`, a stub over its row's figures, was a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Total assets, net"
+      },
+      "count": 0
+    },
+    {
+      "id": "section-kept",
+      "found": "2026-11-25",
+      "issue": "Guard: `Notes to Combined Financial Statements` stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Notes to Combined Financial Statements"
+      }
+    }
+  ]
+}

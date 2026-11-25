@@ -9,7 +9,8 @@
     "2026-11-23: both lists' first rows were read as headers, so every value was named after the grade's description (#51). A bold label column with nothing else bold already read as fields; here the shaded labels and the watermark read as shaded rows, and the bold phrases in the grade 8 values as bold cells.",
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
     "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it.",
-    "2026-11-24 (#137): the table title `HEX CAP SCREWS` is set in small capitals, and its word was dealt to the grid's columns letter by letter (`S Crew S`) where it crossed two of them. A run that crosses two columns is dealt by its words now, and a word whose letters touch stays whole. Its case is still the drawn codes' (`SCrewS`): the page is drawn as a layer, and the ActualText inside optional content is not read."
+    "2026-11-24 (#137): the table title `HEX CAP SCREWS` is set in small capitals, and its word was dealt to the grid's columns letter by letter (`S Crew S`) where it crossed two of them. A run that crosses two columns is dealt by its words now, and a word whose letters touch stays whole. Its case is still the drawn codes' (`SCrewS`): the page is drawn as a layer, and the ActualText inside optional content is not read.",
+    "2026-11-24 (#193): the grade 8 list's `Yield Strength*` row, the last drawn over the watermark, was taken for a header restated partway down: shaded like the first row, over rows that are not. Every row under it took its value as their column name. A row is shaded only by fills of its own now, not by a drawing laid under the page."
   ],
   "checks": [
     {
@@ -65,6 +66,21 @@
       "cell": {
         "column": "Hex Cap Screws ASME B18.2.1-2012"
       }
+    },
+    {
+      "id": "grade-8-yield-is-a-row",
+      "found": "2026-11-24",
+      "issue": "#193: the row was taken for a restated header, and its value was lost as data.",
+      "row": {
+        "#0": "Yield Strength*",
+        "#1": "1/4 through 1-1/2 in. diameter, all lengths: 130,000 psi. minimum"
+      }
+    },
+    {
+      "id": "no-yield-names-a-column",
+      "found": "2026-11-24",
+      "issue": "#193: every row under it was named after its value.",
+      "no_column_header": "130,000 psi"
     }
   ]
 }

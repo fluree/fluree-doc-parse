@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "hse-l153.pdf",
+    "url": "https://www.hse.gov.uk/pubns/priced/l153.pdf",
+    "sha256": "b89e9812cd6756cc245ea0c7926179ad13d5b020884cc74fb2dd00cd5fb6d80e",
+    "about": "HSE L153, Managing health and safety in construction. Each regulation is followed by its guidance, under a `Guidance` label set at 12pt over a 10pt body, beside the guidance's first head."
+  },
+  "notes": [
+    "#215: once its fonts' names were read, the labels and heads set at 12pt read bold, took the bold path at its fixed level, and lost their place in the outline: a bold head beside another on one row is no heading, and so `Guidance` and `4, 5 Who is a client?` became paragraphs. Bold set larger than the body is ranked by its size, as it was when its weight went unread."
+  ],
+  "checks": [
+    {
+      "id": "guidance-label-ranked-by-size",
+      "found": "2026-11-24",
+      "issue": "`Guidance`, set bold at 12pt over a 10pt body, was ranked as a body-size bold head.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Guidance",
+        "evidence": "font-size"
+      }
+    },
+    {
+      "id": "who-is-a-client-kept",
+      "found": "2026-11-24",
+      "issue": "`4, 5 Who is a client?`, beside its `Guidance` label, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "4, 5 Who is a client?"
+      }
+    }
+  ]
+}
