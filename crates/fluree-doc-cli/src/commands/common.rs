@@ -411,10 +411,12 @@ pub(crate) fn ocr_readings(
     fluree_doc_pdf::ocr::WordReading,
 )> {
     use fluree_doc_pdf::ocr::{Crop, WordReading};
-    use fluree_doc_pdf::route::{decide, Route};
+    use fluree_doc_pdf::route::Route;
     let mut out = Vec::new();
-    for p in &doc.pages {
-        let regions = match decide(p).0 {
+    // Numbered as the analysis's anchors and crops are.
+    let routes = fluree_doc_pdf::document::region_routes(doc);
+    for (p, route) in doc.pages.iter().zip(routes) {
+        let regions = match route {
             Route::VlmRegions(r) => r.len(),
             _ => 0,
         };

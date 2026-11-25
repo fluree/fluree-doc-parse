@@ -2260,6 +2260,26 @@ pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
     analyze_with(raw, outline, &AnalyzeOptions::default())
 }
 
+/// Each page's route as [`analyze_with`] decides it: once glyphs drawn twice
+/// at one spot (faux bold) are one, and a watermark laid over the text is
+/// taken out, and before any other cleaning. Those two take glyphs off an
+/// image: a label in faux bold or a watermark over a capture covers it as
+/// drawn, and not once cleaned.
+///
+/// A region is named by its place in its page's route (`r0`, `r1`, …), and
+/// an OCR reading is matched to its region by that name before the analysis
+/// runs: routing the page as drawn there, and cleaned in the analysis, would
+/// give one region two names. The document is not changed: the cleaning is
+/// done on a copy.
+pub fn region_routes(doc: &RawDoc) -> Vec<crate::route::Route> {
+    let mut pages = doc.pages.clone();
+    for p in pages.iter_mut() {
+        dedup::remove_faux_bold(&mut p.glyphs, 8);
+    }
+    crate::watermark::strip_overlaid(&mut pages);
+    pages.iter().map(|p| crate::route::decide(p).0).collect()
+}
+
 pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOptions) -> Analysis {
     let mut timings = StageTimings::default();
     let mut suspect_tables: Vec<table::SuspectTable> = Vec::new();
@@ -2278,7 +2298,26 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     timed(&mut timings.furniture, || {
         crate::watermark::strip_overlaid(&mut raw.pages)
     });
-    for p in raw.pages.iter_mut() {
+    // Routed here, after the two cleanings that take glyphs off an image and
+    // before any other: the page an OCR reading numbers its regions on
+    // ([`region_routes`]), so a region's anchor and its reading carry one
+    // name. `Deterministic` is the right stand-in when nobody asks: both
+    // consumers act only on `VlmRegions`, and both are unreachable in the
+    // configurations that skip the call.
+    let routes: Vec<crate::route::Route> = raw
+        .pages
+        .iter()
+        .map(|p| {
+            timed(&mut timings.routing, || {
+                if routing_is_consulted(opts) {
+                    crate::route::decide(p).0
+                } else {
+                    crate::route::Route::Deterministic
+                }
+            })
+        })
+        .collect();
+    for (p, route) in raw.pages.iter_mut().zip(routes) {
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
         // consumer of `rules` — grids, column rulers, row banding — would
@@ -2299,16 +2338,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // The page's glyphs are final from here: each grid's cells are read
         // from them once.
         let _cells = crate::cells::pin(&p.glyphs);
-        // `Deterministic` is the right stand-in when nobody asks: both
-        // consumers act only on `VlmRegions`, and both are unreachable in the
-        // configurations that skip the call.
-        let route = timed(&mut timings.routing, || {
-            if routing_is_consulted(opts) {
-                crate::route::decide(p).0
-            } else {
-                crate::route::Route::Deterministic
-            }
-        });
 
         // Tables first: a grid's glyphs must not also become paragraphs.
         // Two readings of the page's ruling, judged after trimming: a

@@ -186,9 +186,12 @@ impl Injected {
 ///
 /// `readings` is `(page index, crop, reading)`. Routing is decided on every
 /// page before any word is added, so two readings of one page are judged
-/// against the page as extracted, not against each other.
+/// against the page as extracted, not against each other; and as the
+/// analysis decides it ([`crate::document::region_routes`]), so a region's
+/// reading and its anchor carry one name.
 pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Vec<Injected> {
-    let routes: Vec<Route> = doc.pages.iter().map(|p| route::decide(p).0).collect();
+    // Numbered as the analysis's anchors and crops are.
+    let routes: Vec<Route> = crate::document::region_routes(doc);
     // The regions an engine may fill: the routed ones.
     let regions: Vec<Vec<BBox>> = routes
         .iter()
