@@ -561,6 +561,27 @@ taken in name their columns, each label its own, none repeated among them or
 in the data under them. A table's data repeats itself (`Yes` row after row)
 under a stub run down a continued page, and its rows stay data.
 
+### Group labels over their underlines
+
+A table read from its text names a header label's columns by the words it
+covers, or by the rule under it. A statement's group label is often
+narrower than one of its columns: `Net sales (a)` set over the middle of
+three years, its underline drawn a year at a time. Read by the underline
+piece under its middle alone, the label named one column. The banner passes
+then gave each group the columns up to the next label, a column off, and
+both labels landed in one header cell.
+
+A rule's pieces that meet end to end are one run. Where the label's rule
+row is two runs or more, parted between the groups, the run under a label
+over the figures names its columns, if the label is set as a group's: centred
+over the run (its middle within 15% of the run's width of the run's, as the
+banner passes take a centred label), and the only label of its header row
+over it. A column's label set to one side of cell borders that run on under
+its neighbour (`OP` over `OP | LOS`) is not. A rule row of one run is the header's
+bottom rule, not a group's, and the label reads the piece under its middle
+as before. So does the labels' column's own head: a run across the header
+under it would make the stub head a title over every column.
+
 ### A header restated partway down
 
 A table can name its columns afresh partway down: a VOC table's `By wt |

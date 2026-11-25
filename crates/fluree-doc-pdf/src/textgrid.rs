@@ -1434,24 +1434,55 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     }
     // A header line that is a column's label wrapped onto a second line joins
     // it; a banner, or a line with a rule under it, stays a row of its own.
-    let rule_under = |l: &Line, c: &Chunk| -> Option<(f64, f64)> {
-        rules
+    // The rule under a label: the pieces under its middle, or with `joined`
+    // the run of pieces that meet end to end through it. A group's
+    // underline drawn a column at a time, its joins bridged, is one rule
+    // under the group's label, however few columns the label's own words
+    // cover (`Net sales (a)` over three years); it says which columns the
+    // label spans, not where the header's rows part.
+    let rule_at = |l: &Line, c: &Chunk, joined: bool| -> Option<(f64, f64)> {
+        let mid = (c.x0 + c.x1) / 2.0;
+        let mut pieces: Vec<(f64, f64)> = rules
             .iter()
             .filter(|r| r.orientation == Orientation::Horizontal)
             .filter(|r| r.bbox.y0 >= l.base - fs * 0.2 && r.bbox.y0 <= l.base + fs * 0.8)
-            .filter(|r| r.bbox.x0 <= (c.x0 + c.x1) / 2.0 && r.bbox.x1 >= (c.x0 + c.x1) / 2.0)
             .map(|r| (r.bbox.x0, r.bbox.x1))
-            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
-            // A banner's rule is under it alone; one under several labels
-            // is the rule between the header and the body.
-            .filter(|&(a, b)| {
-                l.chunks
-                    .iter()
-                    .filter(|d| (d.x0 + d.x1) / 2.0 >= a && (d.x0 + d.x1) / 2.0 <= b)
-                    .count()
-                    == 1
-            })
+            .collect();
+        let piece = pieces
+            .iter()
+            .copied()
+            .filter(|&(a, b)| a <= mid && b >= mid)
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let found = if joined {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut runs: Vec<(f64, f64)> = Vec::new();
+            for &(a, b) in &pieces {
+                match runs.last_mut() {
+                    Some(r) if a <= r.1 + 0.5 => r.1 = r.1.max(b),
+                    _ => runs.push((a, b)),
+                }
+            }
+            // Group underlines, one under each group and parted between
+            // them; a rule otherwise is read by the piece under the label.
+            if runs.len() >= 2 {
+                runs.into_iter().find(|&(a, b)| a <= mid && b >= mid)
+            } else {
+                None
+            }
+        } else {
+            piece
+        };
+        // A banner's rule is under it alone; one under several labels is
+        // the rule between the header and the body.
+        found.filter(|&(a, b)| {
+            l.chunks
+                .iter()
+                .filter(|d| (d.x0 + d.x1) / 2.0 >= a && (d.x0 + d.x1) / 2.0 <= b)
+                .count()
+                == 1
+        })
     };
+    let rule_under = |l: &Line, c: &Chunk| rule_at(l, c, false);
     // The header is banner rows and one row of column labels. A banner
     // label runs across columns, has its own rule beneath it, or stands
     // over another column's label without running on into it; it keeps a
@@ -1923,12 +1954,33 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     // Header spans: a label across a gutter, or a rule under it that reaches
     // across one, names every column it covers.
     let ncols = cols.len();
+    // A label over the figures reads its rule's whole run of group
+    // underlines where it is set as a group's label is: centred over the
+    // run, as the banner passes below take a centred label, and the only
+    // label of its header row over it. A column's label set to one side of
+    // the cells' borders run on under its neighbour (`OP` over `OP | LOS`)
+    // is not. The labels' own head reads the piece under it, not a rule
+    // across the header.
+    let group_run = |row: &[&Line], l: &Line, c: &Chunk| -> Option<(f64, f64)> {
+        if !column_of(&cols, c).is_some_and(|k| k > 0) {
+            return None;
+        }
+        rule_at(l, c, true).filter(|&(a, b)| {
+            let centred = ((c.x0 + c.x1) / 2.0 - (a + b) / 2.0).abs() <= (b - a) * 0.15;
+            centred
+                && !row.iter().flat_map(|o| o.chunks.iter()).any(|d| {
+                    let m = (d.x0 + d.x1) / 2.0;
+                    !std::ptr::eq(d, c) && m >= a && m <= b
+                })
+        })
+    };
     let mut spans: Vec<(usize, usize, usize)> = Vec::new();
     for (r, ls) in head_rows.iter().enumerate() {
         for l in ls {
             for c in &l.chunks {
                 let mut ks = covered(&cols, c);
-                if let Some((a, b)) = rule_under(l, c) {
+                let run = group_run(ls, l, c);
+                if let Some((a, b)) = run.or_else(|| rule_under(l, c)) {
                     let wide = Chunk {
                         x0: a,
                         x1: b,
@@ -1978,18 +2030,20 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             let ks = covered(&cols, c);
             // A rule narrower than the label's own columns says nothing of
             // what it spans.
-            let ruled = rule_under(l, c).is_some_and(|(a, b)| {
-                covered(
-                    &cols,
-                    &Chunk {
-                        x0: a,
-                        x1: b,
-                        ..c.clone()
-                    },
-                )
-                .len()
-                    >= ks.len()
-            });
+            let ruled = group_run(&head_rows[r], l, c)
+                .or_else(|| rule_under(l, c))
+                .is_some_and(|(a, b)| {
+                    covered(
+                        &cols,
+                        &Chunk {
+                            x0: a,
+                            x1: b,
+                            ..c.clone()
+                        },
+                    )
+                    .len()
+                        >= ks.len()
+                });
             if ks.len() < 2 || ruled {
                 continue;
             }
@@ -2915,6 +2969,58 @@ mod tests {
             y1: 190.0,
         };
         read(&lines(&gl), &rules, region, 0)
+    }
+
+    #[test]
+    fn group_labels_span_the_columns_their_underlines_run_under() {
+        // Two groups of three years, each label narrower than one column
+        // and set over its group's middle, each underlined a column at a
+        // time, the pieces meeting end to end and the groups' runs parted.
+        let piece = |x0: f64, x1: f64| Rule {
+            bbox: BBox {
+                x0,
+                y0: 53.0,
+                x1,
+                y1: 53.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let rules = vec![
+            piece(115.0, 147.0),
+            piece(147.0, 197.0),
+            piece(197.0, 247.0),
+            piece(275.0, 307.0),
+            piece(307.0, 357.0),
+            piece(357.0, 407.0),
+        ];
+        let years = [120.0, 170.0, 220.0, 280.0, 330.0, 380.0];
+        let mut gl = set("Sales", 168.0, 50.0);
+        gl.extend(set("Assets", 326.0, 50.0));
+        for (x, y) in years
+            .iter()
+            .zip(["2016", "2015", "2014", "2016", "2015", "2014"])
+        {
+            gl.extend(set(y, *x, 64.0));
+        }
+        for (i, label) in ["North", "South", "Total"].into_iter().enumerate() {
+            let base = 80.0 + 12.0 * i as f64;
+            gl.extend(set(label, 20.0, base));
+            for x in years {
+                gl.extend(set("1,234", x - 3.0, base));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 38.0,
+            x1: 420.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().expect("read from its text");
+        assert!(lay.spans.contains(&(0, 1, 4)), "{:?}", lay.spans);
+        assert!(lay.spans.contains(&(0, 4, 7)), "{:?}", lay.spans);
     }
 
     #[test]
