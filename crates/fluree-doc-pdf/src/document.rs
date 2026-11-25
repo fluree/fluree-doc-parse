@@ -2610,6 +2610,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
+        // A statement ruled by its figures' underlines rules off groups of
+        // rows: each line of figures in a group is a row of its own.
+        if grid_sources.contains(&GridSource::Ruled) {
+            let underlined: Vec<usize> = (0..grids.len())
+                .filter(|&k| {
+                    grid_sources[k] == GridSource::Ruled
+                        && table::ruled_by_underlines(&grids[k], &p.rules, &p.glyphs)
+                })
+                .collect();
+            if !underlined.is_empty() {
+                let lines = crate::textgrid::lines(&p.glyphs);
+                for k in underlined {
+                    crate::textgrid::split_underlined_bands(&mut grids[k], &lines);
+                }
+            }
+        }
+
         let page_aligned = timed(&mut timings.tables, || {
             table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
         });

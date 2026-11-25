@@ -137,6 +137,55 @@ wrong of every cell it reads so. Neither it nor the stack stands, and the
 text is read as text. The breaks are the stack's own: a grid ruled some other
 way says less of where its columns are drawn.
 
+### Underlines under figures
+
+A financial statement is often ruled by underlines alone: under a
+subtotal's figures a piece under each column, a double rule under a total,
+the header shaded or ruled across. The pieces end at the columns' edges, but
+on a page whose other rules run across the table, too few of its lines are
+underlines for those ends to have half the lines' support, and the grid
+kept only the edges its long rules give (the Federal Reserve Banks' SOMA
+holdings: three columns for eight of figures).
+
+The gutters between the pieces say it instead. A gap narrower than a cell
+(12pt, one and a half of the narrowest cell) between two pieces each at
+least a cell wide is a gutter, and a line with three or more of them (four
+columns of figures) states its columns'. A gutter on two such lines or more
+is a column's edge, and so are where their run of pieces starts and ends,
+the first figure column's left edge and the last one's right. A gutter is
+added only where no edge stands already. Narrower pieces are no
+underlines: a dashed line's dashes, a chart's curve drawn a point at a time,
+its axis's ticks.
+
+Text set across a gutter says the pieces are not under columns. If a glyph
+on the rule's own row (a baseline within an em of it) spans a gutter, or two
+glyphs a word space or less apart (0.6 em) stand either side of one, none of
+the rule's gutters counts. That catches a caption over a header row drawn a
+cell at a time, or a line of prose over its links' underlines. A head set
+over two columns stands a line's leading above their own underlines and
+does not close the gutter between them. A label run on past where the
+underlines begin drops only that end.
+
+Such rules close groups of rows, not rows. The grid's band between two rows
+of underlines holds `Bills`, `Notes` and `Bonds`, each a line of figures,
+and read as one row it put all three in each cell. In a grid ruled by its
+figures' underlines, a band holding two lines of figures or more (figures in
+two columns after the labels') is cut into a row per line, midway between
+one line's ink and the next one's. A label line between them, a section's
+label over its rows, is a row too. A band with fewer lines of figures stays
+whole: a header's labels wrapped over its lines, a figure with a note under
+it. The grid counts as ruled this way only when the underlines start after
+the rows' labels: after its first column, the labels' column left unruled,
+or after labels set left of a grid of the figures' columns alone, on lines
+that carry its figures. A row of cells drawn a cell at a time from the
+table's edge rules each of its rows, and its bands keep their wrapped lines.
+
+An underline row leaves the labels' column open, and where a label stands
+on each side of it that is no span: the label under a subtotal's underline
+is its own row's, not more of the label above (`Japanese yen Total`). A
+stub head over a header's underlined groups, its text on one side alone,
+still spans the header's rows. See [Merges](#merges).
+
 ## Each box is read on its own
 
 Read all at once, a page's rules make one grid before it is cut into tables.

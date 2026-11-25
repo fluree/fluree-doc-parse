@@ -2175,6 +2175,82 @@ pub fn claim(g: &mut Grid, glyphs: &[Glyph]) {
     }
 }
 
+/// Cut each band of a grid ruled by its figures' underlines
+/// ([`crate::table::ruled_by_underlines`]) that holds two lines of figures
+/// or more into a row per line. Such rules close a group of rows, a rule
+/// under the figures a subtotal sums and a double rule under a total, and
+/// the rows between them are ruled by nothing: each line of figures is a
+/// row, and so is each line between them (a section's label over its
+/// rows). A band with fewer lines of figures is left whole: a header's
+/// labels wrapped over its lines, or a figure with a note under it.
+pub fn split_underlined_bands(g: &mut Grid, lines: &[Line]) {
+    let cols = g.cols();
+    if cols < 3 || g.layout.is_some() {
+        return;
+    }
+    // A line's chunks inside the grid, each with the column its middle is in.
+    let xs = g.xs.clone();
+    fn inside<'a>(l: &'a Line, xs: &[f64]) -> Vec<(usize, &'a Chunk)> {
+        let (x0, x1) = (xs[0], xs[xs.len() - 1]);
+        l.chunks
+            .iter()
+            .filter_map(|c| {
+                let m = (c.x0 + c.x1) / 2.0;
+                (m > x0 && m < x1).then(|| {
+                    (
+                        xs.windows(2)
+                            .position(|w| m >= w[0] && m < w[1])
+                            .unwrap_or(0),
+                        c,
+                    )
+                })
+            })
+            .collect()
+    }
+    // Figures in two of the columns after the first, the labels' column.
+    let figured = |l: &Line| {
+        let mut with: Vec<usize> = inside(l, &xs)
+            .into_iter()
+            .filter(|(k, c)| *k > 0 && is_figure(&c.text) && !is_year(&c.text))
+            .map(|(k, _)| k)
+            .collect();
+        with.dedup();
+        with.len() >= 2
+    };
+    let mut cuts = Vec::new();
+    for w in g.ys.windows(2) {
+        let band: Vec<(f64, f64)> = lines
+            .iter()
+            .filter(|l| l.base > w[0] && l.base <= w[1])
+            .filter_map(|l| {
+                let held = inside(l, &xs);
+                let top = held.iter().map(|(_, c)| c.y0).fold(f64::MAX, f64::min);
+                let bottom = held.iter().map(|(_, c)| c.y1).fold(f64::MIN, f64::max);
+                (!held.is_empty()).then_some((top, bottom))
+            })
+            .collect();
+        let rows_of_figures = lines
+            .iter()
+            .filter(|l| l.base > w[0] && l.base <= w[1] && figured(l))
+            .count();
+        if rows_of_figures < 2 {
+            continue;
+        }
+        for p in band.windows(2) {
+            // Midway between one line's ink and the next one's; lines whose
+            // ink overlaps are not cut.
+            if p[1].0 > p[0].1 {
+                cuts.push((p[0].1 + p[1].0) / 2.0);
+            }
+        }
+    }
+    if cuts.is_empty() {
+        return;
+    }
+    g.ys.extend(cuts);
+    g.ys.sort_by(f64::total_cmp);
+}
+
 /// The regions of grids ruled with horizontals only: their bands are not
 /// rows and their segments' ends are not columns.
 pub fn unruled_grids(
@@ -2512,6 +2588,57 @@ mod tests {
             .iter()
             .map(|c| c.text.clone())
             .collect()
+    }
+
+    #[test]
+    fn a_band_under_figures_underlines_holds_a_row_per_line() {
+        // A statement's grid as its underlines rule it: a header band, a
+        // band of three lines of figures over a subtotal's underlines, a
+        // total's band and a band holding one figure with a note under it.
+        let mut g = crate::table::Grid {
+            layout: None,
+            page: 0,
+            xs: vec![50.0, 150.0, 208.0, 270.0, 332.0, 386.0],
+            ys: vec![30.0, 60.0, 103.0, 123.0, 150.0],
+            bbox: BBox {
+                x0: 50.0,
+                y0: 30.0,
+                x1: 386.0,
+                y1: 150.0,
+            },
+        };
+        let mut glyphs = Vec::new();
+        // The header's labels wrapped over two lines.
+        for (x, top, under) in [
+            (160.0, "Total", "cost"),
+            (222.0, "Par", "value"),
+            (284.0, "Fair", "value"),
+            (344.0, "Net", "gain"),
+        ] {
+            glyphs.extend(set(top, x, 44.0));
+            glyphs.extend(set(under, x, 55.0));
+        }
+        for (base, label) in [
+            (75.0, "Cash"),
+            (87.0, "Receivables"),
+            (99.0, "Inventory"),
+            (119.0, "Total"),
+        ] {
+            glyphs.extend(set(label, 55.0, base));
+            for x in [175.0, 237.0, 299.0, 357.0] {
+                glyphs.extend(set("1,234", x, base));
+            }
+        }
+        glyphs.extend(set("Other", 55.0, 135.0));
+        glyphs.extend(set("1,234", 175.0, 135.0));
+        glyphs.extend(set("see note", 160.0, 146.0));
+        split_underlined_bands(&mut g, &lines(&glyphs));
+        assert_eq!(g.ys.len(), 7, "{:?}", g.ys);
+        // The cuts fall between one line's ink and the next one's.
+        for (cut, (above, below)) in [g.ys[2], g.ys[3]].iter().zip([(75.0, 87.0), (87.0, 99.0)]) {
+            assert!(*cut > above + 2.0 && *cut < below - 8.0, "{:?}", g.ys);
+        }
+        assert_eq!(&g.ys[4..], &[103.0, 123.0, 150.0]);
     }
 
     #[test]
