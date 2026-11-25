@@ -1042,6 +1042,7 @@ dependencies = [
  "kurbo",
  "png 0.17.16",
  "read-fonts",
+ "rustc-hash",
  "serde",
  "serde_json",
  "unicode-normalization",
