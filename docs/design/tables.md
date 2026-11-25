@@ -702,7 +702,11 @@ holds its value in its first column (a statement's `$ 11,452`, the next
 columns unruled on that row), and figures alone across columns are the
 grid's cuts off the page's. DoCO then writes the value under each column of
 the run, where each has a header of its own; under one shared header, or in
-a band or a restated header row, it stays one cell.
+a band or a restated header row, it stays one cell. Columns that are one
+stacked header's children are that header's attributes, not things of their
+own: a software product's `Terminal GTWIN CD-ROM` set across the
+`Description` group's `Screen size` to `SD memory card slot` is none of
+them, and is written once, named `Description`.
 
 ### Rows drawn but not ruled
 

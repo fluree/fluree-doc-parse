@@ -405,9 +405,10 @@ fn record_width(header: &[String]) -> Option<usize> {
 ///   of data (not a band, nor a row naming the columns afresh);
 /// - the value is the run's only text, the source's other cells in it
 ///   empty (a sliced prose row holds text in several);
-/// - each column of the run has its own header, all of them different.
-///
-/// `None` where no run qualifies.
+/// - each column of the run has its own header, all of them different;
+/// - the columns have no stacked header's parent in common: a value across
+///   `Description`'s columns describes the group, and is written once,
+///   named by it.
 fn spread_across_columns(
     rows: &[Vec<String>],
     raw: &[Vec<String>],
@@ -416,13 +417,25 @@ fn spread_across_columns(
     merged_left: Option<&[bool]>,
     spread_left: Option<&[bool]>,
     subs: &[usize],
-) -> Option<Vec<Vec<String>>> {
-    let left = merged_left?;
-    let spread = spread_left?;
-    let ncols = rows.first()?.len();
+) -> Spread {
+    let mut found = Spread::default();
+    let (Some(left), Some(spread), Some(ncols)) =
+        (merged_left, spread_left, rows.first().map(Vec::len))
+    else {
+        return found;
+    };
     if left.len() != rows.len() * ncols || spread.len() != left.len() || raw.len() != rows.len() {
-        return None;
+        return found;
     }
+    // A stacked header's parent: `Description` of `Description / Screen
+    // size`.
+    let parent = |k: usize| {
+        header
+            .get(k)
+            .and_then(|h| h.rsplit_once(" / "))
+            .map(|(p, _)| p.trim())
+            .filter(|p| !p.is_empty())
+    };
     let mut out = rows.to_vec();
     let mut changed = false;
     for r in n_header..rows.len() {
@@ -443,7 +456,17 @@ fn spread_across_columns(
                 named.sort_unstable();
                 named.dedup();
                 let alone = (c + 1..end).all(|k| raw[r].get(k).is_none_or(|t| t.trim().is_empty()));
-                if all_named && named.len() == end - c && alone {
+                // A run over one parent's columns describes the parent, its
+                // columns being the parent's attributes: a software
+                // product's `Terminal GTWIN CD-ROM` set across the
+                // `Description` group's `Screen size` to `SD memory card
+                // slot` is none of them. It is written once, under the
+                // parent's name. Columns with no parent in common are
+                // things of their own, each a model's, and take a copy.
+                let group = parent(c).filter(|p| (c..end).all(|k| parent(k) == Some(p)));
+                if let Some(p) = group {
+                    found.heads.insert((r, c), p.to_string());
+                } else if all_named && named.len() == end - c && alone {
                     for k in c + 1..end {
                         out[r][k] = rows[r][c].clone();
                     }
@@ -453,7 +476,18 @@ fn spread_across_columns(
             c = end;
         }
     }
-    changed.then_some(out)
+    found.rows = changed.then_some(out);
+    found
+}
+
+/// What [`spread_across_columns`] makes of a table's spread values: the
+/// rows with values copied into each column they are set across, where any
+/// were, and the header a value written once is named by instead of its
+/// column's, by row and column.
+#[derive(Default)]
+struct Spread {
+    rows: Option<Vec<Vec<String>>>,
+    heads: std::collections::HashMap<(usize, usize), String>,
 }
 
 fn column_headers(
@@ -1216,7 +1250,7 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         ]
                         .concat(),
                     );
-                    let rows = spread.as_ref().unwrap_or(rows);
+                    let rows = spread.rows.as_ref().unwrap_or(rows);
                     // A row set like the header, partway down, names the
                     // columns of the rows beneath it in the header's place:
                     // its labels stand for the header's lowest row, under
@@ -1403,7 +1437,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             em.nodes[cell_idx]
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
-                            if let Some(h) = header.get(c).filter(|h| !h.is_empty()) {
+                            if let Some(h) = spread
+                                .heads
+                                .get(&(r, c))
+                                .or(header.get(c))
+                                .filter(|h| !h.is_empty())
+                            {
                                 em.nodes[cell_idx]
                                     .insert("doc:columnHeader".into(), Value::String(h.clone()));
                             }
@@ -2226,6 +2265,10 @@ mod tests {
         assert_eq!(table(true, models), ["M17 Series", "M21 Series"]);
         assert_eq!(table(false, models), ["M17 Series"]);
         assert_eq!(table(true, ["Specifications", "Value", ""]), ["Value"]);
+        // Across one stacked header's columns, its attributes, a value
+        // describes the group: written once, named by it.
+        let grouped = ["Product", "Description / Screen size", "Description / Power supply"];
+        assert_eq!(table(true, grouped), ["Description"]);
     }
 
     #[test]
