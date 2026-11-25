@@ -636,6 +636,18 @@ impl Collector {
     }
 }
 
+/// A drawn shape's paint: its colour, or the kind of pattern it is painted
+/// with.
+fn paint_of(paint: &hayro_interpret::Paint<'_>) -> rule::Paint {
+    match paint {
+        hayro_interpret::Paint::Color(c) => rule::Paint::Solid(c.to_rgba().to_rgba8()),
+        hayro_interpret::Paint::Pattern(p) => match p.as_ref() {
+            hayro_interpret::pattern::Pattern::Shading(_) => rule::Paint::Gradient,
+            hayro_interpret::pattern::Pattern::Tiling(_) => rule::Paint::Tiled,
+        },
+    }
+}
+
 impl<'a> Device<'a> for Collector {
     fn set_soft_mask(&mut self, _m: Option<hayro_interpret::SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _b: hayro_interpret::BlendMode) {}
@@ -643,7 +655,7 @@ impl<'a> Device<'a> for Collector {
         &mut self,
         path: &kurbo::BezPath,
         transform: Affine,
-        _paint: &hayro_interpret::Paint<'a>,
+        paint: &hayro_interpret::Paint<'a>,
         mode: &hayro_interpret::PathDrawMode,
     ) {
         // Bounding box only. A table grid is axis-aligned rectangles and
@@ -680,6 +692,15 @@ impl<'a> Device<'a> for Collector {
             self.rules.extend(rules);
             return;
         }
+        // What the fills are painted with, read once and only for a fill.
+        let filled = matches!(mode, hayro_interpret::PathDrawMode::Fill(_));
+        let mut painted = None;
+        let mut fill_of = |x: rule::Fill, bbox: BBox| rule::Fill {
+            bbox,
+            paint: Some(*painted.get_or_insert_with(|| paint_of(paint))),
+            stroked: !filled,
+            ..x
+        };
         // A rule is kept as drawn: table structure reads a grid's ruling
         // whole, and a table broken by the page foot draws its next row's
         // rules on under the clip. A filled shape is measured by what shows
@@ -687,7 +708,7 @@ impl<'a> Device<'a> for Collector {
         // A path filling several rectangles apart, a table's shaded cells
         // drawn as one, is a fill each: read whole, its box covered the
         // table, and the bands it shades were none.
-        if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
+        if filled {
             if let Some(boxes) = subpath_fills(&path) {
                 for b in boxes {
                     match rule::classify(b, self.page) {
@@ -698,7 +719,7 @@ impl<'a> Device<'a> for Collector {
                         }
                         Some(rule::Shape::Fill(x)) => {
                             if let Some(bbox) = self.visible(x.bbox) {
-                                self.fills.push(rule::Fill { bbox, ..x });
+                                self.fills.push(fill_of(x, bbox));
                             }
                         }
                         None => {}
@@ -715,7 +736,7 @@ impl<'a> Device<'a> for Collector {
             }
             Some(rule::Shape::Fill(x)) => {
                 if let Some(bbox) = self.visible(x.bbox) {
-                    self.fills.push(rule::Fill { bbox, ..x });
+                    self.fills.push(fill_of(x, bbox));
                 }
             }
             None => {}
@@ -2467,11 +2488,9 @@ mod actual_text_tests {
         assert_eq!(cased_over(&report, &[(2, 3, "p")]), "REPORT");
     }
 
-    #[test]
-    fn a_shape_is_measured_by_what_its_clip_lets_show() {
-        // A polar chart's outer circle, drawn whole and clipped to the
-        // chart's quarter, centred on its corner and reaching off the page.
-        let mut c = Collector {
+    /// A collector for a letter-size page with nothing drawn on it yet.
+    fn collector() -> Collector {
+        Collector {
             page: 0,
             glyphs: Vec::new(),
             images: Vec::new(),
@@ -2498,7 +2517,14 @@ mod actual_text_tests {
             faces: Default::default(),
             weights: Default::default(),
             probes: Probes::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn a_shape_is_measured_by_what_its_clip_lets_show() {
+        // A polar chart's outer circle, drawn whole and clipped to the
+        // chart's quarter, centred on its corner and reaching off the page.
+        let mut c = collector();
         let circle = BBox {
             x0: 133.0,
             y0: -71.0,
@@ -2526,6 +2552,56 @@ mod actual_text_tests {
         assert!(c.visible(outside).is_none());
         c.pop_clip_path();
         assert!(c.visible(outside).is_some());
+    }
+
+    #[test]
+    fn a_fill_carries_its_paint_and_an_outline_says_it_is_one() {
+        use hayro_interpret::color::{AlphaColor, Color};
+        use hayro_interpret::{FillRule, Paint, PathDrawMode};
+        let mut c = collector();
+        // A table's shaded cells drawn as one path: two rows of two cells,
+        // side by side, the rows a section apart.
+        let grey = Paint::Color(Color::from_rgba(AlphaColor::from_rgba8(217, 217, 217, 255)));
+        let mut cells = kurbo::BezPath::new();
+        for (x0, y0) in [
+            (100.0, 100.0),
+            (200.0, 100.0),
+            (100.0, 180.0),
+            (200.0, 180.0),
+        ] {
+            for el in Rect::new(x0, y0, x0 + 100.0, y0 + 20.0)
+                .to_path(0.1)
+                .elements()
+            {
+                cells.push(*el);
+            }
+        }
+        c.draw_path(
+            &cells,
+            Affine::IDENTITY,
+            &grey,
+            &PathDrawMode::Fill(FillRule::NonZero),
+        );
+        // A box drawn as a black outline: a fill by its extent only.
+        let black = Paint::Color(Color::from_rgba(AlphaColor::BLACK));
+        c.draw_path(
+            &Rect::new(300.0, 300.0, 400.0, 360.0).to_path(0.1),
+            Affine::IDENTITY,
+            &black,
+            &PathDrawMode::Stroke(Default::default()),
+        );
+        let painted: Vec<_> = c.fills.iter().map(|f| (f.paint, f.stroked)).collect();
+        let solid = |v| Some(rule::Paint::Solid([v, v, v, 255]));
+        assert_eq!(
+            painted,
+            vec![
+                (solid(217), false),
+                (solid(217), false),
+                (solid(217), false),
+                (solid(217), false),
+                (solid(0), true)
+            ]
+        );
     }
 
     #[test]
