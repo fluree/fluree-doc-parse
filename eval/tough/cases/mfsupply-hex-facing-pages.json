@@ -1,0 +1,64 @@
+{
+  "document": {
+    "file": "mfsupply-hex-cap-screws.pdf",
+    "url": "https://www.mfsupply.com/v/vspfiles/assets/Hex-Head-Cap-Screws-Grade-5-%26-8.pdf",
+    "sha256": "37c91036346a1b8bc859912edfa17b386fa19c8398441e8e841430749c038cf4",
+    "about": "MF Supply hex cap screws sheet (2 pages). Its dimension table opens with a title band, HEX CAP SCREWS / ASME B18.2.1-2012, over a four-row header."
+  },
+  "notes": [
+    "2026-11-25 (#277): the sheet's two pages face each other. Page 2 swaps its footer's sides (the folio and the sales address change places) and sets it about 7pt lower, and sets its banner mirrored. Page 1's footer was Figure text and page 2's Paragraphs; the folios 114 and 115 were lost; page 2's banner came out as headings."
+  ],
+  "checks": [
+    {
+      "id": "footer-not-figure-text",
+      "found": "2026-11-25",
+      "issue": "#277: page 1's footer was Figure text.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "This page prints with a watermark"
+      },
+      "count": 0
+    },
+    {
+      "id": "footer-not-body-text",
+      "found": "2026-11-25",
+      "issue": "#277: page 2's footer was body paragraphs. (Kept once as the document's footer, its evidence says so.)",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "This page prints with a watermark",
+        "evidence": "layout"
+      },
+      "count": 0
+    },
+    {
+      "id": "folio-not-figure",
+      "found": "2026-11-25",
+      "issue": "#277: page 1's folio `114` was Figure text.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "114"
+      },
+      "count": 0
+    },
+    {
+      "id": "banner-copy-no-heading",
+      "found": "2026-11-25",
+      "issue": "#277: page 2's banner copy was an h3.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "CAP SCREWS & BOLTS"
+      },
+      "count": 0
+    },
+    {
+      "id": "title-kept",
+      "found": "2026-11-25",
+      "issue": "#277: page 1's banner is the sheet's title, and stays.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "HEX CAP SCREWS"
+      },
+      "count": 1
+    }
+  ]
+}

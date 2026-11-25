@@ -60,6 +60,24 @@ and only page 2's is running. A footer that moved is running on both pages.
 One line alone that moved, with nothing beside it and not opening its page,
 stays text.
 
+Facing pages mirror their template. A catalogue's two facing pages swap the
+sides of their footer: the folio stands on the left of page 1 and on the
+right of page 2, and the sales address does the opposite. Page 2 may also
+set its footer a few points lower. A copy is read as mirrored when its left
+edge stands where page 1's right edge would be, reflected about the page's
+centre (or right where left would be, or centre where centre would be).
+Such a copy runs when the whole band moved that way: two lines or more of
+page 2's band are copies of page 1's, mirrored or not, all moved down by
+one amount. The tolerance is a quarter of their size, because a mirrored
+copy is compared edge to opposite edge, the first letter's side bearing
+against the last's, and each line's ink sits its own way on its baseline. A
+page number that counts the pages (`114`, `115`) runs the same way and
+gives each page its folio. In the head band, page 1 keeps its copy as the
+document's title: a catalogue's banner over its first page is set again,
+mirrored, over the facing page. The same words may run in both bands, a
+phone line in the letterhead and again in the footer. The copies one band
+leaves are read against the other band's move.
+
 A title page that sets the running head's words as its own title, larger
 and in its own place, keeps its title. The copies at the running head's
 place are furniture; the title is not. Nor are the same words elsewhere on
@@ -108,6 +126,20 @@ Template text does neither: it sits among the page's lines, at their size,
 and nothing lies on it. A figure that repeats and overlaps its own labels
 does so the same way on every page, and is drawn among the page's text, so
 it is kept as well.
+
+One piece of template text is a title, though: the page template's own,
+set below its header band. A datasheet whose one table runs over several
+pages prints the table's title on each page (`Dimensions of Hexagon Socket
+Head Cap Screws`). The line counts as that title when all of these hold:
+- it is on every page, at the same place to a tenth of its size;
+- it is set larger than the body by the margin a font-size heading needs;
+- nothing of the page's own stands above it anywhere across the page, only
+  the header band: it opens the page's text. A drawing's label repeated on
+  each slide stands among the slide's text, so it is not a title.
+
+The first page keeps it as the document's title, and the copies after it
+are running. The table's column labels repeat too, but they stand under the
+title at the body's size, so they stay.
 
 ## Matching inside table cells
 
