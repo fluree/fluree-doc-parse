@@ -6,7 +6,8 @@
     "about": "OMB, Analytical Perspectives FY 2027, chapter 10, Tax Expenditures (public domain): table rows whose dot leaders are mapped to U+FFFD."
   },
   "notes": [
-    "A leader's glyph is a small round mark on the baseline, read as the full stop it is."
+    "A leader's glyph is a small round mark on the baseline, read as the full stop it is.",
+    "2026-11-25 (#270): on a page of the tax-expenditure table, `Total` is set across the year columns over `2025 | 2026 | … | 2026–2035`. The span the ruling leaves open runs on over the stub's columns, empty there, and the years were read as a row of data under the label."
   ],
   "checks": [
     {
@@ -20,6 +21,16 @@
       "found": "2026-11-23",
       "issue": "As above.",
       "text": "Exclusion of certain allowances for Federal employees abroad ....."
+    },
+    {
+      "id": "years-under-their-span",
+      "found": "2026-11-25",
+      "issue": "#270: each year column was named by the spanning label alone, the years a row of data.",
+      "cell": {
+        "value": "83,660",
+        "column": "Total / 2027",
+        "row": "132"
+      }
     }
   ]
 }

@@ -32,10 +32,10 @@
     {
       "id": "error-names-its-tip",
       "found": "2026-11-24",
-      "issue": "#162: as above, for an error value.",
+      "issue": "#162: as above, for an error value. (#281: the column's note mark `1)` is now set apart from its name.)",
       "cell": {
         "value": "±1.6 %",
-        "column": "Systematic error1)",
+        "column": "Systematic error 1)",
         "row": "0.1 mL / white"
       }
     }

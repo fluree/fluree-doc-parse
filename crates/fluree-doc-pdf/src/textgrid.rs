@@ -683,6 +683,29 @@ fn split_at_gutters(cols: &[(f64, f64)], l: &Line) -> Line {
 /// sentence (`montmorillonite/smectite 100`, not a footnote's line).
 const MAX_CUT_WORDS: usize = 8;
 
+/// Most words a stub's head may hold over a table read from its text: it
+/// names what the rows are, and runs to a title's length at most.
+const MAX_STUB_HEAD_WORDS: usize = 12;
+
+/// Whether text is set as a title: two in three of its words of four
+/// letters or more capitalised, and no stop, semicolon, colon or bracketed
+/// citation in it. Sentence case and a sentence's stops are prose's.
+fn set_as_title(text: &str) -> bool {
+    let long: Vec<&str> = text
+        .split_whitespace()
+        .filter(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 4)
+        .collect();
+    let capitalised = long
+        .iter()
+        .filter(|w| {
+            w.chars()
+                .find(|c| c.is_alphabetic())
+                .is_some_and(char::is_uppercase)
+        })
+        .count();
+    !long.is_empty() && capitalised * 3 >= long.len() * 2 && !text.contains(['.', ';', ':', '['])
+}
+
 /// A word that is part of a date with the word before it: a year, or a day
 /// after a month's name (`December 31, 2016`), which a banner ends on.
 fn date_part(before: &Chunk, w: &Chunk) -> bool {
@@ -1039,11 +1062,24 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             if crossed + between >= 2 {
                 break;
             }
-            let prose = above
+            // A stub's head beside the columns' own heads may run to a
+            // title's length (`Sales Volumes per Day by Products from Ongoing
+            // Operations | 2017 | 2016`): set as a title, its longer words
+            // capitalised and no sentence's stop in it, beside two heads or
+            // more. A line of prose beside a table runs in sentence case.
+            let heads_beside = above
                 .chunks
                 .iter()
-                .any(|c| c.text.split_whitespace().count() >= 9)
-                || above.chunks.first().is_some_and(|c| is_caption(&c.text));
+                .filter(|d| column_of(&cols0, d).is_some_and(|k| k > 0))
+                .count();
+            let prose = above.chunks.iter().any(|c| {
+                let words = c.text.split_whitespace().count();
+                words >= 9
+                    && !(heads_beside >= 2
+                        && words <= MAX_STUB_HEAD_WORDS
+                        && column_of(&cols0, c) == Some(0)
+                        && set_as_title(&c.text))
+            }) || above.chunks.first().is_some_and(|c| is_caption(&c.text));
             if prose {
                 break;
             }
@@ -1297,12 +1333,42 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         return None;
     }
     while let Some(l) = head.last() {
-        let label_only = l.chunks.iter().all(|c| column_of(&cols, c) == Some(0))
-            && l.chunks.iter().all(|c| covered(&cols, c).len() <= 1);
+        // The header's own rule, drawn under the line above (an underline
+        // under each column's head), parts this line from it: the header
+        // ends there, and what is under it is the body's.
+        let ruled_apart = head.len() > 1 && {
+            let p = head[head.len() - 2];
+            rules.iter().any(|r| {
+                r.orientation == Orientation::Horizontal
+                    && r.axis_pos() > p.base
+                    && r.axis_pos() < l.base - l.fs * 0.5
+                    && r.bbox.x0 < cols[0].1
+                    && r.bbox.x1 > cols[0].0
+            })
+        };
+        // In the label column; or, under the header's rule, hung out to
+        // the left of it as a group's label often is (`United States` over
+        // its indented rows), reaching into it and short of the second
+        // column. A speck with no letter or figure in it says nothing.
+        let said: Vec<&Chunk> = l
+            .chunks
+            .iter()
+            .filter(|c| c.text.chars().any(char::is_alphanumeric))
+            .collect();
+        let hung = |c: &Chunk| ruled_apart && c.x1 > cols[0].0 && c.x1 < cols[1].0;
+        let label_only = !said.is_empty()
+            && said
+                .iter()
+                .all(|c| column_of(&cols, c) == Some(0) || hung(c))
+            && said.iter().all(|c| covered(&cols, c).len() <= 1);
+        // Wrapped from the line above, unless that rule parts them
+        // (`United States` under `Sales Volumes per Day by Products | 2017
+        // | 2016`).
         let wrapped = head.len() > 1 && {
             let p = head[head.len() - 2];
             l.base - p.base <= l.fs * WRAP_LEADING
                 && p.chunks.iter().any(|c| column_of(&cols, c) == Some(0))
+                && !ruled_apart
         };
         if label_only && head.len() > 1 && !wrapped {
             body.insert(0, head.pop().unwrap());
@@ -2371,6 +2437,26 @@ pub fn strip_leaders(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stub_head_is_set_as_a_title_and_prose_is_not() {
+        assert!(set_as_title(
+            "Sales Volumes per Day by Products from Ongoing Operations"
+        ));
+        assert!(set_as_title(
+            "(Amounts in Millions Except Treasury Stock Shares in Thousands)"
+        ));
+        // Sentence case, a sentence's stops, a citation: prose.
+        assert!(!set_as_title(
+            "Then a novel feature selection technique is introduced and performed"
+        ));
+        assert!(!set_as_title(
+            "LVEF measurement; as the predictive ability of LVEF was"
+        ));
+        assert!(!set_as_title(
+            "health care expenditures [20]. In addition, we searched"
+        ));
+    }
     use crate::rule::Rule;
 
     #[test]

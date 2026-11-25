@@ -35,9 +35,9 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--attachments <DIR>` | save each email's attachments under `DIR/<email name>/`, to convert on their own. See [Email](../inputs/email.md#attachments) |
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
 | `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
-| `--structure-results <DIR>` | table-structure readings. Env: `FDOC_STRUCTURE_RESULTS` |
+| `--structure-results <DIR>` | table-structure readings, for the [three-way veto](../concepts/escalation.md#the-three-way-veto) on a table reading from `--tier-results` or from a model called in the run; no table crop it vetoes is sent to the model. Env: `FDOC_STRUCTURE_RESULTS` |
 | `--ocr-words <DIR>` | OCR word readings, read as text on the pages and regions the router sends a reader. See [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words). Env: `FDOC_OCR_WORDS` |
-| `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. Env: `FDOC_VLM_ANCHORS` |
+| `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. With a reader (`--tier-results`, or a model called in the run), keep the ones it did not answer (a crop with no sidecar file, one `--pages` or `escalation.max_crops` left out), in every format, Markdown and text included; without it they are dropped. See [Anchors](../integration/anchors.md#interaction-with---tier-results). Env: `FDOC_VLM_ANCHORS` |
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
 

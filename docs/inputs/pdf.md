@@ -134,6 +134,14 @@ broke, and reads as the word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
+**Dashes and addresses at a line's end.** A line ending in an em or en dash
+set closed against the word before it joins the next with no space, as the
+text's own hyphen does: `restore—` over `D2D` is `restore—D2D`, `10–` over
+`20` is `10–20`. A dash with a space before it was set apart and keeps its
+space. A web address broken at a slash (one with `://` or opening `www.`)
+runs on into the next line whole; a slash ending any other word may have
+had a space after it on the line the break took, and keeps it.
+
 A table cell needs one more piece of evidence. A narrow column breaks a
 compound at its own hyphen (`long-` over `term`) far more often than prose
 does, and the letters alone cannot tell the two apart. So a cell's word
@@ -210,14 +218,21 @@ opens with a bullet is a list item unless it is a heading, and one that opens
 with a plain bullet or a box to tick is never a heading, whatever its size
 or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
 or a diamond is set before headings as often as before items (`❖ Gene` over
-a guideline's subsection), so there the heading pass decides.
+a guideline's subsection), so there the heading pass decides. A
+mathematical operator set apart beside a formula's bar (`∂`, `∑`) is the
+formula's text. It is read as a marker only at the margin of what it would
+mark, as a number is.
 
 **Drawn bullets.** Some producers draw a list's bullets as small filled dots
 or squares and leave no bullet in the text. A filled mark under a checkbox's
 size, set just left of a line and level with it, opens a list item, as long
 as another such mark at the same place opens another line. A list draws a
 bullet for each item, in a column. A seal's ring of dots or a chart's
-scatter is level with a line of text only by chance. A list of one item
+scatter is level with a line of text only by chance. A drawing's dots also
+crowd one another, where a list's bullets stand a line apart. So a mark with
+another dot closer than half an em, in the size of the line beside it, is a
+drawing's and opens no item. Examples are a map's towns beside the title of
+its district, and the modules of a QR code beside its caption. A list of one item
 draws one bullet, and it marks its line when it is drawn like the page's
 other bullets: their size, as far from its text as theirs.
 The item's marker is `•`. Each item starts where its bullet is, however
@@ -307,7 +322,10 @@ each opening with its number. A line whose raised number counts on from the
 note above it (`7 1 MB/s = …` then `8 Portion of buffer…`) starts the next
 note. A raised number the text layer set apart from its line is the note's,
 not a list's marker: it stays in front of its text, where the body's note
-marks can find it.
+marks can find it. A line opening with its note's reference marks, a run of
+up to four asterisks, daggers or section signs (`*`, `**`, `†`), starts a
+note of its own, even under a full line of the note before: `*** Zero waste
+…` under the `**` note's last line.
 
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
@@ -318,6 +336,10 @@ unit, after a quantity (`26TB 1`, not `26TB1`), or after a bracket that
 holds words (`(49 N) 5`, not `(49 N)5`). So is one after a compound or a
 code joined by hyphens (`3-way 1`, `MACL-153M-XX 2,3`), and after a bracket
 whose slash parts names rather than terms (`(512e/4Kn) 1,2`, `(mm/in, max) 4`).
+So is a number after a word and the comma or stop closing it (`MTBF, 4`,
+`countries. 5`), since no power is raised past a word's punctuation, and a
+number closing on a bracket of its own, as notes are numbered in much of
+Europe (`dilution series 1)`).
 A raised number set before a word, after a space or at a line's head, is a
 note's number before its note or the name it is on, and is read apart from
 it the same way (`4 M17 series`, not `4M17 series`). Raised text that belongs
@@ -406,6 +428,20 @@ read whole before the next. A box set in two columns of running text under
 full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
+
+**Tables and boxes in the reading order.** A table is read where it stands
+in its column, under the heading it sits under: one above it in its column,
+or one beside it at the left, either just above its top or level with its
+first row, as a side head in a column of its own stands. A label beside the
+first row is no head when other labels stand down the table's side below it.
+Those are the rows' labels. Two tables side by side under one heading are
+read left then right, each followed by the note under it. A line stops at a
+rule drawn up between two of its words, such as the side of a box between a
+letterhead and the form box beside it. The rule must run the line's height,
+stand in a word space at least, cross no text along its length, and stand
+beside two rows of text or more on each side. So a chart's line drawn behind
+its labels parts nothing, and neither does the border between a single row's
+cells: a code and what it names stay one line.
 
 **Columns run together.** Many producers write the space after a word as a
 glyph that puts no ink down. Where the next glyph on the line stands across a
@@ -643,8 +679,13 @@ many more places than its rows and columns: the outlines of a unit's
 terminals, or a drawing's dimension and extension lines. So is a ruled row
 or column holding nothing but three numbers or more that step evenly, by one
 difference (`160 140 … 0`) or one ratio (`1 10 100`): an axis's scale ruled
-by its tick marks. A table drawn over a drawing, ruled at its rows and
-columns and mostly filled, stays a table.
+by its tick marks. So is a dimension drawing's grid: its lines end in
+arrowheads, two or more of them, and its cells hold callouts alone, such as
+figures with their units (`83⁵/16"`, `(2117 mm)`), counts (`2X`) and datum
+letters, with no words but units and a dimension's notes (`TYP`, `MAX`).
+The drawing is a figure, and the callouts and view names around it are its
+labels. A table drawn over a drawing, ruled at its rows and columns and
+mostly filled, stays a table.
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows

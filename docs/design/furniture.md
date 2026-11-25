@@ -60,6 +60,24 @@ and only page 2's is running. A footer that moved is running on both pages.
 One line alone that moved, with nothing beside it and not opening its page,
 stays text.
 
+Facing pages mirror their template. A catalogue's two facing pages swap the
+sides of their footer: the folio stands on the left of page 1 and on the
+right of page 2, and the sales address does the opposite. Page 2 may also
+set its footer a few points lower. A copy is read as mirrored when its left
+edge stands where page 1's right edge would be, reflected about the page's
+centre (or right where left would be, or centre where centre would be).
+Such a copy runs when the whole band moved that way: two lines or more of
+page 2's band are copies of page 1's, mirrored or not, all moved down by
+one amount. The tolerance is a quarter of their size, because a mirrored
+copy is compared edge to opposite edge, the first letter's side bearing
+against the last's, and each line's ink sits its own way on its baseline. A
+page number that counts the pages (`114`, `115`) runs the same way and
+gives each page its folio. In the head band, page 1 keeps its copy as the
+document's title: a catalogue's banner over its first page is set again,
+mirrored, over the facing page. The same words may run in both bands, a
+phone line in the letterhead and again in the footer. The copies one band
+leaves are read against the other band's move.
+
 A title page that sets the running head's words as its own title, larger
 and in its own place, keeps its title. The copies at the running head's
 place are furniture; the title is not. Nor are the same words elsewhere on
@@ -108,6 +126,20 @@ Template text does neither: it sits among the page's lines, at their size,
 and nothing lies on it. A figure that repeats and overlaps its own labels
 does so the same way on every page, and is drawn among the page's text, so
 it is kept as well.
+
+One piece of template text is a title, though: the page template's own,
+set below its header band. A datasheet whose one table runs over several
+pages prints the table's title on each page (`Dimensions of Hexagon Socket
+Head Cap Screws`). The line counts as that title when all of these hold:
+- it is on every page, at the same place to a tenth of its size;
+- it is set larger than the body by the margin a font-size heading needs;
+- nothing of the page's own stands above it anywhere across the page, only
+  the header band: it opens the page's text. A drawing's label repeated on
+  each slide stands among the slide's text, so it is not a title.
+
+The first page keeps it as the document's title, and the copies after it
+are running. The table's column labels repeat too, but they stand under the
+title at the body's size, so they stay.
 
 A line OCR read is never a watermark, as it is never furniture: on a scan
 the same text repeats for its own reasons, such as a form copied per
@@ -201,10 +233,88 @@ adding signals:
   Taken as a running line, the short form was cut out of the long ones and
   left `– ELECTRIC`. Where the pages a line is missing from set, in its place,
   a longer line that opens or closes with its words, the place holds a title
-  that varies, and none of it runs. Not where the longer line is running
-  lines set as one: its other words run themselves (a navigation bar's
-  `Introduction Environmental Initiatives`, a transcript's `June 14, 2023
-  Chair Powell's Press Conference FINAL`), or it runs as it stands.
+  that varies, and repetition takes none of it: it is a slot of section names
+  ([below](#a-running-head-that-names-its-section)). Not where the longer
+  line is running lines set as one: its other words run themselves (a
+  navigation bar's `Introduction Environmental Initiatives`, a transcript's
+  `June 14, 2023 Chair Powell's Press Conference FINAL`), or it runs as it
+  stands.
+
+## A running head that names its section
+
+Some documents print, in one place at the head of each page, the name of the
+section the page is in: `Overview` over two pages, `Standard Features` over
+four, `Technical Specifications` over thirteen. A product sheet may title each
+of its parts the same way, `DISHWASHER – ELECTRIC` over two pages and then
+`DISHWASHER – GAS`. The name is the section's heading where it first appears,
+and running text on the pages after. If every copy is removed, the section has
+no heading. If every copy is kept, the name repeats as a heading or a paragraph
+on every page.
+
+A slot is a place at the head of the page, found by its height, by its left
+or right edge, and by the style its lines are set in. A head set flush right
+moves its left edge as the name gets longer or shorter, so either edge is
+enough. Facing pages often mirror the head, flush left on one side of the
+spread and flush right on the other. A slot found only on even pages and one
+found only on odd pages, at the same height and in the same style, are one
+slot when the two sides print the same name. A book's title over its left-hand
+pages and the chapter's name over its right-hand ones stay two slots.
+
+A running head stands alone. A line is not a candidate in either of these
+cases:
+
+- Another line of the page shares its row. An example is a margin label,
+  `Regulation`, printed beside the regulation's number and the first line of
+  its text.
+- A line in the same style sits directly above or below it, within a line's
+  height. That line belongs to a display title of several lines. A catalogue
+  that sets two variants of one product on facing pages repeats the title's
+  first line over a different second line.
+
+Lines already found running by repetition do not count against this. A
+two-line head's first line, or the address printed beside it, is part of the
+head.
+
+A slot names sections only when at least two of its names are each set as a
+heading where they first appear, and each runs over two pages or more. Set as
+a heading means one of two things:
+
+- larger than the body text, by the same margin the heading pass needs before
+  size alone makes a heading; or
+- the last of the slot's names that the document's outline opened at or
+  before that page. A bookmark lands where its section opens, which can be
+  before the first page that prints the head: the page before, two pages
+  before on facing pages that print the head only on one side, or the first
+  page for the first section.
+
+A running head set no larger than the text, with no bookmark naming it, looks
+like the rest of the page except that it repeats. Examples are a journal's
+short title, the name line at the top of each page of a tax form, and a
+signature block's labels. Those are left to the repetition pass. If every name
+appears only once, each is that page's own title. One name running after
+another that appears once is a title page's title, then the running title of
+the rest. In a slot that names sections:
+
+- The first copy of each name set as a heading stays as the section's heading.
+  The copies after it are running text, and so is any later run of a name
+  already used.
+- If the same words are printed elsewhere, no smaller than the head, the
+  section already has its heading (a chapter's title over its first page).
+  The pages searched are the one where the name first appears, the page
+  before, and any page from where the outline opened the section. A heading
+  broken over two lines in one style counts. Every copy in the slot is then
+  running text. An agenda or contents entry that names the section is set
+  smaller, and does not count.
+- The running copies are taken as whole lines. Their words elsewhere are
+  content, so a short name is not cut out of a longer one (`DISHWASHER` in
+  `DISHWASHER – GAS`).
+- A line that holds a running line found by repetition, plus more words, is
+  that line merged with its neighbours on the row. It names no section. For
+  example, `June 14, 2023 Chair Powell's Press Conference FINAL` is printed as
+  three separate groups on the other pages.
+
+A section name is at most eight words: a section is named in a phrase, not a
+sentence.
 
 ## Where it goes
 

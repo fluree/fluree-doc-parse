@@ -28,9 +28,15 @@ fdoc convert document.pdf
 ```
 
 The deep reader's cache is produced by `eval/llm-tier/run_tier.py` over the
-crops `fdoc dev render-routed` writes. **A change to those prompts invalidates
-the cache**, in the sense that matters: the committed readings are no longer
-what the committed prompt produces. Refresh it in the same commit, and expect
+crops `fdoc dev render-routed` writes. Those follow the config file in effect,
+and `escalation.on_column_doubt` there writes a page in column doubt whole;
+the committed cache is made with it off, its default, so produce the crops
+with `FDOC_ESCALATE_COLUMNS=0`. A whole-page reading that enters the cache is
+spliced whatever the scoring run's settings.
+
+**A change to those prompts invalidates the cache**, in the sense that
+matters: the committed readings are no longer what the committed prompt
+produces. Refresh it in the same commit, and expect
 the aggregate to hold while individual documents move — see the variance note
 in [the scoreboard](scoreboard.md#rules).
 

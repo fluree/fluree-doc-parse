@@ -346,7 +346,7 @@ impl Grid {
                 })
                 .collect()
         };
-        let suffixed: std::collections::HashSet<usize> = (0..runs.len())
+        let suffixed: rustc_hash::FxHashSet<usize> = (0..runs.len())
             .filter(|&m| after_figure(m) && !prices_next(m))
             .map(|m| line_of[m])
             .collect();
@@ -454,8 +454,7 @@ impl Grid {
         // or watermark drawn over a table runs through several cells, or
         // across text, and stays out of them.
         {
-            let occupied: std::collections::HashSet<usize> =
-                home.iter().flatten().copied().collect();
+            let occupied: rustc_hash::FxHashSet<usize> = home.iter().flatten().copied().collect();
             let mut turned: Vec<usize> = (0..glyphs.len())
                 .filter(|&i| {
                     let g = &glyphs[i];
@@ -1248,16 +1247,25 @@ impl Grid {
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
-        // A label column — bold on every row, nothing else bold — makes a
-        // list of fields, whose first row is a field like the others.
+        // Label columns — the leading columns bold on every row, the rest
+        // bold on none, the first row's included — make a list of fields,
+        // whose first row is a field like the others: a field's name, or a
+        // name and the size each value is for (`PRODUCT CODE | 8′2" | …`). A
+        // header row names every column in its weight, the values' too.
         let bold = |(weighted, heavy): (usize, usize)| weighted > 0 && heavy * 2 > weighted;
         let weights: Vec<Vec<(usize, usize)>> = (0..self.rows())
             .map(|r| self.cell_weights(glyphs, r))
             .collect();
+        let labels = (0..self.cols())
+            .take_while(|&c| weights.iter().all(|w| bold(w[c])))
+            .count();
         let label_column = self.cols() >= 2
             && run == 0
-            && weights.iter().all(|w| bold(w[0]))
-            && weights.iter().all(|w| w[1..].iter().all(|c| !bold(*c)));
+            && labels >= 1
+            && labels < self.cols()
+            && weights
+                .iter()
+                .all(|w| w[labels..].iter().all(|c| !bold(*c)));
         // So does one whose labels a colon ends, in any weight.
         let colon_labels =
             self.cols() == 2 && rows.iter().all(|r| r.len() == 2) && colon_fields(&rows.concat());
@@ -1685,8 +1693,10 @@ impl Grid {
     /// nowhere is open on every row, and following it made a 30-row table
     /// all header. So the rows taken in must read as labels (no numbers),
     /// the block stays within [`MAX_HEADER_ROWS`], and a rule drawn across
-    /// the whole table must close it, the way a header is ruled off from
-    /// its data. Otherwise the measured count stands.
+    /// the table must close it, the way a header is ruled off from its
+    /// data: across every column but those whose cell runs on across the
+    /// line, a stub labelling header and body alike. Otherwise the measured
+    /// count stands.
     pub fn stacked_header_rows(
         &self,
         header_rows: usize,
@@ -1711,19 +1721,57 @@ impl Grid {
         if n == header_rows {
             return header_rows;
         }
+        // Ruled off under the columns the header ends in. A stub whose
+        // label spans the header and the body alike, every row of the table
+        // (`Tolerance on Length` beside every row), runs on across the line
+        // and is ruled under nowhere there.
         let y = self.ys[n];
-        let closing = span_coverage(
-            rules
+        // The stub runs on through every row of the table, from its first:
+        // it labels the whole table. A group's label spanning some rows is
+        // no reason to leave the header open.
+        let runs_on = |c: usize| (1..rows.len()).all(|r| merges.continues_above[r * cols + c]);
+        let runs: Vec<(f64, f64)> = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Horizontal
+                    && (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0
+            })
+            .map(|r| (r.bbox.x0, r.bbox.x1))
+            .collect();
+        let closed_under = |skip: &dyn Fn(usize) -> bool| {
+            let (mut closed, mut width) = (0.0, 0.0);
+            for c in (0..cols).filter(|&c| !skip(c)) {
+                let (x0, x1) = (self.xs[c], self.xs[c + 1]);
+                closed += span_coverage(runs.iter().copied(), x0, x1);
+                width += x1 - x0;
+            }
+            width > 0.0 && closed >= 0.9 * width
+        };
+        if closed_under(&|_| false) {
+            return n;
+        }
+        // Closed under all but the stub: the rows taken in name their
+        // columns, each label its own, none repeated among them or in the
+        // rows of data under them. A table's data repeats itself (`Yes` row
+        // after row) under a stub run down a continued page.
+        let trimmed = |r: usize| -> Vec<&str> {
+            rows[r]
                 .iter()
-                .filter(|r| {
-                    r.orientation == Orientation::Horizontal
-                        && (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0
-                })
-                .map(|r| (r.bbox.x0, r.bbox.x1)),
-            self.bbox.x0,
-            self.bbox.x1,
-        );
-        if closing >= 0.9 * (self.bbox.x1 - self.bbox.x0) {
+                .map(|t| t.trim())
+                .filter(|t| !t.is_empty())
+                .collect()
+        };
+        let taken: Vec<&str> = (header_rows..n).flat_map(|r| trimmed(r)).collect();
+        let below: Vec<&str> = (n..rows.len()).flat_map(|r| trimmed(r)).collect();
+        // A stub labels a table's rows: three of data or more under the
+        // header, not a form's box of two.
+        let named = rows.len() >= n + 3
+            && (header_rows..n).all(|r| trimmed(r).len() >= 2)
+            && taken
+                .iter()
+                .enumerate()
+                .all(|(i, a)| !taken[..i].contains(a) && !below.contains(a));
+        if named && closed_under(&runs_on) {
             n
         } else {
             header_rows
@@ -1902,6 +1950,7 @@ fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
                         out.push(CELL_BREAK);
                     }
                 }
+                _ if crate::block::closed_join(&out, l) => {}
                 _ => out.push(' '),
             }
         }
@@ -3547,6 +3596,62 @@ fn split_row_bands(
         (rules_run_through(i) && one_row(i, &crossing(i), true))
             || (!crossed[i] && ruled_alike(i).is_some_and(|cols| one_row(i, &cols, false)))
     };
+    // Two tables boxed in one frame, a blank band between them: the band is
+    // crossed by the frame's two sides alone, where the bands either side of
+    // it rule two tables, columns set at different places, and holds no
+    // text. Each table reads its own columns. A band across the table holding a label (a group's
+    // banner) is crossed by the frame alone too, and stays a row.
+    let (left, right) = (xs[0], xs[xs.len() - 1]);
+    let framed_only = |i: usize| {
+        let at = crossing(i);
+        !at.is_empty()
+            && at
+                .iter()
+                .all(|&x| (x - left).abs() <= EDGE_TOLERANCE || (x - right).abs() <= EDGE_TOLERANCE)
+    };
+    let ruled_inside = |i: usize| {
+        crossing(i)
+            .iter()
+            .any(|&x| x > left + EDGE_TOLERANCE && x < right - EDGE_TOLERANCE)
+    };
+    let blank = |i: usize| {
+        !glyphs.iter().any(|g| {
+            !g.text.trim().is_empty()
+                && g.bbox.is_some_and(|b| {
+                    let y = (b.y0 + b.y1) / 2.0;
+                    y > ys[i] && y < ys[i + 1] && b.x0 >= left && b.x1 <= right
+                })
+        })
+    };
+    // The column rules inside the frame differ either side: two tables,
+    // not one with a blank row set between its rows.
+    let inner = |i: usize| -> Vec<f64> {
+        crossing(i)
+            .into_iter()
+            .filter(|&x| x > left + EDGE_TOLERANCE && x < right - EDGE_TOLERANCE)
+            .collect()
+    };
+    let ruled_apart = |a: usize, b: usize| {
+        let (p, q) = (inner(a), inner(b));
+        p.len() != q.len()
+            || p.iter()
+                .zip(&q)
+                .any(|(x, y)| (x - y).abs() > EDGE_TOLERANCE)
+    };
+    // Each side a table by its own ruling: three columns or more, two rules
+    // inside, over three rows or more. A box's one row, a diagram's panel,
+    // a chart's axis are no table to part off.
+    let a_table = |rows: usize, at: usize| rows >= 3 && inner(at).len() >= 2;
+    let boxed_gap = |i: usize| {
+        if !(i > 0 && i + 2 < ys.len() && framed_only(i) && blank(i)) {
+            return false;
+        }
+        let above = (0..i).rev().take_while(|&k| ruled_inside(k)).count();
+        let below = (i + 1..ys.len() - 1)
+            .take_while(|&k| ruled_inside(k))
+            .count();
+        a_table(above, i - 1) && a_table(below, i + 1) && ruled_apart(i - 1, i + 1)
+    };
 
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -3559,7 +3664,8 @@ fn split_row_bands(
         let heads = i == start && rules_run_through(i) && crossing(i).len() >= 3;
         let too_tall =
             (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP && !walled(i) && !runs_on(i) && !heads
-                || is_gap(i);
+                || is_gap(i)
+                || boxed_gap(i);
         let ends_run = !too_tall && (changes_after(i) || boxes_change_after(i));
         if too_tall || is_last || ends_run {
             // A band that is itself too tall is the gap: end the table before it.
@@ -5678,25 +5784,34 @@ pub fn detect_aligned(
     fills: &[crate::rule::Fill],
     page: usize,
 ) -> Vec<Grid> {
-    let captions: Vec<BBox> = crate::line::assemble(glyphs)
-        .into_iter()
-        .filter(|line| numbered_table_caption(&line.text))
-        .map(|line| line.bbox)
-        .collect();
+    // The page's lines, read only for a candidate its geometry does not
+    // already accept and big enough for a caption to name.
+    let captions = std::cell::OnceCell::new();
+    let captions = || -> &Vec<BBox> {
+        captions.get_or_init(|| {
+            crate::line::assemble(glyphs)
+                .into_iter()
+                .filter(|line| numbered_table_caption(&line.text))
+                .map(|line| line.bbox)
+                .collect()
+        })
+    };
     let (rows, cells) = aligned_rows(glyphs);
     let mut out: Vec<Grid> = aligned_runs(&rows, &cells, page)
         .into_iter()
         .filter(|g| {
-            let captioned = g.cols() >= 3
-                && g.rows() >= 3
-                && captions.iter().any(|caption| {
-                    caption.y1 <= g.bbox.y0
-                        && g.bbox.y0 - caption.y1 <= g.bbox.height()
-                        && caption.x1 >= g.bbox.x0
-                        && caption.x0 <= g.bbox.x1
-                });
+            let captioned = || {
+                g.cols() >= 3
+                    && g.rows() >= 3
+                    && captions().iter().any(|caption| {
+                        caption.y1 <= g.bbox.y0
+                            && g.bbox.y0 - caption.y1 <= g.bbox.height()
+                            && caption.x1 >= g.bbox.x0
+                            && caption.x0 <= g.bbox.x1
+                    })
+            };
             accepts_aligned_candidate(g, rules, fills)
-                || captioned
+                || captioned()
                 || has_typeset_header(g, glyphs)
                 || has_two_axis_header(g, glyphs)
         })
@@ -5715,7 +5830,7 @@ pub fn detect_aligned(
             out.push(part);
         }
     }
-    for list in colon_field_lists(glyphs, page) {
+    for list in colon_field_lists(glyphs, &rows, page) {
         let taken = out
             .iter()
             .any(|g| g.bbox.y0 < list.bbox.y1 && list.bbox.y0 < g.bbox.y1);
@@ -6020,8 +6135,12 @@ fn label_colon(label: &str) -> Option<bool> {
 /// the same order turns more multi-column prose into tables — two columns
 /// of a report, three panels of a slide — than the gates of
 /// [`detect_aligned`] can turn away.
-fn colon_field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
-    let (mut rows, _) = aligned_rows(glyphs);
+fn colon_field_lists(
+    glyphs: &[crate::glyph::Glyph],
+    rows: &[Vec<&crate::glyph::Glyph>],
+    page: usize,
+) -> Vec<Grid> {
+    let mut rows = rows.to_vec();
     for r in rows.iter_mut() {
         r.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
     }
@@ -6219,7 +6338,7 @@ pub fn field_lists_in(
     let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
     let cuts: Vec<f64> = columns.iter().skip(1).map(|c| c.x0).collect();
     // Runs that share rows share their cells: each cell's text is read once.
-    let mut read: std::collections::HashMap<Vec<usize>, String> = Default::default();
+    let mut read: rustc_hash::FxHashMap<Vec<usize>, String> = Default::default();
     let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
     let mut out = Vec::new();
     for i in 0..rows.len() {
@@ -8628,6 +8747,78 @@ mod header_tests {
     }
 
     #[test]
+    fn a_stub_beside_header_and_body_leaves_the_header_closed() {
+        // A stub labelling every row, a size label over two header rows, a
+        // group label over its two leaves; the rule under the header runs
+        // under every column but the stub's.
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            vec![0.0, 20.0, 40.0, 60.0, 80.0, 100.0],
+        );
+        let rules = vec![
+            h(0.0, 400.0, 0.0),
+            h(200.0, 400.0, 20.0),
+            h(100.0, 400.0, 40.0),
+            h(100.0, 400.0, 60.0),
+            h(100.0, 400.0, 80.0),
+            h(0.0, 400.0, 100.0),
+            v(0.0, 100.0, 0.0),
+            v(0.0, 100.0, 100.0),
+            v(0.0, 100.0, 200.0),
+            v(20.0, 100.0, 300.0),
+            v(0.0, 100.0, 400.0),
+        ];
+        let merges = g.merges(&rules, &[]);
+        let t = rows(&[
+            &["Tolerance", "Size", "Length", ""],
+            &["", "", "Short", "Long"],
+            &["", "M6", "1.0", "2.0"],
+            &["", "M8", "1.5", "2.5"],
+            &["", "M10", "2.0", "3.0"],
+        ]);
+        assert_eq!(g.stacked_header_rows(1, &t, &merges, &rules), 2);
+    }
+
+    #[test]
+    fn two_tables_boxed_in_one_frame_part_at_the_blank_band() {
+        // One frame round two tables, its sides running on down through the
+        // blank band between them, each ruled at columns of its own.
+        let mut rules: Vec<Rule> = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0, 140.0, 160.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        rules.extend([v(0.0, 160.0, 0.0), v(0.0, 160.0, 300.0)]);
+        rules.extend([
+            v(0.0, 80.0, 100.0),
+            v(0.0, 80.0, 200.0),
+            v(100.0, 160.0, 120.0),
+            v(100.0, 160.0, 220.0),
+        ]);
+        let grids = detect_group(&rules, &[], &[], 0, &[]);
+        assert_eq!(grids.len(), 2, "{grids:?}");
+        assert_eq!(grids[0].cols(), 3);
+        assert_eq!(grids[1].cols(), 3);
+        // A box of one row under a table, its one rule inside set apart from
+        // the table's: no second table to part off.
+        let mut boxed: Vec<Rule> = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        boxed.extend([v(0.0, 120.0, 0.0), v(0.0, 120.0, 300.0)]);
+        boxed.extend([
+            v(0.0, 80.0, 100.0),
+            v(0.0, 80.0, 200.0),
+            v(100.0, 120.0, 150.0),
+        ]);
+        let grids = detect_group(&boxed, &[], &[], 0, &[]);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        // A label set across the band, a group's banner: one table.
+        let banner = [gly(120.0, 94.0, 60.0, "Group")];
+        let grids = detect_group(&rules, &[], &banner, 0, &[]);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+    }
+
+    #[test]
     fn a_rule_drawn_in_overlapping_pieces_has_one_column_edge_per_overlap() {
         let ends = |pieces: &[(f64, f64)]| {
             let rules: Vec<Rule> = pieces.iter().map(|&(a, b)| h(a, b, 100.0)).collect();
@@ -9100,6 +9291,58 @@ mod header_tests {
         glyphs.extend(run(5.0, 135.0, "10", false));
         glyphs.extend(run(105.0, 135.0, "12", false));
         let t = rows(&[&["1", "2"], &["10", "12"], &["", ""]]);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
+    }
+
+    #[test]
+    fn two_bold_label_columns_beside_plain_values_make_no_header() {
+        // A field's name and the size each value is for, both bold on every
+        // row, the values plain: a list of fields, the first row one of them.
+        let g = plain_grid(
+            vec![0.0, 100.0, 150.0, 300.0],
+            vec![100.0, 120.0, 140.0, 160.0],
+        );
+        let run = |x: f64, y: f64, text: &str, bold: bool| -> Vec<crate::glyph::Glyph> {
+            text.chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    let mut gl = gly(x + 6.0 * i as f64, y, 5.0, &c.to_string());
+                    gl.weight = Some(if bold { 700 } else { 400 });
+                    gl
+                })
+                .collect()
+        };
+        let mut glyphs = Vec::new();
+        for (y, label, size, value) in [
+            (115.0, "Code", "4 ft", "7712"),
+            (135.0, "Count", "4 ft", "60"),
+            (155.0, "Weight", "4 ft", "12 kg"),
+        ] {
+            glyphs.extend(run(5.0, y, label, true));
+            glyphs.extend(run(105.0, y, size, true));
+            glyphs.extend(run(155.0, y, value, false));
+        }
+        let t = rows(&[
+            &["Code", "4 ft", "7712"],
+            &["Count", "4 ft", "60"],
+            &["Weight", "4 ft", "12 kg"],
+        ]);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 0);
+        // A header bold across every column, the values' too, still is one.
+        let mut glyphs = Vec::new();
+        glyphs.extend(run(5.0, 115.0, "Item", true));
+        glyphs.extend(run(105.0, 115.0, "Size", true));
+        glyphs.extend(run(155.0, 115.0, "Price", true));
+        for (y, a, b, c) in [(135.0, "Bolt", "M6", "0.40"), (155.0, "Nut", "M6", "0.10")] {
+            glyphs.extend(run(5.0, y, a, true));
+            glyphs.extend(run(105.0, y, b, true));
+            glyphs.extend(run(155.0, y, c, false));
+        }
+        let t = rows(&[
+            &["Item", "Size", "Price"],
+            &["Bolt", "M6", "0.40"],
+            &["Nut", "M6", "0.10"],
+        ]);
         assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
     }
 

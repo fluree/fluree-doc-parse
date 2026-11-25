@@ -55,9 +55,34 @@ Weight and size never make a heading of these:
   Preparation` over `Jun 5, 2026`, `Photochemically Reactive` over `No`).
   A section's heading stands over sentences, or over more lines than one
   (`Power and Ratings` over `120 V~ 60 Hz` and the rest of its ratings).
+- **A stack of labels over values set in:** bold labels of a few words,
+  set alike from one edge, each over its value. The value is set lighter
+  at the label's size, within an em under it, set in from it by half an em
+  or more, one to three lines, and no sentence (`PRODUCT NUMBER`,
+  `PRODUCT NAME` and `MANUFACTURER'S NAME`, each over its value, at 9.6pt
+  over an 8pt body). A single bold head over text set in is a heading as
+  often as a field, so the stack is what tells them apart. A numbered title
+  is a heading.
 - **A form's label** ending in a colon or `#` (`Location:`, `Model #:`),
   where only its size would make it a heading: the blank beside it is
-  where its value goes.
+  where its value goes. Bold too, when it heads a box left blank
+  (`APPROVALS:` and `AVAILABLE AT:` side by side over a sheet's footer boxes
+  for a dealer's stamp). That means two things:
+  - Nothing on its page reaches below it over its width, or is set in from
+    it as a list's items are under their lead-in.
+  - Nothing on its row to its right runs on from it, apart from another
+    such label. An article's `FOURTH:` beside its text keeps that text.
+
+  This is judged on the final elements, where tables and figures stand
+  under the labels that introduce them.
+- **Bold lettering:** bold set at three fifths of the text or smaller. The
+  text is measured both by the document's body and by the page's level
+  lines, and the smaller of the two is used. A watermark's turned letters
+  can outnumber a page's lines and set the body at their size, and a title
+  slide sets its own lines larger than the document's text. Examples are a logo's `IN
+  THE USA` at 3.8pt over an 8pt body, a chart's labels and a figure's
+  callouts. Real heads set small are still set as text is read, at seven
+  tenths of the body or more.
 - **A form's grid and line captions:** column keys and answer heads, and
   nothing else (`(a) (b)`, `Yes No`), and a line's caption between its
   letter and its number (`b Refunded 37b`).

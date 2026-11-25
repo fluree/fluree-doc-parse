@@ -858,6 +858,14 @@ fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
         .map(|e| e.level)
 }
 
+/// Smallest size, against the text, of a bold line read as a heading on its
+/// weight. Bold set at three fifths of it or smaller is lettering, not a
+/// section's title: a logo's `IN THE USA` at 3.8pt over an 8pt body,
+/// a chart's axis and data labels, a figure's callouts. A heading set small
+/// is still set as text is read (a sheet's sidebar heads at seven tenths of
+/// its body), not as fine print.
+const BOLD_HEADING_FLOOR: f64 = 0.6;
+
 /// Detect headings across a document.
 /// Smallest size, against the body's, of a numbered line read as a section
 /// heading. Notes and footnotes are numbered too, and set smaller.
@@ -1136,6 +1144,23 @@ pub fn detect_with_body(
 
     let mut out = Vec::new();
     for (page_idx, blocks) in pages.iter().enumerate() {
+        // Lettering is set far smaller than the text, measured either way:
+        // by the document's body, or by the size the page's level lines are
+        // set in. A watermark's letters, set at an angle each as a line of
+        // its own, can outnumber a page's lines of text and set the
+        // document's body at their size; a title slide or a page of large
+        // type sets its own lines larger than the document's text.
+        let level = crate::block::body_size(
+            blocks
+                .iter()
+                .flat_map(|b| &b.lines)
+                .filter(|l| l.rotation_bucket == 0),
+        );
+        let lettering_measure = if level > 0.0 {
+            level.min(body as f64)
+        } else {
+            body as f64
+        };
         // Suppress headings after a contents marker on the same page: the
         // entries below it are the table of contents, not sections.
         let toc_from = blocks.iter().position(|b| is_toc_marker(&b.text()));
@@ -1288,7 +1313,12 @@ pub fn detect_with_body(
             // 4. Bold, at body size. Documents very commonly set section
             // titles in the body face at the body size, differing only in
             // weight, which no size-based test can see. Bold set larger is
-            // ranked by its size, as other display type is.
+            // ranked by its size, as other display type is; bold set far
+            // smaller is lettering.
+            // Read through the form's-text deferral, as other text set
+            // like a heading is: dropped here, it would break the run of
+            // bold heads #171 reads (`INNOVATION` over `IN THE USA`).
+            let lettering = (b.font_size as f64) < lettering_measure * BOLD_HEADING_FLOOR;
             if b.bold
                 && !body_is_bold
                 && b.font_size as f64 <= body as f64 * (1.0 + HEADING_SIZE_MARGIN)
@@ -1303,7 +1333,7 @@ pub fn detect_with_body(
                     text,
                     level: 3,
                     evidence: Evidence::Bold,
-                    form_text: form,
+                    form_text: form || lettering,
                     style: style_of(b),
                 });
                 continue;
@@ -1407,6 +1437,7 @@ fn form_text(text: &str, page: &[Block], i: usize) -> bool {
         || refers_elsewhere(t)
         || line_caption(t)
         || label_over_value(page, i)
+        || stacked_field(page, i)
         || turned(page, &page[i])
         || under_a_scale(page, i)
         || heads_figures(page, i)
@@ -1491,6 +1522,72 @@ fn label_over_value(page: &[Block], i: usize) -> bool {
         && (text.chars().any(|c| c.is_ascii_digit()) || answers(&text))
 }
 
+/// Most lines of a field's value set under its label: an address's
+/// street, town and postcode.
+const MAX_FIELD_VALUE_LINES: usize = 3;
+
+/// Least a field's value is set in from its label, in the label's ems: a
+/// value hangs under its label, where a section's text starts from its
+/// heading's edge.
+const FIELD_INDENT: f64 = 0.5;
+
+/// The block under bold label `i` that is its value: lighter, at the
+/// label's size, within an em under it, set in from it, a line or three
+/// that is no sentence and no list's item. A value is a name, a code or an
+/// address; a question's answer set as a bullet under it is the question's
+/// text.
+fn field_value(page: &[Block], i: usize) -> Option<usize> {
+    let label = &page[i];
+    if !label.bold {
+        return None;
+    }
+    let k = directly_below(page, i)?;
+    let v = &page[k];
+    let fs = (label.font_size as f64).max(1.0);
+    (!v.bold
+        && (v.font_size - label.font_size).abs() <= 0.25
+        && v.bbox.y0 - label.bbox.y1 <= fs * VALUE_GAP
+        && v.bbox.x0 - label.bbox.x0 >= fs * FIELD_INDENT
+        && v.lines.len() <= MAX_FIELD_VALUE_LINES
+        && !v.text().trim_end().ends_with('.')
+        && v.marker.is_none()
+        && !starts_like_list_item(&v.text()))
+    .then_some(k)
+}
+
+/// A bold label over its value, in a stack of labels set alike, each over
+/// its own: `PRODUCT NUMBER` over `K25W951`, `PRODUCT NAME` over `Symmetry
+/// Interior Latex Matte, Extra White`, `MANUFACTURER'S NAME` over its
+/// address. A label set alike is bold at the same size from the same edge,
+/// within half an em, and stands under this label's value or over the
+/// value this label stands under. One label over a line set in is a
+/// heading over its text as often as a field: the stack tells them apart.
+/// A field's label is a few words and states no section number; a
+/// numbered title over its table's first lines is a heading.
+fn stacked_field(page: &[Block], i: usize) -> bool {
+    let label = &page[i];
+    let words = label.text().split_whitespace().count();
+    if words > MAX_FIELD_LABEL_WORDS || numbering_depth(&label.text()).is_some() {
+        return false;
+    }
+    let Some(k) = field_value(page, i) else {
+        return false;
+    };
+    let fs = (label.font_size as f64).max(1.0);
+    let alike = |j: usize| {
+        let o = &page[j];
+        j != i
+            && o.bold
+            && (o.font_size - label.font_size).abs() <= 0.25
+            && (o.bbox.x0 - label.bbox.x0).abs() <= fs * 0.5
+            && field_value(page, j).is_some()
+    };
+    let next = directly_below(page, k).is_some_and(alike);
+    let prev = (0..page.len())
+        .any(|j| alike(j) && field_value(page, j).and_then(|v| directly_below(page, v)) == Some(i));
+    next || prev
+}
+
 /// The line is an answer and nothing else: `No`, `N.A.`.
 fn answers(t: &str) -> bool {
     let mut words = t.split_whitespace().peekable();
@@ -1526,7 +1623,7 @@ const MAX_FORM_LABEL_WORDS: usize = 3;
 
 /// A form's label: a word or three ending in a colon or a `#`, `Location:`,
 /// `Model #:`, `Item #`.
-fn form_label(t: &str) -> bool {
+pub(crate) fn form_label(t: &str) -> bool {
     (t.ends_with(':') || t.ends_with('#')) && t.split_whitespace().count() <= MAX_FORM_LABEL_WORDS
 }
 
@@ -1846,7 +1943,7 @@ fn opens_an_address(b: &Block, page: &[Block]) -> bool {
         }
         // A street or a city between the name and the number: a heading
         // set straight over a line to call is a heading.
-        if ends_with_contact(&next.text()) {
+        if contact_line(&next.text()) {
             return step > 0;
         }
         last = next;
@@ -1857,8 +1954,18 @@ fn opens_an_address(b: &Block, page: &[Block]) -> bool {
 /// Any line of the block states a web address, an e-mail address or a
 /// phone number: an address block's.
 fn states_contact(b: &Block) -> bool {
-    b.lines.iter().any(|l| ends_with_contact(&l.text))
-        || b.text().split(['•', '|']).any(ends_with_contact)
+    b.lines.iter().any(|l| contact_line(&l.text)) || b.text().split(['•', '|']).any(contact_line)
+}
+
+/// A line of an address: text ending on a web address, an e-mail address
+/// or a phone number that is no sentence closing on it, its stop after the
+/// address and words before it (`Meeting held virtually at
+/// www.example.com/meeting.`). That is prose giving an address, not a line
+/// of one: an address line states the address alone, or after a label or a
+/// phone number, and no stop closes it.
+fn contact_line(t: &str) -> bool {
+    let t = t.trim_end();
+    ends_with_contact(t) && !(t.ends_with('.') && t.split_whitespace().count() > 2)
 }
 
 /// Most words on one line of an address.
@@ -2644,6 +2751,88 @@ mod tests {
     }
 
     #[test]
+    fn bold_lettering_far_below_the_body_is_form_text() {
+        // A 10pt body; a bold head at its size, a bold sidebar head at
+        // seven tenths of it, and a badge's bold lettering at two fifths.
+        let mut page = vec![at("Overview", 10.0, 100.0, true)];
+        for k in 0..8 {
+            page.push(at(
+                "The bracket mounts on any level wall in minutes.",
+                10.0,
+                120.0 + 14.0 * k as f64,
+                false,
+            ));
+        }
+        page.push(at("Quick Facts", 7.0, 300.0, true));
+        page.push(at("BUILT TO LAST", 4.0, 400.0, true));
+        // A watermark's letters, turned and each a line of its own, outnumber
+        // the page's text: they are no measure of it.
+        let mut marked = page.clone();
+        for k in 0..30 {
+            let mut w = at("W", 30.0, 20.0 * k as f64, false);
+            w.lines[0].rotation_bucket = 45;
+            marked.push(w);
+        }
+        let hs = detect(&[page], &[]);
+        let flag = |t: &str| hs.iter().find(|h| h.text == t).map(|h| h.form_text);
+        assert_eq!(flag("Overview"), Some(false));
+        assert_eq!(flag("Quick Facts"), Some(false));
+        assert_eq!(flag("BUILT TO LAST"), Some(true));
+        let hs = detect(&[marked], &[]);
+        let flag = |t: &str| hs.iter().find(|h| h.text == t).map(|h| h.form_text);
+        assert_eq!(flag("Overview"), Some(false));
+        assert_eq!(flag("BUILT TO LAST"), Some(true));
+    }
+
+    #[test]
+    fn a_stack_of_labels_over_values_set_in_is_no_heading() {
+        // Three bold labels, each over its value set in by an em at its
+        // size: a lot number, a name, and an address of two lines.
+        let pair = |label: &str, value: &str, lines: usize, y: f64| {
+            let mut l = at(label, 9.0, y, true);
+            l.bbox.x0 = 40.0;
+            l.bbox.x1 = 140.0;
+            let mut v = at(value, 9.0, y + 12.0, false);
+            v.lines = vec![v.lines[0].clone(); lines];
+            v.bbox.x0 = 49.0;
+            v.bbox.x1 = 220.0;
+            v.bbox.y1 = v.bbox.y0 + 12.0 * lines as f64;
+            [l, v]
+        };
+        let mut page: Vec<Block> = Vec::new();
+        page.extend(pair("LOT CODE", "A7-301", 1, 100.0));
+        page.extend(pair("ITEM NAME", "Coated Steel Hinge, Black", 1, 125.0));
+        page.extend(pair("MAKER", "Northwind Hardware Works", 2, 150.0));
+        for i in [0, 2, 4] {
+            assert!(stacked_field(&page, i), "label {i}");
+        }
+        // One bold head over text set in is a heading over its text: no
+        // label stands with it.
+        let lone = pair(
+            "Installation",
+            "Mount the bracket on a level wall",
+            2,
+            100.0,
+        );
+        assert!(!stacked_field(&lone, 0));
+        // Nor is a value a sentence.
+        let mut page: Vec<Block> = Vec::new();
+        page.extend(pair("Scope", "This guide covers the hinge.", 1, 100.0));
+        page.extend(pair("Care", "Wipe it with a dry cloth.", 1, 125.0));
+        assert!(!stacked_field(&page, 0) && !stacked_field(&page, 2));
+        // Nor a list's item: questions, each over its answer as a bullet.
+        let mut page: Vec<Block> = Vec::new();
+        page.extend(pair(
+            "Why a bracket?",
+            "• It holds the shelf level",
+            1,
+            100.0,
+        ));
+        page.extend(pair("Why steel?", "• It does not warp in heat", 1, 125.0));
+        assert!(!stacked_field(&page, 0) && !stacked_field(&page, 2));
+    }
+
+    #[test]
     fn fields_forms_and_signatures_are_no_headings() {
         // A label and its value on one line.
         assert!(field_on_its_line("CRI: 90+"));
@@ -2824,6 +3013,14 @@ mod tests {
         // A local number is hyphenated; set apart by a point, it is a
         // decimal.
         assert!(ends_with_contact("Fax 272-2408"));
+        // A line of an address, not a sentence closing on one.
+        assert!(contact_line("1-800-GET-PINK® www.owenscorning.com"));
+        assert!(contact_line("www.example.com"));
+        assert!(contact_line("Visit www.example.com."));
+        assert!(!contact_line(
+            "Meeting held virtually at www.example.com/meeting2025."
+        ));
+        assert!(!contact_line("Questions may be sent to help@example.com."));
         assert!(!ends_with_contact("Exact Mass: 259.1572"));
     }
 
