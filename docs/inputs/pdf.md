@@ -99,6 +99,18 @@ read: it names the glyph drawn, and the width the PDF gives the code is that
 glyph's. A map that reads a code as anything else, a small capital, a
 ligature or a symbol font's glyph, is kept.
 
+**Accents set over their letters.** Many typesetters draw `é` as an `e` and a
+spacing `´` placed over it, and TeX draws every accented letter and every
+hat, tilde and bar in its formulas that way. Read in order that is two
+characters, `Balague´`, `K¨ahler`, `A˚`, where the page shows one. A spacing
+accent (`´` `` ` `` `ˆ` `˜` `¨` `¯` `˘` `˙` `˚` `˝` `ˇ`, and `¸` `˛` under the
+letter) whose ink is centred on a letter's and touches it or nearly does is
+read as part of that letter: `Balagué`, `Kähler`, `Å`, and `K̂` or `x̄`,
+letter and combining mark, where Unicode has no single character. An
+accent over a dotless `ı` reads as an accented `i`. The same character set
+beside a letter is left as printed: an acute standing in for an apostrophe
+(`Spearman´s`), a prime after a figure, inch marks after a dimension.
+
 **Symbol fonts.** A PDF made from Word gives a character set in Symbol or
 Wingdings the font's own code plus `0xF000` as its text, a private-use
 character, and every reader of the text layer gets that code: `1600 μmole`

@@ -2844,6 +2844,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         timed(&mut timings.dedup, || {
             dedup::remove_faux_bold(&mut p.glyphs, 8)
         });
+        // An accent drawn over its letter is part of it, once any copy of
+        // either is gone: `e` and `´` are `é`.
+        timed(&mut timings.dedup, || crate::accent::compose(&mut p.glyphs));
     }
     // A watermark laid over the text, before it is read into the lines it
     // crosses.
