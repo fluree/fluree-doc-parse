@@ -88,6 +88,17 @@ from their shape instead:
   leaders between a table's labels and its figures, a decimal point, the
   stops in `U.S.`.
 
+**Capitals mapped to lowercase.** Some producers write a font's character
+map with some of its capitals folded to lowercase: the code that draws `F`
+reads `f`, and a reader that trusts the map gets `board of Governors of
+the Federal reserve System`, or a table's row label `foreign currency
+translation adjustments`. Where the font's encoding is a standard one
+(WinAnsi, MacRoman or Standard, with its differences) and names, for a
+code, the same letter as the map in the other case, the encoding's letter is
+read: it names the glyph drawn, and the width the PDF gives the code is that
+glyph's. A map that reads a code as anything else, a small capital, a
+ligature or a symbol font's glyph, is kept.
+
 **Symbol fonts.** A PDF made from Word gives a character set in Symbol or
 Wingdings the font's own code plus `0xF000` as its text, a private-use
 character, and every reader of the text layer gets that code: `1600 μmole`
