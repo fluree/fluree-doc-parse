@@ -4,7 +4,9 @@ Engine adapters for opendataloader-bench. `pdf_parser_fluree.py` runs
 `fdoc convert <pdf> --format md --md-links text --no-escalate`: the
 benchmark's reference writes a link as its words alone, and so does
 `--md-links text`. Set `FLUREE_DOC_MD_LINKS=inline` to score the default
-Markdown instead. [The benchmarks page](../docs/benchmarks/README.md#reproducing-it)
+Markdown instead. The adapter takes out the notes `fdoc` leaves in
+`<!-- fluree-doc-parse: … -->` comments before scoring
+(`FLUREE_DOC_KEEP_NOTES=1` keeps them). [The benchmarks page](../docs/benchmarks/README.md#reproducing-it)
 has the full steps.
 
 The model-tier splicing that used to live in `pdf_parser_fluree_hybrid.py` is

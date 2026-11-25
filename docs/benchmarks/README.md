@@ -102,7 +102,11 @@ The adapter runs `fdoc convert <pdf> --format md --md-links text
 reference writes them, and no model is called: tiers 2 and 3 read the
 committed caches named below.
 Set `FLUREE_DOC_MD_LINKS=inline` to score the default Markdown, links and
-all.
+all. The adapter takes out the notes `fdoc` leaves in HTML comments
+(`<!-- fluree-doc-parse: … -->`, such as raster regions no reader
+transcribed): they report on the conversion, are no part of the document's
+text, and a rendered view does not show them. Set `FLUREE_DOC_KEEP_NOTES=1`
+to score them as written.
 
 Then:
 
