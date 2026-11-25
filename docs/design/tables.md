@@ -140,6 +140,16 @@ boundary. Where a table's first and last rules end together, that is its
 edge. This is read from one table's rules only: across a whole page, the
 first and last rules are as often its running head and foot.
 
+A catalogue's product table often has no first or last rule there: its
+header is shaded across every column, and its rows are ruled from the
+second column on, each product's name spanning its group (`FP0R-E8
+Expansion Unit` beside six rows). Where the band shaded across the grid's
+first row runs on past its left edge to the grid's far edge, its text stands
+over the strip it adds (`Product name`), and words stand in that strip in
+the rows below, the band's edge is the table's. A band merely wider than
+its table, with no name over the strip or nothing under it, adds nothing,
+and no grid is widened onto another.
+
 ## Tall rows
 
 A band more than 3.5 times the median row height is taken for the gap
@@ -422,6 +432,13 @@ figure there is the row's value (`158,571`, two figures a slash parts,
 column beside carries a header of its own says nothing either way: a
 `Probable Cause` column under its own header names its rows as surely as a
 sub-property column under its property's.
+Groups can stand over sub-groups, each set down a column of its own and
+spanning fewer rows than the group it parts: each is named in turn, and the
+column after them is the row's own label (`FP2 Backplane / Conventional
+type / 7-module type (for master and expansion)`). A column spanning
+exactly the group's rows says more of the group (a tip's colour, its
+volumes carried down), and is read as the row's own label, as before:
+`0.1 mL / white`.
 
 A table ruled with horizontals only groups its columns another way. Each
 group's label (`2024`, `2023`, `Percent Change`) is set over a rule drawn
