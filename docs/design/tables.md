@@ -34,7 +34,13 @@ fdoc dev tables report.pdf 12    # the grid that came out of it
 
 Multiple passes over one parse, rather than multiple services:
 
-- **Stroked rules** — drawn lines, clustered by axis as above.
+- **Stroked rules** — drawn lines, clustered by axis as above. A rule is
+  read as drawn, except where its clip is drawn round that one line: some
+  producers draw every rule far past the table, out past the page, and clip
+  each to the stretch that shows. Such a rule is cut to its clip, so a
+  column group's rule is as short as it looks and a table's own rules are
+  not taken for page-wide decoration. Under a broad clip (the page body, a
+  table's region, the foot a table breaks at) a rule stays whole.
 - **Filled rects** — thin filled rectangles used as rules.
 - **Alignment clustering** — column inference from the x-positions of text,
   for tables with genuinely no drawn geometry.
