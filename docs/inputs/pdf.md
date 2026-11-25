@@ -515,6 +515,27 @@ type. A slide's background holds its title, and a plot's own background is
 filled by its bars, with the axes' names and the legend outside it; neither
 is a frame.
 
+**A picture with labels set on it is a figure.** A product's cutaway placed
+as an image draws no shapes, and the names of its layers set over it
+(`Heat Sealable PLA Layer`, `PLA Core`) would otherwise read as paragraphs. A
+picture smaller than the page, with two blocks or more set on it, is a
+figure of those labels and of any label hung over its edge, when every block
+over it, even in part, is a label (fifteen words or fewer, no display type),
+and the labels are set about it rather than one under another from a single
+left edge. Its labels name the parts of the picture, as a raster chart's
+values, a map's place names or a diagram's parts do. It takes nothing set
+around it, so the heading under the picture opens the next section. None of
+these is a figure:
+
+- a photo with a title set over it, such as a slide's background;
+- a brochure's background, with paragraphs that run on and off it;
+- a signature under the line and the name it signs;
+- a photo with only a credit in its corner.
+
+A picture's labels still count toward the body size. A picture holds only
+a few, and setting them aside could tip a slide deck's body to another
+size.
+
 **Headings near drawings.** A heading set larger than the body that the
 figure took as a label keeps its type when the document sets headings at
 that size and weight away from any drawing: `Operation` over a drawing of the

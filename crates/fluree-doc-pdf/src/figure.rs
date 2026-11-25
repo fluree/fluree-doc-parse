@@ -71,7 +71,8 @@ pub struct Figure {
     /// The drawing alone: the shapes' extent, before any label was taken.
     pub drawing: BBox,
     pub page: usize,
-    /// Fills the region was inferred from, for the evidence trail.
+    /// Fills the region was inferred from, for the evidence trail: none
+    /// for a picture with its labels set over it (see [`pictures`]).
     pub shapes: usize,
     /// The box drawn around the drawing, where one is: a panel the
     /// drawing's shapes lie within, holding its labels.
@@ -1093,10 +1094,26 @@ pub fn attach_beside(
             labels.push(taken);
             continue;
         }
+        // A picture's labels are the blocks set on it (see [`pictures`]),
+        // with those hung over its edge, a layer's name set half off the
+        // cutaway: what lies round it is the page's.
+        if f.shapes == 0 {
+            let taken: Vec<usize> = (0..blocks.len())
+                .filter(|&i| {
+                    let (b, size, text) = blocks[i];
+                    let on = share_inside(&b, &drawing);
+                    on >= MARK_INSIDE || (on > 0.0 && picture_label(size, text, prose))
+                })
+                .collect();
+            f.bbox = taken.iter().fold(drawing, |r, &t| r.union(&blocks[t].0));
+            labels.push(taken);
+            continue;
+        }
         // The drawing's own marks: text set inside it.
         let mut taken: Vec<usize> = (0..blocks.len())
             .filter(|&i| share_inside(&blocks[i].0, &drawing) >= MARK_INSIDE)
             .collect();
+        // A photo's callouts take the marks in them, and reach for nothing.
         if callouts(&drawing, blocks, &photos) {
             labels.push(taken);
             continue;
@@ -1318,6 +1335,77 @@ const FRAME_PAGE: f64 = 0.9;
 /// Size, against the page's prose, from which text is display type: a
 /// title, not a frame's label.
 const FRAME_DISPLAY: f32 = 1.3;
+
+/// Pictures with labels set over them, as figures: a product's cutaway
+/// with its layers named on it (`Heat Sealable PLA Layer`, `PLA Core`).
+/// Drawn as an image, it draws no shapes, and its labels were read as the
+/// page's text, in whatever section the reading order put them.
+///
+/// A picture is one when two blocks or more lie on it, every block over it
+/// is a label (a few words, no display type), and they do not all start
+/// from one left edge. A photo with a title or a paragraph set over it, a
+/// slide's or a brochure's background, is not; nor is a signature under the
+/// name it signs, a picture the size of the page, or one a drawing already
+/// covers.
+pub fn pictures(
+    images: &[BBox],
+    blocks: &[(BBox, f32, &str)],
+    page: usize,
+    (page_width, page_height): (f64, f64),
+    prose: f32,
+    figures: &[Figure],
+) -> Vec<Figure> {
+    images
+        .iter()
+        .filter(|im| {
+            let page_scale = page_width > 0.0
+                && page_height > 0.0
+                && im.width() / page_width > MAX_PAGE_FRACTION
+                && im.height() / page_height > MAX_PAGE_FRACTION;
+            let on: Vec<&(BBox, f32, &str)> = blocks
+                .iter()
+                .filter(|(b, ..)| share_inside(b, im) >= MARK_INSIDE)
+                .collect();
+            !page_scale
+                && im.width().min(im.height()) >= MIN_SIDE
+                && im.width() * im.height() >= MIN_AREA
+                && !figures.iter().any(|f| {
+                    share_inside(&f.drawing, im) > 0.0 || share_inside(im, &f.drawing) > 0.0
+                })
+                && on.len() >= 2
+                // Every block over it, wholly or in part, is a label: a
+                // brochure's paragraphs run on and off the picture behind
+                // them, and its headings over it are theirs.
+                && blocks
+                    .iter()
+                    .filter(|(b, ..)| share_inside(b, im) > 0.0)
+                    .all(|(_, size, text)| picture_label(*size, text, prose))
+                // Labels lie about the picture, each by what it names. Lines
+                // set one under another from one left edge are the page's
+                // text over a picture under it: a signature over the line
+                // and the name it signs.
+                && !on.iter().all(|(b, size, _)| {
+                    (b.x0 - on[0].0.x0).abs() <= *size as f64 * PICTURE_EDGE
+                })
+        })
+        .map(|im| Figure {
+            bbox: *im,
+            drawing: *im,
+            page,
+            shapes: 0,
+            frame: None,
+        })
+        .collect()
+}
+
+/// Widest difference, in ems, between the left edges of lines set as one
+/// column.
+const PICTURE_EDGE: f64 = 0.5;
+
+/// A label as a picture's: a few words, no display type.
+fn picture_label(size: f32, text: &str, prose: f32) -> bool {
+    text.split_whitespace().count() <= LABEL_MAX_WORDS && size < prose * FRAME_DISPLAY
+}
 
 /// Are two blocks one run of text: set at one size from one left edge, one
 /// under the other with no more than a paragraph's space between?
@@ -2304,6 +2392,68 @@ mod tests {
         ];
         attach(&mut figs, &labels, &panels, (612.0, 792.0), 9.0);
         assert!(figs[0].bbox.y0 <= 262.0, "kept to {:?}", figs[0].bbox);
+    }
+
+    #[test]
+    fn a_picture_with_labels_set_on_it_is_a_figure_of_them() {
+        // A film's cutaway drawn as an image, its layers named on it, the
+        // last half off its lower edge, and the next section's heading
+        // under it.
+        let picture = bb(298.0, 247.0, 525.0, 385.0);
+        let blocks = vec![
+            (
+                bb(437.0, 320.0, 534.0, 328.0),
+                8.0,
+                "Heat Sealable PLA Layer",
+            ),
+            (bb(310.0, 362.0, 345.0, 368.0), 8.0, "PLA Core"),
+            (
+                bb(430.0, 383.0, 527.0, 391.0),
+                8.0,
+                "Heat Sealable PLA Layer",
+            ),
+            (
+                bb(291.0, 414.0, 424.0, 422.0),
+                10.0,
+                "Environmental Certifications",
+            ),
+        ];
+        let mut figs = pictures(&[picture], &blocks, 0, (612.0, 792.0), 10.0, &[]);
+        assert_eq!(figs.len(), 1);
+        let labels = attach(&mut figs, &blocks, &[picture], (612.0, 792.0), 10.0);
+        assert_eq!(labels, vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn a_picture_is_no_figure_for_a_title_a_paragraph_a_signature_or_a_credit() {
+        let picture = bb(298.0, 247.0, 525.0, 385.0);
+        let label = (bb(310.0, 362.0, 345.0, 368.0), 8.0, "PLA Core");
+        let none = |blocks: &[(BBox, f32, &str)], im: BBox| {
+            pictures(&[im], blocks, 0, (612.0, 792.0), 10.0, &[]).is_empty()
+        };
+        // A slide's photo with its title set over it in display type.
+        let title = (bb(310.0, 260.0, 500.0, 284.0), 24.0, "Our Mission");
+        assert!(none(&[title, label], picture));
+        // A paragraph set over it.
+        let prose = "Our films are made from a renewable resource and are heat \
+                     sealable on both sides, with good mechanical properties";
+        let paragraph = (bb(310.0, 260.0, 500.0, 300.0), 8.0, prose);
+        assert!(none(&[paragraph, label], picture));
+        // A paragraph run on and off it, with a heading over it: a
+        // brochure's background.
+        let heading = (bb(400.0, 300.0, 470.0, 312.0), 10.0, "GROWTH");
+        let running = (bb(310.0, 370.0, 560.0, 400.0), 10.0, prose);
+        assert!(none(&[heading, label, running], picture));
+        // A signature, over the line and the name it signs, from one edge.
+        let line = (bb(300.0, 330.0, 460.0, 342.0), 11.0, "_________________");
+        let name = (bb(300.0, 344.0, 380.0, 356.0), 11.0, "Kirk Sanders");
+        assert!(none(&[line, name], picture));
+        // A credit alone in its corner.
+        let credit = (bb(440.0, 375.0, 520.0, 382.0), 6.0, "Photo: J. Doe");
+        assert!(none(&[credit], picture));
+        // The page's own background, whatever is set on it.
+        let page = bb(0.0, 0.0, 612.0, 792.0);
+        assert!(none(&[credit, label], page));
     }
 
     #[test]

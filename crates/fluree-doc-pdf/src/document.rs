@@ -1629,6 +1629,15 @@ fn find_figures(
             .map(|&i| (blocks[i].bbox, blocks[i].font_size, block_texts[i].as_str()))
             .collect();
         let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
+        let labelled = figure::pictures(
+            &images,
+            &block_boxes,
+            pi,
+            (page.width, page.height),
+            prose_size(blocks),
+            &figures,
+        );
+        figures.extend(labelled);
         let taken = figure::attach_beside(
             &mut figures,
             &block_boxes,
@@ -1672,10 +1681,19 @@ fn find_figures(
 /// one-line labels, or a catalogue's drawings, outnumber a page's lines of
 /// prose, and measured over them the body came out at the labels' 4pt:
 /// every caption over it was "larger than body", and a heading.
+///
+/// A picture's labels (see [`figure::pictures`]) still count: a picture
+/// holds a few, and set aside they tipped the body of a slide deck, whose
+/// sizes stand close in count, to another size.
 fn drawn(page_figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]) -> Vec<Vec<bool>> {
     page_figures
         .iter()
-        .map(|(_, member)| member.iter().map(Option::is_some).collect())
+        .map(|(figures, member)| {
+            member
+                .iter()
+                .map(|m| m.is_some_and(|fi| figures[fi].shapes > 0))
+                .collect()
+        })
         .collect()
 }
 
