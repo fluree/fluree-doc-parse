@@ -1368,6 +1368,49 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
                 && !parted_over(j, x0, x1, size)
         })
     };
+    // A label that heads a column of its own, set apart from the text past
+    // the gap: a margin block (`Issued 07-2025` over `Supersedes 05-2025`)
+    // beside a note set in its own size. The line under the label starts
+    // where it does and ends short of the text past the gap, and the label
+    // and that text differ in size or baseline ([`RESTYLED`]). A heading's
+    // number has its text's size and baseline, and the line under it runs
+    // on across. The label holds a letter: a bare number over others is a
+    // chart's ticks or a column of figures beside its label, not a block.
+    let heads_a_column = |me: usize, label: &[usize], last: &Glyph, next: &Glyph, size: f64| {
+        let worded = label
+            .iter()
+            .any(|&j| glyphs[j].text.chars().any(char::is_alphabetic));
+        let restyled = (last.font_size - next.font_size).abs() as f64 > RESTYLED * size
+            || (last.origin.1 - next.origin.1).abs() > RESTYLED * size;
+        if !worded {
+            return false;
+        }
+        let Some(x0) = label
+            .iter()
+            .filter_map(|&j| glyphs[j].bbox.map(|b| b.x0))
+            .reduce(f64::min)
+        else {
+            return false;
+        };
+        let bottom = label
+            .iter()
+            .filter_map(|&j| glyphs[j].bbox.map(|b| b.y1))
+            .fold(f64::MIN, f64::max);
+        let far = next.bbox.map_or(f64::MAX, |b| b.x0);
+        restyled
+            && boxes.iter().enumerate().any(|(j, (o, em, horizontal))| {
+                // The block's next line: its top under the label's ink (an
+                // ascender may reach a fifth of an em up into it), at most
+                // an em of leading down, starting within half an em of the
+                // label's start, and ending an em short of the far text.
+                j != me
+                    && *horizontal
+                    && o.y0 >= bottom - 0.2 * em
+                    && o.y0 - bottom <= *em
+                    && (o.x0 - x0).abs() <= 0.5 * em
+                    && o.x1 < far - *em
+            })
+    };
     let mut out = Vec::with_capacity(lines.len());
     for (me, l) in lines.into_iter().enumerate() {
         if !l.is_horizontal() {
@@ -1394,7 +1437,8 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
             };
             let size = glyphs[*inked].font_size.max(next.font_size).max(1.0) as f64;
             if b.x0 - a.x1 > size * BLOCK_GAP_RATIO
-                && !lone_label(glyphs, &idxs[from..k])
+                && (!lone_label(glyphs, &idxs[from..k])
+                    || heads_a_column(me, &idxs[from..k], &glyphs[*inked], next, size))
                 && !crossed(me, a.x1, b.x0, size)
             {
                 cuts.push(k);
@@ -1501,6 +1545,12 @@ fn part_at_walls(lines: Vec<Line>, glyphs: &[Glyph], walls: &[BBox], ratio: f64)
 /// How far, in the line's size, another line's ends may stand from its own
 /// for the two to be set to one measure.
 const SAME_MEASURE: f64 = 1.5;
+
+/// How far, in the larger size's ems, a label and the text past its gap
+/// differ in size or baseline to be set apart from each other: a size a
+/// step smaller (6pt beside 7pt is a seventh), or a baseline off by more
+/// than one line's jitter, which is a few hundredths of an em.
+const RESTYLED: f64 = 0.1;
 
 /// Rows above and below, in the line's size, whose lines show a gap is no
 /// gutter by running across it.
@@ -3259,6 +3309,71 @@ mod tests {
         assert!(label("Article IV"));
         assert!(!label("fit easily"));
         assert!(!label("Rated voltage"));
+    }
+
+    /// `text` at `size` from `x` on `baseline`, half a size a letter, its
+    /// spaces outline-less glyphs, drawn in order from `first`.
+    fn set_at(text: &str, x: f64, baseline: f64, size: f32, first: usize) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let mut l = sized(
+                    &c.to_string(),
+                    x + size as f64 * 0.5 * i as f64,
+                    baseline,
+                    size,
+                );
+                if c == ' ' {
+                    l.bbox = None;
+                }
+                l.draw_index = first + i;
+                l
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_label_heading_a_column_of_its_own_is_cut_from_the_text_beside_it() {
+        // A margin block, `Rev 4` over `Rev 3` at 8pt, a space glyph after
+        // its first line, and a note at 6pt beside it, its first baseline a
+        // point higher. Read as a number set off by a tab, `Rev 4` kept
+        // the note's first line.
+        let mut v = set_at("Rev 4 ", 20.0, 200.0, 8.0, 0);
+        v.extend(set_at("Notes apply to all sizes", 120.0, 199.0, 6.0, 10));
+        v.extend(set_at("Rev 3", 20.0, 210.0, 8.0, 40));
+        v.extend(set_at("shown on this sheet", 120.0, 206.5, 6.0, 50));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(texts.contains(&"Rev 4".to_string()), "{texts:?}");
+        assert!(
+            texts.contains(&"Notes apply to all sizes".to_string()),
+            "{texts:?}"
+        );
+
+        // A heading's number in its text's size and on its baseline keeps
+        // its text, though a short line under it starts where it does.
+        let mut v = set_at("3.1 ", 20.0, 200.0, 8.0, 0);
+        v.extend(set_at("Results", 120.0, 200.0, 8.0, 10));
+        v.extend(set_at("None.", 20.0, 210.0, 8.0, 20));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("3.1") && t.ends_with("Results")),
+            "{texts:?}"
+        );
+
+        // Nor is a bare number over others cut from a label beside it: a
+        // chart's ticks beside a series' name.
+        let mut v = set_at("20 ", 20.0, 200.0, 8.0, 0);
+        v.extend(set_at("Energy", 120.0, 199.0, 6.0, 10));
+        v.extend(set_at("10", 20.0, 210.0, 8.0, 20));
+        let texts: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("20") && t.ends_with("Energy")),
+            "{texts:?}"
+        );
     }
 
     #[test]
