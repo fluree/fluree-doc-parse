@@ -1311,6 +1311,30 @@ pub fn attach_beside(
     labels
 }
 
+/// Give back to the page each label that introduces a list on its colon,
+/// `Make the following Electrical Connections to supply cord:` over its
+/// lettered steps, within [`COLUMN_GAP`] lines above an item and no more
+/// than six ems left of it. A list item is no label, so the steps are the
+/// page's, and the line leading into them is theirs. `items` are the
+/// page's list items, by box and size.
+pub fn release_lead_ins(
+    taken: &mut [Vec<usize>],
+    blocks: &[(BBox, f32, &str)],
+    items: &[(BBox, f32)],
+) {
+    for labels in taken.iter_mut() {
+        labels.retain(|&k| {
+            let (b, size, text) = blocks[k];
+            !(text.trim_end().ends_with(':')
+                && items.iter().any(|(o, osize)| {
+                    let line = size.max(*osize).max(1.0) as f64;
+                    (0.0..=line * COLUMN_GAP).contains(&(o.y0 - b.y1))
+                        && (0.0..=line * 6.0).contains(&(o.x0 - b.x0))
+                }))
+        });
+    }
+}
+
 /// Most space, in lines, between a framed figure's caption or note and the
 /// frame, or the caption before it.
 const CAPTION_GAP: f64 = 2.5;
@@ -2488,6 +2512,25 @@ mod tests {
         ];
         let labels = attach(&mut figs, &blocks, &[], (612.0, 792.0), 9.0);
         assert_eq!(labels, vec![Vec::<usize>::new()]);
+    }
+
+    #[test]
+    fn a_line_introducing_a_list_is_no_label() {
+        // A wiring diagram took the line over its lettered steps; the steps
+        // are list items, and the line leads into them. A legend's title on
+        // its colon, over nothing but the drawing's labels, stays.
+        let blocks = vec![
+            (
+                bb(300.0, 100.0, 520.0, 108.0),
+                8.0,
+                "Make the following Electrical Connections to supply cord:",
+            ),
+            (bb(300.0, 200.0, 340.0, 208.0), 8.0, "Legend:"),
+        ];
+        let items = vec![(bb(310.0, 112.0, 540.0, 130.0), 8.0)];
+        let mut taken = vec![vec![0, 1]];
+        release_lead_ins(&mut taken, &blocks, &items);
+        assert_eq!(taken, vec![vec![1]]);
     }
 
     #[test]

@@ -985,7 +985,7 @@ const DISPLAY_LINE_RATIO: f64 = 1.3;
 /// with every line of a justified paragraph. A line that opens with a list
 /// number is a slide's next item, not the title's next line.
 fn display_aligned(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
-    if ordinal_prefix(&next.text).is_some() {
+    if count_prefix(&next.text).is_some() {
         return false;
     }
     let display = |l: &Line| l.font_size as f64 >= edge.body * DISPLAY_LINE_RATIO;
@@ -1295,6 +1295,46 @@ fn ordinal_prefix(text: &str) -> Option<(u32, &str)> {
     Some((t[..digits].parse().ok()?, label))
 }
 
+/// Where a lettered label's place in its count starts: `a.` is
+/// `LETTERED + 1`. Letters count apart from numbers, so `b.` follows `a.`
+/// and never `1.`.
+const LETTERED: u32 = 1000;
+
+/// The lower-case letter a line opens with as an ordered list's label,
+/// `a.`, `b)`, `(c)`, with its place in the count (see [`LETTERED`]) and
+/// the label's text. A capital, `A.`, opens an appendix or a section as
+/// often as an item, and is no label here.
+fn letter_prefix(text: &str) -> Option<(u32, &str)> {
+    let t = text.trim_start();
+    let body = t.strip_prefix('(');
+    let inner = body.unwrap_or(t);
+    let c = inner.chars().next().filter(char::is_ascii_lowercase)?;
+    let after = &inner[1..];
+    let rest = match body {
+        Some(_) => after.strip_prefix(')')?,
+        None => after.strip_prefix(['.', ')'])?,
+    };
+    if !rest.starts_with([' ', '\t', '\u{00A0}']) {
+        return None;
+    }
+    let label = &t[..t.len() - rest.len()];
+    Some((LETTERED + (c as u32 - 'a' as u32) + 1, label))
+}
+
+/// Does a count go on from place `m`? A lettered one opens at `a.`, or
+/// carries on from a line already counted: lines that happen to open `(d)`
+/// and `(e)`, a caption's panels wrapped one to a line, count off from
+/// nothing.
+fn opens_or_carries(m: u32, carried: bool) -> bool {
+    m < LETTERED || m == LETTERED + 1 || carried
+}
+
+/// The label a line opens with as an ordered list's item, numbered or
+/// lettered: `1.`, `12)`, `a.`, `(b)`.
+fn count_prefix(text: &str) -> Option<(u32, &str)> {
+    ordinal_prefix(text).or_else(|| letter_prefix(text))
+}
+
 /// The block `at` with the marker that leads it, if a checkbox, a drawn
 /// bullet or a run of dashes does: an item, before it is parted, so the
 /// passes that part blocks see it as the item it is, as they see one a
@@ -1580,11 +1620,17 @@ fn split_stacked_heads(b: Block, edge: &Edge) -> Vec<Block> {
 /// opening with `n−1.` set where the item `n.` after it opens is the one
 /// before. A list whose items stand a little further apart than its lines
 /// parts into blocks between some items and not others.
+///
+/// A lettered list opens itself: a block opening with `a.` and the block
+/// set where it is under it opening with `b.` are its first two items,
+/// each a paragraph long or a step wrapped over lines. A lone `a.` is a
+/// paragraph's. Numbers wait for [`gather_counted_items`], which tells a
+/// list from numbered sections.
 fn count_on(blocks: &mut [Block]) {
     let ordinal = |b: &Block| {
         b.lines
             .first()
-            .and_then(|l| ordinal_prefix(&l.text))
+            .and_then(|l| count_prefix(&l.text))
             .map(|(n, label)| (n, label.to_string()))
     };
     let item = |b: &Block| {
@@ -1616,6 +1662,17 @@ fn count_on(blocks: &mut [Block]) {
                 if n == m + 1 {
                     blocks[k - 1].marker = Some(label);
                     changed = true;
+                    continue;
+                }
+            }
+            let (a, z) = (&blocks[k - 1], &blocks[k]);
+            if let (None, None, Some((m, first)), Some((n, second))) =
+                (a.marker.as_ref(), z.marker.as_ref(), ordinal(a), ordinal(z))
+            {
+                if m == LETTERED + 1 && n == m + 1 {
+                    blocks[k - 1].marker = Some(first);
+                    blocks[k].marker = Some(second);
+                    changed = true;
                 }
             }
         }
@@ -1627,11 +1684,15 @@ fn count_on(blocks: &mut [Block]) {
 
 /// Split a block where its lines count off, `1. Avoid exposure…` and,
 /// after a line or two hanging under it, `2. Avoid exposure…` set where the
-/// `1.` is: an ordered list's items printed one after another at the
-/// paragraph's leading. Each starts its own block and carries its label as
-/// its marker, as [`split_hard_breaks`] marks a hand-broken list's steps;
-/// the lines it wraps onto hang under it and stay with it. Text before the
-/// first item is a block of its own.
+/// `1.` is, or `a.` over `b.`: an ordered list's items printed one after
+/// another at the paragraph's leading. Each starts its own block and
+/// carries its label as its marker, as [`split_hard_breaks`] marks a
+/// hand-broken list's steps; the lines it wraps onto hang under it and stay
+/// with it. Text before the first item is a block of its own, and so is a
+/// line set left of the last item's label that opens a count of its own,
+/// where the list the items sit under goes on (`f. The depth of focus…`
+/// over `2. When changing…`). A plain line set left of it is the item's,
+/// wrapped back to the margin its first line was indented from.
 fn split_counted(b: Block) -> Vec<Block> {
     if b.lines.len() < 2 {
         return vec![b];
@@ -1640,15 +1701,19 @@ fn split_counted(b: Block) -> Vec<Block> {
     let ordinals: Vec<Option<(u32, String)>> = b
         .lines
         .iter()
-        .map(|l| ordinal_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
+        .map(|l| count_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
         .collect();
     let mut counted: Vec<Option<String>> = vec![None; b.lines.len()];
-    let mut prev: Option<(usize, u32)> = None;
+    // The last line of each count, numbers and letters: a lettered step set
+    // under `2.` leaves the count `3.` goes on from.
+    let mut prev: [Option<(usize, u32)>; 2] = [None; 2];
     for (i, o) in ordinals.iter().enumerate() {
         let Some((n, label)) = o else { continue };
-        if let Some((j, m)) = prev {
+        let kind = usize::from(*n > LETTERED);
+        if let Some((j, m)) = prev[kind] {
             let (a, z) = (&b.lines[j], &b.lines[i]);
             if *n == m + 1
+                && opens_or_carries(m, counted[j].is_some())
                 && (a.bbox.x0 - z.bbox.x0).abs() <= fs * 0.5
                 && b.lines[j + 1..i]
                     .iter()
@@ -1660,7 +1725,7 @@ fn split_counted(b: Block) -> Vec<Block> {
                 }
             }
         }
-        prev = Some((i, *n));
+        prev[kind] = Some((i, *n));
     }
     if counted.iter().all(Option::is_none) {
         return vec![b];
@@ -1674,14 +1739,20 @@ fn split_counted(b: Block) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     let mut cur: Vec<Line> = Vec::new();
     let mut label: Option<String> = None;
+    let mut item_left: Option<f64> = None;
     for (i, l) in lines.into_iter().enumerate() {
-        if counted[i].is_some() && !cur.is_empty() {
+        let outdented =
+            ordinals[i].is_some() && item_left.is_some_and(|x| l.bbox.x0 < x - fs * 0.5);
+        if (counted[i].is_some() || outdented) && !cur.is_empty() {
             let mut piece = build(std::mem::take(&mut cur));
             piece.marker = label.take();
             out.push(piece);
         }
         if counted[i].is_some() {
             label = counted[i].clone();
+            item_left = Some(l.bbox.x0);
+        } else if outdented {
+            item_left = None;
         }
         cur.push(l);
     }
@@ -1747,21 +1818,24 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     let ordinals: Vec<Option<(u32, String)>> = b
         .lines
         .iter()
-        .map(|l| ordinal_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
+        .map(|l| count_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
         .collect();
     let mut counted: Vec<Option<String>> = vec![None; b.lines.len()];
-    let mut prev: Option<(usize, u32)> = None;
+    // The last line of each count, numbers and letters: a lettered step set
+    // under `2.` leaves the count `3.` goes on from.
+    let mut prev: [Option<(usize, u32)>; 2] = [None; 2];
     for (i, o) in ordinals.iter().enumerate() {
         if let Some((n, label)) = o {
-            if let Some((j, m)) = prev {
-                if *n == m + 1 {
+            let kind = usize::from(*n > LETTERED);
+            if let Some((j, m)) = prev[kind] {
+                if *n == m + 1 && opens_or_carries(m, counted[j].is_some()) {
                     counted[i] = Some(label.clone());
                     if counted[j].is_none() {
                         counted[j] = ordinals[j].as_ref().map(|(_, l)| l.clone());
                     }
                 }
             }
-            prev = Some((i, *n));
+            prev[kind] = Some((i, *n));
         }
     }
     let Block {
@@ -2103,7 +2177,7 @@ pub fn counts_off(b: &Block) -> bool {
     b.marker.as_deref().is_some_and(|m| {
         b.lines
             .first()
-            .and_then(|l| ordinal_prefix(&l.text))
+            .and_then(|l| count_prefix(&l.text))
             .is_some_and(|(_, label)| label == m)
     })
 }
@@ -3470,6 +3544,135 @@ mod tests {
         assert_eq!(ordinal_prefix("1.5 mL of water"), None);
         assert_eq!(ordinal_prefix("2024. The year"), None);
         assert_eq!(ordinal_prefix("Label four"), None);
+    }
+
+    #[test]
+    fn a_lower_case_letter_labels_an_item_counted_apart_from_numbers() {
+        assert_eq!(count_prefix("a. The size"), Some((LETTERED + 1, "a.")));
+        assert_eq!(count_prefix("b) The field"), Some((LETTERED + 2, "b)")));
+        assert_eq!(count_prefix("(c) The image"), Some((LETTERED + 3, "(c)")));
+        assert_eq!(count_prefix("2. When changing"), Some((2, "2.")));
+        // A capital opens an appendix as often as an item, and an
+        // abbreviation or a word is no label.
+        assert_eq!(count_prefix("A. Appendix"), None);
+        assert_eq!(count_prefix("e.g. this"), None);
+        assert_eq!(count_prefix("ab. Not one"), None);
+        assert_eq!(count_prefix("(c The image"), None);
+    }
+
+    #[test]
+    fn lettered_lines_are_items_and_the_text_set_left_of_them_is_not() {
+        // Six short steps lettered under a numbered question, and the next
+        // question set left of them, all at the paragraph's leading.
+        let lines = vec![
+            row(
+                "a. The size of the field of view decreases",
+                60.0,
+                0.0,
+                230.0,
+            ),
+            row("b. The field of view becomes darker", 60.0, 10.0, 200.0),
+            row("c. The size of the image increases", 60.0, 20.0, 190.0),
+            row(
+                "2. When changing from scanning to low power the field",
+                40.0,
+                30.0,
+                300.0,
+            ),
+            row("of view gets smaller.", 40.0, 40.0, 120.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        let marks: Vec<Option<&str>> = b.iter().map(|b| b.marker.as_deref()).collect();
+        assert_eq!(
+            marks,
+            [Some("a."), Some("b."), Some("c."), None],
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        assert_eq!(b[3].lines.len(), 2);
+        // A note's wrapped line goes back to the margin its number was
+        // indented from, and is the note's.
+        let note = vec![
+            row(
+                "1. Projections of real gross domestic product.",
+                48.0,
+                0.0,
+                250.0,
+            ),
+            row(
+                "2. Measure is the overall consumer price index, the price",
+                48.0,
+                10.0,
+                300.0,
+            ),
+            row("measure that has been most widely used.", 40.0, 20.0, 230.0),
+        ];
+        let b = assemble(&note, 1.2);
+        assert_eq!(
+            b.last().map(|b| b.lines.len()),
+            Some(2),
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // Lines that happen to open `(d)` and `(e)`, a caption's panels
+        // wrapped one to a line, count off from nothing.
+        let caption = vec![
+            row(
+                "Figure 6. Detection results: (a) input frame; (b) truth; (c)",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row(
+                "(d) result of the method based on the wavelet transform;",
+                40.0,
+                10.0,
+                300.0,
+            ),
+            row("(e) result when J = 4.", 40.0, 20.0, 140.0),
+        ];
+        assert!(assemble(&caption, 1.2).iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
+    fn lettered_blocks_open_a_list_of_their_own() {
+        // Wiring steps a step apart, each wrapped over two lines.
+        let lines = vec![
+            row(
+                "a. For 120V connect the black fixture lead to the",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row("voltage supply.", 49.0, 10.0, 120.0),
+            row(
+                "b. For 120V connect the white fixture lead to the",
+                40.0,
+                30.0,
+                300.0,
+            ),
+            row("neutral supply.", 49.0, 40.0, 120.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        let marks: Vec<Option<&str>> = b.iter().map(|b| b.marker.as_deref()).collect();
+        assert_eq!(
+            marks,
+            [Some("a."), Some("b.")],
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // A lone `a.` opens a paragraph, not a list.
+        let lone = vec![
+            row(
+                "a. For 120V connect the black fixture lead to the",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row("voltage supply.", 49.0, 10.0, 120.0),
+            row("Then close the box.", 40.0, 30.0, 140.0),
+        ];
+        assert!(assemble(&lone, 1.2).iter().all(|b| b.marker.is_none()));
     }
 
     #[test]
