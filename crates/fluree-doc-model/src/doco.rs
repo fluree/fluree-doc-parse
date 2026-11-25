@@ -3235,92 +3235,104 @@ mod tests {
     fn a_table_of_many_bands_is_written_in_linear_time() {
         // Each row searched the list of bands, twice, for whether it is one
         // and for the last above it: 170,000 bands took 28 s.
-        let n = 120_000;
-        let mut t = el("doco:Table", "", None);
-        let mut rows = vec![vec!["Name".to_string(), "Code".to_string()]];
-        for i in 0..n {
-            rows.push(vec![format!("Band {i}"), String::new()]);
-            rows.push(vec![format!("Item {i}"), i.to_string()]);
-        }
-        t.cells = Some(rows);
-        t.header_rows = Some(1);
-        t.sub_headers = Some((0..n).map(|i| 1 + 2 * i).collect());
-        let start = std::time::Instant::now();
+        let table = |n: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut rows = vec![vec!["Name".to_string(), "Code".to_string()]];
+            for i in 0..n {
+                rows.push(vec![format!("Band {i}"), String::new()]);
+                rows.push(vec![format!("Item {i}"), i.to_string()]);
+            }
+            t.cells = Some(rows);
+            t.header_rows = Some(1);
+            t.sub_headers = Some((0..n).map(|i| 1 + 2 * i).collect());
+            t
+        };
+        crate::scaling::assert_linear("a table of many bands", 2_000, table, |t| {
+            graph(std::slice::from_ref(t));
+            crate::emit::to_xhtml(std::slice::from_ref(t));
+        });
+        let n = 2_000;
+        let t = table(n);
         let g = graph(std::slice::from_ref(&t));
         let xhtml = crate::emit::to_xhtml(std::slice::from_ref(&t));
-        let took = start.elapsed();
         let cells = find(&g, "doc:TableCell");
         assert_eq!(cells.len(), 2 * n);
         let last = cells.last().unwrap();
         assert_eq!(last["doc:sectionLabel"], format!("Band {}", n - 1));
         assert_eq!(last["doc:cellValue"], (n - 1).to_string());
         assert_eq!(xhtml.matches("<th colspan=\"2\">Band").count(), n);
-        assert!(took.as_secs() < 30, "{took:?}");
     }
 
     #[test]
     fn a_group_merged_down_many_rows_is_named_in_linear_time() {
         // Each cell beside a group walked the group's run up and down to
         // find the rows it spans: a group over 100,000 rows walked them
-        // for each of them.
-        let n = 100_000;
-        let mut t = el("doco:Table", "", None);
-        let mut rows = vec![vec![
-            "Group".to_string(),
-            "Item".to_string(),
-            "Code".to_string(),
-        ]];
-        for i in 0..n {
-            let group = if i == 0 { "All" } else { "" };
-            rows.push(vec![group.to_string(), format!("Item {i}"), i.to_string()]);
-        }
-        t.cells = Some(rows);
-        t.header_rows = Some(1);
-        let mut down = vec![false; (n + 1) * 3];
-        for r in 2..=n {
-            down[r * 3] = true;
-        }
-        t.merged_down = Some(down);
-        let start = std::time::Instant::now();
-        let g = graph(std::slice::from_ref(&t));
-        let took = start.elapsed();
+        // for each of them, for 84 s.
+        let table = |n: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut rows = vec![vec![
+                "Group".to_string(),
+                "Item".to_string(),
+                "Code".to_string(),
+            ]];
+            for i in 0..n {
+                let group = if i == 0 { "All" } else { "" };
+                rows.push(vec![group.to_string(), format!("Item {i}"), i.to_string()]);
+            }
+            t.cells = Some(rows);
+            t.header_rows = Some(1);
+            let mut down = vec![false; (n + 1) * 3];
+            for r in 2..=n {
+                down[r * 3] = true;
+            }
+            t.merged_down = Some(down);
+            t
+        };
+        crate::scaling::assert_linear("a group merged down many rows", 2_000, table, |t| {
+            graph(std::slice::from_ref(t));
+        });
+        let n = 2_000;
+        let g = graph(std::slice::from_ref(&table(n)));
         let cells = find(&g, "doc:TableCell");
         let last = cells.last().unwrap();
         assert_eq!(last["doc:cellValue"], (n - 1).to_string());
         assert_eq!(last["doc:rowHeader"], format!("All / Item {}", n - 1));
-        assert!(took.as_secs() < 30, "{took:?}");
     }
 
     #[test]
     fn a_tall_stacked_header_is_named_in_time_linear_in_its_cells() {
         // Each column walked back along its row to the cell holding its
         // label: 128 rows merged across 16,384 columns took 4 s.
-        let (h, cols) = (64, 16_384);
-        let mut t = el("doco:Table", "", None);
-        let mut rows: Vec<Vec<String>> = (0..h)
-            .map(|r| {
-                let mut row = vec![String::new(); cols];
-                row[0] = format!("Level {r}");
-                row
-            })
-            .collect();
-        rows.push((0..cols).map(|c| c.to_string()).collect());
-        t.cells = Some(rows);
-        t.header_rows = Some(h);
-        let mut left = vec![true; (h + 1) * cols];
-        for r in 0..=h {
-            left[r * cols] = false;
-        }
-        left[h * cols..].fill(false);
-        t.merged_left = Some(left);
-        let start = std::time::Instant::now();
-        let g = graph(std::slice::from_ref(&t));
-        let took = start.elapsed();
+        let h = 16;
+        let table = |cols: usize| {
+            let mut t = el("doco:Table", "", None);
+            let mut rows: Vec<Vec<String>> = (0..h)
+                .map(|r| {
+                    let mut row = vec![String::new(); cols];
+                    row[0] = format!("Level {r}");
+                    row
+                })
+                .collect();
+            rows.push((0..cols).map(|c| c.to_string()).collect());
+            t.cells = Some(rows);
+            t.header_rows = Some(h);
+            let mut left = vec![true; (h + 1) * cols];
+            for r in 0..=h {
+                left[r * cols] = false;
+            }
+            left[h * cols..].fill(false);
+            t.merged_left = Some(left);
+            t
+        };
+        crate::scaling::assert_linear("a tall header over many columns", 1_000, table, |t| {
+            graph(std::slice::from_ref(t));
+        });
+        let cols = 1_000;
+        let g = graph(std::slice::from_ref(&table(cols)));
         let cells = find(&g, "doc:TableCell");
         assert_eq!(cells.len(), cols);
         let path = (0..h).map(|r| format!("Level {r}")).collect::<Vec<_>>();
         assert_eq!(cells[cols - 1]["doc:columnHeader"], path.join(" / "));
-        assert!(took.as_secs() < 10, "{took:?}");
     }
 
     /// What the DoCO output writes for a table's cells, at the budget's

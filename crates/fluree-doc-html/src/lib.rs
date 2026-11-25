@@ -2473,6 +2473,7 @@ mod tests {
         converting_to, output, Output, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES, MAX_MEMORY, MAX_WORK,
         TEXT_BYTES,
     };
+    use fluree_doc_model::scaling::assert_linear;
 
     fn parse(src: &str) -> Vec<Element> {
         super::parse(src).unwrap()
@@ -3332,12 +3333,16 @@ mod tests {
         // 200,000 took 37 s, and as long behind what the scan of the tags
         // passed over and the tokenizer did not.
         for before in ["", "<!-->", "<svg><title>"] {
-            let start = std::time::Instant::now();
             let err = super::parse(&format!("{before}{}", tag(200_000)))
                 .unwrap_err()
                 .to_string();
             assert!(err.contains("steps"), "{err}");
-            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+            assert_linear(
+                &format!("refusing a tag of many attributes after {before:?}"),
+                50_000,
+                |n| format!("{before}{}", tag(n)),
+                |page| assert!(super::parse(page).is_err()),
+            );
         }
         assert_eq!(super::parse(&tag(1_000)).unwrap().len(), 1);
     }
@@ -3458,12 +3463,17 @@ mod tests {
         // Each looks for an open element of its name down all those open:
         // 20,000 `<span>`, then 200,000 `</zz>`, ran past a minute.
         let page = |close: &str| format!("{}{}", "<span>".repeat(2_000), close.repeat(5_000));
-        let start = std::time::Instant::now();
         let err = within_steps(&page("</zz>"), MAX_WORK >> 6)
             .unwrap_err()
             .to_string();
         assert!(err.contains("steps"), "{err}");
-        assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
+        // Refused as soon, however many there are of each.
+        assert_linear(
+            "end tags that close nothing",
+            2_000,
+            |n| format!("{}{}", "<span>".repeat(n), "</zz>".repeat(n * 5 / 2)),
+            |page| assert!(within_steps(page, MAX_WORK >> 6).is_err()),
+        );
         // Closing the innermost each time is read.
         assert!(within_steps(&page("</span>"), MAX_WORK >> 6).is_ok());
     }
@@ -3514,16 +3524,25 @@ mod tests {
         // of 100 attributes took over two minutes, as did a million end
         // tags looking past 20,000 `<i>` the parser holds, closed.
         let attrs: String = (0..40).map(|k| format!(" a{k}")).collect();
-        let compared: String = (0..1_000).map(|i| format!("<b id={i}{attrs}>")).collect();
-        let held: String = (0..500).map(|i| format!("<i id={i}>")).collect();
-        let looked_past = |n: usize| format!("<p>{held}</p>{}", "</b>".repeat(n));
-        for page in [compared, looked_past(10_000)] {
-            let start = std::time::Instant::now();
+        let compared =
+            |n: usize| -> String { (0..n).map(|i| format!("<b id={i}{attrs}>")).collect() };
+        let held = |n: usize| -> String { (0..n).map(|i| format!("<i id={i}>")).collect() };
+        let looked_past = |held: &str, n: usize| format!("<p>{held}</p>{}", "</b>".repeat(n));
+        for page in [compared(1_000), looked_past(&held(500), 10_000)] {
             let err = within_steps(&page, MAX_WORK >> 6).unwrap_err().to_string();
             assert!(err.contains("steps"), "{err}");
-            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
         }
-        assert!(within_steps(&looked_past(1_000), MAX_WORK >> 6).is_ok());
+        assert!(within_steps(&looked_past(&held(500), 1_000), MAX_WORK >> 6).is_ok());
+        // Refused as soon, however many there are.
+        assert_linear("start tags compared", 1_000, compared, |page| {
+            assert!(within_steps(page, MAX_WORK >> 6).is_err())
+        });
+        assert_linear(
+            "end tags looking past those held",
+            10_000,
+            |n| looked_past(&held(n / 20), n),
+            |page| assert!(within_steps(page, MAX_WORK >> 6).is_err()),
+        );
         // Formatting elements closed, or left open around a mail's
         // paragraphs, are read.
         let closed = "<p><font face=Arial size=2 color=#1F497D><b class=x>a</b> b</font></p>";
@@ -3615,15 +3634,19 @@ mod tests {
     fn a_long_run_of_inline_elements_is_read_in_linear_time() {
         // Each element counted the characters of the run before it, for a
         // link's offsets: a million `<span>` took 12 s.
-        let (n, word) = (100_000, "é".repeat(100));
-        let page = format!(
-            "<div>{}<a href=\"/é\">çà</a> ü</div>",
-            format!("<span>{word}</span>").repeat(n)
-        );
+        let word = "é".repeat(100);
+        let page = |n: usize| {
+            format!(
+                "<div>{}<a href=\"/é\">çà</a> ü</div>",
+                format!("<span>{word}</span>").repeat(n)
+            )
+        };
+        assert_linear("a run of spans", 5_000, page, |page| {
+            assert_eq!(super::parse(page).unwrap().len(), 1);
+        });
+        let n = 5_000;
+        let els = super::parse(&page(n)).unwrap();
         let n = n * 100;
-        let start = std::time::Instant::now();
-        let els = super::parse(&page).unwrap();
-        let took = start.elapsed();
         assert_eq!(els.len(), 1);
         // The link is where its characters are, past the multi-byte ones.
         let l = &els[0].links.as_ref().unwrap()[0];
@@ -3632,7 +3655,6 @@ mod tests {
             els[0].text.chars().skip(n).take(2).collect::<String>(),
             "çà"
         );
-        assert!(took.as_secs() < 10, "{took:?}");
     }
     #[test]
     fn the_walk_asks_each_element_once_what_is_under_and_above_it() {
@@ -3640,21 +3662,32 @@ mod tests {
         // of the walk above it, and whether an `<aside>` was in an article
         // a walk up its ancestors: 500 `<span>` around a million `<br>x`
         // took 54 s, a million `<aside>` 500 elements deep 18 s.
-        let deep_inline = format!(
-            "{}{}<div>y</div>",
-            "<span>".repeat(500),
-            "<br>x".repeat(50_000)
+        // Deeper and longer together: either walk alone grows with their
+        // product.
+        assert_linear(
+            "inline elements around many lines",
+            10_000,
+            |n| {
+                format!(
+                    "{}{}<div>y</div>",
+                    "<span>".repeat(n / 100),
+                    "<br>x".repeat(n)
+                )
+            },
+            |page| assert!(super::parse(page).is_ok()),
         );
-        let deep_asides = format!(
-            "{}<table><tr><td>{}",
-            "<div>".repeat(500),
-            "<aside></aside>".repeat(200_000)
+        assert_linear(
+            "asides deep down",
+            40_000,
+            |n| {
+                format!(
+                    "{}<table><tr><td>{}",
+                    "<div>".repeat(n / 400),
+                    "<aside></aside>".repeat(n)
+                )
+            },
+            |page| assert!(super::parse(page).is_ok()),
         );
-        for page in [deep_inline, deep_asides] {
-            let start = std::time::Instant::now();
-            assert!(super::parse(&page).is_ok());
-            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
-        }
         // What is under and above is read as it was.
         let els = parse(
             "<section><div><span><aside><p>Factbox.</p></aside></span></div></section>\
@@ -3738,18 +3771,26 @@ mod tests {
         // each gathered again what the one inside them holds; and each was
         // told by all the text before it, a word of a million raised
         // digits looked at again at each.
-        let nested = format!(
-            "<p>Revenue{}{}{}</p>",
-            "<sup>".repeat(500),
-            "<br>x".repeat(20_000),
-            "</sup>".repeat(500)
+        // Deeper and longer together, the nested ones.
+        assert_linear(
+            "nested raised elements",
+            4_000,
+            |n| {
+                format!(
+                    "<p>Revenue{}{}{}</p>",
+                    "<sup>".repeat(n / 40),
+                    "<br>x".repeat(n),
+                    "</sup>".repeat(n / 40)
+                )
+            },
+            |page| assert_eq!(parse(page).len(), 1),
         );
-        let run = format!("<p>\u{3c1}w{}</p>", "<sup>2</sup>".repeat(100_000));
-        for page in [nested, run] {
-            let start = std::time::Instant::now();
-            assert_eq!(parse(&page).len(), 1);
-            assert!(start.elapsed().as_secs() < 10, "{:?}", start.elapsed());
-        }
+        assert_linear(
+            "a word of raised digits",
+            5_000,
+            |n| format!("<p>\u{3c1}w{}</p>", "<sup>2</sup>".repeat(n)),
+            |page| assert_eq!(parse(page).len(), 1),
+        );
         // A mark is still told apart, and a power kept with its value.
         assert_eq!(
             texts(&parse(

@@ -1875,6 +1875,7 @@ fn is_numeric(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::scaling::assert_linear;
 
     const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
 
@@ -2242,36 +2243,39 @@ mod tests {
         // 100,000 header references and 10,000 pictures, each naming an id
         // none of 30,000 relationships has: a scan of them all for each,
         // and of the references listed for each reference, took 17 s in a
-        // release build.
-        let rels: String = (0..30_000)
-            .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
-            .collect();
-        let refs: String = (0..100_000)
-            .map(|i| format!("<w:headerReference w:type=\"default\" r:id=\"hX{i:08}\"/>"))
-            .collect();
-        let body = format!(
-            "{}<w:sectPr>{refs}</w:sectPr>",
-            picture("rIdXXXXXXX").repeat(10_000)
-        );
-        let docx = zipped(&[
-            (
-                "word/document.xml".to_string(),
-                format!("<w:document><w:body>{body}</w:body></w:document>").into_bytes(),
-            ),
-            (
-                "word/_rels/document.xml.rels".to_string(),
-                format!("<Relationships>{rels}</Relationships>").into_bytes(),
-            ),
-        ]);
-        let start = std::time::Instant::now();
-        let (_, _, media) = parse_with_media(&docx).unwrap();
-        let took = start.elapsed();
-        assert_eq!(media.len(), 10_000);
+        // release build. Each count grows with `n` here, so either scan
+        // grows with its square.
+        let docx = |n: usize| {
+            let rels: String = (0..3 * n)
+                .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
+                .collect();
+            let refs: String = (0..10 * n)
+                .map(|i| format!("<w:headerReference w:type=\"default\" r:id=\"hX{i:08}\"/>"))
+                .collect();
+            let body = format!(
+                "{}<w:sectPr>{refs}</w:sectPr>",
+                picture("rIdXXXXXXX").repeat(n)
+            );
+            zipped(&[
+                (
+                    "word/document.xml".to_string(),
+                    format!("<w:document><w:body>{body}</w:body></w:document>").into_bytes(),
+                ),
+                (
+                    "word/_rels/document.xml.rels".to_string(),
+                    format!("<Relationships>{rels}</Relationships>").into_bytes(),
+                ),
+            ])
+        };
+        assert_linear("headers and pictures among relationships", 500, docx, |d| {
+            parse_with_media(d).unwrap();
+        });
+        let (_, _, media) = parse_with_media(&docx(1_000)).unwrap();
+        assert_eq!(media.len(), 1_000);
         assert_eq!(
             media[0].source,
             fluree_doc_model::MediaSource::Missing("rIdXXXXXXX".into())
         );
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]
@@ -2279,21 +2283,23 @@ mod tests {
         // One picture of 100,000 images, each its own id, and the first
         // named again: a scan of those kept for each took 6.4 s in a
         // release build.
-        let blips: String = (0..100_000)
-            .map(|i| format!("<a:blip r:embed=\"rId{i:07}\"/>"))
-            .collect();
-        let body = format!(
-            "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/><a:graphic><a:graphicData>\
-             <pic:pic>{blips}<a:blip r:embed=\"rId0000000\"/></pic:pic>\
-             </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
-        );
-        let docx = package(&body, &[], &[]);
-        let start = std::time::Instant::now();
-        let (_, _, media) = parse_with_media(&docx).unwrap();
-        let took = start.elapsed();
-        assert_eq!(media.len(), 100_000);
-        assert_eq!(media[99_999].index, 99_999);
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        let docx = |n: usize| {
+            let blips: String = (0..n)
+                .map(|i| format!("<a:blip r:embed=\"rId{i:07}\"/>"))
+                .collect();
+            let body = format!(
+                "<w:p><w:r><w:drawing><wp:inline><wp:docPr id=\"1\" name=\"P\"/><a:graphic><a:graphicData>\
+                 <pic:pic>{blips}<a:blip r:embed=\"rId0000000\"/></pic:pic>\
+                 </a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
+            );
+            package(&body, &[], &[])
+        };
+        assert_linear("a picture of many images", 5_000, docx, |d| {
+            parse_with_media(d).unwrap();
+        });
+        let (_, _, media) = parse_with_media(&docx(10_000)).unwrap();
+        assert_eq!(media.len(), 10_000);
+        assert_eq!(media[9_999].index, 9_999);
     }
 
     #[test]
@@ -2329,16 +2335,19 @@ mod tests {
         // 100,000 header references, each its own id and none of them a
         // relationship: a scan of those listed for each took 7.6 s in a
         // release build. Named again, a header is listed once.
-        let refs: String = (0..100_000)
-            .map(|i| format!("<w:headerReference w:type=\"default\" r:id=\"hX{i:08}\"/>"))
-            .collect();
-        let body = format!("<w:sectPr>{refs}</w:sectPr>");
-        let start = std::time::Instant::now();
-        let shown = shown_parts(&format!("<w:body>{body}{body}</w:body>"), "header", false);
-        let took = start.elapsed();
-        assert_eq!(shown.len(), 100_000);
-        assert_eq!(shown[99_999], "hX00099999");
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        let body = |n: usize| {
+            let refs: String = (0..n)
+                .map(|i| format!("<w:headerReference w:type=\"default\" r:id=\"hX{i:08}\"/>"))
+                .collect();
+            let body = format!("<w:sectPr>{refs}</w:sectPr>");
+            format!("<w:body>{body}{body}</w:body>")
+        };
+        assert_linear("header references", 5_000, body, |b| {
+            shown_parts(b, "header", false);
+        });
+        let shown = shown_parts(&body(10_000), "header", false);
+        assert_eq!(shown.len(), 10_000);
+        assert_eq!(shown[9_999], "hX00009999");
     }
 
     #[test]
@@ -3151,15 +3160,15 @@ mod tests {
         // took 38 s. Lines repeated across the two headers are still kept
         // once.
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-        let n = 60_000;
-        let lines: String = (0..n).map(|i| para(None, &format!("Line {i}"))).collect();
-        let body = doc(&format!(
-            "{}<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rId1\"/>\
+        let docx = |n: usize| {
+            let lines: String = (0..n).map(|i| para(None, &format!("Line {i}"))).collect();
+            let body = doc(&format!(
+                "{}<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rId1\"/>\
              <w:headerReference w:type=\"even\" r:id=\"rId2\"/></w:sectPr>",
-            para(None, "Body text")
-        ));
-        let settings = format!("<w:settings {NS}><w:evenAndOddHeaders/></w:settings>");
-        let docx = zipped(&[
+                para(None, "Body text")
+            ));
+            let settings = format!("<w:settings {NS}><w:evenAndOddHeaders/></w:settings>");
+            let docx = zipped(&[
             ("word/document.xml".to_string(), body.into_bytes()),
             (
                 "word/_rels/document.xml.rels".to_string(),
@@ -3180,12 +3189,15 @@ mod tests {
                 format!("<w:hdr {NS}>{lines}{}</w:hdr>", para(None, "Even only")).into_bytes(),
             ),
         ]);
-        let start = std::time::Instant::now();
-        let els = parse(&docx).unwrap();
-        let took = start.elapsed();
+            docx
+        };
+        assert_linear("a header of many lines", 2_000, docx, |d| {
+            parse(d).unwrap();
+        });
+        let n = 6_000;
+        let els = parse(&docx(n)).unwrap();
         let header = els.iter().filter(|e| e.evidence == "header").count();
         assert_eq!(header, n + 1);
-        assert!(took.as_secs() < 20, "{took:?}");
     }
 
     #[test]

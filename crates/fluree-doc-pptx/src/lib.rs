@@ -737,6 +737,7 @@ fn emit_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::scaling::assert_linear;
 
     const NS: &str = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
 
@@ -991,39 +992,41 @@ mod tests {
         // then one that is: a scan of them all for each listing took 24 s
         // in a release build.
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
-        let listed: String = (0..20_000)
-            .map(|i| format!("<p:sldId id=\"{}\" r:id=\"rIdXXXXXXX\"/>", 256 + i))
-            .collect();
-        let others: String = (0..200_000)
-            .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
-            .collect();
-        let parts = vec![
-            (
-                "ppt/presentation.xml".to_string(),
-                format!(
-                    "<p:presentation {NS}><p:sldIdLst>{listed}\
+        let bytes = |n: usize| {
+            let listed: String = (0..n)
+                .map(|i| format!("<p:sldId id=\"{}\" r:id=\"rIdXXXXXXX\"/>", 256 + i))
+                .collect();
+            let others: String = (0..10 * n)
+                .map(|i| format!("<Relationship Id=\"rId{i:07}\" Target=\"a\"/>"))
+                .collect();
+            let parts = vec![
+                (
+                    "ppt/presentation.xml".to_string(),
+                    format!(
+                        "<p:presentation {NS}><p:sldIdLst>{listed}\
                      <p:sldId id=\"1\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+                    ),
                 ),
-            ),
-            (
-                "ppt/_rels/presentation.xml.rels".to_string(),
-                format!(
-                    "<Relationships>{others}<Relationship Id=\"rId1\" Type=\"{rel}\" \
+                (
+                    "ppt/_rels/presentation.xml.rels".to_string(),
+                    format!(
+                        "<Relationships>{others}<Relationship Id=\"rId1\" Type=\"{rel}\" \
                      Target=\"slides/slide1.xml\"/></Relationships>"
+                    ),
                 ),
-            ),
-            (
-                "ppt/slides/slide1.xml".to_string(),
-                slide(&shape(None, &para("listed"))),
-            ),
-        ];
-        let bytes = package(&parts);
-        let start = std::time::Instant::now();
-        let els = parse(&bytes).unwrap();
-        let took = start.elapsed();
+                (
+                    "ppt/slides/slide1.xml".to_string(),
+                    slide(&shape(None, &para("listed"))),
+                ),
+            ];
+            package(&parts)
+        };
+        assert_linear("slides listed among relationships", 1_000, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(2_000)).unwrap();
         let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["listed"]);
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]
@@ -1033,8 +1036,10 @@ mod tests {
         // listing took 4.7 s in a release build. A deck that lists no part it
         // holds is read in its parts' order.
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
-        let listed = "<p:sldId id=\"256\" r:id=\"rId1\"/>".repeat(200_000);
-        let mut parts = vec![
+        let bytes = |n: usize| {
+            let listed = "<p:sldId id=\"256\" r:id=\"rId1\"/>".repeat(20 * n);
+            let mut parts =
+                vec![
             (
                 "ppt/presentation.xml".to_string(),
                 format!("<p:presentation {NS}><p:sldIdLst>{listed}</p:sldIdLst></p:presentation>"),
@@ -1051,14 +1056,15 @@ mod tests {
                 slide(&shape(None, &para("unlisted"))),
             ),
         ];
-        parts.extend((0..30_000).map(|i| (format!("ppt/other/p{i}.xml"), String::new())));
-        let bytes = package(&parts);
-        let start = std::time::Instant::now();
-        let els = parse(&bytes).unwrap();
-        let took = start.elapsed();
+            parts.extend((0..3 * n).map(|i| (format!("ppt/other/p{i}.xml"), String::new())));
+            package(&parts)
+        };
+        assert_linear("slides listed among parts", 500, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(1_000)).unwrap();
         let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         assert_eq!(texts, ["unlisted"]);
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]
@@ -1069,33 +1075,32 @@ mod tests {
         let rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart";
         let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
                      <c:chart xmlns:c=\"c\" r:id=\"rIdXXXXXXX\"/></a:graphicData></a:graphic></p:graphicFrame>";
-        let charts: String = (0..200_000)
+        let bytes = |n: usize| {
+            let charts: String = (0..10 * n)
             .map(|i| {
                 format!(
                     "<Relationship Id=\"rId{i:07}\" Type=\"{rel}\" Target=\"../charts/chart1.xml\"/>"
                 )
             })
             .collect();
-        let parts = vec![
-            (
-                "ppt/charts/chart1.xml".to_string(),
-                chart_xml(&ser("Share", &["EMEA"], &["28.0"])),
-            ),
-            (
-                "ppt/slides/slide1.xml".to_string(),
-                slide(&frame.repeat(20_000)),
-            ),
-            (
-                "ppt/slides/_rels/slide1.xml.rels".to_string(),
-                format!("<Relationships>{charts}</Relationships>"),
-            ),
-        ];
-        let bytes = package(&parts);
-        let start = std::time::Instant::now();
-        let els = parse(&bytes).unwrap();
-        let took = start.elapsed();
+            let parts = vec![
+                (
+                    "ppt/charts/chart1.xml".to_string(),
+                    chart_xml(&ser("Share", &["EMEA"], &["28.0"])),
+                ),
+                ("ppt/slides/slide1.xml".to_string(), slide(&frame.repeat(n))),
+                (
+                    "ppt/slides/_rels/slide1.xml.rels".to_string(),
+                    format!("<Relationships>{charts}</Relationships>"),
+                ),
+            ];
+            package(&parts)
+        };
+        assert_linear("frames among chart relationships", 1_000, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(2_000)).unwrap();
         assert!(els.iter().all(|e| e.kind != "doco:Table"));
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
     }
 
     #[test]
@@ -1107,15 +1112,17 @@ mod tests {
         let slide_rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide";
         let frame = "<p:graphicFrame><a:graphic><a:graphicData>\
                      <c:chart xmlns:c=\"c\" r:id=\"rId0000007\"/></a:graphicData></a:graphic></p:graphicFrame>";
-        let charts: String = (0..200_000)
+        let bytes = |n: usize| {
+            let charts: String = (0..1_000 * n)
             .map(|i| {
                 format!(
                     "<Relationship Id=\"rId{i:07}\" Type=\"{chart}\" Target=\"../charts/chart1.xml\"/>"
                 )
             })
             .collect();
-        let listed = "<p:sldId id=\"256\" r:id=\"rIdS\"/>".repeat(200);
-        let parts = vec![
+            let listed = "<p:sldId id=\"256\" r:id=\"rIdS\"/>".repeat(n);
+            let parts =
+                vec![
             (
                 "ppt/presentation.xml".to_string(),
                 format!("<p:presentation {NS}><p:sldIdLst>{listed}</p:sldIdLst></p:presentation>"),
@@ -1137,13 +1144,14 @@ mod tests {
                 format!("<Relationships>{charts}</Relationships>"),
             ),
         ];
-        let bytes = package(&parts);
-        let start = std::time::Instant::now();
-        let els = parse(&bytes).unwrap();
-        let took = start.elapsed();
+            package(&parts)
+        };
+        assert_linear("a slide listed many times", 10, bytes, |b| {
+            parse(b).unwrap();
+        });
+        let els = parse(&bytes(20)).unwrap();
         let tables = els.iter().filter(|e| e.kind == "doco:Table").count();
-        assert_eq!(tables, 200, "the chart, at each listing");
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        assert_eq!(tables, 20, "the chart, at each listing");
     }
 
     #[test]

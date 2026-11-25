@@ -727,10 +727,13 @@ pub(crate) mod tests {
         // 10,000 listings and 500,000 relationships: each listing scanning
         // them all, 1.9 million of them took 28 s in a release build.
         let bytes = related_book(&[], &[inline(0, "a")], MAX_ENTRIES, 500_000);
-        let start = std::time::Instant::now();
         assert!(parse_xlsb(&bytes).is_ok());
-        let took = start.elapsed();
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        fluree_doc_model::scaling::assert_linear(
+            "sheets listed among relationships",
+            500,
+            |n| related_book(&[], &[inline(0, "a")], n, 50 * n),
+            |b| assert!(parse_xlsb(b).is_ok()),
+        );
     }
 
     #[test]

@@ -8,3 +8,6 @@ description = "Plain text to Fluree document elements (DoCO-typed)"
 [dependencies]
 fluree-doc-model.workspace = true
 encoding_rs = "0.8"
+
+[dev-dependencies]
+fluree-doc-model = { workspace = true, features = ["test-util"] }

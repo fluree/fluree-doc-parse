@@ -3856,11 +3856,13 @@ mod tests {
     fn a_sheet_is_found_among_the_relationships_in_one_lookup() {
         // 20,000 listings and 200,000 relationships, 21 KB zipped: each
         // listing scanning them all took 15 s in a release build.
-        let bytes = listing(20_000, 200_000);
-        let start = std::time::Instant::now();
-        assert_eq!(parse(&bytes).unwrap().len(), 2);
-        let took = start.elapsed();
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        assert_eq!(parse(&listing(2_000, 20_000)).unwrap().len(), 2);
+        fluree_doc_model::scaling::assert_linear(
+            "sheets listed among relationships",
+            1_000,
+            |n| listing(n, 10 * n),
+            |b| assert_eq!(parse(b).unwrap().len(), 2),
+        );
     }
 
     const XDR: &str = r#"xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
@@ -4036,13 +4038,23 @@ mod tests {
              <xdr:pic><xdr:blipFill>{blips}<a:blip r:embed=\"r0\"/></xdr:blipFill></xdr:pic>\
              </xdr:twoCellAnchor></xdr:wsDr>"
         );
-        let start = std::time::Instant::now();
         let got = pictures(&xml, &mut Budget::default()).unwrap();
-        let took = start.elapsed();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].rids.len(), 200_000);
         assert_eq!(got[0].rids[199_999], "r199999");
-        assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+        let drawing = |n: usize| {
+            let blips: String = (0..n)
+                .map(|i| format!("<a:blip r:embed=\"r{i}\"/>"))
+                .collect();
+            format!(
+                "<xdr:wsDr><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:row>0</xdr:row></xdr:from>\
+                 <xdr:pic><xdr:blipFill>{blips}<a:blip r:embed=\"r0\"/></xdr:blipFill></xdr:pic>\
+                 </xdr:twoCellAnchor></xdr:wsDr>"
+            )
+        };
+        fluree_doc_model::scaling::assert_linear("a picture of many images", 5_000, drawing, |x| {
+            pictures(x, &mut Budget::default()).unwrap();
+        });
         // Each spent before it is kept.
         assert!(pictures(&xml, &mut Budget::new(16 << 20, 0)).is_err());
     }
