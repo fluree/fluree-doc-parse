@@ -38,6 +38,16 @@
         "column": "M21 Series",
         "row": "Time set range"
       }
+    },
+    {
+      "id": "weight-under-each-model",
+      "found": "2026-11-25",
+      "issue": "#268: the weights set across both models' columns, wider than most values but standing in from both edges alike, were written under `M17 Series` alone.",
+      "cell": {
+        "value": "MT 17/MT 21: 120V/230V 11 kg; 100V: 12kg MTR 17/MTR 21: 120V 24 kg; 230V 24kg/25kg 100V: 25kg",
+        "column": "M21 Series",
+        "row": "Weight"
+      }
     }
   ]
 }
