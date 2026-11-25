@@ -1573,6 +1573,60 @@ fn read_form_text(elements: &mut [Element]) {
     }
 }
 
+/// How far past a lead-in's end, in its line heights, the items it
+/// introduces may be set in: a bullet's indent and the space after it.
+const LEAD_IN_REACH: f64 = 3.0;
+
+/// A form's label over a box left blank, read as a heading on its weight
+/// or size: a word or three ending in a colon or `#` with nothing set under
+/// it on its page, over its width, and nothing on its row to its right but
+/// another such label: `APPROVALS:` and `AVAILABLE AT:` side by side over the
+/// empty boxes in a sheet's footer, for a dealer's stamp. A heading ending
+/// in a colon introduces what is set under it, a list, a table or a figure,
+/// however much space it leaves first, or what runs on beside it (an
+/// article's `FOURTH:` beside its text, set in past it). Run on the final
+/// elements, where tables and figures stand under their labels.
+fn read_blank_fields(elements: &mut [Element]) {
+    let blank: Vec<usize> = (0..elements.len())
+        .filter(|&i| {
+            let e = &elements[i];
+            let Some(b) = e.bbox else {
+                return false;
+            };
+            let h = b.height().max(1.0);
+            e.kind == "doco:SectionTitle"
+                && matches!(e.evidence, "bold" | "font-size")
+                && heading::form_label(e.text.trim())
+                && !elements.iter().enumerate().any(|(k, o)| {
+                    k != i
+                        && o.page == e.page
+                        && o.bbox.is_some_and(|ob| {
+                            // Reaching below it over its width, or set in
+                            // from it as a list's items are under their
+                            // lead-in, from under it or from its row: a
+                            // paragraph whose first line runs on beside the
+                            // label wraps under it.
+                            let reach = b.x1 + LEAD_IN_REACH * h;
+                            let under =
+                                ob.y1 > b.y1 + 0.2 * h && reach.min(ob.x1) > ob.x0.max(b.x0);
+                            // Text set on to its right on its row is what
+                            // it labels, unless that is another blank's label.
+                            let beside = ob.x0 >= b.x1
+                                && ob.y1.min(b.y1) - ob.y0.max(b.y0) > 0.5 * h
+                                && !heading::form_label(o.text.trim());
+                            under || beside
+                        })
+                })
+        })
+        .collect();
+    for i in blank {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
+    }
+}
+
 /// Two headings that are one, set over two lines: the second goes on in
 /// lower case from where the first starts, or the two are centred on one
 /// axis, one line's spacing apart (`Poly-Lactic-Acid` over `FDA Compliant
@@ -4224,6 +4278,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
     read_form_text(&mut elements);
+    read_blank_fields(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -4465,6 +4520,89 @@ mod tests {
             }),
             ..Element::new(kind, text, "rust", evidence)
         }
+    }
+
+    #[test]
+    fn a_label_over_a_blank_box_is_no_heading() {
+        // A sheet's footer: two labels side by side over empty boxes for a
+        // stamp, and a lead-in over its table and another over its list.
+        let mut elements = vec![
+            line_at(
+                "doco:SectionTitle",
+                "SIGNED BY:",
+                "bold",
+                Some(3),
+                700.0,
+                300.0,
+            ),
+            line_at("doco:SectionTitle", "STAMP:", "bold", Some(3), 700.0, 420.0),
+            line_at("doco:SectionTitle", "Sizes:", "bold", Some(3), 400.0, 40.0),
+            line_at("doco:Table", "S | M | L", "layout", None, 412.0, 40.0),
+            line_at(
+                "doco:SectionTitle",
+                "Includes:",
+                "bold",
+                Some(3),
+                500.0,
+                40.0,
+            ),
+            line_at("doco:ListItem", "Two brackets", "layout", None, 511.0, 50.0),
+            line_at(
+                "doco:Paragraph",
+                "Printed 2030",
+                "layout",
+                None,
+                760.0,
+                60.0,
+            ),
+        ];
+        // An article's label beside its text, the paragraph's first line
+        // running on from it and wrapping under it; a short lead-in over
+        // items set in past its end.
+        let mut article = line_at(
+            "doco:Paragraph",
+            "The shares are …",
+            "layout",
+            None,
+            299.0,
+            40.0,
+        );
+        article.bbox = Some(BBox {
+            x0: 40.0,
+            y0: 299.0,
+            x1: 540.0,
+            y1: 350.0,
+        });
+        elements.push(line_at(
+            "doco:SectionTitle",
+            "SIXTH:",
+            "bold",
+            Some(3),
+            300.0,
+            100.0,
+        ));
+        elements.push(article);
+        let mut lead = line_at("doco:SectionTitle", "Talks:", "bold", Some(3), 600.0, 40.0);
+        lead.bbox = Some(BBox {
+            x0: 40.0,
+            y0: 600.0,
+            x1: 70.0,
+            y1: 607.0,
+        });
+        elements.push(lead);
+        elements.push(line_at(
+            "doc:ListItem",
+            "A panel on records",
+            "layout",
+            None,
+            618.0,
+            76.0,
+        ));
+        read_blank_fields(&mut elements);
+        assert_eq!(
+            heads(&elements),
+            ["Sizes:", "Includes:", "SIXTH:", "Talks:"]
+        );
     }
 
     fn heads(elements: &[Element]) -> Vec<&str> {
