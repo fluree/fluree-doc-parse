@@ -273,7 +273,13 @@ fn an_image_that_does_not_decode_is_listed_for_its_page() {
         )],
     );
     std::fs::write(&input, bytes).unwrap();
+    // A deterministic parse decodes no image, so it cannot know this one is
+    // broken: it reports it not examined, as it would a sound one.
     let o = convert_as(&dir, &[&input], "doco", &[]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(document(&o).get("doc:parseWarnings").is_none());
+    // A parse that probes the images decodes it, and finds it broken.
+    let o = convert_as(&dir, &[&input], "doco", &["--probe-images"]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(
         document(&o)["doc:parseWarnings"],
@@ -289,7 +295,12 @@ fn an_image_that_does_not_decode_is_listed_for_its_page() {
         stderr(&o)
     );
     // Not when `--pages` leaves the page out, nor under `-q` on stderr.
-    let o = convert_as(&dir, &[&input], "doco", &["--pages", "2", "-q"]);
+    let o = convert_as(
+        &dir,
+        &[&input],
+        "doco",
+        &["--probe-images", "--pages", "2", "-q"],
+    );
     assert!(document(&o).get("doc:parseWarnings").is_none());
     assert!(stderr(&o).is_empty(), "{}", stderr(&o));
     // A clean page says nothing.
@@ -341,7 +352,8 @@ fn an_image_that_does_not_decode_is_listed_for_its_own_page_only() {
         .concat(),
     ]);
     std::fs::write(&input, bytes).unwrap();
-    let o = convert_as(&dir, &[&input], "doco", &[]);
+    // Probed, so decoded.
+    let o = convert_as(&dir, &[&input], "doco", &["--probe-images"]);
     assert!(o.status.success(), "{}", stderr(&o));
     assert_eq!(
         document(&o)["doc:parseWarnings"],

@@ -996,6 +996,36 @@ mod tests {
         };
         assert_eq!(mixed.summary(), one.summary());
 
+        // Images not examined are said once, by page, after what is missing.
+        let unprobed = |page| UnreadRegion {
+            reason: "Unprobed".into(),
+            ..region(page, 40.0)
+        };
+        let alone = Notes {
+            unread_regions: vec![unprobed(4), unprobed(0), unprobed(1)],
+            ..Default::default()
+        };
+        assert_eq!(
+            alone.summary().as_deref(),
+            Some(
+                "fluree-doc-parse: 3 images on pages 1–2, 5 were not examined: a parse \
+                 that probes images (OCR or escalation) can tell whether they hold text."
+            )
+        );
+        let after = Notes {
+            unread_regions: vec![unprobed(0), region(2, 582.0)],
+            ..Default::default()
+        };
+        assert_eq!(
+            after.summary().as_deref(),
+            Some(
+                "fluree-doc-parse: 1 raster region carries content no reader \
+                 transcribed: page 3 at 56,582,556,732. This output is missing it. \
+                 1 image on page 1 was not examined: a parse that probes images (OCR \
+                 or escalation) can tell whether it holds text."
+            )
+        );
+
         // Listed in page order, then down the page; after unread pages.
         let both = Notes {
             unread: vec![UnreadPage {
