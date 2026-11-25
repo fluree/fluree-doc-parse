@@ -204,6 +204,8 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             width,
             height,
             rotation: 0,

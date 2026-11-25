@@ -1096,7 +1096,28 @@ fn assemble_lines(
     let counts = |i: usize, n: u32| {
         (i > 0 && n > 1 && opens[i - 1] == Some(n - 1)) || opens.get(i + 1) == Some(&Some(n + 1))
     };
-    for ((m, i, only_note), n) in placed.into_iter().zip(raised) {
+    // Each placed marker's count, where it is one, and whether another
+    // marker on the page continues it: a list counts, one item to the next.
+    let counted: Vec<Vec<(u8, u32)>> = placed
+        .iter()
+        .map(|(m, _, _)| count_values(&m.text))
+        .collect();
+    // A number counts on from its neighbour; a letter or a roman numeral
+    // counts from its list's first, every one from `a` or `i` to it set on
+    // the page: a word set down the margin a letter a line spells, and its
+    // letters follow one another only by chance.
+    let has = |kind: u8, n: u32| counted.iter().flatten().any(|&(k, o)| k == kind && o == n);
+    let continued: Vec<bool> = counted
+        .iter()
+        .map(|c| {
+            c.iter().any(|&(kind, n)| {
+                let neighbour = has(kind, n + 1) || (n > 1 && has(kind, n - 1));
+                let from_first = kind == 0 || kind == 3 || (1..n).all(|o| has(kind, o));
+                neighbour && from_first
+            })
+        })
+        .collect();
+    for (((m, i, only_note), n), counts_on) in placed.into_iter().zip(raised).zip(continued) {
         if n.is_some_and(|n| counts(i, n)) {
             let b = &mut blocks[i];
             b.bbox = b.bbox.union(&m.bbox);
@@ -1108,10 +1129,128 @@ fn assemble_lines(
             continue;
         }
         if !only_note && blocks[i].marker.is_none() {
-            blocks[i].marker = Some(m.text.clone());
+            // A count set apart from its item (`2` beside `Transaction
+            // reported to you…` on a form, `(b)`, `iv.`, `[37]`) is part of
+            // what the item says, as a number set inline is: it stays in
+            // front of the item's text, as printed, where another item's
+            // marker counts on from it or up to it. A bullet's glyph is only
+            // its mark; a year over a table's row, a fraction, a dimension or
+            // a lone note letter counts nothing.
+            // A number raised before the line, smaller than its text, is a
+            // note's mark or a chart's tick (`67` at 8pt beside 10pt text),
+            // whatever counts beside it: a list's number sits on the line.
+            let raised_mark = blocks[i]
+                .lines
+                .first()
+                .is_some_and(|l| note_number(&m, l) || m.font_size < l.font_size * MARKER_SIZE);
+            // And it stands level with its item's first line: a figure set
+            // beside a paragraph's later line is a chart's tick beside the
+            // column.
+            let level = blocks[i].lines.first().is_some_and(|l| {
+                let middle = (m.bbox.y0 + m.bbox.y1) * 0.5;
+                let slack = MARKER_LEVEL * (l.font_size as f64).max(1.0);
+                middle >= l.bbox.y0 - slack && middle <= l.bbox.y1 + slack
+            });
+            let b = &mut blocks[i];
+            b.marker = Some(m.text.clone());
+            if counts_on && level && !raised_mark {
+                // Set on the item's first line, as printed, and in its size:
+                // a line of its own would count as text of the marker's size
+                // wherever the body's size is measured.
+                b.bbox = b.bbox.union(&m.bbox);
+                if let Some(first) = b.lines.first_mut() {
+                    first.text = format!("{} {}", m.text.trim(), first.text);
+                    first.bbox = first.bbox.union(&m.bbox);
+                    let mut glyphs = m.glyphs.clone();
+                    glyphs.extend(first.glyphs.iter().copied());
+                    first.glyphs = glyphs;
+                }
+            }
         }
     }
     blocks
+}
+
+/// Least size, against its item's, of a list's count: set near the item's
+/// type, if a little smaller. A chart's tick labels beside a column of text
+/// are set at two thirds of it or less.
+const MARKER_SIZE: f32 = 0.7;
+
+/// How far above or below its item's first line, in that line's size, a
+/// list's count may stand: set on its own baseline or a little off it. A
+/// figure beside a paragraph's next line stands a full line away.
+const MARKER_LEVEL: f64 = 0.3;
+
+/// A marker's counts, by kind: a number of up to three figures (`2`, `2.`,
+/// `(15)`, `[37]`, the last part of `2.1.3`), one letter (`b`, `(b)`, `B.`),
+/// or a roman numeral (`iv.`, `(III)`); `i`, `v` and `x` alone may be
+/// either a letter or a roman numeral. None for anything else: a year, a
+/// fraction, a dimension, a bullet.
+fn count_values(text: &str) -> Vec<(u8, u32)> {
+    let t = text.trim().trim_matches(['(', ')', '[', ']', '.', ':']);
+    let roman = match t.to_ascii_lowercase().as_str() {
+        "i" => Some((2, 1)),
+        "v" => Some((2, 5)),
+        "x" => Some((2, 10)),
+        _ => None,
+    };
+    count_value(text).into_iter().chain(roman).collect()
+}
+
+/// A marker's one count; see [`count_values`].
+fn count_value(text: &str) -> Option<(u8, u32)> {
+    let t = text.trim();
+    let t = t
+        .strip_prefix(['(', '['])
+        .map(|t| t.strip_suffix([')', ']']).unwrap_or(t))
+        .unwrap_or(t);
+    let t = t.strip_suffix(['.', ')', ':']).unwrap_or(t);
+    if t.is_empty() {
+        return None;
+    }
+    if t.chars().all(|c| c.is_ascii_digit()) {
+        return (t.len() <= 3)
+            .then(|| t.parse().ok())
+            .flatten()
+            .map(|n| (0, n));
+    }
+    if let Some(last) = t.rsplit_once('.').map(|(_, l)| l) {
+        let parts_ok = t
+            .split('.')
+            .all(|p| !p.is_empty() && p.len() <= 3 && p.chars().all(|c| c.is_ascii_digit()));
+        return parts_ok
+            .then(|| last.parse().ok())
+            .flatten()
+            .map(|n| (3, n));
+    }
+    let mut cs = t.chars();
+    if let (Some(c), None) = (cs.next(), cs.next()) {
+        if c.is_ascii_alphabetic() {
+            return Some((1, (c.to_ascii_lowercase() as u32) - ('a' as u32) + 1));
+        }
+        return None;
+    }
+    let roman = |c: char| match c.to_ascii_lowercase() {
+        'i' => Some(1),
+        'v' => Some(5),
+        'x' => Some(10),
+        'l' => Some(50),
+        'c' => Some(100),
+        _ => None,
+    };
+    let vals: Option<Vec<u32>> = t.chars().map(roman).collect();
+    let vals = vals?;
+    (vals.len() <= 6).then(|| {
+        let mut total = 0i64;
+        for (k, v) in vals.iter().enumerate() {
+            if vals.get(k + 1).is_some_and(|n| n > v) {
+                total -= *v as i64;
+            } else {
+                total += *v as i64;
+            }
+        }
+        (2, total.max(0) as u32)
+    })
 }
 
 /// `m`, a marker, stands just left of `l` on its row, as a bullet drawn
@@ -1964,8 +2103,20 @@ fn split_entries(b: Block, edge: &Edge) -> Vec<Block> {
             && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
             && !l.text.trim_end().ends_with(['-', '\u{AD}', ','])
     });
+    // An entry ends its line; a line ending on a word its phrase runs on
+    // from (`…since the` over `April 2024 Financial Stability Report…`)
+    // ends no entry. In lower case, as a sentence sets it: a capital `A`
+    // ending an entry is its label's (`…with Part A`).
+    let runs_on = |l: &Line| {
+        l.text
+            .split_whitespace()
+            .next_back()
+            .is_some_and(|w| RUNS_ON.contains(&w))
+    };
     let ended = b.lines.windows(2).all(|w| {
-        opens_capital(&w[1]) && edge.right - w[0].bbox.x1 > first_word_width(&w[1]) + fs * 0.5
+        opens_capital(&w[1])
+            && !runs_on(&w[0])
+            && edge.right - w[0].bbox.x1 > first_word_width(&w[1]) + fs * 0.5
     });
     if !set || !ended {
         return vec![b];
@@ -3046,6 +3197,46 @@ mod tests {
         for c in ['\u{2212}', '\u{2219}', '\u{2022}'] {
             assert!(!says_something(c), "{c}");
         }
+    }
+
+    #[test]
+    fn a_count_set_apart_stays_with_its_item() {
+        let mark = |t: &str, y: f64| {
+            let mut m = l(t, 40.0, y, 10.0);
+            m.bbox.x1 = 40.0 + 6.0 * t.len() as f64;
+            m
+        };
+        // Three steps, each number set apart left of its step: the
+        // numbers count, and stay in front of their steps.
+        let lines = vec![
+            mark("1", 0.0),
+            l("Remove the cover from the housing.", 70.0, 0.0, 10.0),
+            mark("2", 30.0),
+            l("Disconnect the supply cable.", 70.0, 30.0, 10.0),
+            mark("3", 60.0),
+            l("Lift the unit from its bracket.", 70.0, 60.0, 10.0),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.2).iter().map(|b| b.text()).collect();
+        assert!(
+            texts.contains(&"2 Disconnect the supply cable.".to_string()),
+            "{texts:?}"
+        );
+        assert!(
+            texts.contains(&"1 Remove the cover from the housing.".to_string()),
+            "{texts:?}"
+        );
+        // A year beside a row's label counts nothing: it stays out of the
+        // label. It is a chart's tick, kept as text of its own, never a
+        // marker (see `is_marker`).
+        let lines = vec![
+            mark("2031", 0.0),
+            l("Longer run", 70.0, 0.0, 10.0),
+            mark("•", 30.0),
+            l("Median of the projections", 70.0, 30.0, 10.0),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.2).iter().map(|b| b.text()).collect();
+        assert!(texts.contains(&"Longer run".to_string()), "{texts:?}");
+        assert!(texts.iter().all(|t| !t.starts_with("2031 ")), "{texts:?}");
     }
 
     #[test]
@@ -5264,6 +5455,21 @@ mod tests {
         column.extend(prose.clone());
         let b = assemble_in_measure(&prose, &column, 1.2, &[], &[], &[], 8.0, &[]);
         assert_eq!(b.len(), 1);
+        // A sentence broken before a title its line had no room for, the
+        // line ending on `the`, goes on into it: no entry ends on `the`.
+        let sentence = vec![
+            row("The changes since the", 40.0, 100.0, 120.0),
+            row("Annual Report are as follows:", 40.0, 110.0, 150.0),
+        ];
+        let mut column = measure(0.0);
+        column.extend(sentence.clone());
+        let b = assemble_in_measure(&sentence, &column, 1.2, &[], &[], &[], 8.0, &[]);
+        assert_eq!(
+            b.len(),
+            1,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
     }
 
     #[test]
