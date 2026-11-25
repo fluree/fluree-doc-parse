@@ -55,9 +55,14 @@ Four line kinds, and they answer different questions:
 | `CROPS` | how many crops a configured reader would be handed for the document |
 
 `ROUTE`, `TABLE`, `HEADING` and `FIGURE` escalate on their own evidence once a
-reader is configured. `CROPS` is the sum of what they and the table anchors
-would send — the number a consumer's cap is measured against, printed before
-anything is paid for. It is capped in `fdoc convert` by
+reader is configured. `CROPS` is what they and the table anchors would send
+— the crops `convert --escalate` pays for, those `dev render-routed` writes
+less the tables the structure readings (`FDOC_STRUCTURE_RESULTS`) veto, the
+number a consumer's cap is measured against, printed before anything is
+paid for. It is taken from the [anchors](../integration/anchors.md) of the
+analysed page, where `ROUTE` routes the page as extracted: a label in faux
+bold over an image can make the two disagree on how many regions a page
+has, and `CROPS` is the count that is read. It is capped in `fdoc convert` by
 [`escalation.max_crops`](config.md#how-much-one-document-may-send).
 
 `FIGURE` is the one that recognises a *designed* page — an infographic, a
@@ -76,7 +81,13 @@ COLUMN pages do not escalate by default — `fdoc config set escalation.on_colum
 
 That default is a measurement rather than caution — see
 [`fdoc config`](config.md#pages-that-read-across-their-panels). A `COLUMN`
-page still parses; it reads across its panels instead of down them.
+page still parses; it reads across its panels instead of down them. Once the
+configuration escalates them (or `FDOC_ESCALATE_COLUMNS` does for one run),
+the hint is not printed and `CROPS` counts each such page, read whole, as
+`convert --escalate` reads it; when the config file did it, a note on stderr
+says which file. `FDOC_ESCALATE_COLUMNS=0` turns it off for one run whatever
+the file says, and the hint then says that instead:
+`COLUMN pages are kept off for this run by FDOC_ESCALATE_COLUMNS=0`.
 
 See [the router](../design/router.md) and [Escalation and
 arbitration](../concepts/escalation.md).

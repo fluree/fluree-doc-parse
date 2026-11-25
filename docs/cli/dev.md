@@ -91,4 +91,16 @@ fdoc dev pair report.pdf "ab"               # what gap does this pair actually h
 ```
 
 `render-routed` is also how you produce the crops a model tier reads — see
-[Wiring the escalation tiers](../integration/escalation-tiers.md).
+[Wiring the escalation tiers](../integration/escalation-tiers.md). With
+`FDOC_STRUCTURE_RESULTS` set, it still writes the table crops those
+structure readings veto, for the structure reader, and marks them
+`"vetoed": true` in the manifest: a run that always passes those structure
+readings never sends them to a deep reader.
+
+It chooses its crops as `convert` does, config file included: with
+`escalation.on_column_doubt` on in the config file in effect (the
+`.fdoc/config.toml` nearest the working directory, or the per-user one where
+there is none; the two are not merged), a page in column doubt is written
+whole in place of its region and table crops, and a note on stderr says so.
+`FDOC_ESCALATE_COLUMNS=0` turns that off for one run; producing the crops of
+a benchmark cache, set it, so a file left on the machine cannot change them.
