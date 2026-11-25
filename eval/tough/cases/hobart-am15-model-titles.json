@@ -6,15 +6,19 @@
     "about": "Hobart AM15 specification sheet (dealer copy). Its specification page sets two columns of prose under a rule."
   },
   "notes": [
-    "2026-11-24 (#190): each page's title names the model, `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS`, and three pages set `DISHWASHER` alone. Those three were read as a running line, and it was cut out of the other titles, leaving `– ELECTRIC` and `– GAS`."
+    "2026-11-24 (#190): each page's title names the model, `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS`, and three pages set `DISHWASHER` alone. Those three were read as a running line, and it was cut out of the other titles, leaving `– ELECTRIC` and `– GAS`.",
+    "2026-11-25 (#276): each title is a running head naming the part of the sheet the page is in, flush left on the left-hand pages and flush right on the right-hand ones. It is the heading at its first page and runs on the pages after, so each title is read once, and `DISHWASHER` runs on its later pages without being cut from the longer titles."
   ],
   "checks": [
     {
-      "id": "short-title-not-running",
-      "found": "2026-11-24",
-      "issue": "#190: `DISHWASHER` was running text.",
-      "running": "DISHWASHER",
-      "count": 0
+      "id": "short-title-once",
+      "found": "2026-11-25",
+      "issue": "#190 kept `DISHWASHER` out of the running lines, so it was a heading on all three of its pages; #276 keeps it once, at its first page.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "DISHWASHER"
+      },
+      "count": 1
     },
     {
       "id": "no-electric-fragment",
@@ -36,21 +40,23 @@
     },
     {
       "id": "electric-title-whole",
-      "found": "2026-11-24",
-      "issue": "#190: as above.",
+      "found": "2026-11-25",
+      "issue": "#276: the title was a heading on both of its pages. (#190: it was once cut to `– ELECTRIC`.)",
       "element": {
+        "type": "doco:SectionTitle",
         "text": "DISHWASHER – ELECTRIC"
       },
-      "count": 2
+      "count": 1
     },
     {
       "id": "gas-title-whole",
-      "found": "2026-11-24",
-      "issue": "#190: as above.",
+      "found": "2026-11-25",
+      "issue": "#276: the title was a heading on both of its pages. (#190: it was once cut to `– GAS`.)",
       "element": {
+        "type": "doco:SectionTitle",
         "text": "DISHWASHER – GAS"
       },
-      "count": 2
+      "count": 1
     }
   ]
 }

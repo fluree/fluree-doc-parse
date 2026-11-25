@@ -291,7 +291,8 @@ build them.
 ### Regions nothing read
 
 - `fluree_doc_pdf::Page` gains `routing`, what the router made of the page
-  as it was drawn (`None` until `analyze_with` keeps it; `Page::routing()`
+  once faux bold counts once and an overlaid watermark is out (`None` until
+  `analyze_with` or an OCR reading keeps it; `Page::routing()`
   decides it when absent, `Page::keep_routing()` keeps it), and `warnings`,
   what the PDF interpreter reported while reading it. A `Page` literal needs
   both. `ImagePlacement` gains `key`, what the image shows (`None` when not
