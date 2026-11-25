@@ -634,8 +634,9 @@ fn select(
                 // region crop of the page can land, and left alone the page
                 // goes unread. The whole page needs no anchor. It is read
                 // for the pixels of its regions, so it keeps their reason,
-                // as a page whose regions a doubt widens does. Not when OCR
-                // read every region: no anchor is minted for one it read.
+                // as a page whose regions a doubt widens does.
+                // A region OCR read mints no anchor either, and is not read
+                // again: a page whose regions OCR read all asks for nothing.
                 None if matches!(&route, Route::VlmRegions(r)
                     if (0..r.len()).any(|i| !p.ocr_read_region(i))) =>
                 {
