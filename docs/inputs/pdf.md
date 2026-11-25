@@ -303,13 +303,20 @@ bulleted `UL Listed to control:` has its dashed loads set under its text,
 and a regulation's `(1) … from—` has its `(a)` and `(b)` set under its own.
 An item whose marker stands back out returns to the level its marker stands
 at. The marker must stand at least an em right of the marker above, from
-half an em before that item's text to two and a half ems past it. A marker
+an em before that item's text to two and a half ems past it. A marker
 further out belongs to another column. Only an item that follows the one
 before it down the page nests. A run broken by anything else, carried to
 the next column or onto the next page, starts again at the top. A wrapped
 line is its item's own, and a paragraph set with a hanging indent has no
 marker, so neither nests. Neither does a line read as an item whose number
 stands beside a later line: it carries on the item before.
+
+A marker is placed where it is drawn. One list can set its first bullet in
+the line and draw the rest apart from it, so one item's text starts at its
+bullet and the next item's a bullet's width in. They are compared by their
+bullets, which stand level, so the items are siblings. A box to tick marks
+a choice rather than a list's lead-in: what is set beside or under a form's
+`Yes` and `No` boxes stays level with them.
 
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of
@@ -633,6 +640,17 @@ from its text:
   behind a table turns back on itself, and a line with no axis by it is no
   plot. The text of such a plot is left in the measure of the body's size,
   as the page's headings are read against it.
+- A bar chart's bars are fills of one width, three or more at an even pitch,
+  each standing on one base or hanging from it, at lengths that differ.
+  Pieces that abut, each ending where the next starts, are one stacked bar;
+  pieces a gap apart are bars of their own, so charts set one over another
+  are read apart. Bars are a chart when an axis binds them: the base drawn
+  as a rule across them, a column of ticks beside them at an even pitch, or
+  a scale beside them whose numbers step evenly. Bars set across the page
+  are read the same way. A table's shading is no chart: its rows run to one
+  length and hold their text, its figures step unevenly, and its columns of
+  cells end, piece after piece, at the same rows across the table, where a
+  stacked bar's few pieces end at their values.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that

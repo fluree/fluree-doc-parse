@@ -486,6 +486,11 @@ struct PageText {
 /// comma, a sign, a percent or a currency sign between them: `1,000`,
 /// `0.04`, `−20`, `45%`.
 fn numbers(glyphs: &[Glyph]) -> Vec<BBox> {
+    numbers_said(glyphs).into_iter().map(|(b, _)| b).collect()
+}
+
+/// [`numbers`], each with what it says.
+fn numbers_said(glyphs: &[Glyph]) -> Vec<(BBox, String)> {
     let mut out = Vec::new();
     let mut run: Option<(BBox, f64, String)> = None;
     let number = |t: &str| {
@@ -507,7 +512,7 @@ fn numbers(glyphs: &[Glyph]) -> Vec<BBox> {
         if !joins || t.is_empty() {
             if let Some((r, _, s)) = run.take() {
                 if number(&s) {
-                    out.push(r);
+                    out.push((r, s));
                 }
             }
         }
@@ -524,7 +529,7 @@ fn numbers(glyphs: &[Glyph]) -> Vec<BBox> {
     }
     if let Some((r, _, s)) = run {
         if number(&s) {
-            out.push(r);
+            out.push((r, s));
         }
     }
     out
@@ -1964,6 +1969,404 @@ pub fn axis_plots(
             shapes: traces
                 .iter()
                 .filter(|t| share_inside(&t.bbox, &p) > 0.5)
+                .count()
+                .max(1),
+            frame: None,
+            axes: true,
+        })
+        .collect()
+}
+
+/// Fewest bars a chart is read from.
+const CHART_BARS: usize = 3;
+
+/// Least run of a chart's bars across, in the page's text size: a signal
+/// icon's bars stand within an em or two.
+const BAR_RUN: f64 = 3.0;
+
+/// Least length of a chart's longest bar, in the page's text size.
+const BAR_LENGTH: f64 = 2.0;
+
+/// Share of a chart's bars that stand on its base or hang from it.
+const BAR_BASE_SHARE: f64 = 0.8;
+
+/// A chart's bars, at most one in this many with text on or against it.
+const BAR_WORDED: usize = 3;
+
+/// Pieces to a stack, on average, from which stacks whose breaks line up are
+/// a table's columns of cells: a stacked bar holds a piece to a series.
+const CELL_PIECES: f64 = 4.0;
+
+/// Stacks that are a table's columns of cells: most breaks between their
+/// pieces (where one ends and the next starts) stand level with a break in
+/// half the other stacks or more, at the table's rows. A stacked bar's
+/// pieces end at their values.
+fn cells<'a>(stacks: impl Iterator<Item = &'a [BBox]>) -> bool {
+    // Each break, and the stack it is in, along the bars.
+    let mut breaks: Vec<(f64, usize)> = Vec::new();
+    let mut broken = 0usize;
+    for (i, stack) in stacks.enumerate() {
+        let mut v = stack.to_vec();
+        v.sort_by(|a, b| a.y0.total_cmp(&b.y0));
+        let before = breaks.len();
+        breaks.extend(v.windows(2).map(|p| (p[0].y1, i)));
+        broken += usize::from(breaks.len() > before);
+    }
+    if breaks.is_empty() || broken < 2 {
+        return false;
+    }
+    breaks.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut level = 0usize;
+    for (k, &(y, i)) in breaks.iter().enumerate() {
+        let mut with: Vec<usize> = Vec::new();
+        for &(e, j) in breaks[..k].iter().rev().take_while(|(e, _)| y - e <= 0.5) {
+            if j != i && (y - e).abs() <= 0.5 {
+                with.push(j);
+            }
+        }
+        for &(_, j) in breaks[k + 1..].iter().take_while(|(e, _)| e - y <= 0.5) {
+            if j != i {
+                with.push(j);
+            }
+        }
+        with.sort_unstable();
+        with.dedup();
+        if with.len() * 2 >= broken - 1 {
+            level += 1;
+        }
+    }
+    level * 2 > breaks.len()
+}
+
+/// Bar charts drawn as fills: [`CHART_BARS`] or more bars of one width at
+/// an even pitch, each standing on one base or hanging from it, of lengths
+/// that differ, bound by an axis: the base drawn as a rule across them, a
+/// column of ticks beside them at an even pitch, or a scale's numbers
+/// beside them. Bars set across the page likewise, turned. A table's
+/// shading bands its rows at one length, a rating's cells are one size,
+/// and an icon's bars have no axis.
+pub fn bar_plots(
+    fills: &[crate::rule::Fill],
+    rules: &[Rule],
+    marks: &[Rule],
+    glyphs: &[Glyph],
+    page: usize,
+    figures: &[Figure],
+) -> Vec<Figure> {
+    use crate::rule::Orientation;
+    let em = {
+        let mut sizes: Vec<f32> = glyphs
+            .iter()
+            .filter(|g| g.bbox.is_some())
+            .map(|g| g.font_size)
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64
+    };
+    let said = numbers_said(glyphs);
+    // Each fill once: many producers fill a shape and stroke it again.
+    let mut drawn: Vec<BBox> = fills
+        .iter()
+        .map(|f| f.bbox)
+        .filter(|b| b.width() >= 0.5 && b.height() >= 0.5)
+        .collect();
+    drawn.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    let mut boxes: Vec<BBox> = Vec::new();
+    for b in drawn {
+        let again = boxes
+            .iter()
+            .rev()
+            .take_while(|o| b.x0 - o.x0 < 0.5)
+            .any(|o| {
+                (o.y0 - b.y0).abs() < 0.5 && (o.x1 - b.x1).abs() < 0.5 && (o.y1 - b.y1).abs() < 0.5
+            });
+        if !again {
+            boxes.push(b);
+        }
+    }
+    let len = |r: &Rule| match r.orientation {
+        Orientation::Horizontal => r.bbox.width(),
+        Orientation::Vertical => r.bbox.height(),
+    };
+    let ticks: Vec<&Rule> = rules
+        .iter()
+        .chain(marks)
+        .filter(|r| len(r) <= em * TICK_LENGTH && len(r) >= em * 0.15)
+        .collect();
+    let mut plots: Vec<BBox> = Vec::new();
+    for turned in [false, true] {
+        // Bars across the page are read as bars up it, turned.
+        let t = |b: &BBox| {
+            if turned {
+                BBox {
+                    x0: b.y0,
+                    y0: b.x0,
+                    x1: b.y1,
+                    y1: b.x1,
+                }
+            } else {
+                *b
+            }
+        };
+        let along = if turned {
+            Orientation::Vertical
+        } else {
+            Orientation::Horizontal
+        };
+        let bars: Vec<BBox> = boxes.iter().map(t).collect();
+        let mut order: Vec<usize> = (0..bars.len()).collect();
+        order.sort_by(|&a, &b| bars[a].width().total_cmp(&bars[b].width()));
+        let mut k = 0;
+        while k < order.len() {
+            let w = bars[order[k]].width();
+            let mut j = k;
+            while j < order.len() && bars[order[j]].width() - w <= 0.5 {
+                j += 1;
+            }
+            let same: Vec<BBox> = order[k..j].iter().map(|&i| bars[i]).collect();
+            k = j;
+            if same.len() < CHART_BARS {
+                continue;
+            }
+            // Its bars: the pieces at one place across that abut, each
+            // ending where the next starts, a stack. Pieces a gap apart are
+            // bars of their own: a chart set over another, its bars at the
+            // same places, or a form's boxes in two rows.
+            let mut sorted = same.clone();
+            sorted.sort_by(|a, b| a.x0.total_cmp(&b.x0).then(a.y0.total_cmp(&b.y0)));
+            let mut columns: Vec<(f64, Vec<BBox>)> = Vec::new();
+            for b in sorted {
+                match columns.last_mut() {
+                    Some((x, v))
+                        if (b.x0 - *x).abs() <= 0.5
+                            && b.y0 <= v.iter().fold(f64::MIN, |e, o| e.max(o.y1)) + 1.0 =>
+                    {
+                        v.push(b)
+                    }
+                    _ => columns.push((b.x0, vec![b])),
+                }
+            }
+            let extent = |v: &[BBox]| {
+                v.iter()
+                    .fold((f64::MAX, f64::MIN), |(a, b), o| (a.min(o.y0), b.max(o.y1)))
+            };
+            // A chart to a band of bars level with one another, and along
+            // it a chart to a run: a gap past a few pitches starts another.
+            let mut by_top: Vec<usize> = (0..columns.len()).collect();
+            by_top.sort_by(|&a, &b| extent(&columns[a].1).0.total_cmp(&extent(&columns[b].1).0));
+            let mut bands: Vec<Vec<usize>> = Vec::new();
+            let mut low = f64::MIN;
+            for c in by_top {
+                let (y0, y1) = extent(&columns[c].1);
+                match bands.last_mut() {
+                    Some(band) if y0 <= low + 1.0 => band.push(c),
+                    _ => bands.push(vec![c]),
+                }
+                low = if bands.last().unwrap().len() == 1 {
+                    y1
+                } else {
+                    low.max(y1)
+                };
+            }
+            let mut runs: Vec<Vec<usize>> = Vec::new();
+            for mut band in bands {
+                band.sort_by(|&a, &b| columns[a].0.total_cmp(&columns[b].0));
+                let mut run: Vec<usize> = Vec::new();
+                for c in band {
+                    if let Some(&p) = run.last() {
+                        if columns[c].0 - columns[p].0 > w * 2.0 + em * 4.0 {
+                            runs.push(std::mem::take(&mut run));
+                        }
+                    }
+                    run.push(c);
+                }
+                runs.push(run);
+            }
+            for run in runs.iter().filter(|r| r.len() >= CHART_BARS) {
+                let xs: Vec<f64> = run.iter().map(|&c| columns[c].0).collect();
+                if !evenly_pitched(&xs) || xs[1] - xs[0] < w - 0.5 {
+                    continue;
+                }
+                // A stack holds a piece to a series, a few, each ending at its
+                // value; a table's column of cells a piece to a row, row after
+                // row, ending at its rows, the same in every column. Where the
+                // stacks hold many pieces and most of their breaks line up
+                // across them, they are cells. Few pieces may line up by their
+                // values alone: a histogram's counts are whole.
+                let pieces_each = run.iter().map(|&c| columns[c].1.len()).sum::<usize>() as f64
+                    / run.len() as f64;
+                if pieces_each >= CELL_PIECES && cells(run.iter().map(|&c| &columns[c].1[..])) {
+                    continue;
+                }
+                // The base: an edge most bars share, standing on it or
+                // hanging from it.
+                // Most bars share it, so one of the first few bars has it.
+                let first = run.len() - (run.len() as f64 * BAR_BASE_SHARE).ceil() as usize + 1;
+                let edges: Vec<f64> = run
+                    .iter()
+                    .take(first.max(1))
+                    .flat_map(|&c| columns[c].1.iter().flat_map(|b| [b.y0, b.y1]))
+                    .collect();
+                let support = |y: f64| {
+                    run.iter()
+                        .filter(|&&c| {
+                            columns[c]
+                                .1
+                                .iter()
+                                .any(|b| (b.y0 - y).abs() <= 1.0 || (b.y1 - y).abs() <= 1.0)
+                        })
+                        .count()
+                };
+                let Some(base) = edges
+                    .iter()
+                    .copied()
+                    .max_by_key(|&y| support(y))
+                    .filter(|&y| support(y) as f64 >= run.len() as f64 * BAR_BASE_SHARE)
+                else {
+                    continue;
+                };
+                // Of lengths that differ, the longest of a chart's size.
+                let lengths: Vec<f64> = run
+                    .iter()
+                    .map(|&c| {
+                        let (y0, y1) = extent(&columns[c].1);
+                        y1 - y0
+                    })
+                    .collect();
+                let longest = lengths.iter().copied().fold(0.0, f64::max);
+                let differ = lengths.iter().any(|l| (l - lengths[0]).abs() > 1.0);
+                let hull = run
+                    .iter()
+                    .flat_map(|&c| columns[c].1.iter())
+                    .fold(columns[run[0]].1[0], |r, b| r.union(b));
+                if !differ || longest < em * BAR_LENGTH || hull.width() < em * BAR_RUN {
+                    continue;
+                }
+                // Bare: a chart's bars carry a value here and there, a
+                // table's shading its rows' text, and an underline sits
+                // under a figure.
+                let around = t(&hull);
+                let inked: Vec<(f64, f64)> = glyphs
+                    .iter()
+                    .filter(|g| !g.text.trim().is_empty())
+                    .filter_map(|g| g.bbox)
+                    .map(|gb| ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0))
+                    .filter(|&(x, y)| {
+                        x >= around.x0 - em
+                            && x <= around.x1 + em
+                            && y >= around.y0 - em
+                            && y <= around.y1 + em
+                    })
+                    .collect();
+                let worded = run
+                    .iter()
+                    .flat_map(|&c| columns[c].1.iter())
+                    .filter(|b| {
+                        let o = t(b);
+                        inked.iter().any(|&(x, y)| {
+                            x >= o.x0 && x <= o.x1 && y >= o.y0 - em * 0.5 && y <= o.y1 + em * 0.5
+                        })
+                    })
+                    .count();
+                let pieces = run.iter().map(|&c| columns[c].1.len()).sum::<usize>();
+                if worded * BAR_WORDED > pieces {
+                    continue;
+                }
+                let mut region = hull;
+                let mut bound = false;
+                // The base drawn as a rule across the bars.
+                for r in rules.iter().filter(|r| r.orientation == along) {
+                    let rb = t(&r.bbox);
+                    let at = (rb.y0 + rb.y1) / 2.0;
+                    if (at - base).abs() <= 1.5 && rb.x0 <= hull.x0 + em && rb.x1 >= hull.x1 - em {
+                        region = region.union(&rb);
+                        bound = true;
+                    }
+                }
+                // A column of ticks beside the bars, at an even pitch.
+                let reach = em * TRACE_AXIS_REACH;
+                let mut cols: Vec<(f64, Vec<BBox>)> = Vec::new();
+                for k in ticks.iter().filter(|k| k.orientation == along) {
+                    let kb = t(&k.bbox);
+                    let beside = (kb.x1 <= hull.x0 + 1.0 && hull.x0 - kb.x1 <= reach)
+                        || (kb.x0 >= hull.x1 - 1.0 && kb.x0 - hull.x1 <= reach);
+                    if !beside || kb.y0 < hull.y0 - reach || kb.y1 > hull.y1 + reach {
+                        continue;
+                    }
+                    match cols.iter_mut().find(|(x, _)| (x - kb.x0).abs() <= 1.0) {
+                        Some((_, v)) => v.push(kb),
+                        None => cols.push((kb.x0, vec![kb])),
+                    }
+                }
+                for (_, col) in &cols {
+                    let mut at: Vec<f64> = col.iter().map(|k| (k.y0 + k.y1) / 2.0).collect();
+                    at.sort_by(f64::total_cmp);
+                    at.dedup_by(|a, b| (*a - *b).abs() <= 0.5);
+                    if at.len() >= AXIS_TICKS && evenly_pitched(&at) {
+                        region = col.iter().fold(region, |r, k| r.union(k));
+                        bound = true;
+                    }
+                }
+                let back = |b: &BBox| t(b);
+                // A scale beside them: its numbers in a column along the
+                // bars, stepping evenly. A table's figures step unevenly.
+                if !bound {
+                    let reach = em * AXIS_REACH;
+                    let near: Vec<(BBox, &str)> = said
+                        .iter()
+                        .map(|(b, s)| (t(b), s.as_str()))
+                        .filter(|(b, _)| {
+                            let beside = (b.x1 <= hull.x0 + 1.0 && hull.x0 - b.x1 <= reach)
+                                || (b.x0 >= hull.x1 - 1.0 && b.x0 - hull.x1 <= reach);
+                            beside && b.y1 >= hull.y0 - reach && b.y0 <= hull.y1 + reach
+                        })
+                        .collect();
+                    for (a, _) in &near {
+                        let mut column: Vec<&(BBox, &str)> = near
+                            .iter()
+                            .filter(|(n, _)| {
+                                (n.x1 - a.x1).abs() <= 2.0 || (n.x0 - a.x0).abs() <= 2.0
+                            })
+                            .collect();
+                        column.sort_by(|p, q| p.0.y0.total_cmp(&q.0.y0));
+                        let values: Vec<String> = column
+                            .iter()
+                            .map(|(_, s)| s.replace(['%', '$'], ""))
+                            .collect();
+                        if column.len() >= AXIS_VALUES && crate::document::axis_scale(&values) {
+                            bound = true;
+                            break;
+                        }
+                    }
+                }
+                if !bound {
+                    continue;
+                }
+                let r = back(&region);
+                match plots
+                    .iter_mut()
+                    .find(|p| share_inside(&r, p) > 0.0 || share_inside(p, &r) > 0.0)
+                {
+                    Some(p) => *p = p.union(&r),
+                    None => plots.push(r),
+                }
+            }
+        }
+    }
+    plots
+        .into_iter()
+        .filter(|p| {
+            !figures
+                .iter()
+                .any(|f| share_inside(&f.drawing, p) > 0.0 || share_inside(p, &f.drawing) > 0.0)
+        })
+        .map(|p| Figure {
+            bbox: p,
+            drawing: p,
+            page,
+            shapes: boxes
+                .iter()
+                .filter(|b| share_inside(b, &p) > 0.5)
                 .count()
                 .max(1),
             frame: None,
@@ -3517,6 +3920,81 @@ mod tests {
             axes: false,
         };
         assert!(axis_plots(&[axis], &ticks, &[series], &text, 0, &[found]).is_empty());
+    }
+
+    #[test]
+    fn bars_bound_by_an_axis_are_a_chart() {
+        use crate::rule::Fill;
+        let fill = |x0: f64, y0: f64, x1: f64, y1: f64| Fill::new(bb(x0, y0, x1, y1), 0);
+        let rule = |o: Orientation, x0: f64, y0: f64, x1: f64, y1: f64| Rule {
+            bbox: bb(x0, y0, x1, y1),
+            orientation: o,
+            page: 0,
+        };
+        // Text at 8 pt on the page: an em is 8.
+        let text: Vec<Glyph> = (0..5)
+            .map(|k| glyph("x", 400.0 + 6.0 * k as f64, 600.0, 8.0))
+            .collect();
+        // Six bars 10 wide, 20 apart, standing on a base at 300.
+        let heights = [40.0, 65.0, 30.0, 80.0, 55.0, 20.0];
+        let bars: Vec<Fill> = heights
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let x = 100.0 + 20.0 * i as f64;
+                fill(x, 300.0 - h, x + 10.0, 300.0)
+            })
+            .collect();
+        let base = rule(Orientation::Horizontal, 95.0, 299.8, 215.0, 300.2);
+        let got = bar_plots(&bars, &[base], &[], &text, 0, &[]);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].axes);
+        // No axis by them, no chart.
+        assert!(bar_plots(&bars, &[], &[], &text, 0, &[]).is_empty());
+        // A column of ticks beside them binds them as well.
+        let ticks: Vec<Rule> = (0..5)
+            .map(|k| {
+                let y = 300.0 - 20.0 * k as f64;
+                rule(Orientation::Horizontal, 88.0, y - 0.2, 94.0, y + 0.2)
+            })
+            .collect();
+        assert_eq!(bar_plots(&bars, &[], &ticks, &text, 0, &[]).len(), 1);
+        // Stacked: a piece to a series, ending at its value.
+        let stacked: Vec<Fill> = heights
+            .iter()
+            .enumerate()
+            .flat_map(|(i, h)| {
+                let x = 100.0 + 20.0 * i as f64;
+                let cut = 300.0 - h * 0.4;
+                [
+                    fill(x, cut, x + 10.0, 300.0),
+                    fill(x, 300.0 - h, x + 10.0, cut),
+                ]
+            })
+            .collect();
+        assert_eq!(bar_plots(&stacked, &[base], &[], &text, 0, &[]).len(), 1);
+        // A table's shading bands its rows at one length.
+        let bands: Vec<Fill> = (0..6)
+            .map(|i| {
+                let y = 100.0 + 20.0 * i as f64;
+                fill(100.0, y, 400.0, y + 10.0)
+            })
+            .collect();
+        let edge = rule(Orientation::Vertical, 99.8, 95.0, 100.2, 215.0);
+        assert!(bar_plots(&bands, &[edge], &[], &text, 0, &[]).is_empty());
+        // Columns of cells: a piece to a row, their breaks level across the
+        // columns, however long each column runs.
+        let cells: Vec<Fill> = (0..6)
+            .flat_map(|i| {
+                let x = 100.0 + 20.0 * i as f64;
+                let rows = if i == 2 { 4 } else { 5 };
+                (0..rows).map(move |r| {
+                    let y = 300.0 - 12.0 * (r + 1) as f64;
+                    fill(x, y, x + 10.0, y + 12.0)
+                })
+            })
+            .collect();
+        assert!(bar_plots(&cells, &[base], &[], &text, 0, &[]).is_empty());
     }
 
     /// Lines drawn across a plot: a horizontal one at each `ys` from the
