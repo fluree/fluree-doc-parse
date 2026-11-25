@@ -189,6 +189,14 @@ marker, as a bullet is, and wrapped lines hang under the item's text. A lone
 line so opening, among lines of prose at the same place, is a range, a minus
 or a dialogue's dash, and stays as it reads.
 
+A glyph that says nothing as text marks items the same way: a symbol the
+font maps to a control code or to the private-use area, or an arrow, a
+shape or a dingbat. A sidebar whose `▶` bullets the font maps to the
+control code 0x17 reads as a list, and as such a mark is no range or
+minus, its items may wrap over any number of lines. No control character
+other than a tab or a line break is written into the output, from any
+source.
+
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of
 description under it. Such a list is read as a list, each item's title and
