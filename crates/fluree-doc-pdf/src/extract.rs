@@ -800,6 +800,20 @@ impl<'a> Device<'a> for Collector {
             None => String::new(),
         };
 
+        // A letter the font's ToUnicode map gives in the other case than
+        // the glyph its encoding draws (`F` read `f`): see `faces::recased`.
+        if let HGlyph::Outline(o) = glyph {
+            let mut chars = text.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                if c.is_ascii_alphabetic() {
+                    if let Some(drawn) = self.faces.recase(o.font_cache_key(), c, o.advance_width())
+                    {
+                        text = drawn.to_string();
+                    }
+                }
+            }
+        }
+
         // Drawn in Symbol or Wingdings: its text is read as that font's
         // characters once it is final (see `read_symbols`). The font is
         // known by the name the PDF gives it, or, where a producer renamed

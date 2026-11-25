@@ -1770,8 +1770,20 @@ fn split_entries(b: Block, edge: &Edge) -> Vec<Block> {
             && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
             && !l.text.trim_end().ends_with(['-', '\u{AD}', ','])
     });
+    // An entry ends its line; a line ending on a word its phrase runs on
+    // from (`…since the` over `April 2024 Financial Stability Report…`)
+    // ends no entry. In lower case, as a sentence sets it: a capital `A`
+    // ending an entry is its label's (`…with Part A`).
+    let runs_on = |l: &Line| {
+        l.text
+            .split_whitespace()
+            .next_back()
+            .is_some_and(|w| RUNS_ON.contains(&w))
+    };
     let ended = b.lines.windows(2).all(|w| {
-        opens_capital(&w[1]) && edge.right - w[0].bbox.x1 > first_word_width(&w[1]) + fs * 0.5
+        opens_capital(&w[1])
+            && !runs_on(&w[0])
+            && edge.right - w[0].bbox.x1 > first_word_width(&w[1]) + fs * 0.5
     });
     if !set || !ended {
         return vec![b];
@@ -4884,6 +4896,21 @@ mod tests {
         column.extend(prose.clone());
         let b = assemble_in_measure(&prose, &column, 1.2, &[], &[], &[], 8.0);
         assert_eq!(b.len(), 1);
+        // A sentence broken before a title its line had no room for, the
+        // line ending on `the`, goes on into it: no entry ends on `the`.
+        let sentence = vec![
+            row("The changes since the", 40.0, 100.0, 120.0),
+            row("Annual Report are as follows:", 40.0, 110.0, 150.0),
+        ];
+        let mut column = measure(0.0);
+        column.extend(sentence.clone());
+        let b = assemble_in_measure(&sentence, &column, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(
+            b.len(),
+            1,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
     }
 
     #[test]
