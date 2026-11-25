@@ -481,7 +481,13 @@ size is a label only as wide as the drawing, give or take half again: a
 chart's title, legend or axis name. Two lines of prose beside a small QR
 code or an icon run well past it, and stay the page's. So does a line that runs
 on, at the same size and left edge, from text the figure did not take, such
-as the last of a column of notes or the first bullets of a list. The rectangle
+as the last of a column of notes or the first bullets of a list. So does
+text in a column of its own beside a drawing, level with it: a heading or a
+note set flush with a paragraph of the page's in that column (`FCC` and its
+caution beside an install guide's drawing), a run of steps wrapped from
+line to line (`… the black fixture lead to the` over `voltage supply …`),
+and the line introducing them on its colon. A label is terse, and stands
+among the drawing's. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
 heading inside it that was not taken as a label keeps its type.
 
