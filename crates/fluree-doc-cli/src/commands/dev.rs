@@ -1143,6 +1143,31 @@ fn holds_a_table(crop: &fluree_doc_pdf::geom::BBox, tables: &[fluree_doc_pdf::ge
     })
 }
 
+/// The manifest record of the region crop `tag` on page `page`, cut to `b`:
+/// the `reason` its tag names, `table` when the layout detector boxed one of
+/// `detected` inside it, `vetoed` when the structure readings veto it
+/// (`vetoed` lists `p{page}_{tag}`, as [`crate::escalate::jobs::to_render`]
+/// names them). A vetoed table keeps its reason, `table`: the veto says a
+/// deep reader need not read it, not why it was cut.
+fn region_record(
+    stem: &str,
+    page: usize,
+    tag: &str,
+    b: &fluree_doc_pdf::geom::BBox,
+    detected: &[fluree_doc_pdf::geom::BBox],
+    vetoed: &[String],
+) -> serde_json::Value {
+    serde_json::json!({
+        "doc": stem, "page": page, "kind": "region", "png": format!("{stem}_p{page}_{tag}.png"),
+        "bbox": [b.x0, b.y0, b.x1, b.y1],
+        "table": holds_a_table(b, detected),
+        "reason": fluree_doc_pdf::escalate::CropReason::of_region_tag(tag)
+            .expect("a region crop's tag")
+            .as_str(),
+        "vetoed": vetoed.contains(&format!("p{page}_{tag}")),
+    })
+}
+
 /// Render every routed page or region to `outdir` as PNG, with a JSONL
 /// manifest (`manifest.jsonl`) recording where each crop belongs so the
 /// hybrid adapter can splice VLM output back at the right position.
@@ -1165,7 +1190,7 @@ pub(crate) fn render_routed(
     let mut manifest =
         std::fs::File::create(outdir.join("manifest.jsonl")).expect("create manifest");
     let (mut n_pages, mut n_crops, mut n_media) = (0usize, 0usize, 0usize);
-    let tiers = crate::commands::common::TierConfig::from_env();
+    let tiers = crate::commands::common::TierConfig::configured();
     let layout = tiers.layout_boxes.as_deref();
     // Crops are named by stem: a second input of a stem already cropped
     // (`report.pdf` and `report.png`) would overwrite the first's crops and
@@ -1180,6 +1205,8 @@ pub(crate) fn render_routed(
             crate::config::DEFAULT_OCR_MAX_CROPS
         }
     };
+    let mut n_vetoed = 0usize;
+    let mut n_columns = 0usize;
 
     for f in &files {
         let stem = crate::commands::common::stem_of(f);
@@ -1261,20 +1288,32 @@ pub(crate) fn render_routed(
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
         // (named crops so the adapter can find each by its anchor token).
-        // The crop set is the library's `escalate::plan`, which
-        // `convert --escalate` and `triage` take too, so they cannot drift
-        // apart.
+        // The crop set is the anchors of an analysis made with the options
+        // `convert` uses, as `triage` and `convert --escalate` take them, so
+        // each crop file fills the anchor of its name. A table the
+        // structure readings veto is written all the same, for the
+        // structure reader, and named apart for a deep reader.
         let stem = crate::commands::common::stem_of(f);
         let hints = fluree_doc_pdf::escalate::CropHints {
             regions_apart: ocr_regions,
-            ..crate::escalate::jobs::hints(&doc, stem, layout, false)
+            ..crate::escalate::jobs::hints(&doc, stem, &tiers)
         };
-        let (mut jobs, reasons) = fluree_doc_pdf::escalate::plan_explained(
-            &doc,
+        let analysis = fluree_doc_pdf::document::analyze_with(
+            &mut doc.clone(),
             &fluree_doc_pdf::outline::extract(&pdf),
-            &tiers.options_for(stem),
-            &hints,
+            &fluree_doc_pdf::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..tiers.options_for(stem)
+            },
         );
+        let (mut jobs, reasons, vetoed) = crate::escalate::jobs::to_render(
+            &doc,
+            &analysis,
+            stem,
+            &hints,
+            tiers.structure_results.as_deref(),
+        );
+        n_columns += crate::escalate::jobs::whole_for_columns(&reasons);
         // The crops `convert --ocr` reads, from the same `ocr::ocr_jobs`
         // and under the same limit, so the three-step path reads what it
         // reads: the regions a model call would not pay for are added, and a
@@ -1291,9 +1330,23 @@ pub(crate) fn render_routed(
             let routed: std::collections::HashMap<usize, usize> = doc
                 .pages
                 .iter()
-                .map(|p| match fluree_doc_pdf::route::decide(p).0 {
+                .zip(fluree_doc_pdf::document::region_routes(&doc))
+                .map(|(p, route)| match route {
                     fluree_doc_pdf::route::Route::VlmRegions(r) => (p.index, r.len()),
                     _ => (p.index, 0),
+                })
+                .collect();
+            // The engine's regions are in the page's reading frame; the
+            // model's crops, and so the manifest, in the display frame.
+            let ocr = ocr
+                .into_iter()
+                .map(|(pi, crops)| {
+                    let page = doc.pages.iter().find(|p| p.index == pi);
+                    let shown = |b: fluree_doc_pdf::geom::BBox| page.map_or(b, |p| p.to_display(b));
+                    (
+                        pi,
+                        crops.map(|l| l.into_iter().map(|(t, b)| (t, shown(b))).collect()),
+                    )
                 })
                 .collect();
             add_ocr_jobs(&mut jobs, ocr, |page| {
@@ -1319,7 +1372,7 @@ pub(crate) fn render_routed(
         // several scales hands its crops over out of.
         let order = fluree_doc_pdf::escalate::crop_order(&jobs);
         let mut lines: Vec<(usize, serde_json::Value)> = Vec::new();
-        fluree_doc_pdf::escalate::for_each_crop_of(&pdf, &doc, &jobs, mode, |crop| {
+        fluree_doc_pdf::escalate::for_each_displayed_crop_of(&pdf, &doc, &jobs, mode, |crop| {
             let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
             let page_idx = crop.page;
             let name = format!("{stem}_{}.png", crop.name);
@@ -1410,19 +1463,15 @@ pub(crate) fn render_routed(
                     n_crops += 1;
                     let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
                     let detected = layout_tables(layout, stem, page_idx);
-                    serde_json::json!({
-                        "doc": stem, "page": page_idx, "kind": "region", "png": name,
-                        "bbox": [b.x0, b.y0, b.x1, b.y1],
-                        "table": holds_a_table(&b, &detected),
-                        "reason": if small.contains(&(page_idx, tag.to_string())) {
-                            fluree_doc_pdf::escalate::CropReason::SmallRegion.as_str()
-                        } else {
-                            fluree_doc_pdf::escalate::CropReason::of_region_tag(tag)
-                                .expect("a region crop's tag")
-                                .as_str()
-                        },
-                        "scale": crop.scale,
-                    })
+                    let mut rec = region_record(stem, page_idx, tag, &b, &detected, &vetoed);
+                    n_vetoed += usize::from(rec["vetoed"] == true);
+                    if small.contains(&(page_idx, tag.to_string())) {
+                        rec["reason"] = fluree_doc_pdf::escalate::CropReason::SmallRegion
+                            .as_str()
+                            .into();
+                    }
+                    rec["scale"] = crop.scale.into();
+                    rec
                 }
             };
             let ls = links_in(crop.bbox.as_ref());
@@ -1440,6 +1489,26 @@ pub(crate) fn render_routed(
         "{n_pages} full pages, {n_crops} region crops, {n_media} embedded images -> {}",
         outdir.display()
     );
+    if let Some(note) = vetoed_note(n_vetoed) {
+        eprintln!("{note}");
+    }
+    if let Some(note) = crate::escalate::jobs::column_note(&tiers, n_columns) {
+        eprintln!("{note}");
+    }
+}
+
+/// What `dev render-routed` says on stderr when it wrote `n` table crops
+/// the structure readings veto. The crop set differs from the one `convert
+/// --escalate` sends by these: said where it is seen, not left to a field
+/// nobody looks for.
+fn vetoed_note(n: usize) -> Option<String> {
+    (n > 0).then(|| {
+        format!(
+            "note: {n} table crop(s) the structure readings (FDOC_STRUCTURE_RESULTS) veto \
+             are written for the structure reader and marked \"vetoed\" in the manifest: \
+             `convert --escalate` does not send them, and a deep reader need not read them"
+        )
+    })
 }
 
 /// Add to a document's crop jobs the crops an OCR engine reads
@@ -1801,7 +1870,7 @@ pub(crate) fn render_crops(manifest: &Path, corpus: &Path, outdir: &Path) {
             .collect();
         // The manifest's boxes are elements' `doc:bbox`, in the display
         // frame already.
-        for crop in escalate::render_crops_displayed(&pdf, &jobs) {
+        for crop in escalate::render_crops(&pdf, &jobs) {
             std::fs::write(outdir.join(format!("{doc}_{}.png", crop.name)), &crop.png)
                 .expect("write crop");
             n += 1;
@@ -2045,6 +2114,46 @@ mod tests {
                 (1, "r1".to_string()),
                 (2, "r0".to_string())
             ]
+        );
+    }
+
+    #[test]
+    fn a_region_the_structure_readings_veto_is_marked_so_in_the_manifest() {
+        let b = BBox {
+            x0: 10.0,
+            y0: 20.0,
+            x1: 110.0,
+            y1: 80.0,
+        };
+        let vetoed = vec!["p3_t0".to_owned()];
+        let rec = region_record("doc", 3, "t0", &b, &[], &vetoed);
+        assert_eq!(rec["vetoed"], true);
+        // Vetoed, it is still cut for the table the grid does not trust.
+        assert_eq!(rec["reason"], "table");
+        assert_eq!(rec["png"], "doc_p3_t0.png");
+        // The same tag on another page, and another tag on the same page,
+        // are read.
+        assert_eq!(
+            region_record("doc", 2, "t0", &b, &[], &vetoed)["vetoed"],
+            false
+        );
+        assert_eq!(
+            region_record("doc", 3, "t1", &b, &[], &vetoed)["vetoed"],
+            false
+        );
+        assert_eq!(region_record("doc", 3, "t0", &b, &[], &[])["vetoed"], false);
+    }
+
+    /// `render-routed` says how many vetoed table crops it wrote, and that
+    /// `convert --escalate` does not send them; nothing when it wrote none.
+    #[test]
+    fn render_routed_says_how_many_vetoed_tables_it_wrote() {
+        assert_eq!(vetoed_note(0), None);
+        let note = vetoed_note(2).expect("a note");
+        assert!(note.starts_with("note: 2 table crop(s)"), "{note}");
+        assert!(
+            note.contains("`convert --escalate` does not send them"),
+            "{note}"
         );
     }
 }

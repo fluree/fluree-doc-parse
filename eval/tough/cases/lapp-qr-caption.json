@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "lapp-innovation-catalogue.pdf",
+    "url": "https://lappespana.lappgroup.com/fileadmin/DAM/Lapp_Espana/1R_05_DESCARGAS/Catalogos_y_folletos/PDF/lapp_innovation-catalogue_spring26_en.pdf",
+    "sha256": "23355150efc339a27675fe73bf66a881292ef6bb9a858e9dd5ee0f93c1a3af24",
+    "about": "LAPP innovation catalogue, spring 2026 (36 pages). Its product pages share one template: box headings and the close of a standard description stand at the same place on page after page, and a thumb index runs down the side margin."
+  },
+  "notes": [
+    "2026-11-25 (#276): a QR code's modules, small drawn squares, stood level with the caption beside it and were taken as bullets: its lines read as list items. A drawing's dots crowd one another; a list's bullets stand a line apart."
+  ],
+  "checks": [
+    {
+      "id": "qr-caption-one-paragraph",
+      "found": "2026-11-25",
+      "issue": "#276: the caption beside each QR code was two list items.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Scan the QR code to view all available variants, technical data, datasheets, as well as suitable accessories and comparable products - including current availability directly in our online shop"
+      },
+      "count": 2
+    }
+  ]
+}
