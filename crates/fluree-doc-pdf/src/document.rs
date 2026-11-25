@@ -1983,6 +1983,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // not rows and their rules' ends are not columns. See `textgrid`.
         // Where alignment already reads the page's one coarse grid, it
         // keeps it.
+        let mut beside_labels: Vec<crate::geom::BBox> = Vec::new();
         if !aligned_preferred {
             timed(&mut timings.tables, || {
                 let lines = crate::textgrid::lines(&p.glyphs);
@@ -1990,8 +1991,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
+                    let beside = crate::textgrid::read_beside_its_labels(
+                        &grids[i], &p.rules, &p.fills, &lines,
+                    );
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
                         let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        if beside {
+                            beside_labels.extend(got.iter().map(|g| g.bbox));
+                        }
                         if debug {
                             eprintln!(
                                 "TEXTGRID p{} seed grid {i} region {:?} -> {:?}",
@@ -2151,7 +2158,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
 
         // The prose's columns, which the field lists below look between too.
-        let prose_cols = timed(&mut timings.columns, || crate::column::detect(&prose));
+        // A table read from its text for the labels beside it stands in a
+        // column of the prose: its text keeps that column's extent, as it
+        // would read had it been prose.
+        let prose_cols = timed(&mut timings.columns, || {
+            let elsewhere: Vec<Grid> = grids
+                .iter()
+                .zip(&grid_sources)
+                .filter(|(g, s)| !(**s == GridSource::Text && beside_labels.contains(&g.bbox)))
+                .map(|(g, _)| g.clone())
+                .collect();
+            if elsewhere.len() == grids.len() {
+                crate::column::detect(&prose)
+            } else {
+                crate::column::detect(&glyphs_outside_grids(&p.glyphs, &elsewhere))
+            }
+        });
         let mut cols = timed(&mut timings.columns, || {
             line::assemble_columns_in(&prose, &p.rules, p.index, &prose_cols)
         });
