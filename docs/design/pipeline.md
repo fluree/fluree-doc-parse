@@ -143,7 +143,10 @@ opens in lower case (within a quarter again of the paragraph spacing) or
 the break falls inside the run of capitals the weight change belongs to,
 with lines of the paragraph above it (within the paragraph spacing). A
 heading in bold capitals stands alone over text that opens in mixed case,
-and a contents entry's leader is never a full line.
+and a contents entry's leader is never a full line. Under an item whose
+lines hang under its first, a line opening in lower case where those lines
+are set goes on with it, full line or not: a list's bold-italic `or` under
+an item of two lines whose second is the shorter.
 
 **A size step across a hand-ended line.** The lines of one paragraph do not
 measure alike — an 11pt paper reads 10.9 on one line and 11.1 on the next —
