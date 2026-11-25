@@ -2070,6 +2070,57 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
     }) || after.is_some_and(|a| (adv.at(a.origin) - at).abs() < same)
 }
 
+/// The explicit space at `idxs[k]` is the room a script is set in: a
+/// subscript or a superscript, smaller than the letter before the space and
+/// off its baseline, drawn after the word's letters but set back into the
+/// space's advance, straight after them. A producer writes `As`, a space and
+/// `O`, then draws the `2` of As₂O₃ in the space, and `HNO`, a space and the
+/// stop, then the `3` of HNO₃ where the space starts: the page shows no
+/// space, and the script joins its word (`As 2O3`, `HNO 3.` before).
+fn script_set_in(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool {
+    let space = &glyphs[idxs[k]];
+    let drawn = |i: &&usize| glyphs[**i].bbox.is_some();
+    let (Some(&p), Some(&n)) = (
+        idxs[..k].iter().rev().find(drawn),
+        idxs[k + 1..].iter().find(drawn),
+    ) else {
+        return false;
+    };
+    let (before, script) = (&glyphs[p], &glyphs[n]);
+    let size = before.font_size.max(1.0) as f64;
+    let em = space.font_size.max(1.0) as f64;
+    // Smaller than the letter it follows, as a script is.
+    let ratio = script.font_size as f64 / size;
+    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) {
+        return false;
+    }
+    // Off the letter's baseline, raised or lowered.
+    let across = |g: &Glyph| {
+        if adv.vertical() {
+            g.origin.0
+        } else {
+            g.origin.1
+        }
+    };
+    if (across(script) - across(before)).abs() < size * SCRIPT_LEAST_SHIFT {
+        return false;
+    }
+    // Set into the space, from where it starts to where its pen stops.
+    let at = adv.at(space.origin);
+    let width = space.advance.unwrap_or(0.0);
+    let start = adv.at(script.origin);
+    if start < at - SPACE_INSIDE * em || start > at + width + SPACE_INSIDE * em {
+        return false;
+    }
+    // After a letter: a formula's element, a symbol's name.
+    before.text.chars().last().is_some_and(char::is_alphabetic)
+}
+
+/// Least shift, as a share of the base letter's size, of a script's
+/// baseline from it: a subscript drops a fifth of the size or more, and a
+/// glyph a tenth off is on the line, jittered.
+const SCRIPT_LEAST_SHIFT: f64 = 0.1;
+
 /// How far, in ems, a space must sit short of the pen's stop after the mark
 /// ahead of it to be inside that mark: further than a kern moves a space.
 const SPACE_INSIDE: f64 = 0.15;
@@ -2343,6 +2394,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     && !text.is_empty()
                     && !text.ends_with(' ')
                     && !stray_space(glyphs, idxs, k, adv)
+                    && !script_set_in(glyphs, idxs, k, adv)
                 {
                     text.push(' ');
                 }
@@ -3411,6 +3463,39 @@ mod tests {
         v.push(space(10.0, 2));
         v.extend(run("the", 13.0, 3));
         assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    #[test]
+    fn a_script_set_into_a_space_joins_its_word() {
+        // `As`, a space and `O` drawn in turn, then the subscripts: the `2`
+        // set back into the space, the `3` after the `O`.
+        let lowered = |text: &str, x: f64, nth: usize| {
+            let mut l = g(text, x, 2.5, 3.0, 0.0);
+            l.font_size = 6.0;
+            l.advance = Some(3.3);
+            l.draw_index = nth;
+            l
+        };
+        let mut v = run("As", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("O", 12.0, 3));
+        v.push(lowered("2", 10.1, 4));
+        v.push(lowered("3", 17.1, 5));
+        assert_eq!(assemble(&v)[0].text, "As2O3");
+        // A space before a word of the line's own size is a word space.
+        let mut v = run("As", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("O", 12.0, 3));
+        assert_eq!(assemble(&v)[0].text, "As O");
+        // So is one before a smaller word set on the line's baseline.
+        let mut v = run("As", 0.0, 0);
+        v.push(space(10.0, 2));
+        let mut small = g("x", 10.1, 0.0, 3.0, 0.0);
+        small.font_size = 6.0;
+        small.advance = Some(3.3);
+        small.draw_index = 3;
+        v.push(small);
+        assert_eq!(assemble(&v)[0].text, "As x");
     }
 
     #[test]

@@ -422,6 +422,14 @@ or a note's number: `kg/10⁶ dscm`, not `kg/106 dscm`; `4.0x10⁻³`, not
 `4.0x10-3`; `2024³`, not `20243`. An ordinal's ending stays with the number
 it agrees with (`22nd`, `118th`, `21e`).
 
+Some producers write a space between a formula's letters and draw the
+subscript into it afterwards: `As`, a space and `O`, then the `2` of As₂O₃
+set back where the space stands. A space whose room a script fills — a
+glyph after a letter, smaller than it and off its baseline, starting inside
+the space's advance — is no word space, and the script joins its word:
+`As2O3`, `HNO3`, `NH4OH`, not `As 2O3`, `HNO 3`, `NH 4OH`. The same holds for
+a symbol's subscript (`τ1`, `χ2`).
+
 A degree sign set as a raised `o` or `0` reads as `°` wherever it cannot be
 an ordinal's ending or a power: before a temperature's unit (`25°C`, not
 `25oC`), after three figures or more (`~ 145°`, not `~ 145 o`), after a
