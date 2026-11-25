@@ -159,11 +159,9 @@ of `r{i}` covers the region plus a 6-unit margin, clipped to the page —
 what `render-routed` draws. Any resolution works: `width` and `height` scale
 the reading onto the crop, so an engine may read the same crop rendered
 finer. The image embedded in the page is not that crop: it may cover only
-part of the page, and a region crop includes its margin.
-
-On a page turned to read upright (`/Rotate`, or text drawn sideways),
-`render-routed` does not yet crop regions where this mapping expects them;
-read whole pages there, or give the boxes in `page` units.
+part of the page, and a region crop includes its margin. On a page turned
+to read upright (`/Rotate`, or text drawn sideways), the crop is cut from
+the page as displayed, as a whole-page reading is.
 
 **What the page takes.** Only what the router sends a reader:
 
