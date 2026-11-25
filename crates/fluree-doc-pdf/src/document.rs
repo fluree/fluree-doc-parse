@@ -1620,6 +1620,59 @@ enum GridSource {
     Text,
 }
 
+/// Fewest lines of prose a document's body size is read from alone.
+const THIN_PROSE_LINES: usize = 8;
+
+/// The body size of a document whose prose is too short to say it, read
+/// with its tables' text: a page that is a title, a label and a folio over a
+/// table. Its prose alone counts the title's two lines against one of each
+/// other size, and the title, taken for the body, was no heading. Each of
+/// a table's lines counts once, at its size; `None` where the prose runs
+/// to [`THIN_PROSE_LINES`] or more, or no table holds text.
+fn thin_prose_body(
+    blocks: &[Vec<Block>],
+    pages: &[crate::extract::Page],
+    layouts: &[PageLayout],
+) -> Option<f32> {
+    let prose: usize = blocks.iter().flatten().map(|b| b.lines.len()).sum();
+    if prose >= THIN_PROSE_LINES {
+        return None;
+    }
+    let key = |size: f32| (size * 4.0).round() as i32;
+    let mut lines: std::collections::BTreeMap<i32, usize> = Default::default();
+    for b in blocks.iter().flatten() {
+        *lines.entry(key(b.font_size)).or_default() += b.lines.len();
+    }
+    let mut table_lines: std::collections::BTreeSet<(usize, i64, i32)> = Default::default();
+    for (pi, layout) in layouts.iter().enumerate() {
+        let Some(page) = pages.get(pi) else { continue };
+        for g in &layout.grids {
+            for gl in page
+                .glyphs
+                .iter()
+                .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+            {
+                let Some(b) = gl.bbox else { continue };
+                let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                if cx > g.bbox.x0 && cx < g.bbox.x1 && cy > g.bbox.y0 && cy < g.bbox.y1 {
+                    table_lines.insert((pi, gl.origin.1.round() as i64, key(gl.font_size)));
+                }
+            }
+        }
+    }
+    if table_lines.is_empty() {
+        return None;
+    }
+    for (_, _, k) in &table_lines {
+        *lines.entry(*k).or_default() += 1;
+    }
+    // The most lines; of equal counts, the smaller size.
+    lines
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(k, _)| *k as f32 / 4.0)
+}
+
 struct PageLayout {
     grids: Vec<Grid>,
     grid_sources: Vec<GridSource>,
@@ -2172,6 +2225,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         for (g, source) in grids.iter_mut().zip(&grid_sources) {
             if *source == GridSource::Ruled {
                 g.take_group_labels(&p.rules, &p.glyphs);
+                g.take_column_heads(&p.rules, &p.glyphs);
             }
         }
 
@@ -2732,6 +2786,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // figures follow it.
     let mut page_figures = find_figures(&raw.pages, &blocks_per_page);
     let mut body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
+    let thin = thin_prose_body(&blocks_per_page, &raw.pages, &layouts);
+    if let Some(size) = thin {
+        body_font = size;
+    }
     let body_bold = heading::body_is_bold(raw.pages.iter().flat_map(|p| p.glyphs.iter()));
     let headings = timed(&mut timings.headings, || {
         let first = heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold);
@@ -2739,7 +2797,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let in_section = heading::in_section(&first);
         if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
             page_figures = find_figures(&raw.pages, &blocks_per_page);
-            body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
+            body_font = thin.unwrap_or_else(|| {
+                heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures))
+            });
             heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold)
         } else {
             first
