@@ -3925,10 +3925,7 @@ mod tests {
     #[test]
     fn bars_bound_by_an_axis_are_a_chart() {
         use crate::rule::Fill;
-        let fill = |x0: f64, y0: f64, x1: f64, y1: f64| Fill {
-            bbox: bb(x0, y0, x1, y1),
-            page: 0,
-        };
+        let fill = |x0: f64, y0: f64, x1: f64, y1: f64| Fill::new(bb(x0, y0, x1, y1), 0);
         let rule = |o: Orientation, x0: f64, y0: f64, x1: f64, y1: f64| Rule {
             bbox: bb(x0, y0, x1, y1),
             orientation: o,
