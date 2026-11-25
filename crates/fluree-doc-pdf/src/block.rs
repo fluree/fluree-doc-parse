@@ -495,6 +495,16 @@ const RUN_ALIGN: f64 = 1.5;
 /// items' size as theirs, `K-23723 Faucet cleaner` under a heading of its
 /// own.
 pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
+    let centre = |d: &BBox| ((d.x0 + d.x1) * 0.5, (d.y0 + d.y1) * 0.5);
+    // A drawing's dots crowd one another: a map's towns, a chart's markers.
+    // A list's bullets stand a line apart.
+    let crowded = |d: &BBox, em: f64| {
+        let (x, y) = centre(d);
+        dots.iter().any(|o| {
+            let (ox, oy) = centre(o);
+            o != d && (ox - x).hypot(oy - y) < em * DOT_CROWD
+        })
+    };
     let marks: Vec<(BBox, usize)> = dots
         .iter()
         .filter_map(|d| {
@@ -503,6 +513,7 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
                 .position(|l| dot_for(l, std::slice::from_ref(d)))
                 .map(|i| (*d, i))
         })
+        .filter(|(d, i)| !crowded(d, (lines[*i].font_size as f64).max(1.0)))
         .collect();
     let listed: Vec<&(BBox, usize)> = marks
         .iter()
@@ -534,6 +545,12 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
         .map(|(d, _)| *d)
         .collect()
 }
+
+/// Nearest, in the em of the line it marks, another dot stands to a list's
+/// bullet. A list sets its bullets a line apart, an em or more; dots
+/// closer than half that are a drawing's, set beside a heading only by
+/// chance (a district map's towns beside its district's title).
+const DOT_CROWD: f64 = 0.5;
 
 /// Fewest words a list's item says for a lone bullet to join its list: an
 /// item is a phrase, where a drawing's label names a part in a word or two.
@@ -2818,6 +2835,35 @@ mod tests {
         assert_eq!(b[0].lines.len(), 3);
         // The paragraph after a list's last item is the page's.
         assert_eq!(rejoin_broken_items(vec![item, broken], &[]).len(), 2);
+    }
+
+    #[test]
+    fn a_drawings_dots_are_no_bullets() {
+        // A two-line title at 20pt beside a scatter of markers, two of
+        // which happen to stand one above the other level with its lines:
+        // each has another marker within a few points, as a list's
+        // bullets, a line apart, never do.
+        let lines = vec![
+            l("Northern Region", 200.0, 300.0, 20.0),
+            l("Office", 200.0, 326.0, 20.0),
+        ];
+        let dot = |x: f64, y: f64| BBox {
+            x0: x,
+            y0: y,
+            x1: x + 2.0,
+            y1: y + 2.0,
+        };
+        let scatter = [
+            dot(170.0, 308.0),
+            dot(174.0, 311.0),
+            dot(167.0, 314.0),
+            dot(170.0, 334.0),
+            dot(176.0, 331.0),
+            dot(173.0, 338.0),
+        ];
+        assert!(marking_dots(&lines, &scatter).is_empty());
+        // The two in a column alone are a list's bullets.
+        assert_eq!(marking_dots(&lines, &[scatter[0], scatter[3]]).len(), 2);
     }
 
     #[test]
