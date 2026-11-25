@@ -182,10 +182,14 @@ under the item.
 of a field (`CRI: 90+` at the body's size, or a label with its value
 beside it), of a value
 set under its bold label at the label's size (`K25W951` under `PRODUCT
-NUMBER`), of a form's label waiting for its value (`Location:`, `Model
-#:`), of a signature block's role and party (`INVESTOR:` over the party's name over
+NUMBER`) or of the label over it, of a form's label waiting for its value (`Location:`, `Model
+#:`), of a form's column keys and answer heads (`(a) (b)`, `Yes No`), of a
+line's caption between its letter and number (`b Refunded 37b`), of a
+sentence that refers elsewhere (`…, see your tax return instructions.`), of
+a signature block's role and party (`INVESTOR:` over the party's name over
 `By:`) or a signature page's label, or of a letterhead's lines over the
-sender's address and numbers.
+sender's address and numbers. No heading stops on `and`, `of`, `the` or
+`not`: such a line runs on into the next.
 
 **Bullets.** The typographic bullets and geometric shapes are read as
 bullets, and so are the arrows and boxes the dingbat fonts set as them

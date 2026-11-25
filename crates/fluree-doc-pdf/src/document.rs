@@ -770,7 +770,7 @@ const STACKED_LABELS: usize = 3;
 /// more than its weight does. Only bold lines end a run, because a bold
 /// line's level says nothing beside another kind of heading's.
 fn demote_empty_bold_heads(elements: &mut [Element]) {
-    let bold = |e: &Element| e.kind == "doco:SectionTitle" && e.evidence == "bold";
+    let bold = |e: &Element| e.kind == "doco:SectionTitle" && unflagged(e.evidence) == "bold";
     let level = |e: &Element| e.level.unwrap_or(6);
     let same_row = |a: &Element, b: &Element| match (a.bbox, b.bbox) {
         (Some(a_box), Some(b_box)) if a.page == b.page => {
@@ -1053,13 +1053,34 @@ fn heading_yields_to_figure(evidence: Evidence, in_figure: bool, in_drawing: boo
     }
 }
 
+/// Evidence a heading set as a form's text carries until runs of bold
+/// heads are judged: the evidence it would have, with this prefix.
+const FORM_TEXT: &str = "form-";
+
+/// A heading's evidence, without the mark of a form's text.
+fn unflagged(evidence: &'static str) -> &'static str {
+    evidence.strip_prefix(FORM_TEXT).unwrap_or(evidence)
+}
+
+/// A form's text, kept a heading while runs of bold heads were judged
+/// ([`heading::Heading::form_text`]), is read as text from here on.
+fn read_form_text(elements: &mut [Element]) {
+    for e in elements.iter_mut() {
+        if e.kind == "doco:SectionTitle" && e.evidence.starts_with(FORM_TEXT) {
+            e.kind = "doco:Paragraph".into();
+            e.level = None;
+            e.evidence = "layout";
+        }
+    }
+}
+
 fn heading_fragments_join(a: &Element, b: &Element) -> bool {
     if a.kind != "doco:SectionTitle"
         || b.kind != "doco:SectionTitle"
         || a.page != b.page
         || a.level != b.level
-        || a.evidence != b.evidence
-        || !matches!(a.evidence, "font-size" | "bold")
+        || unflagged(a.evidence) != unflagged(b.evidence)
+        || !matches!(unflagged(a.evidence), "font-size" | "bold")
         || !b
             .text
             .chars()
@@ -1082,6 +1103,11 @@ fn coalesce_heading_fragments(elements: &mut Vec<Element>) {
             if heading_fragments_join(previous, &e) {
                 previous.text.push(' ');
                 previous.text.push_str(&e.text);
+                // Joined, the heading is a form's text only if both parts
+                // were: a line that stopped mid-phrase has found its end.
+                if !e.evidence.starts_with(FORM_TEXT) {
+                    previous.evidence = unflagged(previous.evidence);
+                }
                 if let (Some(a), Some(b)) = (previous.bbox.as_mut(), e.bbox) {
                     a.x0 = a.x0.min(b.x0);
                     a.y0 = a.y0.min(b.y0);
@@ -2559,8 +2585,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // one occurrence is structurally a heading.
     let mut is_heading: std::collections::HashMap<(usize, usize), (usize, Evidence)> =
         Default::default();
+    let mut form_text: std::collections::HashSet<(usize, usize)> = Default::default();
     for h in &headings {
         is_heading.insert((h.page, h.block_index), (h.level, h.evidence));
+        if h.form_text {
+            form_text.insert((h.page, h.block_index));
+        }
     }
 
     let mut elements = Vec::new();
@@ -2630,13 +2660,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 Some((l, ev)) if !weak_heading_in_figure => (
                     "doco:SectionTitle",
                     Some(*l),
-                    match ev {
-                        Evidence::Outline => "outline",
-                        Evidence::Title => "title",
-                        Evidence::Numbering => "numbering",
-                        Evidence::Sequence => "sequence",
-                        Evidence::FontSize => "font-size",
-                        Evidence::Bold => "bold",
+                    match (ev, form_text.contains(&(pi, block_idx))) {
+                        (Evidence::Outline, _) => "outline",
+                        (Evidence::Title, _) => "title",
+                        (Evidence::Sequence, _) => "sequence",
+                        (Evidence::Numbering, false) => "numbering",
+                        (Evidence::FontSize, false) => "font-size",
+                        (Evidence::Bold, false) => "bold",
+                        (Evidence::Numbering, true) => "form-numbering",
+                        (Evidence::FontSize, true) => "form-font-size",
+                        (Evidence::Bold, true) => "form-bold",
                     },
                 ),
                 _ if figure_of.is_some() => ("doco:Figure", None, "fills"),
@@ -3356,6 +3389,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     link_continued_tables(&mut elements, &frames);
     drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
+    read_form_text(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -3605,6 +3639,27 @@ mod tests {
             .filter(|e| e.kind == "doco:SectionTitle")
             .map(|e| e.text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn a_forms_text_stays_in_its_run_of_bold_heads_until_judged() {
+        let head = |t: &str, ev: &'static str, y: f64| {
+            line_at("doco:SectionTitle", t, ev, Some(2), y, 50.0)
+        };
+        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
+        // A grid's caption, its keys, and another caption, stacked: a run
+        // of three, all but the last text. Dropped first, the keys would
+        // leave a run of two, both kept.
+        let mut grid = vec![
+            head("Description of property", "bold", 100.0),
+            head("(a) (b)", "form-bold", 112.0),
+            head("Gain or (loss)", "bold", 124.0),
+            text("Example 100 sh. XYZ Co.", 140.0),
+        ];
+        demote_empty_bold_heads(&mut grid);
+        read_form_text(&mut grid);
+        assert_eq!(heads(&grid), ["Gain or (loss)"]);
+        assert!(grid.iter().all(|e| !e.evidence.starts_with(FORM_TEXT)));
     }
 
     #[test]

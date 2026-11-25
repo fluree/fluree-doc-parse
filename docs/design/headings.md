@@ -49,9 +49,22 @@ Weight and size never make a heading of these:
   (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
   `MANUFACTURER'S NAME`). A section under its title is set apart from it
   by size or a gap.
+- **A label over its value:** a bold label with a single short line under
+  it, set lighter at its size within an em, holding a figure or an
+  answer, and followed by the next label or nothing (`Date of
+  Preparation` over `Jun 5, 2026`, `Photochemically Reactive` over `No`).
+  A section's heading stands over sentences, or over more lines than one
+  (`Power and Ratings` over `120 V~ 60 Hz` and the rest of its ratings).
 - **A form's label** ending in a colon or `#` (`Location:`, `Model #:`),
   where only its size would make it a heading: the blank beside it is
   where its value goes.
+- **A form's grid and line captions:** column keys and answer heads, and
+  nothing else (`(a) (b)`, `Yes No`), and a line's caption between its
+  letter and its number (`b Refunded 37b`).
+- **A sentence that refers elsewhere:** `For Paperwork Reduction Act
+  Notice, see your tax return instructions.`, a form's footer. A title
+  that mentions the instructions keeps it in brackets, `Other Information
+  (see instructions)`, and stays.
 - **A signature block's party:** a role or a name with a line to sign on
   just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
   `(Signature)`), and a signature page's label (`Signature Page to Voting
@@ -64,6 +77,18 @@ Weight and size never make a heading of these:
 A row of short blocks side by side was tried as a third test, as a table's
 header cells (`TYPE`, `NAME`, `DESCRIPTION`), and dropped: a slide's card
 titles stand side by side the same way (`Our Purpose`, `Our Mission`).
+
+A form's text and a line that stops mid-phrase stay headings until runs of
+bold heads have been judged, and are read as text after. A run of bold lines
+that heads nothing, or stands three deep, is text on the evidence of the whole
+run; taking one of its lines out first would leave the others standing as
+headings, a table's cells among them.
+
+No heading stops mid-phrase, on an article, a conjunction, `of` or `not`: a
+line that does runs on into the next, as a form's numbered caption cut at
+its first line (`5 Expenses recorded on books this year not`) or a side
+label set a word or two a line (`Tax and` over `Credits`). Only lowercase
+words count, so `Part A` and `Schedule A` stay titles.
 
 A heading holds at most 12 words. The limit rises to 20 words, on at most
 two lines, in two cases where more than its shape vouches for it:
