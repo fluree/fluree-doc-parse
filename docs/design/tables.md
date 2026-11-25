@@ -396,6 +396,15 @@ body text, a box laid out around paragraphs, a drawing's labels.
   a page's column divider is the next column's prose. A table's own column
   rules stand between its labels and its figures too, and run no further
   than the table.
+- **Prose across a gutter.** Past its first label column, the reading reaches
+  left for further columns of labels set close by (a code beside a
+  description), within eight ems. A page's gutter can be narrower than that,
+  and with no divider drawn the next column's prose was taken in as a column
+  of labels. A column whose lines run on from one another, in half the pairs
+  of lines or more (two at least), is prose and ends the reach; a column of
+  codes starts each line afresh. Made on the first label column as well, the
+  same test took statements' wrapped labels for prose and cost their row
+  headers, so it stands on the further columns only.
 
 ## Tables drawn with characters
 

@@ -918,7 +918,7 @@ fn read_beside(
         // description), where half the region's lines have one.
         let lines_in: Vec<&Line> = all.iter().filter(|l| in_band(l)).collect();
         for _ in 0..4 {
-            let mut more: Vec<f64> = lines_in
+            let picked: Vec<(&Line, &Chunk)> = lines_in
                 .iter()
                 .filter_map(|l| {
                     l.chunks
@@ -927,12 +927,26 @@ fn read_beside(
                         .filter(|c| !divided(l, c, region.x0))
                         .filter(|c| !ruled_elsewhere(c))
                         .max_by(|a, b| a.x1.total_cmp(&b.x1))
-                        .map(|c| c.x0)
+                        .map(|c| (*l, c))
                 })
                 .collect();
-            if more.len() * 2 < lines_in.len() || more.len() < 2 {
+            if picked.len() * 2 < lines_in.len() || picked.len() < 2 {
                 break;
             }
+            // Prose set in the page's next column over runs on from line to
+            // line, across a gutter narrower than the reach here; a column of
+            // codes beside descriptions starts each line afresh.
+            let ran = picked
+                .windows(2)
+                .filter(|w| {
+                    let ((a, ca), (b, cb)) = (w[0], w[1]);
+                    b.base - a.base <= a.fs.max(b.fs) * NEXT_LINE && runs_on(ca, cb)
+                })
+                .count();
+            if ran >= 2 && ran * 2 >= picked.len() - 1 {
+                break;
+            }
+            let mut more: Vec<f64> = picked.iter().map(|(_, c)| c.x0).collect();
             more.sort_by(f64::total_cmp);
             let median = more[more.len() / 2];
             match more.iter().find(|&&l| l >= median - fs * 6.0) {
@@ -3313,6 +3327,60 @@ mod tests {
         // Labels under no other table's rules are still taken in.
         let open = read_ruled_stack(&ls, &right_rules, region, 0);
         assert!(open.iter().any(|g| g.bbox.x0 < 250.0), "got {open:?}");
+    }
+
+    #[test]
+    fn prose_across_the_gutter_is_no_label_column() {
+        // Figures with their labels in the page's right column, the left
+        // column's prose running on beside them a gutter away (40pt, inside
+        // the reach for a further column of labels), no rule between.
+        let prose = [
+            "credit risk is the risk that a party",
+            "would incur a loss as a result of",
+            "nonperformance by counterparties of",
+            "their contractual obligations and the",
+            "continued volatility in the markets",
+        ];
+        let labels = [
+            "Revenues",
+            "Operations",
+            "Depreciation",
+            "Income taxes",
+            "Other",
+        ];
+        let row = |gl: &mut Vec<Glyph>, i: usize, l: &str| {
+            let y = 50.0 + 12.0 * i as f64;
+            gl.extend(set(l, 250.0, y));
+            gl.extend(set(&format!("{}", 30 + i), 340.0, y));
+            gl.extend(set(&format!("({})", 5 + i), 380.0, y));
+        };
+        let mut gl = Vec::new();
+        for (i, (p, l)) in prose.iter().zip(labels).enumerate() {
+            gl.extend(set(p, 20.0, 50.0 + 12.0 * i as f64));
+            row(&mut gl, i, l);
+        }
+        let region = BBox {
+            x0: 335.0,
+            y0: 40.0,
+            x1: 410.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty());
+        assert!(grids.iter().all(|g| g.bbox.x0 > 200.0), "{grids:?}");
+        // A column of codes beside their descriptions, each line its own,
+        // is still taken in.
+        let mut coded = Vec::new();
+        for (i, (code, l)) in ["REV", "OPS", "DEP", "TAX", "OTH"]
+            .iter()
+            .zip(labels)
+            .enumerate()
+        {
+            coded.extend(set(code, 200.0, 50.0 + 12.0 * i as f64));
+            row(&mut coded, i, l);
+        }
+        let grids = read(&lines(&coded), &[], region, 0);
+        assert!(grids.iter().any(|g| g.bbox.x0 < 210.0), "{grids:?}");
     }
 
     /// A table of three groups, a size and its colour set once over three
