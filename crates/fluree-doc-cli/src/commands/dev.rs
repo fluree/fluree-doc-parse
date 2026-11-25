@@ -1208,6 +1208,9 @@ pub(crate) fn render_routed(
     let mut n_vetoed = 0usize;
     let mut n_columns = 0usize;
 
+    // The images too small to route are probed only for the OCR regions.
+    let mut eopts = fluree_doc_pdf::ExtractOptions::default();
+    eopts.probe_small_images = ocr_regions;
     for f in &files {
         let stem = crate::commands::common::stem_of(f);
         if !stems.insert(stem.to_string()) {
@@ -1253,11 +1256,11 @@ pub(crate) fn render_routed(
             }
             continue;
         }
-        let doc = match extract_file(f) {
+        let Ok(data) = std::fs::read(f) else { continue };
+        let doc = match fluree_doc_pdf::extract_bytes_with(data.clone(), &eopts) {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let data = std::fs::read(f).expect("read pdf");
         let pdf = Pdf::new(Arc::new(data)).expect("parse pdf");
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
