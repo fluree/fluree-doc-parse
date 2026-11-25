@@ -1317,6 +1317,7 @@ fn finish(b: Block, edge: &Edge) -> Vec<Block> {
         .flat_map(split_counted)
         .flat_map(|b| split_ended(b, edge))
         .flat_map(|b| split_entries(b, edge))
+        .flat_map(|b| split_stacked_heads(b, edge))
         .collect()
 }
 
@@ -1500,6 +1501,70 @@ fn split_entries(b: Block, edge: &Edge) -> Vec<Block> {
         opens_capital(&w[1]) && edge.right - w[0].bbox.x1 > first_word_width(&w[1]) + fs * 0.5
     });
     if !set || !ended {
+        return vec![b];
+    }
+    let Block {
+        lines, gap_above, ..
+    } = b;
+    let mut out: Vec<Block> = lines.into_iter().map(|l| build(vec![l])).collect();
+    out[0].gap_above = gap_above;
+    out
+}
+
+/// Words a wrapped line may end on, or its next line open with: the phrase
+/// runs on across the break.
+const RUNS_ON: &[&str] = &[
+    "a", "an", "the", "and", "or", "nor", "but", "not", "of", "to", "in", "on", "at", "by", "for",
+    "from", "with", "as", "into", "via", "among", "between", "through", "within", "without",
+    "across", "over", "under", "after", "before", "during", "per", "versus", "vs", "about",
+    "against", "toward", "towards", "upon", "my", "your", "our", "their", "its", "his", "her",
+];
+
+/// Part two bold lines set one over the other, each a heading of its own:
+/// `Materials and methods` over `Animals`, `V - Etiology` over `A.
+/// Genetics`. Entries are parted the same way ([`split_entries`]), but bold
+/// lines are left whole there, as a title broken over two lines must be.
+/// Here the break is no wrap: both lines are bold, at one size from the
+/// body's up to display type (a diagram's labels are set smaller), set at
+/// one indent; the second opens with a capital, not a bracket (`Hours:
+/// 8:30 am - 6:00 pm EST` over `(Monday - Friday)`), and its first word
+/// would have fitted on the first. The phrase does not run
+/// on across the break (`RIGHT OF FIRST REFUSAL` over `AND CO-SALE
+/// AGREEMENT`, `Where's My` over `Refund?`), and the second line is no
+/// dateline (`Notes to Consolidated Financial Statements` over `December
+/// 31, 2019`). Three or more lines are a title's: a company, a statement
+/// and its date.
+fn split_stacked_heads(b: Block, edge: &Edge) -> Vec<Block> {
+    if b.lines.len() != 2 || !edge.agreed || b.marker.is_some() {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let (first, second) = (&b.lines[0], &b.lines[1]);
+    let set = [first, second].iter().all(|l| {
+        l.bold
+            && (l.font_size - first.font_size).abs() <= 0.25
+            && (l.font_size as f64) >= edge.body - 0.25
+            && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
+            && (l.bbox.x0 - first.bbox.x0).abs() <= fs * 0.5
+    });
+    let runs_on = |w: Option<&str>| w.is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()));
+    let ends_open = first
+        .text
+        .trim_end()
+        .ends_with(['-', '\u{AD}', ',', ':', ';', '&', '/'])
+        || runs_on(first.text.split_whitespace().next_back());
+    let dateline = second
+        .text
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|n| n.len() == 4 && (n.starts_with("19") || n.starts_with("20")));
+    let bracketed = second.text.trim_start().starts_with(['(', '[']);
+    let stacked = opens_capital(second)
+        && !bracketed
+        && !ends_open
+        && !runs_on(second.text.split_whitespace().next())
+        && !dateline
+        && edge.right - first.bbox.x1 > first_word_width(second) + fs * 0.5;
+    if !set || !stacked {
         return vec![b];
     }
     let Block {
@@ -4041,6 +4106,53 @@ mod tests {
             "{:?}",
             b.iter().map(Block::text).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn stacked_bold_heads_part() {
+        let bold = |text: &str, y: f64, x1: f64| {
+            let mut line = row(text, 40.0, y, x1);
+            line.bold = true;
+            line
+        };
+        // A section's heading over its first subsection's.
+        let heads = vec![
+            bold("Materials and methods", 100.0, 130.0),
+            bold("Animals", 110.0, 75.0),
+        ];
+        let mut column = measure(0.0);
+        column.extend(heads.clone());
+        let b = assemble_in_measure(&heads, &column, 1.2, &[], &[], &[], 8.0);
+        assert_eq!(
+            b.iter().map(Block::text).collect::<Vec<_>>(),
+            ["Materials and methods", "Animals"]
+        );
+        // A title wrapped at the column's edge, or ending on a word that
+        // runs on, stays whole.
+        for title in [
+            vec![
+                bold(
+                    "Inhibition of telomerase activity of human ovarian",
+                    100.0,
+                    295.0,
+                ),
+                bold("Cancer Cells by AZT", 110.0, 140.0),
+            ],
+            vec![
+                bold("Effect of AZT on telomerase activity in", 100.0, 200.0),
+                bold("HO-8910 Cells", 110.0, 110.0),
+            ],
+        ] {
+            let mut column = measure(0.0);
+            column.extend(title.clone());
+            let b = assemble_in_measure(&title, &column, 1.2, &[], &[], &[], 8.0);
+            assert_eq!(
+                b.len(),
+                1,
+                "{:?}",
+                b.iter().map(Block::text).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
