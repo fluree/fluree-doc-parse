@@ -143,6 +143,33 @@ wrong of every cell it reads so. Neither it nor the stack stands, and the
 text is read as text. The breaks are the stack's own: a grid ruled some other
 way says less of where its columns are drawn.
 
+### Tables side by side, ruled with whole lines
+
+Two tables set side by side in a page's two columns, each ruled under its rows
+with lines drawn whole across its own width, leave the page-wide reading
+nothing to stand on. Their lines interleave down the page a few points apart,
+or fall level and read as one line across both, and no line breaks where a
+column does. Each stack of such lines is read from its text where all of these
+hold:
+
+- it has four lines or more, one under the next at an even pitch, each drawn
+  unbroken across the same stretch. A line's pieces end only at its two ends;
+  two pieces with a gap between them are two lines, one over each table;
+- another such stack stands beside it, sharing half the height of the shorter;
+- no grid already holds most of it;
+- three bands in four or more between its lines hold text. A table ruled under
+  its rows sets a row in every band, a blank row aside; a chart's gridlines
+  stand over its bars, a drawing's lines over nothing;
+- the reading stands within its lines, give or take a twentieth of their
+  width for a header label hung past them. A stack narrower than the table it
+  rules is one column's lines in a wider table.
+
+Labels left of the stack are not taken in from under the other table's rules:
+a horizontal over the text that ends short of the stack, within its height.
+Read as any region is, the left table's last column would be the right one's
+labels. A grid with no verticals inside such a stack, read again from its
+text, keeps the same guard.
+
 ### Underlines under figures
 
 A financial statement is often ruled by underlines alone: under a
@@ -369,6 +396,26 @@ body text, a box laid out around paragraphs, a drawing's labels.
   a page's column divider is the next column's prose. A table's own column
   rules stand between its labels and its figures too, and run no further
   than the table.
+- **Prose across a gutter.** Past its first label column, the reading reaches
+  left for further columns of labels set close by (a code beside a
+  description), within eight ems. A page's gutter can be narrower than that,
+  and with no divider drawn the next column's prose was taken in as a column
+  of labels. A column whose lines run on from one another, in half the pairs
+  of lines or more (two at least), is prose and ends the reach; a column of
+  codes starts each line afresh. Made on the first label column as well, the
+  same test took statements' wrapped labels for prose and cost their row
+  headers, so it stands on the further columns only.
+- **A label set close to its figure.** A label long enough to come within a
+  cell gap of its figure reads as one chunk with it, which no column holds,
+  and the table's rows break there. Such a chunk is cut where the figure
+  starts across a gutter: at the end of its line, where the figure is the
+  row's value (`montmorillonite/smectite 100`); or further in, where the cut
+  figure fills a column the rest of its line leaves empty (`LOC440055 0.721`
+  beside the row's other values). The second only into a column the table's
+  rows fill, on three lines at least and half as many as its fullest
+  column: a receipt sets its amounts where each line's text ends, making
+  columns of a line or two, and a label's own figure (`Antihistamine
+  tablets (30)`) would be cut into one of them.
 
 ## Tables drawn with characters
 
@@ -560,6 +607,27 @@ there; the rule closing the header may leave its column open where the rows
 taken in name their columns, each label its own, none repeated among them or
 in the data under them. A table's data repeats itself (`Yes` row after row)
 under a stub run down a continued page, and its rows stay data.
+
+### Group labels over their underlines
+
+A table read from its text names a header label's columns by the words it
+covers, or by the rule under it. A statement's group label is often
+narrower than one of its columns: `Net sales (a)` set over the middle of
+three years, its underline drawn a year at a time. Read by the underline
+piece under its middle alone, the label named one column. The banner passes
+then gave each group the columns up to the next label, a column off, and
+both labels landed in one header cell.
+
+A rule's pieces that meet end to end are one run. Where the label's rule
+row is two runs or more, parted between the groups, the run under a label
+over the figures names its columns, if the label is set as a group's: centred
+over the run (its middle within 15% of the run's width of the run's, as the
+banner passes take a centred label), and the only label of its header row
+over it. A column's label set to one side of cell borders that run on under
+its neighbour (`OP` over `OP | LOS`) is not. A rule row of one run is the header's
+bottom rule, not a group's, and the label reads the piece under its middle
+as before. So does the labels' column's own head: a run across the header
+under it would make the stub head a title over every column.
 
 ### A header restated partway down
 
@@ -1041,6 +1109,42 @@ Not a header ruled off as its rows are (`(millions) | 2017 | 2016`), which
 names no measure and starts the next table, nor a header ruled above and
 below under a table ruled only round its own.
 
+It runs on, too, through a line that carries on the cells of the line above.
+That line is the next one under it (within 1.6 of the type's size, where any
+body leading lies and a line with a blank line between does not). It has
+nothing in the stub column and no figure, and each of its chunks stands in a
+column the line above fills and runs on from what stands there: it starts
+mid-phrase, or the text above ends on a word or mark that wants more. Such a
+line is a name or a description wrapped onto a second line, and it joins its
+row's cell (`LSM2 homolog, U6 small nuclear RNA` over `associated (S.
+cerevisiae)`). Spacing alone cannot tell it from a row: a journal sets its
+rows and its wrapped lines at the same leading. A row with an empty stub and
+a new value (`Banana` under `Apple`) runs on from nothing and stays a row.
+Nothing is carried on in a column whose text runs on across the rows: where,
+on half the lines that open a row (two at least), the column's text continues
+the line above it, the column is a page's prose read in beside the table, its
+sentences carried down through the rows. A table's cells start afresh on
+each row.
+
+A caption wrapped over the table keeps its lines after the first. Walking
+up from the first row for the header, a line that is the next one under a
+caption, or under such a line, holding one chunk that runs on from it, ends
+the walk: `human liver microsomes.` under `Table 1. Inhibitory potencies …
+in rat and` is the caption's, not a header row.
+
+Where alignment reads a page better than its one coarse ruled grid, and that
+grid is ruled with horizontals only, the grid is read from its text as well.
+A journal's table between its top and bottom rules, a mid rule between two
+groups of rows, gives one grid of bands, and alignment reads only the rows
+under one group, leaving the header and the other group as text. Of the two
+readings, the one whose cells hold more of the page's text stands: both read
+the same table, and the better leaves less of it out. On such a page only the
+seed is read from its text; runs of figures are left to alignment. A seed
+whose last band holds the header alone, a top rule and the rule under the
+header with the table run on past the page's foot and no rule under its rows,
+is read on below that rule: alignment reads such a table in pieces, broken at
+each group label in its stub (`Education`, `Occupation` over their rows).
+
 A table ruled under its rows with horizontals alone, with no vertical and
 its rows not lumped, standing beside lines of the page's text on half its
 rows, is set in a column of its own beside a column of prose. The prose's
@@ -1134,7 +1238,9 @@ one a box's spacing below, are linked in two ways:
   pieces a little apart). A name over two of the lower part's columns heads
   both (`Nominal Size` over the size and its decimal), so the header is dealt
   onto the lower part's columns, a name spanning those it covers, and is all
-  header: `D / Body Diameter / Max.`.
+  header: `D / Body Diameter / Max.`. The two are then one table: the box's
+  rows become the table's header rows and the box goes, where it stood as a
+  table of no cells before the table it heads.
 - **Rows set below a table on its columns.** A run of rows read by alignment
   breaks where a line of something else falls between two of them, such as
   an outer table's label centred on the tall row the inner table sits in.
