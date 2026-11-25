@@ -10,3 +10,6 @@ fluree-doc-model.workspace = true
 html5ever = "0.39"
 markup5ever_rcdom = "0.39"
 encoding_rs = "0.8"
+
+[dev-dependencies]
+fluree-doc-model = { workspace = true, features = ["test-util"] }

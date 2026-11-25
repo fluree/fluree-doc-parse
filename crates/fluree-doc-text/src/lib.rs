@@ -256,6 +256,7 @@ fn element(kind: &str, text: String) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::scaling::assert_linear;
 
     fn read(src: &str) -> Vec<(String, String)> {
         parse(src)
@@ -379,11 +380,12 @@ mod tests {
         // each `](` used to look back over the whole line for a `[`, and
         // this took over eight seconds.
         for open in ["", "["] {
-            let line = format!("{open}x{}", "](".repeat(500_000));
-            let started = std::time::Instant::now();
-            assert!(!is_markdown(&line));
-            let took = started.elapsed();
-            assert!(took.as_secs_f64() < 1.0, "{open:?}: {took:?}");
+            assert_linear(
+                &format!("a line of `](` after {open:?}"),
+                50_000,
+                |n| format!("{open}x{}", "](".repeat(n)),
+                |line| assert!(!is_markdown(line)),
+            );
         }
     }
 

@@ -420,6 +420,7 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluree_doc_model::scaling::assert_linear;
 
     use fluree_doc_model::budget::{
         converting_to, Output, CELL_BYTES, ELEMENT_BYTES, FLAT_CELL_BYTES, FLAT_ELEMENT_BYTES,
@@ -600,19 +601,19 @@ mod tests {
     fn links_on_one_line_are_located_in_linear_time() {
         // Each link counted the characters of the paragraph before it:
         // 600,000 on one line, 4 MB, took 16 s.
-        let n = 1_000_000;
-        let src = format!("é {}[ç](u) ü", "[a](b) ".repeat(n));
+        let src = |n: usize| format!("é {}[ç](u) ü", "[a](b) ".repeat(n));
         // As Markdown: as DoCO, a million links are past the budget.
-        let start = std::time::Instant::now();
-        let e = converting_to(Output::Flat, || parse(&src));
-        let took = start.elapsed();
+        assert_linear("links on one line", 20_000, src, |src| {
+            converting_to(Output::Flat, || parse(src));
+        });
+        let n = 100_000;
+        let e = converting_to(Output::Flat, || parse(&src(n)));
         let links = e[0].links.as_ref().unwrap();
         assert_eq!(links.len(), n + 1);
         // Spans in characters, past the multi-byte ones.
         assert_eq!(links[1].span(), Some((4, 5)));
         assert_eq!(links[n].span(), Some((2 + 2 * n, 3 + 2 * n)));
         assert_eq!(links[n].href(), "u");
-        assert!(took.as_secs() < 10, "{took:?}");
     }
 
     #[test]
