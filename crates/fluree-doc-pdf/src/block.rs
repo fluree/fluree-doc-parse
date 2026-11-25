@@ -1409,7 +1409,10 @@ fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
 /// either
 ///
 /// - the next opens in lower case: `…to see improved` over `performance in
-///   4Kn fomat.`, in footnotes set at twice their size's leading; or
+///   4Kn fomat.`, in footnotes set at twice their size's leading. Under an
+///   item whose lines hang under its first, a line set where they are goes
+///   on whether or not the line above is full: a list's `or` between two of
+///   its items, set in another weight; or
 /// - the break falls inside a run of capitals the weight change belongs to:
 ///   `…lead dust. LEAD IS` over the bold `TOXIC. EXPOSURE…`, in a warning
 ///   set narrower than its column, whose measure says nothing of where the
@@ -1438,15 +1441,24 @@ fn runs_on(cur: &[Line], next: &Line, leading: f64) -> bool {
     {
         return false;
     }
-    let reach = cur.iter().map(|l| l.bbox.x1).fold(next.bbox.x1, f64::max);
-    if reach - prev.bbox.x1 >= first_word_width(next) {
-        return false;
-    }
     let first = next
         .text
         .trim_start()
         .trim_start_matches(['(', '[', '"', '\'', '“', '‘']);
-    if first.chars().next().is_some_and(char::is_lowercase) {
+    let lower = first.chars().next().is_some_and(char::is_lowercase);
+    // A line hanging under an item, where the item's lines after its
+    // first are set: a list's `or` between two of its items, under an
+    // item of two lines whose second is the shorter.
+    let hangs = cur.len() >= 2
+        && cur[0].bbox.x0 + fs * 0.5 < prev.bbox.x0
+        && cur[1..]
+            .iter()
+            .all(|l| (l.bbox.x0 - prev.bbox.x0).abs() <= fs * INDENT_TOLERANCE);
+    let reach = cur.iter().map(|l| l.bbox.x1).fold(next.bbox.x1, f64::max);
+    if reach - prev.bbox.x1 >= first_word_width(next) && !(lower && hangs) {
+        return false;
+    }
+    if lower {
         return dy <= leading * PARAGRAPH_FACTOR * RUN_ON_LEADING;
     }
     let capitals = |w: Option<&str>| {
@@ -4111,6 +4123,43 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_lowercase_line_hanging_under_an_item_goes_on_with_it() {
+        let at = |t: &str, x0: f64, y: f64, x1: f64, bold: bool| {
+            let mut n = l(t, x0, y, 11.0);
+            n.bbox.x1 = x1;
+            n.bold = bold;
+            n
+        };
+        // An item of two lines, its second the shorter, over a bold `or`
+        // set at the item's hanging indent, then the next item.
+        let lines = vec![
+            at(
+                "- Mixed bulb type per Multigang and Mixed Bulb",
+                45.5,
+                256.6,
+                290.0,
+                false,
+            ),
+            at("Type Ratings table (see page 3)", 52.1, 270.5, 210.0, false),
+            at("or", 53.5, 286.6, 63.0, true),
+            at(
+                "- 250 W Lutron LTEA Hi-lume 1% forward-phase",
+                45.5,
+                298.5,
+                288.0,
+                false,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert!(
+            texts.iter().any(|t| t.ends_with("(see page 3) or")),
+            "{texts:?}"
+        );
+        assert!(texts.iter().all(|t| t != "or"), "{texts:?}");
     }
 
     #[test]
