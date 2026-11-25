@@ -1333,12 +1333,42 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         return None;
     }
     while let Some(l) = head.last() {
-        let label_only = l.chunks.iter().all(|c| column_of(&cols, c) == Some(0))
-            && l.chunks.iter().all(|c| covered(&cols, c).len() <= 1);
+        // The header's own rule, drawn under the line above (an underline
+        // under each column's head), parts this line from it: the header
+        // ends there, and what is under it is the body's.
+        let ruled_apart = head.len() > 1 && {
+            let p = head[head.len() - 2];
+            rules.iter().any(|r| {
+                r.orientation == Orientation::Horizontal
+                    && r.axis_pos() > p.base
+                    && r.axis_pos() < l.base - l.fs * 0.5
+                    && r.bbox.x0 < cols[0].1
+                    && r.bbox.x1 > cols[0].0
+            })
+        };
+        // In the label column; or, under the header's rule, hung out to
+        // the left of it as a group's label often is (`United States` over
+        // its indented rows), reaching into it and short of the second
+        // column. A speck with no letter or figure in it says nothing.
+        let said: Vec<&Chunk> = l
+            .chunks
+            .iter()
+            .filter(|c| c.text.chars().any(char::is_alphanumeric))
+            .collect();
+        let hung = |c: &Chunk| ruled_apart && c.x1 > cols[0].0 && c.x1 < cols[1].0;
+        let label_only = !said.is_empty()
+            && said
+                .iter()
+                .all(|c| column_of(&cols, c) == Some(0) || hung(c))
+            && said.iter().all(|c| covered(&cols, c).len() <= 1);
+        // Wrapped from the line above, unless that rule parts them
+        // (`United States` under `Sales Volumes per Day by Products | 2017
+        // | 2016`).
         let wrapped = head.len() > 1 && {
             let p = head[head.len() - 2];
             l.base - p.base <= l.fs * WRAP_LEADING
                 && p.chunks.iter().any(|c| column_of(&cols, c) == Some(0))
+                && !ruled_apart
         };
         if label_only && head.len() > 1 && !wrapped {
             body.insert(0, head.pop().unwrap());
