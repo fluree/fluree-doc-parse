@@ -721,13 +721,40 @@ impl Notes {
                 at.join("; ")
             ));
         }
-        if said.is_empty() {
-            return None;
+        // Images no pixel of which was looked at: a capture of text and a
+        // logo alike. Said once, by page, not each with its box: they are
+        // as often decoration as content, and the boxes are in
+        // `doc:unreadRegions`.
+        let mut unprobed: Vec<usize> = self
+            .unread_regions
+            .iter()
+            .filter(|r| r.reason == "Unprobed")
+            .map(|r| r.page + 1)
+            .collect();
+        let images = unprobed.len();
+        unprobed.sort_unstable();
+        unprobed.dedup();
+        let unexamined = (images > 0).then(|| {
+            format!(
+                "{images} image{} on page{} {} {} not examined: a parse that \
+                 probes images (OCR or escalation) can tell whether {} text",
+                if images == 1 { "" } else { "s" },
+                if unprobed.len() == 1 { "" } else { "s" },
+                page_runs(&unprobed),
+                if images == 1 { "was" } else { "were" },
+                if images == 1 { "it holds" } else { "they hold" },
+            )
+        });
+        match (said.is_empty(), unexamined) {
+            (true, None) => None,
+            (true, Some(u)) => Some(format!("fluree-doc-parse: {u}.")),
+            (false, u) => Some(format!(
+                "fluree-doc-parse: {}. This output is missing it.{}",
+                said.join(". "),
+                u.map(|u| format!(" {}{}.", u[..1].to_uppercase(), &u[1..]))
+                    .unwrap_or_default()
+            )),
         }
-        Some(format!(
-            "fluree-doc-parse: {}. This output is missing it.",
-            said.join(". ")
-        ))
     }
 }
 

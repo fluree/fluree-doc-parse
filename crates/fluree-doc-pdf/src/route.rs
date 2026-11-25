@@ -168,7 +168,9 @@ fn unread_regions(page: &Page, min_fraction: f64) -> Vec<BBox> {
     let mut seen = std::collections::HashSet::new();
     page.images
         .iter()
-        .filter(|p| p.texty && holds_a_line(p) && share(page, &p.bbox) >= min_fraction)
+        .filter(|p| {
+            p.texty == Some(true) && holds_a_line(p) && share(page, &p.bbox) >= min_fraction
+        })
         .filter(|p| {
             text.get_or_insert_with(|| TextLayer::of(page))
                 .void(&p.bbox)
@@ -316,6 +318,13 @@ pub enum Declined {
     /// chart, an illustration. Nothing reads it, neither a model nor an OCR
     /// engine: it is listed, for a caller to judge.
     NotTexty,
+    /// Not examined: the parse decoded no image
+    /// ([`crate::ExtractOptions::probe_images`] off, as a deterministic run
+    /// that neither escalates nor reads with an OCR engine sets it), so
+    /// nothing tells a capture of text from a photograph. Listed at any
+    /// share of the page, from [`MIN_SMALL_REGION_SIDE`] on its longer side:
+    /// a run that probes may find text in it.
+    Unprobed,
 }
 
 /// The raster regions of a page that the text layer does not cover and the
@@ -325,7 +334,8 @@ pub enum Declined {
 /// Empty for a page read whole, whose regions go with the page. An image
 /// that is neither texty nor a tenth of the page (an icon, a bullet, a
 /// small photo) is not listed: nothing in it suggests content. Nor is a
-/// texty one under [`MIN_SMALL_REGION_SIDE`] (a checkbox, an icon), one
+/// texty or unprobed one under [`MIN_SMALL_REGION_SIDE`] (a checkbox, an
+/// icon), one
 /// whose own pixels cannot hold a line of text ([`MIN_TEXT_LINE_PX`], a
 /// mask stretched into a rule), or a second drawing of an image in one
 /// place.
@@ -345,7 +355,8 @@ pub fn declined_regions_for(page: &Page, route: &Route) -> Vec<(BBox, Declined)>
 /// [`declined_regions_for`], each [`Declined::Small`] region with its
 /// number among the regions an OCR engine reads ([`ocr_regions_for`]): what
 /// a caller needs to tell whether an engine read it, without listing those
-/// regions again. A [`Declined::NotTexty`] one has none: no engine reads it.
+/// regions again. A [`Declined::NotTexty`] or [`Declined::Unprobed`] one has
+/// none: no engine reads it.
 pub fn declined_regions_numbered(
     page: &Page,
     route: &Route,
@@ -360,14 +371,14 @@ pub fn declined_regions_numbered(
     // texty image is counted whether listed or not, for the number of those
     // after it: an OCR engine reads every one.
     let large = |p: &ImagePlacement| share(page, &p.bbox) >= MIN_REGION_FRACTION;
+    let sized = |p: &ImagePlacement| longer_side(&p.bbox) >= MIN_SMALL_REGION_SIDE;
     let Some(last) = page.images.iter().rposition(|p| {
-        if !holds_a_line(p) {
-            false
-        } else if p.texty {
-            !large(p) && longer_side(&p.bbox) >= MIN_SMALL_REGION_SIDE
-        } else {
-            large(p)
-        }
+        holds_a_line(p)
+            && match p.texty {
+                Some(true) => !large(p) && sized(p),
+                Some(false) => large(p),
+                None => sized(p),
+            }
     }) else {
         return Vec::new();
     };
@@ -376,10 +387,12 @@ pub fn declined_regions_numbered(
     let mut read = routed.len();
     let mut out = Vec::new();
     for p in &page.images[..=last] {
-        if !(p.texty || large(p))
-            || !holds_a_line(p)
-            || routed.contains(&p.bbox)
-            || !seen.insert(box_key(&p.bbox))
+        let worth = match p.texty {
+            Some(true) => true,
+            Some(false) => large(p),
+            None => sized(p),
+        };
+        if !worth || !holds_a_line(p) || routed.contains(&p.bbox) || !seen.insert(box_key(&p.bbox))
         {
             continue;
         }
@@ -389,16 +402,23 @@ pub fn declined_regions_numbered(
         {
             continue;
         }
-        if !p.texty {
-            out.push((p.bbox, Declined::NotTexty, None));
-            continue;
+        match p.texty {
+            None => {
+                out.push((p.bbox, Declined::Unprobed, None));
+                continue;
+            }
+            Some(false) => {
+                out.push((p.bbox, Declined::NotTexty, None));
+                continue;
+            }
+            Some(true) => {}
         }
         let number = read;
         read += 1;
         // A checkbox or an icon; or, texty and large, a region the page's
         // routing does not route, which only a routing kept from before the
         // page changed can leave.
-        if !large(p) && longer_side(&p.bbox) >= MIN_SMALL_REGION_SIDE {
+        if !large(p) && sized(p) {
             out.push((p.bbox, Declined::Small, Some(number)));
         }
     }
@@ -414,7 +434,7 @@ fn ocr_extras<'a>(page: &'a Page, routed: &'a [BBox]) -> impl Iterator<Item = BB
     let mut seen = std::collections::HashSet::new();
     page.images
         .iter()
-        .filter(move |p| p.texty && holds_a_line(p) && !routed.contains(&p.bbox))
+        .filter(move |p| p.texty == Some(true) && holds_a_line(p) && !routed.contains(&p.bbox))
         .filter(move |p| {
             text.get_or_insert_with(|| TextLayer::of(page))
                 .void(&p.bbox)
@@ -590,7 +610,7 @@ mod tests {
                 .into_iter()
                 .map(|(bbox, texty)| ImagePlacement {
                     bbox,
-                    texty,
+                    texty: Some(texty),
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),

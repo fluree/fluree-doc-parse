@@ -777,7 +777,11 @@ pub(crate) fn figures(pdf: &Path, page: Option<usize>) {
                 im.bbox.y1,
                 im.bbox.width(),
                 im.bbox.height(),
-                if im.texty { " texty" } else { "" }
+                match im.texty {
+                    Some(true) => " texty",
+                    Some(false) => "",
+                    None => " unprobed",
+                }
             );
         }
         for f in &found {

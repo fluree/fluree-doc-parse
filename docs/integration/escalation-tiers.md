@@ -48,7 +48,10 @@ offered to an OCR engine only, is listed with the reason `Small` when nothing
 read it and it is half an inch or more on its longer side (a checkbox is
 not). A large image the pixel probe does not take for text (a photograph, a
 chart) is cropped for no reader and listed with `NotTexty`. Neither is
-warned about, since each is a logo or a photograph as often as content.
+warned about, since each is a logo or a photograph as often as content. A
+run that neither escalates nor reads with OCR decodes no image: it lists
+them all as `Unprobed`, with one warning by page (`--probe-images` probes
+without reading).
 
 The probe takes a screen capture with a few lines on a wide, light ground
 for text (lines of text on a ground of one colour, besides ink on paper):
