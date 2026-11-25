@@ -1,0 +1,52 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Page 5 sets three wiring diagrams in one drawn box, their labels in its margins, with a note in the column beside the box and the diagrams' title over it."
+  },
+  "notes": [
+    "#201: the figure regions started at the switch drawings, not the box, so labels in the box's margin were body text, and the note beside the box and the title over it were taken as the diagrams' labels.",
+    "#201: an alignment grid read across the box's right edge put the wire labels and the note's next two lines in one row, and the note was cut after its first line."
+  ],
+  "checks": [
+    {
+      "id": "title-over-box-is-text",
+      "found": "2026-11-24",
+      "issue": "`4-Way Wiring (Using MA-R Companion Dimmer)`, the title over the box, was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "4-Way Wiring (Using MA-R Companion Dimmer)"
+      },
+      "count": 0
+    },
+    {
+      "id": "note-beside-box-is-text",
+      "found": "2026-11-24",
+      "issue": "`Note: Dimmer can be installed on the`, in the column beside the box, was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Note: Dimmer can be installed on the"
+      },
+      "count": 0
+    },
+    {
+      "id": "label-in-margin-is-figure",
+      "found": "2026-11-24",
+      "issue": "`Dimmer Line Side`, a label in the box's margin, was a Paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Dimmer Line Side"
+      }
+    },
+    {
+      "id": "note-whole",
+      "found": "2026-11-24",
+      "issue": "The note was cut after `Note: Dimmer can be installed on the`; its next lines were read with the wire labels: `Brass Blue Brass Blue line side, load side, or in the`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Note: Dimmer can be installed on the line side, load side, or in the middle of the circuit."
+      }
+    }
+  ]
+}

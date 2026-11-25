@@ -17,8 +17,8 @@ pub mod symbols;
 
 pub use doco::{to_doco, to_text, DocoOptions};
 pub use element::{
-    xsd_date_time, xsd_temporal, Attachment, Datum, DocumentInfo, Element, Link, Notes,
-    ParseWarning, Target, Turn, UnreadPage, UnreadRegion,
+    is_stray_control, xsd_date_time, xsd_temporal, Attachment, Datum, DocumentInfo, Element, Link,
+    Notes, ParseWarning, Target, Turn, UnreadPage, UnreadRegion,
 };
 pub use emit::{
     to_markdown, to_markdown_with, to_markdown_with_options, to_xhtml, to_xhtml_with,

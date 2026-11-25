@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "hpe-hdd-quickspecs.pdf",
+    "url": "https://www.hpe.com/psnow/doc/a00001287enw.pdf",
+    "sha256": "59838ba8f9e0431c4a6cbd71ce6d205de979ca02df1431ce3b8ec2ee91fe051c",
+    "about": "HPE hard disk drive QuickSpecs. Its overview lists each topic's points, Reliability, Compatibility and Security, as items opening with a minus sign, U+2212, the text hanging after it."
+  },
+  "notes": [
+    "#274: the minus sign was no list's mark, so a topic's items ran together into one paragraph."
+  ],
+  "checks": [
+    {
+      "id": "minus-item",
+      "found": "2026-11-25",
+      "issue": "#274: Reliability's three items after the first ran together as one paragraph opening with `−`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Pre-failure Alerts with HPE Smart Array Controller, Systems Insight Manager, and HPE Smart firmware.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "minus-last-item",
+      "found": "2026-11-25",
+      "issue": "#274: as above, the last of them.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Best-in-class supply assurance program reduces downtime due to product delays.",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
+  },
+  "notes": [
+    "2026-11-24 (#206): after a compound or a code joined by hyphens (`3-way`, `Multi-location`, `MACL-153M-XX`), a raised note number was neither a note nor a power, and ran into the word."
+  ],
+  "checks": [
+    {
+      "id": "three-way-note",
+      "found": "2026-11-24",
+      "issue": "#206: `3-way1`.",
+      "text": "3-way 1"
+    },
+    {
+      "id": "three-way-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: `3-way1`.",
+      "no_text": "3-way1"
+    },
+    {
+      "id": "multi-location-note",
+      "found": "2026-11-24",
+      "issue": "#206: as above.",
+      "text": "Multi-location 4"
+    },
+    {
+      "id": "multi-location-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: as above.",
+      "no_text": "Multi-location4"
+    },
+    {
+      "id": "code-note",
+      "found": "2026-11-24",
+      "issue": "#206: as above, after a model code.",
+      "text": "MACL-153M-XX 2,3"
+    },
+    {
+      "id": "code-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: as above, after a model code.",
+      "no_text": "MACL-153M-XX2,3"
+    }
+  ]
+}
