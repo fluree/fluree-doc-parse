@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Its accessories are two boxed tables set one under the other, under 3 pt apart."
+  },
+  "notes": [
+    "2026-11-25 (#197): the `Trims` box (two columns parted at one place) and the `Housings` box under it (two columns parted at another) touch, their rules a hair apart. Read as one drawing, their dividers made three columns neither has: `Trims` became a title over the whole and `Housings` a band partway down, the trims' second column read as the third."
+  ],
+  "checks": [
+    {
+      "id": "trims-own-table",
+      "found": "2026-11-25",
+      "issue": "#197: the trims' second column was the merged grid's third.",
+      "columns": {
+        "with": "CR4T-TRMSTAN-1 - 4\" (102mm) Plastic Reflector Trim - Satin Nickel CR4T-TRMBKBB-1 - 4\" (102mm) Plastic Reflector Trim w/Extended Flange - Black",
+        "count": 2
+      }
+    },
+    {
+      "id": "housings-own-table",
+      "found": "2026-11-25",
+      "issue": "#197: the housings were rows of the trims' table, under a band.",
+      "columns": {
+        "with": "GU24 Base Housings Recessed Housings, 120V RR4-GU24 - Retrofit",
+        "count": 2
+      }
+    },
+    {
+      "id": "housings-named-by-their-box",
+      "found": "2026-11-25",
+      "issue": "#197: as above; `Housings` was a section label inside the trims' table, not its own table's header.",
+      "cell": {
+        "value": "Universal 120-277V Housings Recessed Housings, 120-277V RC4-UNI -New Construction RR4-UNI -Retrofit",
+        "column": "Housings"
+      }
+    }
+  ]
+}

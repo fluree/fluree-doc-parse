@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "mdpi-sensors-16-00456.pdf",
+    "url": "https://www.mdpi.com/1424-8220/16/4/456/pdf",
+    "sha256": "dd1522df6dc387715f2e8911896f8f23361a504d6de4fcc5236ff81963d5329d",
+    "about": "Sensors 2016, 16, 456 (doi:10.3390/s16040456), a journal article. Page 1 sets the journal's name, the article's title, its authors, and their affiliations with e-mail addresses and a telephone number."
+  },
+  "notes": [
+    "#202: a letterhead, the sender's name over its address and numbers at the head of page 1, is no heading. The article's title also stands at the head of page 1, two steps over a line that gives a telephone number, and was read as one. A letterhead's name sets nothing between it and its address but lines set like it, such as a division's name; the authors under a title are set otherwise."
+  ],
+  "checks": [
+    {
+      "id": "article-title-kept",
+      "found": "2026-11-24",
+      "issue": "The article's title, over its authors and their affiliations, was read as a letterhead and lost its heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Background Subtraction Based on Three-Dimensional Discrete Wavelet Transform"
+      }
+    }
+  ]
+}
