@@ -553,6 +553,20 @@ from its text:
   A line broken off for a label or a trace leaves its neighbours a whole
   number of steps apart, and the grid still counts. A ruled table's text
   fills most of its cells, and its rows and columns differ in size.
+- A line chart drawn in strokes alone fills nothing: its series are lines
+  of many straight segments, most of them diagonal (a series sampled
+  densely steps under half a point per value, and leans against its own
+  step), and its axes are a rule under the plot with ticks at an even
+  pitch, or a column of ticks beside a scale. A series bound by such an
+  axis is a plot when it runs one way across the page, as a series plotted
+  against its axis does; its drawing is the box its axes bound, up to the
+  top of the axes standing at its sides, so a title set over the plot is
+  measured from the plot's top and not from the series' highest point. A
+  table's rules, a statement's underlines and a form's boxes
+  run square and draw no series. An outline, a symbol or a drawing set
+  behind a table turns back on itself, and a line with no axis by it is no
+  plot. The text of such a plot is left in the measure of the body's size,
+  as the page's headings are read against it.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that
