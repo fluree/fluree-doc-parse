@@ -759,6 +759,52 @@ The row is not data. The rows under it, until the next such row, take its
 names in place of the header's lowest row, under any rows above that one:
 `K25W951 / By wt`. A band across the row is a section's label instead.
 
+A table read from its text can be set in blocks. Each block has its own
+title and opens on the same line of column names again: `<16 | 16/17 | 18/19
+| <20` under `Bolivia 1994 | Bolivia 2008`, again under `Colombia 1990 |
+Colombia 2010`, and again for each country. Such a table is one table, not
+one table per block. Blocks join where all of these hold:
+
+- the next block's first line sets the same words in the same columns as
+  the first block's;
+- that line can name columns: nothing in the stub, names over half the
+  columns or more, and no plain number among them. Bounds and ranges name
+  columns (`<16 | 16/17 | <20`). A row of data repeated under each section
+  names itself in the stub (`Number of patients | 909 | 462`). A chart's
+  repeated ticks (`3 | 3`) and a formula's subscripts (`0 | 0 | 0`) are
+  plain numbers;
+- the title between them is a header's depth of lines at most, and holds
+  words;
+- each title line holds figures, years aside, in fewer than half the
+  columns (`Kenya | 1993 | 2008/9`);
+- the lines are set apart as the rows are.
+
+Where the column lines differ (a block adds a column), the block is a table
+of its own.
+
+Each block's title is a section over the block's rows, the first block's
+included. Each block's line of column names is a restated header, naming
+the columns of its own rows. The first title stands over the first column
+line, and header rows must be a table's top rows. So such a table has no
+header rows, and only lines set over the first title are its header.
+
+The alternatives each name a later block's rows by another block's title:
+
+- the first title and column line as the header, with later titles as
+  sections, gives `Colombia` rows the column `Bolivia 1994 / <16`;
+- the first title as a banner over every column does the same for every
+  row.
+
+So every block's rows take their section from their own title and their
+column names from their own column line. Nothing is dropped. The Markdown
+shows the first title as the header line, then each block's column line and
+rows, then the next title.
+
+A lone first row that reads as a title is normally taken off as the table's
+title. The first block's title is not, because a restated column line
+stands under it, as it does under every later block's title (`Uganda 1995
+2011` over `<16 | 16/17`).
+
 ### Rows of parameters
 
 A grid of figures can be headed by the rows of its parameters rather than by

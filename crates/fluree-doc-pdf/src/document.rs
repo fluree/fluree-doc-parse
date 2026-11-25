@@ -258,8 +258,10 @@ fn layout_title(
         return None;
     }
     // A banner over the column names the reading found under it heads the
-    // header (`December 31, 2017` over `2017 | 2016`), not the table.
-    if lay.header_rows > 1 {
+    // header (`December 31, 2017` over `2017 | 2016`), not the table. Nor
+    // does the first block's title over its own column names, as each later
+    // block's does (`Uganda 1995 2011` over `<16 | 16/17`).
+    if lay.header_rows > 1 || lay.restated_headers.contains(&1) {
         return None;
     }
     // Set where a title is: at the table's left edge, or centred on it. A
@@ -325,6 +327,7 @@ fn layout_title(
             })
             .collect(),
         sub_headers: lay.sub_headers.iter().filter_map(|&r| up(r)).collect(),
+        restated_headers: lay.restated_headers.iter().filter_map(|&r| up(r)).collect(),
         cells: lay.cells[cols..].to_vec(),
         claimed: lay.claimed.clone(),
     }));
@@ -4773,7 +4776,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .collect(),
             };
             let restated_headers = match explicit {
-                Some(_) => Vec::new(),
+                Some(lay) => lay.restated_headers.clone(),
                 None => g.restated_header_rows(
                     &rows,
                     header_rows,
