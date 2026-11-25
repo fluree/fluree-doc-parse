@@ -481,6 +481,11 @@ item, with `doc:xhtmlTag` `li`. DoCO has no list item class: a list's members
 are typed as what they are, and being contained by the list is what makes
 them members. Their order is their `nif:beginIndex`.
 
+A drawing's text read between two items ends the list, unless the items
+count on across it, `3.` then `4.`. A numbered list run on into the next
+column, with a photo's callouts read between the columns, stays one list,
+and the callouts stay figure text where they fall.
+
 ```json
 { "@type": "doco:List", "po:contains": [ "…-element-7", "…-element-8" ] }
 { "@id": "…-element-7", "@type": "doco:Paragraph", "doc:xhtmlTag": "li",

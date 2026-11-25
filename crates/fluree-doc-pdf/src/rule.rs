@@ -651,12 +651,12 @@ mod tests {
         // tick beside a line of its own.
         let mut fills: Vec<Fill> = (0..5)
             .map(|k| {
-                let x = 65.0 + 9.5 * k as f64;
-                f(x, 693.5, x + 9.0, 702.2)
+                let x = 120.0 + 8.4 * k as f64;
+                f(x, 300.0, x + 8.0, 308.5)
             })
             .collect();
-        fills.push(f(40.0, 511.0, 47.0, 518.0));
-        assert_eq!(checkboxes(&fills), [bb(40.0, 511.0, 47.0, 518.0)]);
+        fills.push(f(60.0, 150.0, 67.0, 157.0));
+        assert_eq!(checkboxes(&fills), [bb(60.0, 150.0, 67.0, 157.0)]);
     }
 
     #[test]
