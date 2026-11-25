@@ -1128,9 +1128,13 @@ pub fn attach_beside(
         loop {
             let mut grew = false;
             for (i, (b, size, text)) in blocks.iter().enumerate() {
+                // Nor is an address: a line closing on a web address, an
+                // e-mail address or a phone number says where to reach the
+                // page's maker, not what the drawing shows.
                 if b.width() > max_w
                     || text.split_whitespace().count() > LABEL_MAX_WORDS
                     || taken.contains(&i)
+                    || crate::heading::ends_with_contact(text)
                 {
                     continue;
                 }
@@ -2454,6 +2458,36 @@ mod tests {
         // The page's own background, whatever is set on it.
         let page = bb(0.0, 0.0, 612.0, 792.0);
         assert!(none(&[credit, label], page));
+    }
+
+    #[test]
+    fn an_address_is_no_drawings_label() {
+        // A mascot and a logo drawn as one cluster, reaching over the
+        // company's address set under the logo: its phone and web line says
+        // where to reach the maker, and the lines it runs on from go with it.
+        let drawing = bb(27.0, 664.0, 160.0, 756.0);
+        let mut figs = vec![Figure {
+            bbox: drawing,
+            drawing,
+            page: 0,
+            shapes: 39,
+            frame: None,
+        }];
+        let blocks = vec![
+            (bb(124.0, 708.0, 232.0, 716.0), 7.0, "ACME SALES, LLC"),
+            (
+                bb(124.0, 718.0, 244.0, 735.0),
+                7.0,
+                "ONE ACME PARKWAY TOLEDO, OH 43659 USA",
+            ),
+            (
+                bb(124.0, 741.0, 212.0, 758.0),
+                7.0,
+                "1-800-555-0100 www.acme.com",
+            ),
+        ];
+        let labels = attach(&mut figs, &blocks, &[], (612.0, 792.0), 9.0);
+        assert_eq!(labels, vec![Vec::<usize>::new()]);
     }
 
     #[test]
