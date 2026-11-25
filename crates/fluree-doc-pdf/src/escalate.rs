@@ -33,10 +33,13 @@
 //! let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
 //! let ol = outline::extract(&pdf);
 //! let mut doc = extract_bytes(bytes).unwrap();
+//! let extracted = doc.clone();
 //! let opts = document::AnalyzeOptions { emit_anchors: true, ..Default::default() };
 //! let mut analysis = document::analyze_with(&mut doc, &ol, &opts);
 //!
-//! let jobs = escalate::crops_for(&doc, &analysis, false);
+//! // The crops `fdoc` reads: region crops at this analysis's anchors,
+//! // chosen from the document as extracted.
+//! let jobs = escalate::crops_at_anchors(&extracted, &analysis, &Default::default());
 //! let crops = escalate::render_crops(&pdf, &jobs);
 //! let links = fluree_doc_pdf::link::extract(&pdf);
 //! let mut readings = escalate::Readings::default();
@@ -106,8 +109,10 @@ pub enum CropReason {
     NearBlank,
     /// A whole page whose glyphs' Unicode cannot be trusted.
     BrokenText,
-    /// A raster region of a text page that the text layer does not cover, or
-    /// a whole page read for a doubt that also carries one.
+    /// A raster region of a text page that the text layer does not cover;
+    /// or a whole page read for its regions: for a doubt that also carries
+    /// one, or in place of regions that exist only as extracted, where the
+    /// analysis, once it cleaned the page, minted no anchor for them.
     Region,
     /// A table the deterministic grid found but does not trust.
     Table,
