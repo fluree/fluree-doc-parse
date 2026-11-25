@@ -174,6 +174,20 @@ the rows below, the band's edge is the table's. A band merely wider than
 its table, with no name over the strip or nothing under it, adds nothing,
 and no grid is widened onto another.
 
+A table left open at the top can set a band over the columns its figures
+share (`BOLSAS ADICIONALES NECESARIAS POR CADA 100 PIES DE LA LÍNEA DEL
+TECHO` over three roof pitches) and rule under it across those columns
+alone. The column of labels beside them (`VALOR-R`) stands open from the
+band's top down through the header, and its rule runs on up beside the band.
+The rules alone start the grid under the band, which then reads as a heading
+over the table, and each pitch is named by itself. Where the top rule runs
+over a group of two columns or more and leaves only edge columns open, and
+the rule at the group's open side runs on above it, the grid is raised to
+where that rule ends. The band's text must stand over the group alone: a
+title running on over the label column is the table's. The band is then the
+top of a stacked header (`BOLSAS ADICIONALES … / 4:12 INCLINACIÓN DEL
+TECHO`), and the label column a cell from the band's top down.
+
 ## Tall rows
 
 A band more than 3.5 times the median row height is taken for the gap
