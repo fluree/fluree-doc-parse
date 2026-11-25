@@ -3478,33 +3478,29 @@ mod tests {
         // the letters' height below theirs.
         let cols = vec![
             crate::column::Column {
-                x0: 45.0,
-                x1: 293.0,
+                x0: 30.0,
+                x1: 250.0,
             },
             crate::column::Column {
-                x0: 293.0,
-                x1: 423.0,
+                x0: 250.0,
+                x1: 400.0,
             },
         ];
-        let mut stop = ln(".", 295.0, 295.6, 676.1, 7.0);
-        stop.bbox.y1 = 676.9;
+        let mut stop = ln(".", 252.0, 252.6, 506.2, 9.0);
+        stop.bbox.y1 = 507.0;
         let mut split = vec![
             vec![ln(
-                "All other product names are property of their respective owners",
-                46.2,
-                294.9,
-                671.8,
-                7.0,
+                "the terms apply to every party the agreement lists",
+                32.0,
+                251.5,
+                500.0,
+                9.0,
             )],
             vec![stop],
         ];
         rejoin_spanning_lines(&mut split, &cols);
         assert!(split[1].is_empty(), "{:?}", split[1]);
-        assert!(
-            split[0][0].text.ends_with("owners."),
-            "{}",
-            split[0][0].text
-        );
+        assert!(split[0][0].text.ends_with("lists."), "{}", split[0][0].text);
     }
 
     #[test]

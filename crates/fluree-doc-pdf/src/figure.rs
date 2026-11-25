@@ -2457,51 +2457,47 @@ mod tests {
 
     #[test]
     fn a_wordmark_under_diagrams_is_grouped_alone() {
-        // Two wiring diagrams' shapes, and a logo's letters 41pt under them,
-        // within the reach that groups the diagrams.
+        // Two diagrams' shapes, and a logo's letters 36pt under them, within
+        // the reach that groups the diagrams.
         let mut shapes = vec![
-            bb(76.9, 509.7, 112.9, 563.7),
-            bb(96.9, 524.8, 145.8, 533.9),
-            bb(56.9, 544.1, 145.8, 560.9),
-            bb(76.3, 595.7, 112.3, 649.7),
-            bb(121.5, 595.7, 157.4, 649.7),
-            bb(56.6, 630.3, 236.0, 651.8),
+            bb(320.0, 200.0, 356.0, 254.0),
+            bb(340.0, 215.0, 389.0, 224.0),
+            bb(300.0, 234.0, 389.0, 251.0),
+            bb(319.0, 286.0, 355.0, 340.0),
+            bb(364.0, 286.0, 400.0, 340.0),
+            bb(299.0, 320.0, 479.0, 342.0),
         ];
         for k in 0..6 {
-            let x = 65.1 + 9.4 * k as f64;
-            shapes.push(bb(x, 693.5, x + 9.0, 702.1));
+            let x = 310.0 + 8.5 * k as f64;
+            shapes.push(bb(x, 378.0, x + 7.0, 388.0));
         }
         let got = detect(&fills(&shapes), &[], &[], 0, (612.0, 792.0));
         assert!(!got.is_empty(), "the diagrams are a figure");
-        assert!(got.iter().all(|f| f.drawing.y1 < 660.0), "{got:?}");
+        assert!(got.iter().all(|f| f.drawing.y1 < 350.0), "{got:?}");
     }
 
     #[test]
     fn text_beside_a_wordmark_is_not_a_drawings_label() {
-        // A form's title beside the wordmark in a footer, 41pt under the
-        // page's diagrams: within their reach, but the logo's company.
+        // A form's title beside the wordmark in a footer, under the page's
+        // diagrams: within their reach, but the logo's company.
         let fig = || {
             vec![Figure {
-                bbox: bb(56.0, 510.0, 287.0, 652.0),
-                drawing: bb(56.0, 510.0, 287.0, 652.0),
+                bbox: bb(300.0, 200.0, 480.0, 342.0),
+                drawing: bb(300.0, 200.0, 480.0, 342.0),
                 page: 0,
-                shapes: 32,
+                shapes: 20,
                 frame: None,
             }]
         };
         let blocks = vec![
+            (bb(300.0, 188.0, 420.0, 196.0), 8.0, "Wiring Diagram"),
             (
-                bb(56.0, 497.0, 200.0, 506.0),
-                9.0,
-                "Single-Pole Wiring Diagram",
-            ),
-            (
-                bb(129.0, 693.0, 380.0, 704.0),
-                11.5,
-                "SPECIFICATION SUBMITTAL P/N 369-116",
+                bb(372.0, 377.0, 560.0, 388.0),
+                11.0,
+                "PRODUCT DATA SHEET 12-345",
             ),
         ];
-        let mark = bb(65.1, 693.5, 121.4, 702.1);
+        let mark = bb(310.0, 378.0, 359.5, 388.0);
         let mut figs = fig();
         let taken = attach_beside(&mut figs, &blocks, &[], (612.0, 792.0), 9.0, &[mark]);
         assert_eq!(taken[0], [0], "{taken:?}");
