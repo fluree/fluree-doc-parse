@@ -658,6 +658,16 @@ as detected. Consumers wanting self-contained rows
 does, and the XHTML emitter expresses the merges as `rowspan`/`colspan`
 instead.
 
+A column no cell starts in is dropped once the spans are read: on every row,
+its cell is empty and the rest of the one to its left. The grid cut it where
+another row's ruling, a band over the header or a nested table, parts the
+columns, and it carries nothing of its own. An environmental data sheet's
+three-column VOC tables were ruled as six and written with an empty column
+after each, their cells in columns 0, 2 and 4. A column that is merely
+empty, its cells never merged into their neighbours', stays: the page draws
+it. A table the page break split drops a column only where every part does,
+so its parts keep one set of columns and read on as one table.
+
 ### Rows drawn but not ruled
 
 An unruled boundary is not, by itself, a merge: reading every one as a span

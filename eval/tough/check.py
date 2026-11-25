@@ -180,6 +180,18 @@ def run_check(check, reading):
         want = {keys[k]: norm(v) for k, v in check["cell"].items()}
         ok = any(all(norm(c.get(k, "")) == v for k, v in want.items()) for c in reading.cells)
         return ok, None if ok else "no such cell"
+    if "columns" in check:
+        # The table holding a cell of this value has exactly this many
+        # columns: its cells' `doc:columnIndex` run 0..count-1.
+        want = check["columns"]
+        found = []
+        for t in (n for n in reading.nodes.values() if n.get("@type") == "doco:Table"):
+            cells = [reading.nodes.get(c, {}) for c in t.get("po:contains", [])]
+            cells = [c for c in cells if c.get("@type") == "doc:TableCell"]
+            if any(norm(c.get("doc:cellValue", "")) == norm(want["with"]) for c in cells):
+                found.append(sorted({c["doc:columnIndex"] for c in cells}))
+        ok = any(idx == list(range(want["count"])) for idx in found)
+        return ok, None if ok else f"column indexes {found}"
     if "running" in check:
         # A line read as running text, exactly `count` times where one is
         # given: `0` for a body line that must not be taken.
