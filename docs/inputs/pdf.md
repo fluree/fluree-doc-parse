@@ -579,6 +579,24 @@ type. A slide's background holds its title, and a plot's own background is
 filled by its bars, with the axes' names and the legend outside it; neither
 is a frame.
 
+**Between two drawings.** A title set under one drawing and over another,
+across both, goes to the one it stands nearer. Distance is measured to each
+drawing and the labels only it took. If both are equally near, the title
+goes to the lower, since a title stands over what it names. A diagram's
+title set under the diagram above therefore heads the next. Where the lower
+drawing is framed, the title is the page's, as any title over a frame that
+is no caption is.
+
+This applies only to display titles: text set larger than the prose, in
+words, and no caption. A panel's axis name and ticks stay with the panel
+above, however close the next panel's labels stand, and a paper's figure
+caption stays with the figure over it.
+
+**A list between a label and its drawing.** A list's items are never a
+drawing's labels, so a label's reach must not pass over them. A section
+head over its bulleted items, with the drawing below the items, is the
+page's head, not the drawing's title.
+
 **A picture with labels set on it is a figure.** A product's cutaway placed
 as an image draws no shapes, and the names of its layers set over it
 (`Heat Sealable PLA Layer`, `PLA Core`) would otherwise read as paragraphs. A
