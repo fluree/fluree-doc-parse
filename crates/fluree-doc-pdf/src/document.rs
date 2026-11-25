@@ -2254,7 +2254,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // not rows and their rules' ends are not columns. See `textgrid`.
         // Where alignment already reads the page's one coarse grid, it
         // keeps it.
-        let mut beside_labels: Vec<crate::geom::BBox> = Vec::new();
+        let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
         if !aligned_preferred {
             timed(&mut timings.tables, || {
                 let lines = crate::textgrid::lines(&p.glyphs);
@@ -2264,9 +2264,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let stacks = table::stack_columns(&p.rules, &p.fills);
                 let mut withheld: Vec<usize> = Vec::new();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
-                    let beside = crate::textgrid::read_beside_its_labels(
-                        &grids[i], &p.rules, &p.fills, &lines,
-                    );
+                    let beside =
+                        crate::textgrid::ruled_beside_prose(&grids[i], &p.rules, &p.fills, &lines);
                     // The stacks of row lines ruled alike within the seed:
                     // the places their lines break, their columns' edges as
                     // drawn.
@@ -2292,7 +2291,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                             withheld.push(i);
                         }
                         if beside {
-                            beside_labels.extend(got.iter().map(|g| g.bbox));
+                            beside_prose.extend(got.iter().map(|g| g.bbox));
                         }
                         if debug {
                             eprintln!(
@@ -2455,14 +2454,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
 
         // The prose's columns, which the field lists below look between too.
-        // A table read from its text for the labels beside it stands in a
-        // column of the prose: its text keeps that column's extent, as it
-        // would read had it been prose.
+        // A table ruled under its rows with horizontals alone, standing
+        // beside a column of the page's prose (`textgrid::ruled_beside_prose`),
+        // is set in a column of its own: its text keeps that column's extent,
+        // as it would read had it been prose.
+        //
+        // The test is pure geometry, made on the ruled grid that seeds the
+        // table read from its text. In practice only such seeds give tables
+        // of this shape. Made on every table the page's readers keep, it
+        // changed two documents more, one for the better and one for the
+        // worse; counted, a table's own gutters part the page's text at them.
         let prose_cols = timed(&mut timings.columns, || {
             let elsewhere: Vec<Grid> = grids
                 .iter()
                 .zip(&grid_sources)
-                .filter(|(g, s)| !(**s == GridSource::Text && beside_labels.contains(&g.bbox)))
+                .filter(|(g, s)| !(**s == GridSource::Text && beside_prose.contains(&g.bbox)))
                 .map(|(g, _)| g.clone())
                 .collect();
             if elsewhere.len() == grids.len() {

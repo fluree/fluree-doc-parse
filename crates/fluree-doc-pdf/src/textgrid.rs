@@ -2174,10 +2174,11 @@ pub fn merges_drawn_columns(g: &Grid, edges: &[f64], within: &BBox, glyphs: &[Gl
     })
 }
 
-/// Of `unruled_grids`, one read here only for the labels to its left: it is
-/// ruled row by row as a table is, but stands beside lines of a column of
-/// the page's prose. Its text, read as a table's, stays in that column.
-pub fn read_beside_its_labels(
+/// A grid with no vertical, ruled under its rows as a table is and not
+/// lumped, with lines of the page's text standing to its left on half its
+/// rows: a table set beside a column of the page's prose, in a column of its
+/// own. All of it is the grid's geometry and the lines around it.
+pub fn ruled_beside_prose(
     g: &Grid,
     rules: &[Rule],
     fills: &[crate::rule::Fill],
