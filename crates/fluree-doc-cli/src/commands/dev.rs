@@ -1252,7 +1252,8 @@ pub(crate) fn render_routed(
             let routed: std::collections::HashMap<usize, usize> = doc
                 .pages
                 .iter()
-                .map(|p| match fluree_doc_pdf::route::decide(p).0 {
+                .zip(fluree_doc_pdf::document::region_routes(&doc))
+                .map(|(p, route)| match route {
                     fluree_doc_pdf::route::Route::VlmRegions(r) => (p.index, r.len()),
                     _ => (p.index, 0),
                 })

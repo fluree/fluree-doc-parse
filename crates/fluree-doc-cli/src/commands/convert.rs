@@ -1170,6 +1170,55 @@ mod tests {
     /// region the analysis counts the router out of as extracted is still
     /// asked for, and every reading is filed under the anchor of its own
     /// crop, not under a neighbour's that took its index.
+    /// An OCR reading names its region as the analysis's anchors do: a
+    /// label in faux bold over a capture covers it as drawn and not once
+    /// cleaned, and both count it.
+    #[test]
+    fn an_ocr_reading_and_an_anchor_name_a_region_alike() {
+        let doc = page_with_faux_bold_over_a_region();
+        let regions = match &fluree_doc_pdf::document::region_routes(&doc)[0] {
+            fluree_doc_pdf::route::Route::VlmRegions(r) => r.clone(),
+            other => panic!("{other:?}"),
+        };
+        let mut analysed = doc.clone();
+        let a = fluree_doc_pdf::document::analyze_with(
+            &mut analysed,
+            &[],
+            &fluree_doc_pdf::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..Default::default()
+            },
+        );
+        let anchors: Vec<(String, f64)> = a
+            .elements
+            .iter()
+            .filter(|e| e.evidence == "route")
+            .map(|e| (e.text.clone(), e.rect().y0))
+            .collect();
+        assert_eq!(
+            anchors,
+            regions
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (format!("[[VLM:p0:r{i}]]"), b.y0))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(anchors.len(), 2, "{anchors:?}");
+        // A reading of the second region is looked up under its name.
+        let dir = std::env::temp_dir().join(format!(
+            "fdoc-ocr-names-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let words = r#"{"coords":"px","width":100,"height":100,"words":[{"text":"B","box":[10,10,20,20]}]}"#;
+        std::fs::write(dir.join("doc_p0_r1.json"), words).unwrap();
+        let read = common::ocr_readings(&dir, "doc", &doc, true);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].1, fluree_doc_pdf::ocr::Crop::Region(1));
+    }
+
     #[test]
     fn a_live_region_reading_lands_at_its_own_crop() {
         let cfg = TierConfig {
