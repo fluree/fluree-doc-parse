@@ -239,8 +239,16 @@ what the router made of it:
 | `Region` | its pixels look like text or a table, and it covers a tenth of the page or more | a model (`r{i}`), an OCR engine | yes |
 | `Small` | its pixels look like text, but it covers under a tenth of the page; half an inch (36 units) or more on its longer side | an OCR engine only (`small_region`) | no |
 | `NotTexty` | a tenth of the page or more, but the pixel probe does not take it for text: a photograph, a chart, an illustration | nothing | no |
+| `Unprobed` | not examined: a plain run decodes no image, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | once, by page |
 
-The router sends a model only to `Region`; the other two it declines. An
+The images are probed only by a run that acts on the verdict: escalation,
+OCR (`--ocr`, `--ocr-words`), the anchors or the layout sidecars, or
+`--probe-images`. The decode is most of what an image costs, so a plain run
+skips it and lists each image the text layer does not cover as `Unprobed`;
+a run that probes lists the same images as `Region`, `Small` or `NotTexty`.
+
+The router sends a model only to `Region`; it declines `Small` and
+`NotTexty`. An
 OCR engine (`--ocr`, `--ocr-words`) reads the `Small` ones, and one it read
 is not listed: it runs locally and bills nothing, where a model call is
 billed and sends the image off the machine. A `NotTexty` region is read by

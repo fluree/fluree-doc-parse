@@ -3,7 +3,7 @@
 use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
 use fluree_doc_pdf::document::Element;
-use fluree_doc_pdf::{extract_bytes, outline};
+use fluree_doc_pdf::{extract_bytes_with, outline, ExtractOptions};
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -1734,10 +1734,22 @@ fn convert_bytes(
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
     let opts = cfg.options_for(stem);
-    // Every parse probes the images: the analysis routes every page, to
-    // say which regions of it nothing read ([`fluree_doc_pdf::route::declined_regions`]),
-    // and an image's pixels decide whether it holds text.
-    let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
+    // Images are probed for whatever reads their pixels' verdict: the
+    // router, when it runs for escalation or for the anchors and sidecars
+    // analysis routes for; the OCR word readings, asked for up to the
+    // page's routed regions; an OCR engine, which reads the texty images
+    // too small to route; and a caller who asks for the verdicts
+    // (`--probe-images`). A deterministic parse decodes none, and reports
+    // each image the text layer does not cover as not examined
+    // ([`fluree_doc_pdf::route::Declined::Unprobed`]).
+    let mut eopts = ExtractOptions::default();
+    eopts.probe_images = args.probe_images
+        || cfg.escalate
+        || cfg.ocr_words.is_some()
+        || cfg.ocr.is_some()
+        || opts.emit_anchors
+        || opts.layout_prefix.is_some();
+    let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
