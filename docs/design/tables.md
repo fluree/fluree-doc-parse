@@ -134,6 +134,17 @@ cell's words). Inner boxes are read before the frames round them.
   table would be: three rows or more, two columns or more, and text in half
   its cells. A form's strip of field boxes, a chart's legend and a
   schematic's outlines are boxes too.
+- **Boxes stacked a hair apart are two drawings.** A spec sheet sets its
+  option tables one under another, each boxed with its own title band and
+  its own columns (`Trims` over two, `Housings` under it over two others),
+  closer than rules must be to touch. Read as one drawing, the two boxes'
+  dividers made three columns neither has. Where a line runs across the
+  whole set on either side of a gap less than a row tall, no vertical
+  crosses the gap, each side is closed at both ends, and each rules a
+  column the other does not, the set is two boxes. A header ruled off by a
+  double line, its verticals broken across it, rules the columns the rows
+  under it do, or fewer, and stays one table; so do boxes whose sides run
+  on across the gap.
 - **A box ruling a single column** is left to the page-wide reading, which
   has its own tests for a one-column list. A sidebar parted by a rule is as
   often one.
