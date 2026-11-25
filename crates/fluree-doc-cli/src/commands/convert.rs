@@ -1733,6 +1733,10 @@ fn convert_bytes(
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
+    let opts = cfg.options_for(stem);
+    // Every parse probes the images: the analysis routes every page, to
+    // say which regions of it nothing read ([`fluree_doc_pdf::route::declined_regions`]),
+    // and an image's pixels decide whether it holds text.
     let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
@@ -1793,7 +1797,6 @@ fn convert_bytes(
     // extracted, which the analysis below changes.
     let read_here = cfg.escalate && cfg.tier_results.is_none();
     let extracted = read_here.then(|| doc.clone());
-    let opts = cfg.options_for(stem);
     let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts);
     common::arbitrate_layout_titles(cfg.layout_boxes.as_deref(), stem, &mut a.elements);
     // The page's own text, so the arbiter can ask whether an escalated
