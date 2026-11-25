@@ -14,11 +14,15 @@ tells you how far down the ladder it came from.
 | 1 | document title | `title` | a one-off style in the first blocks of page 1 |
 | 2 | outline match | `outline` | the author named this heading |
 | 3 | numbering | `numbering` | `5.3.1` states its own depth |
-| 4 | weight | `bold` | bolder than body text |
+| 4 | weight | `bold` | bolder than body text, at the body's size |
 | 5 | font size | `font-size` | larger than body, in a repeated size tier |
 
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
+
+Bold set larger than the body is ranked by its size, not given `bold`'s one
+level. A part's 12pt bold label over 10pt bold heads stays above them, as it
+does where the face's weight cannot be read at all.
 
 Weight and size never make a heading of these:
 

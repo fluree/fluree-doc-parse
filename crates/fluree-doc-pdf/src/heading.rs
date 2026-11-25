@@ -1115,9 +1115,11 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             }
             // 4. Bold, at body size. Documents very commonly set section
             // titles in the body face at the body size, differing only in
-            // weight, which no size-based test can see.
+            // weight, which no size-based test can see. Bold set larger is
+            // ranked by its size, as other display type is.
             if b.bold
                 && !body_is_bold
+                && b.font_size as f64 <= body as f64 * (1.0 + HEADING_SIZE_MARGIN)
                 && bold_is_structural
                 && n_chars <= MAX_FONTSIZE_HEADING_CHARS
                 && b.lines.len() <= MAX_FONTSIZE_HEADING_LINES
@@ -2617,6 +2619,21 @@ mod tests {
         let hs = detect(&pages, &[]);
         assert_eq!(hs.len(), 1);
         assert_eq!(hs[0].evidence, Evidence::Bold);
+    }
+
+    #[test]
+    fn bold_set_larger_than_the_body_is_ranked_by_its_size() {
+        let mut part = blk("Guidance", 12.0, 1);
+        part.bold = true;
+        let mut sub = blk("Market Penetration", 10.0, 1);
+        sub.bold = true;
+        let title = blk("Managing health and safety", 20.0, 1);
+        let pages = vec![vec![title, part, sub, blk("ordinary body prose", 10.0, 30)]];
+        let hs = detect(&pages, &[]);
+        assert_eq!(hs.len(), 3, "{hs:?}");
+        assert_eq!(hs[1].evidence, Evidence::FontSize);
+        assert_eq!(hs[2].evidence, Evidence::Bold);
+        assert!(hs[1].level < hs[2].level, "{hs:?}");
     }
 
     #[test]
