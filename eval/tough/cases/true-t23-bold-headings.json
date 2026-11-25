@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 1 centres a three-line address over a form set in small columns."
+  },
+  "notes": [
+    "#215: the sheet's text is in Type 1C Frutiger faces, whose weights only their names and descriptors state (`FrutigerLTStd-Bold`, `/FontWeight 700`). No glyph read as bold."
+  ],
+  "checks": [
+    {
+      "id": "bold-heading-refrigeration",
+      "found": "2026-11-24",
+      "issue": "`REFRIGERATION SYSTEM`, set in Frutiger Bold, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "REFRIGERATION SYSTEM",
+        "evidence": "bold"
+      }
+    },
+    {
+      "id": "bold-heading-door",
+      "found": "2026-11-24",
+      "issue": "`DOOR`, set in Frutiger Bold, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "DOOR",
+        "evidence": "bold"
+      }
+    },
+    {
+      "id": "bold-heading-lighting",
+      "found": "2026-11-24",
+      "issue": "`LIGHTING`, set in Frutiger Bold, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "LIGHTING",
+        "evidence": "bold"
+      }
+    }
+  ]
+}

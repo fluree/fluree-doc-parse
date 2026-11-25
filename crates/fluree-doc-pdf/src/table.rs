@@ -30,7 +30,7 @@ pub use fluree_doc_model::merges::{denormalize, Merges as CellMerges};
 const AXIS_TOLERANCE: f64 = 2.5;
 
 /// Endpoints within this distance are the same grid position.
-const EDGE_TOLERANCE: f64 = 3.0;
+pub(crate) const EDGE_TOLERANCE: f64 = 3.0;
 
 /// A grid needs at least this many lines each way. Two horizontals and two
 /// verticals is a single cell — a box, not a table.
@@ -211,7 +211,7 @@ impl Grid {
 
     /// The cell each glyph is read into, as `row * cols + col`; `None` for
     /// a glyph outside the grid or set across it.
-    fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
+    pub(crate) fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
         let cols = self.cols();
         let mut home: Vec<Option<usize>> = vec![None; glyphs.len()];
 
@@ -1219,7 +1219,14 @@ impl Grid {
         if row0.iter().all(|c| c.trim().is_empty()) {
             return 0;
         }
-        let run = self.leading_fill_run(fills);
+        let mut run = self.leading_fill_run(fills);
+        // The run's last row is the body's first stripe where the rows from
+        // it on are shaded every other row and it holds figures as they do:
+        // an exposure table's `ethanol | 1000 | - | 1000` shaded under its
+        // header's own cells, the next row bare, the one after shaded.
+        if run >= 2 && self.stripes_from(fills, run - 1) && figures_row(&rows[run - 1]) {
+            run -= 1;
+        }
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
@@ -1523,7 +1530,11 @@ impl Grid {
     /// - its names turned on their side in two cells or more, as narrow
     ///   columns' names are.
     ///
-    /// A band across the row is a section's label, not this.
+    /// A band across the row is a section's label, not this, and so is a
+    /// row under another bold row of names: the two are the table's top
+    /// block, a header and its first row set alike (`Class | Mission
+    /// Critical | Business Critical` over `Workload | High | Medium |
+    /// Low`), and nothing above them names the columns for one to rename.
     pub fn restated_header_rows(
         &self,
         rows: &[Vec<String>],
@@ -1571,7 +1582,14 @@ impl Grid {
             let (values, bold) = bold_values(r);
             bold < values || values == 0
         };
-        let shaded = |r: usize| self.band_has_fill(fills, r);
+        // The row and the header shaded by fills of their own: a page's
+        // watermark drawn under the table's top rows, and ending above the
+        // rest, shades none of them. The rows under it unshaded by any fill:
+        // a table laid on a background is shaded throughout, and no row of
+        // it stands apart by its shading.
+        let shaded = |r: usize| self.rows_have_own_fill(fills, r..r + 1);
+        let header_shaded = self.rows_have_own_fill(fills, 0..header_rows.max(1));
+        let unshaded = |r: usize| !self.band_has_fill(fills, r);
         // Turned glyphs inside the table, each with the cell its ink is in.
         let turned_at: Vec<(&crate::glyph::Glyph, (usize, usize))> = glyphs
             .iter()
@@ -1602,21 +1620,25 @@ impl Grid {
                 .collect();
             cells.len() >= 2
         };
-        // Two rows under it at least: one row under a row of names is as
-        // likely its value.
-        (header_rows.max(1)..n.saturating_sub(2))
+        // A row under it at least. One row under a row of names is as
+        // likely its value, but the row is set apart as a header is (bold or
+        // shaded over a plain row), and a header names one row's columns as
+        // surely as ten: a short VOC table's `VOC Content | LB/Gal | g/L`
+        // over its one `Total`.
+        (header_rows.max(1)..n.saturating_sub(1))
             .filter(|&r| {
                 !bands.contains(&r)
                     && labels(r)
+                    && !(r > 0 && labels(r - 1) && bold(r - 1))
                     && rows[r]
                         .iter()
                         .zip(&rows[r + 1])
                         .any(|(a, b)| !a.trim().is_empty() && !b.trim().is_empty())
                     && ((bold(r) && plain(r + 1))
                         || (shaded(r)
-                            && shaded(0)
-                            && !shaded(r + 1)
-                            && (r + 2 >= n || !shaded(r + 2)))
+                            && header_shaded
+                            && unshaded(r + 1)
+                            && (r + 2 >= n || unshaded(r + 2)))
                         || turned(r))
             })
             .collect()
@@ -1718,6 +1740,33 @@ impl Grid {
     /// not any-single-fill — a header row shaded cell-by-cell is five narrow
     /// fills, none individually wide.
     fn band_has_fill(&self, fills: &[crate::rule::Fill], row: usize) -> bool {
+        self.shaded_across(fills, row, None)
+    }
+
+    /// Whether rows `rows` are shaded by fills of their own, across half the
+    /// table at the first of them: each fill starting and ending within
+    /// those rows. A background laid under the page or the whole table (a
+    /// watermark's grey drawing) runs on past them, and shades no row of its
+    /// own.
+    fn rows_have_own_fill(
+        &self,
+        fills: &[crate::rule::Fill],
+        rows: std::ops::Range<usize>,
+    ) -> bool {
+        let (Some(&top), Some(&bottom)) = (self.ys.get(rows.start), self.ys.get(rows.end)) else {
+            return false;
+        };
+        self.shaded_across(fills, rows.start, Some((top, bottom)))
+    }
+
+    /// Whether fills cover half the table's width across row `row`'s middle,
+    /// counting only those lying `within` the given heights where set.
+    fn shaded_across(
+        &self,
+        fills: &[crate::rule::Fill],
+        row: usize,
+        within: Option<(f64, f64)>,
+    ) -> bool {
         let (Some(&y0), Some(&y1)) = (self.ys.get(row), self.ys.get(row + 1)) else {
             return false;
         };
@@ -1725,6 +1774,11 @@ impl Grid {
         let mut spans: Vec<(f64, f64)> = fills
             .iter()
             .filter(|f| f.bbox.y0 <= mid && f.bbox.y1 >= mid)
+            .filter(|f| {
+                within.is_none_or(|(top, bottom)| {
+                    f.bbox.y0 >= top - EDGE_TOLERANCE && f.bbox.y1 <= bottom + EDGE_TOLERANCE
+                })
+            })
             .map(|f| (f.bbox.x0.max(self.bbox.x0), f.bbox.x1.min(self.bbox.x1)))
             .filter(|(a, b)| b > a)
             .collect();
@@ -1749,6 +1803,13 @@ impl Grid {
             .take_while(|r| self.band_has_fill(fills, *r))
             .count()
     }
+
+    /// Whether the rows from `r` on are shaded every other row, `r` first:
+    /// two shaded rows at least, a bare one between.
+    fn stripes_from(&self, fills: &[crate::rule::Fill], r: usize) -> bool {
+        let n = self.rows();
+        r + 2 < n && (r..n.min(r + 5)).all(|k| self.band_has_fill(fills, k) == ((k - r) % 2 == 0))
+    }
     /// Cell index containing a point, as (row, col).
     pub fn cell_at(&self, x: f64, y: f64) -> Option<(usize, usize)> {
         let c = self.xs.windows(2).position(|w| x >= w[0] && x < w[1])?;
@@ -1756,6 +1817,9 @@ impl Grid {
         Some((r, c))
     }
 }
+
+/// Most words a column head's line holds in one column: more is a sentence.
+const MAX_HEAD_WORDS: usize = 8;
 
 /// Baseline-to-baseline distance, in font sizes, up to which two lines are
 /// one wrapped label rather than the values of two rows. Wrapped lines sit
@@ -1929,6 +1993,28 @@ fn reads_as_quantity(s: &str) -> bool {
 /// A cell that reads as a quantity: digits with currency/percent/grouping
 /// dressing and nothing alphabetic. Bare 4-digit years are *not* numeric for
 /// header purposes — `2023 | 2024` over money columns is a header row.
+/// A row of figures past its label: every value cell with text holds
+/// figures and their signs alone (`1000`, `0.25 – 21.4`, `±17.0`) or a
+/// dash, one at least a figure.
+fn figures_row(row: &[String]) -> bool {
+    let figures = |t: &str| {
+        t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().all(|c| {
+                c.is_ascii_digit() || c.is_whitespace() || ".,%-−–—+±×/()$€£<>≤≥*".contains(c)
+            })
+    };
+    let values: Vec<&str> = row
+        .iter()
+        .skip(1)
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .collect();
+    values.iter().any(|t| figures(t))
+        && values
+            .iter()
+            .all(|t| figures(t) || t.chars().all(|c| "-–—".contains(c)))
+}
+
 pub(crate) fn is_numeric_cell(s: &str) -> bool {
     if s.is_empty() || !s.chars().any(|c| c.is_ascii_digit()) {
         return false;
@@ -2227,6 +2313,205 @@ impl Grid {
         self.bbox.y0 = y0;
     }
 
+    /// Take in the column heads set over the grid's top rule, the table open
+    /// above them.
+    ///
+    /// A table ruled under its header and not over it (an exposure-limit
+    /// table's `OSHA` over `TWA`, `NIOSH` over `STEL`, each over its column,
+    /// a heavy rule under them) begins its grid at that rule: the heads
+    /// were left outside it, read as text, the bold ones as headings, and
+    /// no value was named. The lines over the rule are the grid's top row
+    /// when the nearest sits within a line of it and each line reads as a
+    /// row of heads: every run of text on it stands within one column, one
+    /// run to a column, inside the table's width, in two columns or more.
+    /// A line further up is taken while it is set as close as a head's
+    /// wrapped lines are and stands in the columns alike. One run alone
+    /// there is a head's wrapped line over a column past the first; over
+    /// the first, only where it starts where the head under it does, in its
+    /// size and weight (`Supp. Figure 3I: Levels of α-KG` over `with WT or
+    /// mutant IDH1`, beside `Mean | SD | N`): a table's title set close over
+    /// its stub's head is set apart from it.
+    ///
+    /// What stops the header, and is left outside:
+    ///
+    /// - a line across a column's edge or past the table: a title, a
+    ///   caption or prose;
+    /// - two runs in one column: the heads part where the grid does not,
+    ///   and it is no grid of theirs (two tables side by side read as one,
+    ///   a statement read with half its columns);
+    /// - a row of data: a label in the first column with figures beside it,
+    ///   a year apart (`South East | 57,384 | 37,525`), or a field, its
+    ///   label ending in a colon (`APPLICABILITY: | The working range is …`);
+    /// - a sentence: a head runs to a few words;
+    /// - a line set much smaller than the table's text: a running head over
+    ///   the page's rule, a note.
+    pub fn take_column_heads(&mut self, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) {
+        let cols = self.cols();
+        if cols < 2 || self.xs.len() != cols + 1 || self.ys.len() < 3 {
+            return;
+        }
+        let (left, right, top) = (self.xs[0], self.xs[cols], self.ys[0]);
+        let width = right - left;
+        // The top is a rule across the table.
+        let at_top = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Horizontal
+                    && (r.axis_pos() - top).abs() <= EDGE_TOLERANCE
+            })
+            .map(|r| (r.bbox.x0, r.bbox.x1));
+        if span_coverage(at_top, left, right) < 0.9 * width {
+            return;
+        }
+        // The size the table's own text is set in.
+        let mut inside: Vec<f64> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter(|g| {
+                g.bbox.is_some_and(|b| {
+                    let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                    cx > left && cx < right && cy > top && cy < self.bbox.y1
+                })
+            })
+            .map(|g| g.font_size as f64)
+            .collect();
+        inside.sort_by(f64::total_cmp);
+        let Some(&body) = inside.get(inside.len() / 2) else {
+            return;
+        };
+        // Each mark over the top: baseline, size, ink, weight, text.
+        let mut over: Vec<(f64, f64, BBox, bool, &str)> = glyphs
+            .iter()
+            .filter(|g| g.is_horizontal() && !g.text.trim().is_empty())
+            .filter_map(|g| {
+                let bold = g.weight.is_some_and(|w| w >= 600);
+                Some((
+                    g.origin.1,
+                    g.font_size.max(1.0) as f64,
+                    g.bbox?,
+                    bold,
+                    g.text.as_str(),
+                ))
+            })
+            .filter(|(_, _, b, _, _)| b.y1 <= top + 1.0 && b.y1 > top - 8.0 * MIN_CELL_EXTENT)
+            .collect();
+        // Nearest first, then a line at a time by baseline.
+        over.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let column_of = |x0: f64, x1: f64| {
+            (0..cols).find(|&c| x0 >= self.xs[c] - 1.0 && x1 <= self.xs[c + 1] + 1.0)
+        };
+        let year = |t: &str| {
+            t.len() == 4
+                && t.chars().all(|c| c.is_ascii_digit())
+                && (t.starts_with("19") || t.starts_with("20"))
+        };
+        let mut taken: Vec<BBox> = Vec::new();
+        // The runs of the line last taken: start, column, size, weight.
+        let mut under: Vec<(f64, usize, f64, bool)> = Vec::new();
+        let mut below = top;
+        let mut i = 0;
+        while i < over.len() {
+            let (base, fs, _, _, _) = over[i];
+            let end = (i..over.len())
+                .find(|&k| base - over[k].0 > 0.3 * fs)
+                .unwrap_or(over.len());
+            let mut marks: Vec<(BBox, f64, bool, &str)> =
+                over[i..end].iter().map(|o| (o.2, o.1, o.3, o.4)).collect();
+            i = end;
+            let first = taken.is_empty();
+            let reach = if first { 1.0 } else { 1.6 };
+            if below - base > reach * fs {
+                break;
+            }
+            // Text of the line the table does not reach: prose beside it.
+            if marks
+                .iter()
+                .all(|m| m.0.x1 <= left - 1.0 || m.0.x0 >= right + 1.0)
+            {
+                continue;
+            }
+            if marks
+                .iter()
+                .any(|m| m.0.x0 < left - 1.0 || m.0.x1 > right + 1.0)
+            {
+                break;
+            }
+            let mut sizes: Vec<f64> = marks.iter().map(|m| m.1).collect();
+            sizes.sort_by(f64::total_cmp);
+            if sizes[sizes.len() / 2] < 0.75 * body {
+                break;
+            }
+            // Runs of text: glyphs a word space apart or closer, each with
+            // its first glyph's size and weight, and its text.
+            marks.sort_by(|a, b| a.0.x0.total_cmp(&b.0.x0));
+            let mut runs: Vec<(f64, f64, f64, bool, String)> = Vec::new();
+            for (b, size, bold, text) in &marks {
+                match runs.last_mut() {
+                    Some(r) if b.x0 - r.1 <= 0.6 * fs => {
+                        if b.x0 - r.1 > 0.15 * fs {
+                            r.4.push(' ');
+                        }
+                        r.4.push_str(text);
+                        r.1 = r.1.max(b.x1);
+                    }
+                    _ => runs.push((b.x0, b.x1, *size, *bold, text.to_string())),
+                }
+            }
+            let Some(homes) = runs
+                .iter()
+                .map(|r| column_of(r.0, r.1))
+                .collect::<Option<Vec<usize>>>()
+            else {
+                break;
+            };
+            let mut columns = homes.clone();
+            columns.dedup();
+            let label = runs.first().filter(|_| homes[0] == 0).map(|r| r.4.trim());
+            let data = label.is_some_and(|l| {
+                l.ends_with(':')
+                    || (l.chars().any(char::is_alphabetic)
+                        && runs[1..].iter().any(|r| {
+                            let t = r.4.trim();
+                            is_numeric_cell(t) && !year(t)
+                        }))
+            });
+            if columns.len() < homes.len()
+                || data
+                || runs
+                    .iter()
+                    .any(|r| r.4.split_whitespace().count() > MAX_HEAD_WORDS)
+            {
+                break;
+            }
+            let close = !first && below - base <= PARAGRAPH_LEADING * fs;
+            let wrapped = close
+                && columns.len() == 1
+                && (columns[0] > 0
+                    || under.iter().any(|&(x0, c, size, bold)| {
+                        c == 0
+                            && (x0 - runs[0].0).abs() <= 1.0
+                            && (size - runs[0].2).abs() <= 0.25
+                            && bold == runs[0].3
+                    }));
+            if columns.len() < 2 && !wrapped {
+                break;
+            }
+            under = runs
+                .iter()
+                .zip(&homes)
+                .map(|(r, &c)| (r.0, c, r.2, r.3))
+                .collect();
+            taken.extend(marks.iter().map(|m| m.0));
+            below = base;
+        }
+        if taken.is_empty() {
+            return;
+        }
+        let y0 = taken.iter().map(|b| b.y0).fold(f64::MAX, f64::min) - 1.0;
+        self.ys.insert(0, y0);
+        self.bbox.y0 = y0;
+    }
+
     /// The spans of a top row of column-group labels: each label spans the
     /// columns the rule under it runs under ([`Grid::column_groups`]).
     ///
@@ -2343,6 +2628,21 @@ fn detect_group(
     glyphs: &[crate::glyph::Glyph],
     page: usize,
     frames: &[BBox],
+) -> Vec<Grid> {
+    detect_group_trimmed(rules, fills, glyphs, page, frames, true)
+}
+
+/// [`detect_group`], trimming the grid's ends of bands no vertical crosses
+/// or not: a stack of row lines ruled alike ([`ruled_stacks`]) is the
+/// table's rows by how they are drawn, and a heading's underline is not
+/// ruled like them.
+fn detect_group_trimmed(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+    trim: bool,
 ) -> Vec<Grid> {
     let hs: Vec<&Rule> = rules
         .iter()
@@ -2472,16 +2772,67 @@ fn detect_group(
     let boxed = vs
         .iter()
         .any(|r| r.bbox.y1 > top + EDGE_TOLERANCE && r.bbox.y0 < bottom - EDGE_TOLERANCE);
-    if !among.is_empty() {
-        let crossed = |lo: f64, hi: f64| {
-            let mid = (lo + hi) / 2.0;
-            among.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
-        };
+    let crossed = |lo: f64, hi: f64| {
+        let mid = (lo + hi) / 2.0;
+        among.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
+    };
+    if trim && !among.is_empty() {
         while ys.len() > MIN_GRID_LINES && !crossed(ys[0], ys[1]) {
             ys.remove(0);
         }
         while ys.len() > MIN_GRID_LINES && !crossed(ys[ys.len() - 2], ys[ys.len() - 1]) {
             ys.pop();
+        }
+        // Trimmed as far as a grid goes and still no band crossed, the
+        // verticals say nothing of these rows, and the rules alone must
+        // bound them. Lines of text between two rules drawn over different
+        // stretches of the page, sharing none, are no row: the rules divide
+        // the sections of a page set in columns, one column's rule over the
+        // other's. Two tables side by side, each ending on its own rule a
+        // little above or below the other's, leave between those rules a
+        // sliver holding nothing, or one table's last line.
+        let extent = |y: f64| {
+            h_lines
+                .iter()
+                .filter(|l| (l.axis - y).abs() <= EDGE_TOLERANCE)
+                .fold(None, |acc: Option<(f64, f64)>, l| {
+                    Some(acc.map_or((l.lo, l.hi), |(a, b)| (a.min(l.lo), b.max(l.hi))))
+                })
+        };
+        // Lines of text under one of the two rules, in its stretch: a
+        // column's paragraphs or list, not one table's last line beside
+        // the other's.
+        let lines_under = |lo: f64, hi: f64, (x0, x1): (f64, f64)| {
+            let under: Vec<&crate::glyph::Glyph> = glyphs
+                .iter()
+                .filter(|gl| {
+                    !gl.text.trim().is_empty()
+                        && gl.bbox.is_some_and(|b| {
+                            let (x, y) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                            y > lo && y < hi && x > x0 && x < x1
+                        })
+                })
+                .collect();
+            let mut sizes: Vec<f64> = under.iter().map(|gl| gl.font_size as f64).collect();
+            sizes.sort_by(f64::total_cmp);
+            // A line's raised marks (`***`, a note's letter) are on it.
+            let tol = sizes
+                .get(sizes.len() / 2)
+                .map_or(2.0, |s| (s * 0.5).max(2.0));
+            let mut bases: Vec<f64> = under.iter().map(|gl| gl.origin.1).collect();
+            bases.sort_by(f64::total_cmp);
+            coalesce(bases, tol).len()
+        };
+        let divides = |a: f64, b: f64| match (extent(a), extent(b)) {
+            (Some((a0, a1)), Some((b0, b1))) => {
+                a1.min(b1) <= a0.max(b0)
+                    && (lines_under(a, b, (a0, a1)) >= 2 || lines_under(a, b, (b0, b1)) >= 2)
+            }
+            _ => false,
+        };
+        if !ys.windows(2).any(|w| crossed(w[0], w[1])) && ys.windows(2).any(|w| divides(w[0], w[1]))
+        {
+            return Vec::new();
         }
     }
 
@@ -3246,9 +3597,13 @@ pub fn detect_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
-    with_header_band_edges(
-        detect_framed_rules(rules, fills, glyphs, page, frames),
-        fills,
+    with_column_bands(
+        with_header_band_edges(
+            detect_framed_rules(rules, fills, glyphs, page, frames),
+            fills,
+            glyphs,
+        ),
+        rules,
         glyphs,
     )
 }
@@ -3263,7 +3618,42 @@ fn detect_framed_rules(
 ) -> Vec<Grid> {
     let whole = detect_group(rules, fills, glyphs, page, frames);
     if whole.is_empty() {
-        return detect_components(rules, fills, glyphs, page, frames);
+        // The page-wide reading finds nothing where two tables on the page
+        // rule their columns apart at different places: across the page no
+        // edge but the outer two has the lines' support, and a one-column
+        // grid with verticals inside it is no table. Read in touching
+        // components, a table ruled with horizontals only falls apart into
+        // lines, none touching the next; its lines ruled alike are read
+        // together.
+        let mut out = detect_components(rules, fills, glyphs, page, frames);
+        for stack in ruled_stacks(rules) {
+            for g in detect_group_trimmed(&stack, fills, glyphs, page, frames, false) {
+                // Rows and columns: a chart's gridlines, broken alike where
+                // its bars stand, leave one column of tick labels.
+                if g.rows() < 2 || g.cols() < 2 || !rules_its_rows(&g, glyphs) {
+                    continue;
+                }
+                // A band the components read inside it on its own (a shaded
+                // header whose separators touch its rule) is one of its rows.
+                let band_within = |o: &Grid| {
+                    o.rows() == 1
+                        && o.bbox.x0 >= g.bbox.x0 - EDGE_TOLERANCE
+                        && o.bbox.x1 <= g.bbox.x1 + EDGE_TOLERANCE
+                        && o.bbox.y0 >= g.bbox.y0 - EDGE_TOLERANCE
+                        && o.bbox.y1 <= g.bbox.y1 + EDGE_TOLERANCE
+                };
+                if out
+                    .iter()
+                    .filter(|o| overlaps(&o.bbox, &g.bbox))
+                    .all(|o| band_within(o))
+                {
+                    out.retain(|o| !band_within(o));
+                    out.push(g);
+                }
+            }
+        }
+        out.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        return out;
     }
     let boxed = detect_boxes(rules, fills, glyphs, page, frames);
     if boxed.grids.is_empty() {
@@ -3716,6 +4106,110 @@ fn bound_by_bands(
         .collect()
 }
 
+/// Where a set of touching rules is two boxes stacked a hair apart: the
+/// middle of the gap between them.
+///
+/// A spec sheet sets its option tables one under another, each boxed with
+/// its own title band and its own columns (`Trims` over two, `Housings`
+/// under it over two others), two or three points apart. That is close
+/// enough for their rules to touch, and read as one drawing the two boxes'
+/// dividers made three columns neither has. The gap says they are two: a
+/// line across the whole set on either side of it, less than a row apart,
+/// and no vertical crossing between them, where every rule between a
+/// box's doubled top line crosses it. Each side is closed at both ends and
+/// rules a column the other does not. A header ruled off by a double line
+/// with the verticals broken across it rules the same columns as the rows
+/// under it, or fewer, and stays one table.
+fn stacked_boxes_gap(rs: &[&Rule]) -> Option<f64> {
+    let (hs, vs): (Vec<&Rule>, Vec<&Rule>) = rs
+        .iter()
+        .copied()
+        .partition(|r| r.orientation == Orientation::Horizontal);
+    if hs.len() < 4 || vs.len() < 4 {
+        return None;
+    }
+    let x0 = rs.iter().map(|r| r.bbox.x0).fold(f64::INFINITY, f64::min);
+    let x1 = rs
+        .iter()
+        .map(|r| r.bbox.x1)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let width = x1 - x0;
+    let mut ys: Vec<f64> = hs.iter().map(|r| r.axis_pos()).collect();
+    ys.sort_by(f64::total_cmp);
+    ys.dedup_by(|a, b| (*a - *b).abs() <= 0.5);
+    // Lines run across the whole set, drawn in pieces or not.
+    let across: Vec<f64> = ys
+        .into_iter()
+        .filter(|&y| {
+            let pieces = hs
+                .iter()
+                .filter(|r| (r.axis_pos() - y).abs() <= 0.5)
+                .map(|r| (r.bbox.x0, r.bbox.x1));
+            span_coverage(pieces, x0, x1) >= 0.95 * width
+        })
+        .collect();
+    for w in across.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if b - a >= MIN_CELL_EXTENT
+            || vs
+                .iter()
+                .any(|v| v.bbox.y0 < b - 1.0 && v.bbox.y1 > a + 1.0)
+        {
+            continue;
+        }
+        let mid = (a + b) / 2.0;
+        let side = |above: bool| -> Vec<f64> {
+            vs.iter()
+                .filter(|v| ((v.bbox.y0 + v.bbox.y1) / 2.0 < mid) == above)
+                .map(|v| v.axis_pos())
+                .collect()
+        };
+        let (up, down) = (side(true), side(false));
+        let closed = |xs: &[f64]| {
+            xs.iter().any(|x| (x - x0).abs() <= EDGE_TOLERANCE)
+                && xs.iter().any(|x| (x - x1).abs() <= EDGE_TOLERANCE)
+        };
+        let inner = |xs: &[f64]| -> Vec<f64> {
+            xs.iter()
+                .copied()
+                .filter(|&x| x > x0 + EDGE_TOLERANCE && x < x1 - EDGE_TOLERANCE)
+                .collect()
+        };
+        let own = |p: &[f64], q: &[f64]| {
+            p.iter()
+                .any(|x| q.iter().all(|y| (x - y).abs() > EDGE_TOLERANCE))
+        };
+        let (iu, id) = (inner(&up), inner(&down));
+        if closed(&up) && closed(&down) && own(&iu, &id) && own(&id, &iu) {
+            return Some(mid);
+        }
+    }
+    None
+}
+
+/// `comp`, a set of touching rules, parted into the boxes stacked in it
+/// (see [`stacked_boxes_gap`]).
+fn split_stacked_boxes<T: Copy>(comp: Vec<T>, rule: impl Fn(T) -> Rule) -> Vec<Vec<T>> {
+    let mut out = Vec::new();
+    let mut todo = vec![comp];
+    while let Some(c) = todo.pop() {
+        let rs: Vec<Rule> = c.iter().map(|&t| rule(t)).collect();
+        let refs: Vec<&Rule> = rs.iter().collect();
+        match stacked_boxes_gap(&refs) {
+            Some(mid) => {
+                let (up, down): (Vec<T>, Vec<T>) = c.into_iter().partition(|&t| {
+                    let b = rule(t).bbox;
+                    (b.y0 + b.y1) / 2.0 < mid
+                });
+                todo.push(up);
+                todo.push(down);
+            }
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 /// The page's rules in touching sets, as indices.
 fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
     let mut remaining: Vec<usize> = (0..rules.len()).collect();
@@ -3745,7 +4239,7 @@ fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
             }
         }
         component.sort_unstable();
-        components.push(component);
+        components.extend(split_stacked_boxes(component, |i| rules[i]));
     }
     components
 }
@@ -3966,9 +4460,13 @@ pub fn detect_by_component_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
-    with_header_band_edges(
-        detect_components(rules, fills, glyphs, page, frames),
-        fills,
+    with_column_bands(
+        with_header_band_edges(
+            detect_components(rules, fills, glyphs, page, frames),
+            fills,
+            glyphs,
+        ),
+        rules,
         glyphs,
     )
 }
@@ -4047,6 +4545,238 @@ fn with_header_band_edge(
     Some(wider)
 }
 
+/// `grids`, each raised to the top of the band its ruling opens over a
+/// group of its columns (see [`with_column_band`]); not onto another grid.
+fn with_column_bands(
+    mut grids: Vec<Grid>,
+    rules: &[Rule],
+    glyphs: &[crate::glyph::Glyph],
+) -> Vec<Grid> {
+    for i in 0..grids.len() {
+        let Some(taller) = with_column_band(&grids[i], rules, glyphs) else {
+            continue;
+        };
+        if !grids
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != i && overlaps(&o.bbox, &taller.bbox))
+        {
+            grids[i] = taller;
+        }
+    }
+    grids
+}
+
+/// `g` raised by a row where its top rule runs over a group of its columns
+/// only and the rule beside the group runs on above it, up to the top of a
+/// band naming the group.
+///
+/// A table left open at the top sets a band over the columns its figures
+/// share (`BOLSAS ADICIONALES NECESARIAS POR CADA 100 PIES DE LA LÍNEA DEL
+/// TECHO` over three roof pitches) and rules under it across those columns
+/// alone; the column of labels beside them (`VALOR-R`) stands open from the
+/// band's top down through the header, its rule running on up beside the
+/// band. The rules alone start the grid under the band, and the band reads
+/// as a heading over the table. Its text must stand over the group alone:
+/// a title running on over the labels is the table's, not the group's.
+fn with_column_band(g: &Grid, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Option<Grid> {
+    let cols = g.cols();
+    if g.ys.len() < 3 || cols < 3 || g.xs.len() != cols + 1 {
+        return None;
+    }
+    let top = g.ys[0];
+    let at_top: Vec<(f64, f64)> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == Orientation::Horizontal
+                && (r.bbox.y0 - top).abs() <= EDGE_TOLERANCE * 2.0
+        })
+        .map(|r| (r.bbox.x0, r.bbox.x1))
+        .collect();
+    let ruled: Vec<bool> = (0..cols)
+        .map(|c| {
+            let (x0, x1) = (g.xs[c], g.xs[c + 1]);
+            span_coverage(at_top.iter().copied(), x0, x1) >= 0.6 * (x1 - x0)
+        })
+        .collect();
+    // The group: one run of ruled columns, two or more, the open ones beside
+    // it at the table's edges.
+    let a = ruled.iter().position(|r| *r)?;
+    let b = a + ruled[a..].iter().take_while(|r| **r).count();
+    if b - a < 2 || ruled[b..].iter().any(|r| *r) || (a == 0 && b == cols) {
+        return None;
+    }
+    // The rule at each open side of the group runs on above the top; the
+    // band stands as tall as the shorter.
+    let mut band_top = f64::NEG_INFINITY;
+    for k in [a, b] {
+        if k == 0 || k == cols {
+            continue;
+        }
+        let x = g.xs[k];
+        let up = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Vertical
+                    && (r.axis_pos() - x).abs() <= EDGE_TOLERANCE
+                    && r.bbox.y1 >= top - EDGE_TOLERANCE
+                    && r.bbox.y0 < top - MIN_CELL_EXTENT
+            })
+            .map(|r| r.bbox.y0)
+            .reduce(f64::min)?;
+        band_top = band_top.max(up);
+    }
+    let (left, right) = (g.xs[0], g.xs[cols]);
+    let (gx0, gx1) = (g.xs[a] - EDGE_TOLERANCE, g.xs[b] + EDGE_TOLERANCE);
+    let mut named = false;
+    for b in glyphs
+        .iter()
+        .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+        .filter_map(|gl| gl.bbox)
+    {
+        let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+        if cy <= band_top || cy >= top || cx <= left || cx >= right {
+            continue;
+        }
+        if b.x0 < gx0 || b.x1 > gx1 {
+            return None;
+        }
+        named = true;
+    }
+    if !named {
+        return None;
+    }
+    let mut taller = g.clone();
+    taller.ys.insert(0, band_top);
+    taller.bbox.y0 = band_top;
+    Some(taller)
+}
+
+/// A grid read from a stack of row lines is a table ruled row by row: its
+/// lines part its text's lines, three to a row at most (a statement ruled
+/// only under its header and its totals sets many rows between them), and
+/// two of its columns or more hold text in half its rows (a chart's
+/// gridlines leave one column of tick labels, a list of boxes one of
+/// marks).
+fn rules_its_rows(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    let inside: Vec<&crate::glyph::Glyph> = glyphs
+        .iter()
+        .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+        .filter(|gl| {
+            gl.bbox.is_some_and(|b| {
+                let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                cx > g.bbox.x0 && cx < g.bbox.x1 && cy > g.bbox.y0 && cy < g.bbox.y1
+            })
+        })
+        .collect();
+    let mut sizes: Vec<f32> = inside.iter().map(|gl| gl.font_size).collect();
+    if sizes.is_empty() {
+        return false;
+    }
+    sizes.sort_by(f32::total_cmp);
+    let fs = sizes[sizes.len() / 2].max(1.0) as f64;
+    let baselines = coalesce(inside.iter().map(|gl| gl.origin.1).collect(), 0.4 * fs).len();
+    if baselines > 3 * g.rows() {
+        return false;
+    }
+    let (rows, cols) = (g.rows(), g.cols());
+    let cells = g.cell_texts(glyphs);
+    let held = (0..cols)
+        .filter(|&c| {
+            (0..rows)
+                .filter(|&r| !cells[r * cols + c].trim().is_empty())
+                .count()
+                * 2
+                >= rows
+        })
+        .count();
+    held >= 2
+}
+
+/// Stacks of a page's row lines ruled alike: three lines or more, one under
+/// the next, each with the same extent and broken at the same places, a
+/// table ruled with horizontals only that draws each line a column at a
+/// time. Its lines need not touch. With each stack, the verticals standing
+/// within it or a row above it (a shaded header's separators), one of them
+/// at least on a break.
+fn ruled_stacks(rules: &[Rule]) -> Vec<Vec<Rule>> {
+    let hs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let lines = cluster(&hs);
+    let breaks = |g: &GridLine| {
+        coalesce(
+            g.ends
+                .iter()
+                .copied()
+                .filter(|e| *e > g.lo + EDGE_TOLERANCE && *e < g.hi - EDGE_TOLERANCE)
+                .collect(),
+            EDGE_TOLERANCE,
+        )
+    };
+    let alike = |a: &GridLine, b: &GridLine| {
+        let (ba, bb) = (breaks(a), breaks(b));
+        (a.lo - b.lo).abs() <= EDGE_TOLERANCE
+            && (a.hi - b.hi).abs() <= EDGE_TOLERANCE
+            && !ba.is_empty()
+            && ba.len() == bb.len()
+            && ba
+                .iter()
+                .zip(&bb)
+                .all(|(p, q)| (p - q).abs() <= 2.0 * EDGE_TOLERANCE)
+    };
+    let mut stacks: Vec<Vec<&GridLine>> = Vec::new();
+    for line in &lines {
+        match stacks.last_mut() {
+            Some(stack) if alike(stack[stack.len() - 1], line) => stack.push(line),
+            _ => stacks.push(vec![line]),
+        }
+    }
+    stacks
+        .into_iter()
+        .filter(|stack| stack.len() >= 3)
+        .filter_map(|stack| {
+            let (top, bottom) = (stack[0].axis, stack[stack.len() - 1].axis);
+            let (lo, hi) = (stack[0].lo, stack[0].hi);
+            let mut gaps: Vec<f64> = stack.windows(2).map(|w| w[1].axis - w[0].axis).collect();
+            gaps.sort_by(f64::total_cmp);
+            let row = gaps[gaps.len() / 2];
+            let picked: Vec<Rule> = rules
+                .iter()
+                .filter(|r| match r.orientation {
+                    Orientation::Horizontal => stack.iter().any(|g| {
+                        (r.axis_pos() - g.axis).abs() <= AXIS_TOLERANCE
+                            && r.bbox.x0 >= lo - EDGE_TOLERANCE
+                            && r.bbox.x1 <= hi + EDGE_TOLERANCE
+                    }),
+                    Orientation::Vertical => {
+                        r.axis_pos() >= lo - EDGE_TOLERANCE
+                            && r.axis_pos() <= hi + EDGE_TOLERANCE
+                            && r.bbox.y0 >= top - row - EDGE_TOLERANCE
+                            && r.bbox.y1 <= bottom + row + EDGE_TOLERANCE
+                    }
+                })
+                .copied()
+                .collect();
+            // Its breaks are columns' edges where a vertical stands on one
+            // (a shaded header's separators): a statement's figures
+            // underlined a column at a time break alike too, between columns
+            // that rows of text no rule parts carry on above and below.
+            let edges = breaks(stack[0]);
+            picked
+                .iter()
+                .any(|r| {
+                    r.orientation == Orientation::Vertical
+                        && edges
+                            .iter()
+                            .any(|e| (r.axis_pos() - e).abs() <= 2.0 * EDGE_TOLERANCE)
+                })
+                .then_some(picked)
+        })
+        .collect()
+}
+
 /// Group the rules into touching components and detect a grid in each.
 fn detect_components(
     rules: &[Rule],
@@ -4080,7 +4810,7 @@ fn detect_components(
                 }
             }
         }
-        components.push(component);
+        components.extend(split_stacked_boxes(component, |r| r));
     }
 
     let mut out: Vec<Grid> = components
@@ -7238,6 +7968,39 @@ mod header_tests {
     }
 
     #[test]
+    fn row_lines_ruled_alike_under_a_header_stack_into_one_table() {
+        // Five row lines, each drawn a column at a time, broken at 100 and
+        // 200; a shaded header's separators stand on the breaks above them.
+        let mut rules = Vec::new();
+        for y in [20.0, 33.0, 46.0, 59.0, 72.0] {
+            for (a, b) in [(0.0, 100.0), (100.0, 200.0), (200.0, 300.0)] {
+                rules.push(h(a, b, y));
+            }
+        }
+        for x in [100.0, 200.0] {
+            rules.push(v(7.0, 20.0, x));
+        }
+        let stacks = ruled_stacks(&rules);
+        assert_eq!(stacks.len(), 1, "got {stacks:?}");
+        assert_eq!(stacks[0].len(), rules.len());
+        // A statement's figures underlined a column at a time break alike
+        // too, with no vertical on a break: no table of their own.
+        let underlines: Vec<Rule> = rules
+            .iter()
+            .filter(|r| r.orientation == Orientation::Horizontal)
+            .copied()
+            .collect();
+        assert!(ruled_stacks(&underlines).is_empty());
+        // Nor are unbroken lines, a chart's gridlines: no columns.
+        let gridlines: Vec<Rule> = [20.0, 33.0, 46.0, 59.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .chain([v(7.0, 20.0, 100.0)])
+            .collect();
+        assert!(ruled_stacks(&gridlines).is_empty());
+    }
+
+    #[test]
     fn a_header_band_over_a_label_column_is_the_tables_edge() {
         // A product table shaded across its header row, its rows ruled
         // from the second column on: only the rule between the two groups
@@ -7520,6 +8283,236 @@ mod header_tests {
     }
 
     #[test]
+    fn heads_set_over_a_tables_top_rule_are_its_top_row() {
+        let grid = || {
+            plain_grid(
+                vec![0.0, 100.0, 200.0, 300.0],
+                vec![100.0, 120.0, 140.0, 160.0],
+            )
+        };
+        let rules = |from: f64| vec![h(from, 300.0, 100.0)];
+        // Heads on two lines, each in its column, over the rule.
+        let heads = vec![
+            gly(5.0, 96.0, 40.0, "Substance"),
+            gly(110.0, 96.0, 30.0, "TWA"),
+            gly(210.0, 96.0, 30.0, "STEL"),
+            gly(110.0, 86.0, 30.0, "OSHA"),
+            gly(210.0, 86.0, 30.0, "NIOSH"),
+        ];
+        // The table's own text, at the heads' size.
+        let cells = [
+            gly(5.0, 115.0, 30.0, "ethanol"),
+            gly(110.0, 115.0, 20.0, "1000"),
+            gly(210.0, 115.0, 10.0, "-"),
+        ];
+        let heads = [heads, cells.to_vec()].concat();
+        let mut g = grid();
+        g.take_column_heads(&rules(0.0), &heads);
+        assert_eq!(g.rows(), 4);
+        assert_eq!(g.ys[0], 77.0);
+        // A title over them stays out.
+        let mut titled = [&heads[..3], &cells[..]].concat();
+        titled.push(gly(5.0, 86.0, 250.0, "TABLE 3. EXPOSURE LIMITS"));
+        let mut g = grid();
+        g.take_column_heads(&rules(0.0), &titled);
+        assert_eq!(g.ys[0], 87.0);
+        // A line across the columns' edges is no row of heads.
+        let mut g = grid();
+        let mut across = cells.to_vec();
+        across.push(gly(5.0, 96.0, 250.0, "TABLE 3. LIMITS"));
+        g.take_column_heads(&rules(0.0), &across);
+        assert_eq!(g.rows(), 3);
+        // Nor is one head alone.
+        let mut g = grid();
+        g.take_column_heads(&rules(0.0), &[&heads[..1], &cells[..]].concat());
+        assert_eq!(g.rows(), 3);
+        // Nor a row of data over the rule: a label and its figures.
+        let mut g = grid();
+        let mut data = cells.to_vec();
+        data.extend([
+            gly(5.0, 96.0, 40.0, "South East"),
+            gly(110.0, 96.0, 30.0, "57,384"),
+        ]);
+        g.take_column_heads(&rules(0.0), &data);
+        assert_eq!(g.rows(), 3);
+        // Nor two heads in one column: the grid is not theirs.
+        let mut g = grid();
+        let mut two = cells.to_vec();
+        two.extend([
+            gly(5.0, 96.0, 40.0, "Item"),
+            gly(110.0, 96.0, 20.0, "2014"),
+            gly(160.0, 96.0, 20.0, "2013"),
+        ]);
+        g.take_column_heads(&rules(0.0), &two);
+        assert_eq!(g.rows(), 3);
+        // A top ruled over part of the table is no top rule.
+        let mut g = grid();
+        g.take_column_heads(&rules(150.0), &heads);
+        assert_eq!(g.rows(), 3);
+    }
+
+    #[test]
+    fn a_shaded_first_row_of_figures_starting_stripes_is_data() {
+        let rows: Vec<Vec<String>> = [
+            ["Substance", "TWA", "STEL"],
+            ["ethanol", "1000", "-"],
+            ["2-propanol", "400", "500"],
+            ["acetone", "1000", "-"],
+            ["butanedione", "0.005", "0.025"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        assert!(figures_row(&rows[1]));
+        assert!(!figures_row(&rows[0]));
+        assert!(figures_row(&[
+            "ethanol".to_string(),
+            "0.25 – 21.4".to_string(),
+            "±17.0".to_string()
+        ]));
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            (0..6).map(|k| k as f64 * 20.0).collect(),
+        );
+        // Heads shaded, then every other row from the first.
+        let shaded = [
+            fill(0.0, 0.0, 300.0, 20.0),
+            fill(0.0, 20.0, 300.0, 40.0),
+            fill(0.0, 60.0, 300.0, 80.0),
+        ];
+        assert_eq!(g.leading_fill_run(&shaded), 2);
+        assert!(g.stripes_from(&shaded, 1));
+        assert_eq!(g.header_rows(&rows, &[], &[], &shaded), 1);
+    }
+
+    #[test]
+    fn a_band_over_a_group_of_columns_is_the_tables_top_row() {
+        // A label column and three columns under a band; the rule under
+        // the band runs over the three alone, and the label column's rule
+        // runs on up beside the band.
+        let g = plain_grid(
+            vec![0.0, 40.0, 120.0, 200.0, 280.0],
+            vec![114.0, 136.0, 150.0, 164.0, 178.0],
+        );
+        let rules = |stub: bool, top_from: f64| {
+            let mut rs = vec![h(top_from, 280.0, 114.0)];
+            rs.extend([136.0, 150.0, 164.0, 178.0].map(|y| h(0.0, 280.0, y)));
+            rs.push(v(if stub { 100.0 } else { 114.0 }, 178.0, 40.0));
+            rs.extend([120.0, 200.0].map(|x| v(114.0, 178.0, x)));
+            rs
+        };
+        let band = [gly(45.0, 110.0, 150.0, "BAGS PER 100 FT OF RIDGE")];
+        let taller = with_column_band(&g, &rules(true, 40.0), &band).expect("raised");
+        assert_eq!(taller.ys[0], 100.0);
+        assert_eq!(taller.rows(), g.rows() + 1);
+        // Text running on over the label column is the table's title.
+        let title = [gly(5.0, 110.0, 190.0, "ADDITIONAL BAGS PER 100 FT")];
+        assert!(with_column_band(&g, &rules(true, 40.0), &title).is_none());
+        // No rule running on above the top: the grid starts where it did.
+        assert!(with_column_band(&g, &rules(false, 40.0), &band).is_none());
+        // A top rule across every column closes the table; nothing opens.
+        assert!(with_column_band(&g, &rules(true, 0.0), &band).is_none());
+        // Nothing named in the band.
+        assert!(with_column_band(&g, &rules(true, 40.0), &[]).is_none());
+    }
+
+    #[test]
+    fn boxes_stacked_a_hair_apart_are_two_drawings() {
+        // Two boxes 2.5 pt apart, each closed, parting their columns at
+        // different places.
+        let boxes = |second_divider: f64, joined: bool| {
+            let mut rs = vec![
+                h(0.0, 300.0, 0.0),
+                h(0.0, 300.0, 40.0),
+                v(0.0, 40.0, 100.0),
+                h(0.0, 300.0, 42.5),
+                h(0.0, 300.0, 80.0),
+                v(42.5, 80.0, second_divider),
+            ];
+            if joined {
+                rs.extend([v(0.0, 80.0, 0.0), v(0.0, 80.0, 300.0)]);
+            } else {
+                rs.extend([
+                    v(0.0, 40.0, 0.0),
+                    v(0.0, 40.0, 300.0),
+                    v(42.5, 80.0, 0.0),
+                    v(42.5, 80.0, 300.0),
+                ]);
+            }
+            rs
+        };
+        let rs = boxes(200.0, false);
+        let refs: Vec<&Rule> = rs.iter().collect();
+        let gap = stacked_boxes_gap(&refs).expect("two boxes");
+        assert!(gap > 40.0 && gap < 42.5);
+        let comps = component_indices(&rs);
+        assert_eq!(comps.len(), 2);
+        // A header ruled off by a double line, the verticals broken across
+        // it, parts its columns where the rows under it do.
+        let rs = boxes(100.0, false);
+        let refs: Vec<&Rule> = rs.iter().collect();
+        assert!(stacked_boxes_gap(&refs).is_none());
+        // Sides running on across the gap make one box.
+        let rs = boxes(200.0, true);
+        let refs: Vec<&Rule> = rs.iter().collect();
+        assert!(stacked_boxes_gap(&refs).is_none());
+        assert_eq!(component_indices(&rs).len(), 1);
+    }
+
+    #[test]
+    fn section_dividers_down_two_columns_are_no_table() {
+        // Rules over each section of a page set in two columns: the first
+        // across both, then by turns across the right column and the left.
+        // A short stroke of a drawn box among them crosses none of the
+        // bands, and the trim runs out of lines first; of the rules left,
+        // none is drawn over the same stretch as the next.
+        let mut rules = vec![h(0.0, 140.0, 100.0), h(160.0, 300.0, 100.0)];
+        rules.push(h(160.0, 300.0, 200.0));
+        rules.push(h(0.0, 140.0, 300.0));
+        rules.push(h(160.0, 300.0, 400.0));
+        rules.push(v(335.0, 345.0, 50.0));
+        // Each section holds its lines of text.
+        let text: Vec<crate::glyph::Glyph> = [140.0, 160.0, 240.0, 260.0, 340.0, 360.0]
+            .iter()
+            .flat_map(|&y| {
+                [
+                    gly(10.0, y, 100.0, "Section text"),
+                    gly(170.0, y, 100.0, "Section text"),
+                ]
+            })
+            .collect();
+        assert!(detect_group(&rules, &[], &text, 0, &[]).is_empty());
+        // Without text between them, or with one line, rules apart are two
+        // tables side by side ending a little apart, and the grid stands as
+        // before.
+        assert!(!detect_group(&rules, &[], &[], 0, &[]).is_empty());
+        let one_line: Vec<crate::glyph::Glyph> = [150.0, 250.0, 350.0]
+            .iter()
+            .map(|&y| gly(10.0, y, 100.0, "Last row"))
+            .collect();
+        assert!(!detect_group(&rules, &[], &one_line, 0, &[]).is_empty());
+
+        // A table ruled with horizontals only under a stroke of decoration
+        // is still one (`a_horizontally_ruled_table_is_not_split_into_rows`):
+        // its rules share their stretch of the page.
+
+        // A table whose lower rows its frame crosses keeps them, under a
+        // heading's underline the trim takes off.
+        let mut table: Vec<Rule> = [60.0, 100.0, 120.0, 140.0, 160.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        table.extend([
+            v(100.0, 160.0, 0.0),
+            v(100.0, 160.0, 150.0),
+            v(100.0, 160.0, 300.0),
+        ]);
+        let grids = detect_group(&table, &[], &[], 0, &[]);
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].rows(), 3);
+    }
+
+    #[test]
     fn a_rule_drawn_in_overlapping_pieces_has_one_column_edge_per_overlap() {
         let ends = |pieces: &[(f64, f64)]| {
             let rules: Vec<Rule> = pieces.iter().map(|&(a, b)| h(a, b, 100.0)).collect();
@@ -7756,6 +8749,62 @@ mod header_tests {
             one.extend(set(r, &[false, r == 2 || r == 0, r == 0]));
         }
         assert!(g.restated_header_rows(&rows, 1, &[], &one, &[]).is_empty());
+        // A bold row of names under another is the table's top block
+        // continuing, not a header restated.
+        let top: Vec<Vec<String>> = [
+            ["Class", "Mission Critical", "Business Critical"],
+            ["Workload", "High", "Medium"],
+            ["Usage", "Email, planning", "Backup, archive"],
+            ["Interface", "SAS 12 Gb", "SATA 6 Gb"],
+            ["RPM", "10000", "7200"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let set_top = |r: usize| -> Vec<crate::glyph::Glyph> {
+            top[r]
+                .iter()
+                .enumerate()
+                .map(|(c, t)| {
+                    let mut x = gly(c as f64 * 100.0 + 5.0, r as f64 * 20.0 + 14.0, 30.0, t);
+                    x.weight = Some(if r < 2 { 700 } else { 400 });
+                    x
+                })
+                .collect()
+        };
+        let glyphs: Vec<_> = (0..5).flat_map(set_top).collect();
+        assert!(g
+            .restated_header_rows(&top, 0, &[], &glyphs, &[])
+            .is_empty());
+    }
+
+    #[test]
+    fn a_row_shaded_like_the_header_restates_it_but_a_watermark_does_not() {
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            (0..6).map(|k| k as f64 * 20.0).collect(),
+        );
+        let rows = rows(&[
+            &["", "Alpha", "Beta"],
+            &["Size", "12", "14"],
+            &["Mode", "Fast", "Slow"],
+            &["Rate", "3", "4"],
+            &["Load", "5", "6"],
+        ]);
+        // The header and the row restating it, each shaded on its own.
+        let bands = [fill(0.0, 0.0, 300.0, 20.0), fill(0.0, 40.0, 300.0, 60.0)];
+        assert_eq!(g.restated_header_rows(&rows, 1, &[], &[], &bands), vec![2]);
+        // A page's watermark drawn under the top three rows, ending above
+        // the rest, shades none of them.
+        let watermark = [fill(0.0, -200.0, 300.0, 60.0)];
+        assert!(g
+            .restated_header_rows(&rows, 1, &[], &[], &watermark)
+            .is_empty());
+        // A table laid on a background is shaded throughout: no row of it
+        // stands apart by its shading.
+        let mut laid = bands.to_vec();
+        laid.push(fill(-10.0, -10.0, 310.0, 110.0));
+        assert!(g.restated_header_rows(&rows, 1, &[], &[], &laid).is_empty());
     }
 
     #[test]
@@ -8066,6 +9115,37 @@ mod header_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_grid_is_not_read_across_a_drawings_box() {
+        use crate::geom::BBox;
+        use crate::rule::Fill;
+        let bb = |x0: f64, y0: f64, x1: f64, y1: f64| BBox { x0, y0, x1, y1 };
+        // A wiring diagram's box holding its switches, and a table's shaded
+        // label column holding only text.
+        let mut fills = vec![Fill {
+            bbox: bb(46.0, 95.0, 421.0, 563.0),
+            page: 0,
+        }];
+        for k in 0..3 {
+            let x = 115.0 + 100.0 * k as f64;
+            fills.push(Fill {
+                bbox: bb(x, 135.0, x + 29.0, 180.0),
+                page: 0,
+            });
+        }
+        fills.push(Fill {
+            bbox: bb(50.0, 600.0, 150.0, 700.0),
+            page: 0,
+        });
+        let walls = walls(&fills);
+        assert_eq!(walls.len(), 2, "{walls:?}");
+        // Wire labels inside the box and the note beside it, in one grid.
+        assert!(walled_in(&bb(260.0, 140.0, 590.0, 160.0), &walls));
+        // A grid inside the box, or one with the shaded column, is a grid.
+        assert!(!walled_in(&bb(120.0, 140.0, 400.0, 160.0), &walls));
+        assert!(!walled_in(&bb(50.0, 610.0, 400.0, 690.0), &walls));
+    }
     use super::*;
 
     #[test]
@@ -9577,4 +10657,62 @@ mod tests {
         g.group_label_merges(&gl, &rules, &mut m);
         assert!(!m.continues_left.iter().any(|x| *x));
     }
+}
+
+/// An upright edge of a box drawn on the page, from its top to its foot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Wall {
+    pub x: f64,
+    pub y0: f64,
+    pub y1: f64,
+}
+
+/// Fewest shapes a box holds for it to be a drawing's frame, whose edges
+/// part the text either side of them.
+const FRAMED_SHAPES: usize = 3;
+
+/// The upright edges of the boxes drawn round drawings: a fill holding
+/// other shapes, a wiring diagram's box. A table's shaded column holds
+/// text, not shapes, and its edge parts no row.
+pub fn walls(fills: &[crate::rule::Fill]) -> Vec<Wall> {
+    fills
+        .iter()
+        .filter(|f| {
+            let b = f.bbox;
+            let area = b.width() * b.height();
+            fills
+                .iter()
+                .filter(|o| {
+                    let c = o.bbox;
+                    let (cx, cy) = ((c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5);
+                    b.contains(cx, cy) && c.width() * c.height() < area * 0.5
+                })
+                .count()
+                >= FRAMED_SHAPES
+        })
+        .flat_map(|f| {
+            let b = f.bbox;
+            [
+                Wall {
+                    x: b.x0,
+                    y0: b.y0,
+                    y1: b.y1,
+                },
+                Wall {
+                    x: b.x1,
+                    y0: b.y0,
+                    y1: b.y1,
+                },
+            ]
+        })
+        .collect()
+}
+
+/// Does one of `walls` stand inside `b`, between its left and right
+/// edges, from its top to its foot? A grid read across it puts a drawing's
+/// labels and the note beside its box in one row.
+pub fn walled_in(b: &crate::geom::BBox, walls: &[Wall]) -> bool {
+    walls
+        .iter()
+        .any(|w| w.x > b.x0 + 1.0 && w.x < b.x1 - 1.0 && w.y0 <= b.y0 && w.y1 >= b.y1)
 }
