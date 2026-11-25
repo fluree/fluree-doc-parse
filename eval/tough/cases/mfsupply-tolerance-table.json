@@ -1,0 +1,41 @@
+{
+  "document": {
+    "file": "mfsupply-hex-cap-screws.pdf",
+    "url": "https://www.mfsupply.com/v/vspfiles/assets/Hex-Head-Cap-Screws-Grade-5-%26-8.pdf",
+    "sha256": "37c91036346a1b8bc859912edfa17b386fa19c8398441e8e841430749c038cf4",
+    "about": "MF Supply hex cap screw specifications. Its tolerance table is boxed in the same frame as the dimensions table above it, a blank band between them, with a stub label spanning every row and a group header over the length columns."
+  },
+  "notes": [
+    "2026-11-25 (#272): the frame's two sides run down through the blank band between the two tables, so the page-wide reading took both for one and the tolerance table had the dimensions table's columns; read from its text instead, its stub label was fused into its first cell, its `....` placeholders were dropped as leaders, and its group header covered three of its five columns. A blank band crossed by the frame's sides alone, between bands with column rules inside, parts two tables. The stub, labelling header and body alike, is no reason for the header to be left open."
+  ],
+  "checks": [
+    {
+      "id": "stub-on-every-row",
+      "found": "2026-11-25",
+      "issue": "#272: `Tolerance on Length` was fused into the first cell and named no other row.",
+      "cell": {
+        "value": "-0.06",
+        "row": "Tolerance on Length / 7/16 and 1/2"
+      }
+    },
+    {
+      "id": "placeholder-is-a-value",
+      "found": "2026-11-25",
+      "issue": "#272: the `....` cells were dropped and left as Figures after the table.",
+      "cell": {
+        "value": "....",
+        "column": "Nominal Screw Length / Up to 1 in., incl.",
+        "row": "Tolerance on Length / 7/8 and 1"
+      }
+    },
+    {
+      "id": "group-header-over-every-length",
+      "found": "2026-11-25",
+      "issue": "#272: `Nominal Screw Length` headed three of the five length columns.",
+      "cell": {
+        "value": "-0.04",
+        "column": "Nominal Screw Length / Over 1 in. to 2-1/2 in., incl."
+      }
+    }
+  ]
+}
