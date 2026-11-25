@@ -2819,9 +2819,26 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let (mut marks, exact) = timed(&mut timings.furniture, || {
-        furniture::detect_with_exact(&flat_lines)
+    // The page each bookmark lands on, and its title: a running head the
+    // outline names is set as its section's heading there.
+    let bookmarks: Vec<(usize, String)> = outline
+        .iter()
+        .filter_map(|it| it.page.map(|pi| (pi, it.title.clone())))
+        .collect();
+    let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
+        furniture::detect_with_heads(&flat_lines, &bookmarks)
     });
+    // The texts kept as a section's heading on their page, though the same
+    // words run as furniture on the pages after: never scrubbed there.
+    let kept_heads: Vec<std::collections::HashSet<String>> = kept_heads
+        .iter()
+        .enumerate()
+        .map(|(pi, set)| {
+            set.iter()
+                .map(|li| flat_lines[pi].0[*li].text.trim().to_string())
+                .collect()
+        })
+        .collect();
     // The folio is read from the page's edges over *every* glyph, not from
     // the lines left after grids took theirs: a form's key/value grid that
     // runs down into the footer band takes the footer's glyphs with it, and
@@ -3272,7 +3289,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .iter()
                     .all(|s| (b.font_size - s).abs() > 0.15 * s.max(b.font_size))
             });
-            let scrubbed = if retitled {
+            let kept = kept_heads.get(pi).is_some_and(|k| k.contains(text.trim()));
+            let scrubbed = if retitled || kept {
                 text.clone()
             } else if height <= 0.0 {
                 furniture::scrub_block(&text, &scrub_texts)

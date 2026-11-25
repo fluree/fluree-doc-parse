@@ -97,6 +97,9 @@ Anything the layout pass dropped: a PDF's page [furniture](../design/furniture.m
 headers, footers, watermarks, on every page they repeat on. A running header
 and footer are text once: a Word file's as the file stores them (see
 [DOCX](../inputs/office-and-web.md#docx)), and a PDF's as its first page prints
-the header and its last page the footer. This is consistent with the graph — an element
+the header and its last page the footer. A running head that names the section
+the page is in is text once as well, where it is first printed, at the start of its
+section (see [furniture](../design/furniture.md#a-running-head-that-names-its-section)).
+This is consistent with the graph — an element
 that does not exist has no text and no offsets — so the two outputs never
 disagree about what the document contains.

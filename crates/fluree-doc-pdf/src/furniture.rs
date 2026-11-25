@@ -87,6 +87,9 @@ pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<BTreeMap<usize, Furniture>> {
 /// of their own on every page, or every page but one, so no copy merged
 /// into a block or a table, and the page left out is where the words are
 /// not running: a title page's title, or a product code in a table.
+///
+/// A section's name read as running at the head of the page
+/// ([`section_running_heads`]) is taken the same way, as the line it is.
 pub fn detect_with_exact(
     pages: &[(Vec<Line>, f64)],
 ) -> (
@@ -95,6 +98,26 @@ pub fn detect_with_exact(
 ) {
     let (marks, _, exact) = detect_all(pages);
     (marks, exact)
+}
+
+/// As [`detect_with_exact`], also reading the running heads that name the
+/// section the page is in ([`section_running_heads`]), and returning, per
+/// page, the lines kept as a section's heading: text the scrub must not
+/// take, though the same words run as furniture on the pages after.
+/// `bookmarks` are the document's outline entries, as the page each lands
+/// on and its title.
+#[allow(clippy::type_complexity)]
+pub fn detect_with_heads(
+    pages: &[(Vec<Line>, f64)],
+    bookmarks: &[(usize, String)],
+) -> (
+    Vec<BTreeMap<usize, Furniture>>,
+    Vec<std::collections::HashSet<usize>>,
+    Vec<std::collections::HashSet<usize>>,
+) {
+    let (mut marks, _, mut exact) = detect_all(pages);
+    let heads = section_running_heads(pages, &mut marks, &mut exact, bookmarks);
+    (marks, exact, heads)
 }
 
 /// Of the digit runs a page-number line carries, the one that is the page
@@ -457,6 +480,305 @@ fn detect_all(
         set.retain(|li| out[pi].contains_key(li));
     }
     (out, folios, exact)
+}
+
+/// Most words in a section's name set as a running head. A section is
+/// named in a phrase, not a sentence (`Summary of Changes`, `DISHWASHER –
+/// ELECTRIC`): a longer line at the head of the page is text set high.
+const MAX_SECTION_HEAD_WORDS: usize = 8;
+
+/// Two lines set in one style differ in measured size by less than this
+/// share of the larger: the median of one face at one size, rounded, and
+/// well short of the step from one style to the next.
+const SAME_STYLE_SIZE: f32 = 0.1;
+
+/// Section names set as running heads: one slot at the head of the page,
+/// filled in turn with the name of each section, repeated on its pages
+/// (`Overview` over two pages, `Standard Features` over four, `Technical
+/// Specifications` over thirteen; or a two-line head's second line,
+/// `DISHWASHER – ELECTRIC` then `DISHWASHER – GAS`).
+///
+/// A slot names sections in turn where two names or more are each set as a
+/// heading at their first copy and each run over two pages or more. Set as
+/// a heading means larger than the body, by the margin a font-size heading
+/// needs, or bookmarked to that page or the one before. A running head set
+/// no larger than the text and named by no bookmark (a journal's short
+/// title, a form's name line, a signature block's label) is told apart
+/// from the page by nothing but its repetition, and is left to it. One name
+/// running after another set once is a title page's title and the running
+/// title of the rest.
+///
+/// In such a slot, the first copy of each name set as a heading is the
+/// section's heading and stays in the text, and the copies after it are
+/// running text, as are the name's later runs in the slot. A name already
+/// read as running by repetition is kept the same way, at its first copy.
+///
+/// A section whose heading is set elsewhere on the page its running head
+/// first appears, or on the page before (a chapter's title over its first
+/// page, the running head from the next), has its heading already, and
+/// every copy in the slot is running text.
+///
+/// The copies this reads as running are taken as whole lines (`exact`):
+/// their words elsewhere are content, as a shorter name is inside a longer
+/// one (`DISHWASHER` in `DISHWASHER – GAS`).
+fn section_running_heads(
+    pages: &[(Vec<Line>, f64)],
+    out: &mut [BTreeMap<usize, Furniture>],
+    exact: &mut [std::collections::HashSet<usize>],
+    bookmarks: &[(usize, String)],
+) -> Vec<std::collections::HashSet<usize>> {
+    let mut heads: Vec<std::collections::HashSet<usize>> = vec![Default::default(); pages.len()];
+    // A slot: a place at the head of the page, by relative height and left
+    // or right edge, and the lines set there in page order.
+    struct Slot {
+        rel_y: f64,
+        x0: f64,
+        x1: f64,
+        size: f32,
+        lines: Vec<(usize, usize)>,
+    }
+    let key = |t: &str| {
+        t.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    // The lines read as running by repetition. A line that carries one of
+    // them and more words is a row they merged into (`January 31, 2024
+    // Chair Powell's Press Conference FINAL`, set as three groups on the
+    // other pages): the scrub's to clean, not a section's name.
+    let running: std::collections::HashSet<String> = out
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, marks)| marks.keys().map(move |&li| key(&pages[pi].0[li].text)))
+        .filter(|k| !k.is_empty())
+        .collect();
+    let merges_running = |text: &str| {
+        let k = key(text);
+        let padded = format!(" {k} ");
+        running
+            .iter()
+            .any(|r| *r != k && padded.contains(&format!(" {r} ")))
+    };
+    // A running head stands alone: no line of the page's own shares its
+    // row (a margin label beside its regulation's number and text), and
+    // none in its style sits within a line's height above or below it over
+    // the same width (a display title's next line, `lash WITHOUT LIMITS`
+    // over `TUBING EXTREME`, where the page before set the same first line
+    // over another). Lines already running are the head's company, not the
+    // page's: a two-line head's first line, the address set beside it.
+    let alone = |pi: usize, li: usize| {
+        let lines = &pages[pi].0;
+        let l = &lines[li];
+        let h = l.bbox.y1 - l.bbox.y0;
+        lines.iter().enumerate().all(|(mi, m)| {
+            if mi == li || out[pi].contains_key(&mi) {
+                return true;
+            }
+            let mh = m.bbox.y1 - m.bbox.y0;
+            let overlap = l.bbox.y1.min(m.bbox.y1) - l.bbox.y0.max(m.bbox.y0);
+            let same_row = overlap > 0.5 * h.min(mh);
+            let gap = (m.bbox.y0 - l.bbox.y1).max(l.bbox.y0 - m.bbox.y1);
+            let stacked = gap < h
+                && l.bbox.x1.min(m.bbox.x1) > l.bbox.x0.max(m.bbox.x0)
+                && (l.font_size - m.font_size).abs()
+                    <= SAME_STYLE_SIZE * l.font_size.max(m.font_size);
+            !same_row && !stacked
+        })
+    };
+    let mut slots: Vec<Slot> = Vec::new();
+    for (pi, (lines, height)) in pages.iter().enumerate() {
+        if *height <= 0.0 {
+            continue;
+        }
+        for (li, l) in lines.iter().enumerate() {
+            let rel_y = l.bbox.y0 / height;
+            if rel_y >= EDGE_BAND
+                || !names_a_section(&l.text)
+                || merges_running(&l.text)
+                || !alone(pi, li)
+            {
+                continue;
+            }
+            let fs = (l.font_size as f64).max(1.0);
+            // Set from one left edge, or flush to one right edge: a running
+            // head set right moves its left edge with the name's length.
+            // Within an em of the edge, for the side bearing of the first
+            // or last letter. And in one style: a running head's slot is
+            // not the line of small print set beside it.
+            match slots.iter_mut().find(|s| {
+                (s.rel_y - rel_y).abs() < POSITION_TOLERANCE
+                    && ((s.x0 - l.bbox.x0).abs() <= fs || (s.x1 - l.bbox.x1).abs() <= fs)
+                    && (s.size - l.font_size).abs() <= SAME_STYLE_SIZE * s.size.max(l.font_size)
+            }) {
+                Some(s) => s.lines.push((pi, li)),
+                None => slots.push(Slot {
+                    rel_y,
+                    x0: l.bbox.x0,
+                    x1: l.bbox.x1,
+                    size: l.font_size,
+                    lines: vec![(pi, li)],
+                }),
+            }
+        }
+    }
+    // Facing pages mirror their heads, flush left on one side of the spread
+    // and flush right on the other: a slot on even pages only and one on
+    // odd pages only, at one height and in one style, are one slot where
+    // the two sides set the same name. A book's title over its left-hand
+    // pages and the chapter's name over its right-hand ones are two.
+    let shares_name = |a: &Slot, b: &Slot| {
+        a.lines.iter().any(|&(pi, li)| {
+            let k = key(&pages[pi].0[li].text);
+            b.lines
+                .iter()
+                .any(|&(pj, lj)| key(&pages[pj].0[lj].text) == k)
+        })
+    };
+    let parity = |s: &Slot| {
+        let p = s.lines[0].0 % 2;
+        s.lines.iter().all(|&(pi, _)| pi % 2 == p).then_some(p)
+    };
+    let mut i = 0;
+    while i < slots.len() {
+        if let Some(p) = parity(&slots[i]) {
+            let facing = (i + 1..slots.len()).find(|&j| {
+                parity(&slots[j]) == Some(1 - p)
+                    && (slots[j].rel_y - slots[i].rel_y).abs() < POSITION_TOLERANCE
+                    && (slots[j].size - slots[i].size).abs()
+                        <= SAME_STYLE_SIZE * slots[j].size.max(slots[i].size)
+                    && shares_name(&slots[i], &slots[j])
+            });
+            if let Some(j) = facing {
+                let other = slots.remove(j);
+                slots[i].lines.extend(other.lines);
+                slots[i].lines.sort_unstable();
+            }
+        }
+        i += 1;
+    }
+    let body = crate::block::body_size(pages.iter().flat_map(|(lines, _)| lines));
+    let bookmarks: Vec<(usize, String)> = bookmarks
+        .iter()
+        .map(|(pi, title)| (*pi, key(title)))
+        .collect();
+    // Larger than the body by the margin a font-size heading needs.
+    let display = |pi: usize, li: usize| {
+        pages[pi].0[li].font_size as f64 > body * (1.0 + crate::heading::HEADING_SIZE_MARGIN)
+    };
+    for slot in slots {
+        let texts: Vec<String> = slot
+            .lines
+            .iter()
+            .map(|&(pi, li)| key(&pages[pi].0[li].text))
+            .collect();
+        let names: std::collections::HashSet<&str> = texts.iter().map(String::as_str).collect();
+        // The page the outline opened `name`'s section at, where the page
+        // `pi` is in it: the last of the slot's names bookmarked at or
+        // before the page. A bookmark lands where its section opens, which
+        // may be before the first page its running head is set on: the
+        // page before, where facing pages set the head on every other one,
+        // or the document's first page for its first section.
+        let opened = |name: &str, pi: usize| {
+            bookmarks
+                .iter()
+                .filter(|(p, k)| *p <= pi && names.contains(k.as_str()))
+                .max_by_key(|(p, _)| *p)
+                .filter(|(_, k)| k == name)
+                .map(|(p, _)| *p)
+        };
+        // The slot's runs of one name, in page order.
+        let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+        for (k, t) in texts.iter().enumerate() {
+            match runs.last_mut() {
+                Some(r) if texts[r.start] == *t => r.end = k + 1,
+                _ => runs.push(k..k + 1),
+            }
+        }
+        // Each name's first copy, and whether it is set as a heading there.
+        let mut first: std::collections::HashMap<&str, bool> = Default::default();
+        for r in &runs {
+            let (pi, li) = slot.lines[r.start];
+            let name = texts[r.start].as_str();
+            first
+                .entry(name)
+                .or_insert_with(|| display(pi, li) || opened(name, pi).is_some());
+        }
+        let sections = first
+            .iter()
+            .filter(|(name, set)| {
+                **set
+                    && runs
+                        .iter()
+                        .any(|r| texts[r.start] == **name && r.len() >= 2)
+            })
+            .count();
+        if sections < 2 {
+            continue;
+        }
+        // A name's later runs go on with its section: only its first run
+        // keeps a copy as the heading.
+        let mut named: std::collections::HashSet<&str> = Default::default();
+        for r in &runs {
+            let name = texts[r.start].as_str();
+            if !first[name] {
+                continue;
+            }
+            let run = &slot.lines[r.clone()];
+            let (first_page, _) = run[0];
+            // The same words set anywhere else on the page, no smaller than
+            // the head: the section's own heading, wherever it stands, on
+            // one line or broken over two in one style (`Federal Reserve
+            // Bank of` over `St. Louis`). An agenda or contents entry naming
+            // the section is set smaller.
+            let size = pages[first_page].0[run[0].1].font_size;
+            let in_body = |pi: usize| {
+                pages.get(pi).is_some_and(|(lines, _)| {
+                    let own = |li: usize| {
+                        !slot.lines.contains(&(pi, li))
+                            && lines[li].font_size >= size * (1.0 - SAME_STYLE_SIZE)
+                    };
+                    (0..lines.len()).any(|li| {
+                        own(li)
+                            && (key(&lines[li].text) == name
+                                || lines.get(li + 1).is_some_and(|m| {
+                                    own(li + 1)
+                                        && (m.font_size - lines[li].font_size).abs()
+                                            <= SAME_STYLE_SIZE
+                                                * m.font_size.max(lines[li].font_size)
+                                        && key(&format!("{} {}", lines[li].text, m.text)) == name
+                                }))
+                    })
+                })
+            };
+            // From the page the outline opened the section at, or the page
+            // before, to the head's first page.
+            let from = opened(name, first_page)
+                .unwrap_or(first_page)
+                .min(first_page.saturating_sub(1));
+            let headed = !named.insert(name) || (from..=first_page).any(in_body);
+            for (k, &(pi, li)) in run.iter().enumerate() {
+                if k == 0 && !headed {
+                    out[pi].remove(&li);
+                    exact[pi].remove(&li);
+                    heads[pi].insert(li);
+                } else if let std::collections::btree_map::Entry::Vacant(e) = out[pi].entry(li) {
+                    e.insert(Furniture::Header);
+                    exact[pi].insert(li);
+                }
+            }
+        }
+    }
+    heads
+}
+
+/// A line that could name a section: a few words with letters in them, not
+/// a page's number or a running line of figures.
+fn names_a_section(text: &str) -> bool {
+    let words = text.split_whitespace().count();
+    (1..=MAX_SECTION_HEAD_WORDS).contains(&words)
+        && text.chars().filter(|c| c.is_alphabetic()).count() >= 3
+        && !says_page(text)
 }
 
 /// A page's number where no other page's says how they are numbered: a
@@ -1225,6 +1547,264 @@ mod tests {
         (0..n).map(|i| (f(i), 1000.0)).collect()
     }
 
+    /// A line at `y` set larger than the test lines' body, as a heading is.
+    fn head(text: &str, y: f64) -> Line {
+        let mut l = line(text, y);
+        l.font_size = 16.0;
+        l
+    }
+
+    #[test]
+    fn a_running_head_naming_its_section_keeps_its_first_copy() {
+        // Twelve pages; the head slot names the section the page is in:
+        // `Installation` on pages 0-3, `Maintenance` on 4-8, `Warranty`
+        // on 9-11, under a series name that runs on every page.
+        let name = |i: usize| match i {
+            0..=3 => "Installation",
+            4..=8 => "Maintenance",
+            _ => "Warranty",
+        };
+        let sheet = |set: fn(&str, f64) -> Line| {
+            doc(12, move |i| {
+                vec![
+                    line("Model 40 Series", 30.0),
+                    set(name(i), 60.0),
+                    line(&format!("Text on page {i} of its section."), 400.0),
+                ]
+            })
+        };
+        let firsts = [
+            (0, true),
+            (1, false),
+            (4, true),
+            (7, false),
+            (9, true),
+            (11, false),
+        ];
+        let (marks, _, heads) = detect_with_heads(&sheet(head), &[]);
+        for (i, first) in firsts {
+            assert_eq!(heads[i].contains(&1), first, "page {i}");
+            assert_eq!(marks[i].contains_key(&1), !first, "page {i}");
+        }
+        // Set at the body's size, the names are told from the page by
+        // their repetition alone, and left to it.
+        let pages = sheet(line);
+        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(heads.iter().all(|h| h.is_empty()));
+        assert_eq!(marks, detect(&pages));
+        // Unless the outline names each where it starts.
+        let bookmarks: Vec<(usize, String)> = [0, 4, 9]
+            .into_iter()
+            .map(|i| (i, name(i).to_string()))
+            .collect();
+        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks);
+        for (i, first) in firsts {
+            assert_eq!(heads[i].contains(&1), first, "page {i}");
+            assert_eq!(marks[i].contains_key(&1), !first, "page {i}");
+        }
+        // A section whose heading is set in its first page's body: every
+        // copy in the slot runs.
+        let pages = doc(12, |i| {
+            let mut ls = vec![line("Model 40 Series", 30.0), head(name(i), 60.0)];
+            if i == 4 {
+                ls.push(head("Maintenance", 300.0));
+            }
+            ls.push(line(&format!("Text on page {i}."), 400.0));
+            ls
+        });
+        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(!heads[4].contains(&1));
+        assert!(heads[0].contains(&1));
+        // A chapter's title over the page before has it too; an agenda's
+        // entry there, set smaller than the head, is no heading.
+        for (size, kept) in [(24.0, false), (10.0, true)] {
+            let pages = doc(12, |i| {
+                let mut ls = vec![line("Model 40 Series", 30.0), head(name(i), 60.0)];
+                if i == 3 {
+                    let mut l = line("Maintenance", 500.0);
+                    l.font_size = size;
+                    ls.push(l);
+                }
+                ls.push(line(&format!("Text on page {i}."), 400.0));
+                ls
+            });
+            let (_, _, heads) = detect_with_heads(&pages, &[]);
+            assert_eq!(heads[4].contains(&1), kept, "{size}pt");
+        }
+        // A slot whose names each appear once is each page's own title.
+        let pages = doc(6, |i| {
+            vec![
+                head(
+                    &format!(
+                        "Topic number {}",
+                        ["one", "two", "three", "four", "five", "six"][i]
+                    ),
+                    60.0,
+                ),
+                line("Text.", 400.0),
+            ]
+        });
+        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(heads.iter().all(|h| h.is_empty()));
+        // A title page's title, then one running title over the rest.
+        let pages = doc(9, |i| {
+            vec![
+                head(
+                    if i == 0 {
+                        "Field Guide"
+                    } else {
+                        "Northern Region"
+                    },
+                    60.0,
+                ),
+                line(&format!("Text on page {i}."), 400.0),
+            ]
+        });
+        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(heads.iter().all(|h| h.is_empty()));
+    }
+
+    /// A line set from `x0` to `x1` at `y`, at the test lines' size.
+    fn line_at(text: &str, y: f64, x0: f64, x1: f64) -> Line {
+        let mut l = line(text, y);
+        l.bbox.x0 = x0;
+        l.bbox.x1 = x1;
+        l
+    }
+
+    /// A line set from `x0` to `x1` at `y`, at the size of a heading.
+    fn head_at(text: &str, y: f64, x0: f64, x1: f64) -> Line {
+        let mut l = head(text, y);
+        l.bbox.x0 = x0;
+        l.bbox.x1 = x1;
+        l
+    }
+
+    #[test]
+    fn a_running_head_mirrored_on_facing_pages_is_one_slot() {
+        // Nine pages, the head flush left on even pages and flush right on
+        // odd ones, its left edge moving with the name's length. Read as two
+        // slots, each would keep a first copy of its own (`Assembly` on
+        // pages 0 and 1).
+        let name = |i: usize| match i {
+            0..=2 => "Assembly",
+            3..=5 => "Operation",
+            _ => "Service",
+        };
+        let pages = doc(9, |i| {
+            let width = 11.0 * name(i).len() as f64;
+            let head = if i % 2 == 0 {
+                head_at(name(i), 45.0, 40.0, 40.0 + width)
+            } else {
+                head_at(name(i), 45.0, 570.0 - width, 570.0)
+            };
+            vec![head, line(&format!("Text on page {i}."), 400.0)]
+        });
+        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        for i in 0..9 {
+            let first = [0, 3, 6].contains(&i);
+            assert_eq!(heads[i].contains(&0), first, "page {i}");
+            assert_eq!(marks[i].contains_key(&0), !first, "page {i}");
+        }
+    }
+
+    #[test]
+    fn a_bookmark_opens_its_section_before_its_running_head() {
+        // Each section opens on an even page with its heading, large, and
+        // bookmarked there. Its name runs at the body's size over the later
+        // right-hand pages, flush right; the book's title runs over the
+        // left-hand ones, flush left, at the same height and in the same
+        // style. The name's first running copy is two pages after its
+        // bookmark, and every copy runs: the section has its heading.
+        let name = |i: usize| {
+            if i < 6 {
+                "Northern Region"
+            } else {
+                "Central Region"
+            }
+        };
+        let pages = doc(12, |i| {
+            let mut ls = vec![];
+            if i % 6 == 0 {
+                let mut l = line(name(i), 120.0);
+                l.font_size = 24.0;
+                ls.push(l);
+            } else if i % 2 == 0 {
+                ls.push(line_at(name(i), 30.0, 420.0, 560.0));
+            } else {
+                ls.push(line_at("Annual Review", 30.0, 40.0, 140.0));
+            }
+            ls.push(line(&format!("Text on page {i}."), 400.0));
+            ls
+        });
+        let bookmarks = vec![(0, name(0).to_string()), (6, name(6).to_string())];
+        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks);
+        assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
+        for i in [2, 4, 8, 10] {
+            assert!(marks[i].contains_key(&0), "page {i}");
+        }
+    }
+
+    #[test]
+    fn a_line_of_a_block_is_no_running_head() {
+        // A margin label at the head of each page, beside its article's
+        // number and the first line of its text: `Article` over six pages,
+        // `Annex` over four. Each is a line of its row, not a head.
+        let pages = doc(10, |i| {
+            let label = if i < 6 { "Article" } else { "Annex" };
+            vec![
+                head_at(label, 100.0, 40.0, 110.0),
+                head_at(&format!("{}", i / 2 + 1), 100.0, 150.0, 160.0),
+                line_at(&format!("(a) the text of page {i}"), 102.0, 200.0, 560.0),
+                line(&format!("Text on page {i}."), 400.0),
+            ]
+        });
+        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
+        assert_eq!(marks, detect(&pages));
+        // A display title of two lines, the first shared by a product's
+        // two variants on facing pages: a title's line, not a running head.
+        let pages = doc(6, |i| {
+            let first = ["Lumen Series", "Aurora Series", "Nova Series"][i / 2];
+            let second = ["Red", "Blue", "Green", "Black", "White", "Grey"][i];
+            vec![
+                head_at(first, 40.0, 60.0, 260.0),
+                head_at(&format!("{second} Variant"), 58.0, 60.0, 240.0),
+                line(&format!("Text on page {i}."), 400.0),
+            ]
+        });
+        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
+        assert_eq!(marks, detect(&pages));
+    }
+
+    #[test]
+    fn a_running_row_merged_names_no_section() {
+        // A head of three groups, set apart on every page but two, where
+        // they run together as one line: the merged line is the running
+        // line leaking, not a second name in the date's slot.
+        let pages = doc(10, |i| {
+            let mut ls = if i == 6 || i == 7 {
+                vec![head_at(
+                    "May 2, 2030 Quarterly Review DRAFT",
+                    30.0,
+                    40.0,
+                    560.0,
+                )]
+            } else {
+                vec![
+                    head_at("May 2, 2030", 30.0, 40.0, 140.0),
+                    head_at("Quarterly Review", 30.0, 250.0, 400.0),
+                    head_at("DRAFT", 30.0, 510.0, 560.0),
+                ]
+            };
+            ls.push(line(&format!("Text on page {i}."), 400.0));
+            ls
+        });
+        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
+    }
+
     #[test]
     fn detects_repeated_footer() {
         let pages = doc(10, |i| {
@@ -1332,22 +1912,31 @@ mod tests {
     }
 
     #[test]
-    fn a_title_that_varies_from_page_to_page_is_not_running() {
-        // A spec sheet's title names the model on some pages and not on
-        // others: `DISHWASHER` alone where the others say which.
+    fn a_title_that_varies_from_page_to_page_runs_whole_after_its_first_copy() {
+        // A sheet's title names the part the page is in, and some pages set
+        // the short name alone: each name is kept at its first page and
+        // runs after it, read as the whole line it is, so the short name is
+        // not cut from the longer ones.
         let pages = doc(8, |i| {
             let title = match i {
-                1 | 2 => "DISHWASHER – ELECTRIC",
-                3 | 4 => "DISHWASHER – GAS",
-                _ => "DISHWASHER",
+                1 | 2 => "PUMP – DIESEL",
+                3 | 4 => "PUMP – PETROL",
+                _ => "PUMP",
             };
             vec![
-                line(title, 60.0),
+                head(title, 60.0),
                 line(&format!("Body text of page {i}"), 400.0),
             ]
         });
-        let marks = detect(&pages);
-        assert!(marks.iter().all(|m| m.get(&0).is_none()), "{marks:?}");
+        let (marks, exact, heads) = detect_with_heads(&pages, &[]);
+        for (i, kept) in [true, true, false, true, false, false, false, false]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(heads[i].contains(&0), kept, "page {i}");
+            assert_eq!(marks[i].contains_key(&0), !kept, "page {i}");
+            assert_eq!(exact[i].contains(&0), !kept, "page {i}");
+        }
     }
 
     #[test]
