@@ -1183,18 +1183,7 @@ pub fn keep_running(
         .position(|e| e.page >= first)
         .unwrap_or(elements.len());
     elements.splice(before..before, head);
-    // A continued table names the part before it by id.
-    let mut renamed = std::collections::HashMap::new();
-    for (i, e) in elements.iter_mut().enumerate() {
-        let id = format!("elem-{:05}", i + 1);
-        let old = std::mem::replace(&mut e.id, id.clone());
-        renamed.insert(old, id);
-    }
-    for e in elements.iter_mut() {
-        if let Some(new) = e.continues.as_ref().and_then(|c| renamed.get(c)) {
-            e.continues = Some(new.clone());
-        }
-    }
+    crate::document::renumber(elements);
 }
 
 #[cfg(test)]

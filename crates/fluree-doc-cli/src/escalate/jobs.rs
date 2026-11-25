@@ -1,11 +1,14 @@
 //! What the CLI knows about a document's crops that the library does not.
 //!
 //! The crop set is chosen in one place, the library's
-//! [`fluree_doc_pdf::escalate::plan`], for every command that asks:
-//! `fdoc dev render-routed` writes them to disk for an external reader,
-//! `fdoc convert --escalate` sends them to a configured one, and `fdoc
-//! triage` counts them. They must agree — a crop set that differs between
-//! them means the cached benchmark scores describe a pipeline nobody runs.
+//! [`fluree_doc_pdf::escalate`], for every command that asks: `fdoc dev
+//! render-routed` writes them to disk for an external reader and `fdoc
+//! triage` counts them, both from `plan`, and `fdoc convert --escalate`
+//! sends them to a configured one, from the analysis it splices into. All
+//! three take `crops_at_anchors` of an analysis made with the same options,
+//! so each region crop is named after the anchor it fills. They must agree
+//! — a crop set that differs between them means the cached benchmark scores
+//! describe a pipeline nobody runs.
 //! What the CLI adds is its hints: the layout detector's table boxes, from
 //! sidecar files, and whether column doubt escalates.
 

@@ -541,59 +541,76 @@ fn replace_read_pages(
     // vanish: the one page the reader was asked to read was the one page
     // never visited. `page_text` is the page count when the caller has one.
     let mut order: Vec<usize> = elements.iter().map(|e| e.page).collect();
-    order.extend((0..page_text.len()).filter(|page| {
-        readings
-            .read(stem, &format!("p{page}_full"))
-            .is_some_and(|blocks| !blocks.is_empty())
-    }));
+    order.extend(0..page_text.len());
     order.sort_unstable();
     order.dedup();
-    if order.is_empty() {
+    // Each page's reading, read once.
+    let read: std::collections::BTreeMap<usize, String> = order
+        .into_iter()
+        .filter_map(|page| {
+            readings
+                .read(stem, &format!("p{page}_full"))
+                .as_deref()
+                .and_then(blocks_to_text)
+                // A reading that lost most of the page's own words did not
+                // read a shorter page; it arrived truncated. Keeping the
+                // deterministic elements is the recoverable failure — half a
+                // page substituted for a whole one is not.
+                .filter(|text| {
+                    page_text
+                        .get(page)
+                        .and_then(|lines| crate::fidelity::letter_retention(text, lines))
+                        .is_none_or(|kept| kept >= MIN_PAGE_RETENTION)
+                })
+                .map(|text| (page, text))
+        })
+        .collect();
+    // No page read whole, the common case: nothing to substitute.
+    if read.is_empty() {
         return;
     }
     let mut out: Vec<Element> = Vec::with_capacity(elements.len());
-    for page in order {
-        let text = readings
-            .read(stem, &format!("p{page}_full"))
-            .as_deref()
-            .and_then(blocks_to_text)
-            // A reading that lost most of the page's own words did not read a
-            // shorter page; it arrived truncated. Keeping the deterministic
-            // elements is the recoverable failure — half a page substituted
-            // for a whole one is not.
-            .filter(|text| {
-                page_text
-                    .get(page)
-                    .and_then(|lines| crate::fidelity::letter_retention(text, lines))
-                    .is_none_or(|kept| kept >= MIN_PAGE_RETENTION)
-            });
-        match text {
-            Some(text) => out.push(Element {
-                page,
-                bbox: elements
-                    .iter()
-                    .find(|e| e.page == page)
-                    .and_then(|e| e.bbox),
-                // A whole-page VLM reading is a block of prose, so it is a
-                // text-bearing leaf like every other one this crate emits
-                // (`overlay.rs`, `link.rs`, `document.rs`). It was
-                // `doco:Section`, which in DoCO is a *container* holding a
-                // `doco:SectionTitle` — and consumers treat it as one:
-                // Solo's embedder recurses into a Section's children for
-                // text and never reads the node's own `nif:isString`, so an
-                // escalated page produced zero chunks and failed the run
-                // with "empty document body?" while carrying the full text.
-                ..Element::new("doco:Paragraph", text, "vlm", "page-tier")
-            }),
-            None => out.extend(elements.iter().filter(|e| e.page == page).cloned()),
+    let mut pending = read.into_iter().peekable();
+    let mut taken: Option<usize> = None;
+    for e in std::mem::take(elements) {
+        // A page read whole with no element before this one, a scan: its
+        // reading goes where its page falls.
+        while let Some((page, text)) = pending.next_if(|(page, _)| *page < e.page) {
+            out.push(page_reading(page, None, text));
+        }
+        if taken == Some(e.page) {
+            continue;
+        }
+        match pending.next_if(|(page, _)| *page == e.page) {
+            // The first element of a page read whole: the reading takes the
+            // place of the page's run, and the rest of the run goes.
+            Some((page, text)) => {
+                out.push(page_reading(page, e.bbox, text));
+                taken = Some(page);
+            }
+            None => out.push(e),
         }
     }
-    // Ids are assigned in emission order, and a substituted page changes how
-    // many elements precede every later one.
-    for (i, e) in out.iter_mut().enumerate() {
-        e.id = format!("elem-{:05}", i + 1);
-    }
+    out.extend(pending.map(|(page, text)| page_reading(page, None, text)));
     *elements = out;
+}
+
+/// A whole-page reading as the one element that stands for its page.
+fn page_reading(page: usize, bbox: Option<crate::geom::BBox>, text: String) -> Element {
+    Element {
+        page,
+        bbox,
+        // A whole-page VLM reading is a block of prose, so it is a
+        // text-bearing leaf like every other one this crate emits
+        // (`overlay.rs`, `link.rs`, `document.rs`). It was
+        // `doco:Section`, which in DoCO is a *container* holding a
+        // `doco:SectionTitle` — and consumers treat it as one:
+        // Solo's embedder recurses into a Section's children for
+        // text and never reads the node's own `nif:isString`, so an
+        // escalated page produced zero chunks and failed the run
+        // with "empty document body?" while carrying the full text.
+        ..Element::new("doco:Paragraph", text, "vlm", "page-tier")
+    }
 }
 
 /// As [`splice`], with each page's own text so a reading can be checked
@@ -608,12 +625,61 @@ pub fn splice_with_page(
     structure: Option<&dyn TierBackend>,
     pages: &[Vec<String>],
 ) {
+    splice_anchors(elements, stem, readings, structure, pages, false)
+}
+
+/// As [`splice_with_page`], but an anchor no reading answers stays in the
+/// output instead of dropping, for a later tier to fill.
+///
+/// For a caller that asked for anchors and reads some of them itself: what
+/// its reader answered lands, and a crop it left out is still marked where
+/// it belongs. An anchor that was answered and lost to arbitration or the
+/// three-way veto drops as it does in [`splice_with_page`]: the deterministic
+/// text standing there was chosen, not left waiting. So does one answered
+/// with nothing to read: a crop the reader found nothing printed on is
+/// answered with an empty reading, not left out of `readings`. And so do the
+/// anchors on a page read whole (`pN_full` in `readings`), whatever that
+/// reading made of the page: their regions were read as part of it.
+///
+/// On a page planned whole and left unread (`escalation.max_crops` cut it,
+/// or its `pN_full` sidecar is missing) the anchors stay. No crop of their
+/// name is planned on such a page, so what answers them is the page's own
+/// reading, `pN_full`, which replaces the page and its anchors with it.
+pub fn splice_leaving_unanswered(
+    elements: &mut Vec<Element>,
+    stem: &str,
+    readings: &dyn TierBackend,
+    structure: Option<&dyn TierBackend>,
+    pages: &[Vec<String>],
+) {
+    splice_anchors(elements, stem, readings, structure, pages, true)
+}
+
+fn splice_anchors(
+    elements: &mut Vec<Element>,
+    stem: &str,
+    readings: &dyn TierBackend,
+    structure: Option<&dyn TierBackend>,
+    pages: &[Vec<String>],
+    keep_unanswered: bool,
+) {
     // Page tier: a full-page reading replaces that page, and only that page.
     //
     // Per page rather than per document. A page escalates on its own evidence
     // — no usable text layer, or a hierarchy resting on nothing — and a long
     // report with one such page must not lose the other twenty-four to it.
     replace_read_pages(elements, stem, readings, pages);
+
+    // A page read whole was read in place of its regions and tables, which
+    // were never cropped on their own: an anchor still standing on it, after
+    // a page reading that came back empty or lost to the deterministic text,
+    // has no crop of its name to wait for, and counts as answered.
+    let mut read_whole: std::collections::HashMap<usize, bool> = Default::default();
+    let mut page_read = |page: usize| {
+        *read_whole
+            .entry(page)
+            .or_insert_with(|| readings.read(stem, &format!("p{page}_full")).is_some())
+    };
 
     let mut out: Vec<Element> = Vec::with_capacity(elements.len());
     let mut i = 0;
@@ -626,11 +692,9 @@ pub fn splice_with_page(
         };
         match kind {
             AnchorKind::Region | AnchorKind::Insert => {
-                if let Some(mut text) = readings
-                    .read(stem, &crop)
-                    .as_deref()
-                    .and_then(blocks_to_text)
-                {
+                let reading = readings.read(stem, &crop);
+                let answered = reading.is_some() || page_read(e.page);
+                if let Some(mut text) = reading.as_deref().and_then(blocks_to_text) {
                     let chart_title = if kind == AnchorKind::Region {
                         promote_response_chart_title(&text)
                     } else {
@@ -652,8 +716,11 @@ pub fn splice_with_page(
                         "region-splice"
                     };
                     out.push(el);
+                } else if keep_unanswered && !answered {
+                    out.push(elements[i].clone());
                 }
-                // No reading → the anchor drops; deterministic output stands.
+                // No reading → the anchor drops, unless asked to wait for
+                // one; deterministic output stands.
                 i += 1;
             }
             AnchorKind::Table => {
@@ -700,22 +767,24 @@ pub fn splice_with_page(
                 // replace with the *whole* reading — crops often carry a
                 // caption or note alongside the table, and dropping them
                 // loses content the deterministic pass never had.
-                let replacement = if vetoed {
+                let reading = if vetoed {
                     None
                 } else {
-                    readings.read(stem, &crop).and_then(|blocks| {
-                        let frag = blocks_to_text(&blocks)?;
-                        let page_lines = pages.get(page_no).map(|v| v.as_slice()).unwrap_or(&[]);
-                        reading_wins_full(
-                            &frag,
-                            ours_rows,
-                            ours_cols,
-                            page_lines,
-                            ours_cells.as_deref(),
-                        )
-                        .then_some(frag)
-                    })
+                    readings.read(stem, &crop)
                 };
+                let answered = vetoed || reading.is_some() || page_read(page_no);
+                let replacement = reading.and_then(|blocks| {
+                    let frag = blocks_to_text(&blocks)?;
+                    let page_lines = pages.get(page_no).map(|v| v.as_slice()).unwrap_or(&[]);
+                    reading_wins_full(
+                        &frag,
+                        ours_rows,
+                        ours_cols,
+                        page_lines,
+                        ours_cells.as_deref(),
+                    )
+                    .then_some(frag)
+                });
 
                 match (replacement, table_at) {
                     (Some(html), Some(t)) => {
@@ -737,12 +806,19 @@ pub fn splice_with_page(
                         i = skip_to;
                     }
                     _ => {
-                        i += 1; // anchor drops, table stands
+                        if keep_unanswered && !answered {
+                            out.push(elements[i].clone());
+                        }
+                        i += 1; // anchor drops unless kept above, table stands
                     }
                 }
             }
         }
     }
+    // Ids are assigned in emission order, anchors included, and a
+    // substituted page or a dropped anchor changes how many elements precede
+    // every later one.
+    crate::document::renumber(&mut out);
     *elements = out;
 }
 
@@ -943,6 +1019,57 @@ mod tests {
         }
     }
 
+    /// The analysis numbers its anchors with the other elements, so an
+    /// anchor the splice drops left a gap in every id after it, and an id
+    /// that differs from the run without a reader. A continued table keeps
+    /// naming the part before it, and names none when that part was read
+    /// away with its page.
+    #[test]
+    fn ids_follow_the_elements_the_splice_leaves() {
+        let numbered = || {
+            let mut els = vec![
+                on_page(0, "prose"),
+                on_page(0, "[[VLMTAB:p0:t0]]"),
+                Element {
+                    page: 0,
+                    ..Element::new("doco:Table", "first part", "rust", "layout")
+                },
+                Element {
+                    page: 1,
+                    ..Element::new("doco:Table", "second part", "rust", "layout")
+                },
+            ];
+            for (i, e) in els.iter_mut().enumerate() {
+                e.id = format!("elem-{:05}", i + 1);
+            }
+            els[3].continues = Some("elem-00003".into());
+            els
+        };
+        let ids = |els: &[Element]| {
+            els.iter()
+                .map(|e| (e.id.clone(), e.continues.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let mut els = numbered();
+        splice(&mut els, "doc", &OneReading("nothing", ""), None);
+        assert_eq!(
+            ids(&els),
+            [
+                ("elem-00001".into(), None),
+                ("elem-00002".into(), None),
+                ("elem-00003".into(), Some("elem-00002".into())),
+            ]
+        );
+
+        let mut els = numbered();
+        splice(&mut els, "doc", &OneReading("p0_full", "page one"), None);
+        assert_eq!(
+            ids(&els),
+            [("elem-00001".into(), None), ("elem-00002".into(), None)]
+        );
+    }
+
     #[test]
     fn a_page_reading_replaces_that_page_and_leaves_the_rest() {
         let mut els = vec![
@@ -1052,5 +1179,148 @@ mod tests {
         let mut els = vec![on_page(0, "Summary of findings")];
         scrub_furniture(&mut els, &furniture);
         assert_eq!(els[0].text, "Summary of findings");
+    }
+
+    /// A backend holding a reading per crop name, a table where it reads as
+    /// one.
+    struct Crops(&'static [(&'static str, &'static str)]);
+
+    impl TierBackend for Crops {
+        fn read(&self, _stem: &str, crop: &str) -> Option<Vec<Block>> {
+            let (_, content) = self.0.iter().find(|(name, _)| *name == crop)?;
+            Some(vec![Block {
+                label: if content.starts_with("<table") {
+                    "table"
+                } else {
+                    "text"
+                }
+                .into(),
+                content: (*content).into(),
+            }])
+        }
+    }
+
+    /// A region anchor, then a table anchor labelling the 2x2 grid after it.
+    fn anchored_page() -> Vec<Element> {
+        vec![
+            on_page(0, "[[VLM:p0:r0]]"),
+            on_page(0, "[[VLMTAB:p0:t0]]"),
+            Element {
+                cells: Some(vec![
+                    vec!["a".into(), "b".into()],
+                    vec!["c".into(), "d".into()],
+                ]),
+                ..Element::new("doco:Table", "a b c d", "rust", "grid")
+            },
+        ]
+    }
+
+    fn anchors(elements: &[Element]) -> Vec<&str> {
+        elements
+            .iter()
+            .filter(|e| parse_anchor(&e.text).is_some())
+            .map(|e| e.text.as_str())
+            .collect()
+    }
+
+    /// Nothing answered either anchor. Spliced as usual they drop; asked to
+    /// wait, they stay for a later tier, and the grid stands either way.
+    #[test]
+    fn an_anchor_no_reading_answers_waits_only_when_asked_to() {
+        let none = Crops(&[]);
+        let mut dropped = anchored_page();
+        splice_with_page(&mut dropped, "doc", &none, None, &[]);
+        assert!(anchors(&dropped).is_empty());
+        let mut kept = anchored_page();
+        splice_leaving_unanswered(&mut kept, "doc", &none, None, &[]);
+        assert_eq!(anchors(&kept), ["[[VLM:p0:r0]]", "[[VLMTAB:p0:t0]]"]);
+        assert_eq!(kept.last().unwrap().provenance, "rust");
+    }
+
+    /// An answered anchor is not waiting: a region reading lands, and a table
+    /// the three-way veto kept deterministic loses its anchor as it would
+    /// without the wait.
+    #[test]
+    fn an_answered_anchor_does_not_wait() {
+        let vlm = Crops(&[
+            ("p0_r0", "Revenue rose 12%."),
+            (
+                "p0_t0",
+                "<table><tr><td>w</td><td>x</td></tr><tr><td>y</td><td>z</td></tr></table>",
+            ),
+        ]);
+        let structure = Crops(&[(
+            "p0_t0",
+            "<table><tr><td>ab</td></tr><tr><td>cd</td></tr></table>",
+        )]);
+        let mut elements = anchored_page();
+        splice_leaving_unanswered(&mut elements, "doc", &vlm, Some(&structure), &[]);
+        assert!(anchors(&elements).is_empty(), "{elements:?}");
+        assert_eq!(elements[0].text, "Revenue rose 12%.");
+        assert_eq!(elements[1].provenance, "rust", "the veto kept the grid");
+    }
+
+    /// A reading that says nothing is still an answer: a region answered
+    /// with prose about the image, or with nothing at all, and a table
+    /// answered with nothing, lose their anchors with nothing landing.
+    #[test]
+    fn an_anchor_answered_with_nothing_to_read_does_not_wait() {
+        for region in ["There is no text in this image.", ""] {
+            let vlm = Crops(if region.is_empty() {
+                &[("p0_r0", ""), ("p0_t0", "")]
+            } else {
+                &[("p0_r0", "There is no text in this image.")]
+            });
+            let mut elements = anchored_page();
+            splice_leaving_unanswered(&mut elements, "doc", &vlm, None, &[]);
+            let expected: &[&str] = if region.is_empty() {
+                &[]
+            } else {
+                &["[[VLMTAB:p0:t0]]"]
+            };
+            assert_eq!(anchors(&elements), expected, "{region:?}");
+            assert!(elements.iter().all(|e| e.provenance == "rust"));
+        }
+    }
+
+    /// A table reading that loses the shape arbitration was answered: the
+    /// grid stands, and its anchor drops as it does without the wait.
+    #[test]
+    fn a_table_reading_that_loses_arbitration_does_not_wait() {
+        // The same two rows with two columns merged into one: the grid's
+        // finer split wins.
+        let vlm = Crops(&[(
+            "p0_t0",
+            "<table><tr><td>a b</td></tr><tr><td>c d</td></tr></table>",
+        )]);
+        let mut elements = anchored_page();
+        splice_leaving_unanswered(&mut elements, "doc", &vlm, None, &[]);
+        assert_eq!(anchors(&elements), ["[[VLM:p0:r0]]"]);
+        assert_eq!(elements.last().unwrap().provenance, "rust");
+    }
+
+    /// A page read whole was read in place of its region and table crops,
+    /// which were never made. When that reading comes back empty, or loses
+    /// to the page's own text, the deterministic page stands, and its
+    /// anchors drop: nothing will ever be read under their names.
+    #[test]
+    fn the_anchors_of_a_page_read_whole_do_not_wait() {
+        // Enough letters for retention to judge a reading by.
+        let page_text = vec![vec![
+            "The quarterly figures follow in the table below."
+                .to_string();
+            3
+        ]];
+        for vlm in [Crops(&[("p0_full", "")]), Crops(&[("p0_full", "a")])] {
+            let mut elements = anchored_page();
+            splice_leaving_unanswered(&mut elements, "doc", &vlm, None, &page_text);
+            assert!(anchors(&elements).is_empty(), "{elements:?}");
+            assert!(elements.iter().all(|e| e.provenance == "rust"));
+        }
+        // Another page read whole leaves this one's anchors waiting.
+        let vlm = Crops(&[("p1_full", "")]);
+        let mut elements = anchored_page();
+        splice_leaving_unanswered(&mut elements, "doc", &vlm, None, &page_text);
+        assert_eq!(anchors(&elements), ["[[VLM:p0:r0]]", "[[VLMTAB:p0:t0]]"]);
     }
 }

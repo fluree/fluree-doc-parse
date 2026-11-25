@@ -12,7 +12,7 @@ tiers](../integration/escalation-tiers.md).
 | `FDOC_TIER_RESULTS` | `--tier-results` | model readings of crops (tier 4) |
 | `FDOC_ESCALATE_COLUMNS` | `escalation.on_column_doubt` | also escalate pages whose columns the segmentation cannot represent — see below |
 | `FDOC_STRUCTURE_RESULTS` | `--structure-results` | table-structure readings (tier 3/5) |
-| `FDOC_VLM_ANCHORS` | `--emit-anchors` | emit `[[VLM:…]]` tokens |
+| `FDOC_VLM_ANCHORS` | `--emit-anchors` | emit `[[VLM:…]]` tokens; with a reader, keep the ones it did not answer — see [Anchors](../integration/anchors.md#interaction-with---tier-results) |
 | `FDOC_HOME` | — | where the per-user [config](../cli/config.md) lives, overriding the platform default |
 
 Presence is what counts for the boolean ones — any value, including an empty

@@ -55,9 +55,13 @@ Four line kinds, and they answer different questions:
 | `CROPS` | how many crops a configured reader would be handed for the document |
 
 `ROUTE`, `TABLE`, `HEADING` and `FIGURE` escalate on their own evidence once a
-reader is configured. `CROPS` is the sum of what they and the table anchors
-would send — the number a consumer's cap is measured against, printed before
-anything is paid for. It is capped in `fdoc convert` by
+reader is configured. `CROPS` is what they and the table anchors would send
+— the crops `dev render-routed` writes and `convert --escalate` pays for, the
+number a consumer's cap is measured against, printed before anything is
+paid for. It is taken from the [anchors](../integration/anchors.md) of the
+analysed page, where `ROUTE` routes the page as extracted: a label in faux
+bold over an image can make the two disagree on how many regions a page
+has, and `CROPS` is the count that is read. It is capped in `fdoc convert` by
 [`escalation.max_crops`](config.md#how-much-one-document-may-send).
 
 `FIGURE` is the one that recognises a *designed* page — an infographic, a
