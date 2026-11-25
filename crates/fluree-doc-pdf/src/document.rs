@@ -340,7 +340,35 @@ fn names_spanned_columns(
     if rows.len() < 3 || continues_left.len() < 2 * cols {
         return false;
     }
-    let spans = header_spans(&continues_left[..cols]);
+    let empty = |r: usize, c: usize| rows[r].get(c).is_none_or(|t| t.trim().is_empty());
+    // A span the ruling leaves open over a column its label does not
+    // reach, empty in both rows (the stub's, its rule not drawn up through
+    // the band), names the columns from where the label stands. A span
+    // with no label over it, cells the ruling leaves open over the stub,
+    // names nothing.
+    let spans: Vec<(usize, usize)> = header_spans(&continues_left[..cols])
+        .into_iter()
+        .map(|(a, b)| {
+            let a = (a..b).find(|&c| !(empty(0, c) && empty(1, c))).unwrap_or(b);
+            (a, b)
+        })
+        .filter(|&(a, b)| b > a && (a..b).any(|c| !empty(0, c)))
+        .collect();
+    let spanned = |c: usize| spans.iter().any(|&(a, b)| (a..b).contains(&c));
+    // Keys in figures (`0° | 45° | 90°`, sizes, years) name the columns
+    // under a span as surely as words, where the row's own stub is empty
+    // and the rows under it have one: a row of the data names its row in
+    // the stub, and so does the row of figures under a banner.
+    let stubs: Vec<usize> = (0..cols).filter(|&c| !spanned(c)).collect();
+    let keyed = !stubs.is_empty()
+        && stubs.iter().all(|&c| empty(1, c))
+        && rows[2..]
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| stubs.iter().any(|&c| !empty(i + 2, c)))
+            .count()
+            * 2
+            >= rows.len() - 2;
     let labels = |a: usize, b: usize| {
         let names: Vec<&str> = rows[1][a..b].iter().map(|t| t.trim()).collect();
         let short = b - a < cols || names.iter().all(|t| t.split_whitespace().count() <= 4);
@@ -348,7 +376,7 @@ fn names_spanned_columns(
             && (a + 1..b).all(|k| !continues_left[cols + k])
             && names
                 .iter()
-                .all(|t| !t.is_empty() && !table::is_numeric_cell(t))
+                .all(|t| !t.is_empty() && (keyed || !table::is_numeric_cell(t)))
             && names.iter().collect::<std::collections::HashSet<_>>().len() == names.len()
     };
     // A column the first row names without spanning it may take a second
@@ -362,7 +390,6 @@ fn names_spanned_columns(
             && t.chars().any(|c| c.is_ascii_digit())
             && t.chars().any(char::is_alphabetic)
     };
-    let spanned = |c: usize| spans.iter().any(|&(a, b)| (a..b).contains(&c));
     let named_above = (0..cols).filter(|&c| !spanned(c)).all(|c| {
         let t = rows[1][c].trim();
         t.is_empty()
@@ -375,7 +402,7 @@ fn names_spanned_columns(
         && spans.iter().all(|&(a, b)| labels(a, b))
         && rows[1]
             .iter()
-            .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()))
+            .all(|t| t.trim().is_empty() || keyed || !table::is_numeric_cell(t.trim()))
 }
 
 /// The columns each spanning label of a header row covers, as `start..end`,
@@ -2162,7 +2189,7 @@ fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
 /// glyph, rasterises image coverage onto a grid, and tests glyph containment
 /// once per candidate region. Computing a verdict nobody consumes is the
 /// clearest kind of waste, even where the corpus is too noisy to time it.
-fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
+pub fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
     opts.emit_anchors || opts.layout_prefix.is_some()
 }
 
@@ -2332,9 +2359,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
-        let mut aligned_full = timed(&mut timings.tables, || {
+        let page_aligned = timed(&mut timings.tables, || {
             table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
         });
+        // Alignment is read again below from the glyphs outside the grids
+        // (`glyphs_outside_grids`, which keeps them in order). Where no grid
+        // took any, those are the page's glyphs as they are here, and so is
+        // their reading.
+        let aligned_in = |glyphs: &[Glyph]| {
+            if glyphs.len() == p.glyphs.len() {
+                page_aligned.clone()
+            } else {
+                table::detect_aligned(glyphs, &p.rules, &p.fills, p.index)
+            }
+        };
+        let mut aligned_full = page_aligned.clone();
         // Justified prose lines its words up into columns; it is no reading
         // to prefer over a ruled table holding a paragraph in a cell.
         aligned_full.retain(|g| !table::reads_as_prose(g, &p.glyphs));
@@ -2410,7 +2449,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 taken.extend(read.iter().map(|g| g.bbox));
                 let outside = glyphs_outside_grids(&p.glyphs, &grids);
                 let _outside_cells = crate::cells::pin(&outside);
-                let accepted = table::detect_aligned(&outside, &p.rules, &p.fills, p.index);
+                let accepted = aligned_in(&outside);
                 let typed: Vec<crate::geom::BBox> = accepted
                     .iter()
                     .filter(|g| table::typed_layout(g, &outside))
@@ -2579,9 +2618,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // `table::is_corroborated`. An earlier ungated version was
         // net-negative: it converted prose into tables and cost more in reading
         // order (NID 0.868 -> 0.839) than it gained in table structure.
-        let mut aligned = timed(&mut timings.tables, || {
-            table::detect_aligned(&prose, &p.rules, &p.fills, p.index)
-        });
+        let mut aligned = timed(&mut timings.tables, || aligned_in(&prose));
         // A box drawn round a drawing parts the text either side of it: a
         // grid read across its edge put a diagram's labels and the note in
         // the column beside its box in one row.
@@ -4779,6 +4816,48 @@ mod tests {
         ]);
         assert!(!names_spanned_columns(&numbers, &left, &[]));
         assert!(!names_spanned_columns(&methods, &[false; 15], &[]));
+        // Keys in figures under a span name its columns where their own
+        // stub is empty and the rows under them have one: sizes over a
+        // model's readings.
+        let mut size_left = vec![false; 16];
+        size_left[2] = true;
+        size_left[3] = true;
+        let sizes = grid(&[
+            &["", "Width (mm)", "", ""],
+            &["", "100", "150", "200"],
+            &["Model A", "2.1", "2.9", "3.8"],
+            &["Model B", "2.4", "3.3", "4.2"],
+        ]);
+        assert!(names_spanned_columns(&sizes, &size_left, &[]));
+        // With no stub under them, they are a row of the data like the rest.
+        let unstubbed = grid(&[
+            &["", "Width (mm)", "", ""],
+            &["", "100", "150", "200"],
+            &["", "2.1", "2.9", "3.8"],
+            &["", "2.4", "3.3", "4.2"],
+        ]);
+        assert!(!names_spanned_columns(&unstubbed, &size_left, &[]));
+        // Nor do keys that repeat.
+        let repeated = grid(&[
+            &["", "Width (mm)", "", ""],
+            &["", "100", "100", "200"],
+            &["Model A", "2.1", "2.9", "3.8"],
+            &["Model B", "2.4", "3.3", "4.2"],
+        ]);
+        assert!(!names_spanned_columns(&repeated, &size_left, &[]));
+        // A span the ruling leaves open over the stub's column too names
+        // the columns from where its label stands.
+        let mut wide = vec![false; 20];
+        wide[2] = true;
+        wide[3] = true;
+        wide[4] = true;
+        let angles = grid(&[
+            &["", "", "Horizontal angle", "", ""],
+            &["", "", "0°", "45°", "90°"],
+            &["Vertical angle", "45°", "23,252", "23,208", "22,970"],
+            &["", "55°", "17,172", "17,146", "16,972"],
+        ]);
+        assert!(names_spanned_columns(&angles, &wide, &[]));
         // A value run across the banner's columns names nothing.
         let mut run = left.clone();
         run[5 + 2] = true;

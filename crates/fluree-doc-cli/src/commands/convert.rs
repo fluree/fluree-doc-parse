@@ -3,7 +3,7 @@
 use crate::cli::{ConvertArgs, Format};
 use crate::commands::common::{self, TierConfig};
 use fluree_doc_pdf::document::Element;
-use fluree_doc_pdf::{extract_bytes, outline};
+use fluree_doc_pdf::{extract_bytes_with, outline, ExtractOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -595,7 +595,16 @@ fn convert_bytes(
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(data.clone()))
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
-    let mut doc = extract_bytes(data).map_err(|e| format!("extract: {e}"))?;
+    let opts = cfg.options_for(stem);
+    // Images are probed for the router, which runs for escalation, for the
+    // anchors and sidecars analysis routes for, and for the OCR word
+    // readings, asked for up to the page's routed regions; a deterministic
+    // parse has no use for the decode.
+    let mut eopts = ExtractOptions::default();
+    eopts.probe_images = cfg.escalate
+        || cfg.ocr_words.is_some()
+        || fluree_doc_pdf::document::routing_is_consulted(&opts);
+    let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
@@ -627,7 +636,6 @@ fn convert_bytes(
     // extracted, which the analysis below changes.
     let read_here = cfg.escalate && cfg.tier_results.is_none();
     let extracted = read_here.then(|| doc.clone());
-    let opts = cfg.options_for(stem);
     let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &ol, &opts);
     common::arbitrate_layout_titles(cfg.layout_boxes.as_deref(), stem, &mut a.elements);
     // The page's own text, so the arbiter can ask whether an escalated
