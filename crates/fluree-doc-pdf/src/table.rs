@@ -30,7 +30,7 @@ pub use fluree_doc_model::merges::{denormalize, Merges as CellMerges};
 const AXIS_TOLERANCE: f64 = 2.5;
 
 /// Endpoints within this distance are the same grid position.
-const EDGE_TOLERANCE: f64 = 3.0;
+pub(crate) const EDGE_TOLERANCE: f64 = 3.0;
 
 /// A grid needs at least this many lines each way. Two horizontals and two
 /// verticals is a single cell — a box, not a table.
@@ -211,7 +211,7 @@ impl Grid {
 
     /// The cell each glyph is read into, as `row * cols + col`; `None` for
     /// a glyph outside the grid or set across it.
-    fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
+    pub(crate) fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
         let cols = self.cols();
         let mut home: Vec<Option<usize>> = vec![None; glyphs.len()];
 

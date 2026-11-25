@@ -772,6 +772,25 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
     });
 
     for table in table_elements {
+        // A table set inside another's box, a grid nested in one of its
+        // cells, follows it, after any others nested in it before.
+        let within = |inner: &Element, host: &Element| {
+            let (h, t) = (host.rect(), inner.rect());
+            host.kind == "doco:Table"
+                && inner.kind == "doco:Table"
+                && t.x0 >= h.x0 - 1.0
+                && t.x1 <= h.x1 + 1.0
+                && t.y0 >= h.y0 - 1.0
+                && t.y1 <= h.y1 + 1.0
+        };
+        if let Some(host) = content.iter().position(|e| within(&table, e)) {
+            let mut at = host + 1;
+            while at < content.len() && within(&content[at], &content[host]) {
+                at += 1;
+            }
+            content.insert(at, table);
+            continue;
+        }
         let mut last_before = None;
         let mut first_after = None;
         for (i, element) in content.iter().enumerate() {
@@ -1095,7 +1114,7 @@ fn prefer_aligned_over_ruled(ruled: &[Grid], aligned: &[Grid], glyphs: &[Glyph])
         return false;
     }
     let coarse = ruled_grid.cell_texts(glyphs).iter().any(|cell| {
-        cell.split_whitespace().count() > 25
+        cell.split_whitespace().count() > PROSE_CELL_WORDS
             || cell
                 .split_whitespace()
                 .collect::<Vec<_>>()
@@ -1106,7 +1125,12 @@ fn prefer_aligned_over_ruled(ruled: &[Grid], aligned: &[Grid], glyphs: &[Glyph])
                 })
     });
     let aligned_cells: usize = aligned.iter().map(|grid| grid.rows() * grid.cols()).sum();
-    coarse || aligned_cells >= ruled_grid.rows() * ruled_grid.cols() * 3
+    let wide: Vec<&Grid> = aligned
+        .iter()
+        .filter(|grid| grid.cols() >= ruled_grid.cols() + 3)
+        .collect();
+    (coarse && !nested_in_one_row(ruled_grid, &wide))
+        || aligned_cells >= ruled_grid.rows() * ruled_grid.cols() * 3
 }
 
 /// Prefer a reading from horizontal bands over one coarse ruled grid whose
@@ -1124,7 +1148,7 @@ fn prefer_horizontal_bands(ruled: &[Grid], bands: &[Grid], glyphs: &[Glyph]) -> 
     let ruled_grid = &ruled[0];
     let table_not_list = |band: &Grid| !is_marker_list(&band.cell_texts(glyphs), band.cols());
     let coarse = ruled_grid.cell_texts(glyphs).iter().any(|cell| {
-        cell.split_whitespace().count() > 25
+        cell.split_whitespace().count() > PROSE_CELL_WORDS
             || cell
                 .split_whitespace()
                 .collect::<Vec<_>>()
@@ -1141,7 +1165,164 @@ fn prefer_horizontal_bands(ruled: &[Grid], bands: &[Grid], glyphs: &[Glyph]) -> 
                     || (ruled_grid.cols() <= 2
                         && band.cols() == ruled_grid.cols()
                         && band.rows() >= ruled_grid.rows() + 2))
+                && !nested_in_one_row(ruled_grid, &[band])
         })
+}
+
+/// The wider readings each lie within one row of a ruled grid of four rows
+/// or more: grids nested in its rows (an acoustic row's nine columns of
+/// figures in a property list), not tables a frame was drawn round. A long
+/// cell is then no sign of a frame, and the ruled grid stands. A frame's
+/// table runs down across the frame's rows, or the frame has too few rows to
+/// tell.
+fn nested_in_one_row(ruled: &Grid, wide: &[&Grid]) -> bool {
+    ruled.rows() >= 4
+        && !wide.is_empty()
+        && wide.iter().all(|w| {
+            ruled.ys.windows(2).any(|row| {
+                w.bbox.y0 >= row[0] - table::EDGE_TOLERANCE
+                    && w.bbox.y1 <= row[1] + table::EDGE_TOLERANCE
+            })
+        })
+}
+
+/// Most of a ruled grid's rows read as a table's rows: two cells or more
+/// filled, each short, over four rows or more. Such a grid is a table
+/// whatever one long cell holds, or a grid nested in one of its rows (a
+/// property list whose acoustic row sets its own nine columns of figures):
+/// its rules account for its cells, and no reading of the text in its place
+/// does better. A frame round a page of prose, or a table set in one of its
+/// cells, has few such rows; a box of three rows holding field lists says
+/// too little either way.
+fn reads_as_rows(grid: &Grid, glyphs: &[Glyph]) -> bool {
+    let cols = grid.cols();
+    if cols < 2 || grid.rows() < 4 {
+        return false;
+    }
+    let cells = grid.cell_texts(glyphs);
+    let rows = cells
+        .chunks(cols)
+        .filter(|row| {
+            let words: Vec<usize> = row
+                .iter()
+                .map(|t| t.split_whitespace().count())
+                .filter(|&w| w > 0)
+                .collect();
+            words.len() >= 2 && words.iter().all(|&w| w <= PROSE_CELL_WORDS)
+        })
+        .count();
+    rows * 2 > grid.rows()
+}
+
+/// Words a cell holds before it is prose rather than a value: the length
+/// at which a ruled grid's cell counts as coarse.
+const PROSE_CELL_WORDS: usize = 25;
+
+/// The table a grid nested in a ruled cell reads as: its own header row,
+/// then a band naming the property it sits under (`Acoustical
+/// Performance`), so its cells carry that as their section, then its rows.
+fn nested_table(
+    n: &Grid,
+    page: &crate::extract::Page,
+    pi: usize,
+    label: Option<String>,
+    scrub: &[(String, bool)],
+) -> Element {
+    let cols = n.cols().max(1);
+    let mut rows: Vec<Vec<String>> = n
+        .cell_texts(&page.glyphs)
+        .chunks(cols)
+        .map(|row| {
+            row.iter()
+                .map(|t| furniture::scrub_cell(t, scrub))
+                .collect()
+        })
+        .collect();
+    // A first row of names over rows of figures is the header; the
+    // ruled-table reading decides otherwise.
+    let figures = |row: &[String]| row.iter().any(|t| table::is_numeric_cell(t.trim()));
+    let header_rows =
+        if rows.len() > 1 && !figures(&rows[0]) && rows[1..].iter().all(|r| figures(r)) {
+            1
+        } else {
+            n.header_rows(&rows, &page.glyphs, &page.rules, &page.fills)
+        };
+    let mut merged_left = vec![false; rows.len() * cols];
+    let mut sub_headers = Vec::new();
+    if let Some(label) = label {
+        let mut band = vec![String::new(); cols];
+        band[0] = label;
+        rows.insert(header_rows, band);
+        let at = header_rows * cols;
+        merged_left.splice(at..at, (0..cols).map(|c| c > 0));
+        sub_headers.push(header_rows);
+    }
+    let text = rows
+        .iter()
+        .map(|r| r.join(" | "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Element {
+        page: pi,
+        bbox: Some(n.bbox),
+        cells: Some(rows),
+        header_rows: Some(header_rows),
+        sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
+        merged_left: merged_left.iter().any(|x| *x).then_some(merged_left),
+        ..Element::new("doco:Table", text, "rust", "rules")
+    }
+}
+
+/// Least glyphs a ruled cell holds before it is read for a grid of its own.
+const NESTED_MIN_GLYPHS: usize = 20;
+
+/// A grid's first row names its columns over rows of figures: a table with
+/// a header of its own. A cell's figures stacked line under line under the
+/// outer table's header line up into columns too, but name nothing.
+fn names_its_columns(n: &Grid, glyphs: &[Glyph]) -> bool {
+    let cols = n.cols().max(1);
+    let cells = n.cell_texts(glyphs);
+    let rows: Vec<&[String]> = cells.chunks(cols).collect();
+    let figures = |row: &[String]| row.iter().any(|t| table::is_numeric_cell(t.trim()));
+    let [head, body @ ..] = rows.as_slice() else {
+        return false;
+    };
+    let names = head.iter().filter(|t| !t.trim().is_empty()).count();
+    names * 2 > cols && !figures(head) && !body.is_empty() && body.iter().all(|r| figures(r))
+}
+
+/// Grids set inside single cells of a ruled table, each with the row and
+/// column of the cell it fills: a property list whose acoustic row sets nine
+/// columns of figures under their own header in its Performance cell. A
+/// cell's text lined up into three columns or more over three rows or more,
+/// taking nearly all of the cell, its first row naming the columns over rows
+/// of figures, is a table of its own; wrapped prose in a cell lines up into
+/// no columns.
+fn nested_grids(g: &Grid, page: &crate::extract::Page) -> Vec<(Grid, usize, usize)> {
+    let cols = g.cols();
+    let mut by_cell: std::collections::BTreeMap<usize, Vec<Glyph>> =
+        std::collections::BTreeMap::new();
+    for (gl, home) in page.glyphs.iter().zip(g.glyph_cells(&page.glyphs)) {
+        if let Some(k) = home.filter(|_| !gl.text.trim().is_empty()) {
+            by_cell.entry(k).or_default().push(gl.clone());
+        }
+    }
+    let mut out = Vec::new();
+    for (k, inside) in by_cell {
+        if inside.len() < NESTED_MIN_GLYPHS {
+            continue;
+        }
+        for n in table::detect_aligned(&inside, &page.rules, &page.fills, page.index) {
+            if n.rows() < 3 || n.cols() < 3 {
+                continue;
+            }
+            let taken = n.takes(&inside).iter().filter(|t| **t).count();
+            if taken * 10 >= inside.len() * 8 && names_its_columns(&n, &inside) {
+                out.push((n, k / cols, k % cols));
+            }
+        }
+    }
+    out
 }
 
 /// A grid's first column holds nothing but list markers (`a)`, `2.`, `(iii)`,
@@ -2491,9 +2672,37 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 }
             };
             let cols = g.cols().max(1);
+            // A grid set in one of a ruled table's cells is read as a table
+            // of its own, after this one; the cell keeps only what it does not
+            // take. Only in a table whose rows read as a table's: a frame
+            // round a table set in one of its cells is read as before.
+            let nested = if layout.grid_sources[gi] == GridSource::Ruled
+                && reads_as_rows(g, &raw.pages[pi].glyphs)
+            {
+                nested_grids(g, &raw.pages[pi])
+            } else {
+                Vec::new()
+            };
+            let own_glyphs: Vec<Glyph>;
+            let cell_glyphs: &[Glyph] = if nested.is_empty() {
+                &raw.pages[pi].glyphs
+            } else {
+                let taken: Vec<Vec<bool>> = nested
+                    .iter()
+                    .map(|(n, _, _)| n.takes(&raw.pages[pi].glyphs))
+                    .collect();
+                own_glyphs = raw.pages[pi]
+                    .glyphs
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !taken.iter().any(|t| t[*i]))
+                    .map(|(_, gl)| gl.clone())
+                    .collect();
+                &own_glyphs
+            };
             let flat: Vec<String> = match g.layout.as_deref() {
                 Some(lay) => lay.texts(&raw.pages[pi].glyphs, g.cols()),
-                None => g.cell_texts(&raw.pages[pi].glyphs),
+                None => g.cell_texts(cell_glyphs),
             }
             .into_iter()
             .enumerate()
@@ -2885,6 +3094,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 styled: g.opens_styled(&raw.pages[pi].glyphs, &raw.pages[pi].fills),
                 bold: g.opens_bold(&raw.pages[pi].glyphs),
             });
+            for (n, r, c) in &nested {
+                let label = (*c > 0)
+                    .then(|| table_elements.last())
+                    .flatten()
+                    .and_then(|e: &Element| e.cells.as_ref())
+                    .and_then(|rows| rows.get(r.saturating_sub(shift)))
+                    .and_then(|row| row.first())
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                table_elements.push(nested_table(n, &raw.pages[pi], pi, label, &scrub_texts));
+                tables += 1;
+            }
         }
         // Table-confidence anchors: a grid whose structure was *inferred* from
         // alignment rather than read from drawn rules has guessed column
@@ -3725,6 +3946,110 @@ mod tests {
             ordered.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
             vec!["before", "table", "after"]
         );
+    }
+
+    #[test]
+    fn a_table_nested_in_anothers_cell_follows_it() {
+        let content = vec![
+            element("before", 10.0, 10.0, 300.0, 20.0, false),
+            element("after", 10.0, 300.0, 300.0, 310.0, false),
+        ];
+        // A grid set in one of the outer table's cells, further down it.
+        let tables = vec![
+            element("nested", 120.0, 200.0, 290.0, 260.0, true),
+            element("outer", 10.0, 40.0, 300.0, 280.0, true),
+        ];
+        let ordered = interleave_tables(content, tables);
+        assert_eq!(
+            ordered.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            vec!["before", "outer", "nested", "after"]
+        );
+    }
+
+    #[test]
+    fn a_wide_reading_inside_one_row_is_nested_and_one_across_rows_is_not() {
+        let grid = |ys: Vec<f64>, y0: f64, y1: f64| Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 100.0, 300.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0,
+                x1: 300.0,
+                y1,
+            },
+            ys,
+        };
+        let ruled = grid(vec![0.0, 20.0, 40.0, 60.0, 140.0], 0.0, 140.0);
+        // Nine columns of figures set in the last row's cell.
+        let in_row = grid(vec![70.0, 90.0, 110.0, 130.0], 70.0, 130.0);
+        assert!(nested_in_one_row(&ruled, &[&in_row]));
+        // A table running down across the rows of a frame drawn round it.
+        let across = grid(vec![25.0, 50.0, 75.0, 100.0], 25.0, 100.0);
+        assert!(!nested_in_one_row(&ruled, &[&across]));
+        // A box of three rows says too little.
+        let small = grid(vec![0.0, 20.0, 60.0, 140.0], 0.0, 140.0);
+        assert!(!nested_in_one_row(&small, &[&in_row]));
+    }
+
+    #[test]
+    fn a_ruled_grid_of_short_rows_reads_as_rows_and_a_frame_does_not() {
+        let word = |x: f64, y: f64, i: usize| Glyph {
+            text: "Value".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y - 8.0,
+                x1: x + 25.0,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            advance: None,
+            draw_index: i,
+        };
+        let grid = |xs: Vec<f64>, ys: Vec<f64>| Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: xs[xs.len() - 1],
+                y1: ys[ys.len() - 1],
+            },
+            xs,
+            ys,
+        };
+        // A short value in every cell of four rows.
+        let rows = grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            vec![0.0, 20.0, 40.0, 60.0, 80.0],
+        );
+        let mut glyphs = Vec::new();
+        for r in 0..4 {
+            for c in 0..3 {
+                glyphs.push(word(
+                    c as f64 * 100.0 + 5.0,
+                    r as f64 * 20.0 + 14.0,
+                    glyphs.len(),
+                ));
+            }
+        }
+        assert!(reads_as_rows(&rows, &glyphs));
+        // A frame round a page of prose: one cell of thirty words.
+        let frame = grid(vec![0.0, 100.0, 300.0], vec![0.0, 20.0, 220.0, 240.0]);
+        let prose: Vec<Glyph> = (0..30)
+            .map(|i| {
+                word(
+                    105.0 + (i % 3) as f64 * 60.0,
+                    34.0 + (i / 3) as f64 * 12.0,
+                    i,
+                )
+            })
+            .collect();
+        assert!(!reads_as_rows(&frame, &prose));
     }
 
     #[test]
