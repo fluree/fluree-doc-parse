@@ -67,6 +67,20 @@ Read page-wide, a grid takes in every rule on the page, and a logo's strokes
 at the page foot crossed none of a horizontals-only spec table's rows, so it
 was trimmed to its last two.
 
+A grid the trim runs down to the three lines a grid needs without finding a
+band any vertical crosses has only its rules to say where its rows are.
+Lines of text between two rules drawn over different stretches of the page,
+sharing none, are no row, and the grid is no table: two lines or more under
+one of the rules, in its stretch, are a column's paragraphs or list. Such
+rules divide the sections of a page set in two columns, one column's rule
+over the other's. Kept, the last two bands of such a page became one table,
+the end of one column's list in one cell and the next section in the other.
+Two tables set side by side, each ending on its own rule a little above or
+below the other's, leave between those rules a sliver holding nothing, or
+each table's last line, and they stand. So does a table ruled with
+horizontals only under a stroke of decoration the trim counts: its rules
+share their stretch of the page.
+
 A table ruled with horizontals only takes its columns from where its rules
 break: a rule drawn a cell at a time has pieces meeting end to end at the
 columns' edges. A rule drawn a cell at a time can run each cell's piece on

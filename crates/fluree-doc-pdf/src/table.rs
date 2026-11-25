@@ -2545,6 +2545,57 @@ fn detect_group_trimmed(
         while ys.len() > MIN_GRID_LINES && !crossed(ys[ys.len() - 2], ys[ys.len() - 1]) {
             ys.pop();
         }
+        // Trimmed as far as a grid goes and still no band crossed, the
+        // verticals say nothing of these rows, and the rules alone must
+        // bound them. Lines of text between two rules drawn over different
+        // stretches of the page, sharing none, are no row: the rules divide
+        // the sections of a page set in columns, one column's rule over the
+        // other's. Two tables side by side, each ending on its own rule a
+        // little above or below the other's, leave between those rules a
+        // sliver holding nothing, or one table's last line.
+        let extent = |y: f64| {
+            h_lines
+                .iter()
+                .filter(|l| (l.axis - y).abs() <= EDGE_TOLERANCE)
+                .fold(None, |acc: Option<(f64, f64)>, l| {
+                    Some(acc.map_or((l.lo, l.hi), |(a, b)| (a.min(l.lo), b.max(l.hi))))
+                })
+        };
+        // Lines of text under one of the two rules, in its stretch: a
+        // column's paragraphs or list, not one table's last line beside
+        // the other's.
+        let lines_under = |lo: f64, hi: f64, (x0, x1): (f64, f64)| {
+            let under: Vec<&crate::glyph::Glyph> = glyphs
+                .iter()
+                .filter(|gl| {
+                    !gl.text.trim().is_empty()
+                        && gl.bbox.is_some_and(|b| {
+                            let (x, y) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                            y > lo && y < hi && x > x0 && x < x1
+                        })
+                })
+                .collect();
+            let mut sizes: Vec<f64> = under.iter().map(|gl| gl.font_size as f64).collect();
+            sizes.sort_by(f64::total_cmp);
+            // A line's raised marks (`***`, a note's letter) are on it.
+            let tol = sizes
+                .get(sizes.len() / 2)
+                .map_or(2.0, |s| (s * 0.5).max(2.0));
+            let mut bases: Vec<f64> = under.iter().map(|gl| gl.origin.1).collect();
+            bases.sort_by(f64::total_cmp);
+            coalesce(bases, tol).len()
+        };
+        let divides = |a: f64, b: f64| match (extent(a), extent(b)) {
+            (Some((a0, a1)), Some((b0, b1))) => {
+                a1.min(b1) <= a0.max(b0)
+                    && (lines_under(a, b, (a0, a1)) >= 2 || lines_under(a, b, (b0, b1)) >= 2)
+            }
+            _ => false,
+        };
+        if !ys.windows(2).any(|w| crossed(w[0], w[1])) && ys.windows(2).any(|w| divides(w[0], w[1]))
+        {
+            return Vec::new();
+        }
     }
 
     // Boundaries closer together than this hold no content — an artefact of a
@@ -8065,6 +8116,59 @@ mod header_tests {
         let refs: Vec<&Rule> = rs.iter().collect();
         assert!(stacked_boxes_gap(&refs).is_none());
         assert_eq!(component_indices(&rs).len(), 1);
+    }
+
+    #[test]
+    fn section_dividers_down_two_columns_are_no_table() {
+        // Rules over each section of a page set in two columns: the first
+        // across both, then by turns across the right column and the left.
+        // A short stroke of a drawn box among them crosses none of the
+        // bands, and the trim runs out of lines first; of the rules left,
+        // none is drawn over the same stretch as the next.
+        let mut rules = vec![h(0.0, 140.0, 100.0), h(160.0, 300.0, 100.0)];
+        rules.push(h(160.0, 300.0, 200.0));
+        rules.push(h(0.0, 140.0, 300.0));
+        rules.push(h(160.0, 300.0, 400.0));
+        rules.push(v(335.0, 345.0, 50.0));
+        // Each section holds its lines of text.
+        let text: Vec<crate::glyph::Glyph> = [140.0, 160.0, 240.0, 260.0, 340.0, 360.0]
+            .iter()
+            .flat_map(|&y| {
+                [
+                    gly(10.0, y, 100.0, "Section text"),
+                    gly(170.0, y, 100.0, "Section text"),
+                ]
+            })
+            .collect();
+        assert!(detect_group(&rules, &[], &text, 0, &[]).is_empty());
+        // Without text between them, or with one line, rules apart are two
+        // tables side by side ending a little apart, and the grid stands as
+        // before.
+        assert!(!detect_group(&rules, &[], &[], 0, &[]).is_empty());
+        let one_line: Vec<crate::glyph::Glyph> = [150.0, 250.0, 350.0]
+            .iter()
+            .map(|&y| gly(10.0, y, 100.0, "Last row"))
+            .collect();
+        assert!(!detect_group(&rules, &[], &one_line, 0, &[]).is_empty());
+
+        // A table ruled with horizontals only under a stroke of decoration
+        // is still one (`a_horizontally_ruled_table_is_not_split_into_rows`):
+        // its rules share their stretch of the page.
+
+        // A table whose lower rows its frame crosses keeps them, under a
+        // heading's underline the trim takes off.
+        let mut table: Vec<Rule> = [60.0, 100.0, 120.0, 140.0, 160.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        table.extend([
+            v(100.0, 160.0, 0.0),
+            v(100.0, 160.0, 150.0),
+            v(100.0, 160.0, 300.0),
+        ]);
+        let grids = detect_group(&table, &[], &[], 0, &[]);
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].rows(), 3);
     }
 
     #[test]
