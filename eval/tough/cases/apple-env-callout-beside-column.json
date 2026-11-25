@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "apple-environmental-progress-2024.pdf",
+    "url": "https://www.apple.com/environment/pdf/Apple_Environmental_Progress_Report_2024.pdf",
+    "sha256": "87e86dbe8545c2006ad4e9af3e7e01b0ff713d4535171f924e06c32cc1bda5ba",
+    "about": "Apple Environmental Progress Report 2024 (113 pages). Its pages set callouts in display type beside body columns, the two often near one baseline."
+  },
+  "notes": [
+    "2026-11-25 (#264): a callout heading set in display type beside a body column ran on into the column's line (`Mac Studio now uses 100 percent Switching to recycled and recycled aluminum in its enclosure`). The column cut put the heading's last letters on the column's side, one fragment over the next, and the space glyph after the first kept the gutter to the column's text unmeasured; the gutter's cut spared it as a marker set off by a tab. In the heading's size, beside the column's, and heading a run of such fragments that ends short of the column's text, it is cut away, and the column cut's repair rejoins it to its word."
+  ],
+  "checks": [
+    {
+      "id": "callout-heading-whole",
+      "found": "2026-11-25",
+      "issue": "#264: the heading took the column's words `Switching to recycled and`.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Mac Studio now uses 100 percent recycled aluminum in its enclosure"
+      }
+    },
+    {
+      "id": "column-line-whole",
+      "found": "2026-11-25",
+      "issue": "#264: as above; the column's paragraph began `low-carbon aluminum`.",
+      "text": "Switching to recycled and low-carbon aluminum has decreased our greenhouse gas emissions"
+    }
+  ]
+}

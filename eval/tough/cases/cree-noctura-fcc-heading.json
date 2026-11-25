@@ -6,7 +6,8 @@
     "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables. Each language numbers its three pages from 1, in its own words, and sets its step numbers at the top of its second and third pages."
   },
   "notes": [
-    "2026-11-24 (#190): the `FCC` heading the guide sets near the top of each language's last page, partway down a column under the end of the section before, repeats on 3 of 9 pages and was read as a running header: the FCC statements lost their heading."
+    "2026-11-24 (#190): the `FCC` heading the guide sets near the top of each language's last page, partway down a column under the end of the section before, repeats on 3 of 9 pages and was read as a running header: the FCC statements lost their heading.",
+    "2026-11-25 (#284): with its words kept, `FCC` was a paragraph: set in 9pt bold capitals with a rule under it, as `WATTAGE ADJUSTMENT` is, but three letters are too few to look like a title on their shape alone."
   ],
   "checks": [
     {
@@ -21,6 +22,16 @@
       "found": "2026-11-24",
       "issue": "#190: the heading was gone from all three FCC statements.",
       "element": {
+        "text": "FCC"
+      },
+      "count": 3
+    },
+    {
+      "id": "fcc-heading",
+      "found": "2026-11-25",
+      "issue": "#284: `FCC` was a paragraph on all three pages.",
+      "element": {
+        "type": "doco:SectionTitle",
         "text": "FCC"
       },
       "count": 3

@@ -47,6 +47,11 @@ const BASELINE_TOLERANCE: f64 = 0.5;
 /// rows are set further apart, or the row beside it carries values.
 const WRAP_LEADING: f64 = 1.35;
 
+/// Baseline distance, in font sizes, up to which a line is the next one
+/// under another: set at a body's leading, 1.2 to 1.5 of its size. A line
+/// with a blank line between stands twice that below.
+const NEXT_LINE: f64 = 1.6;
+
 /// Vertical gap between consecutive lines, in font sizes, that ends a table.
 const MAX_ROW_GAP: f64 = 2.6;
 
@@ -642,22 +647,41 @@ fn fits(cols: &[(f64, f64)], l: &Line) -> bool {
 /// starts inside it. A label long enough to bring its figure within a cell
 /// gap reads as one chunk with it (`montmorillonite/smectite 100`), which no
 /// column holds, and the table's rows broke at it. Only a figure ending the
-/// line is cut off: a banner's words across the gutters it spans stay one
-/// label. A cut is kept only where every piece then sits in one column.
-fn split_at_gutters(cols: &[(f64, f64)], l: &Line) -> Line {
+/// line is cut off, or one filling a column its line leaves empty: a
+/// banner's words across the gutters it spans stay one label. A cut is kept
+/// only where every piece then sits in one column. `held` counts the
+/// region's lines with a chunk in each column.
+fn split_at_gutters(cols: &[(f64, f64)], held: &[usize], l: &Line) -> Line {
     let mut chunks: Vec<Chunk> = Vec::new();
     for (i, c) in l.chunks.iter().enumerate() {
-        // Only the line's last chunk: its figure is then the row's value. A
-        // label with its row's value set after it keeps a figure of its own
-        // (`Antihistamine tablets (30) | 30.80`), however wide a monospaced
-        // word space.
-        // A run of prose ending in a figure (a footnote under the table) is
-        // no label and its value; cut, it would fit the columns as a row.
-        if covered(cols, c).len() <= 1
-            || c.words.len() < 2
-            || c.words.len() > MAX_CUT_WORDS
-            || i + 1 < l.chunks.len()
-        {
+        // The line's last chunk: its figure is then the row's value. A run of
+        // prose ending in a figure (a footnote under the table) is no label
+        // and its value; cut, it would fit the columns as a row.
+        // Or a chunk further in whose cut piece would fill a column the rest
+        // of its line leaves empty: a label set close to its first figure
+        // (`LOC440055 0.721`), the row's other values in the columns after.
+        // A label with its row's value set after it keeps a figure of its own
+        // (`Antihistamine tablets (30) | 30.80`): the value fills the column.
+        // Only a column the table's rows fill, three lines at least and half
+        // as many as its fullest column (wrapped lines in other columns
+        // aside): a receipt's amounts, set where each line's text ends, make
+        // columns of a line or two, and a label's own figure (`Antihistamine
+        // tablets (30)`) falls in one of them.
+        let fullest = held.iter().copied().max().unwrap_or(0);
+        let fills_empty = |piece: &Chunk| {
+            column_of(cols, piece).is_some_and(|k| {
+                let filled = held.get(k).copied().unwrap_or(0);
+                filled >= 3
+                    && filled * 2 >= fullest
+                    && !l
+                        .chunks
+                        .iter()
+                        .enumerate()
+                        .any(|(j, d)| j != i && covered(cols, d).contains(&k))
+            })
+        };
+        let last = i + 1 == l.chunks.len();
+        if covered(cols, c).len() <= 1 || c.words.len() < 2 || c.words.len() > MAX_CUT_WORDS {
             chunks.push(c.clone());
             continue;
         }
@@ -702,7 +726,10 @@ fn split_at_gutters(cols: &[(f64, f64)], l: &Line) -> Line {
                 words: ws.into_iter().cloned().collect(),
             })
             .collect();
-        if cut.len() > 1 && cut.iter().all(|p| covered(cols, p).len() <= 1) {
+        if cut.len() > 1
+            && cut.iter().all(|p| covered(cols, p).len() <= 1)
+            && (last || cut[1..].iter().all(&fills_empty))
+        {
             chunks.extend(cut);
         } else {
             chunks.push(c.clone());
@@ -792,6 +819,46 @@ fn has_figures(cols: &[(f64, f64)], l: &Line) -> bool {
 /// The tables in the lines of `region`: each run of rows carrying values
 /// in the region's columns, with the header over it.
 pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid> {
+    read_beside(all, rules, region, page, false)
+}
+
+/// Whether the bands between a stack's row lines (at `ys`, down the page)
+/// hold text, three in four of them or more: a table ruled under its rows
+/// sets a row in every band, a blank row or two aside, where a chart's
+/// gridlines stand over its bars and a drawing's lines over nothing.
+pub fn bands_hold_text(all: &[Line], region: BBox, ys: &[f64]) -> bool {
+    let bands = ys.len().saturating_sub(1);
+    let held = ys
+        .windows(2)
+        .filter(|w| {
+            all.iter().any(|l| {
+                l.base > w[0]
+                    && l.base < w[1]
+                    && l.chunks
+                        .iter()
+                        .any(|c| c.x0 >= region.x0 - 1.0 && c.x1 <= region.x1 + 1.0)
+            })
+        })
+        .count();
+    bands > 0 && held * 4 >= bands * 3
+}
+
+/// [`read`], for a region a stack of unbroken row lines rules: its labels
+/// are never text that stands under another table's rules, rules that cover
+/// it and stop short of the region. A table set beside this one in the
+/// page's next column draws its row lines across its own width, and its last
+/// column is no label column of this one.
+pub fn read_ruled_stack(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid> {
+    read_beside(all, rules, region, page, true)
+}
+
+fn read_beside(
+    all: &[Line],
+    rules: &[Rule],
+    region: BBox,
+    page: usize,
+    own_rules: bool,
+) -> Vec<Grid> {
     let fs = all
         .iter()
         .filter(|l| l.base >= region.y0 && l.y0 <= region.y1)
@@ -818,6 +885,19 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                 && r.bbox.y1 - r.bbox.y0 >= 2.0 * (region.y1 - region.y0)
         })
     };
+    // In a stack's region, text under another table's rules is that
+    // table's ([`read_ruled_stack`]).
+    let ruled_elsewhere = |c: &Chunk| {
+        own_rules
+            && rules.iter().any(|r| {
+                r.orientation == crate::rule::Orientation::Horizontal
+                    && r.bbox.x0 <= c.x0
+                    && r.bbox.x1 >= c.x1
+                    && r.bbox.x1 < region.x0 - fs * 0.5
+                    && r.bbox.y0 >= region.y0 - fs
+                    && r.bbox.y0 <= region.y1 + fs
+            })
+    };
     let mut lefts: Vec<f64> = all
         .iter()
         .filter(|l| in_band(l))
@@ -826,6 +906,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                 .iter()
                 .filter(|c| c.x1 <= region.x0 + fs && c.x0 < region.x0 - fs)
                 .filter(|c| !divided(l, c, region.x0))
+                .filter(|c| !ruled_elsewhere(c))
                 .max_by(|a, b| a.x1.total_cmp(&b.x1))
                 // A statement sets its labels at the margin and its figures
                 // at the far side of the page, with or without leaders.
@@ -859,20 +940,35 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
         // description), where half the region's lines have one.
         let lines_in: Vec<&Line> = all.iter().filter(|l| in_band(l)).collect();
         for _ in 0..4 {
-            let mut more: Vec<f64> = lines_in
+            let picked: Vec<(&Line, &Chunk)> = lines_in
                 .iter()
                 .filter_map(|l| {
                     l.chunks
                         .iter()
                         .filter(|c| c.x1 <= x0 + 0.5 && x0 - c.x1 < fs * 8.0)
                         .filter(|c| !divided(l, c, region.x0))
+                        .filter(|c| !ruled_elsewhere(c))
                         .max_by(|a, b| a.x1.total_cmp(&b.x1))
-                        .map(|c| c.x0)
+                        .map(|c| (*l, c))
                 })
                 .collect();
-            if more.len() * 2 < lines_in.len() || more.len() < 2 {
+            if picked.len() * 2 < lines_in.len() || picked.len() < 2 {
                 break;
             }
+            // Prose set in the page's next column over runs on from line to
+            // line, across a gutter narrower than the reach here; a column of
+            // codes beside descriptions starts each line afresh.
+            let ran = picked
+                .windows(2)
+                .filter(|w| {
+                    let ((a, ca), (b, cb)) = (w[0], w[1]);
+                    b.base - a.base <= a.fs.max(b.fs) * NEXT_LINE && runs_on(ca, cb)
+                })
+                .count();
+            if ran >= 2 && ran * 2 >= picked.len() - 1 {
+                break;
+            }
+            let mut more: Vec<f64> = picked.iter().map(|(_, c)| c.x0).collect();
             more.sort_by(f64::total_cmp);
             let median = more[more.len() / 2];
             match more.iter().find(|&&l| l >= median - fs * 6.0) {
@@ -938,9 +1034,18 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
     if cols0.len() < 2 {
         return Vec::new();
     }
+    // How many of the region's lines set a chunk in each column: a column
+    // the table's rows fill, or one a line or two happen to.
+    let held: Vec<usize> = (0..cols0.len())
+        .map(|k| {
+            band.iter()
+                .filter(|&&i| clipped[i].chunks.iter().any(|c| covered(&cols0, c) == [k]))
+                .count()
+        })
+        .collect();
     let clipped: Vec<Line> = clipped
         .iter()
-        .map(|l| split_at_gutters(&cols0, l))
+        .map(|l| split_at_gutters(&cols0, &held, l))
         .collect();
     let value_row = |l: &Line| fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l);
     // A line ruled off above and below, as the rows around it are, holding
@@ -992,6 +1097,10 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
     };
     // A section's label in the label column, as [`section_label`] reads one.
     let section = |l: &Line| label_row(l) && section_label(&l.chunks[0].text);
+    let running = {
+        let ls: Vec<&Line> = band.iter().map(|&i| &clipped[i]).collect();
+        running_columns(&cols0, &ls)
+    };
     // Runs of value rows, up to three label lines between them.
     let mut runs: Vec<(usize, usize)> = Vec::new();
     let mut k = 0;
@@ -1017,7 +1126,10 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             ) {
                 break;
             }
-            if value_row(l) || ruled_row(l, &clipped[band[j - 1]]) {
+            if value_row(l)
+                || ruled_row(l, &clipped[band[j - 1]])
+                || carries_on(&cols0, &running, &clipped[band[j - 1]], l)
+            {
                 end = band[j];
                 labels = 0;
             } else if label_row(l) && labels < 3 {
@@ -1054,7 +1166,10 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             ) {
                 break;
             }
-            if value_row(next) || ruled_row(next, &clipped[last]) {
+            if value_row(next)
+                || ruled_row(next, &clipped[last])
+                || carries_on(&cols0, &running, &clipped[last], next)
+            {
                 last += 1;
                 continue;
             }
@@ -1136,7 +1251,29 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                         && column_of(&cols0, c) == Some(0)
                         && set_as_title(&c.text))
             }) || above.chunks.first().is_some_and(|c| is_caption(&c.text));
-            if prose {
+            // A caption wrapped over the table: its lines after the first,
+            // each the next line under the one before and running on from
+            // it, are the caption's.
+            let caption_tail = {
+                let mut k = first - 1;
+                let mut tail = false;
+                while k > 0 && first - 1 - k < 3 {
+                    let (up, l) = (&clipped[k - 1], &clipped[k]);
+                    let runs = l.chunks.len() == 1
+                        && l.base - up.base <= l.fs.max(up.fs) * NEXT_LINE
+                        && up.chunks.last().is_some_and(|a| runs_on(a, &l.chunks[0]));
+                    if !runs {
+                        break;
+                    }
+                    if up.chunks.first().is_some_and(|c| is_caption(&c.text)) {
+                        tail = true;
+                        break;
+                    }
+                    k -= 1;
+                }
+                tail
+            };
+            if prose || caption_tail {
                 break;
             }
             crossed += between;
@@ -1305,6 +1442,77 @@ fn continues(l: &Line, n: &Line) -> bool {
     let (Some(a), Some(b)) = (l.chunks.first(), n.chunks.first()) else {
         return false;
     };
+    runs_on(a, b)
+}
+
+/// A line that carries on the cells of the line above it, in columns that
+/// are cells and not prose ([`running_columns`]): the next line under it
+/// ([`NEXT_LINE`]), nothing in the stub column and no figure,
+/// each of its words in a column the line above fills, running on from what
+/// stands there ([`runs_on`]). A name or a description wrapped onto a second
+/// line, its row's other cells done on the first.
+fn carries_on(cols: &[(f64, f64)], running: &[bool], above: &Line, l: &Line) -> bool {
+    let fs = l.fs.max(above.fs);
+    let d = l.base - above.base;
+    d > 0.0
+        && d <= fs * NEXT_LINE
+        && !l.chunks.is_empty()
+        && fits(cols, l)
+        && l.chunks.iter().all(|c| {
+            let Some(k) = column_of(cols, c).filter(|&k| k > 0) else {
+                return false;
+            };
+            !running.get(k).copied().unwrap_or(false)
+                && !is_figure(&c.text)
+                && above
+                    .chunks
+                    .iter()
+                    .filter(|a| column_of(cols, a) == Some(k))
+                    .next_back()
+                    .is_some_and(|a| runs_on(a, c))
+        })
+}
+
+/// The columns whose text runs on across the table's rows: on the lines
+/// that open a row, a label in the stub column, the column's text runs on
+/// from the line above in half of them, two at least. That is a page's prose
+/// read in beside the table, its sentences carried down through the rows; a
+/// table's cells start afresh on each row.
+fn running_columns(cols: &[(f64, f64)], lines: &[&Line]) -> Vec<bool> {
+    let mut opened = vec![0usize; cols.len()];
+    let mut ran = vec![0usize; cols.len()];
+    for w in lines.windows(2) {
+        let (up, l) = (w[0], w[1]);
+        if !l.chunks.iter().any(|c| column_of(cols, c) == Some(0)) {
+            continue;
+        }
+        let near = l.base - up.base <= l.fs.max(up.fs) * NEXT_LINE;
+        for c in &l.chunks {
+            let Some(k) = column_of(cols, c).filter(|&k| k > 0) else {
+                continue;
+            };
+            opened[k] += 1;
+            if near
+                && up
+                    .chunks
+                    .iter()
+                    .filter(|a| column_of(cols, a) == Some(k))
+                    .next_back()
+                    .is_some_and(|a| runs_on(a, c))
+            {
+                ran[k] += 1;
+            }
+        }
+    }
+    (0..cols.len())
+        .map(|k| ran[k] >= 2 && ran[k] * 2 >= opened[k])
+        .collect()
+}
+
+/// Whether text `b`, on the next line, runs on from `a`: it starts
+/// mid-phrase, or `a` ends on a word or mark that wants more; not after a
+/// colon, and not from a bold line into a plain one (a heading).
+fn runs_on(a: &Chunk, b: &Chunk) -> bool {
     let t = a.text.trim_end();
     if t.ends_with(':') || (a.bold && !b.bold) {
         return false;
@@ -1337,6 +1545,13 @@ fn continues(l: &Line, n: &Line) -> bool {
                 | "under"
                 | "over"
                 | "than"
+                | "through"
+                | "between"
+                | "within"
+                | "without"
+                | "during"
+                | "across"
+                | "via"
         )
 }
 
@@ -1434,24 +1649,55 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     }
     // A header line that is a column's label wrapped onto a second line joins
     // it; a banner, or a line with a rule under it, stays a row of its own.
-    let rule_under = |l: &Line, c: &Chunk| -> Option<(f64, f64)> {
-        rules
+    // The rule under a label: the pieces under its middle, or with `joined`
+    // the run of pieces that meet end to end through it. A group's
+    // underline drawn a column at a time, its joins bridged, is one rule
+    // under the group's label, however few columns the label's own words
+    // cover (`Net sales (a)` over three years); it says which columns the
+    // label spans, not where the header's rows part.
+    let rule_at = |l: &Line, c: &Chunk, joined: bool| -> Option<(f64, f64)> {
+        let mid = (c.x0 + c.x1) / 2.0;
+        let mut pieces: Vec<(f64, f64)> = rules
             .iter()
             .filter(|r| r.orientation == Orientation::Horizontal)
             .filter(|r| r.bbox.y0 >= l.base - fs * 0.2 && r.bbox.y0 <= l.base + fs * 0.8)
-            .filter(|r| r.bbox.x0 <= (c.x0 + c.x1) / 2.0 && r.bbox.x1 >= (c.x0 + c.x1) / 2.0)
             .map(|r| (r.bbox.x0, r.bbox.x1))
-            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
-            // A banner's rule is under it alone; one under several labels
-            // is the rule between the header and the body.
-            .filter(|&(a, b)| {
-                l.chunks
-                    .iter()
-                    .filter(|d| (d.x0 + d.x1) / 2.0 >= a && (d.x0 + d.x1) / 2.0 <= b)
-                    .count()
-                    == 1
-            })
+            .collect();
+        let piece = pieces
+            .iter()
+            .copied()
+            .filter(|&(a, b)| a <= mid && b >= mid)
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let found = if joined {
+            pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut runs: Vec<(f64, f64)> = Vec::new();
+            for &(a, b) in &pieces {
+                match runs.last_mut() {
+                    Some(r) if a <= r.1 + 0.5 => r.1 = r.1.max(b),
+                    _ => runs.push((a, b)),
+                }
+            }
+            // Group underlines, one under each group and parted between
+            // them; a rule otherwise is read by the piece under the label.
+            if runs.len() >= 2 {
+                runs.into_iter().find(|&(a, b)| a <= mid && b >= mid)
+            } else {
+                None
+            }
+        } else {
+            piece
+        };
+        // A banner's rule is under it alone; one under several labels is
+        // the rule between the header and the body.
+        found.filter(|&(a, b)| {
+            l.chunks
+                .iter()
+                .filter(|d| (d.x0 + d.x1) / 2.0 >= a && (d.x0 + d.x1) / 2.0 <= b)
+                .count()
+                == 1
+        })
     };
+    let rule_under = |l: &Line, c: &Chunk| rule_at(l, c, false);
     // The header is banner rows and one row of column labels. A banner
     // label runs across columns, has its own rule beneath it, or stands
     // over another column's label without running on into it; it keeps a
@@ -1678,6 +1924,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         let d = b.base - a.base;
         d <= b.fs * WRAP_LEADING && d < pitch * 0.85
     };
+    let running = running_columns(&cols, &body);
     let mut body_rows: Vec<(Vec<&Line>, bool)> = Vec::new(); // (lines, section)
     let mut i = 0;
     while i < body.len() {
@@ -1715,6 +1962,14 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 continue;
             }
             body_rows.push((vec![l], i + 1 < body.len()));
+            i += 1;
+            continue;
+        }
+        // A cell wrapped onto this line: the row above's.
+        if body_rows.last().is_some_and(|(prev, section)| {
+            !section && carries_on(&cols, &running, prev.last().unwrap(), l)
+        }) {
+            body_rows.last_mut().unwrap().0.push(l);
             i += 1;
             continue;
         }
@@ -1923,12 +2178,33 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     // Header spans: a label across a gutter, or a rule under it that reaches
     // across one, names every column it covers.
     let ncols = cols.len();
+    // A label over the figures reads its rule's whole run of group
+    // underlines where it is set as a group's label is: centred over the
+    // run, as the banner passes below take a centred label, and the only
+    // label of its header row over it. A column's label set to one side of
+    // the cells' borders run on under its neighbour (`OP` over `OP | LOS`)
+    // is not. The labels' own head reads the piece under it, not a rule
+    // across the header.
+    let group_run = |row: &[&Line], l: &Line, c: &Chunk| -> Option<(f64, f64)> {
+        if !column_of(&cols, c).is_some_and(|k| k > 0) {
+            return None;
+        }
+        rule_at(l, c, true).filter(|&(a, b)| {
+            let centred = ((c.x0 + c.x1) / 2.0 - (a + b) / 2.0).abs() <= (b - a) * 0.15;
+            centred
+                && !row.iter().flat_map(|o| o.chunks.iter()).any(|d| {
+                    let m = (d.x0 + d.x1) / 2.0;
+                    !std::ptr::eq(d, c) && m >= a && m <= b
+                })
+        })
+    };
     let mut spans: Vec<(usize, usize, usize)> = Vec::new();
     for (r, ls) in head_rows.iter().enumerate() {
         for l in ls {
             for c in &l.chunks {
                 let mut ks = covered(&cols, c);
-                if let Some((a, b)) = rule_under(l, c) {
+                let run = group_run(ls, l, c);
+                if let Some((a, b)) = run.or_else(|| rule_under(l, c)) {
                     let wide = Chunk {
                         x0: a,
                         x1: b,
@@ -1978,18 +2254,20 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             let ks = covered(&cols, c);
             // A rule narrower than the label's own columns says nothing of
             // what it spans.
-            let ruled = rule_under(l, c).is_some_and(|(a, b)| {
-                covered(
-                    &cols,
-                    &Chunk {
-                        x0: a,
-                        x1: b,
-                        ..c.clone()
-                    },
-                )
-                .len()
-                    >= ks.len()
-            });
+            let ruled = group_run(&head_rows[r], l, c)
+                .or_else(|| rule_under(l, c))
+                .is_some_and(|(a, b)| {
+                    covered(
+                        &cols,
+                        &Chunk {
+                            x0: a,
+                            x1: b,
+                            ..c.clone()
+                        },
+                    )
+                    .len()
+                        >= ks.len()
+                });
             if ks.len() < 2 || ruled {
                 continue;
             }
@@ -2869,6 +3147,310 @@ mod tests {
         assert!(parted.iter().all(|g| g.bbox.x0 > 150.0), "got {parted:?}");
     }
 
+    #[test]
+    fn prose_beside_a_table_is_not_carried_into_its_cells() {
+        // Labels and counts, and beside them a column of prose whose
+        // sentences run on down the lines, through the rows as well.
+        let prose = [
+            "the survey asked each respondent",
+            "whether they knew the causative agent",
+            "of malaria and most of them named",
+            "mosquitoes as the cause while a third",
+            "did not know its brand or how it",
+            "spreads between people in the villages",
+            "and towns where they live today",
+        ];
+        let mut gl = Vec::new();
+        for (i, line) in prose.iter().enumerate() {
+            let y = 50.0 + 12.0 * i as f64;
+            if i % 2 == 0 {
+                let (label, n) = [
+                    ("Alpha", "12"),
+                    ("Beta", "14"),
+                    ("Gamma", "9"),
+                    ("Delta", "11"),
+                ][i / 2];
+                gl.extend(set(label, 20.0, y));
+                gl.extend(set(n, 100.0, y));
+            }
+            gl.extend(set(line, 160.0, y));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 400.0,
+            y1: 130.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        for g in &grids {
+            let texts = g.cell_texts(&gl);
+            assert!(
+                !texts.iter().any(|t| t.contains("respondent whether")),
+                "{texts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_captions_second_line_is_no_header() {
+        // A caption set in from the table and wrapped onto a second line,
+        // 15pt apart, its second line reaching over two columns; then the
+        // header 20pt under it, its heads coded with digits as enzymes are,
+        // and three rows of figures 15pt apart.
+        let mut gl = set(
+            "Table 3. Potency of the compound on the enzymes in rat and",
+            30.0,
+            40.0,
+        );
+        gl.extend(set("human liver samples.", 30.0, 55.0));
+        for (k, t) in ["IC50", "1A2", "2C9", "3A4"].iter().enumerate() {
+            gl.extend(set(t, 20.0 + 70.0 * k as f64, 75.0));
+        }
+        for (i, row) in [
+            ["Rat", "12.5", "3.1", "40.2"],
+            ["Human", "11.0", "2.9", "38.7"],
+            ["Mouse", "13.4", "3.6", "41.9"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, 20.0 + 70.0 * k as f64, 95.0 + 15.0 * i as f64));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 68.0,
+            x1: 320.0,
+            y1: 130.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(texts.iter().any(|t| t == "IC50"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("liver")), "{texts:?}");
+    }
+
+    #[test]
+    fn a_cell_wrapped_onto_the_next_line_stays_in_its_row() {
+        // Four rows, a symbol, a figure and a name; one name runs onto a
+        // second line. Rows and the wrapped line are set 12pt apart alike.
+        let mut gl = Vec::new();
+        let rows = [
+            ("ALPHA", "0.65", "Coronin, actin binding"),
+            ("BETA", "0.61", "Splicing factor, small nuclear"),
+            ("", "", "ribonucleoprotein associated"),
+            ("GAMMA", "0.67", "Lyn substrate 1"),
+            ("DELTA", "-0.60", "Plastin 3"),
+        ];
+        for (i, (sym, fig, name)) in rows.iter().enumerate() {
+            let y = 50.0 + 12.0 * i as f64;
+            gl.extend(set(sym, 20.0, y));
+            gl.extend(set(fig, 100.0, y));
+            gl.extend(set(name, 160.0, y));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 350.0,
+            y1: 115.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "Splicing factor, small nuclear ribonucleoprotein associated"),
+            "{texts:?}"
+        );
+        // A row with nothing in its first column, its name a new one: a row
+        // of its own, not the tail of the one above.
+        let mut list = Vec::new();
+        for (i, (kind, n, name)) in [
+            ("Fruit", "12", "Apple"),
+            ("", "14", "Banana"),
+            ("Root", "9", "Carrot"),
+            ("", "11", "Turnip"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 50.0 + 12.0 * i as f64;
+            list.extend(set(kind, 20.0, y));
+            list.extend(set(n, 100.0, y));
+            list.extend(set(name, 160.0, y));
+        }
+        let grids = read(&lines(&list), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
+    }
+
+    #[test]
+    fn a_tables_row_lines_hold_its_rows_and_gridlines_do_not() {
+        // Five lines 15pt apart: a row of text between each pair.
+        let ys = [40.0, 55.0, 70.0, 85.0, 100.0];
+        let region = BBox {
+            x0: 15.0,
+            y0: 40.0,
+            x1: 260.0,
+            y1: 100.0,
+        };
+        let mut gl = Vec::new();
+        for (i, w) in ys.windows(2).enumerate() {
+            gl.extend(set(&format!("Row {i}"), 20.0, w[1] - 4.0));
+            gl.extend(set(&format!("{}.5", 10 + i), 200.0, w[1] - 4.0));
+        }
+        assert!(bands_hold_text(&lines(&gl), region, &ys));
+        // One blank band in four still holds the table's rows.
+        let three: Vec<Glyph> = gl.iter().filter(|g| g.origin.1 < 90.0).cloned().collect();
+        assert!(bands_hold_text(&lines(&three), region, &ys));
+        // A chart's gridlines with a legend set in one band, and its axis
+        // labels at the lines' left, outside them.
+        let mut chart = set("Projections 18", 120.0, 51.0);
+        for &y in &ys {
+            chart.extend(set(&format!("{}", y as i32), 0.0, y + 3.0));
+        }
+        assert!(!bands_hold_text(&lines(&chart), region, &ys));
+    }
+
+    #[test]
+    fn a_stacks_labels_are_not_under_the_next_tables_rules() {
+        // Two tables side by side, each ruled under its rows across its own
+        // width: codes and their names on the left, figures on the right.
+        let rule = |x0: f64, x1: f64, y: f64| Rule {
+            bbox: BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let mut gl = Vec::new();
+        let mut left_rules = Vec::new();
+        let mut right_rules = Vec::new();
+        for (i, y) in [50.0, 64.0, 78.0, 92.0, 106.0].into_iter().enumerate() {
+            gl.extend(set(&format!("{}", 10 + i), 20.0, y));
+            gl.extend(set(&format!("Item {i}"), 190.0, y));
+            gl.extend(set(&format!("{}.5", 30 + i), 310.0, y));
+            gl.extend(set(&format!("{}.0", 60 + i), 380.0, y));
+            left_rules.push(rule(15.0, 250.0, y + 3.0));
+            right_rules.push(rule(295.0, 455.0, y + 3.0));
+        }
+        let ls = lines(&gl);
+        let region = BBox {
+            x0: 295.0,
+            y0: 40.0,
+            x1: 455.0,
+            y1: 110.0,
+        };
+        let both: Vec<Rule> = left_rules.iter().chain(&right_rules).copied().collect();
+        // Read as any region is, the left table's names are taken in as
+        // the labels of the right one's figures.
+        let any = read(&ls, &both, region, 0);
+        assert!(any.iter().any(|g| g.bbox.x0 < 250.0), "got {any:?}");
+        // Read as a stack, they stand under the left table's own rules.
+        let stack = read_ruled_stack(&ls, &both, region, 0);
+        assert!(stack.iter().all(|g| g.bbox.x0 > 290.0), "got {stack:?}");
+        // Labels under no other table's rules are still taken in.
+        let open = read_ruled_stack(&ls, &right_rules, region, 0);
+        assert!(open.iter().any(|g| g.bbox.x0 < 250.0), "got {open:?}");
+    }
+
+    #[test]
+    fn prose_across_the_gutter_is_no_label_column() {
+        // Figures with their labels in the page's right column, the left
+        // column's prose running on beside them a gutter away (40pt, inside
+        // the reach for a further column of labels), no rule between.
+        let prose = [
+            "credit risk is the risk that a party",
+            "would incur a loss as a result of",
+            "nonperformance by counterparties of",
+            "their contractual obligations and the",
+            "continued volatility in the markets",
+        ];
+        let labels = [
+            "Revenues",
+            "Operations",
+            "Depreciation",
+            "Income taxes",
+            "Other",
+        ];
+        let row = |gl: &mut Vec<Glyph>, i: usize, l: &str| {
+            let y = 50.0 + 12.0 * i as f64;
+            gl.extend(set(l, 250.0, y));
+            gl.extend(set(&format!("{}", 30 + i), 340.0, y));
+            gl.extend(set(&format!("({})", 5 + i), 380.0, y));
+        };
+        let mut gl = Vec::new();
+        for (i, (p, l)) in prose.iter().zip(labels).enumerate() {
+            gl.extend(set(p, 20.0, 50.0 + 12.0 * i as f64));
+            row(&mut gl, i, l);
+        }
+        let region = BBox {
+            x0: 335.0,
+            y0: 40.0,
+            x1: 410.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty());
+        assert!(grids.iter().all(|g| g.bbox.x0 > 200.0), "{grids:?}");
+        // A column of codes beside their descriptions, each line its own,
+        // is still taken in.
+        let mut coded = Vec::new();
+        for (i, (code, l)) in ["REV", "OPS", "DEP", "TAX", "OTH"]
+            .iter()
+            .zip(labels)
+            .enumerate()
+        {
+            coded.extend(set(code, 200.0, 50.0 + 12.0 * i as f64));
+            row(&mut coded, i, l);
+        }
+        let grids = read(&lines(&coded), &[], region, 0);
+        assert!(grids.iter().any(|g| g.bbox.x0 < 210.0), "{grids:?}");
+    }
+
+    #[test]
+    fn a_label_set_close_to_its_first_figure_keeps_its_row() {
+        // Labels at the margin, three columns of figures. One label, a long
+        // code, runs to a word space from its first figure, and the two read
+        // as one chunk across the gutter; its other figures stand in the
+        // columns after.
+        let mut gl = Vec::new();
+        let rows = [
+            "Alpha", "Beta", "Delta", "Epsilon", "Zeta", "", "Eta", "Theta", "Iota", "Kappa",
+            "Lambda",
+        ];
+        for (i, label) in rows.iter().enumerate() {
+            let y = 50.0 + 12.0 * i as f64;
+            if label.is_empty() {
+                // `15` starts at 100, the first figure column's edge.
+                gl.extend(set("GAMMA4400551 15", 100.0 - 5.5 * 13.0, y));
+            } else {
+                gl.extend(set(label, 12.0, y));
+                gl.extend(set(&format!("{}", 10 + i), 100.0, y));
+            }
+            gl.extend(set(&format!("{}", 30 + i), 140.0, y));
+            gl.extend(set(&format!("{}", 50 + i), 180.0, y));
+        }
+        let region = BBox {
+            x0: 95.0,
+            y0: 40.0,
+            x1: 200.0,
+            y1: 185.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 11, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(texts.iter().any(|t| t == "GAMMA4400551"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "15"), "{texts:?}");
+    }
+
     /// A table of three groups, a size and its colour set once over three
     /// volumes, each with its error; `ruled` rules each group off, and
     /// otherwise only the header and the foot are ruled.
@@ -2915,6 +3497,58 @@ mod tests {
             y1: 190.0,
         };
         read(&lines(&gl), &rules, region, 0)
+    }
+
+    #[test]
+    fn group_labels_span_the_columns_their_underlines_run_under() {
+        // Two groups of three years, each label narrower than one column
+        // and set over its group's middle, each underlined a column at a
+        // time, the pieces meeting end to end and the groups' runs parted.
+        let piece = |x0: f64, x1: f64| Rule {
+            bbox: BBox {
+                x0,
+                y0: 53.0,
+                x1,
+                y1: 53.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let rules = vec![
+            piece(115.0, 147.0),
+            piece(147.0, 197.0),
+            piece(197.0, 247.0),
+            piece(275.0, 307.0),
+            piece(307.0, 357.0),
+            piece(357.0, 407.0),
+        ];
+        let years = [120.0, 170.0, 220.0, 280.0, 330.0, 380.0];
+        let mut gl = set("Sales", 168.0, 50.0);
+        gl.extend(set("Assets", 326.0, 50.0));
+        for (x, y) in years
+            .iter()
+            .zip(["2016", "2015", "2014", "2016", "2015", "2014"])
+        {
+            gl.extend(set(y, *x, 64.0));
+        }
+        for (i, label) in ["North", "South", "Total"].into_iter().enumerate() {
+            let base = 80.0 + 12.0 * i as f64;
+            gl.extend(set(label, 20.0, base));
+            for x in years {
+                gl.extend(set("1,234", x - 3.0, base));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 38.0,
+            x1: 420.0,
+            y1: 110.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().expect("read from its text");
+        assert!(lay.spans.contains(&(0, 1, 4)), "{:?}", lay.spans);
+        assert!(lay.spans.contains(&(0, 4, 7)), "{:?}", lay.spans);
     }
 
     #[test]

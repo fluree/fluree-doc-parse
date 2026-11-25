@@ -6,7 +6,8 @@
     "about": "HASM dimensions of hexagon socket head cap screws (3 landscape pages). Each page titles a table whose header row is filled dark green cell by cell."
   },
   "notes": [
-    "2026-11-24 (#110): the header is filled in a box of its own over the ruled box of rows, a gap apart, and was read as a table naming nothing over one with no column names. Its 12 columns are the rows' 14 with two pairs joined: `Nominal Size` over the size and its decimal, `J` over the socket size and its decimal."
+    "2026-11-24 (#110): the header is filled in a box of its own over the ruled box of rows, a gap apart, and was read as a table naming nothing over one with no column names. Its 12 columns are the rows' 14 with two pairs joined: `Nominal Size` over the size and its decimal, `J` over the socket size and its decimal.",
+    "2026-11-25 (#283): with its names dealt onto the rows' columns, the header box stayed behind as a table of no cells before each table, the rows carrying `doc:continues` to it. On one page the two are one table: the box's rows are folded in as the table's header rows, and the box goes."
   ],
   "checks": [
     {
@@ -28,6 +29,15 @@
         "column": "Nominal Size / (Basic Product Diameter)",
         "row": "5"
       }
+    },
+    {
+      "id": "header-box-folded",
+      "found": "2026-11-25",
+      "issue": "#283: an empty doco:Table, the header box, stood before each of the three tables.",
+      "element": {
+        "type": "doco:Table"
+      },
+      "count": 3
     }
   ]
 }

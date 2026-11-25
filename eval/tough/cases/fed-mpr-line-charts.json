@@ -1,0 +1,52 @@
+{
+  "document": {
+    "file": "fed-mpr-20240705.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20240705_mprfullreport.pdf",
+    "sha256": "6cfad88dd4ee058a01db2012bf009c18da45e5306301edf3ff5d3b486644d09d",
+    "about": "Federal Reserve Monetary Policy Report, July 2024. Page 30 sets three charts in a column beside the text: two line charts drawn in strokes alone (personal saving rate; consumer sentiment on two scales) and a stacked bar chart."
+  },
+  "notes": [
+    "#338: line charts drawn in strokes alone were found as no drawing; their titles, legends and tick values were the page's paragraphs and their scales a table.",
+    "Open: the stacked bar chart's legend (`Student loans`) is still the page's text; bars are not traces."
+  ],
+  "checks": [
+    {
+      "id": "legend-is-the-charts",
+      "found": "2026-11-25",
+      "issue": "#338: the consumer-sentiment chart's legend `Michigan survey` was a paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Michigan survey"
+      }
+    },
+    {
+      "id": "chart-title-is-the-charts",
+      "found": "2026-11-25",
+      "issue": "#338: as above, the chart's numbered title.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "19. Personal saving rate"
+      }
+    },
+    {
+      "id": "scales-no-table",
+      "found": "2026-11-25",
+      "issue": "#338: the consumer-sentiment chart's two scales were a table.",
+      "element": {
+        "type": "doco:Table",
+        "text": "1985 average = 100\tFebruary 1966 = 100\n1985 average = 100\tConference Board\n145\t110\n125\t100\n105\t90\n85\t80\n65\t70\n45\t60"
+      },
+      "count": 0
+    },
+    {
+      "id": "bar-legend-is-the-charts",
+      "found": "2026-11-25",
+      "status": "open",
+      "issue": "The stacked bar chart's legend `Student loans` is a paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Student loans"
+      }
+    }
+  ]
+}
