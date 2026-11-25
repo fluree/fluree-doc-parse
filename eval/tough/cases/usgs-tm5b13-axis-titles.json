@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "usgs-tm5b13.pdf",
+    "url": "https://pubs.usgs.gov/tm/05/b13/tm5b13.pdf",
+    "sha256": "52dfce95f32953ebfa8d7f1af27b0bc4f8ffae16918bba0ceb01af066be8d594",
+    "about": "USGS Techniques and Methods 5-B13 (doi:10.3133/tm5B13), on PFAS in water by direct injection. Its appendix plots measured against expected concentrations, drawn as vectors, the y-axis titled up the plot's side."
+  },
+  "notes": [
+    "#241: the plots' axis titles, set bold and turned up the side of the plot, were headings at the body's size. Text set at an angle to the page's is no heading."
+  ],
+  "checks": [
+    {
+      "id": "turned-axis-title",
+      "found": "2026-11-25",
+      "issue": "`Concentration of PFHpS, in ng/L`, a plot's y-axis title set up its side, was a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Concentration of PFHpS, in ng/L"
+      },
+      "count": 0
+    },
+    {
+      "id": "section-kept",
+      "found": "2026-11-25",
+      "issue": "Guard: `Acknowledgments` stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Acknowledgments"
+      }
+    }
+  ]
+}

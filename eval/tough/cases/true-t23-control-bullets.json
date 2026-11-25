@@ -1,0 +1,39 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 1's sidebar is an 11-item list whose `▶` bullets the font maps to the control code 0x17, each item's wrapped lines hanging under its text."
+  },
+  "notes": [
+    "#187: the control code was written into the text, and the items stayed paragraphs, one of them torn across another."
+  ],
+  "checks": [
+    {
+      "id": "no-control-codes",
+      "found": "2026-11-24",
+      "issue": "11 paragraphs opened with U+0017, invalid in XML 1.0.",
+      "no_text": "\u0017"
+    },
+    {
+      "id": "first-item",
+      "found": "2026-11-24",
+      "issue": "`… long term investment.` was a paragraph opening with U+0017.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "True’s solid door reach-in’s are designed with enduring quality that protects your long term investment.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "fourth-item-whole",
+      "found": "2026-11-24",
+      "issue": "Bullet 4 was torn: `… (GWP). \\x17 High capacity, factory balanced` and `refrigeration system …`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "High capacity, factory balanced refrigeration system that maintains cabinet temperatures of 33°F to 38°F (.5°C to 3.3°C) for the best in food preservation.",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

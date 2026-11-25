@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "irs-f1040-2025.pdf",
+    "url": "https://www.irs.gov/pub/irs-pdf/f1040.pdf",
+    "sha256": "3d31c226df0d189ced80e039d01cf0f8820c1019681a0f0ca6264de277b7e982",
+    "about": "IRS Form 1040 (2025), blank. Its sections are labelled by side tabs set a word or two per line, and its questions answered in Yes and No columns."
+  },
+  "notes": [
+    "#240: the answer columns' heads were a heading, and so was the first line of the side tab `Tax and Credits`, which stops on `and`. The tab's two lines are still read as separate blocks."
+  ],
+  "checks": [
+    {
+      "id": "answer-heads",
+      "found": "2026-11-25",
+      "issue": "`Yes No` was an h3.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Yes No"
+      },
+      "count": 0
+    },
+    {
+      "id": "side-tab-first-line",
+      "found": "2026-11-25",
+      "issue": "`Tax and`, the first line of the side tab `Tax and Credits`, was an h2.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Tax and"
+      },
+      "count": 0
+    },
+    {
+      "id": "section-tab-kept",
+      "found": "2026-11-25",
+      "issue": "Guard: `Filing Status` stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Filing Status"
+      }
+    }
+  ]
+}

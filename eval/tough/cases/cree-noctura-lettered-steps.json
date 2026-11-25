@@ -1,0 +1,73 @@
+{
+  "document": {
+    "file": "cree-noctura-install.pdf",
+    "url": "https://cree.widen.net/content/9yzz8vhx6p/original/Noctura-Series-B-Wall-Mount-Install-Guide---Small_LPN00628X0001A1_A.pdf?u=wk1zzb&download=true",
+    "sha256": "e2f1f1f18974f51e54a258713f2185e037bdd5e39353c79adcd59be79086d482",
+    "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). Each language's wiring page sets its electrical connections as six lettered steps, `a.` to `f.`, each wrapped over a line or two, beside the wiring diagram."
+  },
+  "notes": [
+    "#244: lettered steps never formed a list: each read as a paragraph opening with its letter."
+  ],
+  "checks": [
+    {
+      "id": "en-first-step-item",
+      "found": "2026-11-25",
+      "issue": "#244: the English wiring step `a.` was a paragraph, not a list's item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "a. For 120/277/347V connect the black fixture lead to the voltage supply or Hot 1 (for 208/240/480V wiring).",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "en-last-step-item",
+      "found": "2026-11-25",
+      "issue": "#244: the English wiring step `f.` was a paragraph, not a list's item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "f. NOTE: For dimming connections, use Class 1 wiring methods only.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "es-first-step-item",
+      "found": "2026-11-25",
+      "issue": "#244: the Spanish wiring step `a.` was a paragraph, not a list's item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "a. Para 120 V /277 V /347 V, conecte el cable negro de la luminaria a la posición de alimentación de voltaje o energizado 1 (para cableado de 208 V /240 V /480 V).",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "es-last-step-item",
+      "found": "2026-11-25",
+      "issue": "#244: the Spanish wiring step `f.` was a paragraph, not a list's item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "f. NOTA: Para conexiones de atenuación, use métodos de cableado de clase 1 únicamente.",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "fr-first-step-item",
+      "found": "2026-11-25",
+      "issue": "#244: the French wiring step `a.` was a paragraph, not a list's item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "a. Pour 120 /277 /347 V connectez le fil noir du luminaire à la position d’alimentation ou Hot 1 (pour câblage 208 / 240/ 480 V).",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "fr-last-step-item",
+      "found": "2026-11-25",
+      "issue": "#244: the French wiring step `f.` was a paragraph, not a list's item.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "f. REMARQUE : Pour les connexions avec gradation, utilisez uniquement des méthodes de câblage de classe 1.",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

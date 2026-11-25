@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. On page 2 its ratings list joins items with an `or` set bold italic at the items' hanging indent."
+  },
+  "notes": [
+    "#265: once #230 read the `or` as bold, a weight change parted it from a two-line item above it, whose second line is the shorter, and the list was cut in two. A lowercase line hanging under an item goes on with it, full line or not."
+  ],
+  "checks": [
+    {
+      "id": "or-stays-with-item",
+      "found": "2026-11-25",
+      "issue": "The `or` under the two-line item `Mixed bulb type per Multigang and Mixed Bulb Type Ratings table (see page 3)` was a paragraph of its own.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "or"
+      },
+      "count": 0
+    },
+    {
+      "id": "two-line-item-whole",
+      "found": "2026-11-25",
+      "issue": "As above: the item goes on into its `or`.",
+      "element": {
+        "text": "Mixed bulb type per Multigang and Mixed Bulb Type Ratings table (see page 3) or"
+      }
+    }
+  ]
+}
