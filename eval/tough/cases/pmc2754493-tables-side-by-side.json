@@ -1,0 +1,58 @@
+{
+  "document": {
+    "file": "pmc2754493.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2754493/",
+    "sha256": "80032edbf9c033631ee95a971edcc07f378fdb92aaadf5f554cf97660e052d20",
+    "about": "Malaria Journal research article, 'PfHRP2 and PfLDH antigen detection for monitoring the efficacy of artemisinin-based combination therapy (ACT) in the treatment of uncomplicated falciparum malaria', PMC2754493. Page 4 sets four tables in its two columns, two over two, each ruled under every row with lines drawn across its own column alone. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#286): the two columns' row lines interleave down the page, a few points apart, and no grid was read from them; Tables 1 to 3 were left as text, a cell to a paragraph. Each stack of unbroken row lines beside another, its bands holding text, is read from its text within its own lines, and labels standing under the other column's rules are not taken in. The second header row (`% | 95% CI`) is still read as a body row."
+  ],
+  "checks": [
+    {
+      "id": "sensitivity-table-read",
+      "found": "2026-11-25",
+      "issue": "#286: Table 1 was text, `100 (35/35)` a paragraph of its own.",
+      "cell": {
+        "value": "100 (35/35)",
+        "row": "D3"
+      }
+    },
+    {
+      "id": "sensitivity-table-own-columns",
+      "found": "2026-11-25",
+      "issue": "#286: Table 1 had no columns of its own.",
+      "columns": {
+        "with": "100 (35/35)",
+        "count": 5
+      }
+    },
+    {
+      "id": "specificity-table-read",
+      "found": "2026-11-25",
+      "issue": "#286: Table 2 was text.",
+      "cell": {
+        "value": "87.1 (141/162) ***",
+        "row": "D3"
+      }
+    },
+    {
+      "id": "negative-predictive-table-read",
+      "found": "2026-11-25",
+      "issue": "#286: Table 3 was text.",
+      "cell": {
+        "value": "95.3 (141/148)",
+        "row": "D3"
+      }
+    },
+    {
+      "id": "positive-predictive-table-own-columns",
+      "found": "2026-11-25",
+      "issue": "#286: Table 4, read on its own before, keeps its five columns beside the tables now read next to it.",
+      "columns": {
+        "with": "57.1 (28/49)",
+        "count": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "fomcprojtabl20250319.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcprojtabl20250319.pdf",
+    "sha256": "5adb4ec6619920f1d71b2ad8391b91b365d5183206acca0692e508bcbc8fa668",
+    "about": "FOMC Summary of Economic Projections, March 19, 2025. Its uncertainty and risk charts stand in pairs, each titled `December projections` over a y-axis scale from 18 down to 2, the two scales level with each other."
+  },
+  "notes": [
+    "#241: a pair of charts' titles and scales lined up into a two-column table.",
+    "Open: on pages 10 and 11 the charts are drawn in lines alone and found as no drawing, so nothing stands beside the scales and the grid stays a table."
+  ],
+  "checks": [
+    {
+      "id": "paired-scales-are-the-charts",
+      "found": "2026-11-25",
+      "issue": "#241: page 12's paired scales were a table (`December projections | December projections` over `18 | 18` …).",
+      "element": {
+        "type": "doco:Figure",
+        "text": "December projections December projections\n18 18\n16 16\n14 14\n12 12\n10 10\n8 8\n6 6\n4 4\n2 2"
+      }
+    },
+    {
+      "id": "line-chart-scales-no-table",
+      "found": "2026-11-25",
+      "status": "open",
+      "issue": "Pages 10 and 11: the same paired scales beside line charts found as no drawing stay tables.",
+      "element": {
+        "type": "doco:Table",
+        "text": "December projections\tDecember projections\n18\t18\n16\t16\n14\t14\n12\t12\n10\t10\n8\t8\n6\t6\n4\t4\n2\t2"
+      },
+      "count": 0
+    }
+  ]
+}
