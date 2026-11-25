@@ -1247,27 +1247,91 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             };
                             (r > n_header && at(r)) || (r + 1 < rows.len() && at(r + 1))
                         };
+                        // The rows the cell at `r`, `c` spans: its first and
+                        // last.
+                        let span = |r: usize, c: usize| {
+                            let at = |r: usize| {
+                                e.merged_down
+                                    .as_ref()
+                                    .and_then(|m| m.get(r * ncols + c))
+                                    .copied()
+                                    .unwrap_or(false)
+                            };
+                            let mut a = r;
+                            while a > n_header && at(a) {
+                                a -= 1;
+                            }
+                            let mut b = r;
+                            while b + 1 < rows.len() && at(b + 1) {
+                                b += 1;
+                            }
+                            (a, b)
+                        };
                         // A row's own label, not a figure (`55°` is one,
-                        // `158,571` is not).
+                        // `158,571` is not, nor are two figures a slash
+                        // parts, `0 / 0`, or a bound, `<5%`).
                         let figure = |t: &str| {
                             t.chars().any(|c| c.is_ascii_digit())
                                 && t.chars().all(|c| {
-                                    c.is_ascii_digit() || ",.$€£¥%()-+\u{2212} ".contains(c)
+                                    c.is_ascii_digit() || ",.$€£¥%()-+\u{2212}/<>≤≥± ".contains(c)
                                 })
                         };
                         for (c, cell) in row.iter().enumerate() {
                             let first = c - c % width;
                             let group = row.get(first).map(|t| t.trim()).unwrap_or("");
-                            let own = row.get(first + 1).map(|t| t.trim()).unwrap_or("");
-                            let stacked = (c > first + 1
-                                && first + 1 < first + width
-                                && spans_down(r, first)
-                                && !group.is_empty()
+                            // Groups over sub-groups, each set down a column
+                            // of its own (`FP2 Backplane` over `Conventional
+                            // type`): a leading column spanning down is a
+                            // group, and so is each after it spanning fewer
+                            // rows than the one before, a part of its group.
+                            // A column spanning the group's rows exactly says
+                            // more of the group (its colour, its volumes
+                            // carried down), and is read as the row's own, as
+                            // is the first column spanning nothing.
+                            let mut groups: Vec<(usize, &str)> = Vec::new();
+                            let mut k = first;
+                            let mut outer: Option<(usize, usize)> = None;
+                            while k + 1 < first + width && spans_down(r, k) {
+                                let t = row.get(k).map(|t| t.trim()).unwrap_or("");
+                                let rows_spanned = span(r, k);
+                                if t.is_empty()
+                                    || outer.is_some_and(|o| {
+                                        rows_spanned.1 - rows_spanned.0 >= o.1 - o.0
+                                    })
+                                {
+                                    break;
+                                }
+                                if groups.last().map(|g| g.1) != Some(t) {
+                                    groups.push((k, t));
+                                }
+                                outer = Some(rows_spanned);
+                                k += 1;
+                            }
+                            // The groups set left of column `c`.
+                            let left_of = |c: usize| {
+                                groups
+                                    .iter()
+                                    .filter(|(at, _)| *at < c)
+                                    .map(|(_, t)| *t)
+                                    .collect::<Vec<_>>()
+                                    .join(" / ")
+                            };
+                            let own = row.get(k).map(|t| t.trim()).unwrap_or("");
+                            let stacked = (c > k
+                                && !groups.is_empty()
                                 && !own.is_empty()
                                 && !figure(own)
-                                && own != group)
-                                .then(|| format!("{group} / {own}"));
-                            let row_header = stacked.as_deref().unwrap_or(group);
+                                && groups.last().map(|g| g.1) != Some(own))
+                            .then(|| format!("{} / {own}", left_of(k)));
+                            // A cell among the groups is named by those left
+                            // of it.
+                            let row_header = stacked.unwrap_or_else(|| {
+                                if groups.is_empty() {
+                                    group.to_string()
+                                } else {
+                                    left_of(c)
+                                }
+                            });
                             let value = cell.trim();
                             if value.is_empty() {
                                 continue;
@@ -1285,10 +1349,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     .insert("doc:sectionLabel".into(), Value::String(s.into()));
                             }
                             if c > first && !row_header.is_empty() {
-                                em.nodes[cell_idx].insert(
-                                    "doc:rowHeader".into(),
-                                    Value::String(row_header.into()),
-                                );
+                                em.nodes[cell_idx]
+                                    .insert("doc:rowHeader".into(), Value::String(row_header));
                             }
                             em.nodes[cell_idx]
                                 .insert("doc:cellValue".into(), Value::String(value.into()));
@@ -2035,6 +2097,39 @@ mod tests {
     }
 
     #[test]
+    fn a_value_beside_a_group_label_is_no_part_of_the_rows_name() {
+        // A property wrapped down the rows of its two test methods, each row
+        // with its value: `0 / 0` and `<5%` are figures, not labels that
+        // tell the rows apart. A label beside it still does (`Field`).
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(
+            [
+                ["Property", "Value", "Test"],
+                ["Surface burning", "0 / 0", "Method A"],
+                ["", "<5%", "Method B"],
+                ["Hardness", "Field", "Method C"],
+                ["", "Edge", "Method D"],
+            ]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect(),
+        );
+        t.header_rows = Some(1);
+        let mut down = vec![false; 15];
+        down[6] = true;
+        down[12] = true;
+        t.merged_down = Some(down);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let header = |v: &str| {
+            cells.iter().find(|c| c["doc:cellValue"] == v).unwrap()["doc:rowHeader"].clone()
+        };
+        assert_eq!(header("Method A"), "Surface burning");
+        assert_eq!(header("Method B"), "Surface burning");
+        assert_eq!(header("Method D"), "Hardness / Edge");
+    }
+
+    #[test]
     fn a_value_merged_down_is_on_every_row_of_the_text() {
         let mut t = el("doco:Table", "", None);
         t.cells = Some(vec![
@@ -2061,6 +2156,95 @@ mod tests {
         );
         assert_eq!(chars[b..e].iter().collect::<String>(), "Alpha");
         assert!(chars[..b].iter().filter(|c| **c == '\n').count() == 2);
+    }
+
+    #[test]
+    fn a_row_under_a_group_and_its_sub_group_is_named_by_all_three() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec![
+                "Product".into(),
+                "Type".into(),
+                "Specifications".into(),
+                "Part No.".into(),
+            ],
+            vec![
+                "Backplane".into(),
+                "Conventional".into(),
+                "5-module".into(),
+                "BP05".into(),
+            ],
+            vec!["".into(), "".into(), "7-module".into(), "BP07".into()],
+            vec!["".into(), "H type".into(), "8 slots".into(), "BP11".into()],
+            vec![
+                "".into(),
+                "".into(),
+                "8 slots, expansion".into(),
+                "BP10".into(),
+            ],
+        ]);
+        // The product spans its four rows, each type its two.
+        let mut md = vec![false; 20];
+        md[8] = true;
+        md[9] = true;
+        md[12] = true;
+        md[16] = true;
+        md[17] = true;
+        t.merged_down = Some(md);
+        t.header_rows = Some(1);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let row_of = |value: &str| {
+            cells.iter().find(|c| c["doc:cellValue"] == value).unwrap()["doc:rowHeader"].clone()
+        };
+        assert_eq!(row_of("BP07"), "Backplane / Conventional / 7-module");
+        assert_eq!(row_of("BP11"), "Backplane / H type / 8 slots");
+        assert_eq!(row_of("BP10"), "Backplane / H type / 8 slots, expansion");
+        // A cell among the groups is named by those left of it.
+        assert_eq!(row_of("7-module"), "Backplane / Conventional");
+        assert_eq!(row_of("H type"), "Backplane");
+    }
+
+    #[test]
+    fn a_column_spanning_the_groups_rows_says_more_of_the_group() {
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            vec![
+                "Tip".into(),
+                "Colour".into(),
+                "Max. volume".into(),
+                "Volume".into(),
+                "Error".into(),
+            ],
+            vec![
+                "0.1 mL".into(),
+                "white".into(),
+                "100 µL".into(),
+                "10 µL".into(),
+                "±1.6 %".into(),
+            ],
+            vec![
+                "".into(),
+                "".into(),
+                "".into(),
+                "50 µL".into(),
+                "±0.8 %".into(),
+            ],
+        ]);
+        // The tip, its colour and its volume all span the group's two rows.
+        let mut md = vec![false; 15];
+        md[10] = true;
+        md[11] = true;
+        md[12] = true;
+        t.merged_down = Some(md);
+        t.header_rows = Some(1);
+        let g = graph(&[t]);
+        let cells = find(&g, "doc:TableCell");
+        let error = cells
+            .iter()
+            .find(|c| c["doc:cellValue"] == "±0.8 %")
+            .unwrap();
+        assert_eq!(error["doc:rowHeader"], "0.1 mL / white");
     }
 
     #[test]

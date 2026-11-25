@@ -6,7 +6,8 @@
     "about": "Kohler K-R33912 kitchen faucet specification sheet (3 pages, printed by Chrome). The first page opens on a title block; the two after it run the same two lines small at their top right."
   },
   "notes": [
-    "A running head on two pages of three was never furniture, and its copies came out as sections in the middle of the sheet's content. Read from its exact copies, it is; the first page's title block, set larger in another place, stays the title."
+    "A running head on two pages of three was never furniture, and its copies came out as sections in the middle of the sheet's content. Read from its exact copies, it is; the first page's title block, set larger in another place, stays the title.",
+    "2026-11-24 (#191): page 2's two columns open with titles side by side under the running head; a gap inside the left column's section, level with the right column's next title, cut the page, and the standards lines went under the next title."
   ],
   "checks": [
     {
@@ -31,6 +32,15 @@
       "issue": "#44: as above, for the line under it.",
       "text": "Pull-down kitchen sink faucet with three-function sprayhead",
       "count": 1
+    },
+    {
+      "id": "standards-under-their-heading",
+      "found": "2026-11-24",
+      "issue": "`Codes/Standards` was empty; its standards lines (`ASME A112.18.1/CSA B125.1` …) came under `Recommended Products/Accessories`.",
+      "under": {
+        "text": "ASME A112.18.1/CSA B125.1",
+        "section": "Codes/Standards"
+      }
     }
   ]
 }
