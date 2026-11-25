@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "lutron-maestro-369-116.pdf",
+    "url": "https://assets.lutron.com/a/documents/369-116_maestro_120v_multi-location_fluorescent_smart_dimmer.pdf",
+    "sha256": "94c8a1723c49c88c65b9458d21f8be68911a87db0f7a49e5accdcad36a4c1f57",
+    "about": "Lutron Maestro fluorescent multi-location dimmer submittal sheet. Its ratings table sets the load types in a narrow column, hyphenating words at its line ends."
+  },
+  "notes": [
+    "2026-11-24 (#205): a one-page sheet's `Page 1`. With one page there was no repetition to read it by."
+  ],
+  "checks": [
+    {
+      "id": "one-page-folio",
+      "found": "2026-11-24",
+      "issue": "#205: `Page 1` was a Paragraph, and the page had no folio.",
+      "folio": {
+        "page": 1,
+        "value": "1"
+      }
+    },
+    {
+      "id": "page-line-not-in-body",
+      "found": "2026-11-24",
+      "issue": "#205: as above.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Page 1"
+      },
+      "count": 0
+    }
+  ]
+}

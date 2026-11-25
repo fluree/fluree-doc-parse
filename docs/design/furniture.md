@@ -293,5 +293,24 @@ lines left after grids took theirs. A form's key/value grid that runs down
 into the footer band takes the footer's glyphs with it — the furniture pass
 never sees the line, and the page had no folio although it printed one. The
 edge bands are where pagination lives, and assembling them a second time is
-cheap. `fdoc dev furniture` reports what the pipeline stripped and which
-pages carry a folio.
+cheap. A line of the page's own that is nothing but its folio, in those
+bands, is then its page number however few pages left it among their lines:
+a catalogue's tables reach the foot and take the number on most pages, and
+the first and last pages kept theirs in the body. `fdoc dev furniture`
+reports what the pipeline stripped and which pages carry a folio.
+
+A bare number is grouped by the place it stands as well as by its text. All
+of the bands' bare numbers share one signature, the counts of a table that
+runs into the foot with the page number set under them, and the group's
+middle place was the table's: the page numbers, set lower, were read nowhere.
+
+A page's number counts as its folio even where no other page carries one. A
+one-page sheet's `Page 1`, or a data sheet's `2` on the one page after its
+unnumbered cover, has nothing to repeat against. A line alone in the foot band
+that is nothing but the page's place in the file, bare or as `Page N`, is that
+page's number. The page number of another place in the numbering (an extract
+of a catalogue starts at 19) is read by repetition, as before.
+
+A page-number line that says something besides the page is kept in the
+running text with the rest: a document's code beside its page and date
+(`369613g 1 04.08.24`) names the document as a word would.
