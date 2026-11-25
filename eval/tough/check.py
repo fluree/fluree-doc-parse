@@ -133,6 +133,12 @@ class Reading:
             return None
 
         self.section_of = section_of
+        # Each list's items, their strings in order.
+        self.lists = [
+            [self.nodes.get(c, {}).get("nif:isString") for c in n.get("po:contains", [])]
+            for n in graph
+            if n.get("@type") == "doco:List"
+        ]
         # Each page's printed number, by its place in the file from 1.
         pages = next((n["doc:pages"]["@value"] for n in graph if "doc:pages" in n), [])
         self.folios = {p["pageIndex"] + 1: p.get("folio") for p in pages}
@@ -223,6 +229,15 @@ def run_check(check, reading):
         )
         ok = hits == check["count"] if "count" in check else hits > 0
         return ok, None if ok else f"{hits} such elements"
+    if "list" in check:
+        # One list holding all these items, by their strings: a list carried
+        # on past what the page sets between its items, not parted in two.
+        want = check["list"]["holds"]
+        ok = any(all(w in items for w in want) for items in reading.lists)
+        if ok:
+            return True, None
+        parts = [items for items in reading.lists if any(w in items for w in want)]
+        return False, f"in {len(parts)} lists"
     if "no_column_header" in check:
         # Anywhere in the name: under a stacked header a row read as header
         # is one label in a path (`A / B / C`).
