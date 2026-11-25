@@ -217,7 +217,11 @@ or squares and leave no bullet in the text. A filled mark under a checkbox's
 size, set just left of a line and level with it, opens a list item, as long
 as another such mark at the same place opens another line. A list draws a
 bullet for each item, in a column. A seal's ring of dots or a chart's
-scatter is level with a line of text only by chance. A list of one item
+scatter is level with a line of text only by chance. A drawing's dots also
+crowd one another, where a list's bullets stand a line apart. So a mark with
+another dot closer than half an em, in the size of the line beside it, is a
+drawing's and opens no item. Examples are a map's towns beside the title of
+its district, and the modules of a QR code beside its caption. A list of one item
 draws one bullet, and it marks its line when it is drawn like the page's
 other bullets: their size, as far from its text as theirs.
 The item's marker is `•`. Each item starts where its bullet is, however
