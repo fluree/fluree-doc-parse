@@ -1,0 +1,53 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "2026-11-25 (#248): the spec table sets its shared values once, centred across the two models' columns: the warranty, the time set range, the certifications, the dimensions. DoCO wrote each under the first column alone, `M17 Series`, and the M21 had none."
+  ],
+  "checks": [
+    {
+      "id": "warranty-under-each-model",
+      "found": "2026-11-25",
+      "issue": "#248: the M21 had no warranty cell.",
+      "cell": {
+        "value": "2 years",
+        "column": "M21 Series",
+        "row": "Warranty"
+      }
+    },
+    {
+      "id": "warranty-under-first-model",
+      "found": "2026-11-25",
+      "issue": "#248: as above; the M17's stays.",
+      "cell": {
+        "value": "2 years",
+        "column": "M17 Series",
+        "row": "Warranty"
+      }
+    },
+    {
+      "id": "time-range-under-each-model",
+      "found": "2026-11-25",
+      "issue": "#248: as above.",
+      "cell": {
+        "value": "1 min - 99 min; 1 min increments + HOLD mode",
+        "column": "M21 Series",
+        "row": "Time set range"
+      }
+    },
+    {
+      "id": "weight-under-each-model",
+      "found": "2026-11-25",
+      "issue": "#268: the weights set across both models' columns, wider than most values but standing in from both edges alike, were written under `M17 Series` alone.",
+      "cell": {
+        "value": "MT 17/MT 21: 120V/230V 11 kg; 100V: 12kg MTR 17/MTR 21: 120V 24 kg; 230V 24kg/25kg 100V: 25kg",
+        "column": "M21 Series",
+        "row": "Weight"
+      }
+    }
+  ]
+}

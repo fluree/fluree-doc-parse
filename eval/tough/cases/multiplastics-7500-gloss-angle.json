@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "multiplastics-7500.pdf",
+    "url": "https://multi-plastics.com/wp-content/uploads/2016/07/Sell_Sheet_7500.pdf",
+    "sha256": "ba567968030a0029552e911c79ec47e6977829ba0834066eea4dad47957159c5",
+    "about": "Multi-Plastics 7500 PLA film sell sheet (1 page). A product photo stands beside a column of headings, a description and property bullets, all set at the size of the page's text."
+  },
+  "notes": [
+    "2026-11-25 (#209): the gloss is measured at an angle given in brackets, its degree a raised `o`: `Gloss (45o)`."
+  ],
+  "checks": [
+    {
+      "id": "gloss-angle-degree",
+      "found": "2026-11-25",
+      "issue": "#209: `Gloss (45o)`.",
+      "text": "Gloss (45°)"
+    },
+    {
+      "id": "gloss-angle-not-o",
+      "found": "2026-11-25",
+      "issue": "#209: as above.",
+      "no_text": "(45o)"
+    }
+  ]
+}

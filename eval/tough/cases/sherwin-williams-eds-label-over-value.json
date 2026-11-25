@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "sherwin-williams-eds.pdf",
+    "url": "https://www.sherwin-williams.com/document/EDS/en/790417048503/",
+    "sha256": "fdb65ebef0a2b38b63cbee91c73c48752af5e2370370e42c63fe80a6266007ee",
+    "about": "Sherwin-Williams environmental data sheet. Each page sets small ruled VOC tables under larger ones and under full-width section banners."
+  },
+  "notes": [
+    "#240: once the sheet was no longer taken to be set bold throughout (#247), its bold field labels over their values read as headings."
+  ],
+  "checks": [
+    {
+      "id": "label-over-date",
+      "found": "2026-11-25",
+      "issue": "`Date of Preparation`, a bold label over its date, was an h4.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Date of Preparation"
+      },
+      "count": 0
+    },
+    {
+      "id": "label-over-code",
+      "found": "2026-11-25",
+      "issue": "`PRODUCT NUMBER`, a bold label over its code, was a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "PRODUCT NUMBER"
+      },
+      "count": 0
+    }
+  ]
+}

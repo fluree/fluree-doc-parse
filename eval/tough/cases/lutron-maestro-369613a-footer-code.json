@@ -1,0 +1,20 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro LED+ dimmer submittal sheet. Its feature list sets each bullet at the margin and the item's text, wrapped lines and all, an em and a quarter in from it."
+  },
+  "notes": [
+    "2026-11-24 (#205): the footer `369613g 1 04.08.24` carries the document's code and date beside the page's number. Read as a page number that named nothing, it was taken from the body and kept nowhere."
+  ],
+  "checks": [
+    {
+      "id": "footer-code-running",
+      "found": "2026-11-24",
+      "issue": "#205: the footer with the document's code was in neither the body nor the running text.",
+      "running": "369613g 1 04.08.24",
+      "count": 1
+    }
+  ]
+}

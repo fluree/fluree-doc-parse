@@ -9,7 +9,8 @@
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
     "2026-11-24 (#136): a degree set as a raised `o` read as the letter after a number and a space (`75 oF`).",
     "2026-11-24 (#126): a raised ® beside a display title was dropped or joined a smaller line beside it, because the space glyph the producer set after it decided which line it was.",
-    "2026-11-24 (#110): the acoustical rows `2`, `3`, `5` were a second table with no column names; the outer table's label, centred on its tall row, falls between `1.5` and `2` and broke the run of aligned rows."
+    "2026-11-24 (#110): the acoustical rows `2`, `3`, `5` were a second table with no column names; the outer table's label, centred on its tall row, falls between `1.5` and `2` and broke the run of aligned rows.",
+    "2026-11-24 (#194): the property table, ruled 3 × 11, was replaced by a reading from alignment because one cell is long and the acoustic row sets nine columns: data rows became its header and the rest loose paragraphs. The ruled table stands now, and the acoustic grid nested in its Performance cell is a table of its own after it, its cells carrying `Acoustical Performance` as their section."
   ],
   "checks": [
     {
@@ -46,8 +47,7 @@
       "issue": "On page 2 the ® was followed by a space glyph on the header line's baseline, and went to that line.",
       "element": {
         "type": "doco:SectionTitle",
-        "text": "Comfortboard® 80",
-        "evidence": "font-size"
+        "text": "Comfortboard® 80"
       }
     },
     {
@@ -64,6 +64,33 @@
         "value": "0.37",
         "column": "125 Hz",
         "row": "2"
+      }
+    },
+    {
+      "id": "property-table-whole",
+      "found": "2026-11-24",
+      "issue": "#194: the density row was a fragment table's header, and the property labels loose paragraphs.",
+      "cell": {
+        "value": "ASTM C303",
+        "column": "Test Standard",
+        "row": "Density"
+      }
+    },
+    {
+      "id": "no-data-row-as-header",
+      "found": "2026-11-24",
+      "issue": "#194: `Combustibility of Materials at 750 °C` named a column.",
+      "no_column_header": "Combustibility of Materials"
+    },
+    {
+      "id": "acoustic-values-in-their-section",
+      "found": "2026-11-24",
+      "issue": "#194: the acoustic grid nested in the Performance cell is a table of its own, under the property it sits in.",
+      "cell": {
+        "value": "0.37",
+        "column": "125 Hz",
+        "row": "2",
+        "section": "Acoustical Performance"
       }
     }
   ]

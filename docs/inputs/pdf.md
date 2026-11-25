@@ -108,7 +108,10 @@ the word: `Pro duits`, `Septembr e 2026`. A space drawn out of sequence
 with the letters on either side of it, and set on a letter rather than
 between two, is ignored, and the word reads whole. A space drawn in
 sequence, where the pen stopped after the word before it, is always kept,
-however tightly the next word follows.
+however tightly the next word follows. One drawn in sequence but set back
+onto the ink of the letter before it, with the next letter where that
+letter's pen stopped, leaves no space on the page and is ignored too: a
+producer sets one after each `ﬁ` ligature (`Scientifi c`, `califi cado`).
 
 **Lines wrapped inside a word.** Chinese and Japanese set no spaces
 between words, so a line may wrap between any two characters. A line that
@@ -139,6 +142,20 @@ line somewhere else: `Fluo-` over `rescent` is `Fluorescent` in a sheet whose
 title says `Fluorescent`. A word the document prints hyphenated, or nowhere
 else, keeps its hyphen.
 
+**A face's weight.** Each glyph takes its weight from its font: from a
+weight its name states (`Arial-BoldMT`, `HelveticaNeueLTStd-Bd`, `Sohne-Halbfett`,
+`NimbusSansL-Regu`), else from the `/FontWeight` its descriptor states, else
+from the font program. The name goes first because it is the source least
+often wrong: a subset whose program says bold for a regular face, or a
+descriptor that says 400 for a black one, still carries its face's name. A
+medium face is weighed by its ink against the body face, or, setting only
+a few letters, by the stem width its descriptor states, since some families
+set their medium as the bold and others barely darker than regular. So is a
+face nothing states a weight for, where the body text's face states none
+either. In a
+document set in a light face, every weight is read against it: a medium
+over a light body reads as bold.
+
 **Bold inside the text.** A heading set in bold is bold from its first word
 to its last, so a line reads as bold only when it is: most of its glyphs
 bold, and its first and last words. A face that declares no weight counts
@@ -154,8 +171,28 @@ even below a line that runs to the edge. A list with a hanging indent sets
 its bullets at the margin and each line of an item's text in from them, so
 an item's wrapped line starts an em or two right of the bullet line above
 it: up to three ems, it goes on with that item rather than starting a
-paragraph. A line that opens with a dash, or follows an item ending on a
-colon, starts a list of its own under the item.
+paragraph. An item opened by a letter or a number (`a. For 120/277/347V
+connect the black fixture lead to the` over `voltage supply …`) hangs its
+wrapped lines the same way where its sentence plainly goes on: the next
+line opens in lower case, or the item ran out of room. A line that opens
+with a dash, or follows an item ending on a colon, starts a list of its own
+under the item.
+
+**Bold or large, but no heading.** Size and weight do not make a heading
+of a field (`CRI: 90+` at the body's size, or a label with its value
+beside it), of a value
+set under its bold label at the label's size (`K25W951` under `PRODUCT
+NUMBER`) or of the label over it, of a form's label waiting for its value (`Location:`, `Model
+#:`), of a form's column keys and answer heads (`(a) (b)`, `Yes No`), of a
+line's caption between its letter and number (`b Refunded 37b`), of a
+sentence that refers elsewhere (`…, see your tax return instructions.`), of
+a chart's axis title set up its side or under its scale's values, of
+a table's column head or stub over its figures where the table is not read
+as one, of
+a signature block's role and party (`INVESTOR:` over the party's name over
+`By:`) or a signature page's label, or of a letterhead's lines over the
+sender's address and numbers. No heading stops on `and`, `of`, `the` or
+`not`: such a line runs on into the next.
 
 **Bullets.** The typographic bullets and geometric shapes are read as
 bullets, and so are the arrows and boxes the dingbat fonts set as them
@@ -181,13 +218,23 @@ scatter is level with a line of text only by chance.
 The item's marker is `•`. Each item starts where its bullet is, however
 closely the items are spaced.
 
-**Dashes and arrows.** A line opening with a dash or an arrow and a space
-(`—`, `–`, `-`, `→`) is a list item when another line nearby opens with the
-same mark at the same place. The lines between two such lines must hang
+**Dashes and arrows.** A line opening with a dash, a minus sign or an
+arrow and a space (`—`, `–`, `-`, `−`, `→`, `>`) is a list item when
+another line nearby opens with the same mark at the same place. A `>`
+opens an item only before a capital or a figure: a quoted message's lines
+open with one too, going on with their sentences in lower case. The lines between two such lines must hang
 under the item's text or be a word or two (`or`). The mark is the item's
 marker, as a bullet is, and wrapped lines hang under the item's text. A lone
 line so opening, among lines of prose at the same place, is a range, a minus
 or a dialogue's dash, and stays as it reads.
+
+A glyph that says nothing as text marks items the same way: a symbol the
+font maps to a control code or to the private-use area, or an arrow, a
+shape or a dingbat. A sidebar whose `▶` bullets the font maps to the
+control code 0x17 reads as a list, and as such a mark is no range or
+minus, its items may wrap over any number of lines. No control character
+other than a tab or a line break is written into the output, from any
+source.
 
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of
@@ -218,7 +265,10 @@ opening with `1.` is starts the next item, and the lines under it stay with
 it; a run of such items is an ordered list, even across a slightly wider
 space between two of them. A list of entries set one per line, a standard
 or a code on each, reads one entry per paragraph when every line stops well
-short of the column's width and none goes on in lower case. And a
+short of the column's width and none goes on in lower case. Bold lines
+stacked so, each opening with a capital that would have fitted on the line
+before, are headings one per line: `Materials and methods` over `Animals`.
+And a
 paragraph ended on a short line, followed at the same spacing by a line
 opening with a capital, is two paragraphs: the short line stops more than
 the next line's first word and two ems short of the lines around it.
@@ -228,16 +278,52 @@ spacing, as footnotes set at a generous leading have, or across a change to
 bold capitals within the paragraph: the line is full, ends without a full
 stop, and the next goes on in lower case or in the same capitals.
 
+**Lettered items.** Steps and sub-questions lettered in lower case, `a.`,
+`b)`, `(c)`, form a list in two cases:
+
+- the lines count off from `a.` at one left edge, each item's wrapped lines
+  hanging under it;
+- a block opening with `a.` has a block opening with `b.` set where it is
+  under it, each a paragraph long or a step wrapped over lines.
+
+Letters count apart from numbers. So questions numbered `2.` and `3.`, each
+with lettered sub-questions under it, read as two numbered items. The lines
+set left of the last lettered item, where the numbered text goes on
+(`2. When changing…` under `f. The depth of focus…`), are not part of that
+item. A lone `a.` opens a paragraph. Lines that happen to start `(d)` and
+`(e)`, a caption's panels wrapped one to a line, count off from nothing. A
+capital, `A.`, opens an appendix or a section as often as an item, and is
+read as neither here. In Markdown a lettered item is written after a bullet,
+`- a. …`, since Markdown numbers only with digits.
+
+**Footnotes.** A block of footnotes, each opening with its number raised at
+the margin and set at the text's leading, reads one note to a paragraph,
+each opening with its number. A line whose raised number counts on from the
+note above it (`7 1 MB/s = …` then `8 Portion of buffer…`) starts the next
+note. A raised number the text layer set apart from its line is the note's,
+not a list's marker: it stays in front of its text, where the body's note
+marks can find it.
+
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
 `Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
 apart from it, `Acrylonitrile a`, by the same rule as an HTML `<sup>`: a
 letter or symbol after a word, or a number after a word too long to be a
 unit, after a quantity (`26TB 1`, not `26TB1`), or after a bracket that
-holds words (`(49 N) 5`, not `(49 N)5`). Raised text that belongs to its
-word stays in it: a unit's power, kept raised (`cm³`, `m/s²`, and the
+holds words (`(49 N) 5`, not `(49 N)5`). So is one after a compound or a
+code joined by hyphens (`3-way 1`, `MACL-153M-XX 2,3`), and after a bracket
+whose slash parts names rather than terms (`(512e/4Kn) 1,2`, `(mm/in, max) 4`).
+A raised number set before a word, after a space or at a line's head, is a
+note's number before its note or the name it is on, and is read apart from
+it the same way (`4 M17 series`, not `4M17 series`). Raised text that belongs
+to its word stays in it: a unit's power, kept raised (`cm³`, `m/s²`, and the
 Spanish square foot `PIES²`), an ordinal's ending (`1st`) and a formula's
 index or power (`ρwLv²`, `Vol(∂Ω)ⁿ`, `(a+b)²`).
+
+A font may draw its own superior figures instead: set at the text's size and
+on its baseline, but drawn small and high. They are read as raised marks by
+their ink, which stands clear of the baseline and short of a figure's height,
+so `Lengths` and its superior `7` read `Lengths 7`, not `Lengths7`.
 
 After a number, the same marks matter more, because the text layer turns
 them into another number. A note's letters stand apart from the value:
@@ -250,8 +336,9 @@ it agrees with (`22nd`, `118th`, `21e`).
 A degree sign set as a raised `o` or `0` reads as `°` wherever it cannot be
 an ordinal's ending or a power: before a temperature's unit (`25°C`, not
 `25oC`), after three figures or more (`~ 145°`, not `~ 145 o`), after a
-decimal, or after a signed number. `1º` and `2º` stay ordinals and `10⁰` a
-power.
+decimal, after a signed number, or after an approximation's sign or a
+bracket's opening, where no ordinal stands (`~ 95°`, `Gloss (45°)`). `1º`
+and `2º` stay ordinals and `10⁰` a power.
 
 **Mixed numbers.** A spec sheet sets `22 3/8"` with no space before the
 fraction. The fraction is set small, in a smaller size or in the font's own
@@ -271,6 +358,19 @@ sat 5pt from its baseline, and cut the description in three around it. A
 title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
+Nor is a number set beside another number, such as a chart's tick labels
+side by side (`2.4−` beside `2.6−`): a list's number opens an item that
+says more than a number. Taken for markers, the years under a chart's bars
+vanished from the text.
+
+**A callout beside a line.** Text set beside a paragraph's line at the same
+size, on a baseline a little off the line's, is a line of its own: a line is
+read along its row, and where the next glyph read would put the pen back more
+than an em behind the line's end, a new line starts. A flyer's bold callout,
+`GreenCool Technology`, 0.3 of its size higher than the body line to its
+left, was read first and the body line after it, unspaced
+(`GreenCool TechnologyThe refrigerated models…`), and the paragraph was cut
+there.
 
 **Side heads.** Some data sheets set each section's heading in a narrow strip
 at the left, level with the first line of its text in the wide column beside
@@ -387,6 +487,36 @@ from its text:
   holding the bars and scattered labels, is part of its chart. A diagram's
   boxes hold labels set well under the page's text, and are part of the
   diagram.
+- A scatter plot's points line up in rows and columns as a table's shaded
+  cells do. They are not read as a table's shading when all of these hold:
+  - they are marks smaller than a line of the page's text, and most of
+    the group's shapes;
+  - they are drawn as a few symbols;
+  - they spread both ways and fill few of the places their rows and
+    columns cross;
+  - they are plotted against an axis: three numbers or more beside them,
+    set in a column on one right edge or in a row on one baseline.
+
+  A calibration's points, at a few levels across, each at nearly the same
+  height, are such a scatter. A matrix of dots, a row of text apart, a
+  column of drawn bullets, and a seal's ring of dots are not.
+- A form's fields are no drawing's shapes: an empty box a line or two high,
+  under or after its label's colon (`Job Name:`, set at the text's size, not
+  a title's), and the boxes in line with it at its height. The box that
+  holds them is the form's background. So is a band, at least three times
+  as wide as it is tall, holding marks kept to one end, under half its
+  width, with words along the rest of it: a footer's certification logos
+  beside `APPROVALS:`. A submittal's logo set over its form is a logo, and
+  the form's labels are the page's.
+- A word drawn as shapes, a logo's lettering, is a drawing of its own:
+  three letters or more on one baseline at one height, side by side, clear
+  of every other shape by more than their height. A submittal's wordmark
+  under its wiring diagrams no longer joins them by reach, and text set
+  beside the wordmark on its row (`SPECIFICATION SUBMITTAL …`) is no label
+  of the diagrams. Its letters are no boxes to tick either, and neither are
+  a table row's shaded cells set side by side, nor a drawing's pieces: a
+  small square of a logo's illustration, lying in a shape that holds other
+  pieces or overlapping one part way, set beside an address.
 - A background as large as the page joins nothing. Drawings set close
   together are found as separate drawings, rather than lost as one shape too
   large to be a drawing.
@@ -398,15 +528,72 @@ and the labels around it:
   the page's prose and near it or near another label;
 - never further from the drawing than the drawing's own size.
 
+A line at the prose's size is no title in two cases:
+
+- It stands in the page's head band, the top 8% of the page, more than two
+  lines from the drawing. That is a running head, even one that names the
+  appendix the plots are in. A badge's small words there are labels as
+  anywhere.
+- It says three words or more and its sentence runs on into the page's
+  prose set under it, starting in lower case. That is a paragraph's line,
+  even when it was parted at a wide justified space. A legend's entry of a
+  word or two doesn't run on.
+
 A list item, a sentence of more than fifteen words, and a block too wide to be
 a label stay the page's, however close they are set. Text at the prose's
 size is a label only as wide as the drawing, give or take half again: a
 chart's title, legend or axis name. Two lines of prose beside a small QR
 code or an icon run well past it, and stay the page's. So does a line that runs
 on, at the same size and left edge, from text the figure did not take, such
-as the last of a column of notes or the first bullets of a list. The rectangle
+as the last of a column of notes or the first bullets of a list. So does
+text in a column of its own beside a drawing, level with it: a heading or a
+note set flush with a paragraph of the page's in that column (`FCC` and its
+caution beside an install guide's drawing), a run of steps wrapped from
+line to line (`… the black fixture lead to the` over `voltage supply …`),
+and the line introducing them on its colon. So is a line that introduces a
+list on its colon, the list's items set just under it. A label is terse, and stands
+among the drawing's. An address is no label either. A line that closes on a
+phone number, a web address or an e-mail address says where to reach the
+page's maker, not what the drawing shows. The lines it runs on from go with
+it, such as the company and street over `1-800-…` and `www.…` set under a
+logo. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
 heading inside it that was not taken as a label keeps its type.
+
+**A frame drawn round a drawing bounds its figure.** A wiring diagram set in
+a box, with its labels in the box's margins (`Line / Hot` left of the
+switches, `Neutral` under them), takes every label in the box, whatever
+their distance from the shapes. Where one box holds several diagrams, each
+label goes to the nearest. Outside the box it takes only its caption: a
+`Figure 17. …` set over or under the box, a `Note:` or `Source:` under it,
+and the lines that run on from them. A note in the column beside the box and
+a title over it that is no caption are the page's. A box is a frame
+when its drawings span most of it each way, something sits in its margins,
+and all it holds is labels: fifteen words or fewer each, and no display
+type. A slide's background holds its title, and a plot's own background is
+filled by its bars, with the axes' names and the legend outside it; neither
+is a frame.
+
+**A picture with labels set on it is a figure.** A product's cutaway placed
+as an image draws no shapes, and the names of its layers set over it
+(`Heat Sealable PLA Layer`, `PLA Core`) would otherwise read as paragraphs. A
+picture smaller than the page, with two blocks or more set on it, is a
+figure of those labels and of any label hung over its edge, when every block
+over it, even in part, is a label (fifteen words or fewer, no display type),
+and the labels are set about it rather than one under another from a single
+left edge. Its labels name the parts of the picture, as a raster chart's
+values, a map's place names or a diagram's parts do. It takes nothing set
+around it, so the heading under the picture opens the next section. None of
+these is a figure:
+
+- a photo with a title set over it, such as a slide's background;
+- a brochure's background, with paragraphs that run on and off it;
+- a signature under the line and the name it signs;
+- a photo with only a credit in its corner.
+
+A picture's labels still count toward the body size. A picture holds only
+a few, and setting them aside could tip a slide deck's body to another
+size.
 
 **Headings near drawings.** A heading set larger than the body that the
 figure took as a label keeps its type when the document sets headings at
@@ -423,6 +610,11 @@ when half of it lies on a drawing, and a ruled grid whose strokes stand at
 many more places than its rows and columns: the outlines of a unit's
 terminals, or a drawing's dimension and extension lines. A table drawn over
 a drawing, ruled at its rows and columns and mostly filled, stays a table.
+No grid is read across the edge of a box drawn round a drawing, a box
+holding three shapes or more: a diagram's wire labels inside the box and a
+note in the column beside it stand on the same baselines, and read as rows
+they cut the note after its first line. A table's shaded label column holds
+text, not shapes, and parts nothing.
 
 **Body text size.** The size headings are measured against is taken from the
 text outside drawings. A diagram's many small labels do not make every
