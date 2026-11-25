@@ -366,12 +366,16 @@ fn marker_shaped(text: &str) -> bool {
         .all(|c| matches!(c, 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'))
 }
 
-/// A character that is content, not a bullet's shape: a letter or digit, or
-/// a sign that stands for letters or digits — `™` for `TM`, `℃`, `№`, `㎡`
-/// — which line text keeps as printed and which spelled out was content.
+/// A character that is content, not a bullet's shape: a letter or digit, a
+/// sign that stands for letters or digits — `™` for `TM`, `℃`, `№`, `㎡` —
+/// which line text keeps as printed and which spelled out was content, or a
+/// mathematical operator, a formula's `∂` or `∑` set apart beside its bar.
+/// The minus sign is read as a dash, and `∙` is a bullet.
 fn says_something(c: char) -> bool {
     use unicode_normalization::UnicodeNormalization;
-    c.is_alphanumeric() || c.to_string().nfkc().any(char::is_alphanumeric)
+    c.is_alphanumeric()
+        || c.to_string().nfkc().any(char::is_alphanumeric)
+        || (('\u{2200}'..='\u{22FF}').contains(&c) && c != '\u{2212}' && !is_bullet(c))
 }
 
 /// True for a short line that is a bullet, list number or footnote reference
@@ -2796,6 +2800,19 @@ mod tests {
         assert_eq!(b[0].lines.len(), 3);
         // The paragraph after a list's last item is the page's.
         assert_eq!(rejoin_broken_items(vec![item, broken], &[]).len(), 2);
+    }
+
+    #[test]
+    fn a_formulas_operator_says_something() {
+        // Set apart beside a formula's bar, `∂` or `∑` is the formula's,
+        // and a marker only at the margin of what it would mark.
+        for c in ['\u{2202}', '\u{2211}', '\u{221A}', '\u{2264}'] {
+            assert!(says_something(c), "{c}");
+        }
+        // The minus sign reads as a dash, and `∙` is a bullet.
+        for c in ['\u{2212}', '\u{2219}', '\u{2022}'] {
+            assert!(!says_something(c), "{c}");
+        }
     }
 
     #[test]

@@ -210,7 +210,10 @@ opens with a bullet is a list item unless it is a heading, and one that opens
 with a plain bullet or a box to tick is never a heading, whatever its size
 or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
 or a diamond is set before headings as often as before items (`❖ Gene` over
-a guideline's subsection), so there the heading pass decides.
+a guideline's subsection), so there the heading pass decides. A
+mathematical operator set apart beside a formula's bar (`∂`, `∑`) is the
+formula's text. It is read as a marker only at the margin of what it would
+mark, as a number is.
 
 **Drawn bullets.** Some producers draw a list's bullets as small filled dots
 or squares and leave no bullet in the text. A filled mark under a checkbox's
@@ -406,6 +409,20 @@ read whole before the next. A box set in two columns of running text under
 full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
+
+**Tables and boxes in the reading order.** A table is read where it stands
+in its column, under the heading it sits under: one above it in its column,
+or one beside it at the left, either just above its top or level with its
+first row, as a side head in a column of its own stands. A label beside the
+first row is no head when other labels stand down the table's side below it.
+Those are the rows' labels. Two tables side by side under one heading are
+read left then right, each followed by the note under it. A line stops at a
+rule drawn up between two of its words, such as the side of a box between a
+letterhead and the form box beside it. The rule must run the line's height,
+stand in a word space at least, cross no text along its length, and stand
+beside two rows of text or more on each side. So a chart's line drawn behind
+its labels parts nothing, and neither does the border between a single row's
+cells: a code and what it names stay one line.
 
 **Columns run together.** Many producers write the space after a word as a
 glyph that puts no ink down. Where the next glyph on the line stands across a
