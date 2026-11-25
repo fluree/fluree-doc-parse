@@ -1245,6 +1245,9 @@ fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) ->
         return true;
     }
     let fs = (b.font_size as f64).max(1.0);
+    if opens_an_address(b, page) {
+        return true;
+    }
     t.ends_with(':')
         && page.iter().enumerate().any(|(k, o)| {
             k != i
@@ -1437,12 +1440,64 @@ fn over_contact(page: &[Block], i: usize) -> bool {
     false
 }
 
+/// Lines an address runs over, at most, from its first to the line with
+/// its phone number or web address.
+const ADDRESS_LINES: usize = 3;
+
+/// Does `b` open an address: the lines set flush under it, each within a
+/// line and a half of the last, reach one closing on a phone number or a
+/// web address (`Owens Corning Insulating Systems, LLC` over `One Owens
+/// Corning Parkway…` over `1-800-GET-PINK® www.owenscorning.com`)? Its
+/// first line names a company or a person, set bold, and is no section's
+/// title.
+fn opens_an_address(b: &Block, page: &[Block]) -> bool {
+    let fs = (b.font_size as f64).max(1.0);
+    // An address's lines are short: a heading over a list of references,
+    // each closing on its link, opens none.
+    let short = |o: &Block| o.text().split_whitespace().count() <= ADDRESS_WORDS;
+    if !short(b) {
+        return false;
+    }
+    let mut last = b;
+    for step in 0..ADDRESS_LINES {
+        let next = page
+            .iter()
+            .filter(|o| {
+                !std::ptr::eq(*o, last)
+                    && (o.bbox.x0 - b.bbox.x0).abs() <= fs
+                    && (-0.5..=fs * 1.5).contains(&(o.bbox.y0 - last.bbox.y1))
+            })
+            .min_by(|p, q| {
+                p.bbox
+                    .y0
+                    .partial_cmp(&q.bbox.y0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let Some(next) = next else {
+            return false;
+        };
+        if !short(next) {
+            return false;
+        }
+        // A street or a city between the name and the number: a heading
+        // set straight over a line to call is a heading.
+        if ends_with_contact(&next.text()) {
+            return step > 0;
+        }
+        last = next;
+    }
+    false
+}
+
 /// Any line of the block states a web address, an e-mail address or a
 /// phone number: an address block's.
 fn states_contact(b: &Block) -> bool {
     b.lines.iter().any(|l| ends_with_contact(&l.text))
         || b.text().split(['•', '|']).any(ends_with_contact)
 }
+
+/// Most words on one line of an address.
+const ADDRESS_WORDS: usize = 10;
 
 /// A kicker is not a section: a category, series name or tagline set in
 /// smaller type directly above the title (`Scalable. Responsive.
@@ -2173,6 +2228,32 @@ mod tests {
         ];
         let hs = detect(&[page], &[]);
         assert!(hs.iter().any(|h| h.text == statement), "{hs:?}");
+    }
+
+    #[test]
+    fn an_addresss_first_line_is_no_heading() {
+        let at = |t: &str, y: f64| {
+            let mut b = blk(t, 9.0, 1);
+            b.bbox.x0 = 449.0;
+            b.bbox.y0 = y;
+            b.bbox.y1 = y + 9.0;
+            for l in &mut b.lines {
+                l.bbox = b.bbox;
+            }
+            b
+        };
+        let page = vec![
+            at("Owens Corning Insulating Systems, LLC", 634.0),
+            at("One Owens Corning Parkway Toledo, OH 43659 USA", 646.0),
+            at("1-800-GET-PINK\u{AE} www.owenscorning.com", 658.0),
+            at("Installation", 700.0),
+            at(
+                "Blow the insulation to the thickness the chart gives",
+                712.0,
+            ),
+        ];
+        assert!(opens_an_address(&page[0], &page));
+        assert!(!opens_an_address(&page[3], &page));
     }
 
     #[test]

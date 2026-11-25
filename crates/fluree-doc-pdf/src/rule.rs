@@ -254,6 +254,39 @@ pub fn checkboxes(fills: &[Fill]) -> Vec<BBox> {
         }
         hi - lo + 1 >= 3
     };
+    // Nor is a piece of a drawing: a logo's illustration is built of
+    // shapes, some of them small squares, and set beside an address its
+    // pieces read as boxes before the address's lines. A box to tick stands
+    // alone, on a panel or holding its tick; a drawing's piece overlaps its
+    // neighbours part way, or lies in a shape that holds three pieces or
+    // more that are neither boxes nor strips.
+    let inside = |a: &BBox, o: &BBox| {
+        a.x0 >= o.x0 - 0.5 && a.y0 >= o.y0 - 0.5 && a.x1 <= o.x1 + 0.5 && a.y1 <= o.y1 + 0.5
+    };
+    let squarish = |b: &BBox| (b.width() - b.height()).abs() <= CHECKBOX_SQUARENESS;
+    let strip = |b: &BBox| b.width() >= b.height() * 3.0 || b.height() >= b.width() * 3.0;
+    let piece = |b: &BBox| {
+        fills.iter().map(|f| f.bbox).any(|o| {
+            // The box itself, or its tick drawn inside it.
+            if o == *b || inside(&o, b) {
+                return false;
+            }
+            // A shape it lies in is a drawing when it holds three pieces;
+            // a panel or the box's own outline does not.
+            if inside(b, &o) {
+                return fills
+                    .iter()
+                    .map(|f| f.bbox)
+                    .filter(|p| *p != *b && *p != o && inside(p, &o) && !squarish(p) && !strip(p))
+                    .count()
+                    >= 3;
+            }
+            // A neighbour it overlaps part way.
+            let w = b.x1.min(o.x1) - b.x0.max(o.x0);
+            let h = b.y1.min(o.y1) - b.y0.max(o.y0);
+            w > 0.0 && h > 0.0
+        })
+    };
     fills
         .iter()
         .map(|f| f.bbox)
@@ -263,6 +296,7 @@ pub fn checkboxes(fills: &[Fill]) -> Vec<BBox> {
                 && (CHECKBOX_MIN..=CHECKBOX_MAX).contains(&h)
                 && (w - h).abs() <= CHECKBOX_SQUARENESS
                 && !lettered(b)
+                && !piece(b)
         })
         .collect()
 }
@@ -622,6 +656,30 @@ mod tests {
             })
             .collect();
         fills.push(f(40.0, 511.0, 47.0, 518.0));
+        assert_eq!(checkboxes(&fills), [bb(40.0, 511.0, 47.0, 518.0)]);
+    }
+
+    #[test]
+    fn a_drawings_pieces_are_no_checkboxes() {
+        let f = |x0, y0, x1, y1| Fill {
+            bbox: bb(x0, y0, x1, y1),
+            page: 0,
+        };
+        // A logo's illustration: a shape holding pieces, one a small
+        // square, another square overlapping a piece part way; and a box to
+        // tick on a form's panel, with its tick inside it.
+        let fills = vec![
+            f(373.0, 636.0, 423.0, 663.0),
+            f(393.0, 652.0, 404.0, 657.0),
+            f(393.0, 655.0, 406.0, 663.0),
+            f(388.0, 641.0, 397.0, 653.0),
+            f(416.0, 639.0, 420.0, 645.0),
+            f(419.0, 695.0, 425.0, 734.0),
+            f(421.0, 694.0, 425.0, 699.0),
+            f(30.0, 500.0, 300.0, 560.0),
+            f(40.0, 511.0, 47.0, 518.0),
+            f(42.0, 513.0, 45.0, 516.0),
+        ];
         assert_eq!(checkboxes(&fills), [bb(40.0, 511.0, 47.0, 518.0)]);
     }
 

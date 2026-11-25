@@ -171,8 +171,12 @@ even below a line that runs to the edge. A list with a hanging indent sets
 its bullets at the margin and each line of an item's text in from them, so
 an item's wrapped line starts an em or two right of the bullet line above
 it: up to three ems, it goes on with that item rather than starting a
-paragraph. A line that opens with a dash, or follows an item ending on a
-colon, starts a list of its own under the item.
+paragraph. An item opened by a letter or a number (`a. For 120/277/347V
+connect the black fixture lead to the` over `voltage supply …`) hangs its
+wrapped lines the same way where its sentence plainly goes on: the next
+line opens in lower case, or the item ran out of room. A line that opens
+with a dash, or follows an item ending on a colon, starts a list of its own
+under the item.
 
 **Bold or large, but no heading.** Size and weight do not make a heading
 of a field (`CRI: 90+` at the body's size, or a label with its value
@@ -463,7 +467,9 @@ from its text:
   under its wiring diagrams no longer joins them by reach, and text set
   beside the wordmark on its row (`SPECIFICATION SUBMITTAL …`) is no label
   of the diagrams. Its letters are no boxes to tick either, and neither are
-  a table row's shaded cells set side by side.
+  a table row's shaded cells set side by side, nor a drawing's pieces: a
+  small square of a logo's illustration, lying in a shape that holds other
+  pieces or overlapping one part way, set beside an address.
 - A background as large as the page joins nothing. Drawings set close
   together are found as separate drawings, rather than lost as one shape too
   large to be a drawing.
@@ -481,7 +487,13 @@ size is a label only as wide as the drawing, give or take half again: a
 chart's title, legend or axis name. Two lines of prose beside a small QR
 code or an icon run well past it, and stay the page's. So does a line that runs
 on, at the same size and left edge, from text the figure did not take, such
-as the last of a column of notes or the first bullets of a list. The rectangle
+as the last of a column of notes or the first bullets of a list. So does
+text in a column of its own beside a drawing, level with it: a heading or a
+note set flush with a paragraph of the page's in that column (`FCC` and its
+caution beside an install guide's drawing), a run of steps wrapped from
+line to line (`… the black fixture lead to the` over `voltage supply …`),
+and the line introducing them on its colon. A label is terse, and stands
+among the drawing's. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
 heading inside it that was not taken as a label keeps its type.
 
