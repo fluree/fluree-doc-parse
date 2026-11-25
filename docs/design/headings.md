@@ -242,6 +242,24 @@ section that closed at the title with nothing in it. It is read as text,
 where the page sets it. Journal banners (`Open Access`, `RESEARCH
 ARTICLE`) are kickers too.
 
+Reading order is not the page's order of size, so the first blocks can miss
+the title:
+
+- **A title read late.** A sidebar read first can hold the first large
+  line: `Highlights` at 14pt, before the 17pt product title at the right.
+  The page's largest title-shaped line in its upper half is the title when
+  it is over a tenth larger than the first blocks' pick. Where the first
+  blocks hold no title at all, a large line further down is a section's or
+  a statement's, and stays one.
+- **Two candidates of one size.** The one a column further left (by more
+  than a quarter of the page's width) is the title. A category strip at the
+  right of the header (`Wallbox Wiring Devices`) is as large as the title
+  under it at the left. Otherwise the earlier one wins, so a title keeps
+  its same-size subtitle.
+- **A field.** A line at the body's size spread wider than its words could
+  run, a label and its value set apart across the page (`Part No.` …
+  `675 8126H250`), is never the title.
+
 A division's label is not a kicker. A division word and its number, a
 roman numeral or a letter (`Chapter 3`, `PART II`, `Appendix B`) is a
 heading at the title's level. Joining it into the title as one heading was
