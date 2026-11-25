@@ -2490,6 +2490,15 @@ fn find_figures(
             &figures,
         );
         figures.extend(plotted);
+        let charted = figure::axis_plots(
+            &page.rules,
+            &page.ticks,
+            &page.traces,
+            &page.glyphs,
+            pi,
+            &figures,
+        );
+        figures.extend(charted);
         // A dimension drawing whose lines made a ruled grid of its callouts:
         // the drawing its loose callouts and view names are labels of.
         if let Some(layout) = layouts.get(pi) {
@@ -2517,6 +2526,7 @@ fn find_figures(
                         .count()
                         .max(1),
                     frame: None,
+                    axes: false,
                 })
                 .collect();
             figures.extend(dimensioned);
@@ -2582,7 +2592,7 @@ fn drawn(page_figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]) -> Vec<Vec<
         .map(|(figures, member)| {
             member
                 .iter()
-                .map(|m| m.is_some_and(|fi| figures[fi].shapes > 0))
+                .map(|m| m.is_some_and(|fi| figures[fi].shapes > 0 && !figures[fi].axes))
                 .collect()
         })
         .collect()
@@ -5011,6 +5021,7 @@ mod tests {
             page: 0,
             shapes: 24,
             frame: None,
+            axes: false,
         };
         let plots = [plot(100.0), plot(360.0)];
         assert_eq!(panel_axes(&grid, &cells, &plots, 7.0), Some(0));
@@ -5183,6 +5194,8 @@ mod tests {
                 rules,
                 fills: Vec::new(),
                 dots: Vec::new(),
+                traces: Vec::new(),
+                ticks: Vec::new(),
                 width: 600.0,
                 height: 800.0,
                 rotation: 0,

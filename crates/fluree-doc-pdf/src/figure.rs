@@ -77,6 +77,10 @@ pub struct Figure {
     /// The box drawn around the drawing, where one is: a panel the
     /// drawing's shapes lie within, holding its labels.
     pub frame: Option<BBox>,
+    /// Found from a trace bound by its axes ([`axis_plots`]). Its labels
+    /// stay in the text the body's size is measured from; see `drawn` in
+    /// the document pass.
+    pub axes: bool,
 }
 
 /// Group fills that touch or nearly touch into connected clusters, where
@@ -727,6 +731,7 @@ fn judge(
         page,
         shapes: group.len(),
         frame: None,
+        axes: false,
     })
 }
 
@@ -1735,6 +1740,7 @@ pub fn pictures(
             page,
             shapes: 0,
             frame: None,
+            axes: false,
         })
         .collect()
 }
@@ -1751,6 +1757,220 @@ const GRATICULE_PITCH: f64 = 0.1;
 /// labels and notes stand in under a third of them, each crossing a line
 /// or two, where a ruled table's text fills over half its cells.
 const GRATICULE_TEXT: f64 = 0.4;
+
+/// Do the places, ascending, stand a pitch apart: a graticule's lines or an
+/// axis's ticks? Each gap is the pitch or a whole number of it (a line broken
+/// off for a label, a tick under a label left out), most of them the pitch
+/// itself, within [`GRATICULE_PITCH`] of it.
+fn evenly_pitched(at: &[f64]) -> bool {
+    if at.len() < 2 {
+        return false;
+    }
+    let pitches: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
+    let mut sorted = pitches.clone();
+    sorted.sort_by(f64::total_cmp);
+    let pitch = sorted[sorted.len() / 2];
+    let near = |p: f64, k: f64| (p - k * pitch).abs() <= pitch * GRATICULE_PITCH;
+    let whole = |p: f64| {
+        let k = (p / pitch).round();
+        k >= 1.0 && near(p, k)
+    };
+    let at_pitch = pitches.iter().filter(|p| near(**p, 1.0)).count();
+    pitch > 0.0 && pitches.iter().all(|p| whole(*p)) && at_pitch * 2 >= pitches.len()
+}
+
+/// Fewest ticks an axis carries, each way.
+const AXIS_TICKS: usize = 3;
+
+/// Longest tick, in the page's text size: a mark beside a value, short of
+/// any table's rule.
+const TICK_LENGTH: f64 = 1.2;
+
+/// Narrowest trace, in the page's text size, a plot is read from: an arrow
+/// in a diagram or a check mark is narrower.
+const TRACE_WIDTH: f64 = 3.0;
+
+/// Least share of a trace's segments running one way across the page.
+const TRACE_ONWARD: f64 = 0.9;
+
+/// Farthest, in the page's text size, an axis or its ticks stand from the
+/// trace they measure.
+const TRACE_AXIS_REACH: f64 = 3.0;
+
+/// Plots drawn as lines with no graticule: a trace (a stroked line of
+/// diagonal segments, see [`crate::rule::Trace`]) bound by an axis. The axis
+/// is a rule along the trace's foot carrying [`AXIS_TICKS`] or more ticks at
+/// an even pitch, or a column of such ticks beside it, a scale's marks, or
+/// two rules meeting at the plot's corner. A table's rules, a statement's
+/// underlines and a form's boxes run square and draw no trace; a line of
+/// diagonal segments with no axis by it (a map's border, a diagram's arrow)
+/// is no plot either.
+pub fn axis_plots(
+    rules: &[Rule],
+    marks: &[Rule],
+    traces: &[crate::rule::Trace],
+    glyphs: &[Glyph],
+    page: usize,
+    figures: &[Figure],
+) -> Vec<Figure> {
+    use crate::rule::Orientation;
+    let em = {
+        let mut sizes: Vec<f32> = glyphs
+            .iter()
+            .filter(|g| g.bbox.is_some())
+            .map(|g| g.font_size)
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64
+    };
+    let len = |r: &Rule| match r.orientation {
+        Orientation::Horizontal => r.bbox.width(),
+        Orientation::Vertical => r.bbox.height(),
+    };
+    let ticks: Vec<&Rule> = rules
+        .iter()
+        .chain(marks)
+        .filter(|r| len(r) <= em * TICK_LENGTH && len(r) >= em * 0.15)
+        .collect();
+    // Places of a row or a column of ticks, ascending, deduplicated.
+    let places = |mut at: Vec<f64>| {
+        at.sort_by(f64::total_cmp);
+        at.dedup_by(|a, b| (*a - *b).abs() <= 0.5);
+        at
+    };
+    let mut plots: Vec<BBox> = Vec::new();
+    // A series plotted against its axis runs one way across the page; an
+    // outline, a symbol or an arrow turns back on itself.
+    let series = |t: &&crate::rule::Trace| {
+        t.bbox.width() >= em * TRACE_WIDTH && t.onward as f64 >= t.segments as f64 * TRACE_ONWARD
+    };
+    for t in traces.iter().filter(series) {
+        let b = t.bbox;
+        let reach = em * TRACE_AXIS_REACH;
+        let mut region: Option<BBox> = None;
+        // A rule along its foot, spanning it, ticked at an even pitch.
+        for h in rules.iter().filter(|r| {
+            r.orientation == Orientation::Horizontal
+                && r.axis_pos() >= b.y1 - 1.0
+                && r.axis_pos() - b.y1 <= reach
+                && r.bbox.x0 <= b.x0 + em
+                && r.bbox.x1 >= b.x1 - em
+        }) {
+            let y = h.axis_pos();
+            let at = places(
+                ticks
+                    .iter()
+                    .filter(|k| {
+                        k.orientation == Orientation::Vertical
+                            && k.bbox.y0 <= y + 1.0
+                            && k.bbox.y1 >= y - 1.0
+                            && k.bbox.x0 >= h.bbox.x0 - 1.0
+                            && k.bbox.x1 <= h.bbox.x1 + 1.0
+                    })
+                    .map(|k| k.axis_pos())
+                    .collect(),
+            );
+            if at.len() >= AXIS_TICKS && evenly_pitched(&at) {
+                region = Some(region.map_or(b.union(&h.bbox), |r: BBox| r.union(&h.bbox)));
+            }
+        }
+        // A column of ticks beside it, a scale's marks, at an even pitch.
+        let mut columns: Vec<(f64, Vec<&Rule>)> = Vec::new();
+        for k in ticks
+            .iter()
+            .filter(|k| k.orientation == Orientation::Horizontal)
+        {
+            let kb = k.bbox;
+            let beside = (kb.x1 <= b.x0 + 1.0 && b.x0 - kb.x1 <= reach)
+                || (kb.x0 >= b.x1 - 1.0 && kb.x0 - b.x1 <= reach);
+            if !beside || kb.y0 < b.y0 - reach || kb.y1 > b.y1 + reach {
+                continue;
+            }
+            match columns.iter_mut().find(|(x, _)| (x - kb.x0).abs() <= 1.0) {
+                Some((_, v)) => v.push(k),
+                None => columns.push((kb.x0, vec![k])),
+            }
+        }
+        for (_, col) in &columns {
+            let at = places(col.iter().map(|k| k.axis_pos()).collect());
+            if at.len() >= AXIS_TICKS && evenly_pitched(&at) {
+                let span = col.iter().fold(b, |r, k| r.union(&k.bbox));
+                region = Some(region.map_or(span, |r: BBox| r.union(&span)));
+            }
+        }
+        // Two rules meeting at the plot's corner, along its foot and side.
+        if region.is_none() {
+            let foot = rules.iter().find(|r| {
+                r.orientation == Orientation::Horizontal
+                    && r.axis_pos() >= b.y1 - 1.0
+                    && r.axis_pos() - b.y1 <= reach
+                    && r.bbox.x0 <= b.x0 + em
+                    && r.bbox.x1 >= b.x1 - em
+            });
+            let side = rules.iter().find(|r| {
+                r.orientation == Orientation::Vertical
+                    && r.bbox.y0 <= b.y0 + em
+                    && r.bbox.y1 >= b.y1 - em
+                    && ((r.axis_pos() <= b.x0 + 1.0 && b.x0 - r.axis_pos() <= reach)
+                        || (r.axis_pos() >= b.x1 - 1.0 && r.axis_pos() - b.x1 <= reach))
+            });
+            if let (Some(f), Some(s)) = (foot, side) {
+                let corner = (f.bbox.x0 - s.axis_pos()).abs() <= 2.0
+                    || (f.bbox.x1 - s.axis_pos()).abs() <= 2.0;
+                let meets = (s.bbox.y1 - f.axis_pos()).abs() <= 2.0;
+                if corner && meets {
+                    region = Some(b.union(&f.bbox).union(&s.bbox));
+                }
+            }
+        }
+        // The box its axes bound is the plot's drawing: an axis standing at
+        // its side, along the trace, rises to the scale's top value, past
+        // the series' highest point.
+        if let Some(r) = region.as_mut() {
+            let bound = *r;
+            for s in rules.iter().filter(|s| {
+                s.orientation == Orientation::Vertical
+                    && ((s.axis_pos() - bound.x0).abs() <= 2.0
+                        || (s.axis_pos() - bound.x1).abs() <= 2.0)
+                    && s.bbox.y0 <= b.y0 + em
+                    && s.bbox.y1 >= b.y1 - em
+                    && s.bbox.y0 >= bound.y0 - reach
+                    && s.bbox.y1 <= bound.y1 + reach
+            }) {
+                *r = r.union(&s.bbox);
+            }
+        }
+        if let Some(r) = region {
+            match plots
+                .iter_mut()
+                .find(|p| share_inside(&r, p) > 0.0 || share_inside(p, &r) > 0.0)
+            {
+                Some(p) => *p = p.union(&r),
+                None => plots.push(r),
+            }
+        }
+    }
+    plots
+        .into_iter()
+        .filter(|p| {
+            !figures
+                .iter()
+                .any(|f| share_inside(&f.drawing, p) > 0.0 || share_inside(p, &f.drawing) > 0.0)
+        })
+        .map(|p| Figure {
+            bbox: p,
+            drawing: p,
+            page,
+            shapes: traces
+                .iter()
+                .filter(|t| share_inside(&t.bbox, &p) > 0.5)
+                .count()
+                .max(1),
+            frame: None,
+            axes: true,
+        })
+        .collect()
+}
 
 /// Plots drawn as lines: a graticule of rules each spanning the plot, four
 /// or more each way, evenly pitched (a line broken off for a label leaving
@@ -1812,19 +2032,7 @@ pub fn graticules(
     // Lines a pitch apart, or a whole number of pitches where a line breaks
     // off for a label or a trace and so spans less than the rest; most of
     // the gaps at the pitch itself.
-    let even = |at: &[f64]| {
-        let pitches: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
-        let mut sorted = pitches.clone();
-        sorted.sort_by(f64::total_cmp);
-        let pitch = sorted[sorted.len() / 2];
-        let near = |p: f64, k: f64| (p - k * pitch).abs() <= pitch * GRATICULE_PITCH;
-        let whole = |p: f64| {
-            let k = (p / pitch).round();
-            k >= 1.0 && near(p, k)
-        };
-        let at_pitch = pitches.iter().filter(|p| near(**p, 1.0)).count();
-        pitch > 0.0 && pitches.iter().all(|p| whole(*p)) && at_pitch * 2 >= pitches.len()
-    };
+    let even = |at: &[f64]| evenly_pitched(at);
     let mut out = Vec::new();
     for (hbox, hat) in sets(&hs, true) {
         for (vbox, vat) in sets(&vs, false) {
@@ -1876,6 +2084,7 @@ pub fn graticules(
                 page,
                 shapes: hat.len() + vat.len(),
                 frame: None,
+                axes: false,
             });
         }
     }
@@ -2081,6 +2290,7 @@ mod tests {
             page: 0,
             shapes: 16,
             frame,
+            axes: false,
         };
         let blocks = vec![
             (bb(48.0, 150.0, 70.0, 166.0), 8.0, "Line / Hot"),
@@ -2246,6 +2456,7 @@ mod tests {
             page: 0,
             shapes: 43,
             frame: None,
+            axes: false,
         }]
     }
 
@@ -2291,6 +2502,7 @@ mod tests {
             page: 0,
             shapes: 15,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![(
             bb(294.0, 150.0, 548.0, 181.0),
@@ -2314,6 +2526,7 @@ mod tests {
             page: 0,
             shapes: 8,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![(
             bb(271.0, 703.0, 490.0, 739.0),
@@ -2329,6 +2542,7 @@ mod tests {
             page: 0,
             shapes: 30,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![(
             bb(100.0, 280.0, 350.0, 292.0),
@@ -2349,6 +2563,7 @@ mod tests {
             page: 0,
             shapes: 12,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![
             (bb(96.0, 470.0, 150.0, 480.0), 7.0, "2021"), // tick label below
@@ -2403,6 +2618,7 @@ mod tests {
             page: 0,
             shapes: 33,
             frame: None,
+            axes: false,
         }];
         let column: Vec<(BBox, f32, &str)> = (0..6)
             .map(|i| {
@@ -2421,6 +2637,7 @@ mod tests {
                 page: 0,
                 shapes: 33,
                 frame: None,
+                axes: false,
             }]
         };
         let ticks: Vec<(BBox, f32, &str)> = (0..3)
@@ -2473,6 +2690,7 @@ mod tests {
             page: 0,
             shapes: 14,
             frame: None,
+            axes: false,
         }];
         let notes: Vec<(BBox, f32, &str)> = (0..6)
             .map(|i| {
@@ -2495,6 +2713,7 @@ mod tests {
             page: 0,
             shapes: 20,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![
             (bb(250.0, 150.0, 290.0, 158.0), 7.0, "Axis"),
@@ -2750,6 +2969,7 @@ mod tests {
                 page: 0,
                 shapes: 20,
                 frame: None,
+                axes: false,
             }]
         };
         let blocks = vec![
@@ -2780,6 +3000,7 @@ mod tests {
                 page: 0,
                 shapes: 7,
                 frame: None,
+                axes: false,
             }]
         };
         let para = "This product can be adjusted for wattage from fifty to seventy five watts by adjusting the three position switch on the back housing.";
@@ -2839,6 +3060,7 @@ mod tests {
             page: 0,
             shapes: 12,
             frame: None,
+            axes: false,
         }];
         // A full-measure paragraph: wider than a label can be.
         let blocks = vec![(bb(27.0, 470.0, 560.0, 520.0), 10.0, "prose")];
@@ -2858,6 +3080,7 @@ mod tests {
                 page: 0,
                 shapes: 8,
                 frame: None,
+                axes: false,
             }]
         };
         let around = vec![
@@ -2887,6 +3110,7 @@ mod tests {
             page: 0,
             shapes: 9,
             frame: None,
+            axes: false,
         }];
         let labels = vec![
             (bb(310.0, 300.0, 347.0, 305.0), 5.0, "near coast"),
@@ -2971,6 +3195,7 @@ mod tests {
             page: 0,
             shapes: 39,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![
             (bb(124.0, 708.0, 232.0, 716.0), 7.0, "ACME SALES, LLC"),
@@ -3076,6 +3301,7 @@ mod tests {
             page: 0,
             shapes: 140,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![
             (
@@ -3111,6 +3337,7 @@ mod tests {
             page: 0,
             shapes: 150,
             frame: None,
+            axes: false,
         }];
         let head = vec![(
             bb(397.0, 43.0, 541.0, 53.0),
@@ -3128,6 +3355,7 @@ mod tests {
             page: 0,
             shapes: 20,
             frame: None,
+            axes: false,
         }];
         let title = vec![(bb(98.0, 44.0, 260.0, 54.0), 10.0, "Figure 3. Net income")];
         assert_eq!(
@@ -3146,6 +3374,7 @@ mod tests {
             page: 0,
             shapes: 12,
             frame: None,
+            axes: false,
         }];
         let blocks = vec![
             (bb(300.0, 300.0, 420.0, 310.0), 9.0, "HOUSING"),
@@ -3167,6 +3396,7 @@ mod tests {
             page: 0,
             shapes: 10,
             frame,
+            axes: false,
         };
         let blocks = vec![
             (bb(100.0, 330.0, 300.0, 341.0), 11.0, "Second arrangement"),
@@ -3203,6 +3433,83 @@ mod tests {
         for t in ["123", "37%", "2021", "sky", "1.", "AB"] {
             assert!(!callout_mark(t), "{t}");
         }
+    }
+
+    #[test]
+    fn a_series_over_a_ticked_axis_is_a_plot() {
+        use crate::rule::Trace;
+        let rule = |o: Orientation, x0: f64, y0: f64, x1: f64, y1: f64| Rule {
+            bbox: bb(x0, y0, x1, y1),
+            orientation: o,
+            page: 0,
+        };
+        // Text at 8 pt on the page: an em is 8.
+        let text: Vec<Glyph> = (0..5)
+            .map(|k| glyph("x", 400.0 + 6.0 * k as f64, 600.0, 8.0))
+            .collect();
+        let series = Trace {
+            bbox: bb(104.0, 196.0, 298.0, 262.0),
+            segments: 48,
+            diagonal: 41,
+            onward: 48,
+            page: 0,
+        };
+        let axis = rule(Orientation::Horizontal, 96.0, 269.8, 306.0, 270.2);
+        let ticks: Vec<Rule> = (0..5)
+            .map(|k| {
+                let x = 104.0 + 48.5 * k as f64;
+                rule(Orientation::Vertical, x - 0.2, 270.0, x + 0.2, 274.5)
+            })
+            .collect();
+        let got = axis_plots(&[axis], &ticks, &[series], &text, 0, &[]);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].axes);
+        assert_eq!(got[0].drawing.y0, 196.0);
+        // Axes standing at its sides, on the foot, bound the plot up to the
+        // scale's top, past the series' highest point; a rule standing
+        // further off the plot is none of its frame.
+        let sides = [
+            rule(Orientation::Vertical, 95.8, 182.0, 96.2, 270.0),
+            rule(Orientation::Vertical, 305.8, 182.0, 306.2, 270.0),
+            rule(Orientation::Vertical, 305.8, 40.0, 306.2, 270.0),
+        ];
+        let got = axis_plots(
+            &[axis, sides[0], sides[1]],
+            &ticks,
+            &[series],
+            &text,
+            0,
+            &[],
+        );
+        assert_eq!(got[0].drawing.y0, 182.0);
+        let got = axis_plots(&[axis, sides[2]], &ticks, &[series], &text, 0, &[]);
+        assert_eq!(got[0].drawing.y0, 196.0);
+        // A rule under it with no ticks is no axis.
+        assert!(axis_plots(&[axis], &[], &[series], &text, 0, &[]).is_empty());
+        // An outline turning back on itself is no series.
+        let outline = Trace {
+            onward: 30,
+            ..series
+        };
+        assert!(axis_plots(&[axis], &ticks, &[outline], &text, 0, &[]).is_empty());
+        // A scale's ticks in a column beside it bind it as well.
+        let scale: Vec<Rule> = (0..4)
+            .map(|k| {
+                let y = 200.0 + 20.0 * k as f64;
+                rule(Orientation::Horizontal, 92.0, y - 0.2, 98.0, y + 0.2)
+            })
+            .collect();
+        assert_eq!(axis_plots(&[], &scale, &[series], &text, 0, &[]).len(), 1);
+        // Where a drawing is already found, nothing more is.
+        let found = Figure {
+            bbox: bb(100.0, 190.0, 310.0, 280.0),
+            drawing: bb(100.0, 190.0, 310.0, 280.0),
+            page: 0,
+            shapes: 12,
+            frame: None,
+            axes: false,
+        };
+        assert!(axis_plots(&[axis], &ticks, &[series], &text, 0, &[found]).is_empty());
     }
 
     /// Lines drawn across a plot: a horizontal one at each `ys` from the

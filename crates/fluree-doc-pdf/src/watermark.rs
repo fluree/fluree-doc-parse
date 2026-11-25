@@ -322,6 +322,8 @@ mod tests {
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             width: 612.0,
             height: 792.0,
             rotation: 0,

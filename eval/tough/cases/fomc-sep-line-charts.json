@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "fomcprojtabl20250319.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcprojtabl20250319.pdf",
+    "sha256": "5adb4ec6619920f1d71b2ad8391b91b365d5183206acca0692e508bcbc8fa668",
+    "about": "FOMC Summary of Economic Projections, March 19, 2025. Page 14 stacks three line charts of diffusion indexes, each a series over a year axis beside a scale from 1.00 down to −1.00."
+  },
+  "notes": [
+    "#338: the line charts were found as no drawing; each scale was a paragraph of the page's.",
+    "Open: each chart's year axis and its bold title (`Change in real GDP`, a heading) stay the page's text."
+  ],
+  "checks": [
+    {
+      "id": "scale-is-the-charts",
+      "found": "2026-11-25",
+      "issue": "#338: each chart's scale was a paragraph of the page's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "1.00 0.75 0.50 0.25 0.00 −0.25 −0.50 −0.75 −1.00"
+      }
+    },
+    {
+      "id": "chart-title-no-heading",
+      "found": "2026-11-25",
+      "status": "open",
+      "issue": "Each chart's bold title heads a section.",
+      "no_section": "Change in real GDP"
+    }
+  ]
+}

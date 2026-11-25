@@ -66,6 +66,21 @@ impl Rule {
 }
 
 /// A filled area large enough to be a background rather than a rule.
+/// A stroked line of straight segments, most of them neither horizontal nor
+/// vertical: a chart's trace. Read as its box, as a path is, it was a fill;
+/// kept apart, it says a plot is drawn here.
+#[derive(Debug, Clone, Copy)]
+pub struct Trace {
+    pub bbox: BBox,
+    /// Its straight segments, and of them the diagonal ones.
+    pub segments: usize,
+    pub diagonal: usize,
+    /// Its segments running across the page one way, left to right or right
+    /// to left, never back: a series plotted against its axis.
+    pub onward: usize,
+    pub page: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
     pub bbox: BBox,
