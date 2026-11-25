@@ -488,6 +488,98 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     }
 }
 
+/// Drop the columns no cell starts in, from every part of a table.
+///
+/// A column whose cell on every row is empty and the rest of the one to its
+/// left is none of the table's: the grid cut it where another row's ruling,
+/// a band over the header or a nested table, parts the columns. An
+/// environmental data sheet's three-column VOC tables were ruled as six and
+/// written with an empty column after each, their cells in columns 0, 2 and
+/// 4. A table the page break split is one table: a column goes only where
+/// it goes from every part, so the parts keep one set of columns and read
+/// on as one.
+fn drop_merged_columns(elements: &mut [Element]) {
+    let index: std::collections::HashMap<String, usize> = elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id.clone(), i))
+        .collect();
+    // Each part's first part: the table it carries on.
+    let first = |mut i: usize| {
+        let mut seen = 0;
+        while let Some(&p) = elements[i].continues.as_ref().and_then(|c| index.get(c)) {
+            i = p;
+            seen += 1;
+            if seen > elements.len() {
+                break;
+            }
+        }
+        i
+    };
+    let mut chains: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+    for (i, e) in elements.iter().enumerate() {
+        if e.kind == "doco:Table" && e.cells.is_some() {
+            chains.entry(first(i)).or_default().push(i);
+        }
+    }
+    for parts in chains.values() {
+        let width = |i: usize| {
+            elements[i]
+                .cells
+                .as_ref()
+                .and_then(|r| r.first())
+                .map_or(0, Vec::len)
+        };
+        let cols = width(parts[0]);
+        if cols < 2 || parts.iter().any(|&i| width(i) != cols) {
+            continue;
+        }
+        // A column stays where any part has a cell that starts in it.
+        let starts = |i: usize, c: usize| {
+            let e = &elements[i];
+            let rows = e.cells.as_ref().unwrap();
+            let left = e.merged_left.as_deref();
+            rows.iter().enumerate().any(|(r, row)| {
+                !row[c].trim().is_empty()
+                    || !left.is_some_and(|m| m.get(r * cols + c).copied().unwrap_or(false))
+            })
+        };
+        let keep: Vec<bool> = (0..cols)
+            .map(|c| c == 0 || parts.iter().any(|&i| starts(i, c)))
+            .collect();
+        if keep.iter().all(|k| *k) {
+            continue;
+        }
+        for &i in parts {
+            let e = &mut elements[i];
+            let squeeze = |flags: &Vec<bool>| -> Vec<bool> {
+                flags
+                    .chunks(cols)
+                    .flat_map(|row| row.iter().zip(&keep).filter(|(_, k)| **k).map(|(f, _)| *f))
+                    .collect()
+            };
+            if let Some(rows) = e.cells.as_mut() {
+                for row in rows.iter_mut() {
+                    let mut c = 0;
+                    row.retain(|_| {
+                        c += 1;
+                        keep[c - 1]
+                    });
+                }
+            }
+            e.merged_left = e.merged_left.as_ref().map(squeeze);
+            e.merged_down = e.merged_down.as_ref().map(squeeze);
+            if let Some(rows) = e.cells.as_ref() {
+                e.text = rows
+                    .iter()
+                    .map(|r| r.join(" | "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+        }
+    }
+}
+
 /// Widest gap, in points, between a header drawn as a box of its own and
 /// the box of rows under it: the space a layout leaves between two boxes,
 /// not a paragraph's.
@@ -3206,6 +3298,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
     settle_cell_breaks(
         &mut elements,
