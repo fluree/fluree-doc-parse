@@ -1388,8 +1388,8 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
 
     let mut open_list: Option<usize> = None;
     let mut titled = false;
-    for (e, &span) in elements.iter().zip(&spans) {
-        if open_list.is_some() && e.kind != "doc:ListItem" {
+    for (i, (e, &span)) in elements.iter().zip(&spans).enumerate() {
+        if open_list.is_some() && e.kind != "doc:ListItem" && !counted_across(elements, i) {
             open_list = None;
         }
         if let Some(m) = &e.message {
@@ -2026,6 +2026,39 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
     serde_json::to_string_pretty(&doc).unwrap()
 }
 
+/// The number an ordered list's item opens with, `3.` or `3)`.
+fn item_number(text: &str) -> Option<u32> {
+    let t = text.trim_start();
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || digits > 3 {
+        return None;
+    }
+    let rest = t[digits..].strip_prefix(['.', ')'])?;
+    rest.starts_with(' ').then(|| t[..digits].parse().ok())?
+}
+
+/// Does a list's count carry on across the drawing's text at `i`: the item
+/// before it numbered `n`, the next item after the drawing's text `n + 1`?
+/// A product sheet's numbered features run on into the next column, with
+/// the photo's callouts read between the columns; they are one list.
+fn counted_across(elements: &[Element], i: usize) -> bool {
+    if elements[i].kind != "doco:Figure" {
+        return false;
+    }
+    let before = elements[..i]
+        .iter()
+        .rev()
+        .find(|e| e.kind != "doco:Figure")
+        .filter(|e| e.kind == "doc:ListItem")
+        .and_then(|e| item_number(&e.text));
+    let after = elements[i..]
+        .iter()
+        .find(|e| e.kind != "doco:Figure")
+        .filter(|e| e.kind == "doc:ListItem")
+        .and_then(|e| item_number(&e.text));
+    matches!((before, after), (Some(n), Some(m)) if m == n + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2170,6 +2203,28 @@ mod tests {
             assert_eq!(item(id)["doc:xhtmlTag"], "li");
         }
         assert!(g.iter().all(|n| n["@type"] != "doc:ListItem"));
+    }
+
+    #[test]
+    fn a_counted_list_carries_on_past_a_drawings_text() {
+        // Steps 1 and 2 in one column and 3 in the next, a drawing's
+        // labels read between them: one list. A list starting again at 1
+        // after more of the drawing's text is another.
+        let els = vec![
+            el("doc:ListItem", "1. Open the valve", None),
+            el("doc:ListItem", "2. Drain the tank", None),
+            el("doco:Figure", "A", None),
+            el("doco:Figure", "B", None),
+            el("doc:ListItem", "3. Close the valve", None),
+            el("doco:Figure", "C", None),
+            el("doc:ListItem", "1. Fill the tank", None),
+        ];
+        let g = graph(&els);
+        let lists = find(&g, "doco:List");
+        assert_eq!(lists.len(), 2);
+        assert_eq!(lists[0]["po:contains"].as_array().unwrap().len(), 3);
+        // The drawing's text is kept, every fragment of it.
+        assert_eq!(find(&g, "doco:Figure").len(), 3);
     }
 
     #[test]
