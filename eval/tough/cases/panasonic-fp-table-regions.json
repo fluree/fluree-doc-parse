@@ -9,7 +9,8 @@
     "A column rule drawn in a few rows fell short of a grid line, so two models read as one column.",
     "A table whose middle column is unruled touches in two sets of rules; only its header band joins them.",
     "A row label read across the sub-columns of the rows above it, where their rule stops short of it, was cut at that rule and its pieces joined with a space (`Rea l-time clock function`).",
-    "2026-11-24 (#112): a header shaded down to its first row with no rule between them was read as one row with it."
+    "2026-11-24 (#112): a header shaded down to its first row with no rule between them was read as one row with it.",
+    "2026-11-24 (#104): a product table shades its header across every column but rules its rows only from the second column on; the product-name column was left out of the table."
   ],
   "checks": [
     {
@@ -66,6 +67,36 @@
         "value": "AFPG430",
         "column": "Part No.",
         "row": "FPΣ Positioning Unit"
+      }
+    },
+    {
+      "id": "expansion-unit-names-its-rows",
+      "found": "2026-11-24",
+      "issue": "#104: `FP0R-E8 Expansion Unit` was a paragraph beside its table, and its rows lost their product.",
+      "cell": {
+        "value": "AFP0RE8RS",
+        "column": "Part No.",
+        "row": "FP0R-E8 Expansion Unit / Input 4 points DC, Relay output 4 points, Terminal block type"
+      }
+    },
+    {
+      "id": "backplane-in-its-table",
+      "found": "2026-11-24",
+      "issue": "#104: `FP2 Backplane` was a paragraph; each row is named by the product, its type and its own line.",
+      "cell": {
+        "value": "AFP25007",
+        "column": "Part No.",
+        "row": "FP2 Backplane / Conventional type / 7-module type (for master and expansion)"
+      }
+    },
+    {
+      "id": "positioning-unit-in-its-table",
+      "found": "2026-11-24",
+      "issue": "#104: as above, on p26.",
+      "cell": {
+        "value": "AFP243620",
+        "column": "Part No.",
+        "row": "FP2 Positioning Unit RTEX / Network"
       }
     }
   ]

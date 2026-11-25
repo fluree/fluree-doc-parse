@@ -709,6 +709,7 @@ pub fn assemble_in_measure(
         if mark(i).is_none()
             && band[i] == band[i - 1]
             && read[i] == read[i - 1]
+            && !set_back(&cur, l)
             && (continues(cur.last().unwrap(), l, leading, &edge, !led[i])
                 || runs_on(&cur, l, leading))
         {
@@ -1001,23 +1002,63 @@ fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
         .text
         .trim_start()
         .starts_with(['-', '\u{2013}', '\u{2014}']);
-    let ends_sentence = prev
-        .text
-        .trim_end()
-        .trim_end_matches(['"', '\'', '\u{201D}', '\u{2019}', ')'])
-        .ends_with(['.', '!', '?']);
-    let opens_sentence = next
-        .text
-        .trim_start()
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .is_some_and(|c| c.is_uppercase() || c.is_numeric());
+    let ends_sentence = ends_sentence(prev);
+    let opens_sentence = opens_sentence(next);
     (strip_leading_bullet(&prev.text).is_some() || run_lead(prev).is_some())
         && !prev.text.trim_end().ends_with(':')
         && !opens_list
-        && shift > 0.3
+        && shift > HANG_SHIFT
         && shift <= HANGING_INDENT
         && (!(ends_sentence && opens_sentence) || edge.ran_out_of_room(prev, next))
+}
+
+/// `l` ends on a sentence's full stop, or a question or exclamation mark,
+/// inside any closing quote or bracket.
+fn ends_sentence(l: &Line) -> bool {
+    l.text
+        .trim_end()
+        .trim_end_matches(['"', '\'', '\u{201D}', '\u{2019}', ')'])
+        .ends_with(['.', '!', '?'])
+}
+
+/// `l` opens as a sentence or a heading does: its first letter or digit a
+/// capital or a digit.
+fn opens_sentence(l: &Line) -> bool {
+    l.text
+        .trim_start()
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .is_some_and(|c| c.is_uppercase() || c.is_numeric())
+}
+
+/// Least shift, in ems, of a line out of an item's hang: the margin
+/// [`hangs_under`] takes a wrapped line in by.
+const HANG_SHIFT: f64 = 0.3;
+
+/// `next` is set back out of the bulleted item `cur`: the item's wrapped
+/// lines hang under its text, its last ends a sentence, and `next` opens one
+/// back at its bullet's x, or left of it, with no marker of its own. It is
+/// the heading or paragraph after the list (`…food service marketplace.`
+/// over `REFRIGERATION SYSTEM`), however near an em the hang is, not the
+/// item's next line. A sentence that runs on is no item's end: a paragraph
+/// after the list can open where the items' text is and wrap back to the
+/// margin (`…(including a resident` over `alien), to provide…`).
+fn set_back(cur: &[Line], next: &Line) -> bool {
+    let [first, wrapped @ ..] = cur else {
+        return false;
+    };
+    if wrapped.is_empty()
+        || (strip_leading_bullet(&first.text).is_none() && run_lead(first).is_none())
+    {
+        return false;
+    }
+    let fs = first.font_size.max(next.font_size).max(1.0) as f64;
+    let hang = wrapped.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let last = cur.last().expect("an item and its wrapped lines");
+    hang - first.bbox.x0 > HANG_SHIFT * fs
+        && next.bbox.x0 <= first.bbox.x0 + HANG_SHIFT * fs
+        && ends_sentence(last)
+        && opens_sentence(next)
 }
 
 /// The right edge a column's text wraps at.
@@ -2506,6 +2547,63 @@ mod tests {
             l("• keep out of reach of children", 10.0, 24.0, 10.0),
         ];
         assert_eq!(assemble(&lines, 1.2).len(), 3);
+    }
+
+    #[test]
+    fn a_line_set_back_to_the_bullet_ends_its_item() {
+        // A spec sheet's feature list: wrapped lines hang under the item's
+        // text, just under an em in, and the next section's heading starts
+        // back at the bullet's x with no bullet of its own.
+        let at = |text: &str, x: f64, y: f64, x1: f64| {
+            let mut line = l(text, x, y, 8.7);
+            line.bbox.x1 = x1;
+            line
+        };
+        let lines = vec![
+            at(
+                "• True's commitment to using the highest",
+                18.4,
+                105.3,
+                180.0,
+            ),
+            at(
+                "quality materials and optimized refrigeration",
+                27.3,
+                115.8,
+                184.0,
+            ),
+            at("today's food service marketplace.", 27.2, 126.4, 140.0),
+            at("REFRIGERATION SYSTEM", 18.6, 137.0, 110.0),
+            at(
+                "• Factory engineered, self-contained, capillary",
+                18.4,
+                147.6,
+                184.0,
+            ),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.22).iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 3, "{texts:?}");
+        assert_eq!(texts[1], "REFRIGERATION SYSTEM");
+        // A paragraph after the list that opens where the items' text is and
+        // wraps back to the margin reads on: its sentence did not end.
+        let lines = vec![
+            at(
+                "• Form 1099-A (acquisition or abandonment",
+                18.4,
+                105.3,
+                180.0,
+            ),
+            at(
+                "Use Form W-9 only if you are a U.S. person",
+                27.3,
+                115.8,
+                184.0,
+            ),
+            at("(including a resident", 27.2, 126.4, 120.0),
+            at("alien), to provide your correct TIN.", 18.6, 137.0, 170.0),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.22).iter().map(Block::text).collect();
+        assert!(texts.iter().all(|t| !t.starts_with("alien")), "{texts:?}");
     }
 
     #[test]

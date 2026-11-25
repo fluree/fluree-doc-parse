@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "wd-gold-datasheet.pdf",
+    "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-gold/data-sheet-wd-gold-hdd.pdf",
+    "sha256": "341f32848640e76bc71a507b17aa0635608ad2191b58dec742df80b3481159e4",
+    "about": "Western Digital WD Gold data sheet. Page 1 sets a sidebar (`Highlights` at 14pt) at the left, read first, and the 17pt product title at the right."
+  },
+  "notes": [
+    "2026-11-24 (#204): the document title was the largest of the first blocks in reading order, so a sidebar's heading read first, or a category strip as large as the title and set above it, was taken for it."
+  ],
+  "checks": [
+    {
+      "id": "title-is-the-largest",
+      "found": "2026-11-24",
+      "issue": "`Highlights`, the sidebar's heading, was the document title.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "WD Gold® Enterprise Class SATA HDD",
+        "evidence": "title"
+      }
+    }
+  ]
+}
