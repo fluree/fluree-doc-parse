@@ -267,6 +267,12 @@ impl Budget {
     fn held(&self) -> u64 {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).held
     }
+
+    /// The turns handed out so far: how many callers have asked.
+    #[cfg(test)]
+    fn issued(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).issued
+    }
 }
 
 impl Drop for Grant<'_> {
@@ -869,16 +875,24 @@ mod tests {
         let held = budget.take(60);
         let order = Mutex::new(Vec::new());
         std::thread::scope(|s| {
+            // Each caller is waited for until it has its turn, not for a
+            // while: under a loaded test run a sleep can elapse before the
+            // thread asks, and the small pass would then ask first.
+            let asked = |n: u64| {
+                while budget.issued() < n {
+                    std::thread::yield_now();
+                }
+            };
             let big = s.spawn(|| {
                 let _g = budget.take(80);
                 order.lock().unwrap().push("big");
             });
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            asked(2);
             let small = s.spawn(|| {
                 let _g = budget.take(10);
                 order.lock().unwrap().push("small");
             });
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            asked(3);
             assert!(order.lock().unwrap().is_empty(), "both wait");
             drop(held);
             big.join().unwrap();
