@@ -890,10 +890,18 @@ const STACKED_LABELS: usize = 3;
 /// with nothing between them are looked at as a run, and these runs are
 /// no sections:
 ///
-/// - **A run that heads nothing:** the end of the document follows it, or a
-///   bold heading above its level. That is the name and the role that close
-///   minutes or a letter (`Joshua Gallin` over `Secretary`), or a slide's
-///   kicker over its title.
+/// - **A run that heads nothing:** the end of the document follows it, a
+///   bold heading above its level, or a heading set larger, by its size or
+///   as the title, which ranks above any bold line at the body's size. That
+///   is the name and the role that close minutes or a letter (`Joshua
+///   Gallin` over `Secretary`), a slide's kicker over its title (`LEVEL 2 ·
+///   DERIVED`), or a form's label over a larger line. A label naming a part
+///   of the document (`EXHIBIT B`) heads the title under it and stays, and
+///   so does the document's first heading, which may be its title over a
+///   larger date.
+/// - **A paragraph's bold last line:** a lone bold line set under a
+///   paragraph at its leading, over another bold head (`KEEP OUT OF REACH
+///   OF CHILDREN` closing a caution, over `TRADEMARKS`).
 /// - **A run set as a row:** two of its lines sit side by side, so it is
 ///   read across. That is a table's header cells left out of its grid
 ///   (`Date | Description`), or an answer scale (`OFTEN`, `SOMETIMES`,
@@ -909,10 +917,15 @@ const STACKED_LABELS: usize = 3;
 /// `Apiary selection`) as often as a label over a label.
 ///
 /// Only weight is judged, because a numbered, outlined or larger line says
-/// more than its weight does. Only bold lines end a run, because a bold
-/// line's level says nothing beside another kind of heading's.
+/// more than its weight does. Only bold lines and larger heads end a run: a
+/// bold line's level says nothing beside a numbered or outlined heading's.
 fn demote_empty_bold_heads(elements: &mut [Element]) {
     let bold = |e: &Element| e.kind == "doco:SectionTitle" && unflagged(e.evidence) == "bold";
+    // A heading set larger than the body, by its size or as the title,
+    // ranks above any bold line at the body's size.
+    let set_larger = |e: &Element| {
+        e.kind == "doco:SectionTitle" && matches!(unflagged(e.evidence), "font-size" | "title")
+    };
     let level = |e: &Element| e.level.unwrap_or(6);
     let same_row = |a: &Element, b: &Element| match (a.bbox, b.bbox) {
         (Some(a_box), Some(b_box)) if a.page == b.page => {
@@ -922,10 +935,30 @@ fn demote_empty_bold_heads(elements: &mut [Element]) {
         }
         _ => false,
     };
+    // The document's first heading may be its title, set bold over a
+    // larger date or subtitle (`Transcript of Chair Powell's Press
+    // Conference` over `April 29, 2026`).
+    let first_heading = elements.iter().position(|e| e.kind == "doco:SectionTitle");
     let mut demote: Vec<usize> = Vec::new();
     let mut i = 0;
     while i < elements.len() {
         if !bold(&elements[i]) {
+            i += 1;
+            continue;
+        }
+        // A bold line set at its paragraph's leading under it, over another
+        // bold head: the paragraph's last line, in bold (`KEEP OUT OF REACH
+        // OF CHILDREN` closing a caution, over `TRADEMARKS`). The run is
+        // judged from the head after it. A caption closes nothing: what
+        // follows it is the document's next part (`Table 3 Summary of…`,
+        // then a species' heading).
+        if i > 0
+            && elements[i - 1].kind == "doco:Paragraph"
+            && !heading::is_caption(&elements[i - 1].text)
+            && under_at_leading(&elements[i - 1], &elements[i])
+            && elements.get(i + 1).is_some_and(bold)
+        {
+            demote.push(i);
             i += 1;
             continue;
         }
@@ -936,8 +969,14 @@ fn demote_empty_bold_heads(elements: &mut [Element]) {
         }
         let heads_nothing = match elements.get(j + 1) {
             None => true,
-            Some(next) => bold(next) && level(next) < lvl,
+            Some(next) => {
+                (bold(next) && level(next) < lvl)
+                    || (set_larger(next)
+                        && !designated_label(&elements[j].text)
+                        && Some(i) != first_heading)
+            }
         };
+
         // A division's label beside its title (`Part I | Annual and Monthly
         // Contribution Amount`) is one heading set in two blocks, not a row.
         let row = (i + 1..=j).any(|k| {
@@ -958,6 +997,26 @@ fn demote_empty_bold_heads(elements: &mut [Element]) {
         e.evidence = "layout";
     }
 }
+
+/// `b` stands under `a`, sharing some of its width, at no more than a
+/// line's spacing: no gap opens between them beyond the leading of `b`'s
+/// own line.
+fn under_at_leading(a: &Element, b: &Element) -> bool {
+    match (a.bbox, b.bbox) {
+        (Some(a_box), Some(b_box)) if a.page == b.page => {
+            let height = (b_box.y1 - b_box.y0).max(1.0);
+            let gap = b_box.y0 - a_box.y1;
+            let shared = a_box.x1.min(b_box.x1) > a_box.x0.max(b_box.x0);
+            shared && gap >= -height * 0.2 && gap <= height * CLOSING_LINE_GAP
+        }
+        _ => false,
+    }
+}
+
+/// Widest gap, in the line's own heights, between a paragraph and a bold
+/// line that closes it: the leading's share of a line, short of the space
+/// a heading takes above it.
+const CLOSING_LINE_GAP: f64 = 0.5;
 
 /// How many of its own line heights above a table's top a heading set
 /// beside it, to its left, may stand and still head it.
@@ -1216,6 +1275,12 @@ fn read_form_text(elements: &mut [Element]) {
     }
 }
 
+/// Two headings that are one, set over two lines: the second goes on in
+/// lower case from where the first starts, or the two are centred on one
+/// axis, one line's spacing apart (`Poly-Lactic-Acid` over `FDA Compliant
+/// for direct food contact`, a sheet's subtitle). Lines set from one left
+/// edge and each opening with a capital are two headings, a section over
+/// its first subsection; so is a division's label over its title.
 fn heading_fragments_join(a: &Element, b: &Element) -> bool {
     if a.kind != "doco:SectionTitle"
         || b.kind != "doco:SectionTitle"
@@ -1223,11 +1288,6 @@ fn heading_fragments_join(a: &Element, b: &Element) -> bool {
         || a.level != b.level
         || unflagged(a.evidence) != unflagged(b.evidence)
         || !matches!(unflagged(a.evidence), "font-size" | "bold")
-        || !b
-            .text
-            .chars()
-            .find(|c| c.is_alphabetic())
-            .is_some_and(char::is_lowercase)
     {
         return false;
     }
@@ -1235,14 +1295,85 @@ fn heading_fragments_join(a: &Element, b: &Element) -> bool {
         return false;
     };
     let height = ab.height().max(bb.height()).max(1.0);
-    (ab.x0 - bb.x0).abs() <= height && bb.y0 >= ab.y0 && bb.y0 - ab.y1 <= 1.5 * height
+    if bb.y0 < ab.y0 || bb.y0 - ab.y1 > 1.5 * height {
+        return false;
+    }
+    let lower = b
+        .text
+        .chars()
+        .find(|c| c.is_alphabetic())
+        .is_some_and(char::is_lowercase);
+    if lower {
+        return (ab.x0 - bb.x0).abs() <= height;
+    }
+    // Centred: the two lines' midpoints within half a line's height, what a
+    // centred setting's rounding and a trailing space leave between them.
+    // From different left edges, by more than a line's height: two lines of
+    // different lengths, not a left-aligned pair whose midpoints happen to
+    // agree.
+    let centre = |x: &crate::geom::BBox| (x.x0 + x.x1) / 2.0;
+    unflagged(a.evidence) == "font-size"
+        && (centre(&ab) - centre(&bb)).abs() <= height * 0.5
+        && (ab.x0 - bb.x0).abs() > height
+        && !designated_label(&a.text)
+}
+
+/// A label naming a part of a document by its designator, and nothing
+/// else: `ARTICLE VII`, `EXHIBIT B`, `SECTION 4.15`, `Schedule 2.10`,
+/// `Chapter 3`. It heads the title set under it, and stays a heading of its
+/// own.
+fn designated_label(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let (Some(word), Some(designator), None) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    let d = designator.trim_end_matches(['.', ':']);
+    word.chars().all(char::is_alphabetic)
+        && !d.is_empty()
+        && (d.chars().all(|c| c.is_ascii_digit() || c == '.')
+            || d.chars().all(|c| "IVXLCDMivxlcdm".contains(c))
+            || (d.chars().count() == 1 && d.chars().all(char::is_alphabetic)))
 }
 
 fn coalesce_heading_fragments(elements: &mut Vec<Element>) {
+    // Whether each element stands alone on its rows: nothing else is set
+    // level with it, beside it. A subtitle centred over two lines does; the
+    // cells of a table no grid took have neighbours on their rows.
+    let alone: Vec<bool> = elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let Some(b) = e.bbox else {
+                return false;
+            };
+            !elements.iter().enumerate().any(|(j, o)| {
+                o.bbox.is_some_and(|ob| {
+                    let overlap = b.y1.min(ob.y1) - b.y0.max(ob.y0);
+                    let shorter = (b.y1 - b.y0).min(ob.y1 - ob.y0);
+                    j != i
+                        && shorter > 0.0
+                        && overlap >= shorter * 0.5
+                        && (ob.x1 <= b.x0 || b.x1 <= ob.x0)
+                })
+            })
+        })
+        .collect();
     let mut out: Vec<Element> = Vec::with_capacity(elements.len());
-    for e in elements.drain(..) {
+    // A heading centred over two lines is joined once: a third centred line
+    // under them is a heading of its own.
+    let mut joined_centred = false;
+    let mut last_alone = false;
+    for (e, alone) in elements.drain(..).zip(alone) {
         if let Some(previous) = out.last_mut() {
-            if heading_fragments_join(previous, &e) {
+            let lower = e
+                .text
+                .chars()
+                .find(|c| c.is_alphabetic())
+                .is_some_and(char::is_lowercase);
+            if heading_fragments_join(previous, &e)
+                && (lower || (!joined_centred && alone && last_alone))
+            {
+                joined_centred = !lower;
                 previous.text.push(' ');
                 previous.text.push_str(&e.text);
                 // Joined, the heading is a form's text only if both parts
@@ -1259,6 +1390,8 @@ fn coalesce_heading_fragments(elements: &mut Vec<Element>) {
                 continue;
             }
         }
+        joined_centred = false;
+        last_alone = alone;
         out.push(e);
     }
     *elements = out;
@@ -4001,6 +4134,96 @@ mod tests {
         read_form_text(&mut grid);
         assert_eq!(heads(&grid), ["Gain or (loss)"]);
         assert!(grid.iter().all(|e| !e.evidence.starts_with(FORM_TEXT)));
+    }
+
+    #[test]
+    fn a_bold_line_over_a_larger_head_or_closing_its_paragraph_is_text() {
+        let head = |t: &str, ev: &'static str, lvl: usize, y: f64| {
+            line_at("doco:SectionTitle", t, ev, Some(lvl), y, 50.0)
+        };
+        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
+        // A slide's kicker over its title, set larger.
+        let mut deck = vec![
+            head("Quarterly review", "title", 1, 30.0),
+            text("A short note under the title.", 52.0),
+            head("PART 2 · OUTLOOK", "bold", 4, 74.0),
+            head("What the next quarter asks of us", "font-size", 2, 92.0),
+            text("Text the slide sets under its title…", 110.0),
+        ];
+        demote_empty_bold_heads(&mut deck);
+        assert_eq!(
+            heads(&deck),
+            ["Quarterly review", "What the next quarter asks of us"]
+        );
+        // The document's first heading may be its title over a larger date.
+        let mut transcript = vec![
+            head("Record of the Annual Meeting", "bold", 4, 70.0),
+            head("March 3, 2031", "font-size", 2, 88.0),
+            text("THE CHAIR. The meeting will come to order.", 106.0),
+        ];
+        demote_empty_bold_heads(&mut transcript);
+        assert_eq!(heads(&transcript).len(), 2);
+        // A warning's bold last line, at its leading, over the next head.
+        let mut warning = vec![
+            head("WARNING", "bold", 5, 200.0),
+            text("Handle with gloves and wash hands after use…", 212.0),
+            head("STORE IN A DRY PLACE", "bold", 5, 224.0),
+            head("DISPOSAL", "bold", 5, 241.0),
+            text("Dispose of in line with local rules.", 253.0),
+        ];
+        demote_empty_bold_heads(&mut warning);
+        assert_eq!(heads(&warning), ["WARNING", "DISPOSAL"]);
+        // Set apart from the paragraph above, a section opening on its
+        // first subsection keeps both heads.
+        let mut paper = vec![
+            text("…ter analyses was obtained.", 60.0),
+            head("Materials and methods", "bold", 3, 90.0),
+            head("Animals", "bold", 3, 105.0),
+            text("Mice were obtained…", 120.0),
+        ];
+        demote_empty_bold_heads(&mut paper);
+        assert_eq!(heads(&paper), ["Materials and methods", "Animals"]);
+    }
+
+    #[test]
+    fn a_heading_centred_over_two_lines_is_one() {
+        let centred = |t: &str, x0: f64, x1: f64, y: f64| {
+            let mut e = line_at("doco:SectionTitle", t, "font-size", Some(3), y, x0);
+            e.bbox = Some(BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 12.0,
+            });
+            e
+        };
+        // A subtitle over two centred lines, about a page centre of 300.
+        let mut subtitle = vec![
+            centred("Recycled Fibre Board", 250.0, 350.0, 140.0),
+            centred("Rated for use in damp interiors", 205.0, 395.0, 155.0),
+        ];
+        coalesce_heading_fragments(&mut subtitle);
+        assert_eq!(
+            heads(&subtitle),
+            ["Recycled Fibre Board Rated for use in damp interiors"]
+        );
+        // Cells of a table no grid took, centred in their column, with
+        // their row's other cells beside them.
+        let mut cells = vec![
+            line_at("doco:Paragraph", "Capacity", "layout", None, 420.0, 60.0),
+            centred("12 litres", 330.0, 370.0, 420.0),
+            line_at("doco:Paragraph", "Weight", "layout", None, 434.0, 60.0),
+            centred("2.5 kg (empty)", 320.0, 380.0, 434.0),
+        ];
+        coalesce_heading_fragments(&mut cells);
+        assert_eq!(heads(&cells).len(), 2);
+        // Set from one left edge, a section and its first subsection.
+        let mut pair = vec![
+            centred("Materials and methods", 200.0, 330.0, 100.0),
+            centred("Animals", 200.0, 250.0, 114.0),
+        ];
+        coalesce_heading_fragments(&mut pair);
+        assert_eq!(heads(&pair).len(), 2);
     }
 
     #[test]
