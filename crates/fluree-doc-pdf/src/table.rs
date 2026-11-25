@@ -4662,61 +4662,91 @@ pub(crate) struct HeaderBand {
 /// time, or two cells under one fill).
 pub(crate) fn header_bands(rules: &[Rule], fills: &[crate::rule::Fill]) -> Vec<HeaderBand> {
     let t = EDGE_TOLERANCE;
+    // A band hangs under a rule and is divided by verticals: a page with
+    // no rule of either kind has none, however much it shades.
+    let mut tops: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let verticals: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Vertical)
+        .collect();
+    if fills.is_empty() || tops.is_empty() || verticals.is_empty() {
+        return Vec::new();
+    }
+    tops.sort_by(|a, b| a.axis_pos().total_cmp(&b.axis_pos()));
     let mut boxes: Vec<BBox> = fills.iter().map(|f| f.bbox).collect();
     boxes.sort_by(|a, b| a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)));
-    // Runs of shading one height, joined where they meet or overlap.
+    let touch = |r: &BBox, b: &BBox| {
+        (r.y0 - b.y0).abs() <= t && (r.y1 - b.y1).abs() <= t && b.x0 <= r.x1 + t && b.x1 >= r.x0 - t
+    };
+    // Runs of shading one height, joined where they meet or overlap. The
+    // shading comes in order of its tops, so a run's top is its first
+    // piece's and the runs stand in order of their tops: a piece is only
+    // looked for among the runs whose tops lie within the tolerance of its
+    // own. A chart's page draws thousands of fills.
     let mut runs: Vec<BBox> = Vec::new();
+    let mut from = 0;
     for b in boxes {
-        match runs.iter_mut().find(|r| {
-            (r.y0 - b.y0).abs() <= t
-                && (r.y1 - b.y1).abs() <= t
-                && b.x0 <= r.x1 + t
-                && b.x1 >= r.x0 - t
-        }) {
+        while from < runs.len() && runs[from].y0 < b.y0 - t {
+            from += 1;
+        }
+        match runs[from..].iter_mut().find(|r| touch(r, &b)) {
             Some(r) => *r = r.union(&b),
             None => runs.push(b),
         }
     }
-    // Runs a later piece of shading joined, merged until none touch.
-    let touch = |r: &BBox, b: &BBox| {
-        (r.y0 - b.y0).abs() <= t && (r.y1 - b.y1).abs() <= t && b.x0 <= r.x1 + t && b.x1 >= r.x0 - t
-    };
-    let mut merged = true;
-    while merged {
-        merged = false;
-        'outer: for i in 0..runs.len() {
+    // Runs a later piece of shading joined, merged until none touch, the
+    // first touching pair first. Runs still stand in order of their tops,
+    // and a merge keeps the earlier run's top, so each is compared only with
+    // the runs after it whose tops lie within the tolerance. After a merge
+    // only the grown run can touch a run it did not before, one whose top
+    // lies within the tolerance of its own: the next pair is looked for from
+    // the first of those, not from the page's first run again.
+    let mut start = 0;
+    loop {
+        let mut hit = None;
+        'scan: for i in start..runs.len() {
             for j in i + 1..runs.len() {
+                if runs[j].y0 > runs[i].y0 + t {
+                    break;
+                }
                 if touch(&runs[i], &runs[j]) {
-                    let b = runs.remove(j);
-                    runs[i] = runs[i].union(&b);
-                    merged = true;
-                    break 'outer;
+                    hit = Some((i, j));
+                    break 'scan;
                 }
             }
         }
+        let Some((i, j)) = hit else { break };
+        let b = runs.remove(j);
+        runs[i] = runs[i].union(&b);
+        let y0 = runs[i].y0;
+        start = runs.partition_point(|r| r.y0 < y0 - t);
     }
     let mut out = Vec::new();
     for bbox in runs {
-        let top = rules.iter().any(|r| {
-            r.orientation == Orientation::Horizontal
-                && (r.axis_pos() - bbox.y0).abs() <= t
-                && r.bbox.x0 <= bbox.x0 + t
-                && r.bbox.x1 >= bbox.x1 - t
-        });
-        let mut dividers: Vec<f64> = rules
+        let lo = tops.partition_point(|r| r.axis_pos() < bbox.y0 - t);
+        let top = tops[lo..]
+            .iter()
+            .take_while(|r| r.axis_pos() <= bbox.y0 + t)
+            .any(|r| r.bbox.x0 <= bbox.x0 + t && r.bbox.x1 >= bbox.x1 - t);
+        if !top {
+            continue;
+        }
+        let mut dividers: Vec<f64> = verticals
             .iter()
             .filter(|r| {
-                r.orientation == Orientation::Vertical
-                    && r.axis_pos() > bbox.x0 + t
+                r.axis_pos() > bbox.x0 + t
                     && r.axis_pos() < bbox.x1 - t
                     && (r.bbox.y0 - bbox.y0).abs() <= t
                     && (r.bbox.y1 - bbox.y1).abs() <= t
             })
-            .map(Rule::axis_pos)
+            .map(|r| r.axis_pos())
             .collect();
         dividers.sort_by(f64::total_cmp);
         dividers.dedup_by(|a, b| (*a - *b).abs() <= t);
-        if !top || dividers.is_empty() {
+        if dividers.is_empty() {
             continue;
         }
         let mut edges = vec![bbox.x0];
