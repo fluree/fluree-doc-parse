@@ -679,7 +679,12 @@ many more places than its rows and columns: the outlines of a unit's
 terminals, or a drawing's dimension and extension lines. So is a ruled row
 or column holding nothing but three numbers or more that step evenly, by one
 difference (`160 140 … 0`) or one ratio (`1 10 100`): an axis's scale ruled
-by its tick marks. So is a dimension drawing's grid: its lines end in
+by its tick marks. So are charts set side by side whose scales line up
+into one grid (`240 | 240` down to `0 | 0`, each panel's title over its
+scale): every column of numbers steps evenly and stands beside a chart's
+plot. A table whose figures step so (a rank, a conversion) stands beside
+no chart, and a grid holding a line of the page's prose is no chart's
+axes. So is a dimension drawing's grid: its lines end in
 arrowheads, two or more of them, and its cells hold callouts alone, such as
 figures with their units (`83⁵/16"`, `(2117 mm)`), counts (`2X`) and datum
 letters, with no words but units and a dimension's notes (`TYP`, `MAX`).
