@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "fed-fomc-statement-2025-07.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/monetary20250730a1.pdf",
+    "sha256": "a03d33f6c48a6e3b5d0c2cacb76c0792a517c99c6d900d0bb8f362145bc5e579",
+    "about": "FOMC statement of July 30, 2025: the policy statement and the implementation note merged into one PDF, its bookmarks naming the two files (`20250728.PressRelease.ImplementationNote.pdf`)."
+  },
+  "notes": [
+    "2026-11-25 (#328): the implementation note's title ranked h2 by its weight, under the statement's release line: the note read as part of the statement."
+  ],
+  "checks": [
+    {
+      "id": "note-opens-a-part",
+      "found": "2026-11-25",
+      "issue": "#328: the implementation note's title was an h2.",
+      "section": {
+        "title": "Decisions Regarding Monetary Policy Implementation",
+        "level": 1
+      }
+    }
+  ]
+}

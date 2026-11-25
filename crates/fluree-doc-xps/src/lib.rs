@@ -508,8 +508,11 @@ fn page(
             rules: Vec::new(),
             fills: Vec::new(),
             // A page's drawn bullets come from its paths' fills, which XPS
-            // pages are not read for.
+            // pages are not read for; nor are its strokes, a chart's traces
+            // and ticks.
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             routing: None,
             width,
             height,

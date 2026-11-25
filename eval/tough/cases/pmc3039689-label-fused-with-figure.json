@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "pmc3039689.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3039689/",
+    "sha256": "7db1869e35180e381250f59367b184a9802746b8801e7a93668b09eb71f065fc",
+    "about": "PLoS Neglected Tropical Diseases article, 'Identification of Small Molecule Lead Compounds for Visceral Leishmaniasis Using a Novel Ex Vivo Splenic Explant Model System', PMC3039689. Its Table 4 (p9) counts lead compounds by chemical class under ring-count groups (`1-ring`, `2-ring`, `3-ring`), beside the page's prose. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#350): one class's name is set a word space from its first count (`Phenanthridines 0`), and the two read as one chunk across the gutter, which no column holds; the table's rows broke there, and the pieces took in the prose beside them. A chunk cut where its figure fills a column its line leaves empty, a column the table's rows fill, keeps the row whole."
+  ],
+  "checks": [
+    {
+      "id": "fused-label-in-its-group",
+      "found": "2026-11-25",
+      "issue": "#350: `Phenanthridines 0` was one chunk, and the table broke at its row.",
+      "cell": {
+        "value": "Phenanthridines",
+        "section": "3-ring"
+      }
+    },
+    {
+      "id": "first-group-whole",
+      "found": "2026-11-25",
+      "issue": "#350: the table came out in pieces with the page's prose as a column; `Furans` stood in no group.",
+      "cell": {
+        "value": "Furans",
+        "section": "1-ring"
+      }
+    }
+  ]
+}
