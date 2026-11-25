@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "ti-lm358.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+    "sha256": "8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2",
+    "about": "Texas Instruments LM358 operational amplifier datasheet. Its tables' notes are numbered `(1)`, `(2)`, `(3)`, each number set apart, left of its note's text."
+  },
+  "notes": [
+    "2026-11-25: a note's number set apart from its text was taken as a list's marker and dropped from every output, the note left as a list item with no number; the notes the table's figures point to could not be told apart."
+  ],
+  "checks": [
+    {
+      "id": "stress-note-keeps-its-number",
+      "found": "2026-11-25",
+      "issue": "The note read `Stresses beyond those listed…` with its `(1)` dropped.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "(1) Stresses beyond those listed under Absolute Maximum Ratings may cause permanent damage to the device. These are stress ratings only, and do not imply functional operation of the device at these or any other conditions beyond those indicated under Recommended Operating Conditions. Exposure to absolute-maximum-rated conditions for extended periods may affect device reliability. Differential voltages are at IN+, with respect to IN−."
+      },
+      "count": 1
+    },
+    {
+      "id": "short-circuit-note-keeps-its-number",
+      "found": "2026-11-25",
+      "issue": "As above, `(3)`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "(3) Short circuits from outputs to VS can cause excessive heating and eventual destruction."
+      },
+      "count": 1
+    }
+  ]
+}
