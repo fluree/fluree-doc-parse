@@ -1,0 +1,24 @@
+{
+  "document": {
+    "file": "hermanmiller-aeron.pdf",
+    "url": "https://www.hermanmiller.com/content/dam/hermanmiller/documents/product_literature/product_sheets/aeron_chairs_product_sheet.pdf",
+    "sha256": "7adcc6c3eb4b6217a894af9abea1558038cf8acf2c6b7e9eb5e83cf0add391f3",
+    "about": "Herman Miller Aeron product sheet. Its Key Features are one list numbered 1 to 6, run on from one column into the next, with the photo's callout numbers read between the columns."
+  },
+  "notes": [
+    "#275: the photo's callouts between the columns ended the list, so the features came out as two lists, 1 to 3 and 4 to 6."
+  ],
+  "checks": [
+    {
+      "id": "features-one-list",
+      "found": "2026-11-25",
+      "issue": "#275: Key Features came out as two lists, 1–3 and 4–6.",
+      "list": {
+        "holds": [
+          "1. 8Z Pellicle® 8Z Pellicle offers unprecedented comfort through eight varied zones of tension in the seat and back.",
+          "6. Ocean-bound plastic Aeron is composed of more than 50% recycled material, including ocean-bound plastic."
+        ]
+      }
+    }
+  ]
+}

@@ -247,10 +247,14 @@ section under it. Once the page's tables and figures are placed in reading
 order, `bold` headings at one level that follow each other with nothing
 between them are looked at as a run. Three kinds of run are read as text:
 
-- **A run that heads nothing.** The end of the document follows it, or a bold
-  heading above its level does. This is the name and the role that close
-  minutes or a letter (`Joshua Gallin` over `Secretary`), or a slide's kicker
-  over its title.
+- **A run that heads nothing.** The end of the document follows it, a bold
+  heading above its level does, or a heading set larger, by its size or as
+  the title: a bold line at the body's size ranks below any of those. This
+  is the name and the role that close minutes or a letter (`Joshua Gallin`
+  over `Secretary`), a slide's kicker over its title (`LEVEL 2 · DERIVED`),
+  or a form's label over a larger line. A label naming a part of the
+  document (`EXHIBIT B` over its title) stays, and so does the document's
+  first heading, which may be its title over a larger date.
 - **A run set as a row.** Two of its lines sit side by side, so the run is
   read across. This is a table's header cells left out of its grid, or an
   answer scale (`OFTEN`, `SOMETIMES`, `RARELY`, `NEVER`). Card titles set
@@ -262,15 +266,27 @@ between them are looked at as a run. Three kinds of run are read as text:
   chart's legend or a map's labels, or a form's labels. The last line is
   followed by text and stays a heading.
 
+A bold line set under a paragraph at its leading, with another bold head
+after it, is that paragraph's last line set in bold, and reads as text
+before any run is formed (`KEEP OUT OF REACH OF CHILDREN` closing a caution,
+over `TRADEMARKS`). A heading stands apart from the text above it.
+
 Two bold lines one over the other, followed by text, both stay. A section
 that opens on its first subsection (`Materials and Methods` over `Apiary
 selection`) is set that way as often as one label is set over another.
 
-Only `bold` evidence is judged, and only a bold line ends a run. A numbered,
-outlined or larger heading says more than weight does. A bold line's level
-also says nothing beside another kind of heading's: a bold head over its
-outlined subsections (`Sectors of primary focus` over `Energy`) has a deeper
-level number than they do.
+Only `bold` evidence is judged. A numbered, outlined or larger heading says
+more than weight does. A bold line's level says nothing beside a numbered
+or outlined heading's: a bold head over its outlined subsections (`Sectors
+of primary focus` over `Energy`) has a deeper level number than they do. A
+heading set larger does outrank it.
+
+Two headings of one level and kind are one where the second goes on in
+lower case from where the first starts, or where the two are centred on one
+axis a line's spacing apart: a subtitle over two centred lines
+(`Poly-Lactic-Acid` over `FDA Compliant for direct food contact`). Lines
+set from one left edge, each opening with a capital, stay two headings, and
+so does a division's label over its title.
 
 ## Numbering that is not an outline
 
