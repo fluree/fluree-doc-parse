@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "2026-11-25 (#207): the flyer sets a space after each ﬁ ligature, drawn in turn but with its pen moved back onto the ligature's ink, and the next letter where the ligature's pen stopped. The page shows no space, but it was read as a word break: `Scientifi c`, `Certifi cations`."
+  ],
+  "checks": [
+    {
+      "id": "scientific-whole",
+      "found": "2026-11-25",
+      "issue": "#207: `Scientifi c`.",
+      "no_text": "Scientifi c"
+    },
+    {
+      "id": "certified-whole",
+      "found": "2026-11-25",
+      "issue": "#207: `certifi ed`.",
+      "no_text": "ertifi ed"
+    },
+    {
+      "id": "scientific-read",
+      "found": "2026-11-25",
+      "issue": "#207: as above.",
+      "text": "Thermo Scientific"
+    }
+  ]
+}

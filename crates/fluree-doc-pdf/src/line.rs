@@ -1850,6 +1850,20 @@ fn stray_space(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> bool
             && p.draw_index + 1 == space.draw_index
             && (adv.at(p.origin) + width(p) - at).abs() <= SPACE_INSIDE * em
     });
+    // In turn, but set back onto the mark ahead's ink, with the mark after
+    // it where that mark's pen stopped: the page shows no space, and the
+    // space parts nothing. A producer sets one inside a ligature, its pen
+    // moved back over it (`Scientiﬁ c`, `certiﬁ ed`).
+    let swallowed = match (before, after) {
+        (Some(b), Some(a)) => {
+            let stop = adv.at(b.origin) + width(b);
+            at < stop - SPACE_INSIDE * em && (adv.at(a.origin) - stop).abs() <= SPACE_INSIDE * em
+        }
+        _ => false,
+    };
+    if swallowed {
+        return true;
+    }
     if between || follows {
         return false;
     }
@@ -3043,6 +3057,28 @@ mod tests {
         let mut v = run("of", 0.0, 0);
         v.push(space(10.0, 2));
         v.extend(run("the", 10.1, 3));
+        assert_eq!(assemble(&v)[0].text, "of the");
+    }
+
+    #[test]
+    fn a_space_set_back_into_a_ligature_parts_nothing() {
+        // `Scientiﬁ` then a space drawn on the ﬁ's ink, its pen moved back,
+        // and `c` where the ﬁ's pen stopped.
+        let mut v = run("Scienti", 0.0, 0);
+        let mut fi = g("\u{FB01}", 35.0, 0.0, 6.0, 0.0);
+        fi.advance = Some(6.5);
+        fi.draw_index = 7;
+        v.push(fi);
+        v.push(space(38.0, 8));
+        let mut c = g("c", 41.6, 0.0, 4.5, 0.0);
+        c.advance = Some(5.0);
+        c.draw_index = 9;
+        v.push(c);
+        assert_eq!(assemble(&v)[0].text, "Scientific");
+        // A space where the pen stopped, the next word a space on, stays.
+        let mut v = run("of", 0.0, 0);
+        v.push(space(10.0, 2));
+        v.extend(run("the", 13.0, 3));
         assert_eq!(assemble(&v)[0].text, "of the");
     }
 

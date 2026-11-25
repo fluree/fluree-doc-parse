@@ -108,7 +108,10 @@ the word: `Pro duits`, `Septembr e 2026`. A space drawn out of sequence
 with the letters on either side of it, and set on a letter rather than
 between two, is ignored, and the word reads whole. A space drawn in
 sequence, where the pen stopped after the word before it, is always kept,
-however tightly the next word follows.
+however tightly the next word follows. One drawn in sequence but set back
+onto the ink of the letter before it, with the next letter where that
+letter's pen stopped, leaves no space on the page and is ignored too: a
+producer sets one after each `ﬁ` ligature (`Scientifi c`, `califi cado`).
 
 **Lines wrapped inside a word.** Chinese and Japanese set no spaces
 between words, so a line may wrap between any two characters. A line that
