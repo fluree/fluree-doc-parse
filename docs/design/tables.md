@@ -1214,7 +1214,9 @@ one a box's spacing below, are linked in two ways:
   pieces a little apart). A name over two of the lower part's columns heads
   both (`Nominal Size` over the size and its decimal), so the header is dealt
   onto the lower part's columns, a name spanning those it covers, and is all
-  header: `D / Body Diameter / Max.`.
+  header: `D / Body Diameter / Max.`. The two are then one table: the box's
+  rows become the table's header rows and the box goes, where it stood as a
+  table of no cells before the table it heads.
 - **Rows set below a table on its columns.** A run of rows read by alignment
   breaks where a line of something else falls between two of them, such as
   an outer table's label centred on the tall row the inner table sits in.

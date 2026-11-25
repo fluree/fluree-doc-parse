@@ -957,6 +957,90 @@ fn link_header_box(prev: &mut Element, next: &mut Element, a: &TableFrame, b: &T
     next.header_rows = Some(0);
 }
 
+/// Fold a header drawn as a box of its own into the rows boxed under it.
+///
+/// [`link_header_box`] deals the header box's names onto the rows' columns
+/// and links the rows to it, leaving the box a part of nothing but header.
+/// On one page the two are one table: the box's rows become the table's
+/// header rows, and the box, which held only names, goes. Left as it was, it
+/// read as a table of no cells before every table so drawn.
+fn fold_header_boxes(elements: &mut Vec<Element>) {
+    let mut gone: Vec<usize> = Vec::new();
+    for i in 0..elements.len() {
+        let Some(id) = elements[i].continues.clone() else {
+            continue;
+        };
+        let Some(j) = elements[..i].iter().rposition(|e| e.id == id) else {
+            continue;
+        };
+        let (before, after) = elements.split_at_mut(i);
+        let (head, body) = (&mut before[j], &mut after[0]);
+        let (Some(hc), Some(bc)) = (head.cells.as_ref(), body.cells.as_ref()) else {
+            continue;
+        };
+        let cols = bc.first().map_or(0, |r| r.len());
+        if head.kind != "doco:Table"
+            || head.page != body.page
+            || hc.is_empty()
+            || head.header_rows != Some(hc.len())
+            || hc.iter().any(|r| r.len() != cols)
+        {
+            continue;
+        }
+        let n = hc.len();
+        let flags = |e: &Option<Vec<bool>>, rows: usize| {
+            e.clone().unwrap_or_else(|| vec![false; rows * cols])
+        };
+        let join = |a: &Option<Vec<bool>>, b: &Option<Vec<bool>>| {
+            if a.is_none() && b.is_none() {
+                return None;
+            }
+            let mut v = flags(a, n);
+            v.extend(flags(b, bc.len()));
+            v.iter().any(|f| *f).then_some(v)
+        };
+        let merged_down = join(&head.merged_down, &body.merged_down);
+        let merged_left = join(&head.merged_left, &body.merged_left);
+        let spread_left = join(&head.spread_left, &body.spread_left);
+        let mut cells = hc.clone();
+        cells.extend(bc.iter().cloned());
+        let shift = |v: &Option<Vec<usize>>| v.as_ref().map(|v| v.iter().map(|r| r + n).collect());
+        body.sub_headers = shift(&body.sub_headers);
+        body.restated_headers = shift(&body.restated_headers);
+        if let Some(d) = body.datums.as_mut() {
+            let mut rows: Vec<Vec<Option<fluree_doc_model::element::Datum>>> =
+                vec![vec![None; cols]; n];
+            rows.append(d);
+            *d = rows;
+        }
+        body.header_rows = Some(n + body.header_rows.unwrap_or(0));
+        body.merged_down = merged_down;
+        body.merged_left = merged_left;
+        body.spread_left = spread_left;
+        body.text = cells
+            .iter()
+            .map(|r| r.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.cells = Some(cells);
+        body.bbox = match (head.bbox, body.bbox) {
+            (Some(a), Some(b)) => Some(crate::geom::BBox {
+                x0: a.x0.min(b.x0),
+                y0: a.y0.min(b.y0),
+                x1: a.x1.max(b.x1),
+                y1: a.y1.max(b.y1),
+            }),
+            (a, b) => b.or(a),
+        };
+        body.continues = head.continues.take();
+        gone.push(j);
+    }
+    gone.sort_unstable();
+    for j in gone.into_iter().rev() {
+        elements.remove(j);
+    }
+}
+
 /// Link rows set a little below a table, on its columns, to that table.
 ///
 /// A run of rows read by alignment breaks where a line of something else
@@ -4491,6 +4575,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    fold_header_boxes(&mut elements);
     drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
     read_form_text(&mut elements);
@@ -5673,6 +5758,80 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_header_boxed_over_its_rows_is_folded_into_them() {
+        // A header filled in a box of its own, its rows ruled in another a
+        // few points below, on the same columns.
+        let (mut a, mut fa) = part(
+            "elem-00001",
+            0,
+            &[&["Size", "Diameter", "Length"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (mut b, mut fb) = part(
+            "elem-00002",
+            0,
+            &[&["5", "0.125", "0.50"], &["6", "0.138", "0.75"]],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        a.bbox = Some(BBox {
+            x0: 72.0,
+            y0: 600.0,
+            x1: 595.0,
+            y1: 620.0,
+        });
+        b.bbox = Some(BBox {
+            x0: 72.0,
+            y0: 626.0,
+            x1: 595.0,
+            y1: 720.0,
+        });
+        fa.bbox = a.bbox.unwrap();
+        fb.bbox = b.bbox.unwrap();
+        let mut els = vec![a, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        fold_header_boxes(&mut els);
+        assert_eq!(els.len(), 1, "{els:?}");
+        let t = &els[0];
+        assert_eq!(t.id, "elem-00002");
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.continues, None);
+        assert_eq!(t.cells.as_ref().unwrap()[0], ["Size", "Diameter", "Length"]);
+        assert_eq!(t.cells.as_ref().unwrap().len(), 3);
+        assert_eq!(t.bbox.unwrap().y0, 600.0);
+        // A part on the page before is left linked: one table across a page
+        // break is two elements, one per page.
+        let (c, _) = part(
+            "elem-00003",
+            0,
+            &[&["Size", "Diameter", "Length"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (mut d, _) = part(
+            "elem-00004",
+            1,
+            &[&["7", "0.164", "1.00"]],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        d.continues = Some("elem-00003".into());
+        let mut els = vec![c, d];
+        fold_header_boxes(&mut els);
+        assert_eq!(els.len(), 2);
     }
 
     #[test]
