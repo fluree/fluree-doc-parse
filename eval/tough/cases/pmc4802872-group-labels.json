@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "pmc4802872.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4802872/",
+    "sha256": "695c64beb304da971e8db4eb82454994fa1e4a3e1dfaa8b034b053faafdacbe0",
+    "about": "International Journal for Equity in Health (2016) article, 'Socioeconomic Inequality in mortality using 12-year follow-up data from nationally representative surveys in South Korea', PMC4802872. Its Table 2 (p7) groups its rows under labels in the stub (`Education`, `Occupation`, `Monthly household income (USD)`), ruled only above and under its header, and runs on past the page's foot. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#350): the page's one ruled grid was the header band, alignment was preferred over it, and the text reading of that band alone was empty; alignment read the rows in pieces, broken at each group label, the RR columns of `Occupation` and below left as text. Such a seed is now read on below its last rule, and that reading, holding more of the table, stands. The spanning `Men 30 years of age and older` / `Women …` level of the header is still lost (#351)."
+  ],
+  "checks": [
+    {
+      "id": "occupation-rows-under-their-label",
+      "found": "2026-11-25",
+      "issue": "#350: `Occupation`'s rows were a table of their own, two columns wide, and named no section.",
+      "cell": {
+        "value": "3.26 (1.92–5.56)",
+        "column": "RR (95% CI)",
+        "row": "Manual",
+        "section": "Occupation"
+      }
+    },
+    {
+      "id": "income-rows-under-their-label",
+      "found": "2026-11-25",
+      "issue": "#350: as above, for `Monthly household income (USD)`.",
+      "cell": {
+        "value": "1.51 (1.01–2.26)",
+        "row": "1000–1999",
+        "section": "Monthly household income (USD)"
+      }
+    }
+  ]
+}

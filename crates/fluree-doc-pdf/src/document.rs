@@ -957,6 +957,90 @@ fn link_header_box(prev: &mut Element, next: &mut Element, a: &TableFrame, b: &T
     next.header_rows = Some(0);
 }
 
+/// Fold a header drawn as a box of its own into the rows boxed under it.
+///
+/// [`link_header_box`] deals the header box's names onto the rows' columns
+/// and links the rows to it, leaving the box a part of nothing but header.
+/// On one page the two are one table: the box's rows become the table's
+/// header rows, and the box, which held only names, goes. Left as it was, it
+/// read as a table of no cells before every table so drawn.
+fn fold_header_boxes(elements: &mut Vec<Element>) {
+    let mut gone: Vec<usize> = Vec::new();
+    for i in 0..elements.len() {
+        let Some(id) = elements[i].continues.clone() else {
+            continue;
+        };
+        let Some(j) = elements[..i].iter().rposition(|e| e.id == id) else {
+            continue;
+        };
+        let (before, after) = elements.split_at_mut(i);
+        let (head, body) = (&mut before[j], &mut after[0]);
+        let (Some(hc), Some(bc)) = (head.cells.as_ref(), body.cells.as_ref()) else {
+            continue;
+        };
+        let cols = bc.first().map_or(0, |r| r.len());
+        if head.kind != "doco:Table"
+            || head.page != body.page
+            || hc.is_empty()
+            || head.header_rows != Some(hc.len())
+            || hc.iter().any(|r| r.len() != cols)
+        {
+            continue;
+        }
+        let n = hc.len();
+        let flags = |e: &Option<Vec<bool>>, rows: usize| {
+            e.clone().unwrap_or_else(|| vec![false; rows * cols])
+        };
+        let join = |a: &Option<Vec<bool>>, b: &Option<Vec<bool>>| {
+            if a.is_none() && b.is_none() {
+                return None;
+            }
+            let mut v = flags(a, n);
+            v.extend(flags(b, bc.len()));
+            v.iter().any(|f| *f).then_some(v)
+        };
+        let merged_down = join(&head.merged_down, &body.merged_down);
+        let merged_left = join(&head.merged_left, &body.merged_left);
+        let spread_left = join(&head.spread_left, &body.spread_left);
+        let mut cells = hc.clone();
+        cells.extend(bc.iter().cloned());
+        let shift = |v: &Option<Vec<usize>>| v.as_ref().map(|v| v.iter().map(|r| r + n).collect());
+        body.sub_headers = shift(&body.sub_headers);
+        body.restated_headers = shift(&body.restated_headers);
+        if let Some(d) = body.datums.as_mut() {
+            let mut rows: Vec<Vec<Option<fluree_doc_model::element::Datum>>> =
+                vec![vec![None; cols]; n];
+            rows.append(d);
+            *d = rows;
+        }
+        body.header_rows = Some(n + body.header_rows.unwrap_or(0));
+        body.merged_down = merged_down;
+        body.merged_left = merged_left;
+        body.spread_left = spread_left;
+        body.text = cells
+            .iter()
+            .map(|r| r.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.cells = Some(cells);
+        body.bbox = match (head.bbox, body.bbox) {
+            (Some(a), Some(b)) => Some(crate::geom::BBox {
+                x0: a.x0.min(b.x0),
+                y0: a.y0.min(b.y0),
+                x1: a.x1.max(b.x1),
+                y1: a.y1.max(b.y1),
+            }),
+            (a, b) => b.or(a),
+        };
+        body.continues = head.continues.take();
+        gone.push(j);
+    }
+    gone.sort_unstable();
+    for j in gone.into_iter().rev() {
+        elements.remove(j);
+    }
+}
+
 /// Link rows set a little below a table, on its columns, to that table.
 ///
 /// A run of rows read by alignment breaks where a line of something else
@@ -1545,6 +1629,85 @@ pub(crate) fn axis_scale(cells: &[String]) -> bool {
         .map(|w| (w[0].abs() > f64::EPSILON).then(|| w[1] / w[0]))
         .collect();
     even(differences) || ratios.is_some_and(|r| r[0] > 0.0 && (r[0] - 1.0).abs() > 0.01 && even(r))
+}
+
+/// Fewest numbers a grid's column holds for it to be read as a chart's scale.
+const SCALE_VALUES: usize = 3;
+
+/// Fewest words in a line of prose, as a cell reads one.
+const PROSE_WORDS: usize = 5;
+
+/// Least share of a line's words set in lower case for it to read as prose:
+/// a chart's titles and legends are capitalised, figured or short (`All
+/// needs met by 2020`), a paragraph's line runs on in lower case (`remains
+/// much further below its pre-pandemic level`).
+const PROSE_LOWER: f64 = 0.6;
+
+/// Does the cell read as a line of prose?
+fn prose_line(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let lower = words
+        .iter()
+        .filter(|w| w.chars().next().is_some_and(char::is_lowercase))
+        .count();
+    words.len() >= PROSE_WORDS && lower as f64 >= words.len() as f64 * PROSE_LOWER
+}
+
+/// A cell's text as one number, a minus or a dash for its sign and commas
+/// for thousands: `−20`, `1,000`.
+fn scale_number(text: &str) -> Option<f64> {
+    let t = text
+        .trim()
+        .replace(['\u{2212}', '\u{2013}'], "-")
+        .replace(',', "");
+    (!t.is_empty()).then(|| t.parse::<f64>().ok()).flatten()
+}
+
+/// The chart a grid of axes belongs to, where charts set side by side line
+/// their scales up into one grid (`240 | 240` down to `0 | 0`, each panel's
+/// title over its scale). Every column holding numbers reads as a scale:
+/// [`SCALE_VALUES`] or more stepping evenly ([`axis_scale`]), each beside a
+/// chart's drawing, level with half its height or more and within an axis's
+/// reach ([`SCALE_REACH`] of the grid's text size `line`). Cells of words, a
+/// panel's title or legend, say nothing either way. A table's columns of
+/// figures step unevenly; one whose numbers do (a rank, a conversion) stands
+/// beside no chart. The nearest chart takes the grid's text.
+fn panel_axes(g: &Grid, cells: &[String], figures: &[figure::Figure], line: f64) -> Option<usize> {
+    // A line of prose among the cells is the page's text beside a chart,
+    // read into the grid with its scale: the grid is no chart's axes.
+    if cells.iter().any(|c| prose_line(c)) {
+        return None;
+    }
+    let cols = g.cols();
+    let mut nearest: Option<(usize, f64)> = None;
+    for c in 0..cols {
+        let rows: Vec<usize> = (0..g.rows())
+            .filter(|&r| scale_number(&cells[r * cols + c]).is_some())
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let values: Vec<String> = rows.iter().map(|&r| cells[r * cols + c].clone()).collect();
+        if rows.len() < SCALE_VALUES || !axis_scale(&values) {
+            return None;
+        }
+        let (x0, x1) = (g.xs[c], g.xs[c + 1]);
+        let (y0, y1) = (g.ys[rows[0]], g.ys[rows[rows.len() - 1] + 1]);
+        let beside = figures
+            .iter()
+            .enumerate()
+            .filter_map(|(fi, f)| {
+                let d = f.drawing;
+                let level = y1.min(d.y1) - y0.max(d.y0) >= 0.5 * (y1 - y0);
+                let gap = (d.x0 - x1).max(x0 - d.x1).max(0.0);
+                (level && gap <= line * SCALE_REACH).then_some((fi, gap))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        if nearest.is_none_or(|(_, gap)| beside.1 < gap) {
+            nearest = Some(beside);
+        }
+    }
+    nearest.map(|(fi, _)| fi)
 }
 
 /// Does a heading give way to the figure it is in? Relative typography does
@@ -2336,6 +2499,15 @@ fn find_figures(
             &figures,
         );
         figures.extend(plotted);
+        let charted = figure::axis_plots(
+            &page.rules,
+            &page.ticks,
+            &page.traces,
+            &page.glyphs,
+            pi,
+            &figures,
+        );
+        figures.extend(charted);
         // A dimension drawing whose lines made a ruled grid of its callouts:
         // the drawing its loose callouts and view names are labels of.
         if let Some(layout) = layouts.get(pi) {
@@ -2363,6 +2535,7 @@ fn find_figures(
                         .count()
                         .max(1),
                     frame: None,
+                    axes: false,
                 })
                 .collect();
             figures.extend(dimensioned);
@@ -2428,7 +2601,7 @@ fn drawn(page_figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]) -> Vec<Vec<
         .map(|(figures, member)| {
             member
                 .iter()
-                .map(|m| m.is_some_and(|fi| figures[fi].shapes > 0))
+                .map(|m| m.is_some_and(|fi| figures[fi].shapes > 0 && !figures[fi].axes))
                 .collect()
         })
         .collect()
@@ -2673,19 +2846,28 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // to prefer over a ruled table holding a paragraph in a cell.
         aligned_full.retain(|g| !table::reads_as_prose(g, &p.glyphs));
         let aligned_preferred = prefer_aligned_over_ruled(&grids, &aligned_full, &p.glyphs);
+        // Where alignment reads the page's one coarse grid better, that grid
+        // is still read from its text if it is ruled with horizontals only:
+        // a journal's table between its top and bottom rules, a group's mid
+        // rule across it, comes out of alignment in pieces (the rows under
+        // one group, the header and the rest as text). Which reading stands
+        // is settled below.
+        let seeded_anyway = aligned_preferred && {
+            let lines = crate::textgrid::lines(&p.glyphs);
+            !crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines).is_empty()
+        };
         // Tables ruled with horizontals only, or by nothing but the rules
         // under their figures, are read from their text: their bands are
         // not rows and their rules' ends are not columns. See `textgrid`.
-        // Where alignment already reads the page's one coarse grid, it
-        // keeps it.
         let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
-        if !aligned_preferred {
+        if !aligned_preferred || seeded_anyway {
             timed(&mut timings.tables, || {
                 let lines = crate::textgrid::lines(&p.glyphs);
                 let mut read: Vec<Grid> = Vec::new();
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
                 let stacks = table::stack_columns(&p.rules, &p.fills);
+                let unbroken = table::unbroken_stacks(&p.rules);
                 let mut withheld: Vec<usize> = Vec::new();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
                     let beside =
@@ -2701,7 +2883,46 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         })
                         .collect();
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
-                        let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        // A seed drawn from some of a stack's own lines reads
+                        // as the stack does.
+                        let in_stack = unbroken.iter().any(|(b, _)| {
+                            region.x0 >= b.x0 - 1.0
+                                && region.x1 <= b.x1 + 1.0
+                                && region.y0 >= b.y0 - 1.0
+                                && region.y1 <= b.y1 + 1.0
+                        });
+                        let mut got = if in_stack {
+                            crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index)
+                        } else {
+                            crate::textgrid::read(&lines, &p.rules, region, p.index)
+                        };
+                        // Where alignment was preferred, a seed whose last
+                        // region holds the header alone (a top rule and the
+                        // rule under the header, the table run on past the
+                        // page's foot with no rule under it) is read on below
+                        // that rule: its rows, and its group labels among
+                        // them, that alignment reads in pieces. Which reading
+                        // stands is settled below, as for any seed.
+                        if got.is_empty()
+                            && seeded_anyway
+                            && (region.y1 - grids[i].bbox.y1).abs() <= 3.0
+                        {
+                            let below = crate::geom::BBox {
+                                y1: p.height,
+                                ..region
+                            };
+                            got = crate::textgrid::read(&lines, &p.rules, below, p.index);
+                            if debug {
+                                eprintln!(
+                                    "TEXTGRID p{} seed read on below {:?} -> {:?}",
+                                    p.index,
+                                    below,
+                                    got.iter()
+                                        .map(|g| (g.rows(), g.cols(), g.bbox))
+                                        .collect::<Vec<_>>()
+                                );
+                            }
+                        }
                         // A reading across the columns a stack's rules draw
                         // is no table: neither it nor the seed stands, and
                         // its text stays text.
@@ -2736,6 +2957,58 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         read.extend(got);
                     }
                 }
+                // Row lines drawn unbroken across one stretch, four or more
+                // at an even pitch, beside another such stack: two tables
+                // ruled with horizontals alone, set side by side in a page's
+                // columns. Their lines interleave or fall level, and the
+                // page-wide reading takes neither or both as one. Each is
+                // read from its text, where all of these hold:
+                // - no grid already holds most of it: a table read another
+                //   way keeps that reading;
+                // - its bands hold text ([`crate::textgrid::bands_hold_text`]):
+                //   a chart's gridlines stand over bars, a drawing's over
+                //   nothing;
+                // - the reading stands within its lines: a stack narrower
+                //   than the table it rules is one column's lines in a wider
+                //   table. A twentieth of its width is left for a header
+                //   label hung past them.
+                let stands_beside = |r: &crate::geom::BBox| {
+                    unbroken.iter().map(|(o, _)| o).any(|o| {
+                        let shared = o.y1.min(r.y1) - o.y0.max(r.y0);
+                        (o.x1 <= r.x0 || o.x0 >= r.x1)
+                            && shared > 0.0
+                            && shared >= 0.5 * (o.y1 - o.y0).min(r.y1 - r.y0)
+                    })
+                };
+                for (region, ys) in &unbroken {
+                    let region = *region;
+                    let area = ((region.x1 - region.x0) * (region.y1 - region.y0)).max(1.0);
+                    if grids
+                        .iter()
+                        .any(|g| overlap_area(&g.bbox, &region) >= 0.5 * area)
+                        || !stands_beside(&region)
+                        || !crate::textgrid::bands_hold_text(&lines, region, ys)
+                    {
+                        continue;
+                    }
+                    let mut got =
+                        crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index);
+                    let slack = 0.05 * (region.x1 - region.x0);
+                    got.retain(|g| {
+                        g.bbox.x0 >= region.x0 - slack && g.bbox.x1 <= region.x1 + slack
+                    });
+                    if debug {
+                        eprintln!(
+                            "TEXTGRID p{} unbroken stack {:?} -> {:?}",
+                            p.index,
+                            region,
+                            got.iter()
+                                .map(|g| (g.rows(), g.cols(), g.bbox))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    read.extend(got);
+                }
                 // Runs of figures no grid holds: a statement ruled by
                 // nothing but the underlines under its figures. Not where
                 // alignment finds a layout its type names (a transposed
@@ -2750,7 +3023,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .filter(|g| table::typed_layout(g, &outside))
                     .map(|g| g.bbox)
                     .collect();
-                for region in crate::textgrid::figure_runs(&lines, &p.rules, &taken) {
+                // Where alignment was preferred, only the seed is read again:
+                // alignment reads the runs of figures there.
+                for region in crate::textgrid::figure_runs(&lines, &p.rules, &taken)
+                    .into_iter()
+                    .filter(|_| !aligned_preferred)
+                {
                     if typed.iter().any(|t| overlap_area(t, &region) > 0.0) {
                         continue;
                     }
@@ -2831,7 +3109,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 grid_sources = out_sources;
             });
         }
-        let read_from_text = grid_sources.contains(&GridSource::Text);
+        let mut read_from_text = grid_sources.contains(&GridSource::Text);
+        // Where alignment was preferred, the seed's reading from its text
+        // stands only where it holds more of the table than alignment does:
+        // both read the same table, and the better leaves less of it out.
+        if read_from_text && seeded_anyway {
+            let held = |gs: &[Grid]| -> usize {
+                gs.iter()
+                    .flat_map(|g| g.cell_texts(&p.glyphs))
+                    .map(|t| t.chars().filter(|c| !c.is_whitespace()).count())
+                    .sum()
+            };
+            if held(&grids) <= held(&aligned_full) {
+                read_from_text = false;
+                beside_prose.clear();
+            }
+        }
 
         if read_from_text {
         } else if aligned_preferred {
@@ -3816,9 +4109,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .iter()
                 .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= containment)
                 .filter(|_| !drawn_as_table);
-            // The plot a scale stands against: the figure whose drawing is
-            // nearest it, within an axis's reach.
-            let scaled = if scale && drawn_in.is_none() {
+            // The grid's text size: what an axis's reach is measured in.
+            let line = {
                 let mut sizes: Vec<f32> = raw.pages[pi]
                     .glyphs
                     .iter()
@@ -3829,7 +4121,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .map(|gl| gl.font_size)
                     .collect();
                 sizes.sort_by(f32::total_cmp);
-                let line = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64;
+                sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64
+            };
+            // The plot a scale stands against: the figure whose drawing is
+            // nearest it, within an axis's reach.
+            let scaled = if scale && drawn_in.is_none() {
                 figures
                     .iter()
                     .enumerate()
@@ -3848,7 +4144,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             } else {
                 None
             };
-            let drawn_in = drawn_in.or(scaled);
+            // Charts set side by side, their scales lined up into a grid.
+            let paneled = if drawn_in.is_none() && !scale && g.cols() >= 2 {
+                panel_axes(g, &flat, figures, line)
+            } else {
+                None
+            };
+            let drawn_in = drawn_in.or(scaled).or(paneled);
             if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
@@ -4372,6 +4674,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    fold_header_boxes(&mut elements);
     drop_merged_columns(&mut elements);
     demote_empty_bold_heads(&mut elements);
     read_form_text(&mut elements);
@@ -4770,6 +5073,61 @@ mod tests {
     }
 
     #[test]
+    fn charts_side_by_side_read_their_scales_as_axes() {
+        // Two panels, each a title over a scale from 60 down to 0, the
+        // scales lined up into a two-column grid; each panel's plot stands
+        // just right of its scale.
+        let grid = Grid {
+            page: 0,
+            xs: vec![70.0, 96.0, 330.0, 356.0],
+            ys: vec![100.0, 112.0, 140.0, 168.0, 196.0, 224.0],
+            bbox: BBox {
+                x0: 70.0,
+                y0: 100.0,
+                x1: 356.0,
+                y1: 224.0,
+            },
+            layout: None,
+        };
+        let row = |a: &str, b: &str| vec![a.to_string(), String::new(), b.to_string()];
+        let mut cells = row("31 Copper", "48 Zinc");
+        for v in ["60", "40", "20", "0"] {
+            cells.extend(row(v, v));
+        }
+        let plot = |x0: f64| figure::Figure {
+            bbox: BBox {
+                x0,
+                y0: 114.0,
+                x1: x0 + 190.0,
+                y1: 230.0,
+            },
+            drawing: BBox {
+                x0,
+                y0: 114.0,
+                x1: x0 + 190.0,
+                y1: 230.0,
+            },
+            page: 0,
+            shapes: 24,
+            frame: None,
+            axes: false,
+        };
+        let plots = [plot(100.0), plot(360.0)];
+        assert_eq!(panel_axes(&grid, &cells, &plots, 7.0), Some(0));
+        // With no chart beside them, the columns are a table's.
+        assert_eq!(panel_axes(&grid, &cells, &[], 7.0), None);
+        // Nor where a column's figures step unevenly: data.
+        let mut data = row("31 Copper", "48 Zinc");
+        for (a, b) in [("60", "12"), ("40", "7"), ("20", "31"), ("0", "4")] {
+            data.extend(row(a, b));
+        }
+        assert_eq!(panel_axes(&grid, &data, &plots, 7.0), None);
+        // Nor where the charts stand far off, past an axis's reach.
+        let far = [plot(160.0), plot(420.0)];
+        assert_eq!(panel_axes(&grid, &cells, &far, 7.0), None);
+    }
+
+    #[test]
     fn numbers_stepping_evenly_are_a_scale() {
         let cells = |c: &[&str]| c.iter().map(|t| t.to_string()).collect::<Vec<_>>();
         // By one difference, falling or rising, signed or with thousands.
@@ -4925,6 +5283,8 @@ mod tests {
                 rules,
                 fills: Vec::new(),
                 dots: Vec::new(),
+                traces: Vec::new(),
+                ticks: Vec::new(),
                 width: 600.0,
                 height: 800.0,
                 rotation: 0,
@@ -5657,6 +6017,80 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_header_boxed_over_its_rows_is_folded_into_them() {
+        // A header filled in a box of its own, its rows ruled in another a
+        // few points below, on the same columns.
+        let (mut a, mut fa) = part(
+            "elem-00001",
+            0,
+            &[&["Size", "Diameter", "Length"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (mut b, mut fb) = part(
+            "elem-00002",
+            0,
+            &[&["5", "0.125", "0.50"], &["6", "0.138", "0.75"]],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        a.bbox = Some(BBox {
+            x0: 72.0,
+            y0: 600.0,
+            x1: 595.0,
+            y1: 620.0,
+        });
+        b.bbox = Some(BBox {
+            x0: 72.0,
+            y0: 626.0,
+            x1: 595.0,
+            y1: 720.0,
+        });
+        fa.bbox = a.bbox.unwrap();
+        fb.bbox = b.bbox.unwrap();
+        let mut els = vec![a, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
+        fold_header_boxes(&mut els);
+        assert_eq!(els.len(), 1, "{els:?}");
+        let t = &els[0];
+        assert_eq!(t.id, "elem-00002");
+        assert_eq!(t.header_rows, Some(1));
+        assert_eq!(t.continues, None);
+        assert_eq!(t.cells.as_ref().unwrap()[0], ["Size", "Diameter", "Length"]);
+        assert_eq!(t.cells.as_ref().unwrap().len(), 3);
+        assert_eq!(t.bbox.unwrap().y0, 600.0);
+        // A part on the page before is left linked: one table across a page
+        // break is two elements, one per page.
+        let (c, _) = part(
+            "elem-00003",
+            0,
+            &[&["Size", "Diameter", "Length"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (mut d, _) = part(
+            "elem-00004",
+            1,
+            &[&["7", "0.164", "1.00"]],
+            0,
+            &XS,
+            false,
+            false,
+        );
+        d.continues = Some("elem-00003".into());
+        let mut els = vec![c, d];
+        fold_header_boxes(&mut els);
+        assert_eq!(els.len(), 2);
     }
 
     #[test]

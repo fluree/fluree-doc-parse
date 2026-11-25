@@ -127,6 +127,11 @@ pub struct Page {
     /// Small filled marks, under a checkbox's size: a dot or a square a
     /// producer draws as a list's bullet rather than setting it as a glyph.
     pub dots: Vec<BBox>,
+    /// Stroked lines of diagonal segments: charts' traces.
+    pub traces: Vec<rule::Trace>,
+    /// The straight strokes of paths drawn as many apart, an axis's ticks
+    /// among them, each as a rule. The paths stay whole among the fills too.
+    pub ticks: Vec<Rule>,
     /// Page size in PDF units, in the frame the glyphs are in — the reading
     /// frame (see [`Page::rotation`]). Needed to express positions as a
     /// fraction of page height, which is how furniture detection compares
@@ -314,6 +319,8 @@ struct Collector<'b> {
     /// the largest page's layout is spent ([`Budget::spend_page_glyphs`]).
     largest_page: u64,
     dots: Vec<BBox>,
+    traces: Vec<rule::Trace>,
+    ticks: Vec<Rule>,
     /// The page's visible area — the crop box in render space. Content outside
     /// it is collected by no viewer and must not be collected here either:
     /// a book-spread scan's crop box shows one 510pt page while the
@@ -839,6 +846,12 @@ impl<'a> Device<'a> for Collector<'_> {
             return;
         }
         self.painted.push(drawn);
+        if !matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) {
+            if let Some(trace) = trace_of(&path, drawn, self.page) {
+                self.traces.push(trace);
+            }
+            self.ticks.extend(marks_of(&path, self.page));
+        }
         if matches!(mode, hayro_interpret::PathDrawMode::Fill(_)) && rule::is_dot(&drawn) {
             if let Some(seen) = self.visible(drawn) {
                 if self.spend(|b| b.spend_cells(1)) {
@@ -1064,6 +1077,20 @@ impl<'a> Device<'a> for Collector<'_> {
             Some(hayro_interpret::hayro_cmap::BfString::String(s)) => s,
             None => String::new(),
         };
+
+        // A letter the font's ToUnicode map gives in the other case than
+        // the glyph its encoding draws (`F` read `f`): see `faces::recased`.
+        if let HGlyph::Outline(o) = glyph {
+            let mut chars = text.chars();
+            if let (Some(c), None) = (chars.next(), chars.next()) {
+                if c.is_ascii_alphabetic() {
+                    if let Some(drawn) = self.faces.recase(o.font_cache_key(), c, o.advance_width())
+                    {
+                        text = drawn.to_string();
+                    }
+                }
+            }
+        }
 
         // Drawn in Symbol or Wingdings: its text is read as that font's
         // characters once it is final (see `read_symbols`). The font is
@@ -1477,6 +1504,107 @@ fn image_key(i: &hayro_interpret::Image<'_, '_>, t: Affine) -> Option<u64> {
 /// to it, at a reduced resolution level; every other filter decodes at the
 /// image's own size, and the probe looks at all of it.
 const PROBE_DIM: u32 = 256;
+
+/// The straight strokes of a path drawn as three or more apart, each a
+/// segment of its own: an axis's ticks drawn as one path. Each is a rule.
+fn marks_of(path: &kurbo::BezPath, page: usize) -> Vec<Rule> {
+    let mut parts: Vec<(kurbo::Point, kurbo::Point)> = Vec::new();
+    let mut at: Option<kurbo::Point> = None;
+    let mut segs = 0usize;
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => {
+                at = Some(p);
+                segs = 0;
+            }
+            kurbo::PathEl::LineTo(p) => {
+                let Some(a) = at else { return Vec::new() };
+                segs += 1;
+                if segs > 1 {
+                    return Vec::new();
+                }
+                parts.push((a, p));
+                at = Some(p);
+            }
+            kurbo::PathEl::ClosePath => {}
+            kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => return Vec::new(),
+        }
+    }
+    if parts.len() < 3 {
+        return Vec::new();
+    }
+    parts
+        .into_iter()
+        .filter_map(|(a, b)| {
+            match rule::classify(
+                crate::geom::from_kurbo(kurbo::Rect::from_points(a, b)),
+                page,
+            ) {
+                Some(rule::Shape::Rule(x)) => Some(x),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Most a segment may lean, in points, across its length and still be
+/// horizontal or vertical: a rule's own rounding.
+const SEGMENT_SQUARE: f64 = 0.5;
+
+/// Most a square segment moves across its run, in points: the noise of a
+/// coordinate carried through the page's transforms. A rule drawn
+/// horizontal or vertical moves no more.
+const SEGMENT_NOISE: f64 = 0.05;
+
+/// Least lean of a short diagonal segment, as its move across over its run
+/// (about six degrees). A series sampled densely steps less than a rule's
+/// rounding along its axis per value (a month of 25 years plotted 150
+/// points wide is half a point), so a step that short is read against its
+/// own length.
+const SEGMENT_LEAN: f64 = 0.1;
+
+/// The stroked path as a chart's trace: three straight segments or more,
+/// two of them diagonal at least. A table's rules, a box's sides and a
+/// statement's underlines run square; a trace runs from value to value.
+fn trace_of(path: &kurbo::BezPath, drawn: BBox, page: usize) -> Option<rule::Trace> {
+    let (mut segments, mut diagonal) = (0usize, 0usize);
+    let (mut right, mut left) = (0usize, 0usize);
+    let mut at: Option<kurbo::Point> = None;
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => at = Some(p),
+            kurbo::PathEl::LineTo(p) => {
+                if let Some(a) = at {
+                    segments += 1;
+                    let (dx, dy) = ((p.x - a.x).abs(), (p.y - a.y).abs());
+                    let (across, run) = (dx.min(dy), dx.max(dy));
+                    if across > SEGMENT_SQUARE
+                        || (across > SEGMENT_NOISE && across >= run * SEGMENT_LEAN)
+                    {
+                        diagonal += 1;
+                    }
+                    if p.x - a.x > SEGMENT_NOISE {
+                        right += 1;
+                    } else if a.x - p.x > SEGMENT_NOISE {
+                        left += 1;
+                    }
+                }
+                at = Some(p);
+            }
+            kurbo::PathEl::QuadTo(_, p) | kurbo::PathEl::CurveTo(_, _, p) => at = Some(p),
+            kurbo::PathEl::ClosePath => {}
+        }
+    }
+    // A segment straight up or down runs neither way, and is onward.
+    let onward = segments - right.min(left);
+    (segments >= 3 && diagonal >= 2).then_some(rule::Trace {
+        bbox: drawn,
+        segments,
+        diagonal,
+        onward,
+        page,
+    })
+}
 
 /// The rules a path of several straight subpaths draws, one per subpath, when
 /// every subpath is a horizontal rule a figure wide; `None` for a path of one
@@ -2056,6 +2184,8 @@ pub fn extract_pdf_with(
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             ink: Vec::new(),
             letters: std::mem::take(&mut letters),
             largest_page,
@@ -2126,6 +2256,8 @@ pub fn extract_pdf_with(
             routing: None,
             fills: dev.fills,
             dots: dev.dots,
+            traces: dev.traces,
+            ticks: dev.ticks,
             width: w as f64,
             height: h as f64,
             rotation: 0,
@@ -2295,6 +2427,18 @@ pub(crate) fn turn_page(page: &mut Page, turn: i32) {
     for d in page.dots.iter_mut() {
         *d = rect(*d);
     }
+    for t in page.traces.iter_mut() {
+        t.bbox = rect(t.bbox);
+    }
+    for r in page.ticks.iter_mut() {
+        r.bbox = rect(r.bbox);
+        if turn != 180 {
+            r.orientation = match r.orientation {
+                rule::Orientation::Horizontal => rule::Orientation::Vertical,
+                rule::Orientation::Vertical => rule::Orientation::Horizontal,
+            };
+        }
+    }
     for i in page.images.iter_mut() {
         i.bbox = rect(i.bbox);
     }
@@ -2413,6 +2557,93 @@ pub fn extract_file(path: &std::path::Path) -> Result<Document, ExtractError> {
 mod tests {
     use super::*;
 
+    fn polyline(points: &[(f64, f64)]) -> kurbo::BezPath {
+        let mut p = kurbo::BezPath::new();
+        p.move_to(points[0]);
+        for &q in &points[1..] {
+            p.line_to(q);
+        }
+        p
+    }
+
+    fn drawn(p: &kurbo::BezPath) -> BBox {
+        crate::geom::from_kurbo(kurbo::Shape::bounding_box(p))
+    }
+
+    #[test]
+    fn a_series_line_is_a_trace() {
+        // A series plotted left to right, rising and falling.
+        let line = polyline(&[
+            (80.0, 220.0),
+            (96.0, 204.0),
+            (112.0, 211.0),
+            (128.0, 188.0),
+            (144.0, 196.0),
+        ]);
+        let t = trace_of(&line, drawn(&line), 0).expect("a trace");
+        assert_eq!((t.segments, t.diagonal, t.onward), (4, 4, 4));
+        // A series sampled densely steps under half a point per value, and
+        // its steps still lean.
+        let dense: Vec<(f64, f64)> = (0..60)
+            .map(|i| (100.0 + i as f64 * 0.4, 300.0 + [0.0, 1.5, 0.8, 2.6][i % 4]))
+            .collect();
+        let dense = polyline(&dense);
+        let t = trace_of(&dense, drawn(&dense), 0).expect("a dense trace");
+        assert_eq!((t.segments, t.diagonal, t.onward), (59, 59, 59));
+        // A series sloping gently leans more than a rule's rounding, however
+        // long its steps.
+        let gentle = polyline(&[
+            (346.0, 215.0),
+            (386.0, 213.5),
+            (426.0, 212.0),
+            (470.0, 213.0),
+        ]);
+        let t = trace_of(&gentle, drawn(&gentle), 0).expect("a gentle trace");
+        assert_eq!(t.diagonal, 3);
+        // A box's outline runs square: no trace.
+        let boxed = polyline(&[
+            (80.0, 100.0),
+            (180.0, 100.0),
+            (180.0, 160.0),
+            (80.0, 160.0),
+            (80.0, 100.0),
+        ]);
+        assert!(trace_of(&boxed, drawn(&boxed), 0).is_none());
+        // An outline turning back on itself has a trace's segments but runs
+        // both ways.
+        let outline = polyline(&[
+            (80.0, 100.0),
+            (120.0, 80.0),
+            (160.0, 100.0),
+            (120.0, 120.0),
+            (80.0, 100.0),
+        ]);
+        let t = trace_of(&outline, drawn(&outline), 0).expect("diagonal segments");
+        assert!(t.onward < t.segments);
+    }
+
+    #[test]
+    fn ticks_drawn_as_one_path_are_marks() {
+        // Four ticks down a scale, each its own short stroke.
+        let mut ticks = kurbo::BezPath::new();
+        for k in 0..4 {
+            let y = 140.0 + 15.0 * k as f64;
+            ticks.move_to((70.0, y));
+            ticks.line_to((76.0, y));
+        }
+        let marks = marks_of(&ticks, 0);
+        assert_eq!(marks.len(), 4);
+        assert!(marks
+            .iter()
+            .all(|m| m.orientation == rule::Orientation::Horizontal));
+        // A path whose parts run on through several segments is no set of
+        // ticks.
+        let mut zigzag = polyline(&[(70.0, 140.0), (76.0, 146.0), (82.0, 140.0)]);
+        zigzag.move_to((70.0, 160.0));
+        zigzag.line_to((76.0, 160.0));
+        assert!(marks_of(&zigzag, 0).is_empty());
+    }
+
     #[test]
     fn a_type3_glyph_is_as_wide_as_the_pen_moves_to_any_next_glyph() {
         // `oﬃce`: the ﬃ is Type3 (no box), the letters around it are not.
@@ -2466,6 +2697,8 @@ mod tests {
             routing: None,
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             width: 600.0,
             height: 800.0,
             rotation: 0,
@@ -2752,6 +2985,8 @@ mod actual_text_tests {
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -2805,6 +3040,8 @@ mod actual_text_tests {
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -2888,6 +3125,8 @@ mod actual_text_tests {
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -3249,6 +3488,8 @@ mod budget_tests {
             rect_clips: Vec::new(),
             painted: Vec::new(),
             dots: Vec::new(),
+            traces: Vec::new(),
+            ticks: Vec::new(),
             cased: Vec::new(),
             faces: Default::default(),
             weights: Default::default(),
