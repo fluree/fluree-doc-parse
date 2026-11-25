@@ -390,21 +390,31 @@ pub(crate) fn apply_tiers(
         return;
     };
     let vlm = fluree_doc_pdf::arbiter::FixtureBackend::new(dir.to_path_buf());
+    let structure = structure_backend(structure_results);
     splice(
         emit_anchors,
         elements,
         stem,
         &vlm,
-        structure_results,
+        structure.as_ref().map(|s| s as _),
         pages,
         furniture,
     );
 }
 
+/// The structure readings in `structure_results`, for the three-way veto.
+/// One per run of a document, so the crops chosen and the splice read each
+/// file once between them.
+pub(crate) fn structure_backend(
+    structure_results: Option<&Path>,
+) -> Option<fluree_doc_pdf::arbiter::FixtureBackend> {
+    structure_results.map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()))
+}
+
 /// Splice readings into the element stream, from sidecars or from a reader
 /// called in this run.
 ///
-/// `structure_results` is read for the three-way veto whichever produced
+/// `structure` is read for the three-way veto whichever produced
 /// `readings`: a table reading is as likely to be wrong from a model called
 /// here as from a sidecar, and the structure reading is what overrules it.
 ///
@@ -416,15 +426,10 @@ pub(crate) fn splice(
     elements: &mut Vec<fluree_doc_pdf::document::Element>,
     stem: &str,
     readings: &dyn fluree_doc_pdf::arbiter::TierBackend,
-    structure_results: Option<&Path>,
+    structure: Option<&dyn fluree_doc_pdf::arbiter::TierBackend>,
     pages: &[Vec<String>],
     furniture: &[(String, bool)],
 ) {
-    let structure =
-        structure_results.map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()));
-    let structure = structure
-        .as_ref()
-        .map(|s| s as &dyn fluree_doc_pdf::arbiter::TierBackend);
     if emit_anchors {
         fluree_doc_pdf::arbiter::splice_leaving_unanswered(
             elements, stem, readings, structure, pages,

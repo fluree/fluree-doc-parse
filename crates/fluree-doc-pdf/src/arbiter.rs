@@ -58,18 +58,24 @@ pub trait TierBackend {
 
 /// Readings from a directory of `{stem}_{crop}.json` files in the cache
 /// format produced by the batch runners.
+///
+/// Each file is read and parsed once: a structure reading is asked for when
+/// the crops are chosen, to leave out the tables it vetoes, and again when
+/// the splice applies the veto.
 pub struct FixtureBackend {
     dir: PathBuf,
+    parsed: std::sync::Mutex<std::collections::HashMap<String, Option<Vec<Block>>>>,
 }
 
 impl FixtureBackend {
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            parsed: Default::default(),
+        }
     }
-}
 
-impl TierBackend for FixtureBackend {
-    fn read(&self, stem: &str, crop: &str) -> Option<Vec<Block>> {
+    fn parse(&self, stem: &str, crop: &str) -> Option<Vec<Block>> {
         let txt = std::fs::read_to_string(self.dir.join(format!("{stem}_{crop}.json"))).ok()?;
         let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
         let mut out = Vec::new();
@@ -98,6 +104,17 @@ impl TierBackend for FixtureBackend {
             }
         }
         Some(out)
+    }
+}
+
+impl TierBackend for FixtureBackend {
+    fn read(&self, stem: &str, crop: &str) -> Option<Vec<Block>> {
+        let key = format!("{stem}_{crop}");
+        let mut parsed = self.parsed.lock().unwrap_or_else(|e| e.into_inner());
+        parsed
+            .entry(key)
+            .or_insert_with(|| self.parse(stem, crop))
+            .clone()
     }
 }
 

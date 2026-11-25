@@ -705,14 +705,13 @@ fn read_in_run(
     let hints = crate::escalate::jobs::hints(extracted, stem, cfg);
     // A table the structure readings veto keeps its grid whatever the model
     // reads, so reading it would be paid for and thrown away, and take the
-    // place of a crop under `escalation.max_crops`.
-    let (jobs, reasons) = crate::escalate::jobs::at_anchors(
-        extracted,
-        a,
-        stem,
-        &hints,
-        cfg.structure_results.as_deref(),
-    );
+    // place of a crop under `escalation.max_crops`. One backend for the
+    // choice and the splice, which read the same structure files.
+    let structure = common::structure_backend(cfg.structure_results.as_deref());
+    let structure = structure
+        .as_ref()
+        .map(|s| s as &dyn fluree_doc_pdf::arbiter::TierBackend);
+    let (jobs, reasons) = crate::escalate::jobs::at_anchors(extracted, a, stem, &hints, structure);
     let jobs = crate::escalate::to_read(
         std::path::Path::new(stem),
         jobs,
@@ -726,7 +725,7 @@ fn read_in_run(
         &mut a.elements,
         stem,
         &readings,
-        cfg.structure_results.as_deref(),
+        structure,
         page_text,
         &a.furniture,
     );
@@ -1140,7 +1139,7 @@ mod tests {
         let extracted = page_with_faux_bold_over_a_region();
         let mut doc = extracted.clone();
         let mut a = fluree_doc_pdf::document::analyze_with(&mut doc, &[], &cfg.options_for("doc"));
-        let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg);
+        let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg).0;
         let mut read = 0;
         read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
             read = fluree_doc_pdf::escalate::crop_count(&jobs);
@@ -1318,7 +1317,7 @@ mod tests {
                 fluree_doc_pdf::document::column_doubt(&extracted.pages[0], &a).is_some(),
                 "the page is in column doubt"
             );
-            let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg);
+            let priced = crate::commands::triage::priced(&extracted, &a, "doc", &cfg).0;
             let mut read = 0;
             read_in_run(&mut a, &extracted, &cfg, "doc", &[], None, |jobs, _| {
                 read = fluree_doc_pdf::escalate::crop_count(&jobs);
@@ -1522,7 +1521,7 @@ mod tests {
                 &cfg.options_for("doc"),
             );
             a.elements = an_anchored_grid();
-            crate::commands::triage::priced(&extracted, &a, "doc", &cfg)
+            crate::commands::triage::priced(&extracted, &a, "doc", &cfg).0
         };
         assert_eq!(priced(None), 1);
         assert_eq!(priced(Some(structure.0.clone())), 0);
@@ -1567,12 +1566,13 @@ mod tests {
             "written for the structure reader"
         );
         assert_eq!(vetoed, ["p0_t0"]);
+        let structure = common::structure_backend(cfg.structure_results.as_deref());
         let (sent, _) = crate::escalate::jobs::at_anchors(
             &extracted,
             &a,
             "doc",
             &hints,
-            cfg.structure_results.as_deref(),
+            structure.as_ref().map(|s| s as _),
         );
         let left: Vec<String> = names(&written)
             .into_iter()
@@ -1580,7 +1580,7 @@ mod tests {
             .collect();
         assert_eq!(left, names(&sent));
         assert_eq!(
-            crate::commands::triage::priced(&extracted, &a, "doc", &cfg),
+            crate::commands::triage::priced(&extracted, &a, "doc", &cfg).0,
             left.len()
         );
         let (written, _, vetoed) = render(None);

@@ -17,6 +17,7 @@
 
 use crate::commands::common::TierConfig;
 use crate::commands::dev::layout_tables;
+use fluree_doc_pdf::arbiter::TierBackend;
 use fluree_doc_pdf::document::Analysis;
 use fluree_doc_pdf::escalate::{CropHints, CropJobs, PageReasons};
 use fluree_doc_pdf::Document;
@@ -26,7 +27,7 @@ use std::path::Path;
 /// The crops `analysis` asks a reader for, as `convert --escalate` sends
 /// them and `triage` counts them: its anchors
 /// ([`fluree_doc_pdf::escalate::crops_at_anchors`]), less the tables the
-/// structure readings in `structure_results` veto, whose readings the
+/// structure readings in `structure` veto, whose readings the
 /// splice would throw away, with the reason each whole page among them was
 /// asked for, by which `escalation.max_crops` ranks it. `extracted` is the
 /// document before the analysis changed it.
@@ -35,13 +36,12 @@ pub(crate) fn at_anchors(
     analysis: &Analysis,
     stem: &str,
     hints: &CropHints,
-    structure_results: Option<&Path>,
+    structure: Option<&dyn TierBackend>,
 ) -> (CropJobs, PageReasons) {
     let (mut jobs, reasons) =
         fluree_doc_pdf::escalate::crops_at_anchors_explained(extracted, analysis, hints);
-    if let Some(dir) = structure_results {
-        let structure = fluree_doc_pdf::arbiter::FixtureBackend::new(dir.to_path_buf());
-        fluree_doc_pdf::escalate::without_vetoed(&mut jobs, &analysis.elements, stem, &structure);
+    if let Some(structure) = structure {
+        fluree_doc_pdf::escalate::without_vetoed(&mut jobs, &analysis.elements, stem, structure);
     }
     (jobs, reasons)
 }
@@ -143,21 +143,14 @@ pub(crate) fn column_advice(tiers: &TierConfig) -> Option<String> {
     })
 }
 
-/// How many pages of `extracted` are read whole for their column doubt, as
-/// [`fluree_doc_pdf::escalate::crops_at_anchors`] chooses them when
-/// `on_column_doubt`.
-pub(crate) fn whole_for_columns(
-    extracted: &Document,
-    analysis: &Analysis,
-    on_column_doubt: bool,
-) -> usize {
-    if !on_column_doubt {
-        return 0;
-    }
-    extracted
-        .pages
-        .iter()
-        .filter(|p| fluree_doc_pdf::document::column_doubt(p, analysis).is_some())
+/// How many whole pages of a selection were chosen for their column doubt
+/// alone, by the `reasons` the selection gave them. A page a scan, a
+/// heading or a figure doubt already asked for is read whole whatever the
+/// configuration says about columns, so it is not counted.
+pub(crate) fn whole_for_columns(reasons: &PageReasons) -> usize {
+    reasons
+        .values()
+        .filter(|r| **r == fluree_doc_pdf::escalate::CropReason::ColumnDoubt)
         .count()
 }
 
@@ -233,6 +226,21 @@ mod tests {
             assert_eq!(advice(configured, Some(true)), None);
         }
         assert_eq!(advice(true, None), None);
+    }
+
+    /// A page read whole for a scan or a heading doubt is read whole with
+    /// column doubt off too: the note counts only the pages column doubt
+    /// alone asked for.
+    #[test]
+    fn only_pages_read_for_their_columns_alone_are_counted() {
+        use fluree_doc_pdf::escalate::CropReason;
+        let reasons = PageReasons::from([
+            (0, CropReason::Scanned),
+            (1, CropReason::HeadingDoubt),
+            (2, CropReason::ColumnDoubt),
+            (3, CropReason::Region),
+        ]);
+        assert_eq!(whole_for_columns(&reasons), 1);
     }
 
     #[test]

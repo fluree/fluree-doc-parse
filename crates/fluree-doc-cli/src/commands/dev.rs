@@ -1188,8 +1188,7 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
             &hints,
             tiers.structure_results.as_deref(),
         );
-        n_columns +=
-            crate::escalate::jobs::whole_for_columns(&doc, &analysis, hints.on_column_doubt);
+        n_columns += crate::escalate::jobs::whole_for_columns(&reasons);
         if jobs.is_empty() {
             continue;
         }

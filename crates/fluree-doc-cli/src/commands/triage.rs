@@ -6,25 +6,25 @@ use std::path::{Path, PathBuf};
 
 /// How many crops `convert --escalate` would pay for: the crop set
 /// `render-routed` takes, the anchors of `analysis`, which comes with anchors
-/// on, less the tables the structure readings veto. `extracted` is the
-/// document before the analysis changed it.
+/// on, less the tables the structure readings veto; with the reason each
+/// whole page among them was chosen for. `extracted` is the document before
+/// the analysis changed it.
 pub(crate) fn priced(
     extracted: &fluree_doc_pdf::Document,
     analysis: &fluree_doc_pdf::document::Analysis,
     stem: &str,
     tiers: &crate::commands::common::TierConfig,
-) -> usize {
+) -> (usize, fluree_doc_pdf::escalate::PageReasons) {
     let hints = crate::escalate::jobs::hints(extracted, stem, tiers);
-    fluree_doc_pdf::escalate::crop_count(
-        &crate::escalate::jobs::at_anchors(
-            extracted,
-            analysis,
-            stem,
-            &hints,
-            tiers.structure_results.as_deref(),
-        )
-        .0,
-    )
+    let structure = crate::commands::common::structure_backend(tiers.structure_results.as_deref());
+    let (jobs, reasons) = crate::escalate::jobs::at_anchors(
+        extracted,
+        analysis,
+        stem,
+        &hints,
+        structure.as_ref().map(|s| s as _),
+    );
+    (fluree_doc_pdf::escalate::crop_count(&jobs), reasons)
 }
 
 /// Routing decisions with the signals behind them, one line per routed page,
@@ -138,7 +138,10 @@ pub fn run(path: &Path) -> i32 {
                 let a = fluree_doc_pdf::document::analyze_with(&mut d, &ol, &ropts);
                 doubt = a.suspect_headings.clone();
                 figure_doubt = a.suspect_figures.clone();
-                column_doubts = d
+                // From the document as extracted, as the crops are chosen,
+                // so each COLUMN page is one `CROPS` counts when column
+                // doubt escalates.
+                column_doubts = extracted
                     .pages
                     .iter()
                     .filter_map(|p| {
@@ -146,12 +149,9 @@ pub fn run(path: &Path) -> i32 {
                     })
                     .collect();
                 let stem = crate::commands::common::stem_of(f);
-                crops = priced(&extracted, &a, stem, &tiers);
-                whole_for_columns += crate::escalate::jobs::whole_for_columns(
-                    &extracted,
-                    &a,
-                    crate::escalate::jobs::escalates_columns(&tiers),
-                );
+                let (n, reasons) = priced(&extracted, &a, stem, &tiers);
+                crops = n;
+                whole_for_columns += crate::escalate::jobs::whole_for_columns(&reasons);
                 tables_total += a.tables;
                 tables_suspect += a.suspect_tables.len();
                 for s in &a.suspect_tables {
