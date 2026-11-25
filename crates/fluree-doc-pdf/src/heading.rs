@@ -107,9 +107,9 @@ pub struct Heading {
     pub text: String,
     pub level: usize,
     pub evidence: Evidence,
-    /// Set like a heading, but a form's or a field's text, or a line that
-    /// runs on into the next: `(a) (b)`, `Yes No`, `b Refunded 37b`, a label
-    /// over its value. Kept a heading until runs of bold heads have been
+    /// Set like a heading, but a form's, a field's or a chart's text, or a
+    /// line that runs on into the next: `(a) (b)`, `Yes No`, `b Refunded
+    /// 37b`, a label over its value, an axis's title. Kept a heading until runs of bold heads have been
     /// judged, as they were before these were told apart, and read as text
     /// after: dropping one from a run would leave its neighbours standing.
     pub form_text: bool,
@@ -1294,11 +1294,17 @@ fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) ->
         })
 }
 
-/// A form's text set like a heading: its grid's keys and answer heads, a
-/// line's caption, a footer that refers elsewhere, a label over its value.
+/// A form's or a chart's text set like a heading: a grid's keys and answer
+/// heads, a line's caption, a footer that refers elsewhere, a label over
+/// its value; an axis's title, set up its side or under its scale.
 fn form_text(text: &str, page: &[Block], i: usize) -> bool {
     let t = text.trim();
-    keys_or_answers(t) || refers_elsewhere(t) || line_caption(t) || label_over_value(page, i)
+    keys_or_answers(t)
+        || refers_elsewhere(t)
+        || line_caption(t)
+        || label_over_value(page, i)
+        || turned(page, &page[i])
+        || under_a_scale(page, i)
 }
 
 /// Answers a form offers to tick: the heads of its answer columns.
@@ -1500,6 +1506,74 @@ fn value_under_label(page: &[Block], i: usize) -> bool {
         below = above;
     }
     false
+}
+
+/// The block runs at an angle to the page's text: an axis's title set up
+/// its side (`Concentration of PFHpS, in ng/L`, `Recovery, in percent`), a
+/// tab or a mark in the margin. A page set on its side as a whole turns
+/// its headings with its text, and they stay. Level text is never turned:
+/// where a table is read, what it leaves may be mostly its turned column
+/// labels.
+fn turned(page: &[Block], b: &Block) -> bool {
+    let mut by_angle: HashMap<i32, usize> = HashMap::new();
+    for l in page.iter().flat_map(|o| &o.lines) {
+        *by_angle.entry(l.rotation_bucket).or_default() += 1;
+    }
+    let text = by_angle
+        .into_iter()
+        .max_by_key(|(angle, n)| (*n, *angle == 0))
+        .map_or(0, |(angle, _)| angle);
+    b.lines
+        .iter()
+        .any(|l| l.rotation_bucket != 0 && l.rotation_bucket != text)
+}
+
+/// Fewest values on a row for the row to be a chart's scale.
+const MIN_SCALE_TICKS: usize = 3;
+
+/// A tick's value: a figure with its signs and separators, `1,000`,
+/// `0.25`, `−30`, `10⁻¹`, `50%`.
+fn tick_value(t: &str) -> bool {
+    let t = t.trim();
+    t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || matches!(c, '.' | ',' | '%' | '-' | '−' | '+' | '×' | ' ')
+                || ('\u{2070}'..='\u{209F}').contains(&c)
+                || matches!(c, '¹' | '²' | '³')
+        })
+}
+
+/// An axis's title under its scale: the block is set directly under a row
+/// of [`MIN_SCALE_TICKS`] or more bare values that spans it (`I
+/// OutputCurrentA` under `1 1.5 2 2.5 3 3.5`, `Expected concentration, in
+/// ng/L` under `1 10 100 1,000`). A chart drawn as vectors keeps its labels
+/// among the page's text, out of any figure region.
+fn under_a_scale(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    let ticks: Vec<&Block> = page
+        .iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i
+                && o.lines.len() == 1
+                && tick_value(&o.text())
+                && o.bbox.y1 <= b.bbox.y0 + fs * 0.3
+                && b.bbox.y0 - o.bbox.y1 <= fs * BELOW_GAP
+        })
+        .map(|(_, o)| o)
+        .collect();
+    // The ticks set on one row, together reaching across the block.
+    ticks.iter().any(|t| {
+        let row: Vec<&&Block> = ticks
+            .iter()
+            .filter(|o| (o.bbox.y0 - t.bbox.y0).abs() <= fs * 0.3)
+            .collect();
+        let x0 = row.iter().map(|o| o.bbox.x0).fold(f64::MAX, f64::min);
+        let x1 = row.iter().map(|o| o.bbox.x1).fold(f64::MIN, f64::max);
+        row.len() >= MIN_SCALE_TICKS && x0 <= b.bbox.x1 && x1 >= b.bbox.x0
+    })
 }
 
 /// Widest gap, in ems, between a label and its value on the next line.
@@ -2278,6 +2352,61 @@ mod tests {
         // form's text.
         let hs = detect(&[page], &[]);
         assert!(!hs.is_empty() && hs.iter().all(|h| h.form_text), "{hs:?}");
+    }
+
+    #[test]
+    fn a_charts_axis_titles_are_no_headings() {
+        let placed = |t: &str, x0: f64, x1: f64, y: f64, bold: bool| {
+            let mut b = at(t, 8.0, y, bold);
+            b.bbox.x0 = x0;
+            b.bbox.x1 = x1;
+            b
+        };
+        // An x-axis title under its scale's values.
+        let mut page: Vec<Block> = ["0", "0.5", "1", "1.5", "2"]
+            .iter()
+            .enumerate()
+            .map(|(k, t)| {
+                placed(
+                    t,
+                    100.0 + 40.0 * k as f64,
+                    106.0 + 40.0 * k as f64,
+                    300.0,
+                    false,
+                )
+            })
+            .collect();
+        page.push(placed("I - Output Current - A", 140.0, 230.0, 310.0, true));
+        assert!(under_a_scale(&page, 5));
+        // A heading over a paragraph that opens on figures is no axis's.
+        let page = vec![
+            placed("12 14 18", 100.0, 130.0, 300.0, false),
+            placed("Results", 100.0, 140.0, 310.0, true),
+        ];
+        assert!(!under_a_scale(&page, 1));
+        // A y-axis title set up the plot's side; the page's text runs across.
+        let mut side = placed("Recovery, in percent", 40.0, 48.0, 100.0, true);
+        side.lines[0].rotation_bucket = 90;
+        let page = vec![side, body(), body()];
+        assert!(turned(&page, &page[0]));
+        // On a page turned as a whole, its headings turn with its text.
+        let mut landscape = vec![blk("Summary", 10.0, 1), body(), body()];
+        for b in &mut landscape {
+            for l in &mut b.lines {
+                l.rotation_bucket = 90;
+            }
+        }
+        assert!(!turned(&landscape, &landscape[0]));
+        // Level text beside more turned labels than level lines.
+        let mut labels: Vec<Block> = (0..4)
+            .map(|k| {
+                let mut b = placed("SFF Carriers", 40.0, 48.0, 100.0 + 20.0 * k as f64, false);
+                b.lines[0].rotation_bucket = 90;
+                b
+            })
+            .collect();
+        labels.push(blk("HDD SKU Description Decoder", 14.0, 1));
+        assert!(!turned(&labels, &labels[4]));
     }
 
     #[test]

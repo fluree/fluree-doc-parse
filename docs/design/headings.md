@@ -65,6 +65,13 @@ Weight and size never make a heading of these:
   Notice, see your tax return instructions.`, a form's footer. A title
   that mentions the instructions keeps it in brackets, `Other Information
   (see instructions)`, and stays.
+- **A chart's axis title:** a line set at an angle to the page's text, up a
+  plot's side (`Concentration of PFHpS, in ng/L`), or set directly under a
+  row of three or more bare values that reaches across it, its scale (`I -
+  Output Current - A` under `0 0.5 1 1.5 2`). A chart drawn as vectors
+  keeps its labels among the page's text when no figure region takes them.
+  On a page turned as a whole, the headings turn with the text and stay.
+  A legend's entries and a curve's labels are the figure's to take.
 - **A signature block's party:** a role or a name with a line to sign on
   just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
   `(Signature)`), and a signature page's label (`Signature Page to Voting

@@ -186,6 +186,7 @@ NUMBER`) or of the label over it, of a form's label waiting for its value (`Loca
 #:`), of a form's column keys and answer heads (`(a) (b)`, `Yes No`), of a
 line's caption between its letter and number (`b Refunded 37b`), of a
 sentence that refers elsewhere (`…, see your tax return instructions.`), of
+a chart's axis title set up its side or under its scale's values, of
 a signature block's role and party (`INVESTOR:` over the party's name over
 `By:`) or a signature page's label, or of a letterhead's lines over the
 sender's address and numbers. No heading stops on `and`, `of`, `the` or
