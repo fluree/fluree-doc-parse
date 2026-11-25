@@ -6,7 +6,8 @@
     "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Its field angle sets the degree sign as a small raised letter o after the number."
   },
   "notes": [
-    "2026-11-25 (#200): the coefficients of utilization are headed by the ceiling's and the walls' reflectances, `RC %: | 80` over `RW %: | 70 | 50 | 30 | 10`, over rows keyed by the room cavity ratio. Read as data, no value was named by the reflectances it is for."
+    "2026-11-25 (#200): the coefficients of utilization are headed by the ceiling's and the walls' reflectances, `RC %: | 80` over `RW %: | 70 | 50 | 30 | 10`, over rows keyed by the room cavity ratio. Read as data, no value was named by the reflectances it is for.",
+    "2026-11-25 (#270): the average-luminance table's title band runs over every column but the narrow one `Vertical Angle` is turned in, whose rule runs up through the band. Read as no band across the table, the title was every value's column header."
   ],
   "checks": [
     {
@@ -28,6 +29,12 @@
         "column": "80 / 50",
         "row": "1"
       }
+    },
+    {
+      "id": "luminance-title-not-a-header",
+      "found": "2026-11-25",
+      "issue": "#270: the average-luminance title band named every column.",
+      "no_column_header": "Average Luminance Table"
     }
   ]
 }
