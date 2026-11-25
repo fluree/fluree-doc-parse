@@ -717,6 +717,10 @@ fn pick_entry(entries: &[&OutlineItem], b: &Block) -> Option<usize> {
 }
 
 /// Detect headings across a document.
+/// Smallest size, against the body's, of a numbered line read as a section
+/// heading. Notes and footnotes are numbered too, and set smaller.
+const NUMBERED_NOTE_RATIO: f64 = 0.85;
+
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
     detect_with_body(pages, outline, body_font_size(pages))
 }
@@ -1020,6 +1024,20 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             // 3. Numbering states its own depth — unless the block is a
             // list's item, whose number counts off from the item before it.
             if let Some(depth) = numbering_depth(&text).filter(|_| !initial(&text)) {
+                // Set below the body's size, a numbered line is a note: a
+                // data sheet's `1) Feature only available with …` at 5pt
+                // under 7pt text, or a table's `(1)` notes. Unless set in
+                // capitals, as an agreement sets its sections in small
+                // capitals over its clauses (`6. AFFIRMATIVE COVENANTS.` at
+                // 8pt over 10pt text); a note is set in the text's case.
+                let capitals = text.chars().any(char::is_alphabetic)
+                    && text
+                        .chars()
+                        .filter(|c| c.is_alphabetic())
+                        .all(char::is_uppercase);
+                if (b.font_size as f64) < body as f64 * NUMBERED_NOTE_RATIO && !capitals {
+                    continue;
+                }
                 if b.marker.is_some()
                     || !bare_numbering_is_corroborated(&text, b, body)
                     || coded(&text)
@@ -1602,6 +1620,23 @@ mod tests {
         assert!(!division_label("Chapter 3 Numerical differentiation"));
         assert!(!division_label("Scalable. Responsive."));
         assert!(!division_label("Section"));
+    }
+
+    #[test]
+    fn a_numbered_note_set_small_is_no_heading() {
+        let page = vec![
+            blk("1. Scope", 10.0, 1),
+            body(),
+            body(),
+            body(),
+            blk("1) Feature only available with the larger model", 7.0, 1),
+            // A section set in small capitals under the text's size.
+            blk("2. AFFIRMATIVE COVENANTS.", 8.0, 1),
+            body(),
+        ];
+        let hs = detect(&[page], &[]);
+        let texts: Vec<&str> = hs.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(texts, ["1. Scope", "2. AFFIRMATIVE COVENANTS."], "{hs:?}");
     }
 
     #[test]

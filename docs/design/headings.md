@@ -169,6 +169,15 @@ text, which block assembly gathers into items before headings are read (see
 [Numbered lists](../inputs/pdf.md)). Such an item is never a heading on any
 evidence but the outline's.
 
+A numbered line set below the body's size, under 0.85 of it, is a note:
+a data sheet's `1) Feature only available with …` at 5pt under 7pt text, a
+reference list set small, a chart's numbered title, a table's `(1)` notes.
+Read as a numbered heading, such a footnote opened a level-1 section that
+the rest of the document fell into. Lines set in capitals are the exception.
+An agreement sets its sections in small capitals over clauses at the body's
+size (`6. AFFIRMATIVE COVENANTS.` at 8pt over 10pt text), and a note is set
+in the text's case.
+
 Two label shapes look like numbering and are words:
 
 - **A number hyphenated into a word**: `3-Way Wiring`, `2-Pole`, a
