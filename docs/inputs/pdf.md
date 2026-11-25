@@ -298,6 +298,15 @@ title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
 
+**A callout beside a line.** Text set beside a paragraph's line at the same
+size, on a baseline a little off the line's, is a line of its own: a line is
+read along its row, and where the next glyph read would put the pen back more
+than an em behind the line's end, a new line starts. A flyer's bold callout,
+`GreenCool Technology`, 0.3 of its size higher than the body line to its
+left, was read first and the body line after it, unspaced
+(`GreenCool TechnologyThe refrigerated models…`), and the paragraph was cut
+there.
+
 **Side heads.** Some data sheets set each section's heading in a narrow strip
 at the left, level with the first line of its text in the wide column beside
 it. Such a strip is read with that column, each head just before the text it

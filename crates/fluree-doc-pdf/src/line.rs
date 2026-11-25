@@ -525,6 +525,19 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                 cmp(adv.at(oa), adv.at(ob))
             });
         }
+        // Each glyph's cluster, and each cluster's reach along the line.
+        let mut cluster_of: std::collections::HashMap<usize, usize> = Default::default();
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        for (ci, c) in clusters.iter().enumerate() {
+            let mut span = (f64::MAX, f64::MIN);
+            for &j in c {
+                cluster_of.insert(j, ci);
+                if let Some(b) = glyphs[j].bbox {
+                    span = (span.0.min(adv.start(&b)), span.1.max(adv.end(&b)));
+                }
+            }
+            spans.push(span);
+        }
         let idxs: Vec<usize> = clusters.into_iter().flatten().collect();
 
         let mut cur: Vec<usize> = Vec::new();
@@ -580,12 +593,29 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
                     };
                     big >= small * DISPLAY_RATIO && gap > small * BLOCK_GAP_RATIO
                 });
+            // A run read after the line it is set behind: a cluster of glyphs
+            // on a baseline near this one that lies wholly before where the
+            // line began, as a paragraph's line lies left of a callout set
+            // beside it. Read on into it, the row came out backwards:
+            // `GreenCool Technology` set right of a body line, 0.3 of its
+            // size higher, read `GreenCool TechnologyThe refrigerated…`.
+            // A cluster that reaches into the line, a column's text beside
+            // another's, is left to the gutters to part.
+            let begun = cur
+                .iter()
+                .filter_map(|&j| glyphs[j].bbox.map(|b| adv.start(&b)))
+                .fold(f64::MAX, f64::min);
+            let back = cluster_of.get(&i) != cluster_of.get(&prev)
+                && cluster_of.get(&i).is_some_and(|&c| {
+                    spans[c].1 <= begun + glyphs[i].font_size.max(1.0) as f64 * 0.2
+                });
             // A drop cap heads the line it was put in, its baseline lines
             // below.
-            if (caps.contains(&prev)
-                || joins_line(&glyphs[prev], &glyphs[i], vertical, adv)
-                || joins_line(&glyphs[inked], &glyphs[i], vertical, adv)
-                || joins_line(&glyphs[marked], &glyphs[i], vertical, adv))
+            if !back
+                && (caps.contains(&prev)
+                    || joins_line(&glyphs[prev], &glyphs[i], vertical, adv)
+                    || joins_line(&glyphs[inked], &glyphs[i], vertical, adv)
+                    || joins_line(&glyphs[marked], &glyphs[i], vertical, adv))
                 && !block_gap(&glyphs[prev], &glyphs[i], adv)
                 && !display_gap
             {
@@ -3135,6 +3165,45 @@ mod tests {
         });
         s.advance = Some(3.5);
         s
+    }
+
+    #[test]
+    fn a_callout_beside_a_line_on_a_near_baseline_stays_its_own_line() {
+        // A body line, its raised `™`, and a callout set right of it at the
+        // same size, its baseline 0.29 of the size higher: read on from the
+        // callout, the body line came after it, unspaced.
+        let run = |text: &str, x: f64, base: f64, size: f32| -> Vec<Glyph> {
+            let w = size as f64 * 0.5;
+            text.chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    let cx = x + w * i as f64;
+                    let mut l = g(&c.to_string(), cx, base - size as f64, w - 0.5, 0.0);
+                    l.bbox = l.bbox.map(|b| BBox { y1: base, ..b });
+                    l.origin = (cx, base);
+                    l.font_size = size;
+                    l.advance = Some(w);
+                    if c == ' ' {
+                        l.bbox = None;
+                    }
+                    l
+                })
+                .collect()
+        };
+        let mut v = run("The refrigerated models feature", 36.0, 400.49, 9.0);
+        v.extend(run("™", 175.5, 397.0, 5.0));
+        v.extend(run("GreenCool Technology", 322.0, 397.91, 9.0));
+        let lines: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert!(
+            lines.contains(&"GreenCool Technology".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("The refrigerated models feature")),
+            "{lines:?}"
+        );
     }
 
     #[test]
