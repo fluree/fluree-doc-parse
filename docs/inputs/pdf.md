@@ -176,7 +176,10 @@ connect the black fixture lead to the` over `voltage supply …`) hangs its
 wrapped lines the same way where its sentence plainly goes on: the next
 line opens in lower case, or the item ran out of room. A line that opens
 with a dash, or follows an item ending on a colon, starts a list of its own
-under the item.
+under the item. A sentence an item broke onto a new line by hand, set at
+its hanging indent at the item's size and leading, goes on with the item
+when the list goes on after it: only the paragraph after a list's last
+item is the page's.
 
 **Bold or large, but no heading.** Size and weight do not make a heading
 of a field (`CRI: 90+` at the body's size, or a label with its value
@@ -214,7 +217,9 @@ or squares and leave no bullet in the text. A filled mark under a checkbox's
 size, set just left of a line and level with it, opens a list item, as long
 as another such mark at the same place opens another line. A list draws a
 bullet for each item, in a column. A seal's ring of dots or a chart's
-scatter is level with a line of text only by chance.
+scatter is level with a line of text only by chance. A list of one item
+draws one bullet, and it marks its line when it is drawn like the page's
+other bullets: their size, as far from its text as theirs.
 The item's marker is `•`. Each item starts where its bullet is, however
 closely the items are spaced.
 
@@ -336,9 +341,11 @@ it agrees with (`22nd`, `118th`, `21e`).
 A degree sign set as a raised `o` or `0` reads as `°` wherever it cannot be
 an ordinal's ending or a power: before a temperature's unit (`25°C`, not
 `25oC`), after three figures or more (`~ 145°`, not `~ 145 o`), after a
-decimal, after a signed number, or after an approximation's sign or a
-bracket's opening, where no ordinal stands (`~ 95°`, `Gloss (45°)`). `1º`
-and `2º` stay ordinals and `10⁰` a power.
+decimal, after a signed number, or after an approximation's sign, where no
+ordinal stands (`~ 95°`). After a bracket's opening only a raised letter `o`
+does (`Gloss (45°)`): the ordinal sign `º` is how Spanish and Portuguese set
+a bracketed ordinal, and `(2º)` stays one. `1º` and `2º` stay ordinals and
+`10⁰` a power.
 
 **Mixed numbers.** A spec sheet sets `22 3/8"` with no space before the
 fraction. The fraction is set small, in a smaller size or in the font's own
@@ -573,6 +580,24 @@ and all it holds is labels: fifteen words or fewer each, and no display
 type. A slide's background holds its title, and a plot's own background is
 filled by its bars, with the axes' names and the legend outside it; neither
 is a frame.
+
+**Between two drawings.** A title set under one drawing and over another,
+across both, goes to the one it stands nearer. Distance is measured to each
+drawing and the labels only it took. If both are equally near, the title
+goes to the lower, since a title stands over what it names. A diagram's
+title set under the diagram above therefore heads the next. Where the lower
+drawing is framed, the title is the page's, as any title over a frame that
+is no caption is.
+
+This applies only to display titles: text set larger than the prose, in
+words, and no caption. A panel's axis name and ticks stay with the panel
+above, however close the next panel's labels stand, and a paper's figure
+caption stays with the figure over it.
+
+**A list between a label and its drawing.** A list's items are never a
+drawing's labels, so a label's reach must not pass over them. A section
+head over its bulleted items, with the drawing below the items, is the
+page's head, not the drawing's title.
 
 **A picture with labels set on it is a figure.** A product's cutaway placed
 as an image draws no shapes, and the names of its layers set over it

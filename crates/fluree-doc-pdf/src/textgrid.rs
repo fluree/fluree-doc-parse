@@ -2127,6 +2127,53 @@ pub fn unruled_grids(
         .collect()
 }
 
+/// A reading that puts in one cell figures the seed's ruling sets in
+/// different columns: figures on both sides of one of the ruled grid's
+/// column edges, no glyph across it (`$ 4,137 $ 3,610 $ 3,547` under one
+/// year, where the rules are drawn a column at a time). Its text read so is
+/// no table; left as text, it says nothing wrong. A figure's glyphs set
+/// across an edge say the edge is no column's.
+pub fn merges_drawn_columns(g: &Grid, edges: &[f64], within: &BBox, glyphs: &[Glyph]) -> bool {
+    let Some(lay) = g.layout.as_deref() else {
+        return false;
+    };
+    lay.cells.iter().any(|cell| {
+        // The cell's glyphs among the stack's rows: its edges say nothing of
+        // a table above or below it read with it.
+        let inked: Vec<(&Glyph, BBox)> = cell
+            .iter()
+            .filter_map(|&i| glyphs.get(i))
+            .filter_map(|gl| gl.bbox.map(|b| (gl, b)))
+            .filter(|(_, b)| {
+                let y = (b.y0 + b.y1) / 2.0;
+                y > within.y0 && y < within.y1
+            })
+            .collect();
+        edges.iter().any(|&e| {
+            let figure = |gl: &Glyph| gl.text.chars().any(|c| c.is_ascii_digit());
+            let fs = inked
+                .iter()
+                .map(|(gl, _)| gl.font_size as f64)
+                .fold(0.0, f64::max)
+                .max(1.0);
+            // A quarter of the type's size clear of the edge, each side;
+            // a closing bracket hung past a column's edge, as statements set
+            // them, is the column's own and crosses nothing.
+            let clear = fs * 0.25;
+            let hung = |gl: &Glyph| matches!(gl.text.as_str(), ")" | "]");
+            !inked
+                .iter()
+                .any(|(gl, b)| b.x0 < e && b.x1 > e && !hung(gl))
+                && inked
+                    .iter()
+                    .any(|(gl, b)| figure(gl) && (b.x0 + b.x1) / 2.0 < e - clear)
+                && inked
+                    .iter()
+                    .any(|(gl, b)| figure(gl) && (b.x0 + b.x1) / 2.0 > e + clear)
+        })
+    })
+}
+
 /// Of `unruled_grids`, one read here only for the labels to its left: it is
 /// ruled row by row as a table is, but stands beside lines of a column of
 /// the page's prose. Its text, read as a table's, stays in that column.
@@ -2576,6 +2623,64 @@ mod tests {
         let grids = read(&lines(&gl), &rules, region, 0);
         assert_eq!(grids.len(), 1, "{grids:?}");
         assert_eq!(grids[0].rows(), 4, "{grids:?}");
+    }
+
+    #[test]
+    fn a_reading_that_merges_drawn_columns_is_told() {
+        // Three years' figures a word space apart: read from the text alone,
+        // one column.
+        let rows = [
+            ("Reported", ["4,137", "3,610", "3,547"]),
+            ("Related", ["(951)", "(281)", "(751)"]),
+            ("Charges", ["(110)", "(125)", "(116)"]),
+            ("Adjusted", ["3,944", "3,510", "3,356"]),
+        ];
+        let mut gl = Vec::new();
+        for (i, (label, values)) in rows.iter().enumerate() {
+            let base = 50.0 + 13.0 * i as f64;
+            gl.extend(set(label, 20.0, base));
+            for (k, v) in values.iter().enumerate() {
+                gl.extend(set(v, 120.0 + 30.0 * k as f64, base));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 230.0,
+            y1: 95.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let everywhere = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 300.0,
+            y1: 200.0,
+        };
+        // Edges drawn between the years: the reading merges them.
+        assert!(merges_drawn_columns(
+            &grids[0],
+            &[148.5, 178.5],
+            &everywhere,
+            &gl
+        ));
+        // An edge between the labels and the figures parts no cell.
+        assert!(!merges_drawn_columns(&grids[0], &[100.0], &everywhere, &gl));
+        // An edge through the figures' glyphs is no column's.
+        assert!(!merges_drawn_columns(&grids[0], &[132.0], &everywhere, &gl));
+        // A stack's edges say nothing of rows outside it.
+        let elsewhere = BBox {
+            x0: 0.0,
+            y0: 100.0,
+            x1: 300.0,
+            y1: 200.0,
+        };
+        assert!(!merges_drawn_columns(
+            &grids[0],
+            &[148.5, 178.5],
+            &elsewhere,
+            &gl
+        ));
     }
 
     #[test]
