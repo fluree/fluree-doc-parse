@@ -1208,6 +1208,9 @@ pub(crate) fn render_routed(
     let mut n_vetoed = 0usize;
     let mut n_columns = 0usize;
 
+    // The images too small to route are probed only for the OCR regions.
+    let mut eopts = fluree_doc_pdf::ExtractOptions::default();
+    eopts.probe_small_images = ocr_regions;
     for f in &files {
         let stem = crate::commands::common::stem_of(f);
         if !stems.insert(stem.to_string()) {
@@ -1267,7 +1270,7 @@ pub(crate) fn render_routed(
         }
         // Whatever no other kind claims is read as a PDF, as `convert` reads
         // it: one that does not parse is warned of, as `convert` fails it.
-        let doc = match fluree_doc_pdf::extract_bytes(bytes.clone()) {
+        let doc = match fluree_doc_pdf::extract_bytes_with(bytes.clone(), &eopts) {
             Ok(d) => d,
             Err(e) => {
                 eprintln!("warning: {}: {e}", f.display());
