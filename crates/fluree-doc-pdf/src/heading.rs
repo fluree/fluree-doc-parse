@@ -107,6 +107,12 @@ pub struct Heading {
     pub text: String,
     pub level: usize,
     pub evidence: Evidence,
+    /// Set like a heading, but a form's or a field's text, or a line that
+    /// runs on into the next: `(a) (b)`, `Yes No`, `b Refunded 37b`, a label
+    /// over its value. Kept a heading until runs of bold heads have been
+    /// judged, as they were before these were told apart, and read as text
+    /// after: dropping one from a run would leave its neighbours standing.
+    pub form_text: bool,
     style: Style,
 }
 
@@ -428,6 +434,20 @@ fn title_like_within(text: &str, max_words: usize) -> bool {
         return false;
     }
     !starts_like_list_item(t)
+}
+
+/// Words a title does not end on: an article, a conjunction, `of`, `not`.
+/// A line ending on one runs on into the next: a form's numbered caption
+/// cut at its first line (`5 Expenses recorded on books this year not`), a
+/// side label set a line a word (`Tax and` over `Credits`). In lowercase
+/// only, so that `Part A` and `Schedule A` stay titles.
+const DANGLING_WORDS: &[&str] = &["a", "an", "the", "and", "or", "nor", "of", "not", "but"];
+
+/// The line stops mid-phrase, on one of [`DANGLING_WORDS`].
+fn ends_mid_phrase(t: &str) -> bool {
+    t.split_whitespace()
+        .next_back()
+        .is_some_and(|w| DANGLING_WORDS.contains(&w))
 }
 
 /// The line closes with a web address, a domain, an e-mail address or a
@@ -1044,6 +1064,7 @@ pub fn detect_with_body(
                     text,
                     level: 1,
                     evidence: Evidence::Title,
+                    form_text: false,
                     style: style_of(b),
                 });
                 continue;
@@ -1066,6 +1087,7 @@ pub fn detect_with_body(
                     text,
                     level,
                     evidence: Evidence::Outline,
+                    form_text: false,
                     style: style_of(b),
                 });
                 continue;
@@ -1076,6 +1098,11 @@ pub fn detect_with_body(
             if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
                 continue;
             }
+            // A line that stops mid-phrase runs on into the next, and a
+            // form's keys, captions and labels are its text. Not part of
+            // `title_like`, which also counts the bold lines that decide
+            // whether bold is used for headings at all.
+            let form = ends_mid_phrase(&text) || form_text(&text, blocks, block_idx);
             // A numbered title occurs once in a document: sections are not
             // repeated. A numbered line that recurs is a code — `03 —
             // Partial/Moderate assistance`, an assessment form's answer,
@@ -1098,6 +1125,7 @@ pub fn detect_with_body(
                     text,
                     level: 1,
                     evidence: Evidence::Sequence,
+                    form_text: false,
                     style: style_of(b),
                 });
                 continue;
@@ -1132,6 +1160,7 @@ pub fn detect_with_body(
                     text,
                     level: depth,
                     evidence: Evidence::Numbering,
+                    form_text: form,
                     style: style_of(b),
                 });
                 continue;
@@ -1164,6 +1193,7 @@ pub fn detect_with_body(
                     text,
                     level: 3,
                     evidence: Evidence::Bold,
+                    form_text: form,
                     style: style_of(b),
                 });
                 continue;
@@ -1190,6 +1220,7 @@ pub fn detect_with_body(
                     text,
                     level,
                     evidence: Evidence::FontSize,
+                    form_text: form,
                     style: style_of(b),
                 });
                 continue;
@@ -1252,6 +1283,99 @@ fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) ->
                 && o.bbox.x0 >= b.bbox.x1
                 && o.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP
         })
+}
+
+/// A form's text set like a heading: its grid's keys and answer heads, a
+/// line's caption, a footer that refers elsewhere, a label over its value.
+fn form_text(text: &str, page: &[Block], i: usize) -> bool {
+    let t = text.trim();
+    keys_or_answers(t) || refers_elsewhere(t) || line_caption(t) || label_over_value(page, i)
+}
+
+/// Answers a form offers to tick: the heads of its answer columns.
+const ANSWER_WORDS: &[&str] = &["yes", "no", "n/a", "na"];
+
+/// A grid's column keys or a form's answer heads, and nothing else:
+/// `(a) (b)`, `(f) (g)`, `Yes No`. They head columns, not sections.
+fn keys_or_answers(t: &str) -> bool {
+    let key = |w: &str| {
+        w.strip_prefix('(')
+            .and_then(|w| w.strip_suffix(')'))
+            .is_some_and(|k| {
+                (1..=3).contains(&k.chars().count()) && k.chars().all(char::is_alphanumeric)
+            })
+    };
+    let mut words = t.split_whitespace().peekable();
+    words.peek().is_some()
+        && words.all(|w| key(w) || ANSWER_WORDS.contains(&w.to_lowercase().as_str()))
+}
+
+/// A sentence that sends the reader elsewhere, `For Paperwork Reduction
+/// Act Notice, see your tax return instructions.`: a form's footer. No
+/// section is titled with a cross-reference; a title that only mentions
+/// one keeps it in brackets, `Other Information (see instructions)`.
+fn refers_elsewhere(t: &str) -> bool {
+    t.to_lowercase().contains(", see ")
+}
+
+/// A form's line caption with its line's letter before it and its number
+/// after it: `b Refunded 37b`.
+fn line_caption(t: &str) -> bool {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let letter = |w: &str| w.len() == 1 && w.chars().all(|c| c.is_ascii_lowercase());
+    let number = |w: &str| {
+        let digits = w.trim_end_matches(|c: char| c.is_ascii_lowercase());
+        w.len() == digits.len() + 1
+            && (1..=3).contains(&digits.len())
+            && digits.chars().all(|c| c.is_ascii_digit())
+    };
+    words.len() >= 3 && letter(words[0]) && number(words[words.len() - 1])
+}
+
+/// Most words in a value under its label, `Jun 5, 2026`, counting only
+/// words with a letter or figure: a catalogue's group over its first line
+/// (`Coussinets` over `223-3000 Coussinets d'axes de piston`) runs longer.
+const MAX_LABEL_VALUE_WORDS: usize = 3;
+
+/// A bold label over its value on the next line: the value set lighter at
+/// the label's size within an em, a single short line holding a figure or
+/// an answer, and followed by the next label or nothing (`Date of
+/// Preparation` over `Jun 5, 2026`, `FLASH POINT` over `N.A.`,
+/// `Photochemically Reactive` over `No`). A section's heading stands over
+/// sentences, or over more lines than one.
+fn label_over_value(page: &[Block], i: usize) -> bool {
+    let label = &page[i];
+    if !label.bold {
+        return false;
+    }
+    let Some(k) = directly_below(page, i) else {
+        return false;
+    };
+    let v = &page[k];
+    let fs = (label.font_size as f64).max(1.0);
+    // The value stands alone: the next label or nothing follows it. Under a
+    // heading, its first line runs on into more of the same (`Power and
+    // Ratings` over `120 V~ 60 Hz` over the rest of its ratings).
+    let alone = directly_below(page, k).is_none_or(|n| page[n].bold);
+    let text = v.text();
+    alone
+        && !v.bold
+        && (v.font_size - label.font_size).abs() <= 0.25
+        && v.bbox.y0 - label.bbox.y1 <= fs * VALUE_GAP
+        && v.lines.len() == 1
+        && text
+            .split_whitespace()
+            .filter(|w| w.chars().any(char::is_alphanumeric))
+            .count()
+            <= MAX_LABEL_VALUE_WORDS
+        && (text.chars().any(|c| c.is_ascii_digit()) || answers(&text))
+}
+
+/// The line is an answer and nothing else: `No`, `N.A.`.
+fn answers(t: &str) -> bool {
+    let mut words = t.split_whitespace().peekable();
+    words.peek().is_some()
+        && words.all(|w| ANSWER_WORDS.contains(&w.replace('.', "").to_lowercase().as_str()))
 }
 
 /// Most words in a field's label, `Initial Closing Date`, and in its
@@ -2052,6 +2176,84 @@ mod tests {
         b.bbox.y1 = y + fs as f64;
         b.bold = bold;
         b
+    }
+
+    #[test]
+    fn a_forms_keys_answers_footers_and_line_captions_are_no_headings() {
+        for t in ["(a) (b)", "(f) (g)", "Yes No", "YES NO", "Yes No N/A"] {
+            assert!(keys_or_answers(t), "{t}");
+        }
+        for t in ["Part I", "(a) Definitions", "Notes", "No Surprises"] {
+            assert!(!keys_or_answers(t), "{t}");
+        }
+        assert!(refers_elsewhere(
+            "For Paperwork Reduction Act Notice, see your tax return instructions."
+        ));
+        assert!(!refers_elsewhere("Other Information (see instructions)"));
+        assert!(line_caption("b Refunded 37b"));
+        for t in ["Phase 2b", "a Introduction", "Schedule K", "b Refunded 37"] {
+            assert!(!line_caption(t), "{t}");
+        }
+        // A line that stops mid-phrase runs on into the next.
+        for t in ["5 Expenses recorded on books this year not", "Tax and"] {
+            assert!(ends_mid_phrase(t), "{t}");
+        }
+        for t in ["Part A", "Schedule A", "Terms and Conditions"] {
+            assert!(!ends_mid_phrase(t), "{t}");
+        }
+        let page = vec![
+            blk("(c) (d)", 8.0, 1),
+            blk(
+                "For Paperwork Reduction Act Notice, see separate instructions.",
+                8.0,
+                1,
+            ),
+            body(),
+        ];
+        let mut page = page;
+        page[0].bold = true;
+        page[1].bold = true;
+        // Kept headings until runs of bold heads are judged, marked as a
+        // form's text.
+        let hs = detect(&[page], &[]);
+        assert!(!hs.is_empty() && hs.iter().all(|h| h.form_text), "{hs:?}");
+    }
+
+    #[test]
+    fn a_bold_label_over_its_value_is_no_heading() {
+        let mut label = at("Date of Preparation", 7.0, 100.0, true);
+        label.bbox.x1 = 200.0;
+        let mut value = at("Jun 5, 2026", 7.0, 108.0, false);
+        value.bbox.x1 = 160.0;
+        let mut head = at("Volatile Ingredients", 7.0, 200.0, true);
+        head.bbox.x1 = 200.0;
+        let mut text = at(
+            "The product contains water and a binder in the amounts below.",
+            7.0,
+            208.0,
+            false,
+        );
+        text.bbox.x1 = 400.0;
+        let mut answered = at("Photochemically Reactive", 7.0, 300.0, true);
+        answered.bbox.x1 = 200.0;
+        let mut answer = at("No", 7.0, 308.0, false);
+        answer.bbox.x1 = 90.0;
+        let mut ratings = at("Power and Ratings", 7.0, 400.0, true);
+        ratings.bbox.x1 = 200.0;
+        let mut first = at("120 V~ 60 Hz", 7.0, 408.0, false);
+        first.bbox.x1 = 150.0;
+        let mut more = at("Load rating 600 W incandescent", 7.0, 416.0, false);
+        more.bbox.x1 = 250.0;
+        let page = vec![
+            label, value, head, text, answered, answer, ratings, first, more,
+        ];
+        assert!(label_over_value(&page, 0));
+        assert!(!label_over_value(&page, 2), "a heading over a sentence");
+        assert!(label_over_value(&page, 4));
+        assert!(
+            !label_over_value(&page, 6),
+            "a heading over lines of specifications"
+        );
     }
 
     #[test]
