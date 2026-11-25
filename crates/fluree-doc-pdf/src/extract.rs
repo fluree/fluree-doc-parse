@@ -35,8 +35,10 @@ pub struct ImagePlacement {
     /// sharply — the AI-routed reference engine *loses* 0.38 on one and
     /// *gains* 0.62 on the other.
     ///
-    /// Measured for every raster image: an OCR engine reads the texty ones
-    /// too small to be routed to a model ([`crate::route::ocr_regions`]).
+    /// Measured for every raster image, unless extraction was told nothing
+    /// will read it ([`ExtractOptions::probe_images`]): an OCR engine reads
+    /// the texty ones too small to be routed to a model
+    /// ([`crate::route::ocr_regions`]), and they read false.
     pub texty: bool,
     /// The image's own resolution where it is drawn: its pixels per inch on
     /// the page, along whichever of its axes is drawn coarser. `None` when
@@ -52,6 +54,24 @@ pub struct ImagePlacement {
     /// no more than 8 × 8 pixels at any size, and a rule stretched from a
     /// 1 × 1 mask none at all.
     pub grid: (u32, u32),
+}
+
+/// How [`extract_bytes_with`] reads a document.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ExtractOptions {
+    /// Decode raster images to measure [`ImagePlacement::texty`]. The router
+    /// reads it ([`crate::route::decide`], for a region it would send to a
+    /// model), and so does an OCR engine ([`crate::route::ocr_regions`]);
+    /// the decode is most of what an image costs. A caller that will
+    /// neither route nor read with an engine can turn it off. On by default.
+    pub probe_images: bool,
+}
+
+impl Default for ExtractOptions {
+    fn default() -> Self {
+        Self { probe_images: true }
+    }
 }
 
 #[derive(Clone)]
@@ -287,6 +307,8 @@ struct Collector {
 /// images have no object and are always decoded.
 #[derive(Default)]
 struct Probes {
+    /// No image is probed: nothing will read the result.
+    off: bool,
     found: std::collections::HashMap<ObjectIdentifier, bool>,
     /// No dictionary in the document sets a transfer function; `None` until
     /// `again` asked it.
@@ -299,6 +321,9 @@ impl Probes {
     /// Whether the image's pixels look like text, decoding it unless the
     /// document has drawn it before.
     fn texty(&mut self, image: &hayro_interpret::RasterImage<'_>) -> bool {
+        if self.off {
+            return false;
+        }
         let id = image.stream().dict().obj_id();
         if let Some(found) = id.and_then(|id| self.found.get(&id)) {
             if self.plain == Some(true) {
@@ -1529,6 +1554,14 @@ impl std::fmt::Display for ExtractError {
 impl std::error::Error for ExtractError {}
 
 pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
+    extract_bytes_with(data, &ExtractOptions::default())
+}
+
+/// [`extract_bytes`], read as `options` say.
+pub fn extract_bytes_with(
+    data: Vec<u8>,
+    options: &ExtractOptions,
+) -> Result<Document, ExtractError> {
     let pdf = Pdf::new(Arc::new(data)).map_err(|e| ExtractError::Parse(format!("{e:?}")))?;
     let cache = InterpreterCache::new();
     let settings = InterpreterSettings::default();
@@ -1538,7 +1571,10 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
     let mut faces = crate::faces::Faces::default();
     let mut weights = std::collections::HashMap::new();
-    let mut probes = Probes::default();
+    let mut probes = Probes {
+        off: !options.probe_images,
+        ..Probes::default()
+    };
 
     for (index, page) in pdf.pages().iter().enumerate() {
         let (w, h) = page.render_dimensions();
@@ -2500,5 +2536,58 @@ mod transfer_tests {
         assert!(sets_transfer(&with_state("/TR /Identity")));
         assert!(sets_transfer(&with_state("/TR2 [/Default]")));
         assert!(!sets_transfer(&with_state("/CA 0.5 /ca 0.5")));
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::{extract_bytes, extract_bytes_with, ExtractOptions};
+
+    /// A page covered by one grey image of vertical stripes, two pixels
+    /// wide: ink on ground across every row, as a scanned table reads.
+    fn striped_page() -> Vec<u8> {
+        let pixels: Vec<u8> = (0..64 * 64)
+            .map(|i| if (i % 64) / 2 % 2 == 0 { 0 } else { 255 })
+            .collect();
+        let content = b"q 100 0 0 100 0 0 cm /Im0 Do Q";
+        let mut pdf = Vec::new();
+        pdf.extend_from_slice(
+            b"%PDF-1.4\n\
+              1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+              2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+              3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] \
+              /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >> endobj\n",
+        );
+        pdf.extend_from_slice(
+            format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(content);
+        pdf.extend_from_slice(b"\nendstream endobj\n");
+        pdf.extend_from_slice(
+            format!(
+                "5 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 \
+                 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length {} >> stream\n",
+                pixels.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&pixels);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R /Size 6 >>\n%%EOF\n");
+        pdf
+    }
+
+    #[test]
+    fn an_image_is_probed_unless_no_router_will_read_it() {
+        let probed = extract_bytes(striped_page()).expect("pdf");
+        assert_eq!(probed.pages[0].images.len(), 1);
+        assert!(
+            probed.pages[0].images[0].texty,
+            "stripes read as text structure"
+        );
+        let mut options = ExtractOptions::default();
+        options.probe_images = false;
+        let unprobed = extract_bytes_with(striped_page(), &options).expect("pdf");
+        assert_eq!(unprobed.pages[0].images.len(), 1);
+        assert!(!unprobed.pages[0].images[0].texty);
     }
 }
