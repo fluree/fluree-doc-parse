@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "fed-beigebook-2023-01.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/BeigeBook_20230118.pdf",
+    "sha256": "cb7be8a6ea4382d1ebd46187ed1f203786b0f7a0348f9b4a8d38e823835b0ed3",
+    "about": "Federal Reserve Beige Book, January 2023: one PDF merged from a file per district, its bookmarks naming the files (`01 - beigebook - Boston_pdf_final_January_2023`). Each district runs two pages and names itself once more over its second."
+  },
+  "notes": [
+    "2026-11-25 (#328): the outline matched no line, so levels came from size alone, and the 18pt district titles ranked h4 under the 36pt National Summary. Each district's name over its second page, printed once, stayed an h6 that repeated its title."
+  ],
+  "checks": [
+    {
+      "id": "district-opens-a-part",
+      "found": "2026-11-25",
+      "issue": "#328: the district's title was an h4.",
+      "section": {
+        "title": "Federal Reserve Bank of Boston",
+        "level": 1
+      }
+    },
+    {
+      "id": "district-name-runs-on-its-second-page",
+      "found": "2026-11-25",
+      "issue": "#328: the district's name over its second page was an h6 repeating its title.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Federal Reserve Bank of Boston"
+      },
+      "count": 1
+    }
+  ]
+}
