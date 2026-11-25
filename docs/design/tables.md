@@ -426,9 +426,11 @@ row the first of the data.
 A table can name its columns afresh partway down: a VOC table's `By wt |
 By vol` under a `LB/Gal | g/L` header, or a SKU table's own header row under
 a block of fields in the same box. Such a row sets names in two cells or
-more, each its own, and no figure or part number, over two rows or more with
-something in a column it names. It is set apart from the rows under it one
-of three ways:
+more, each its own, and no figure or part number, over a row or more with
+something in a column it names. One row under a row of names is as likely
+its value, but a header set apart names one row's columns as surely as ten:
+a short VOC table's `VOC Content | LB/Gal | g/L` over its one `Total`. It is
+set apart from the rows under it one of three ways:
 
 - **Bold.** Every value cell is bold, two or more, over a row that is not. A
   first column of row labels keeps its own weight: `VOC Content` is set as
@@ -448,6 +450,17 @@ of three ways:
 The row is not data. The rows under it, until the next such row, take its
 names in place of the header's lowest row, under any rows above that one:
 `K25W951 / By wt`. A band across the row is a section's label instead.
+
+### Rows of parameters
+
+A grid of figures can be headed by the rows of its parameters rather than by
+names. An IES coefficient-of-utilization table opens with `RC %: | 80` and
+`RW %: | 70 | 50 | 30 | 10` over `RCR: 0 | 119 | 119 | …`. Where nothing else
+heads such a table, the rows that open it with a label ending in a colon and
+only figures beside it are its header, over three rows or more, half of them
+or more figures: each value is named by its parameters (`80 / 70`). A table
+of such rows all the way down is a list of fields, each with its values, and
+none of its rows heads it.
 
 ### Row headers under a group label
 

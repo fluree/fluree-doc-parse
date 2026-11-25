@@ -574,6 +574,40 @@ const SPREAD_CENTRE: f64 = 0.15;
 /// Widest a spread value's ink runs, as a share of its run's width.
 const SPREAD_WIDTH: f64 = 0.8;
 
+/// How many rows head a grid of figures as its parameters do: each a
+/// name ending in a colon and only figures beside it, over three rows or
+/// more of figures that are not (`RC %: | 80`, `RW %: | 70 | 50 | 30 | 10`
+/// over `RCR: 0 | 119 | 119 | …`). A table that is such rows all the way
+/// down is a list of fields, each with its values, and none heads it.
+fn parameter_rows(rows: &[Vec<String>]) -> usize {
+    let parameter = |row: &Vec<String>| {
+        let name = row.first().map_or("", |t| t.trim());
+        let values: Vec<&str> = row[1..]
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        name.ends_with(':')
+            && name.chars().any(char::is_alphabetic)
+            && !values.is_empty()
+            && values.iter().all(|t| table::is_numeric_cell(t))
+    };
+    let k = rows.iter().take_while(|row| parameter(row)).count();
+    let body = &rows[k..];
+    let figures = |row: &&Vec<String>| {
+        let values: Vec<&str> = row[1..]
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        !values.is_empty() && values.iter().all(|t| table::is_numeric_cell(t))
+    };
+    if k == 0 || body.len() < 3 || body.iter().filter(figures).count() * 2 < body.len() {
+        return 0;
+    }
+    k
+}
+
 /// Drop the columns no cell starts in, from every part of a table.
 ///
 /// A column whose cell on every row is empty and the rest of the one to its
@@ -3143,6 +3177,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     header_rows = 0;
                 }
             }
+            // Under a title or not, a grid of figures headed by its parameters' rows: the IES
+            // coefficients of utilization under `RC %: | 80` and `RW %: | 70
+            // | 50 | 30 | 10`, each row a parameter's name and its values,
+            // over rows keyed by another (`RCR: 0`, `1`, `2`, …). Read as
+            // data, no value was named by the reflectances it is for.
+            if header_rows == 0 {
+                header_rows = parameter_rows(&rows);
+            }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
             // centred header across the row boundary under it (`time` above,
@@ -3773,6 +3815,36 @@ mod tests {
             .filter(|e| e.kind == "doco:SectionTitle")
             .map(|e| e.text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn rows_of_parameters_head_a_grid_of_figures() {
+        let rows = |rs: &[&[&str]]| -> Vec<Vec<String>> {
+            rs.iter()
+                .map(|r| r.iter().map(|t| t.to_string()).collect())
+                .collect()
+        };
+        let cu = rows(&[
+            &["RC %:", "80", "", ""],
+            &["RW %:", "70", "50", "30"],
+            &["RCR: 0", "119", "119", "119"],
+            &["1", "106", "102", "98"],
+            &["2", "95", "88", "81"],
+        ]);
+        assert_eq!(parameter_rows(&cu), 2);
+        // Fields all the way down: none heads the rest.
+        let fields = rows(&[
+            &["Voltage:", "120", "", ""],
+            &["Watts:", "16", "", ""],
+            &["Lumens:", "1200", "", ""],
+        ]);
+        assert_eq!(parameter_rows(&fields), 0);
+        // Too few rows of figures under them.
+        assert_eq!(parameter_rows(&cu[..4]), 0);
+        // A label without its colon names a row, not a parameter.
+        let mut plain = cu.clone();
+        plain[0][0] = "RC %".into();
+        assert_eq!(parameter_rows(&plain), 0);
     }
 
     #[test]
