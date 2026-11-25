@@ -303,13 +303,20 @@ bulleted `UL Listed to control:` has its dashed loads set under its text,
 and a regulation's `(1) … from—` has its `(a)` and `(b)` set under its own.
 An item whose marker stands back out returns to the level its marker stands
 at. The marker must stand at least an em right of the marker above, from
-half an em before that item's text to two and a half ems past it. A marker
+an em before that item's text to two and a half ems past it. A marker
 further out belongs to another column. Only an item that follows the one
 before it down the page nests. A run broken by anything else, carried to
 the next column or onto the next page, starts again at the top. A wrapped
 line is its item's own, and a paragraph set with a hanging indent has no
 marker, so neither nests. Neither does a line read as an item whose number
 stands beside a later line: it carries on the item before.
+
+A marker is placed where it is drawn. One list can set its first bullet in
+the line and draw the rest apart from it, so one item's text starts at its
+bullet and the next item's a bullet's width in. They are compared by their
+bullets, which stand level, so the items are siblings. A box to tick marks
+a choice rather than a list's lead-in: what is set beside or under a form's
+`Yes` and `No` boxes stays level with them.
 
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of

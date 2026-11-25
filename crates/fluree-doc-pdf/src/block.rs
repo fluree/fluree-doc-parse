@@ -91,6 +91,12 @@ pub struct Block {
     /// paragraph into three. List detection consumes this later to build
     /// label/body pairs.
     pub marker: Option<String>,
+    /// Where the marker stands, when it stands apart from the block's text:
+    /// a drawn bullet or box, or a glyph set beside the first line. Its box
+    /// then starts at the text. `None` where the marker is part of the text
+    /// (a dash or bullet in the run, a count joined to it), and the box
+    /// starts at the marker, or where there is none.
+    pub marker_x: Option<f64>,
 }
 
 impl Block {
@@ -464,25 +470,30 @@ fn band_of(l: &Line, bands: &[BBox]) -> Option<usize> {
 const CHECKBOX_REACH: f64 = 3.0;
 
 /// The checkbox introducing this line, if one sits immediately to its left on
-/// the same visual row.
-fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
+/// the same visual row: where it starts.
+fn checkbox_for(l: &Line, boxes: &[BBox]) -> Option<f64> {
     let fs = (l.font_size as f64).max(1.0);
-    boxes.iter().any(|b| {
-        let vertical = b.y1 > l.bbox.y0 && b.y0 < l.bbox.y1;
-        let gap = l.bbox.x0 - b.x1;
-        vertical && gap > -fs && gap < fs * CHECKBOX_REACH
-    })
+    boxes
+        .iter()
+        .find(|b| {
+            let vertical = b.y1 > l.bbox.y0 && b.y0 < l.bbox.y1;
+            let gap = l.bbox.x0 - b.x1;
+            vertical && gap > -fs && gap < fs * CHECKBOX_REACH
+        })
+        .map(|b| b.x0)
 }
 
-/// Is a drawn bullet set beside this line: level with it, and just left of
-/// where its text starts?
-fn dot_for(l: &Line, dots: &[BBox]) -> bool {
+/// Where a drawn bullet set beside this line starts: level with it, and just
+/// left of where its text starts.
+fn dot_for(l: &Line, dots: &[BBox]) -> Option<f64> {
     let fs = (l.font_size as f64).max(1.0);
-    dots.iter().any(|d| {
-        let middle = (d.y0 + d.y1) * 0.5;
-        let gap = l.bbox.x0 - d.x1;
-        middle > l.bbox.y0 && middle < l.bbox.y1 && gap > 0.0 && gap < fs * DOT_REACH
-    })
+    dots.iter()
+        .find(|d| {
+            let middle = (d.y0 + d.y1) * 0.5;
+            let gap = l.bbox.x0 - d.x1;
+            middle > l.bbox.y0 && middle < l.bbox.y1 && gap > 0.0 && gap < fs * DOT_REACH
+        })
+        .map(|d| d.x0)
 }
 
 /// How far apart, in points, the marks of one dash-led list may start.
@@ -514,7 +525,7 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
         .filter_map(|d| {
             lines
                 .iter()
-                .position(|l| dot_for(l, std::slice::from_ref(d)))
+                .position(|l| dot_for(l, std::slice::from_ref(d)).is_some())
                 .map(|i| (*d, i))
         })
         .filter(|(d, i)| !crowded(d, (lines[*i].font_size as f64).max(1.0)))
@@ -710,11 +721,11 @@ pub fn assemble_in_measure(
     // bullet does. A producer that draws its bullets leaves no bullet in the
     // text, and its items split only where their spacing happened to read
     // as a paragraph's.
-    let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
-    let dotted: Vec<bool> = lines
+    let ticked: Vec<Option<f64>> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
+    let dotted: Vec<Option<f64>> = lines
         .iter()
         .zip(&ticked)
-        .map(|(l, &t)| !t && dot_for(l, dots))
+        .map(|(l, t)| t.is_none().then(|| dot_for(l, dots)).flatten())
         .collect();
     // Lines that open a dash- or arrow-led item: another line near it opens
     // with the same mark at the same place. A lone line so opening is a
@@ -770,21 +781,22 @@ pub fn assemble_in_measure(
         })
         .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
-    let mut marked: Vec<(usize, String)> = Vec::new();
+    // Each block's marker, and where a drawn one stands.
+    let mut marked: Vec<(usize, String, Option<f64>)> = Vec::new();
     let mut start = 0;
     let mark = |i: usize| {
-        if ticked[i] {
-            Some(CHECKBOX_MARKER.to_string())
-        } else if dotted[i] {
-            Some(BULLET_MARKER.to_string())
+        if let Some(x) = ticked[i] {
+            Some((CHECKBOX_MARKER.to_string(), Some(x)))
+        } else if let Some(x) = dotted[i] {
+            Some((BULLET_MARKER.to_string(), Some(x)))
         } else {
-            runs[i].map(String::from)
+            runs[i].map(|c| (String::from(c), None))
         }
     };
     for (i, l) in lines.iter().enumerate() {
         if cur.is_empty() {
-            if let Some(m) = mark(i) {
-                marked.push((blocks.len(), m));
+            if let Some((m, x)) = mark(i) {
+                marked.push((blocks.len(), m, x));
             }
             start = i;
             cur.push(l.clone());
@@ -803,8 +815,8 @@ pub fn assemble_in_measure(
         } else {
             let b = with_mark(build(std::mem::take(&mut cur)), &marked, blocks.len());
             blocks.extend(finish(b, &edge));
-            if let Some(m) = mark(i) {
-                marked.push((blocks.len(), m));
+            if let Some((m, x)) = mark(i) {
+                marked.push((blocks.len(), m, x));
             }
             start = i;
             cur.push(l.clone());
@@ -814,9 +826,10 @@ pub fn assemble_in_measure(
         let b = with_mark(build(cur), &marked, blocks.len());
         blocks.extend(finish(b, &edge));
     }
-    for (i, m) in marked {
+    for (i, m, x) in marked {
         if let Some(b) = blocks.get_mut(i) {
             b.marker = Some(m);
+            b.marker_x = x;
         }
     }
 
@@ -959,6 +972,7 @@ pub fn assemble_in_measure(
             });
             let b = &mut blocks[i];
             b.marker = Some(m.text.clone());
+            b.marker_x = Some(m.bbox.x0);
             if counts_on && level && !raised_mark {
                 // Set on the item's first line, as printed, and in its size:
                 // a line of its own would count as text of the marker's size
@@ -1468,11 +1482,12 @@ fn rejoin_broken_items(blocks: Vec<Block>, markers: &[Line]) -> Vec<Block> {
         });
         if joins {
             let p = out.pop().expect("an item to join");
-            let (marker, gap_above) = (p.marker.clone(), p.gap_above);
+            let (marker, marker_x, gap_above) = (p.marker.clone(), p.marker_x, p.gap_above);
             let mut lines = p.lines;
             lines.extend(b.lines);
             let mut joined = build(lines);
             joined.marker = marker;
+            joined.marker_x = marker_x;
             joined.gap_above = gap_above;
             out.push(joined);
         } else {
@@ -1701,9 +1716,10 @@ fn count_prefix(text: &str) -> Option<(u32, &str)> {
 /// typed bullet leads. Its wrapped lines are its own: `Distributed file
 /// systems, including` over `Hadoop and Ceph`, beside a drawn dot, was cut
 /// in two as a list of entries set one per line.
-fn with_mark(mut b: Block, marked: &[(usize, String)], at: usize) -> Block {
-    if let Some((_, m)) = marked.last().filter(|(i, _)| *i == at) {
+fn with_mark(mut b: Block, marked: &[(usize, String, Option<f64>)], at: usize) -> Block {
+    if let Some((_, m, x)) = marked.last().filter(|(i, _, _)| *i == at) {
         b.marker = Some(m.clone());
+        b.marker_x = *x;
     }
     b
 }
@@ -1746,6 +1762,7 @@ fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
     let Block {
         lines,
         marker,
+        marker_x,
         gap_above,
         ..
     } = b;
@@ -1759,6 +1776,7 @@ fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
     }
     out.push(build(cur));
     out[0].marker = marker;
+    out[0].marker_x = marker_x;
     out[0].gap_above = gap_above;
     out
 }
@@ -2117,6 +2135,7 @@ fn split_counted(b: Block) -> Vec<Block> {
     let Block {
         lines,
         marker,
+        marker_x,
         gap_above,
         ..
     } = b;
@@ -2145,6 +2164,7 @@ fn split_counted(b: Block) -> Vec<Block> {
     out.push(piece);
     if out[0].marker.is_none() {
         out[0].marker = marker;
+        out[0].marker_x = marker_x;
     }
     out[0].gap_above = gap_above;
     out
@@ -2225,6 +2245,7 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     let Block {
         lines,
         marker,
+        marker_x,
         gap_above,
         ..
     } = b;
@@ -2244,6 +2265,7 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     }
     if out[0].marker.is_none() {
         out[0].marker = marker;
+        out[0].marker_x = marker_x;
     }
     out[0].gap_above = gap_above;
     out
@@ -2695,11 +2717,13 @@ pub fn split_structural_prefix(b: Block) -> Vec<Block> {
         return vec![b];
     }
     let marker = b.marker.clone();
+    let marker_x = b.marker_x;
     let gap_above = b.gap_above;
     let mut lines = b.lines;
     let tail = lines.split_off(1);
     let mut prefix = build(lines);
     prefix.marker = marker;
+    prefix.marker_x = marker_x;
     prefix.gap_above = gap_above;
     let mut remainder = build(tail);
     let gap = (remainder.bbox.y0 - prefix.bbox.y1) / remainder.font_size.max(1.0) as f64;
@@ -2726,6 +2750,7 @@ pub(crate) fn build(lines: Vec<Line>) -> Block {
         gap_above: None,
         lines,
         marker: None,
+        marker_x: None,
     }
 }
 
@@ -2767,6 +2792,7 @@ mod tests {
             bold: false,
             gap_above: None,
             marker: None,
+            marker_x: None,
         };
         assert_eq!(
             block("deliver it to 青松纸业有限公", "司.").text(),

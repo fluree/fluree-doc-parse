@@ -2454,6 +2454,7 @@ mod tests {
             bold: false,
             gap_above: None,
             marker: None,
+            marker_x: None,
         }
     }
 
