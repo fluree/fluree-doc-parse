@@ -61,6 +61,7 @@ pub mod document;
 #[cfg(feature = "render")]
 pub mod escalate;
 pub(crate) mod extract;
+pub(crate) mod faces;
 pub mod fidelity;
 pub mod figure;
 pub mod forms;

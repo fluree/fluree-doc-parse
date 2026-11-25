@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its physical-properties tables footnote a value given in brackets, with the note's number raised right after the closing bracket."
+  },
+  "notes": [
+    "2026-11-24 (#206): the sheet's note numbers are a font's superior figures, set at the text's size on its baseline and drawn small and high. Read as figures of the line, they ran into the word before them: `Lengths7`, `(48 mm)6`."
+  ],
+  "checks": [
+    {
+      "id": "lengths-note",
+      "found": "2026-11-24",
+      "issue": "#206: the note's number was read into the word.",
+      "text": "Lengths 7"
+    },
+    {
+      "id": "lengths-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: the note's number was read into the word.",
+      "no_text": "Lengths7"
+    },
+    {
+      "id": "bracket-note",
+      "found": "2026-11-24",
+      "issue": "#206: as above, after a bracket.",
+      "text": "(48 mm) 6"
+    },
+    {
+      "id": "bracket-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: as above, after a bracket.",
+      "no_text": "(48 mm)6"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "sherwin-williams-eds.pdf",
+    "url": "https://www.sherwin-williams.com/document/EDS/en/790417048503/",
+    "sha256": "fdb65ebef0a2b38b63cbee91c73c48752af5e2370370e42c63fe80a6266007ee",
+    "about": "Sherwin-Williams environmental data sheet. Each page sets small ruled VOC tables under larger ones and under full-width section banners."
+  },
+  "notes": [
+    "#202: the sheet sets each value on the line under its bold label, at the label's 9.6 pt over an 8 pt body, so size made a sub-heading of every value."
+  ],
+  "checks": [
+    {
+      "id": "product-number-value",
+      "found": "2026-11-24",
+      "issue": "`K25W951`, the value under `PRODUCT NUMBER`, was an h3.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "K25W951"
+      },
+      "count": 0
+    },
+    {
+      "id": "manufacturer-address-value",
+      "found": "2026-11-24",
+      "issue": "The manufacturer's address under `MANUFACTURER'S NAME` was an h4, and the disclaimer through Volatile Ingredients nested under it.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Cleveland, OH 44113"
+      },
+      "count": 0
+    }
+  ]
+}

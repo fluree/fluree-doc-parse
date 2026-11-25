@@ -1,0 +1,42 @@
+{
+  "document": {
+    "file": "ti-tps5430.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/tps5430.pdf",
+    "sha256": "f0e6a520fb14ae4ef073d8faf0cb5c6bceec29371eb63759e5d5593443282e13",
+    "about": "TI TPS543x step-down converter data sheet. Its typical-characteristics graphs are drawn as vectors, each x-axis titled under its row of tick values."
+  },
+  "notes": [
+    "#241: the graphs' axis titles were headings. A line set directly under a row of three or more bare values spanning it is the axis's title."
+  ],
+  "checks": [
+    {
+      "id": "axis-title-under-scale",
+      "found": "2026-11-25",
+      "issue": "`I - Output Current - A`, an x-axis title under `0 0.5 1 1.5 …`, was a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "I - Output Current - A"
+      },
+      "count": 0
+    },
+    {
+      "id": "efficiency-axis",
+      "found": "2026-11-25",
+      "issue": "`Efficiency - %`, an axis title, was a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Efficiency - %"
+      },
+      "count": 0
+    },
+    {
+      "id": "section-kept",
+      "found": "2026-11-25",
+      "issue": "Guard: `5.1 Absolute Maximum Ratings` stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "5.1 Absolute Maximum Ratings"
+      }
+    }
+  ]
+}
