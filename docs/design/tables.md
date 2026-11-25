@@ -630,6 +630,15 @@ another such label is a group over its sub-group (`Power Management` over
 `Average power requirements (W)` over `Operational | 6.7W | …`), and the
 rows under both carry both.
 
+A journal table read from its text can set its rows in sections, each under
+its label (`Efficacy`, `Withdrawal`, `Adverse events`) with a rule across
+the table over it and a row's space each side. The space a rule takes may
+reach twice a row's gap, and the table runs on across it, when the line
+after the rule is a section's label: a few words in the label column, set
+where the rows above set theirs, and no caption. Past a rule with no such
+label under it, the table has ended (a page's foot, the next table's
+title), and a group's rule under a few columns sets no band.
+
 ## A list of fields has no header row
 
 A spec sheet sets its data as fields, `Label | value` down two columns and

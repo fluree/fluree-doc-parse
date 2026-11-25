@@ -2706,7 +2706,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .filter(|g| table::typed_layout(g, &outside))
                     .map(|g| g.bbox)
                     .collect();
-                for region in crate::textgrid::figure_runs(&lines, &taken) {
+                for region in crate::textgrid::figure_runs(&lines, &p.rules, &taken) {
                     if typed.iter().any(|t| overlap_area(t, &region) > 0.0) {
                         continue;
                     }

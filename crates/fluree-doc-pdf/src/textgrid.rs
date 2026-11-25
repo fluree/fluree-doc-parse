@@ -50,6 +50,41 @@ const WRAP_LEADING: f64 = 1.35;
 /// Vertical gap between consecutive lines, in font sizes, that ends a table.
 const MAX_ROW_GAP: f64 = 2.6;
 
+/// Share of the table's width a rule must run across to set off a band of
+/// its rows: a section's rule, not a column group's.
+const BAND_RULE_SPAN: f64 = 0.6;
+
+/// Most words in a section's label: a band's name (`Adverse events`), not a
+/// title or a note.
+const SECTION_WORDS: usize = 6;
+
+/// A section's label, by its text: a few words, no caption (`Table 5.` over
+/// the next table sets off no band of this one).
+fn section_label(text: &str) -> bool {
+    text.split_whitespace().count() <= SECTION_WORDS && !is_caption(text)
+}
+
+/// Is the gap between two lines, `above` ending at `y0` and the next
+/// starting at `y1`, one a table's rows run on across? A row gap; or, where
+/// the next line is a section's label (`band` true), twice one with a rule
+/// across the table, `x0..x1`, standing in it: a section band is set off by
+/// a rule with a row's space on each side of it (`Withdrawal` over its rows,
+/// under the rows before). Past a rule with no such label under it, the
+/// table has ended: a page's foot under its last row.
+fn row_gap(rules: &[Rule], x0: f64, x1: f64, y0: f64, y1: f64, fs: f64, band: bool) -> bool {
+    let gap = y1 - y0;
+    if gap <= fs * MAX_ROW_GAP {
+        return true;
+    }
+    band && gap <= fs * MAX_ROW_GAP * 2.0
+        && rules.iter().any(|r| {
+            r.orientation == Orientation::Horizontal
+                && r.axis_pos() > y0
+                && r.axis_pos() < y1
+                && r.bbox.x1.min(x1) - r.bbox.x0.max(x0) >= BAND_RULE_SPAN * (x1 - x0)
+        })
+}
+
 /// Deepest header read.
 const MAX_HEADER_LINES: usize = 5;
 
@@ -955,6 +990,8 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             && column_of(&cols0, &l.chunks[0]) == Some(0)
             && covered(&cols0, &l.chunks[0]).len() <= 1
     };
+    // A section's label in the label column, as [`section_label`] reads one.
+    let section = |l: &Line| label_row(l) && section_label(&l.chunks[0].text);
     // Runs of value rows, up to three label lines between them.
     let mut runs: Vec<(usize, usize)> = Vec::new();
     let mut k = 0;
@@ -969,7 +1006,15 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
         let mut labels = 0;
         while j < band.len() {
             let l = &clipped[band[j]];
-            if l.y0 - clipped[band[j - 1]].y1 > fs * MAX_ROW_GAP {
+            if !row_gap(
+                rules,
+                x0,
+                x1,
+                clipped[band[j - 1]].y1,
+                l.y0,
+                fs,
+                label_row(l),
+            ) {
                 break;
             }
             if value_row(l) || ruled_row(l, &clipped[band[j - 1]]) {
@@ -998,7 +1043,15 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
         let mut last = end;
         while last + 1 < clipped.len() {
             let next = &clipped[last + 1];
-            if next.y0 - clipped[last].y1 > fs * MAX_ROW_GAP {
+            if !row_gap(
+                rules,
+                x0,
+                x1,
+                clipped[last].y1,
+                next.y0,
+                fs,
+                label_row(next),
+            ) {
                 break;
             }
             if value_row(next) || ruled_row(next, &clipped[last]) {
@@ -1011,10 +1064,13 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                 j += 1;
             }
             let resumes = j > last + 1
-                && clipped
-                    .get(j)
-                    .is_some_and(|n| n.y0 - clipped[j - 1].y1 <= fs * MAX_ROW_GAP && value_row(n))
-                && (last + 1..j).all(|i| clipped[i].y0 - clipped[i - 1].y1 <= fs * MAX_ROW_GAP);
+                && clipped.get(j).is_some_and(|n| {
+                    row_gap(rules, x0, x1, clipped[j - 1].y1, n.y0, fs, false) && value_row(n)
+                })
+                && (last + 1..j).all(|i| {
+                    let l = &clipped[i];
+                    row_gap(rules, x0, x1, clipped[i - 1].y1, l.y0, fs, section(l))
+                });
             if !resumes {
                 break;
             }
@@ -1042,7 +1098,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
         while first > floor && header_seen < MAX_HEADER_LINES {
             let above = &clipped[first - 1];
             let cur = &clipped[first];
-            if cur.y0 - above.y1 > fs * MAX_ROW_GAP {
+            if !row_gap(rules, x0, x1, above.y1, cur.y0, fs, section(cur)) {
                 break;
             }
             if std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some() {
@@ -2340,7 +2396,7 @@ fn ruled_row_by_row(g: &Grid, rules: &[Rule], fills: &[crate::rule::Fill]) -> bo
 
 /// Runs of lines carrying figures in two places or more that no grid holds:
 /// a statement's rows, ruled by nothing but underlines.
-pub fn figure_runs(lines: &[Line], taken: &[BBox]) -> Vec<BBox> {
+pub fn figure_runs(lines: &[Line], rules: &[Rule], taken: &[BBox]) -> Vec<BBox> {
     // What no grid holds of each line.
     let lines: Vec<Line> = lines
         .iter()
@@ -2382,8 +2438,33 @@ pub fn figure_runs(lines: &[Line], taken: &[BBox]) -> Vec<BBox> {
         let mut k = i + 1;
         // Up to two lines of labels between rows of figures.
         while k < lines.len() && k <= j + 3 {
-            let gap = lines[k].y0 - lines[k - 1].y1;
-            if gap > lines[k].fs * MAX_ROW_GAP || !free(&lines[k]) {
+            let (above, next) = (&lines[k - 1], &lines[k]);
+            let reach = |l: &Line| {
+                l.chunks
+                    .iter()
+                    .fold((f64::MAX, f64::MIN), |(a, b), c| (a.min(c.x0), b.max(c.x1)))
+            };
+            let (a0, a1) = reach(above);
+            let (n0, n1) = reach(next);
+            // A section's label: one short chunk, no figures in it, set at the
+            // label column of the row above.
+            let label = next.chunks.len() == 1
+                && !figured(next)
+                && section_label(&next.chunks[0].text)
+                && above
+                    .chunks
+                    .first()
+                    .is_some_and(|c| (next.chunks[0].x0 - c.x0).abs() <= next.fs);
+            if !row_gap(
+                rules,
+                a0.min(n0),
+                a1.max(n1),
+                above.y1,
+                next.y0,
+                next.fs,
+                label,
+            ) || !free(next)
+            {
                 break;
             }
             if figured(&lines[k]) {
@@ -2437,6 +2518,44 @@ pub fn strip_leaders(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_section_band_runs_on_across_its_rule() {
+        // Rows at 9 pt, a section's rule across the table at 340 with a
+        // row's space each side: the band runs on under its label.
+        let rule = |x0: f64, x1: f64, y: f64| Rule {
+            bbox: BBox {
+                x0,
+                y0: y - 0.25,
+                x1,
+                y1: y + 0.25,
+            },
+            orientation: Orientation::Horizontal,
+            page: 0,
+        };
+        let across = [rule(60.0, 540.0, 340.0)];
+        // A row's gap runs on, ruled or not.
+        assert!(row_gap(&[], 60.0, 540.0, 300.0, 318.0, 9.0, false));
+        // Twice a row's gap with a rule across it, over a section's label.
+        assert!(row_gap(&across, 60.0, 540.0, 328.0, 356.0, 9.0, true));
+        // Not over a line that is no label: the table has ended.
+        assert!(!row_gap(&across, 60.0, 540.0, 328.0, 356.0, 9.0, false));
+        // Nor where the rule under it groups a few columns only.
+        let group = [rule(300.0, 420.0, 340.0)];
+        assert!(!row_gap(&group, 60.0, 540.0, 328.0, 356.0, 9.0, true));
+        // Nor past twice a row's gap.
+        assert!(!row_gap(&across, 60.0, 540.0, 300.0, 356.0, 9.0, true));
+    }
+
+    #[test]
+    fn a_section_label_is_a_few_words_and_no_caption() {
+        assert!(section_label("Adverse events"));
+        assert!(section_label("Secondary outcomes"));
+        assert!(!section_label("Table 5. Ratings by observer group"));
+        assert!(!section_label(
+            "Values are means and standard deviations of the ratings"
+        ));
+    }
 
     #[test]
     fn a_stub_head_is_set_as_a_title_and_prose_is_not() {
