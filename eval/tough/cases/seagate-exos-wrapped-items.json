@@ -22,10 +22,10 @@
     {
       "id": "wrapped-item-after-a-dash-whole",
       "found": "2026-11-24",
-      "issue": "As above, `Enterprise backup and restore—` and `D2D, virtual tape`.",
+      "issue": "As above, `Enterprise backup and restore—` and `D2D, virtual tape`. (#281: the closed dash joins the lines with no space, as the page sets `restore—D2D`.)",
       "element": {
         "type": "doco:Paragraph",
-        "text": "Enterprise backup and restore— D2D, virtual tape",
+        "text": "Enterprise backup and restore—D2D, virtual tape",
         "evidence": "marker"
       }
     }

@@ -1901,6 +1901,7 @@ fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
                         out.push(CELL_BREAK);
                     }
                 }
+                _ if crate::block::closed_join(&out, l) => {}
                 _ => out.push(' '),
             }
         }

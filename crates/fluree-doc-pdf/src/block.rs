@@ -129,7 +129,7 @@ impl Block {
                         HyphenJoin::Hyphen => {}
                         HyphenJoin::Dash => out.push(' '),
                     }
-                } else if !cjk {
+                } else if !cjk && !closed_join(&out, &l.text) {
                     out.push(' ');
                 }
             }
@@ -137,6 +137,33 @@ impl Block {
             prev = Some(l);
         }
         out
+    }
+}
+
+/// Whether a line ending in a dash set closed, or in a web address broken
+/// at a slash, runs on into the next with no space: `restore—` over `D2D`,
+/// `10–` over `20`, `…TechnicalDocumentLibrary/` over its file's name.
+///
+/// A dash set closed against the word before it joins that word to the
+/// next, as the line's own hyphen does; one with a space before it was set
+/// apart, and keeps its space. A slash ending a word may have had a space
+/// after it on the line the break took (`fuego/ desprendimiento`), but an
+/// address holds none.
+pub(crate) fn closed_join(before: &str, next: &str) -> bool {
+    let mut tail = before.chars().rev();
+    let (Some(mark), Some(prev)) = (tail.next(), tail.next()) else {
+        return false;
+    };
+    if prev.is_whitespace() || !next.chars().next().is_some_and(|c| !c.is_whitespace()) {
+        return false;
+    }
+    match mark {
+        '—' | '–' => true,
+        '/' => {
+            let token = before.rsplit(char::is_whitespace).next().unwrap_or("");
+            token.contains("://") || token.to_ascii_lowercase().starts_with("www.")
+        }
+        _ => false,
     }
 }
 
@@ -4283,6 +4310,25 @@ mod tests {
         );
         // A dash set apart from its words stays one.
         assert_eq!(joined("a pause -", "then more"), "a pause - then more");
+        // A dash or slash set closed runs on into the next line.
+        assert_eq!(
+            joined("backup and restore—", "D2D, virtual tape"),
+            "backup and restore—D2D, virtual tape"
+        );
+        assert_eq!(joined("pages 10–", "20 cover it"), "pages 10–20 cover it");
+        assert_eq!(
+            joined("see https://example.com/library/", "warranty.pdf"),
+            "see https://example.com/library/warranty.pdf"
+        );
+        assert_eq!(
+            joined("at www.example.com/", "support"),
+            "at www.example.com/support"
+        );
+        // A slash ending a word may have had its space after it.
+        assert_eq!(joined("cash and/", "or credit"), "cash and/ or credit");
+        // Set apart, each keeps its space.
+        assert_eq!(joined("a pause —", "then more"), "a pause — then more");
+        assert_eq!(joined("Red /", "Blue"), "Red / Blue");
     }
 
     #[test]
