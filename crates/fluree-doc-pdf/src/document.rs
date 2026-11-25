@@ -1936,6 +1936,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut aligned = timed(&mut timings.tables, || {
             table::detect_aligned(&prose, &p.rules, &p.fills, p.index)
         });
+        // A box drawn round a drawing parts the text either side of it: a
+        // grid read across its edge put a diagram's labels and the note in
+        // the column beside its box in one row.
+        let walls = table::walls(&p.fills);
         // Its glyphs are the prose's, outside every grid; but a run of them
         // either side of a grid can line up into a table laid over it.
         aligned.retain(|g| {
@@ -1943,6 +1947,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 && g.cols() >= 2
                 && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
                 && !table::reads_as_prose(g, &prose)
+                && !table::walled_in(&g.bbox, &walls)
         });
         // Field lists set without rules, found between the page's gutters
         // where a row across the page holds more than a label and its
@@ -1972,6 +1977,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .iter()
                     .chain(aligned.iter())
                     .any(|o| overlap_area(&o.bbox, &f.bbox) > 0.0)
+                    || table::walled_in(&f.bbox, &walls)
                 {
                     continue;
                 }

@@ -6,7 +6,8 @@
     "about": "Lutron Maestro LED+ dimmer submittal sheet. Page 5 sets three wiring diagrams in one drawn box, their labels in its margins, with a note in the column beside the box and the diagrams' title over it."
   },
   "notes": [
-    "#201: the figure regions started at the switch drawings, not the box, so labels in the box's margin were body text, and the note beside the box and the title over it were taken as the diagrams' labels."
+    "#201: the figure regions started at the switch drawings, not the box, so labels in the box's margin were body text, and the note beside the box and the title over it were taken as the diagrams' labels.",
+    "#201: an alignment grid read across the box's right edge put the wire labels and the note's next two lines in one row, and the note was cut after its first line."
   ],
   "checks": [
     {
@@ -24,9 +25,10 @@
       "found": "2026-11-24",
       "issue": "`Note: Dimmer can be installed on the`, in the column beside the box, was a Figure.",
       "element": {
-        "type": "doco:Paragraph",
+        "type": "doco:Figure",
         "text": "Note: Dimmer can be installed on the"
-      }
+      },
+      "count": 0
     },
     {
       "id": "label-in-margin-is-figure",
@@ -35,6 +37,15 @@
       "element": {
         "type": "doco:Figure",
         "text": "Dimmer Line Side"
+      }
+    },
+    {
+      "id": "note-whole",
+      "found": "2026-11-24",
+      "issue": "The note was cut after `Note: Dimmer can be installed on the`; its next lines were read with the wire labels: `Brass Blue Brass Blue line side, load side, or in the`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Note: Dimmer can be installed on the line side, load side, or in the middle of the circuit."
       }
     }
   ]

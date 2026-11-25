@@ -461,6 +461,11 @@ when half of it lies on a drawing, and a ruled grid whose strokes stand at
 many more places than its rows and columns: the outlines of a unit's
 terminals, or a drawing's dimension and extension lines. A table drawn over
 a drawing, ruled at its rows and columns and mostly filled, stays a table.
+No grid is read across the edge of a box drawn round a drawing, a box
+holding three shapes or more: a diagram's wire labels inside the box and a
+note in the column beside it stand on the same baselines, and read as rows
+they cut the note after its first line. A table's shaded label column holds
+text, not shapes, and parts nothing.
 
 **Body text size.** The size headings are measured against is taken from the
 text outside drawings. A diagram's many small labels do not make every
