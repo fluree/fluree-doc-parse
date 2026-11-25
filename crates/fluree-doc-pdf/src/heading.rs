@@ -433,7 +433,201 @@ fn title_like_within(text: &str, max_words: usize) -> bool {
     if ends_with_contact(t) {
         return false;
     }
+    // An article's front matter: its authors, and its publication record.
+    if byline(t) || publication_record(t) {
+        return false;
+    }
     !starts_like_list_item(t)
+}
+
+/// The labels an article's publication record sets at the head of a line,
+/// before their value: `Received September 7, 2009; Accepted …`,
+/// `Editor: …`, `Citation: …`. Lowercase.
+const RECORD_LABELS: &[&str] = &[
+    "received",
+    "accepted",
+    "revised",
+    "published",
+    "published online",
+    "available online",
+    "submitted",
+    "editor",
+    "edited by",
+    "reviewed by",
+    "academic editor",
+    "handling editor",
+    "citation",
+    "copyright",
+    "correspondence",
+    "specialty section",
+    "article history",
+];
+
+/// Month names, lowercase, as a publication record dates its steps.
+const MONTHS: &[&str] = &[
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "sept",
+    "oct",
+    "nov",
+    "dec",
+];
+
+/// A line of an article's publication record: one of [`RECORD_LABELS`] and
+/// its value, after a colon (`Editor: Dana Davis, …`) or as a date
+/// (`Received 15 June 2018`, `Copyright © 2010 …`). A section of that name
+/// is the word alone: `Funding`, `Copyright`.
+fn publication_record(t: &str) -> bool {
+    let lower = t
+        .trim_start_matches(['*', '\u{2020}'])
+        .trim()
+        .to_lowercase();
+    RECORD_LABELS.iter().any(|label| {
+        let Some(rest) = lower.strip_prefix(label) else {
+            return false;
+        };
+        if rest.starts_with(|c: char| c.is_alphanumeric()) {
+            return false;
+        }
+        let rest = rest.trim_start();
+        if let Some(value) = rest.strip_prefix(':') {
+            return !value.trim().is_empty();
+        }
+        // An editor's label set alone over the name: no section is titled
+        // so.
+        if rest.is_empty() {
+            return matches!(
+                *label,
+                "academic editor" | "handling editor" | "edited by" | "reviewed by"
+            );
+        }
+        // A date within its first few words: a month's name or a year.
+        rest.split_whitespace().take(4).any(|w| {
+            let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+            MONTHS.contains(&w)
+                || (w.len() == 4
+                    && w.chars().all(|c| c.is_ascii_digit())
+                    && (w.starts_with("19") || w.starts_with("20")))
+        })
+    })
+}
+
+/// Words a person's name may carry in lowercase: `van`, `de`, `von`.
+const NAME_PARTICLES: &[&str] = &[
+    "van", "de", "der", "den", "von", "da", "das", "do", "dos", "del", "della", "di", "du", "la",
+    "le", "ten", "ter", "bin", "al", "el",
+];
+
+/// Marks set after an author's name to point to their affiliation or to
+/// the corresponding author: `1`, `2,3`, `*`, `†`.
+fn affiliation_mark(c: char) -> bool {
+    c.is_ascii_digit()
+        || matches!(
+            c,
+            '*' | '\u{2020}' | '\u{2021}' | '\u{00A7}' | '\u{00B6}' | ',' | '\u{262F}' | '\u{204E}'
+        )
+}
+
+/// A line of an article's authors: people's names, each of two to four
+/// words, with the marks that point to their affiliations
+/// (`Roberta Lattanzi 1, Silvia Rief2, … and*`, `Mariana Spetea 2*`). One
+/// name with a plain number is too like a title (`Study 2`, `Model Year
+/// 2020`), and one with a star like a heading with a note
+/// (`Posted Transactions*`): a line of one name is a byline when it marks
+/// an affiliation and the corresponding author (`2*`) or a list of
+/// affiliations (`1,2`).
+fn byline(t: &str) -> bool {
+    let mut names = 0;
+    let mut marked = false;
+    let mut strong = false;
+    let units = t
+        .replace(" and ", ", ")
+        .replace(" & ", ", ")
+        .replace(';', ",");
+    for unit in units.split(", ") {
+        let unit = unit.trim();
+        let mut words: Vec<&str> = unit.split_whitespace().collect();
+        // A list run on to the next line ends on its `and`.
+        if words
+            .last()
+            .is_some_and(|w| w.trim_end_matches(affiliation_mark) == "and")
+        {
+            words.pop();
+        }
+        // The marks: after the last word, or set apart from it.
+        let mut marks = String::new();
+        while let Some(last) = words.last() {
+            let name = last.trim_end_matches(affiliation_mark);
+            marks.insert_str(0, &last[name.len()..]);
+            if name.is_empty() {
+                words.pop();
+            } else {
+                let n = words.len();
+                words[n - 1] = name;
+                break;
+            }
+        }
+        if words.is_empty() {
+            // Marks alone continue the name before them: `1,2` after `Lee
+            // 1,`, or after the last name on the line above (`3,4, Steve W.
+            // Lindsay5‡, …`).
+            if !marks.is_empty() {
+                marked = true;
+                strong |= strong_mark(&marks);
+                continue;
+            }
+            return false;
+        }
+        let is_name_word = |w: &&str| {
+            NAME_PARTICLES.contains(w)
+                || (w.chars().next().is_some_and(char::is_uppercase)
+                    && w.chars()
+                        .all(|c| c.is_alphabetic() || matches!(c, '.' | '-' | '\'' | '\u{2019}')))
+        };
+        if !(2..=4).contains(&words.len()) || !words.iter().all(is_name_word) {
+            return false;
+        }
+        names += 1;
+        if marks.chars().any(|c| c != ',') {
+            marked = true;
+            // A number past two figures is no affiliation's.
+            if marks
+                .split(',')
+                .any(|m| m.trim_matches(|c: char| !c.is_ascii_digit()).len() > 2)
+            {
+                return false;
+            }
+            strong |= strong_mark(&marks);
+        }
+    }
+    names > 0 && marked && (names >= 2 || strong)
+}
+
+/// A mark only an author's name carries: an affiliation's number with a
+/// symbol for the corresponding author (`2*`), or a list of affiliations
+/// (`1,2`). A symbol alone is as often a note's (`Posted Transactions*`).
+fn strong_mark(marks: &str) -> bool {
+    let digits = marks.chars().any(|c| c.is_ascii_digit());
+    let symbol = marks.chars().any(|c| !c.is_ascii_digit() && c != ',');
+    (digits && symbol) || marks.trim_matches(',').contains(',')
 }
 
 /// Words a title does not end on: an article, a conjunction, `of`, `not`.
@@ -889,6 +1083,19 @@ const SPREAD_ADVANCE: f64 = 0.85;
 /// Sizes, in points, within which two candidate titles are set alike.
 const SAME_TITLE_SIZE: f32 = 0.25;
 
+/// Most lines a document's title set at display size runs over: a
+/// journal article's title, at twice the body's size, runs to five.
+const MAX_TITLE_LINES: usize = 6;
+
+/// Least share of the page's text width a title set for display spans when
+/// no block above it reads as a title.
+const DISPLAY_TITLE_WIDTH: f64 = 0.5;
+
+/// Most words in a document's title set at display size. An article's
+/// title states its finding (`Comparison between CHA2DS2-VASc and the new
+/// R2CHADS2 and ATRIA scores at predicting thromboembolic event in …`).
+const MAX_DISPLAY_TITLE_WORDS: usize = 30;
+
 /// How much larger than the first blocks' title a title read later on the
 /// first page must be to be the document's.
 const LATE_TITLE_RATIO: f32 = 1.1;
@@ -981,6 +1188,21 @@ pub fn detect_with_body(
 
     let document_title = pages.first().and_then(|blocks| {
         let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
+        // The page's largest type, set for display: an article's title, which
+        // may run over four or five lines (`An internal deletion in MTH1
+        // enables growth on glucose of pyruvate-decarboxylase negative, …`).
+        let display = |b: &Block| {
+            b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO
+                && b.font_size >= largest * 0.98
+                && b.lines.len() <= MAX_TITLE_LINES
+        };
+        let limit = |text: &str, b: &Block| {
+            if display(b) {
+                MAX_DISPLAY_TITLE_WORDS
+            } else {
+                word_limit(text, b, body)
+            }
+        };
         let candidate = |i: usize, b: &Block| -> bool {
             let text = b.text();
             // At most three lines, or a few words to a line, as a cover
@@ -990,7 +1212,8 @@ pub fn detect_with_body(
             let words = text.split_whitespace().count();
             let inked: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
             let letters = inked.iter().filter(|c| c.is_alphabetic()).count();
-            let stacked = words <= b.lines.len() * 2 && letters * 10 >= inked.len() * 6;
+            let lettered = letters * 10 >= inked.len() * 6;
+            let stacked = words <= b.lines.len() * 2 && lettered;
             // A title stands alone on its row. One of two one-line
             // groups set across a row, a course's name at the left and
             // its code at the right, is a running head's part. A cover
@@ -1005,8 +1228,8 @@ pub fn detect_with_body(
                 });
             if b.marker.is_some()
                 || shares_row
-                || (b.lines.len() > 3 && !stacked)
-                || !title_like_within(&text, word_limit(&text, b, body))
+                || (b.lines.len() > 3 && !stacked && !(display(b) && lettered))
+                || !title_like_within(&text, limit(&text, b))
                 || (numbering_depth(&text).is_some() && repeated_numbered.contains(&norm(&text)))
             {
                 return false;
@@ -1039,7 +1262,7 @@ pub fn detect_with_body(
             // is not the document title.
             .take_while(|b| {
                 let text = b.text();
-                text.split_whitespace().count() <= word_limit(&text, b, body)
+                text.split_whitespace().count() <= limit(&text, b)
             })
             .enumerate()
             .filter(|&(i, b)| candidate(i, b))
@@ -1074,7 +1297,8 @@ pub fn detect_with_body(
         // 14pt, read before the 17pt title at the right), when it is
         // clearly larger than the first blocks' title. Where the first
         // blocks hold no title, a large line further down is a section's
-        // or a statement's, not the document's.
+        // or a statement's, not the document's, unless it is set for
+        // display.
         let foot = blocks.iter().map(|b| b.bbox.y1).fold(0.0_f64, f64::max);
         let late = blocks
             .iter()
@@ -1083,8 +1307,16 @@ pub fn detect_with_body(
             .filter(|&(i, b)| {
                 b.font_size >= largest * 0.98 && b.bbox.y0 < foot * 0.5 && candidate(i, b)
             })
+            // Where no early block is a title, a title set for display and
+            // across the page: over a journal's banner set across the row
+            // (`RESEARCH ARTICLE` and `Open Access`), and its citation and
+            // DOI. A narrow line set large is a badge or a callout (a
+            // model's number at the right of a sheet's head).
             .find(|(_, b)| {
-                early.is_some_and(|(_, e)| b.font_size > e.font_size * LATE_TITLE_RATIO)
+                early.map_or(
+                    display(b) && b.bbox.width() >= (right - left) * DISPLAY_TITLE_WIDTH,
+                    |(_, e)| b.font_size > e.font_size * LATE_TITLE_RATIO,
+                )
             });
         late.or(early).map(|(i, _)| i)
     });
@@ -2735,6 +2967,101 @@ mod tests {
     }
 
     #[test]
+    fn an_articles_front_matter_is_no_heading() {
+        for t in [
+            "Ann Lee 1, Bo Chen2, Cy Wu2 and*",
+            "Dee Park 2*",
+            "Ann B. Lee 1,2, Bo Chen3",
+            "3,4, Cy D. Wu5\u{2021}, Ed F. Ng1\u{2021}",
+            "Fay Gu and Hal Ito *",
+        ] {
+            assert!(byline(t), "{t}");
+        }
+        // A heading with a note's star, and a label's number sign.
+        assert!(!byline("Posted Transactions*"));
+        assert!(!byline("Comparable Sale #1"));
+        for t in [
+            "Study 2",
+            "Model Year 2020",
+            "Results and Discussion",
+            "Supplementary Figure 1",
+            "Terms and Conditions",
+            "Ann Lee",
+        ] {
+            assert!(!byline(t), "{t}");
+        }
+        for t in [
+            "Received March 3, 2011; Accepted May 9, 2011; Published June 1, 2011",
+            "Editor: Ann Lee, Example University, United States of America",
+            "Academic editor",
+            "Copyright \u{00A9} 2011 Lee et al.",
+            "Submitted 9 July 2018 Accepted 24 August 2018",
+        ] {
+            assert!(publication_record(t), "{t}");
+        }
+        for t in [
+            "Received signal strength",
+            "Funding",
+            "Copyright",
+            "Published works",
+            "Editorial board",
+        ] {
+            assert!(!publication_record(t), "{t}");
+        }
+    }
+
+    #[test]
+    fn an_articles_long_title_is_its_title_and_its_banner_no_heading() {
+        // A journal's banner set across the row, over a title of four lines
+        // at twice the body's size, over the authors.
+        let mut kind = at("ORIGINAL STUDY", 13.0, 90.0, false);
+        kind.bbox.x0 = 60.0;
+        kind.bbox.x1 = 160.0;
+        let mut access = at("Free to Read", 13.0, 90.0, false);
+        access.bbox.x0 = 450.0;
+        access.bbox.x1 = 535.0;
+        let mut title = blk("How a small protein and its partners", 22.0, 1);
+        for line in [
+            "shape growth of yeast cells on glucose",
+            "under stress across many generations",
+            "in the lab",
+        ] {
+            let l = blk(line, 22.0, 1).lines.remove(0);
+            title.lines.push(l);
+        }
+        title.bbox = BBox {
+            x0: 57.0,
+            y0: 120.0,
+            x1: 520.0,
+            y1: 220.0,
+        };
+        let mut authors = at("Ann Lee 1, Bo Chen2 and Cy Wu1*", 10.0, 235.0, true);
+        authors.bbox.x1 = 400.0;
+        let mut text = Vec::new();
+        for k in 0..4 {
+            let mut b = body();
+            b.bbox.y0 = 260.0 + 40.0 * k as f64;
+            b.bbox.y1 = b.bbox.y0 + 30.0;
+            text.push(b);
+        }
+        let mut page = vec![kind, access, title, authors];
+        page.extend(text);
+        let hs = detect(&[page], &[]);
+        assert!(
+            hs.iter()
+                .any(|h| h.text.starts_with("How a small protein") && h.evidence == Evidence::Title),
+            "{hs:?}"
+        );
+        assert!(
+            hs.iter().all(
+                |h| !matches!(h.text.as_str(), "ORIGINAL STUDY" | "Free to Read")
+                    && !h.text.starts_with("Ann Lee")
+            ),
+            "{hs:?}"
+        );
+    }
+
+    #[test]
     fn a_forms_keys_answers_footers_and_line_captions_are_no_headings() {
         for t in ["(a) (b)", "(f) (g)", "Yes No", "YES NO", "Yes No N/A"] {
             assert!(keys_or_answers(t), "{t}");
@@ -3521,16 +3848,25 @@ mod tests {
         let h = detect(&pages, &[]);
         assert_eq!(h.len(), 1, "{h:?}");
         assert_eq!(h[0].evidence, Evidence::Title);
-        // Four lines of ordinary length are not stacked.
-        let pages = vec![vec![
-            stacked(&[
-                "Regional Economy Report",
-                "for the Northern",
-                "and Western",
-                "Districts Today",
-            ]),
-            blk("body text", 10.0, 20),
-        ]];
+        // Four lines of ordinary length are not stacked: at display size
+        // they are a title all the same, as an article's runs on (#367);
+        // set a little larger than the text, they are not.
+        let rows = [
+            "Regional Economy Report",
+            "for the Northern",
+            "and Western",
+            "Districts Today",
+        ];
+        let pages = vec![vec![stacked(&rows), blk("body text", 10.0, 20)]];
+        assert!(detect(&pages, &[])
+            .iter()
+            .any(|h| h.evidence == Evidence::Title));
+        let mut smaller = stacked(&rows);
+        smaller.font_size = 12.0;
+        for l in &mut smaller.lines {
+            l.font_size = 12.0;
+        }
+        let pages = vec![vec![smaller, blk("body text", 10.0, 20)]];
         assert!(detect(&pages, &[])
             .iter()
             .all(|h| h.evidence != Evidence::Title));

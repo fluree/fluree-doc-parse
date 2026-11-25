@@ -405,6 +405,27 @@ digits and a group of four, or opens with `+`. A date, a standard's year
 (`2043-2013`) or a count (`COVID-19`) fails that test. An outline entry can
 still name such a line as a heading.
 
+## An article's front matter
+
+An article's first page sets its authors and its publication record by the
+title, often bold or larger than the text. Neither is a heading.
+
+- **Authors.** A line of people's names, each of two to four words, with
+  the marks that point to their affiliations: `Roberta Lattanzi 1, Silvia
+  Rief2, … and*`, `Hye Chong Hong and Ari Min *`. Two names or more need a
+  mark. One name needs an affiliation's number with a corresponding
+  author's symbol (`Mariana Spetea 2*`) or a list of affiliations (`1,2`).
+  `Study 2`, `Model Year 2020` and `Posted Transactions*` are headings
+  shaped the same way. A line that opens with the marks of the name
+  before it carries the list on (`3,4, Steve W. Lindsay5‡, …`).
+- **The publication record.** A line that opens with one of its labels,
+  `Received`, `Accepted`, `Published`, `Editor`, `Citation`, `Copyright`
+  and the like, then gives a value after a colon or a date:
+  `Received September 7, 2009; Accepted …`, `Editor: Dana Davis, …`,
+  `Copyright © 2023, …`. An editor's label set alone over the name
+  (`Academic editor`) is front matter too. The word alone, `Funding` or
+  `Copyright`, can title a section and stays a heading.
+
 ## The outline tree
 
 **The signal no benchmarked engine uses.** A PDF's outline (bookmark) tree is
@@ -449,7 +470,18 @@ the title:
   The page's largest title-shaped line in its upper half is the title when
   it is over a tenth larger than the first blocks' pick. Where the first
   blocks hold no title at all, a large line further down is a section's or
-  a statement's, and stays one.
+  a statement's, and stays one. The exception is a title set for display
+  across the page: at 1.5 times the body's size or more, the page's largest
+  type, and at least half the text's width. An article's title sits under a
+  banner set across a row, `RESEARCH ARTICLE` at the left and `Open Access`
+  at the right, and under its citation and DOI. A narrow line set large is
+  a badge or a callout, such as a model's number at the right of a sheet's
+  head.
+- **A long title.** A title set for display may run to six lines and thirty
+  words, as an article's states its finding (`An internal deletion in MTH1
+  enables growth on glucose of pyruvate-decarboxylase negative, …`).
+  Otherwise more than three lines is prose, unless a cover stacks a word or
+  two to a line.
 - **Two candidates of one size.** The one a column further left (by more
   than a quarter of the page's width) is the title. A category strip at the
   right of the header (`Wallbox Wiring Devices`) is as large as the title
