@@ -497,9 +497,10 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
 /// columns unruled on that row) holds its value in its first column. So a
 /// run is spread when its only text, in its first cell, is centred on the
 /// run, and narrower than most of it: a row of figures the grid failed to
-/// part runs the run's whole width, and is no one value. Only a value with
-/// a word in it: figures alone across columns are the grid's cuts off the
-/// page's.
+/// part runs the run's whole width, and is no one value. A wider value is
+/// spread where it stands in from both edges alike, by an em or more. Only
+/// a value with a word in it: figures alone across columns are the grid's
+/// cuts off the page's.
 fn spread_runs(
     g: &table::Grid,
     glyphs: &[Glyph],
@@ -547,18 +548,32 @@ fn spread_runs(
                             .collect()
                     }
                 };
-                let ink = ids
+                let marks: Vec<&Glyph> = ids
                     .iter()
                     .filter_map(|&j| glyphs.get(j))
-                    .filter(|gl| !gl.text.trim().is_empty())
+                    .filter(|gl| !gl.text.trim().is_empty() && gl.bbox.is_some())
+                    .collect();
+                let ink = marks
+                    .iter()
                     .filter_map(|gl| gl.bbox)
                     .reduce(|a, b| a.union(&b));
                 if let Some(ink) = ink {
                     let (x0, x1) = (g.xs[c], g.xs[end]);
                     let width = (x1 - x0).max(1.0);
                     let mid = (ink.x0 + ink.x1) / 2.0;
-                    out[r * cols + c] = (mid - (x0 + x1) / 2.0).abs() <= width * SPREAD_CENTRE
-                        && ink.x1 - ink.x0 <= width * SPREAD_WIDTH;
+                    let centred = (mid - (x0 + x1) / 2.0).abs() <= width * SPREAD_CENTRE;
+                    let narrow = ink.x1 - ink.x0 <= width * SPREAD_WIDTH;
+                    // Wider, it is centred as surely where it stands in from
+                    // both edges alike, an em or more: a weight's lines
+                    // across two models' columns. A value set from the left
+                    // that fills the run stands in by the cell's padding
+                    // alone, under an em.
+                    let mut sizes: Vec<f64> = marks.iter().map(|gl| gl.font_size as f64).collect();
+                    sizes.sort_by(f64::total_cmp);
+                    let em = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
+                    let (l, rgt) = (ink.x0 - x0, x1 - ink.x1);
+                    let even = (l - rgt).abs() <= SPREAD_EVEN * em && l.min(rgt) >= em;
+                    out[r * cols + c] = centred && (narrow || even);
                 }
             }
             c = end;
@@ -573,6 +588,12 @@ const SPREAD_CENTRE: f64 = 0.15;
 
 /// Widest a spread value's ink runs, as a share of its run's width.
 const SPREAD_WIDTH: f64 = 0.8;
+
+/// Most a wider spread value's margins in its run may differ, in ems of its
+/// text. A typesetter centring a value leaves the same space either side of
+/// its advance; the ink measured from the glyph boxes differs from that by
+/// the side bearings of its first and last glyphs, a fraction of an em.
+const SPREAD_EVEN: f64 = 0.25;
 
 /// How many rows head a grid of figures as its parameters do: each a
 /// name ending in a colon and only figures beside it, over three rows or
@@ -3875,6 +3896,60 @@ mod tests {
             .filter(|e| e.kind == "doco:SectionTitle")
             .map(|e| e.text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn a_wide_value_standing_in_alike_from_both_edges_is_spread() {
+        // A label column and two columns a value is set across (x 60–260),
+        // its text at 10 pt.
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 60.0, 160.0, 260.0],
+            ys: vec![0.0, 20.0, 40.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 260.0,
+                y1: 40.0,
+            },
+        };
+        let rows: Vec<Vec<String>> = vec![
+            vec!["Spec".into(), "A".into(), "B".into()],
+            vec![
+                "Warranty".into(),
+                "two years on parts".into(),
+                String::new(),
+            ],
+        ];
+        let left = vec![false, false, false, false, false, true];
+        let ink = |x0: f64, x1: f64| Glyph {
+            text: "two years on parts".into(),
+            bbox: Some(BBox {
+                x0,
+                y0: 25.0,
+                x1,
+                y1: 35.0,
+            }),
+            page: 0,
+            origin: (x0, 35.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            advance: None,
+            draw_index: 0,
+        };
+        let spread = |x0: f64, x1: f64| spread_runs(&g, &[ink(x0, x1)], &rows, &left)[4];
+        // Narrow and centred, as before.
+        assert!(spread(110.0, 210.0));
+        // 85% of the run, 15 pt in from each edge: centred as surely.
+        assert!(spread(75.0, 245.0));
+        // As wide, set from the left: in by the padding at its start.
+        assert!(!spread(63.0, 233.0));
+        // Filling the run: in alike, but by the padding alone, under an em.
+        assert!(!spread(63.0, 257.0));
+        // As wide, an em or more in from each edge, but not alike.
+        assert!(!spread(71.0, 241.0));
     }
 
     #[test]
