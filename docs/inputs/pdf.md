@@ -238,6 +238,24 @@ other bullets: their size, as far from its text as theirs.
 The item's marker is `•`. Each item starts where its bullet is, however
 closely the items are spaced.
 
+**Numbers set apart.** A list's number may stand apart from its item, left
+of the item's first line: a form's `2` beside `Transaction reported to you on
+Form 1099-B?`, a datasheet's `(1)` beside its note, `[37]` beside a
+reference. The item's text keeps the number as printed (`2 Transaction
+reported…`, `(1) Stresses beyond…`). A bullet's glyph, by contrast, is only
+the item's mark and is not kept. A number counts as part of a list only when
+all of these hold:
+- the list counts: another item's number is one more or one less, and a
+  letter or roman list runs from its first (`a`, `i`) to this one;
+- it stands level with the item's first line, within three tenths of the
+  line's size;
+- it is set at seven tenths of the item's size or more, and is not raised
+  as a note's mark is.
+
+Anything else is left out of the item's text, as before. That covers a year
+over a table's rows, a fraction, a dimension, a chart's tick labels set
+beside a column, and a word spelled down the margin a letter a line.
+
 **Dashes and arrows.** A line opening with a dash, a minus sign or an
 arrow and a space (`—`, `–`, `-`, `−`, `→`, `>`) is a list item when
 another line nearby opens with the same mark at the same place. A `>`
