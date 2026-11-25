@@ -358,7 +358,8 @@ fn says_something(c: char) -> bool {
 ///
 /// Without that proof a bar chart's tick labels destroy each other: `2024` and
 /// `2023` sit side by side on one row, each outdented relative to the other, so
-/// each reads as the other's bullet. Both vanished from every chart in an
+/// each reads as the other's bullet. And a number marks an item, which says
+/// more than a number: a tick label set beside another is none. Both vanished from every chart in an
 /// annual report, leaving four figures with no years attached — the text was in
 /// the glyph layer, and in the assembled lines, and disappeared here.
 fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
@@ -376,6 +377,11 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     }
     let Some(nb) = neighbour else { return false };
     if l.text.chars().any(says_something) && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
+        return false;
+    }
+    // Nor does it mark another such: a chart's tick labels set side by side,
+    // `2.4−` beside `2.6−`, are no number and its item.
+    if l.text.chars().any(says_something) && marker_shaped(&nb.text) {
         return false;
     }
     // A list's marker is set at most a little larger than its item, never
@@ -3938,6 +3944,21 @@ mod tests {
             Some(&title),
             150.0
         ));
+    }
+
+    #[test]
+    fn a_tick_label_marks_no_other() {
+        // A chart's tick labels side by side on a row, at the column's
+        // margin: neither is the other's number.
+        let mut tick = l("2.4\u{2212}", 419.1, 169.3, 6.2);
+        tick.bbox.x1 = 430.0;
+        let next = l("2.6\u{2212}", 458.9, 169.3, 6.2);
+        assert!(!is_marker(&tick, Some(&next), 419.1));
+        // A number beside the item it opens still marks it.
+        let mut number = l("2.", 10.0, 169.3, 6.2);
+        number.bbox.x1 = 16.0;
+        let item = l("Ergonomic one-button tip ejector", 22.0, 169.3, 6.2);
+        assert!(is_marker(&number, Some(&item), 10.0));
     }
 
     #[test]

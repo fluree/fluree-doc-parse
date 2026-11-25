@@ -356,6 +356,10 @@ sat 5pt from its baseline, and cut the description in three around it. A
 title stacked in a margin, read line by line with the column beside it, is
 put back together as one block, its number and its words in whatever
 weight: `III. Regulatory cholesterol`. Display type is never a list marker.
+Nor is a number set beside another number, such as a chart's tick labels
+side by side (`2.4−` beside `2.6−`): a list's number opens an item that
+says more than a number. Taken for markers, the years under a chart's bars
+vanished from the text.
 
 **A callout beside a line.** Text set beside a paragraph's line at the same
 size, on a baseline a little off the line's, is a line of its own: a line is

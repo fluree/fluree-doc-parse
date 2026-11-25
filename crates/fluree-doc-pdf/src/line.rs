@@ -388,17 +388,10 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
         // A line crossing two cuts was rejoined at the first into the column
         // it began in, so every column to the left is looked at, not just
         // the next one.
-        let left_edges: Vec<(f64, f64, f64, i32)> = per_col[..=i]
+        let left_edges: Vec<(f64, BBox, i32)> = per_col[..=i]
             .iter()
             .flatten()
-            .map(|l| {
-                (
-                    l.bbox.x1,
-                    l.bbox.y0,
-                    l.font_size.max(1.0) as f64,
-                    l.rotation_bucket,
-                )
-            })
+            .map(|l| (l.bbox.x1, l.bbox, l.rotation_bucket))
             .collect();
         // The gap from a line on the far side of the cut, flush against it,
         // back to a line ending flush on the near side at its height.
@@ -409,10 +402,10 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
             }
             left_edges
                 .iter()
-                .filter(|(x1, y0, _, rot)| {
+                .filter(|(x1, b, rot)| {
                     (x1 - cut).abs() < fs * FLUSH
                         && r.bbox.x0 - x1 <= fs * MAX_JOIN_GAP
-                        && (y0 - r.bbox.y0).abs() < fs * 0.5
+                        && one_row(b, r, fs)
                         && *rot == r.rotation_bucket
                 })
                 .map(|(x1, ..)| r.bbox.x0 - x1)
@@ -442,7 +435,7 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
         for m in moved {
             if let Some(l) = per_col[..=i].iter_mut().rev().flatten().find(|l| {
                 let fs = l.font_size.max(1.0) as f64;
-                (l.bbox.x1 - cut).abs() < fs * FLUSH && (l.bbox.y0 - m.bbox.y0).abs() < fs * 0.5
+                (l.bbox.x1 - cut).abs() < fs * FLUSH && one_row(&l.bbox, &m, fs)
             }) {
                 // Fragments of one word must not gain a space: rejoin exactly
                 // unless the geometry shows a real gap.
@@ -456,6 +449,17 @@ fn rejoin_spanning_lines(per_col: &mut [Vec<Line>], cols: &[crate::column::Colum
             }
         }
     }
+}
+
+/// Do a line, `a`, and the piece of it past a cut, `b`, stand on one row:
+/// their tops level, or `b` the stop that closes `a`'s sentence, standing
+/// on its baseline? A line's last glyph alone, its full stop, is a dot on
+/// the baseline, its top the letters' height below theirs.
+fn one_row(a: &BBox, b: &Line, fs: f64) -> bool {
+    let closing = |c: char| ".,;:!?)]\u{2019}\u{201D}".contains(c);
+    let stop = !b.text.trim().is_empty() && b.text.trim().chars().all(closing);
+    (a.y0 - b.bbox.y0).abs() < fs * 0.5
+        || (stop && b.bbox.height() < fs * 0.5 && (a.y1 - b.bbox.y1).abs() <= fs * 0.35)
 }
 
 /// Assemble lines from a single column's glyphs.
@@ -3465,6 +3469,42 @@ mod tests {
         rejoin_spanning_lines(&mut columns, &cols);
         assert_eq!(columns[1].len(), 1, "a gutter is not a word space");
         assert_eq!(columns[0].len(), 1);
+    }
+
+    #[test]
+    fn a_full_stop_past_the_cut_rejoins_its_line() {
+        // A note across the page ends just past a column's edge: its full
+        // stop, alone on the far side, is a dot on the baseline, its top
+        // the letters' height below theirs.
+        let cols = vec![
+            crate::column::Column {
+                x0: 45.0,
+                x1: 293.0,
+            },
+            crate::column::Column {
+                x0: 293.0,
+                x1: 423.0,
+            },
+        ];
+        let mut stop = ln(".", 295.0, 295.6, 676.1, 7.0);
+        stop.bbox.y1 = 676.9;
+        let mut split = vec![
+            vec![ln(
+                "All other product names are property of their respective owners",
+                46.2,
+                294.9,
+                671.8,
+                7.0,
+            )],
+            vec![stop],
+        ];
+        rejoin_spanning_lines(&mut split, &cols);
+        assert!(split[1].is_empty(), "{:?}", split[1]);
+        assert!(
+            split[0][0].text.ends_with("owners."),
+            "{}",
+            split[0][0].text
+        );
     }
 
     #[test]
