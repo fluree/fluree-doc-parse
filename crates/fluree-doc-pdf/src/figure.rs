@@ -1739,6 +1739,149 @@ pub fn pictures(
         .collect()
 }
 
+/// Fewest lines a plot's graticule draws each way.
+const GRATICULE_LINES: usize = 4;
+
+/// Widest difference between two pitches of one graticule, as a share of
+/// its pitch: the rounding of where its lines are drawn, well short of the
+/// differing heights of a table's rows.
+const GRATICULE_PITCH: f64 = 0.1;
+
+/// Largest share of a graticule's cells that hold text: a plot's curve
+/// labels and notes stand in under a third of them, each crossing a line
+/// or two, where a ruled table's text fills over half its cells.
+const GRATICULE_TEXT: f64 = 0.4;
+
+/// Plots drawn as lines: a graticule of rules each spanning the plot, four
+/// or more each way, evenly pitched (a line broken off for a label leaving
+/// its neighbours whole pitches apart), with text in few of its cells. A
+/// scope's trace or a log plot's curves draw no fills, and their grids
+/// were read as tables of the notes set in them (`RA = 9.1 kΩ`). A ruled
+/// table holds its text in most cells, and its rows and columns differ.
+pub fn graticules(
+    rules: &[Rule],
+    glyphs: &[Glyph],
+    page: usize,
+    (page_width, page_height): (f64, f64),
+    figures: &[Figure],
+) -> Vec<Figure> {
+    use crate::rule::Orientation;
+    let along = |o: Orientation| -> Vec<BBox> {
+        rules
+            .iter()
+            .filter(|r| r.orientation == o)
+            .map(|r| r.bbox)
+            .collect()
+    };
+    let (hs, vs) = (along(Orientation::Horizontal), along(Orientation::Vertical));
+    // Rules sharing one extent, the lines of one graticule, by their place.
+    let sets = |lines: &[BBox], horizontal: bool| -> Vec<(BBox, Vec<f64>)> {
+        let mut out: Vec<(BBox, Vec<f64>)> = Vec::new();
+        for l in lines {
+            let (a, b, at) = if horizontal {
+                (l.x0, l.x1, (l.y0 + l.y1) * 0.5)
+            } else {
+                (l.y0, l.y1, (l.x0 + l.x1) * 0.5)
+            };
+            let span = |r: &BBox| {
+                if horizontal {
+                    (r.x0, r.x1)
+                } else {
+                    (r.y0, r.y1)
+                }
+            };
+            match out.iter_mut().find(|(r, _)| {
+                let (p, q) = span(r);
+                (p - a).abs() <= 1.5 && (q - b).abs() <= 1.5
+            }) {
+                Some((r, at_list)) => {
+                    *r = r.union(l);
+                    at_list.push(at);
+                }
+                None => out.push((*l, vec![at])),
+            }
+        }
+        for (_, at) in out.iter_mut() {
+            at.sort_by(f64::total_cmp);
+            at.dedup_by(|p, q| (*p - *q).abs() <= 1.0);
+        }
+        out.into_iter()
+            .filter(|(_, at)| at.len() >= GRATICULE_LINES)
+            .collect()
+    };
+    // Lines a pitch apart, or a whole number of pitches where a line breaks
+    // off for a label or a trace and so spans less than the rest; most of
+    // the gaps at the pitch itself.
+    let even = |at: &[f64]| {
+        let pitches: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        let mut sorted = pitches.clone();
+        sorted.sort_by(f64::total_cmp);
+        let pitch = sorted[sorted.len() / 2];
+        let near = |p: f64, k: f64| (p - k * pitch).abs() <= pitch * GRATICULE_PITCH;
+        let whole = |p: f64| {
+            let k = (p / pitch).round();
+            k >= 1.0 && near(p, k)
+        };
+        let at_pitch = pitches.iter().filter(|p| near(**p, 1.0)).count();
+        pitch > 0.0 && pitches.iter().all(|p| whole(*p)) && at_pitch * 2 >= pitches.len()
+    };
+    let mut out = Vec::new();
+    for (hbox, hat) in sets(&hs, true) {
+        for (vbox, vat) in sets(&vs, false) {
+            // One lattice: the verticals span the horizontals' height, and
+            // these the verticals' width.
+            let lattice = hbox.union(&vbox);
+            let fits = (vbox.y0 - hbox.y0).abs() <= 2.0
+                && (vbox.y1 - hbox.y1).abs() <= 2.0
+                && (hbox.x0 - vbox.x0).abs() <= 2.0
+                && (hbox.x1 - vbox.x1).abs() <= 2.0;
+            if !fits || !even(&hat) || !even(&vat) {
+                continue;
+            }
+            let page_scale = page_width > 0.0
+                && page_height > 0.0
+                && lattice.width() / page_width > MAX_PAGE_FRACTION
+                && lattice.height() / page_height > MAX_PAGE_FRACTION;
+            if page_scale
+                || figures
+                    .iter()
+                    .any(|f| share_inside(&f.drawing, &lattice) > 0.0)
+                || out
+                    .iter()
+                    .any(|f: &Figure| share_inside(&f.drawing, &lattice) > 0.0)
+            {
+                continue;
+            }
+            let cells = (hat.len() - 1) * (vat.len() - 1);
+            let mut held = vec![false; cells];
+            for g in glyphs {
+                let Some(b) = g.bbox else { continue };
+                if g.text.trim().is_empty() {
+                    continue;
+                }
+                let (x, y) = ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5);
+                let row = hat.windows(2).position(|w| y > w[0] && y < w[1]);
+                let col = vat.windows(2).position(|w| x > w[0] && x < w[1]);
+                if let (Some(r), Some(c)) = (row, col) {
+                    held[r * (vat.len() - 1) + c] = true;
+                }
+            }
+            let text = held.iter().filter(|h| **h).count() as f64 / cells as f64;
+            if text > GRATICULE_TEXT {
+                continue;
+            }
+            out.push(Figure {
+                bbox: lattice,
+                drawing: lattice,
+                page,
+                shapes: hat.len() + vat.len(),
+                frame: None,
+            });
+        }
+    }
+    out
+}
+
 /// Widest difference, in ems, between the left edges of lines set as one
 /// column.
 const PICTURE_EDGE: f64 = 0.5;
@@ -3060,5 +3203,92 @@ mod tests {
         for t in ["123", "37%", "2021", "sky", "1.", "AB"] {
             assert!(!callout_mark(t), "{t}");
         }
+    }
+
+    /// Lines drawn across a plot: a horizontal one at each `ys` from the
+    /// first `xs` to the last, a vertical one at each `xs` likewise.
+    fn lattice(xs: &[f64], ys: &[f64]) -> Vec<Rule> {
+        let (x0, x1) = (xs[0], xs[xs.len() - 1]);
+        let (y0, y1) = (ys[0], ys[ys.len() - 1]);
+        let h = ys.iter().map(|&y| Rule {
+            bbox: bb(x0, y - 0.2, x1, y + 0.2),
+            orientation: Orientation::Horizontal,
+            page: 0,
+        });
+        let v = xs.iter().map(|&x| Rule {
+            bbox: bb(x - 0.2, y0, x + 0.2, y1),
+            orientation: Orientation::Vertical,
+            page: 0,
+        });
+        h.chain(v).collect()
+    }
+
+    /// A word set from (x, y), a glyph to each letter.
+    fn word(t: &str, x: f64, y: f64, size: f32) -> Vec<Glyph> {
+        t.chars()
+            .enumerate()
+            .map(|(i, c)| glyph(&c.to_string(), x + i as f64 * size as f64 * 0.55, y, size))
+            .collect()
+    }
+
+    #[test]
+    fn a_graticule_with_a_few_labels_is_a_plot() {
+        // Six divisions across, five down, and two curve labels set over
+        // the lines: a plot, though no fill draws it.
+        let xs: Vec<f64> = (0..7).map(|k| 236.0 + 21.5 * k as f64).collect();
+        let ys: Vec<f64> = (0..6).map(|k| 412.0 + 17.0 * k as f64).collect();
+        let rules = lattice(&xs, &ys);
+        let mut glyphs = word("Vin = 3 V", 262.0, 431.0, 6.5);
+        glyphs.extend(word("Vin = 12 V", 300.0, 470.0, 6.5));
+        let got = graticules(&rules, &glyphs, 0, (612.0, 792.0), &[]);
+        assert_eq!(got.len(), 1);
+        let d = got[0].drawing;
+        assert!((d.x0 - 236.0).abs() < 0.5 && (d.x1 - 365.0).abs() < 0.5);
+        assert!((d.y0 - 412.0).abs() < 0.5 && (d.y1 - 497.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn a_graticule_broken_for_a_label_keeps_its_pitch() {
+        // The third vertical stops short of a note, drawn in two pieces
+        // that span less than the rest: the others stand two pitches apart
+        // there, and the lattice is still a plot's.
+        let xs = [118.0, 133.5, 149.0, 164.5, 180.0, 195.5];
+        let ys = [600.0, 612.0, 624.0, 636.0, 648.0];
+        let mut rules: Vec<Rule> = lattice(&xs, &ys)
+            .into_iter()
+            .filter(|r| {
+                !(r.orientation == Orientation::Vertical && r.bbox.x0 < 149.5 && r.bbox.x1 > 148.5)
+            })
+            .collect();
+        for (y0, y1) in [(600.0, 618.0), (630.0, 648.0)] {
+            rules.push(Rule {
+                bbox: bb(148.8, y0, 149.2, y1),
+                orientation: Orientation::Vertical,
+                page: 0,
+            });
+        }
+        let glyphs = word("t = 2 ms", 140.0, 620.5, 6.0);
+        let got = graticules(&rules, &glyphs, 0, (612.0, 792.0), &[]);
+        assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn a_ruled_grid_with_text_in_its_cells_is_no_plot() {
+        // The same even lattice with a value in each cell: a table's.
+        let xs: Vec<f64> = (0..7).map(|k| 236.0 + 21.5 * k as f64).collect();
+        let ys: Vec<f64> = (0..6).map(|k| 412.0 + 17.0 * k as f64).collect();
+        let rules = lattice(&xs, &ys);
+        let mut glyphs = Vec::new();
+        for y in &ys[..5] {
+            for x in &xs[..6] {
+                glyphs.extend(word("42", x + 4.0, y + 5.0, 7.0));
+            }
+        }
+        assert!(graticules(&rules, &glyphs, 0, (612.0, 792.0), &[]).is_empty());
+        // Nor rows of differing heights, a line or two of text each, though
+        // their cells stand empty.
+        let ys = [412.0, 426.0, 452.0, 466.0, 488.0, 502.0];
+        let rules = lattice(&xs, &ys);
+        assert!(graticules(&rules, &[], 0, (612.0, 792.0), &[]).is_empty());
     }
 }
