@@ -73,6 +73,9 @@ pub struct Figure {
     pub page: usize,
     /// Fills the region was inferred from, for the evidence trail.
     pub shapes: usize,
+    /// The box drawn around the drawing, where one is: a panel the
+    /// drawing's shapes lie within, holding its labels.
+    pub frame: Option<BBox>,
 }
 
 /// Group fills that touch or nearly touch into connected clusters, where
@@ -253,6 +256,14 @@ pub fn detect(
             backgrounds[i] = true;
         }
     }
+    // Any fill set aside may be a drawing's frame, however large: a wiring
+    // diagram's box can take most of the page.
+    let frames: Vec<BBox> = boxes
+        .iter()
+        .zip(&backgrounds)
+        .filter(|(_, &set_aside)| set_aside)
+        .map(|(b, _)| *b)
+        .collect();
     let boxes: Vec<BBox> = boxes
         .iter()
         .zip(&backgrounds)
@@ -277,6 +288,26 @@ pub fn detect(
             }
         },
     );
+    // A box drawn around a drawing frames it: the smallest panel its shapes
+    // lie within, and larger than they are.
+    for f in &mut out {
+        let d = f.drawing;
+        f.frame = frames
+            .iter()
+            .filter(|p| {
+                p.x0 <= d.x0 + 1.0
+                    && p.y0 <= d.y0 + 1.0
+                    && p.x1 >= d.x1 - 1.0
+                    && p.y1 >= d.y1 - 1.0
+                    && p.width() * p.height() > d.width() * d.height() * 1.05
+            })
+            .min_by(|p, q| {
+                (p.width() * p.height())
+                    .partial_cmp(&(q.width() * q.height()))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .copied();
+    }
     out
 }
 
@@ -404,6 +435,7 @@ fn judge(
         drawing: b,
         page,
         shapes: group.len(),
+        frame: None,
     })
 }
 
@@ -719,8 +751,133 @@ pub fn attach(
     // A page-sized image is the page's background, not a picture on it.
     let photos: Vec<BBox> = images.iter().copied().filter(|b| !too_big(b)).collect();
     let mut labels = Vec::with_capacity(figures.len());
-    for f in figures.iter_mut() {
+    let gap = |b: &BBox, r: &BBox| {
+        let dx = (b.x0 - r.x1).max(r.x0 - b.x1).max(0.0);
+        let dy = (b.y0 - r.y1).max(r.y0 - b.y1).max(0.0);
+        dx.max(dy)
+    };
+    // A frame drawn around drawings bounds their figures, where all it
+    // holds is labels: a wiring diagram's box. Text outside it is the
+    // page's whatever its distance (a note in the column beside, the title
+    // over it), and what it holds goes to the drawing nearest within it. A
+    // panel that holds a paragraph beside its chart is no frame.
+    //
+    // The drawings fill a frame: a form's box with a logo in its corner, or
+    // a panel with a chart beside its text, is no frame for them.
+    let framed: Vec<Option<BBox>> = figures
+        .iter()
+        .map(|f| {
+            f.frame.filter(|fr| {
+                let held = figures
+                    .iter()
+                    .filter(|g| g.frame == Some(*fr))
+                    .fold(f.drawing, |r, g| r.union(&g.drawing));
+                let inside: Vec<&(BBox, f32, &str)> = blocks
+                    .iter()
+                    .filter(|(b, ..)| share_inside(b, fr) >= MARK_INSIDE)
+                    .collect();
+                // Its labels stand in its margins, round the drawings: a
+                // plot's own background box, filled by its bars, holds only
+                // values, and its axes' names and legend lie outside it.
+                let margin = inside.iter().any(|(b, ..)| {
+                    figures
+                        .iter()
+                        .filter(|g| g.frame == Some(*fr))
+                        .all(|g| share_inside(b, &g.drawing) < MARK_INSIDE)
+                });
+                // And it is no page's background, and holds no display
+                // type: a slide's background holds its title.
+                let page_wide = page_width > 0.0
+                    && page_height > 0.0
+                    && fr.width() >= page_width * FRAME_PAGE
+                    && fr.height() >= page_height * FRAME_PAGE;
+                !page_wide
+                    && held.width() >= fr.width() * FRAME_FILL
+                    && held.height() >= fr.height() * FRAME_FILL
+                    && margin
+                    && inside.iter().all(|(_, size, t)| {
+                        t.split_whitespace().count() <= LABEL_MAX_WORDS
+                            && *size < prose * FRAME_DISPLAY
+                    })
+            })
+        })
+        .collect();
+    let drawings: Vec<BBox> = figures.iter().map(|f| f.drawing).collect();
+    for (k, f) in figures.iter_mut().enumerate() {
         let drawing = f.drawing;
+        if let Some(fr) = framed[k] {
+            let mut taken: Vec<usize> = (0..blocks.len())
+                .filter(|&i| {
+                    let b = &blocks[i].0;
+                    share_inside(b, &fr) >= MARK_INSIDE
+                        && (0..drawings.len())
+                            .filter(|&j| framed[j] == Some(fr))
+                            .min_by(|&p, &q| {
+                                gap(b, &drawings[p])
+                                    .partial_cmp(&gap(b, &drawings[q]))
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            == Some(k)
+                })
+                .collect();
+            // Its caption is the figure's all the same: `Figure 17. …` set
+            // over or under the frame, a `Note:` or `Source:` under it, and
+            // the lines that run on from them, within a line or two of the
+            // frame or of each other. A title that is no caption, and a note
+            // in the column beside, are the page's.
+            let over_under = |b: &BBox| b.x1.min(fr.x1) - b.x0.max(fr.x0) >= b.width() * 0.5;
+            let mut captions: Vec<usize> = Vec::new();
+            let free = |i: usize, b: &BBox| {
+                !taken.contains(&i) && share_inside(b, &fr) < MARK_INSIDE && over_under(b)
+            };
+            loop {
+                let mut grew = false;
+                for (i, (b, size, text)) in blocks.iter().enumerate() {
+                    if captions.contains(&i)
+                        || !free(i, b)
+                        || !(crate::heading::is_caption(text) || note_label(text))
+                    {
+                        continue;
+                    }
+                    // The caption with the lines that run on from it, as one.
+                    let mut unit = vec![i];
+                    loop {
+                        let next = (0..blocks.len()).find(|&j| {
+                            !unit.contains(&j)
+                                && !captions.contains(&j)
+                                && free(j, &blocks[j].0)
+                                && unit.iter().any(|&u| {
+                                    runs_on(&blocks[u].0, blocks[u].1, &blocks[j].0, blocks[j].1)
+                                })
+                        });
+                        match next {
+                            Some(j) => unit.push(j),
+                            None => break,
+                        }
+                    }
+                    let line = (*size as f64).max(1.0);
+                    let near = |a: &BBox, r: &BBox| {
+                        (-0.5 * line..=CAPTION_GAP * line).contains(&(a.y0 - r.y1).max(r.y0 - a.y1))
+                    };
+                    let reached = unit.iter().any(|&u| {
+                        let a = &blocks[u].0;
+                        near(a, &fr) || captions.iter().any(|&c| near(a, &blocks[c].0))
+                    });
+                    if reached {
+                        captions.extend(unit);
+                        grew = true;
+                    }
+                }
+                if !grew {
+                    break;
+                }
+            }
+            taken.extend(captions);
+            taken.sort_unstable();
+            f.bbox = taken.iter().fold(drawing, |r, &t| r.union(&blocks[t].0));
+            labels.push(taken);
+            continue;
+        }
         // The drawing's own marks: text set inside it.
         let mut taken: Vec<usize> = (0..blocks.len())
             .filter(|&i| share_inside(&blocks[i].0, &drawing) >= MARK_INSIDE)
@@ -730,11 +887,6 @@ pub fn attach(
             continue;
         }
         let reach = drawing.width().min(drawing.height()) * LABEL_REACH;
-        let gap = |b: &BBox, r: &BBox| {
-            let dx = (b.x0 - r.x1).max(r.x0 - b.x1).max(0.0);
-            let dy = (b.y0 - r.y1).max(r.y0 - b.y1).max(0.0);
-            dx.max(dy)
-        };
         // Beside, above or below the drawing: sharing its height or its
         // width. Text off one of its corners is the page's.
         let beside = |b: &BBox| {
@@ -800,6 +952,35 @@ pub fn attach(
     }
     labels
 }
+
+/// Most space, in lines, between a framed figure's caption or note and the
+/// frame, or the caption before it.
+const CAPTION_GAP: f64 = 2.5;
+
+/// `Note:`, `Notes:`, `Source:`, `Sources:`: a figure's note, under it.
+fn note_label(text: &str) -> bool {
+    let first = text
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        first.trim_end_matches(['.', ':']),
+        "note" | "notes" | "source" | "sources"
+    ) && first.ends_with([':', '.'])
+}
+
+/// Least share of a frame's width and height its drawings span: a wiring
+/// diagram's box holds the diagrams and their labels around them.
+const FRAME_FILL: f64 = 0.6;
+
+/// Share of the page, each way, from which a box is the page's background
+/// rather than a frame on it.
+const FRAME_PAGE: f64 = 0.9;
+
+/// Size, against the page's prose, from which text is display type: a
+/// title, not a frame's label.
+const FRAME_DISPLAY: f32 = 1.3;
 
 /// Are two blocks one run of text: set at one size from one left edge, one
 /// under the other with no more than a paragraph's space between?
@@ -927,6 +1108,67 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_drawn_round_a_diagram_bounds_its_figure() {
+        // A wiring diagram in a box, a label in the box's margin left of it,
+        // a note in the column beside the box, and the title over it.
+        let fig = |frame: Option<BBox>| Figure {
+            bbox: bb(115.0, 126.0, 418.0, 209.0),
+            drawing: bb(115.0, 126.0, 418.0, 209.0),
+            page: 0,
+            shapes: 16,
+            frame,
+        };
+        let blocks = vec![
+            (bb(48.0, 150.0, 70.0, 166.0), 8.0, "Line / Hot"),
+            (
+                bb(428.0, 120.0, 589.0, 150.0),
+                8.0,
+                "Note: Dimmer can be installed on the",
+            ),
+            (
+                bb(46.0, 70.0, 260.0, 82.0),
+                10.0,
+                "4-Way Wiring (Using MA-R Companion Dimmer)",
+            ),
+        ];
+        let frame = bb(46.0, 95.0, 421.0, 230.0);
+        let mut figs = vec![fig(Some(frame))];
+        let taken = attach(&mut figs, &blocks, &[], (612.0, 792.0), 8.0);
+        assert_eq!(taken[0], [0], "{taken:?}");
+        // Its caption under the box, and the line that runs on from it, are
+        // the figure's.
+        let mut captioned = blocks.clone();
+        captioned.push((
+            bb(46.0, 236.0, 400.0, 244.0),
+            8.0,
+            "Figure 3. Four-way wiring with a",
+        ));
+        captioned.push((bb(46.0, 246.0, 200.0, 254.0), 8.0, "companion dimmer"));
+        let mut figs = vec![fig(Some(frame))];
+        let taken = attach(&mut figs, &captioned, &[], (612.0, 792.0), 8.0);
+        assert_eq!(taken[0], [0, 3, 4], "{taken:?}");
+        // Unframed, reach takes the note beside the diagram, not the label
+        // in the margin.
+        let mut figs = vec![fig(None)];
+        let taken = attach(&mut figs, &blocks, &[], (612.0, 792.0), 8.0);
+        assert!(taken[0].contains(&1), "{taken:?}");
+        // A page's background is no frame, nor one holding display type,
+        // nor a plot's own box, filled by its drawing with nothing in its
+        // margins.
+        for (frame, blocks) in [
+            (bb(0.0, 0.0, 612.0, 792.0), blocks.clone()),
+            (frame, vec![(bb(48.0, 100.0, 300.0, 120.0), 24.0, "Wiring")]),
+            (bb(114.0, 125.0, 419.0, 210.0), blocks.clone()),
+        ] {
+            let mut figs = vec![fig(Some(frame))];
+            let framed = attach(&mut figs, &blocks, &[], (612.0, 792.0), 8.0);
+            let mut figs = vec![fig(None)];
+            let open = attach(&mut figs, &blocks, &[], (612.0, 792.0), 8.0);
+            assert_eq!(framed, open, "{frame:?}");
+        }
+    }
+
+    #[test]
     fn a_plot_with_a_spanning_background_is_still_a_figure() {
         // Nested plot areas as tall as they are wide, plus two markers.
         let f = fills(&[
@@ -1039,6 +1281,7 @@ mod tests {
             drawing: bb(0.0, 18.0, 585.0, 156.0),
             page: 0,
             shapes: 43,
+            frame: None,
         }]
     }
 
@@ -1083,6 +1326,7 @@ mod tests {
             drawing: bb(222.0, 78.0, 277.0, 126.0),
             page: 0,
             shapes: 15,
+            frame: None,
         }];
         let blocks = vec![(
             bb(294.0, 150.0, 548.0, 181.0),
@@ -1105,6 +1349,7 @@ mod tests {
             drawing: bb(500.0, 689.0, 549.0, 739.0),
             page: 0,
             shapes: 8,
+            frame: None,
         }];
         let blocks = vec![(
             bb(271.0, 703.0, 490.0, 739.0),
@@ -1119,6 +1364,7 @@ mod tests {
             drawing: bb(100.0, 300.0, 400.0, 460.0),
             page: 0,
             shapes: 30,
+            frame: None,
         }];
         let blocks = vec![(
             bb(100.0, 280.0, 350.0, 292.0),
@@ -1138,6 +1384,7 @@ mod tests {
             drawing: bb(100.0, 300.0, 300.0, 460.0),
             page: 0,
             shapes: 12,
+            frame: None,
         }];
         let blocks = vec![
             (bb(96.0, 470.0, 150.0, 480.0), 7.0, "2021"), // tick label below
@@ -1191,6 +1438,7 @@ mod tests {
             drawing: bb(33.0, 33.0, 131.0, 117.0),
             page: 0,
             shapes: 33,
+            frame: None,
         }];
         let column: Vec<(BBox, f32, &str)> = (0..6)
             .map(|i| {
@@ -1208,6 +1456,7 @@ mod tests {
                 drawing: bb(33.0, 33.0, 131.0, 117.0),
                 page: 0,
                 shapes: 33,
+                frame: None,
             }]
         };
         let ticks: Vec<(BBox, f32, &str)> = (0..3)
@@ -1259,6 +1508,7 @@ mod tests {
             drawing: bb(46.0, 690.0, 585.0, 756.0),
             page: 0,
             shapes: 14,
+            frame: None,
         }];
         let notes: Vec<(BBox, f32, &str)> = (0..6)
             .map(|i| {
@@ -1280,6 +1530,7 @@ mod tests {
             drawing: bb(300.0, 100.0, 500.0, 300.0),
             page: 0,
             shapes: 20,
+            frame: None,
         }];
         let blocks = vec![
             (bb(250.0, 150.0, 290.0, 158.0), 7.0, "Axis"),
@@ -1464,6 +1715,7 @@ mod tests {
             drawing: bb(100.0, 300.0, 300.0, 460.0),
             page: 0,
             shapes: 12,
+            frame: None,
         }];
         // A full-measure paragraph: wider than a label can be.
         let blocks = vec![(bb(27.0, 470.0, 560.0, 520.0), 10.0, "prose")];
@@ -1482,6 +1734,7 @@ mod tests {
                 drawing: bb(41.0, 88.0, 302.0, 219.0),
                 page: 0,
                 shapes: 8,
+                frame: None,
             }]
         };
         let around = vec![
@@ -1510,6 +1763,7 @@ mod tests {
             drawing: bb(212.0, 297.0, 462.0, 430.0),
             page: 0,
             shapes: 9,
+            frame: None,
         }];
         let labels = vec![
             (bb(310.0, 300.0, 347.0, 305.0), 5.0, "near coast"),

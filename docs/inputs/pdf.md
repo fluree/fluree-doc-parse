@@ -424,6 +424,20 @@ as the last of a column of notes or the first bullets of a list. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
 heading inside it that was not taken as a label keeps its type.
 
+**A frame drawn round a drawing bounds its figure.** A wiring diagram set in
+a box, with its labels in the box's margins (`Line / Hot` left of the
+switches, `Neutral` under them), takes every label in the box, whatever
+their distance from the shapes. Where one box holds several diagrams, each
+label goes to the nearest. Outside the box it takes only its caption: a
+`Figure 17. …` set over or under the box, a `Note:` or `Source:` under it,
+and the lines that run on from them. A note in the column beside the box and
+a title over it that is no caption are the page's. A box is a frame
+when its drawings span most of it each way, something sits in its margins,
+and all it holds is labels: fifteen words or fewer each, and no display
+type. A slide's background holds its title, and a plot's own background is
+filled by its bars, with the axes' names and the legend outside it; neither
+is a frame.
+
 **Headings near drawings.** A heading set larger than the body that the
 figure took as a label keeps its type when the document sets headings at
 that size and weight away from any drawing: `Operation` over a drawing of the
