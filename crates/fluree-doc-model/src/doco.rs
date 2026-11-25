@@ -663,28 +663,42 @@ pub fn table_copies(e: &Element) -> Copies {
             }
         };
         // A row longer than the first keeps its cells past it as they are.
+        // A cell's row is named by the groups set down the columns before
+        // it in its record and by the row's own label beside them: at most
+        // every column from the record's first to the last one spanning
+        // down, and the one after it, joined by ` / `.
+        let spans_down = |k: usize| {
+            (r > n_header && flag(&e.merged_down, r * cols + k))
+                || (r + 1 < n && flag(&e.merged_down, (r + 1) * cols + k))
+        };
+        let mut record = usize::MAX;
+        let mut last_group = 0;
+        let (mut names, mut joins) = (0u64, 0u64);
         for c in 0..raw[r].len() {
+            let first = c - c % width;
+            if first != record {
+                record = first;
+                (names, joins) = (0, 0);
+                last_group = first;
+                while last_group + 1 < first + width && spans_down(last_group) {
+                    last_group += 1;
+                }
+            }
+            if c > first && c - 1 <= last_group {
+                if c - 1 > first {
+                    joins += 1;
+                }
+                names = names.saturating_add(cost(c - 1));
+            }
             let value = cost(c);
             if value == 0 {
                 continue;
             }
             nodes += 1;
-            let first = c - c % width;
-            // A group spanning down the first column names the row with the
-            // row's own label: `group / own`.
-            let spans = |r: usize| r < n && flag(&e.merged_down, r * cols + first);
-            let stacked = c > first + 1
-                && first + 1 < first + width
-                && ((r > n_header && spans(r)) || spans(r + 1))
-                && cost(first) > 0
-                && cost(first + 1) > 0;
-            let row_header = if c > first { cost(first) } else { 0 };
-            let row_header = if stacked {
-                row_header
-                    .saturating_add(slash)
-                    .saturating_add(cost(first + 1))
+            let row_header = if c > first {
+                names.saturating_add(slash.saturating_mul(joins))
             } else {
-                row_header
+                0
             };
             let labels = column_label(c, restated)
                 .saturating_add(row_header)
@@ -1512,6 +1526,35 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                     // rows below the last band, joined once per band.
                     let mut restated_now: Option<Vec<String>> = None;
                     let mut section_now: Option<String> = None;
+                    // The run a value merged down makes in each column: for
+                    // each cell, the first and last rows of the run it is
+                    // in, below the header. Found once for the table, not
+                    // walked again for each cell beside a group.
+                    let merged_at = |r: usize, c: usize| {
+                        e.merged_down
+                            .as_ref()
+                            .and_then(|m| m.get(r * ncols + c))
+                            .copied()
+                            .unwrap_or(false)
+                    };
+                    let mut run_top = vec![0usize; rows.len() * ncols];
+                    let mut run_end = vec![0usize; rows.len() * ncols];
+                    for c in 0..ncols {
+                        for r in 0..rows.len() {
+                            run_top[r * ncols + c] = if r > n_header && merged_at(r, c) {
+                                run_top[(r - 1) * ncols + c]
+                            } else {
+                                r
+                            };
+                        }
+                        for r in (0..rows.len()).rev() {
+                            run_end[r * ncols + c] = if r + 1 < rows.len() && merged_at(r + 1, c) {
+                                run_end[(r + 1) * ncols + c]
+                            } else {
+                                r
+                            };
+                        }
+                    }
                     for (r, row) in rows.iter().enumerate().skip(n_header) {
                         // A sub-header band labels the rows beneath it; it is
                         // not itself data. Its text rides on those rows as
@@ -1570,8 +1613,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             (r > n_header && at(r)) || (r + 1 < rows.len() && at(r + 1))
                         };
                         // The rows the cell at `r`, `c` spans: its first and
-                        // last.
+                        // last, as found for the whole table above.
                         let span = |r: usize, c: usize| {
+                            if c < ncols {
+                                return (run_top[r * ncols + c], run_end[r * ncols + c]);
+                            }
                             let at = |r: usize| {
                                 e.merged_down
                                     .as_ref()
@@ -1598,6 +1644,11 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                                     c.is_ascii_digit() || ",.$€£¥%()-+\u{2212}/<>≤≥± ".contains(c)
                                 })
                         };
+                        // The groups of the record a cell is in, found once
+                        // for the record.
+                        let mut record = usize::MAX;
+                        let mut groups: Vec<(usize, &str)> = Vec::new();
+                        let mut k = 0;
                         for (c, cell) in row.iter().enumerate() {
                             let first = c - c % width;
                             let group = row.get(first).map(|t| t.trim()).unwrap_or("");
@@ -1610,24 +1661,27 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             // more of the group (its colour, its volumes
                             // carried down), and is read as the row's own, as
                             // is the first column spanning nothing.
-                            let mut groups: Vec<(usize, &str)> = Vec::new();
-                            let mut k = first;
-                            let mut outer: Option<(usize, usize)> = None;
-                            while k + 1 < first + width && spans_down(r, k) {
-                                let t = row.get(k).map(|t| t.trim()).unwrap_or("");
-                                let rows_spanned = span(r, k);
-                                if t.is_empty()
-                                    || outer.is_some_and(|o| {
-                                        rows_spanned.1 - rows_spanned.0 >= o.1 - o.0
-                                    })
-                                {
-                                    break;
+                            if first != record {
+                                record = first;
+                                groups.clear();
+                                k = first;
+                                let mut outer: Option<(usize, usize)> = None;
+                                while k + 1 < first + width && spans_down(r, k) {
+                                    let t = row.get(k).map(|t| t.trim()).unwrap_or("");
+                                    let rows_spanned = span(r, k);
+                                    if t.is_empty()
+                                        || outer.is_some_and(|o| {
+                                            rows_spanned.1 - rows_spanned.0 >= o.1 - o.0
+                                        })
+                                    {
+                                        break;
+                                    }
+                                    if groups.last().map(|g| g.1) != Some(t) {
+                                        groups.push((k, t));
+                                    }
+                                    outer = Some(rows_spanned);
+                                    k += 1;
                                 }
-                                if groups.last().map(|g| g.1) != Some(t) {
-                                    groups.push((k, t));
-                                }
-                                outer = Some(rows_spanned);
-                                k += 1;
                             }
                             // The groups set left of column `c`.
                             let left_of = |c: usize| {
@@ -3201,6 +3255,39 @@ mod tests {
         assert_eq!(last["doc:sectionLabel"], format!("Band {}", n - 1));
         assert_eq!(last["doc:cellValue"], (n - 1).to_string());
         assert_eq!(xhtml.matches("<th colspan=\"2\">Band").count(), n);
+        assert!(took.as_secs() < 30, "{took:?}");
+    }
+
+    #[test]
+    fn a_group_merged_down_many_rows_is_named_in_linear_time() {
+        // Each cell beside a group walked the group's run up and down to
+        // find the rows it spans: a group over 100,000 rows walked them
+        // for each of them.
+        let n = 100_000;
+        let mut t = el("doco:Table", "", None);
+        let mut rows = vec![vec![
+            "Group".to_string(),
+            "Item".to_string(),
+            "Code".to_string(),
+        ]];
+        for i in 0..n {
+            let group = if i == 0 { "All" } else { "" };
+            rows.push(vec![group.to_string(), format!("Item {i}"), i.to_string()]);
+        }
+        t.cells = Some(rows);
+        t.header_rows = Some(1);
+        let mut down = vec![false; (n + 1) * 3];
+        for r in 2..=n {
+            down[r * 3] = true;
+        }
+        t.merged_down = Some(down);
+        let start = std::time::Instant::now();
+        let g = graph(std::slice::from_ref(&t));
+        let took = start.elapsed();
+        let cells = find(&g, "doc:TableCell");
+        let last = cells.last().unwrap();
+        assert_eq!(last["doc:cellValue"], (n - 1).to_string());
+        assert_eq!(last["doc:rowHeader"], format!("All / Item {}", n - 1));
         assert!(took.as_secs() < 30, "{took:?}");
     }
 
