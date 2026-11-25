@@ -284,7 +284,14 @@ pub fn degree(text_before: &str, mark: &str, next: Option<char>) -> bool {
         || (ahead.ends_with(['-', '+'])
             && !ahead[..ahead.len() - 1].ends_with(|c: char| c.is_alphanumeric()));
     let figures = number.chars().filter(char::is_ascii_digit).count();
-    matches!(next, Some('C' | 'F')) || figures >= 3 || number.contains('.') || signed
+    // After an approximation's sign or a bracket's opening, a raised `o` is
+    // no ordinal: no text counts `~ 95th` or `(45th)`. An angle's degree
+    // (`Beam Angle ~ 95°`, `Gloss (45°)`). Not a raised `0`, which may be
+    // a power there (`(10⁰)`).
+    let set_apart = mark.trim() != "0"
+        && ahead.trim_end().ends_with(['~', '≈', '∼', '(', '['])
+        && !ahead.ends_with(|c: char| c.is_alphanumeric());
+    matches!(next, Some('C' | 'F')) || figures >= 3 || number.contains('.') || signed || set_apart
 }
 
 /// Whether `ending` is the ordinal ending of the whole number `number`.
@@ -437,5 +444,12 @@ mod tests {
         // A prime set as a raised `0`, after a list of positions.
         assert!(!degree("4,4", "0", Some('-')));
         assert!(!degree("(upstream),5", "0", Some('(')));
+        // After an approximation's sign or a bracket's opening, an angle.
+        assert!(degree("Beam Angle ~ 95", "o", None));
+        assert!(degree("Gloss (45", "o", Some(')')));
+        assert!(degree("≈ 30", "º", None));
+        // A raised `0` there may be a power; a word before is no sign.
+        assert!(!degree("(10", "0", Some(')')));
+        assert!(!degree("el 2", "o", None));
     }
 }
