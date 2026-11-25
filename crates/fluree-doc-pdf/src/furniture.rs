@@ -77,7 +77,7 @@ fn signature(text: &str) -> String {
 ///
 /// `pages` is one Vec<Line> per page, each paired with that page's height.
 pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<BTreeMap<usize, Furniture>> {
-    detect_all(pages).0
+    detect_all(pages, &[]).0
 }
 
 /// As [`detect`], also returning, per page, the lines read as a short
@@ -96,7 +96,7 @@ pub fn detect_with_exact(
     Vec<BTreeMap<usize, Furniture>>,
     Vec<std::collections::HashSet<usize>>,
 ) {
-    let (marks, _, exact) = detect_all(pages);
+    let (marks, _, exact) = detect_all(pages, &[]);
     (marks, exact)
 }
 
@@ -105,17 +105,20 @@ pub fn detect_with_exact(
 /// page, the lines kept as a section's heading: text the scrub must not
 /// take, though the same words run as furniture on the pages after.
 /// `bookmarks` are the document's outline entries, as the page each lands
-/// on and its title.
+/// on and its title; `widths` the pages' widths, by which a short
+/// document's facing pages are seen to mirror their template
+/// ([`mirrored_running`]), or empty where they are not known.
 #[allow(clippy::type_complexity)]
 pub fn detect_with_heads(
     pages: &[(Vec<Line>, f64)],
     bookmarks: &[(usize, String)],
+    widths: &[f64],
 ) -> (
     Vec<BTreeMap<usize, Furniture>>,
     Vec<std::collections::HashSet<usize>>,
     Vec<std::collections::HashSet<usize>>,
 ) {
-    let (mut marks, _, mut exact) = detect_all(pages);
+    let (mut marks, _, mut exact) = detect_all(pages, widths);
     let heads = section_running_heads(pages, &mut marks, &mut exact, bookmarks);
     (marks, exact, heads)
 }
@@ -142,15 +145,19 @@ const FOLIO_DISTINCT_SHARE: f64 = 0.25;
 pub fn detect_with_folios(
     pages: &[(Vec<Line>, f64)],
 ) -> (Vec<BTreeMap<usize, Furniture>>, Vec<Option<String>>) {
-    let (marks, folios, _) = detect_all(pages);
+    let (marks, folios, _) = detect_all(pages, &[]);
     (marks, folios)
 }
 
 /// As [`detect_with_folios`], each page's folio with where its line stands,
 /// as a share of the page's height: the place the page number is printed
 /// on that page, `None` where the folio's line is not among `pages`' lines.
-pub fn detect_folio_places(pages: &[(Vec<Line>, f64)]) -> Vec<(Option<String>, Option<f64>)> {
-    let (marks, folios, _) = detect_all(pages);
+/// `widths` are as for [`detect_with_heads`].
+pub fn detect_folio_places(
+    pages: &[(Vec<Line>, f64)],
+    widths: &[f64],
+) -> Vec<(Option<String>, Option<f64>)> {
+    let (marks, folios, _) = detect_all(pages, widths);
     folios
         .into_iter()
         .enumerate()
@@ -182,6 +189,7 @@ pub fn is_folio_line(text: &str, folio: &str, rel_y: f64, place: f64) -> bool {
 #[allow(clippy::type_complexity)]
 fn detect_all(
     pages: &[(Vec<Line>, f64)],
+    widths: &[f64],
 ) -> (
     Vec<BTreeMap<usize, Furniture>>,
     Vec<Option<String>>,
@@ -253,6 +261,8 @@ fn detect_all(
         .collect();
 
     let needed = ((n_pages as f64 * MIN_PAGE_FRACTION).ceil() as usize).max(MIN_PAGES);
+    let moves = template_moves(pages, widths);
+    let body = crate::block::body_size(pages.iter().flat_map(|(lines, _)| lines));
 
     // The texts of the lines that repeat on enough pages to run, as set.
     let running: Vec<String> = groups
@@ -319,9 +329,21 @@ fn detect_all(
             // Too few pages for repetition alone: a two-page data sheet's
             // letterhead, or a three-page one's head over the pages after
             // its title page.
-            if let Some((kind, hits)) =
-                exact_running(pages, &occ).or_else(|| shifted_running(pages, &occ))
-            {
+            let found = exact_running(pages, &occ).or_else(|| shifted_running(pages, &occ));
+            // The same words may run in both bands, a letterhead's phone
+            // line over the page and again in its footer: the copies one
+            // band leaves may run where the template moved the other.
+            let left: Vec<(usize, usize, f64, String)> = occ
+                .iter()
+                .filter(|o| {
+                    !found
+                        .as_ref()
+                        .is_some_and(|(_, h)| h.iter().any(|(pi, li, _)| *pi == o.0 && *li == o.1))
+                })
+                .cloned()
+                .collect();
+            let moved = mirrored_running(pages, &moves, &left);
+            for (kind, hits) in found.into_iter().chain(moved) {
                 for (pi, li, _) in &hits {
                     out[*pi].insert(*li, kind);
                     exact[*pi].insert(*li);
@@ -435,6 +457,12 @@ fn detect_all(
                 .filter(|o| watermark_shown(&pages[o.0].0, o.1))
                 .count();
             if shown < needed {
+                if let Some(later) = template_title(pages, &occ, body) {
+                    for (pi, li) in later {
+                        out[pi].insert(li, Furniture::Header);
+                        exact[pi].insert(li);
+                    }
+                }
                 continue;
             }
         }
@@ -1199,6 +1227,259 @@ fn shifted_running<'a>(
     None
 }
 
+/// A page template's title, set below its header band: the same line at
+/// the same place on every page, to the point, saying something in words,
+/// set larger than the body by the margin a font-size heading needs, and
+/// with nothing of the page's own above it anywhere across the page, only
+/// the header band. Datasheets of one table over several pages print the
+/// table's title on each (`Dimensions of Hexagon Socket Head Cap Screws`).
+/// The first page's copy is the document's title; the copies after it,
+/// returned here, are running. Text that only repeats, a table's column
+/// labels on every page, stands under the title, or at the body's size.
+fn template_title(
+    pages: &[(Vec<Line>, f64)],
+    occ: &[(usize, usize, f64, String)],
+    body: f64,
+) -> Option<Vec<(usize, usize)>> {
+    let line = |o: &(usize, usize, f64, String)| &pages[o.0].0[o.1];
+    let first = occ.iter().min_by_key(|o| o.0)?;
+    let a = line(first);
+    let mut on: Vec<usize> = occ.iter().map(|o| o.0).collect();
+    on.sort_unstable();
+    on.dedup();
+    let every = on.len() == pages.len() && on.len() == occ.len();
+    let larger = a.font_size as f64 > body * (1.0 + crate::heading::HEADING_SIZE_MARGIN);
+    // A title says something in words: a drawing's callouts (`1`, `2`,
+    // `4`) stand at their places on each page as well.
+    if !every || !larger || !names_something(&a.text) || !occ.iter().all(|o| same_place(a, line(o)))
+    {
+        return None;
+    }
+    // Above it, across the page, only the header band: it opens the
+    // page's text. A drawing's label repeated on each slide stands among
+    // the slide's text.
+    let heads = occ.iter().all(|o| {
+        let (lines, height) = &pages[o.0];
+        let l = line(o);
+        lines
+            .iter()
+            .enumerate()
+            .all(|(lj, m)| lj == o.1 || m.bbox.y1 > l.bbox.y0 || m.bbox.y0 / height < EDGE_BAND)
+    });
+    heads.then(|| {
+        occ.iter()
+            .filter(|o| o.0 != first.0)
+            .map(|o| (o.0, o.1))
+            .collect()
+    })
+}
+
+/// Widest difference, in a line's size, between where a moved copy stands
+/// and where its template's move puts it. A mirrored copy is measured edge
+/// to opposite edge, the first letter's side bearing against the last's,
+/// and each line's ink sits its own way on its baseline when the band is
+/// set lower: a fifth of an em apart in a catalogue's footer, short of the
+/// line's own height that another line would stand away.
+const MOVED_PLACE: f64 = 0.25;
+
+/// Furthest, in a line's size, a facing page sets its band from where page
+/// 1 sets it: within the line's own height, a few points. A page set
+/// further off is on another template, which [`shifted_running`] reads by
+/// a line moved with its neighbour.
+const MAX_MOVE: f64 = 1.0;
+
+/// How a short document's later page sets one of its edge bands against
+/// page 1's: reflected about the page's centre (facing pages, the outer
+/// margin on each side), and moved up or down by a few points.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Move {
+    page: usize,
+    /// The page's width, the axis a mirrored copy is reflected about.
+    width: f64,
+    top: bool,
+    mirrored: bool,
+    dy: f64,
+}
+
+/// Whether `b`, on a page `width` wide, stands where `a` stands, mirrored
+/// or not, and moved down by `dy`, to within [`MOVED_PLACE`] of its size.
+fn placed_by(a: &Line, b: &Line, width: f64, mirrored: bool, dy: f64) -> bool {
+    let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+    let near = |p: f64, q: f64| (p - q).abs() <= MOVED_PLACE * size;
+    let (ca, cb) = ((a.bbox.x0 + a.bbox.x1) / 2.0, (b.bbox.x0 + b.bbox.x1) / 2.0);
+    let across = if mirrored {
+        near(a.bbox.x0, width - b.bbox.x1)
+            || near(a.bbox.x1, width - b.bbox.x0)
+            || near(ca, width - cb)
+    } else {
+        near(a.bbox.x0, b.bbox.x0) || near(a.bbox.x1, b.bbox.x1) || near(ca, cb)
+    };
+    across && near(b.bbox.y0 - a.bbox.y0, dy) && near(b.bbox.y1 - a.bbox.y1, dy)
+}
+
+/// The moves a short document's later pages set their edge bands by,
+/// where two lines or more of a band are copies of page 1's, alike in text,
+/// size and weight, and the page set every one of them the same way: the
+/// template moved, not a line. A catalogue's facing pages swap the sides
+/// of their footer (`114` and the sales address) and set it a few points
+/// lower, the phone line and the print notice moving with it. The move that
+/// changes nothing is [`exact_running`]'s.
+fn template_moves(pages: &[(Vec<Line>, f64)], widths: &[f64]) -> Vec<Move> {
+    if pages.len().saturating_sub(1).max(2) != 2 || widths.len() != pages.len() {
+        return Vec::new();
+    }
+    let band = |l: &Line, height: f64| {
+        let rel = l.bbox.y0 / height;
+        if rel < EDGE_BAND {
+            Some(true)
+        } else if rel > 1.0 - EDGE_BAND {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let alike = |a: &Line, b: &Line| {
+        let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+        a.rotation_bucket == b.rotation_bucket
+            && a.text == b.text
+            && f64::from((a.font_size - b.font_size).abs()) <= EXACT_PLACE * size
+            && a.bold == b.bold
+    };
+    let (first, h0) = (&pages[0].0, pages[0].1);
+    let mut moves = Vec::new();
+    for (pj, (later, hj)) in pages.iter().enumerate().skip(1) {
+        if h0 <= 0.0 || *hj <= 0.0 {
+            continue;
+        }
+        let width = widths[pj];
+        for top in [true, false] {
+            // Each line of page 1's band and its copy on this page.
+            let pairs: Vec<(&Line, &Line)> = first
+                .iter()
+                .filter(|a| band(a, h0) == Some(top) && !a.text.trim().is_empty())
+                .filter_map(|a| {
+                    later
+                        .iter()
+                        .find(|b| band(b, *hj) == Some(top) && alike(a, b))
+                        .map(|b| (a, b))
+                })
+                .collect();
+            for &(a, b) in &pairs {
+                for mirrored in [true, false] {
+                    let dy = b.bbox.y0 - a.bbox.y0;
+                    let size = f64::from(a.font_size).max(1.0);
+                    if (!mirrored && dy.abs() <= EXACT_PLACE * size) || dy.abs() > MAX_MOVE * size {
+                        continue;
+                    }
+                    let set: Vec<&str> = pairs
+                        .iter()
+                        .filter(|(x, y)| placed_by(x, y, width, mirrored, dy))
+                        .map(|(x, _)| x.text.as_str())
+                        .collect();
+                    // A mirror is seen where a line swapped sides: a line
+                    // centred on the page stands where a mirror puts it and
+                    // where it stood. Seen once where the band moved down
+                    // too, twice where it did not.
+                    let swapped = pairs
+                        .iter()
+                        .filter(|(x, y)| {
+                            placed_by(x, y, width, true, dy) && !placed_by(x, y, width, false, dy)
+                        })
+                        .count();
+                    let moved_down = dy.abs() > EXACT_PLACE * size;
+                    if mirrored && swapped < if moved_down { 1 } else { 2 } {
+                        continue;
+                    }
+                    let m = Move {
+                        page: pj,
+                        width,
+                        top,
+                        mirrored,
+                        dy,
+                    };
+                    if set.len() >= 2 && !moves.iter().any(|o: &Move| close_moves(o, &m, size)) {
+                        moves.push(m);
+                    }
+                }
+            }
+        }
+    }
+    moves
+}
+
+/// Two moves found from different lines that are one.
+fn close_moves(a: &Move, b: &Move, size: f64) -> bool {
+    a.page == b.page
+        && a.top == b.top
+        && a.mirrored == b.mirrored
+        && (a.dy - b.dy).abs() <= MOVED_PLACE * size
+}
+
+/// A short document's running line that a later page sets where its
+/// template moved it ([`template_moves`]): page 1's copy and the later
+/// page's, alike in size and weight and in the same band, the later copy
+/// placed by the band's move. Its text is the same, or a page number that
+/// counts the pages (`114`, `115`). In the head band, page 1 keeps its
+/// copy: a catalogue's banner over its first page is its title, set again
+/// over the facing page.
+fn mirrored_running<'a>(
+    pages: &[(Vec<Line>, f64)],
+    moves: &[Move],
+    occ: &'a [(usize, usize, f64, String)],
+) -> Option<(Furniture, Copies<'a>)> {
+    if moves.is_empty() {
+        return None;
+    }
+    let line = |o: &(usize, usize, f64, String)| &pages[o.0].0[o.1];
+    let first = occ.iter().find(|o| o.0 == 0)?;
+    let a = line(first);
+    let first_top = first.2 < EDGE_BAND;
+    if !first_top && first.2 <= 1.0 - EDGE_BAND {
+        return None;
+    }
+    let mut later: Vec<&(usize, usize, f64, String)> = Vec::new();
+    for o in occ.iter().filter(|o| o.0 != 0) {
+        let b = line(o);
+        let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+        let style = a.rotation_bucket == b.rotation_bucket
+            && f64::from((a.font_size - b.font_size).abs()) <= EXACT_PLACE * size
+            && a.bold == b.bold;
+        let top = o.2 < EDGE_BAND;
+        let in_band = if first_top {
+            top
+        } else {
+            o.2 > 1.0 - EDGE_BAND
+        };
+        let placed = moves
+            .iter()
+            .any(|m| m.page == o.0 && m.top == top && placed_by(a, b, m.width, m.mirrored, m.dy));
+        if style && in_band && placed && !later.iter().any(|h| h.0 == o.0) {
+            later.push(o);
+        }
+    }
+    if later.is_empty() || later.len() + 1 < pages.len().saturating_sub(1).max(2) {
+        return None;
+    }
+    let mut copies: Vec<&(usize, usize, f64, String)> =
+        std::iter::once(first).chain(later).collect();
+    let texts: std::collections::HashSet<&str> = copies.iter().map(|c| c.3.as_str()).collect();
+    let digits_vary = texts.len() > 1;
+    if digits_vary {
+        let numbers: Vec<(usize, &str)> = copies.iter().map(|c| (c.0, c.3.as_str())).collect();
+        if texts.iter().any(|t| names_something(t)) || !advances(&numbers) {
+            return None;
+        }
+    }
+    let kind = classify(copies[0].2, digits_vary);
+    if kind == Furniture::Header {
+        copies.remove(0);
+    }
+    Some((
+        kind,
+        copies.iter().map(|c| (c.0, c.1, c.3.as_str())).collect(),
+    ))
+}
+
 /// Two lines set as copies of one: the same size and weight, the same top
 /// and bottom, and the same left edge, right edge or centre, each to a tenth
 /// of their size.
@@ -1570,7 +1851,7 @@ mod tests {
             (9, true),
             (11, false),
         ];
-        let (marks, _, heads) = detect_with_heads(&sheet(head), &[]);
+        let (marks, _, heads) = detect_with_heads(&sheet(head), &[], &[]);
         for (i, first) in firsts {
             assert_eq!(heads[i].contains(&1), first, "page {i}");
             assert_eq!(marks[i].contains_key(&1), !first, "page {i}");
@@ -1578,7 +1859,7 @@ mod tests {
         // Set at the body's size, the names are told from the page by
         // their repetition alone, and left to it.
         let pages = sheet(line);
-        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()));
         assert_eq!(marks, detect(&pages));
         // Unless the outline names each where it starts.
@@ -1586,7 +1867,7 @@ mod tests {
             .into_iter()
             .map(|i| (i, name(i).to_string()))
             .collect();
-        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks);
+        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks, &[]);
         for (i, first) in firsts {
             assert_eq!(heads[i].contains(&1), first, "page {i}");
             assert_eq!(marks[i].contains_key(&1), !first, "page {i}");
@@ -1601,7 +1882,7 @@ mod tests {
             ls.push(line(&format!("Text on page {i}."), 400.0));
             ls
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(!heads[4].contains(&1));
         assert!(heads[0].contains(&1));
         // A chapter's title over the page before has it too; an agenda's
@@ -1617,7 +1898,7 @@ mod tests {
                 ls.push(line(&format!("Text on page {i}."), 400.0));
                 ls
             });
-            let (_, _, heads) = detect_with_heads(&pages, &[]);
+            let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
             assert_eq!(heads[4].contains(&1), kept, "{size}pt");
         }
         // A slot whose names each appear once is each page's own title.
@@ -1633,7 +1914,7 @@ mod tests {
                 line("Text.", 400.0),
             ]
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()));
         // A title page's title, then one running title over the rest.
         let pages = doc(9, |i| {
@@ -1649,7 +1930,7 @@ mod tests {
                 line(&format!("Text on page {i}."), 400.0),
             ]
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()));
     }
 
@@ -1689,7 +1970,7 @@ mod tests {
             };
             vec![head, line(&format!("Text on page {i}."), 400.0)]
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
         for i in 0..9 {
             let first = [0, 3, 6].contains(&i);
             assert_eq!(heads[i].contains(&0), first, "page {i}");
@@ -1727,7 +2008,7 @@ mod tests {
             ls
         });
         let bookmarks = vec![(0, name(0).to_string()), (6, name(6).to_string())];
-        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks);
+        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks, &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         for i in [2, 4, 8, 10] {
             assert!(marks[i].contains_key(&0), "page {i}");
@@ -1748,7 +2029,7 @@ mod tests {
                 line(&format!("Text on page {i}."), 400.0),
             ]
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         assert_eq!(marks, detect(&pages));
         // A display title of two lines, the first shared by a product's
@@ -1762,9 +2043,99 @@ mod tests {
                 line(&format!("Text on page {i}."), 400.0),
             ]
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         assert_eq!(marks, detect(&pages));
+    }
+
+    #[test]
+    fn facing_pages_mirror_their_template() {
+        // Two facing pages 600 wide. Page 2 sets its footer 7pt lower and
+        // swaps its sides: the folio and the address change places, the
+        // centred line stays centred. The banner at the head swaps sides
+        // too: page 1's is the document's title.
+        let footer = |folio: &str, left: bool, dy: f64| {
+            let (fx, ax) = if left { (30.0, 450.0) } else { (550.0, 30.0) };
+            vec![
+                line_at(folio, 960.0 + dy, fx, fx + 20.0),
+                line_at("Order line 0800 000 000", 962.0 + dy, 230.0, 370.0),
+                line_at("orders@example.test", 961.0 + dy, ax, ax + 120.0),
+            ]
+        };
+        let page = |left: bool| {
+            let mut ls = if left {
+                vec![
+                    head_at("PART CATALOGUE", 40.0, 30.0, 230.0),
+                    head_at("Steel Hardware", 70.0, 30.0, 170.0),
+                ]
+            } else {
+                vec![
+                    head_at("PART CATALOGUE", 40.0, 370.0, 570.0),
+                    head_at("Steel Hardware", 70.0, 430.0, 570.0),
+                ]
+            };
+            for k in 0..20 {
+                ls.push(line(
+                    &format!("Row {k} of page {left}"),
+                    200.0 + 30.0 * k as f64,
+                ));
+            }
+            ls
+        };
+        let mut p1 = page(true);
+        p1.extend(footer("40", true, 0.0));
+        let mut p2 = page(false);
+        p2.extend(footer("41", false, 7.0));
+        let pages = vec![(p1, 1000.0), (p2, 1000.0)];
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[600.0, 600.0]);
+        let n = pages[0].0.len();
+        for (pi, li) in [
+            (0, n - 3),
+            (0, n - 2),
+            (0, n - 1),
+            (1, n - 3),
+            (1, n - 2),
+            (1, n - 1),
+        ] {
+            assert!(marks[pi].contains_key(&li), "page {pi} line {li}");
+        }
+        assert_eq!(marks[0].get(&0), None, "page 1 keeps its title");
+        assert_eq!(marks[1].get(&0), Some(&Furniture::Header));
+        assert_eq!(marks[1].get(&1), Some(&Furniture::Header));
+        let folios: Vec<Option<String>> = detect_folio_places(&pages, &[600.0, 600.0])
+            .into_iter()
+            .map(|(f, _)| f)
+            .collect();
+        assert_eq!(folios, [Some("40".into()), Some("41".into())]);
+        // Without the pages' widths, no mirror is seen.
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[]);
+        assert!(!marks[1].contains_key(&0));
+    }
+
+    #[test]
+    fn a_page_templates_title_is_kept_once() {
+        // Three pages of one table under its title, set below the header
+        // band at the same place on each, over the table's column labels,
+        // which repeat too.
+        let pages = doc(3, |i| {
+            let mut ls = vec![
+                line_at("www.example.test", 40.0, 700.0, 800.0),
+                head_at("Sizes of Steel Brackets", 300.0, 260.0, 560.0),
+                line_at("Size Width Depth", 330.0, 60.0, 260.0),
+            ];
+            for k in 0..12 {
+                ls.push(line(
+                    &format!("{} 1{k} 2{k}", i * 12 + k),
+                    360.0 + 20.0 * k as f64,
+                ));
+            }
+            ls
+        });
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[]);
+        assert_eq!(marks[0].get(&1), None, "the first page keeps its title");
+        assert_eq!(marks[1].get(&1), Some(&Furniture::Header));
+        assert_eq!(marks[2].get(&1), Some(&Furniture::Header));
+        assert!(marks.iter().all(|m| !m.contains_key(&2)), "the labels stay");
     }
 
     #[test]
@@ -1790,7 +2161,7 @@ mod tests {
             ls.push(line(&format!("Text on page {i}."), 400.0));
             ls
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
     }
 
@@ -1917,7 +2288,7 @@ mod tests {
                 line(&format!("Body text of page {i}"), 400.0),
             ]
         });
-        let (marks, exact, heads) = detect_with_heads(&pages, &[]);
+        let (marks, exact, heads) = detect_with_heads(&pages, &[], &[]);
         for (i, kept) in [true, true, false, true, false, false, false, false]
             .into_iter()
             .enumerate()

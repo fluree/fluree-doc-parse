@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Page 2's Application Reference sets two tables side by side, Open Space at the left and Corridor at the right, each titled in its grid and noted beneath."
+  },
+  "notes": [
+    "#280: the right table was placed before the left under their shared heading, and both notes came after both tables."
+  ],
+  "checks": [
+    {
+      "id": "left-note-before-right-table",
+      "found": "2026-11-25",
+      "issue": "#280: Corridor's table came before Open Space's, and Open Space's note after both.",
+      "text": "Open Space: 50' x 40' x 10' Corridor"
+    }
+  ]
+}

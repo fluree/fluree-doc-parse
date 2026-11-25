@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 1's header is a letterhead box beside a form box, a drawn rule between them, the letterhead's first line on the form's first label's baseline."
+  },
+  "notes": [
+    "#280: the letterhead's first line and the form's first label were one line across the rule between the boxes.",
+    "Open: the header's boxes are drawn as stroked rectangles, which are read as one shape rather than four rules, so the header is still read across its boxes row by row (`Location:` after `U.S.A. FOODSERVICE DIVISION`)."
+  ],
+  "checks": [
+    {
+      "id": "letterhead-line-alone",
+      "found": "2026-11-25",
+      "issue": "#280: `TRUE MANUFACTURING CO., INC. Project Name:` was one line.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "TRUE MANUFACTURING CO., INC. Project Name:"
+      },
+      "count": 0
+    },
+    {
+      "id": "form-label-alone",
+      "found": "2026-11-25",
+      "issue": "#280: as above; the form's label stands alone.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Project Name:"
+      }
+    }
+  ]
+}

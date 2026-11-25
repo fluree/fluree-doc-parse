@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "kohler-k-r33912.pdf",
+    "url": "https://techcomm.kohler.com/techcomm/pdf/K-R33912_spec_US-CA_Kohler_en.pdf",
+    "sha256": "b61768a2ab19e9621bb575f793c025f254f2b2f4af35aad473e34b861dd7c214",
+    "about": "Kohler K-R33912 faucet spec sheet. Each page's head and foot rules are drawn far past the page and clipped to the text's width; page 2 sets two columns under its head rule."
+  },
+  "notes": [
+    "#290: a rule clipped to the stretch that shows was read as drawn, wider than the page, and dropped as page decoration; page 2's two columns then read band by band."
+  ],
+  "checks": [
+    {
+      "id": "left-column-read-through",
+      "found": "2026-11-25",
+      "issue": "#290: `Recommended Products/Accessories` from the right column came between `CSA B651` and `Technical Information` in the left.",
+      "text": "CSA B651 Technical Information"
+    }
+  ]
+}
