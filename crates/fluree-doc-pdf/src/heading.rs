@@ -2777,9 +2777,9 @@ mod tests {
             b
         };
         let page = vec![
-            at("Owens Corning Insulating Systems, LLC", 634.0),
-            at("One Owens Corning Parkway Toledo, OH 43659 USA", 646.0),
-            at("1-800-GET-PINK\u{AE} www.owenscorning.com", 658.0),
+            at("ACME Building Products, LLC", 634.0),
+            at("One ACME Way Springfield, OH 45501 USA", 646.0),
+            at("1-800-555-0100 www.acme.com", 658.0),
             at("Installation", 700.0),
             at(
                 "Blow the insulation to the thickness the chart gives",
