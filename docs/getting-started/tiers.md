@@ -25,7 +25,9 @@ the detector's boxes rather than running it: see
 The arbiter takes a generic second opinion on a table, and nothing is wired
 into that slot by default. Supply one through
 [`--structure-results`](../integration/sidecar-formats.md) if you have a
-table-structure model worth consulting.
+table-structure model worth consulting. It weighs a table reading from
+`--tier-results` or from a model called in the run alike, and no table crop
+it vetoes is sent to the model.
 
 ## The two principles
 
