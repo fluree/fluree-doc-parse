@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "cree-cr4t-downlight.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet (Canada). Page 1 sets its specification rows on alternating grey bands beside a line drawing of the fixture; page 2 a column of headed bullet lists beside a polar candela chart drawn as whole circles clipped to a quarter."
+  },
+  "notes": [
+    "#202: the performance summary sets `CRI: 90+` in DIN Medium, a label and its value on one line."
+  ],
+  "checks": [
+    {
+      "id": "cri-field-not-heading",
+      "found": "2026-11-24",
+      "issue": "`CRI: 90+` was a bold h5.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "CRI: 90+"
+      },
+      "count": 0
+    }
+  ]
+}

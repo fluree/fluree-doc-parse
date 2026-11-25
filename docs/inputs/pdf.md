@@ -171,6 +171,15 @@ it: up to three ems, it goes on with that item rather than starting a
 paragraph. A line that opens with a dash, or follows an item ending on a
 colon, starts a list of its own under the item.
 
+**Bold or large, but no heading.** Size and weight do not make a heading
+of a field (`CRI: 90+` at the body's size, or a label with its value
+beside it), of a value
+set under its bold label at the label's size (`K25W951` under `PRODUCT
+NUMBER`), of a form's label waiting for its value (`Location:`, `Model
+#:`), of a signature block's role and party (`INVESTOR:` over the party's name over
+`By:`) or a signature page's label, or of a letterhead's lines over the
+sender's address and numbers.
+
 **Bullets.** The typographic bullets and geometric shapes are read as
 bullets, and so are the arrows and boxes the dingbat fonts set as them
 (`➢`, `◆`, `❑`). A Word file's symbol-font bullets read as the characters

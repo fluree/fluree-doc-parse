@@ -14,18 +14,44 @@ tells you how far down the ladder it came from.
 | 1 | document title | `title` | a one-off style in the first blocks of page 1 |
 | 2 | outline match | `outline` | the author named this heading |
 | 3 | numbering | `numbering` | `5.3.1` states its own depth |
-| 4 | weight | `bold` | bolder than body text |
+| 4 | weight | `bold` | bolder than body text, at the body's size |
 | 5 | font size | `font-size` | larger than body, in a repeated size tier |
 
 `font-size` is the weakest claim in the set — it is last because it is the one
 most easily fooled by emphasis, captions and pull quotes.
 
-Weight and size never make a heading of these two:
+Bold set larger than the body is ranked by its size, not given `bold`'s one
+level. A part's 12pt bold label over 10pt bold heads stays above them, as it
+does where the face's weight cannot be read at all.
+
+Weight and size never make a heading of these:
 
 - **A caption** (`Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
   Functions`), which is the figure's or the table's.
-- **A label ending in a colon with its value set beside it on its row**
-  (`Color:`), which is a field.
+- **A field:** a label ending in a colon with its value set beside it on
+  its row (`Color:`), or after it on its line at the body's size, the
+  value a figure or short and holding one (`CRI: 90+`, `Hours: 8:30 am -
+  6:00 pm EST (Monday - Friday)`, `Initial Closing Date: May 15, 2019`). A
+  title with a subtitle states no figure, runs on past a value's length,
+  or is set larger (`Policy Rules: Limitations`, `Part II: Application of
+  Section 67 Limitation to Specific Deductions`, `Current Situation:
+  2001-2019` at 14 pt over 10).
+- **A value under its label:** a line in a lighter weight set at its bold
+  label's size on the label's next line, alone or with more such lines
+  (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
+  `MANUFACTURER'S NAME`). A section under its title is set apart from it
+  by size or a gap.
+- **A form's label** ending in a colon or `#` (`Location:`, `Model #:`),
+  where only its size would make it a heading: the blank beside it is
+  where its value goes.
+- **A signature block's party:** a role or a name with a line to sign on
+  just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
+  `(Signature)`), and a signature page's label (`Signature Page to Voting
+  Agreement`). Agreements set their parties bold, a dozen to a page.
+- **A letterhead:** the sender's name, at the head of the first page, set
+  over its address and numbers, directly or over a line or two (`TRUE
+  MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE DIVISION` over its
+  street, phone and web address).
 
 A row of short blocks side by side was tried as a third test, as a table's
 header cells (`TYPE`, `NAME`, `DESCRIPTION`), and dropped: a slide's card
