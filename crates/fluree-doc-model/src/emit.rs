@@ -1011,7 +1011,7 @@ mod tests {
             alone.summary().as_deref(),
             Some(
                 "fluree-doc-parse: 3 images on pages 1–2, 5 were not examined: a parse \
-                 that probes images (OCR or escalation) can tell whether they hold text."
+                 that probes images (--probe-images, or OCR) can tell whether they hold text."
             )
         );
         let after = Notes {
@@ -1023,8 +1023,8 @@ mod tests {
             Some(
                 "fluree-doc-parse: 1 raster region carries content no reader \
                  transcribed: page 3 at 56,582,556,732. This output is missing it. \
-                 1 image on page 1 was not examined: a parse that probes images (OCR \
-                 or escalation) can tell whether it holds text."
+                 1 image on page 1 was not examined: a parse that probes images \
+                 (--probe-images, or OCR) can tell whether it holds text."
             )
         );
 
