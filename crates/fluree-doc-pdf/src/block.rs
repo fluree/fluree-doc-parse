@@ -491,7 +491,7 @@ const DOT_REACH: f64 = 2.0;
 /// arrow alone could as well be a range, a minus or a dialogue's dash: a
 /// run of lines each opening with one of them makes them a list's.
 const RUN_LEADS: &[char] = &[
-    '-', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2192}', '\u{2794}', '\u{27F6}',
+    '-', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}', '\u{2192}', '\u{2794}', '\u{27F6}', '>',
 ];
 
 /// A glyph that says nothing as text, which a list can open its items with
@@ -521,10 +521,21 @@ fn run_lead(l: &Line) -> Option<char> {
     let mut chars = t.chars();
     let c = chars.next()?;
     let rest = chars.as_str();
+    // A `>` opens an item that opens a sentence or a figure and says a few
+    // words, `> Ergonomic design`: a quoted message's lines open with one
+    // too, going on with their sentences in lower case, and a comparison's
+    // sign begins a fragment (`> C`, `> 0`).
+    let opens = rest
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|f| f.is_uppercase() || f.is_ascii_digit())
+        && rest.split_whitespace().count() >= 2;
     (leads_runs(c)
         && rest.starts_with([' ', '\u{00A0}', '\t'])
-        && rest.chars().any(char::is_alphanumeric))
-    .then_some(c)
+        && rest.chars().any(char::is_alphanumeric)
+        && (c != '>' || opens))
+        .then_some(c)
 }
 
 /// Lines apart, at most, two items of one dash-led list may stand: an item
@@ -2631,6 +2642,43 @@ mod tests {
         assert!(b.iter().all(|x| x.marker.is_none()), "{b:?}");
         // A minus run into its number opens no item either.
         assert_eq!(run_lead(&l("-2.0%", 46.0, 0.0, 9.0)), None);
+    }
+
+    #[test]
+    fn a_minus_or_an_arrow_opens_a_run_of_items() {
+        // A topic's points, each opening with a minus sign or with `>`,
+        // the text hanging after it.
+        for mark in ["\u{2212}", ">"] {
+            let lines = vec![
+                l(
+                    &format!("{mark} Pre-failure Alerts with the array"),
+                    54.0,
+                    0.0,
+                    9.0,
+                ),
+                l("controller and its firmware.", 72.0, 12.0, 9.0),
+                l(
+                    &format!("{mark} Best-in-class supply assurance"),
+                    54.0,
+                    24.0,
+                    9.0,
+                ),
+            ];
+            let b = assemble(&lines, 1.2);
+            assert_eq!(b.len(), 2, "{mark}: {b:?}");
+            assert!(
+                b.iter().all(|x| x.marker.as_deref() == Some(mark)),
+                "{mark}: {b:?}"
+            );
+        }
+        // A quoted message's lines open with `>` too, going on with their
+        // sentences in lower case: no items.
+        let quote = vec![
+            l("> We met on Tuesday and agreed that", 46.0, 0.0, 9.0),
+            l("> the draft should go out by Friday", 46.0, 12.0, 9.0),
+            l("> once legal has had a look at it.", 46.0, 24.0, 9.0),
+        ];
+        assert!(assemble(&quote, 1.2).iter().all(|x| x.marker.is_none()));
     }
 
     #[test]
