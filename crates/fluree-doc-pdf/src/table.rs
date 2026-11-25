@@ -1553,14 +1553,22 @@ impl Grid {
         };
         // Names, each its own: no figure, no code, none repeated (a row of
         // values under a banner repeats itself).
+        let named: Vec<Vec<usize>> = (0..n)
+            .map(|r| {
+                (0..rows[r].len())
+                    .filter(|&c| !rows[r][c].trim().is_empty())
+                    .collect()
+            })
+            .collect();
+        // One name alone stands for a unit restated over the one column the
+        // rows under it fill (`By wt` over `LVP-VOC | 0.0%`) where it stands
+        // in a value column; alone in the first column, it is a group's
+        // label.
+        let single = |r: usize| named[r].len() == 1 && named[r][0] > 0;
         let labels = |r: usize| {
-            let cells: Vec<&str> = rows[r]
-                .iter()
-                .map(|t| t.trim())
-                .filter(|t| !t.is_empty())
-                .collect();
+            let cells: Vec<&str> = named[r].iter().map(|&c| rows[r][c].trim()).collect();
             let distinct: std::collections::HashSet<&&str> = cells.iter().collect();
-            cells.len() >= 2
+            (cells.len() >= 2 || single(r))
                 && distinct.len() == cells.len()
                 && cells
                     .iter()
@@ -1574,9 +1582,11 @@ impl Grid {
             let bold = values.iter().filter(|c| heavy(***c)).count();
             (values.len(), bold)
         };
+        // Every value cell bold, two or more, or the one name of a single
+        // unit row: one bold word beside a label is emphasis.
         let bold = |r: usize| {
             let (values, bold) = bold_values(r);
-            bold >= 2 && bold == values
+            bold == values && (bold >= 2 || (bold == 1 && single(r)))
         };
         let plain = |r: usize| {
             let (values, bold) = bold_values(r);
@@ -1629,6 +1639,11 @@ impl Grid {
             .filter(|&r| {
                 !bands.contains(&r)
                     && labels(r)
+                    // One name straight under the header carries on the
+                    // header's own label, wrapped (`Body weight` over
+                    // `(kg)`): a unit restated stands partway down, under a
+                    // row of the data.
+                    && !(single(r) && r == header_rows.max(1))
                     && !(r > 0 && labels(r - 1) && bold(r - 1))
                     && rows[r]
                         .iter()
@@ -8700,6 +8715,58 @@ mod header_tests {
             fill(100.0, 20.0, 200.0, 30.0),
         ];
         assert!(g.merges(&rules, &block).continues_above[2 * 2 + 1]);
+    }
+
+    #[test]
+    fn a_single_bold_unit_over_its_column_restates_the_header() {
+        // A measurements table: `mm` over its column, then, partway down,
+        // `in` restated over the one column its row fills.
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            (0..6).map(|k| k as f64 * 20.0).collect(),
+        );
+        let rows = |unit_col: usize| {
+            let mut r = rows(&[
+                &["", "mm", "kg"],
+                &["Length", "120", "4"],
+                &["", "", ""],
+                &["Height", "4.7", ""],
+                &["Depth", "3.1", ""],
+            ]);
+            r[2][unit_col] = "in".into();
+            r
+        };
+        let set = |rows: &Vec<Vec<String>>, bold_row: usize| -> Vec<crate::glyph::Glyph> {
+            let mut out = Vec::new();
+            for (r, row) in rows.iter().enumerate() {
+                for (c, t) in row.iter().enumerate().filter(|(_, t)| !t.is_empty()) {
+                    let mut x = gly(c as f64 * 100.0 + 5.0, r as f64 * 20.0 + 14.0, 30.0, t);
+                    x.weight = Some(if r == 0 || r == bold_row { 700 } else { 400 });
+                    out.push(x);
+                }
+            }
+            out
+        };
+        let unit = rows(1);
+        assert_eq!(
+            g.restated_header_rows(&unit, 1, &[], &set(&unit, 2), &[]),
+            vec![2]
+        );
+        // Straight under the header, it is the header's label wrapped.
+        let mut wrapped = rows(1);
+        wrapped.swap(1, 2);
+        assert!(g
+            .restated_header_rows(&wrapped, 1, &[], &set(&wrapped, 1), &[])
+            .is_empty());
+        // Set plain, it is one more value.
+        assert!(g
+            .restated_header_rows(&unit, 1, &[], &set(&unit, 9), &[])
+            .is_empty());
+        // Alone in the first column, a name labels the rows' group.
+        let group = rows(0);
+        assert!(g
+            .restated_header_rows(&group, 1, &[], &set(&group, 2), &[])
+            .is_empty());
     }
 
     #[test]

@@ -466,7 +466,12 @@ A table can name its columns afresh partway down: a VOC table's `By wt |
 By vol` under a `LB/Gal | g/L` header, or a SKU table's own header row under
 a block of fields in the same box. Such a row sets names in two cells or
 more, each its own, and no figure or part number, over a row or more with
-something in a column it names. One row under a row of names is as likely
+something in a column it names. One name alone does where it stands in a
+value column, the first column empty: a unit restated over the one column
+the rows under it fill (`By wt` over `LVP-VOC | 0.0%`), set apart as below,
+bold as a whole, and under a row of the data: straight under the header it
+is the header's own label wrapped (`Body weight` over `(kg)`). Alone in the
+first column, a name labels a group of rows. One row under a row of names is as likely
 its value, but a header set apart names one row's columns as surely as ten:
 a short VOC table's `VOC Content | LB/Gal | g/L` over its one `Total`. It is
 set apart from the rows under it one of three ways:
