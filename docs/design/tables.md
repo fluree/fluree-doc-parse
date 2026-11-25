@@ -692,6 +692,22 @@ empty, its cells never merged into their neighbours', stays: the page draws
 it. A table the page break split drops a column only where every part does,
 so its parts keep one set of columns and read on as one table.
 
+A value set once across data columns that each have their own header is
+each column's, as a value spanning rows is each row's. A spec sheet centres
+`2 years` across its two models' columns, and DoCO wrote it under the first
+alone: the second model had no warranty. The reader marks such a run
+(`spread_left`) by where its value stands: its only text, worded, centred on
+the run and narrower than most of it. A run the ruling merely leaves open
+holds its value in its first column (a statement's `$ 11,452`, the next
+columns unruled on that row), and figures alone across columns are the
+grid's cuts off the page's. DoCO then writes the value under each column of
+the run, where each has a header of its own; under one shared header, or in
+a band or a restated header row, it stays one cell. Columns that are one
+stacked header's children are that header's attributes, not things of their
+own: a software product's `Terminal GTWIN CD-ROM` set across the
+`Description` group's `Screen size` to `SD memory card slot` is none of
+them, and is written once, named `Description`.
+
 ### Rows drawn but not ruled
 
 An unruled boundary is not, by itself, a merge: reading every one as a span

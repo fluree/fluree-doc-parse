@@ -488,6 +488,92 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     }
 }
 
+/// Which cells start a run of merged cells whose value is set across it:
+/// row-major, the run's first cell `true`.
+///
+/// A value centred across two models' columns (`2 years` under `M17
+/// Series` and `M21 Series`) is each column's; a run the ruling merely
+/// leaves open (a statement's `$ 11,452` under its first column, the next
+/// columns unruled on that row) holds its value in its first column. So a
+/// run is spread when its only text, in its first cell, is centred on the
+/// run, and narrower than most of it: a row of figures the grid failed to
+/// part runs the run's whole width, and is no one value. Only a value with
+/// a word in it: figures alone across columns are the grid's cuts off the
+/// page's.
+fn spread_runs(
+    g: &table::Grid,
+    glyphs: &[Glyph],
+    rows: &[Vec<String>],
+    left: &[bool],
+) -> Vec<bool> {
+    let cols = g.cols();
+    let n = rows.len();
+    let mut out = vec![false; n * cols];
+    if cols < 2 || left.len() != n * cols || g.xs.len() != cols + 1 {
+        return out;
+    }
+    let mut homes: Option<Vec<Option<usize>>> = None;
+    for (r, row) in rows.iter().enumerate() {
+        let mut c = 1;
+        while c < cols {
+            let mut end = c + 1;
+            while end < cols && left[r * cols + end] {
+                end += 1;
+            }
+            let value = row[c].trim();
+            let only_first =
+                !value.is_empty() && row[c + 1..end].iter().all(|t| t.trim().is_empty());
+            // A value with no word in it, figures and signs alone, set across
+            // columns stands in one of them, the grid's cuts off the page's:
+            // no datasheet sets one `5.5` for its MIN and its NOM, and a row
+            // of figures the grid failed to part is the columns' values.
+            let worded = value.chars().any(char::is_alphabetic);
+            if end > c + 1 && only_first && worded {
+                let cells: Vec<usize> = (c..end).map(|k| r * cols + k).collect();
+                let ids: Vec<usize> = match g.layout.as_deref() {
+                    Some(lay) => cells
+                        .iter()
+                        .filter_map(|&i| lay.cells.get(i))
+                        .flatten()
+                        .copied()
+                        .collect(),
+                    None => {
+                        let homes = homes.get_or_insert_with(|| g.glyph_cells(glyphs));
+                        homes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, h)| h.is_some_and(|i| cells.contains(&i)))
+                            .map(|(j, _)| j)
+                            .collect()
+                    }
+                };
+                let ink = ids
+                    .iter()
+                    .filter_map(|&j| glyphs.get(j))
+                    .filter(|gl| !gl.text.trim().is_empty())
+                    .filter_map(|gl| gl.bbox)
+                    .reduce(|a, b| a.union(&b));
+                if let Some(ink) = ink {
+                    let (x0, x1) = (g.xs[c], g.xs[end]);
+                    let width = (x1 - x0).max(1.0);
+                    let mid = (ink.x0 + ink.x1) / 2.0;
+                    out[r * cols + c] = (mid - (x0 + x1) / 2.0).abs() <= width * SPREAD_CENTRE
+                        && ink.x1 - ink.x0 <= width * SPREAD_WIDTH;
+                }
+            }
+            c = end;
+        }
+    }
+    out
+}
+
+/// How far a spread value's middle may stand from its run's, as a share of
+/// the run's width.
+const SPREAD_CENTRE: f64 = 0.15;
+
+/// Widest a spread value's ink runs, as a share of its run's width.
+const SPREAD_WIDTH: f64 = 0.8;
+
 /// Drop the columns no cell starts in, from every part of a table.
 ///
 /// A column whose cell on every row is empty and the rest of the one to its
@@ -569,6 +655,7 @@ fn drop_merged_columns(elements: &mut [Element]) {
             }
             e.merged_left = e.merged_left.as_ref().map(squeeze);
             e.merged_down = e.merged_down.as_ref().map(squeeze);
+            e.spread_left = e.spread_left.as_ref().map(squeeze);
             if let Some(rows) = e.cells.as_ref() {
                 e.text = rows
                     .iter()
@@ -3268,6 +3355,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     &raw.pages[pi].fills,
                 ),
             };
+            let spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
             tables += 1;
             let text = rows
                 .iter()
@@ -3277,6 +3365,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             table_elements.push(Element {
                 page: pi,
                 bbox: Some(g.bbox),
+                spread_left: spread.iter().any(|x| *x).then_some(spread),
                 cells: Some(rows),
                 header_rows: Some(header_rows),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
