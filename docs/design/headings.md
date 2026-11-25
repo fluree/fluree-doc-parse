@@ -24,6 +24,19 @@ Bold set larger than the body is ranked by its size, not given `bold`'s one
 level. A part's 12pt bold label over 10pt bold heads stays above them, as it
 does where the face's weight cannot be read at all.
 
+A heading's weight is its leading run's when it ends on a bracketed note
+set lighter. `raft-R-mate® Attic Vents (Ventilation Baffles)`, bold up to
+its note, ranks with the other 10pt bold heads, not below them. A sentence
+that opens on a bold name and runs on unbracketed keeps the weight of the
+rest of its line.
+
+A title must be four characters or more to be read as one on its shape
+alone. Shorter lines are a word or two of a sentence, a page's letter, or
+`No`. An acronym of two or three capitals on a line of its own (`FCC` over a
+guide's compliance notes) is a heading where it is set exactly as one of the
+document's headings is: the same size, weight and case, read on the same
+evidence. It takes that heading's level.
+
 Where the body itself is set bold, weight carries no information, and no
 heading is read from it. Whether it is comes from the glyphs: the size most of
 the document's letters are set at, and whether most of them are bold, its
