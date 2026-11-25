@@ -3102,22 +3102,73 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                 // across the cut: `Flame spread` beside its
                                 // group label, `Apt. no.` beside an address
                                 // label the cut runs through.
+                                // Cells that do read as one are one, their
+                                // text read whole into the first: a value set
+                                // across two model columns beside its row's
+                                // label (`11/12 seconds (ventilated); 10/12
+                                // seconds (refrigerated)`).
                                 let glyphs = &raw.pages[pi].glyphs;
+                                let homes = g.glyph_cells(glyphs);
+                                // A line runs on across the cut at `k` in row
+                                // `i`: a word left of it and the next on its
+                                // baseline a word space apart. Values in
+                                // columns set close stand further apart.
+                                let runs_across = |i: usize, p: usize, k: usize| {
+                                    let at = |cell: usize| {
+                                        glyphs.iter().zip(&homes).filter(move |(gl, h)| {
+                                            **h == Some(cell)
+                                                && gl.bbox.is_some()
+                                                && !gl.text.trim().is_empty()
+                                        })
+                                    };
+                                    at(i * cols + k).any(|(b, _)| {
+                                        let (bb, fs) =
+                                            (b.bbox.unwrap(), b.font_size.max(1.0) as f64);
+                                        (p..k).any(|q| {
+                                            at(i * cols + q).any(|(a, _)| {
+                                                let ab = a.bbox.unwrap();
+                                                (a.origin.1 - b.origin.1).abs() < 0.3 * fs
+                                                    && ab.x1 <= bb.x0 + 0.5
+                                                    && bb.x0 - ab.x1 <= 0.5 * fs
+                                            })
+                                        })
+                                    })
+                                };
                                 let mut apart: Vec<usize> = Vec::new();
-                                for (i, row) in rows.iter().enumerate().take(r_end).skip(r) {
-                                    let mut prev: Option<usize> = None;
-                                    for (k, cell) in row.iter().enumerate().take(c_end).skip(c) {
-                                        if cell.trim().is_empty() {
+                                for i in r..r_end {
+                                    let mut start: Option<usize> = None;
+                                    for k in c..c_end {
+                                        if rows[i][k].trim().is_empty() {
                                             continue;
                                         }
-                                        let joined = prev.is_some_and(|p| {
+                                        let joined = start.and_then(|p| {
                                             g.region_text(glyphs, &merges, i..i + 1, p..k + 1)
-                                                .is_some()
+                                                .map(|t| (p, t))
                                         });
-                                        if k > c && !joined {
-                                            apart.push(i * cols + k);
+                                        // Cells read as one keep the span; their
+                                        // text is joined where a line runs across.
+                                        if let Some((p, _)) = &joined {
+                                            if !runs_across(i, *p, k) {
+                                                start = Some(k);
+                                                continue;
+                                            }
                                         }
-                                        prev = Some(k);
+                                        match joined {
+                                            Some((p, t)) => {
+                                                rows[i][p] = unfolio(
+                                                    furniture::scrub_cell(&t, &scrub_texts),
+                                                    i,
+                                                    i + 1,
+                                                );
+                                                rows[i][k].clear();
+                                            }
+                                            None => {
+                                                if k > c {
+                                                    apart.push(i * cols + k);
+                                                }
+                                                start = Some(k);
+                                            }
+                                        }
                                     }
                                 }
                                 for k in apart {
@@ -3139,12 +3190,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // the rows beneath them rather than the columns.
             let sub_headers: Vec<usize> = match explicit {
                 Some(lay) => lay.sub_headers.clone(),
+                // Not a row the ruling leaves open but whose values stand
+                // apart in their own cells: a table ruled with horizontals
+                // only leaves every row open.
                 None => merges
                     .full_width_row
                     .iter()
                     .enumerate()
                     .filter(|(r, full)| {
-                        (**full && rows[*r].iter().any(|c| !c.trim().is_empty())
+                        let spans = (1..cols).all(|c| merges.continues_left[*r * cols + c]);
+                        (**full && spans && rows[*r].iter().any(|c| !c.trim().is_empty())
                             || group_label(&rows, *r))
                             && *r >= header_rows
                     })

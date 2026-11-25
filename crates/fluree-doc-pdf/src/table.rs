@@ -2388,6 +2388,21 @@ fn detect_group(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
+    detect_group_trimmed(rules, fills, glyphs, page, frames, true)
+}
+
+/// [`detect_group`], trimming the grid's ends of bands no vertical crosses
+/// or not: a stack of row lines ruled alike ([`ruled_stacks`]) is the
+/// table's rows by how they are drawn, and a heading's underline is not
+/// ruled like them.
+fn detect_group_trimmed(
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    glyphs: &[crate::glyph::Glyph],
+    page: usize,
+    frames: &[BBox],
+    trim: bool,
+) -> Vec<Grid> {
     let hs: Vec<&Rule> = rules
         .iter()
         .filter(|r| r.orientation == Orientation::Horizontal)
@@ -2516,11 +2531,11 @@ fn detect_group(
     let boxed = vs
         .iter()
         .any(|r| r.bbox.y1 > top + EDGE_TOLERANCE && r.bbox.y0 < bottom - EDGE_TOLERANCE);
-    if !among.is_empty() {
-        let crossed = |lo: f64, hi: f64| {
-            let mid = (lo + hi) / 2.0;
-            among.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
-        };
+    let crossed = |lo: f64, hi: f64| {
+        let mid = (lo + hi) / 2.0;
+        among.iter().any(|r| r.bbox.y0 <= mid && r.bbox.y1 >= mid)
+    };
+    if trim && !among.is_empty() {
         while ys.len() > MIN_GRID_LINES && !crossed(ys[0], ys[1]) {
             ys.remove(0);
         }
@@ -3307,7 +3322,42 @@ fn detect_framed_rules(
 ) -> Vec<Grid> {
     let whole = detect_group(rules, fills, glyphs, page, frames);
     if whole.is_empty() {
-        return detect_components(rules, fills, glyphs, page, frames);
+        // The page-wide reading finds nothing where two tables on the page
+        // rule their columns apart at different places: across the page no
+        // edge but the outer two has the lines' support, and a one-column
+        // grid with verticals inside it is no table. Read in touching
+        // components, a table ruled with horizontals only falls apart into
+        // lines, none touching the next; its lines ruled alike are read
+        // together.
+        let mut out = detect_components(rules, fills, glyphs, page, frames);
+        for stack in ruled_stacks(rules) {
+            for g in detect_group_trimmed(&stack, fills, glyphs, page, frames, false) {
+                // Rows and columns: a chart's gridlines, broken alike where
+                // its bars stand, leave one column of tick labels.
+                if g.rows() < 2 || g.cols() < 2 || !rules_its_rows(&g, glyphs) {
+                    continue;
+                }
+                // A band the components read inside it on its own (a shaded
+                // header whose separators touch its rule) is one of its rows.
+                let band_within = |o: &Grid| {
+                    o.rows() == 1
+                        && o.bbox.x0 >= g.bbox.x0 - EDGE_TOLERANCE
+                        && o.bbox.x1 <= g.bbox.x1 + EDGE_TOLERANCE
+                        && o.bbox.y0 >= g.bbox.y0 - EDGE_TOLERANCE
+                        && o.bbox.y1 <= g.bbox.y1 + EDGE_TOLERANCE
+                };
+                if out
+                    .iter()
+                    .filter(|o| overlaps(&o.bbox, &g.bbox))
+                    .all(|o| band_within(o))
+                {
+                    out.retain(|o| !band_within(o));
+                    out.push(g);
+                }
+            }
+        }
+        out.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        return out;
     }
     let boxed = detect_boxes(rules, fills, glyphs, page, frames);
     if boxed.grids.is_empty() {
@@ -4089,6 +4139,131 @@ fn with_header_band_edge(
     wider.xs.insert(0, band.x0);
     wider.bbox.x0 = band.x0;
     Some(wider)
+}
+
+/// A grid read from a stack of row lines is a table ruled row by row: its
+/// lines part its text's lines, three to a row at most (a statement ruled
+/// only under its header and its totals sets many rows between them), and
+/// two of its columns or more hold text in half its rows (a chart's
+/// gridlines leave one column of tick labels, a list of boxes one of
+/// marks).
+fn rules_its_rows(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
+    let inside: Vec<&crate::glyph::Glyph> = glyphs
+        .iter()
+        .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+        .filter(|gl| {
+            gl.bbox.is_some_and(|b| {
+                let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                cx > g.bbox.x0 && cx < g.bbox.x1 && cy > g.bbox.y0 && cy < g.bbox.y1
+            })
+        })
+        .collect();
+    let mut sizes: Vec<f32> = inside.iter().map(|gl| gl.font_size).collect();
+    if sizes.is_empty() {
+        return false;
+    }
+    sizes.sort_by(f32::total_cmp);
+    let fs = sizes[sizes.len() / 2].max(1.0) as f64;
+    let baselines = coalesce(inside.iter().map(|gl| gl.origin.1).collect(), 0.4 * fs).len();
+    if baselines > 3 * g.rows() {
+        return false;
+    }
+    let (rows, cols) = (g.rows(), g.cols());
+    let cells = g.cell_texts(glyphs);
+    let held = (0..cols)
+        .filter(|&c| {
+            (0..rows)
+                .filter(|&r| !cells[r * cols + c].trim().is_empty())
+                .count()
+                * 2
+                >= rows
+        })
+        .count();
+    held >= 2
+}
+
+/// Stacks of a page's row lines ruled alike: three lines or more, one under
+/// the next, each with the same extent and broken at the same places, a
+/// table ruled with horizontals only that draws each line a column at a
+/// time. Its lines need not touch. With each stack, the verticals standing
+/// within it or a row above it (a shaded header's separators), one of them
+/// at least on a break.
+fn ruled_stacks(rules: &[Rule]) -> Vec<Vec<Rule>> {
+    let hs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    let lines = cluster(&hs);
+    let breaks = |g: &GridLine| {
+        coalesce(
+            g.ends
+                .iter()
+                .copied()
+                .filter(|e| *e > g.lo + EDGE_TOLERANCE && *e < g.hi - EDGE_TOLERANCE)
+                .collect(),
+            EDGE_TOLERANCE,
+        )
+    };
+    let alike = |a: &GridLine, b: &GridLine| {
+        let (ba, bb) = (breaks(a), breaks(b));
+        (a.lo - b.lo).abs() <= EDGE_TOLERANCE
+            && (a.hi - b.hi).abs() <= EDGE_TOLERANCE
+            && !ba.is_empty()
+            && ba.len() == bb.len()
+            && ba
+                .iter()
+                .zip(&bb)
+                .all(|(p, q)| (p - q).abs() <= 2.0 * EDGE_TOLERANCE)
+    };
+    let mut stacks: Vec<Vec<&GridLine>> = Vec::new();
+    for line in &lines {
+        match stacks.last_mut() {
+            Some(stack) if alike(stack[stack.len() - 1], line) => stack.push(line),
+            _ => stacks.push(vec![line]),
+        }
+    }
+    stacks
+        .into_iter()
+        .filter(|stack| stack.len() >= 3)
+        .filter_map(|stack| {
+            let (top, bottom) = (stack[0].axis, stack[stack.len() - 1].axis);
+            let (lo, hi) = (stack[0].lo, stack[0].hi);
+            let mut gaps: Vec<f64> = stack.windows(2).map(|w| w[1].axis - w[0].axis).collect();
+            gaps.sort_by(f64::total_cmp);
+            let row = gaps[gaps.len() / 2];
+            let picked: Vec<Rule> = rules
+                .iter()
+                .filter(|r| match r.orientation {
+                    Orientation::Horizontal => stack.iter().any(|g| {
+                        (r.axis_pos() - g.axis).abs() <= AXIS_TOLERANCE
+                            && r.bbox.x0 >= lo - EDGE_TOLERANCE
+                            && r.bbox.x1 <= hi + EDGE_TOLERANCE
+                    }),
+                    Orientation::Vertical => {
+                        r.axis_pos() >= lo - EDGE_TOLERANCE
+                            && r.axis_pos() <= hi + EDGE_TOLERANCE
+                            && r.bbox.y0 >= top - row - EDGE_TOLERANCE
+                            && r.bbox.y1 <= bottom + row + EDGE_TOLERANCE
+                    }
+                })
+                .copied()
+                .collect();
+            // Its breaks are columns' edges where a vertical stands on one
+            // (a shaded header's separators): a statement's figures
+            // underlined a column at a time break alike too, between columns
+            // that rows of text no rule parts carry on above and below.
+            let edges = breaks(stack[0]);
+            picked
+                .iter()
+                .any(|r| {
+                    r.orientation == Orientation::Vertical
+                        && edges
+                            .iter()
+                            .any(|e| (r.axis_pos() - e).abs() <= 2.0 * EDGE_TOLERANCE)
+                })
+                .then_some(picked)
+        })
+        .collect()
 }
 
 /// Group the rules into touching components and detect a grid in each.
@@ -7279,6 +7454,39 @@ mod header_tests {
         assert_eq!(grids.len(), 1, "got {grids:?}");
         assert!((grids[0].xs[0] - 0.0).abs() < 1.0, "got {:?}", grids[0].xs);
         assert_eq!(grids[0].cols(), 3);
+    }
+
+    #[test]
+    fn row_lines_ruled_alike_under_a_header_stack_into_one_table() {
+        // Five row lines, each drawn a column at a time, broken at 100 and
+        // 200; a shaded header's separators stand on the breaks above them.
+        let mut rules = Vec::new();
+        for y in [20.0, 33.0, 46.0, 59.0, 72.0] {
+            for (a, b) in [(0.0, 100.0), (100.0, 200.0), (200.0, 300.0)] {
+                rules.push(h(a, b, y));
+            }
+        }
+        for x in [100.0, 200.0] {
+            rules.push(v(7.0, 20.0, x));
+        }
+        let stacks = ruled_stacks(&rules);
+        assert_eq!(stacks.len(), 1, "got {stacks:?}");
+        assert_eq!(stacks[0].len(), rules.len());
+        // A statement's figures underlined a column at a time break alike
+        // too, with no vertical on a break: no table of their own.
+        let underlines: Vec<Rule> = rules
+            .iter()
+            .filter(|r| r.orientation == Orientation::Horizontal)
+            .copied()
+            .collect();
+        assert!(ruled_stacks(&underlines).is_empty());
+        // Nor are unbroken lines, a chart's gridlines: no columns.
+        let gridlines: Vec<Rule> = [20.0, 33.0, 46.0, 59.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .chain([v(7.0, 20.0, 100.0)])
+            .collect();
+        assert!(ruled_stacks(&gridlines).is_empty());
     }
 
     #[test]

@@ -76,6 +76,30 @@ not two edges with an empty column between them. Pieces a longer rule is
 drawn over whole (group underlines under a rule across all of them) keep
 their ends.
 
+### Row lines ruled alike, read together
+
+A page with two tables ruled at different columns can leave the page-wide
+reading with nothing: across the page no edge but the outer two has the
+support of half the lines, and a one-column grid with verticals inside it is
+no table. Read in touching components instead, a table ruled with
+horizontals only falls apart into lines, none touching the next. So where the
+page-wide reading finds nothing, row lines ruled alike are read together: three
+lines or more, one under the next, each with the same extent and broken at
+the same places, a vertical standing on one of the breaks (a shaded header's
+separators). Its ends are not trimmed: the lines are its rows by how they are
+drawn. It is kept as a table where:
+
+- it has two rows and two columns or more;
+- its lines part its text's lines, three to a row at most (a statement
+  ruled only under its header and its totals sets many rows between them);
+- two of its columns or more hold text in half its rows (a chart's
+  gridlines leave one column of tick labels).
+
+A band the components read inside it on its own, a shaded header whose
+separators touch its rule, is one of its rows. A statement's figures,
+underlined a column at a time, break alike too, but no vertical stands on
+their breaks.
+
 ## Each box is read on its own
 
 Read all at once, a page's rules make one grid before it is cut into tables.
@@ -719,7 +743,14 @@ is a value, unless the two read as one across the cut between them (an
 address label a column cut runs through, beside its `Apt. no.`). It does not
 carry on the cell to its left, so DoCO names its row by the group and by it
 (`Surface-burning characteristics / Smoke developed`) rather than joining the
-two.
+two. Cells that do read as one are one cell, their text read whole into the
+first: a value set across two model columns beside its row's label
+(`11/12 seconds (ventilated); 10/12 seconds (refrigerated)`), in a table ruled
+with horizontals only that breaks every row line at the same edges.
+
+A row the ruling leaves open across the table is a section's band only where
+it does span: in a table ruled with horizontals only every row is left open,
+and a row whose values stand apart in their own cells is a row of values.
 
 ### Shading parts rows
 
