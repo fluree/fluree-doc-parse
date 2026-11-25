@@ -8337,6 +8337,8 @@ mod header_tests {
         crate::rule::Fill {
             bbox: BBox { x0, y0, x1, y1 },
             page: 0,
+            paint: None,
+            stroked: false,
         }
     }
 
@@ -8849,6 +8851,8 @@ mod header_tests {
                 y1: 20.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let grids = detect_framed(&rules, &[band], &[], 0, &[]);
         assert_eq!(grids.len(), 1, "got {grids:?}");
@@ -8863,6 +8867,8 @@ mod header_tests {
                     y1: 20.0,
                 },
                 page: 0,
+                paint: None,
+                stroked: false,
             },
             crate::rule::Fill {
                 bbox: BBox {
@@ -8872,6 +8878,8 @@ mod header_tests {
                     y1: 20.0,
                 },
                 page: 0,
+                paint: None,
+                stroked: false,
             },
         ];
         let grids = detect_framed(&rules, &bands, &[], 0, &[]);
@@ -9103,6 +9111,8 @@ mod header_tests {
                 y1: 40.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let grids = detect_framed(&rules, &[band], &glyphs, 0, &[]);
         assert_eq!(grids[0].ys.len(), 6, "got {:?}", grids[0].ys);
@@ -10315,17 +10325,23 @@ mod tests {
         let mut fills = vec![Fill {
             bbox: bb(46.0, 95.0, 421.0, 563.0),
             page: 0,
+            paint: None,
+            stroked: false,
         }];
         for k in 0..3 {
             let x = 115.0 + 100.0 * k as f64;
             fills.push(Fill {
                 bbox: bb(x, 135.0, x + 29.0, 180.0),
                 page: 0,
+                paint: None,
+                stroked: false,
             });
         }
         fills.push(Fill {
             bbox: bb(50.0, 600.0, 150.0, 700.0),
             page: 0,
+            paint: None,
+            stroked: false,
         });
         let walls = walls(&fills);
         assert_eq!(walls.len(), 2, "{walls:?}");
@@ -10853,6 +10869,8 @@ mod tests {
                 y1: 210.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         }];
         for row in 0..5 {
             for col in 0..4 {
@@ -10864,6 +10882,8 @@ mod tests {
                         y1: 110.0 + row as f64 * 20.0,
                     },
                     page: 0,
+                    paint: None,
+                    stroked: false,
                 });
             }
         }
@@ -11504,6 +11524,8 @@ mod tests {
                 y1: 15.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         assert!(
             detect_aligned(&gl, &[], &[fill], 0).is_empty(),
@@ -11519,6 +11541,8 @@ mod tests {
                         y1: 10.0 + r as f64 * 20.0,
                     },
                     page: 0,
+                    paint: None,
+                    stroked: false,
                 })
             })
             .collect();

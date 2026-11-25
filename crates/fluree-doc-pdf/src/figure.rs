@@ -2367,7 +2367,14 @@ mod tests {
     }
 
     fn fills(v: &[BBox]) -> Vec<Fill> {
-        v.iter().map(|b| Fill { bbox: *b, page: 0 }).collect()
+        v.iter()
+            .map(|b| Fill {
+                bbox: *b,
+                page: 0,
+                paint: None,
+                stroked: false,
+            })
+            .collect()
     }
 
     #[test]

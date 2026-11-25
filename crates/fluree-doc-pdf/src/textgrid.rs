@@ -3555,6 +3555,8 @@ mod tests {
                 y1: 82.0,
             },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let mut glyphs = Vec::new();
         for (x, t) in [

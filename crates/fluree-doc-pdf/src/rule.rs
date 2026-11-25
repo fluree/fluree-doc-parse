@@ -65,7 +65,6 @@ impl Rule {
     }
 }
 
-/// A filled area large enough to be a background rather than a rule.
 /// A stroked line of straight segments, most of them neither horizontal nor
 /// vertical: a chart's trace. Read as its box, as a path is, it was a fill;
 /// kept apart, it says a plot is drawn here.
@@ -81,10 +80,39 @@ pub struct Trace {
     pub page: usize,
 }
 
+/// A filled area large enough to be a background rather than a rule. A
+/// box drawn as an outline is one too, by its extent: `stroked` says so.
 #[derive(Debug, Clone, Copy)]
 pub struct Fill {
     pub bbox: BBox,
     pub page: usize,
+    /// What it is painted with, where read from the page.
+    pub paint: Option<Paint>,
+    /// Drawn as an outline, not filled.
+    pub stroked: bool,
+}
+
+impl Fill {
+    /// A fill of this extent, its paint not known.
+    pub fn new(bbox: BBox, page: usize) -> Self {
+        Fill {
+            bbox,
+            page,
+            paint: None,
+            stroked: false,
+        }
+    }
+}
+
+/// What a shape is painted with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Paint {
+    /// A flat colour: red, green, blue and alpha, 0 to 255.
+    Solid([u8; 4]),
+    /// A gradient: a shading pattern.
+    Gradient,
+    /// A tile repeated over the shape: a hatch or a texture.
+    Tiled,
 }
 
 /// Share of a fill's width the text on it must cover for the fill to be a
@@ -196,7 +224,7 @@ pub fn classify(bbox: BBox, page: usize) -> Option<Shape> {
     // Anything else with real area is a candidate fill. Table detection filters
     // further; a page background or a figure will simply not form a grid.
     if w > MAX_RULE_THICKNESS && h > MAX_RULE_THICKNESS {
-        return Some(Shape::Fill(Fill { bbox, page }));
+        return Some(Shape::Fill(Fill::new(bbox, page)));
     }
     None
 }
@@ -456,6 +484,8 @@ mod tests {
         let band = |y0: f64, y1: f64, x0: f64, x1: f64| Fill {
             bbox: BBox { x0, y0, x1, y1 },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let mut fills = vec![
             band(0.0, 30.0, 0.0, 612.0),
@@ -661,6 +691,8 @@ mod tests {
         let f = |x0, y0, x1, y1| Fill {
             bbox: bb(x0, y0, x1, y1),
             page: 0,
+            paint: None,
+            stroked: false,
         };
         // A logo's lettering, its squarish letters abutting, and a box to
         // tick beside a line of its own.
@@ -679,6 +711,8 @@ mod tests {
         let f = |x0, y0, x1, y1| Fill {
             bbox: bb(x0, y0, x1, y1),
             page: 0,
+            paint: None,
+            stroked: false,
         };
         // A logo's illustration: a shape holding pieces, one a small
         // square, another square overlapping a piece part way; and a box to
@@ -703,6 +737,8 @@ mod tests {
         let f = |x0, y0, x1, y1| Fill {
             bbox: bb(x0, y0, x1, y1),
             page: 0,
+            paint: None,
+            stroked: false,
         };
         let fills = vec![
             f(40.0, 511.0, 47.0, 518.0),  // a checkbox
@@ -721,7 +757,14 @@ mod tests {
     }
 
     fn fills(v: &[BBox]) -> Vec<Fill> {
-        v.iter().map(|b| Fill { bbox: *b, page: 0 }).collect()
+        v.iter()
+            .map(|b| Fill {
+                bbox: *b,
+                page: 0,
+                paint: None,
+                stroked: false,
+            })
+            .collect()
     }
 
     /// A line of 10pt text from `x0`, one 5pt glyph per character.

@@ -838,9 +838,21 @@ pub(crate) fn rules(pdf: &Path, page: Option<usize>) {
                 );
             }
             for fill in p.fills.iter().take(60) {
+                use fluree_doc_pdf::rule::Paint;
+                let paint = match fill.paint {
+                    Some(Paint::Solid([r, g, b, 255])) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    Some(Paint::Solid([r, g, b, a])) => format!("#{r:02x}{g:02x}{b:02x}{a:02x}"),
+                    Some(Paint::Gradient) => "gradient".to_string(),
+                    Some(Paint::Tiled) => "tiled".to_string(),
+                    None => "-".to_string(),
+                };
                 println!(
-                    "   Fill bbox=({:.0},{:.0})-({:.0},{:.0})",
-                    fill.bbox.x0, fill.bbox.y0, fill.bbox.x1, fill.bbox.y1
+                    "   Fill bbox=({:.0},{:.0})-({:.0},{:.0}) {paint}{}",
+                    fill.bbox.x0,
+                    fill.bbox.y0,
+                    fill.bbox.x1,
+                    fill.bbox.y1,
+                    if fill.stroked { " outline" } else { "" }
                 );
             }
         }

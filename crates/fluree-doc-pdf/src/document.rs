@@ -5341,6 +5341,8 @@ mod tests {
         let head = |x0, y0, x1, y1| Fill {
             bbox: BBox { x0, y0, x1, y1 },
             page: 0,
+            paint: None,
+            stroked: false,
         };
         assert!(ends_in_arrowhead(
             &line,
