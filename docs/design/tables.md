@@ -404,6 +404,13 @@ The first row of a ruled or aligned grid is the table's title when:
   from the alignment, holding one label or text whose words run at their
   ordinary spacing over the cuts between columns; or it is the only text in
   the row, in its first column, with nothing in the row spanned;
+- or it is one cell across all of the table but columns too narrow to hold
+  a label set across them, 2.5 ems of its text together: a margin, or the
+  room a label turned down the rows takes, whose rule may run on up through
+  the band (`Average Luminance Table (cd/m²)` over every column but the one
+  `Vertical Angle` is turned in). A line turned down a column takes about
+  two ems, a word set across one three or more; a group's label over part
+  of the table leaves columns a label fits;
 - it is short (12 words or fewer) and is not a number.
 
 The title is read out as a paragraph just above the table, and the table is

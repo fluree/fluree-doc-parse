@@ -80,6 +80,12 @@ pub struct Analysis {
 /// Most words of a table's title band.
 const MAX_TABLE_TITLE_WORDS: usize = 12;
 
+/// Widest, in ems of a band's text, the columns beside a title band may run
+/// together and the band still stand across the table. A line turned down a
+/// column takes a line's height and its padding, about two ems; a word set
+/// across a column takes three or more.
+const BAND_MARGIN_EMS: f64 = 2.5;
+
 /// A grid whose first row is the table's title rather than its header: one label alone in the row, as one cell across the
 /// whole table (`Hex Cap Screws ASME B18.2.1-2012`, a section band
 /// `Mission Critical (10K rpm)`) or as the only text in the first of a row
@@ -115,7 +121,41 @@ fn table_title(
     // over some of the columns (`Dates` over `Start | Next review`) is the
     // header's, and is spanned over them.
     // A row the alignment read as one cell across (`spanning`) is one too.
-    let across = spanning || (1..cols).all(|c| merges.continues_left[c]);
+    // Or one cell across all of the table but columns too narrow to hold a
+    // label set across them ([`BAND_MARGIN_EMS`] of the row's text
+    // together): a margin, or the room a label turned down the rows takes,
+    // whose rule may run on up through the band (`Average Luminance Table
+    // (cd/m²)` over every column but the one `Vertical Angle` is turned
+    // in). A group's label over part of the table leaves columns a label
+    // fits.
+    let em = {
+        let mut sizes: Vec<f64> = page
+            .glyphs
+            .iter()
+            .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+            .filter(|gl| {
+                let (x, y) = gl.center();
+                g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
+            })
+            .map(|gl| gl.font_size as f64)
+            .collect();
+        sizes.sort_by(f64::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(0.0)
+    };
+    let banded = (0..cols)
+        .find(|&c| !flat[c].trim().is_empty())
+        .is_some_and(|c0| {
+            let mut end = c0 + 1;
+            while end < cols && merges.continues_left[end] {
+                end += 1;
+            }
+            let held = (0..cols)
+                .filter(|&c| !flat[c].trim().is_empty())
+                .all(|c| c >= c0 && c < end);
+            let outside = (g.xs[c0] - g.xs[0]) + (g.xs[cols] - g.xs[end]);
+            held && end - c0 >= 2 && outside > 0.0 && outside < BAND_MARGIN_EMS * em
+        });
+    let across = spanning || (1..cols).all(|c| merges.continues_left[c]) || banded;
     let alone = filled(0) == 1
         && !flat[0].trim().is_empty()
         && (1..cols).all(|c| !merges.continues_left[c]);
@@ -4138,6 +4178,109 @@ mod tests {
         assert!(!spread(63.0, 257.0));
         // As wide, an em or more in from each edge, but not alike.
         assert!(!spread(71.0, 241.0));
+    }
+
+    #[test]
+    fn a_band_over_all_but_a_margin_column_is_the_tables_title() {
+        use crate::rule::{Orientation, Rule};
+        let word = |x0: f64, x1: f64, y: f64, t: &str, i: usize| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 7.0,
+                x1,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            advance: None,
+            draw_index: i,
+        };
+        // A grid whose first column is `first` wide; the band over the rest
+        // of it, the rule at the first column's edge running up through it.
+        let table = |first: f64| {
+            let xs = vec![0.0, first, first + 50.0, first + 100.0];
+            let ys = vec![0.0, 15.0, 30.0, 45.0, 60.0];
+            let right = xs[3];
+            let mut rules: Vec<Rule> = ys
+                .iter()
+                .map(|&y| Rule {
+                    bbox: BBox {
+                        x0: 0.0,
+                        y0: y,
+                        x1: right,
+                        y1: y + 0.5,
+                    },
+                    orientation: Orientation::Horizontal,
+                    page: 0,
+                })
+                .collect();
+            let v = |x: f64, y0: f64| Rule {
+                bbox: BBox {
+                    x0: x,
+                    y0,
+                    x1: x + 0.5,
+                    y1: 60.0,
+                },
+                orientation: Orientation::Vertical,
+                page: 0,
+            };
+            rules.extend([v(0.0, 0.0), v(first, 0.0), v(right, 0.0)]);
+            rules.extend([v(first + 50.0, 15.0)]);
+            let mut glyphs = vec![
+                word(first + 4.0, first + 40.0, 11.0, "Hourly", 0),
+                word(first + 43.0, first + 80.0, 11.0, "readings", 1),
+            ];
+            for (r, row) in [
+                ["Site", "North", "South"],
+                ["1", "3.2", "4.1"],
+                ["2", "3.5", "4.4"],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let y = 26.0 + r as f64 * 15.0;
+                glyphs.push(word(2.0, 10.0, y, row[0], 2 + r * 3));
+                glyphs.push(word(first + 4.0, first + 30.0, y, row[1], 3 + r * 3));
+                glyphs.push(word(first + 54.0, first + 80.0, y, row[2], 4 + r * 3));
+            }
+            let grid = Grid {
+                layout: None,
+                page: 0,
+                bbox: BBox {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: right,
+                    y1: 60.0,
+                },
+                xs,
+                ys,
+            };
+            let page = crate::extract::Page {
+                index: 0,
+                glyphs,
+                images: Vec::new(),
+                rules,
+                fills: Vec::new(),
+                dots: Vec::new(),
+                width: 600.0,
+                height: 800.0,
+                rotation: 0,
+            };
+            (grid, page)
+        };
+        // A first column 12 pt wide at 8 pt text: room for a turned line,
+        // not a label set across it. The band is the table's.
+        let (g, page) = table(12.0);
+        let titled = table_title(&g, &page, &[], false);
+        assert_eq!(titled.map(|(t, _)| t).as_deref(), Some("Hourly readings"));
+        // A first column a label fits beside it: a group's label over part
+        // of the table.
+        let (g, page) = table(60.0);
+        assert!(table_title(&g, &page, &[], false).is_none());
     }
 
     #[test]
