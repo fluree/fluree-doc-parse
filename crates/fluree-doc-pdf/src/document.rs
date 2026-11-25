@@ -466,6 +466,29 @@ struct TableFrame {
 /// layout on both pages, so its edges agree to within a rule's stroke.
 const CONTINUED_EDGE_TOLERANCE: f64 = 3.0;
 
+/// Number `elements` in emission order, `elem-00001` on, after a pass added
+/// or removed some, and keep each continued table naming the part before it.
+/// A part removed with its element leaves the one after it continuing
+/// nothing, rather than naming whatever element took its id.
+pub(crate) fn renumber(elements: &mut [Element]) {
+    let mut renamed = std::collections::HashMap::new();
+    for (i, e) in elements.iter_mut().enumerate() {
+        let id = format!("elem-{:05}", i + 1);
+        let old = std::mem::replace(&mut e.id, id.clone());
+        renamed.insert(old, id);
+    }
+    for e in elements.iter_mut() {
+        e.continues = e.continues.take().and_then(|c| renamed.get(&c).cloned());
+    }
+}
+
+/// An element the analysis minted as an address for a reader's text (a
+/// routed region, a table to confirm, a table the layout found and the
+/// rules did not), not content of the page.
+fn is_splice_anchor(e: &Element) -> bool {
+    matches!(e.evidence, "route" | "table-confidence" | "table-missing")
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the
@@ -485,6 +508,12 @@ const CONTINUED_EDGE_TOLERANCE: f64 = 3.0;
 /// part is then nothing but header, and the second opens with a bold row
 /// of labels. That row finishes the header and stays one, so the columns
 /// are named by both.
+///
+/// A splice anchor between the parts is not something between them: it is
+/// an address the reader's text lands at, and the splice drops it. A
+/// table's anchor goes in just before the table, so with anchors on the
+/// second part follows its own anchor, not the first part, and comparing
+/// neighbours alone lost the link on every run that minted anchors.
 fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     let frame = |e: &Element| {
         frames
@@ -497,19 +526,26 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .zip(b)
                 .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
     };
-    for i in 1..elements.len() {
+    let mut last = None;
+    for i in 0..elements.len() {
+        if is_splice_anchor(&elements[i]) {
+            continue;
+        }
+        let Some(p) = last.replace(i) else {
+            continue;
+        };
         let (before, after) = elements.split_at_mut(i);
-        if before[i - 1].kind == "doco:Table"
+        if before[p].kind == "doco:Table"
             && after[0].kind == "doco:Table"
-            && after[0].page == before[i - 1].page
+            && after[0].page == before[p].page
         {
-            if let (Some(a), Some(b)) = (frame(&before[i - 1]), frame(&after[0])) {
-                link_header_box(&mut before[i - 1], &mut after[0], a, b);
-                link_rows_below(&before[i - 1], &mut after[0], a, b);
+            if let (Some(a), Some(b)) = (frame(&before[p]), frame(&after[0])) {
+                link_header_box(&mut before[p], &mut after[0], a, b);
+                link_rows_below(&before[p], &mut after[0], a, b);
             }
             continue;
         }
-        let (prev, next) = (&before[i - 1], &mut after[0]);
+        let (prev, next) = (&before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
         }
@@ -2819,8 +2855,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let (mut marks, exact) = timed(&mut timings.furniture, || {
-        furniture::detect_with_exact(&flat_lines)
+    // The page each bookmark lands on, and its title: a running head the
+    // outline names is set as its section's heading there.
+    let bookmarks: Vec<(usize, String)> = outline
+        .iter()
+        .filter_map(|it| it.page.map(|pi| (pi, it.title.clone())))
+        .collect();
+    let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
+        furniture::detect_with_heads(&flat_lines, &bookmarks)
     });
     // A line OCR read is never furniture. Repetition is furniture's only
     // evidence, and on a scan the same content repeats for its own reasons: a
@@ -2851,6 +2893,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             all == 0 || ocr * 2 < all
         });
     }
+    // The texts kept as a section's heading on their page, though the same
+    // words run as furniture on the pages after: never scrubbed there.
+    let kept_heads: Vec<std::collections::HashSet<String>> = kept_heads
+        .iter()
+        .enumerate()
+        .map(|(pi, set)| {
+            set.iter()
+                .map(|li| flat_lines[pi].0[*li].text.trim().to_string())
+                .collect()
+        })
+        .collect();
     // The folio is read from the page's edges over *every* glyph, not from
     // the lines left after grids took theirs: a form's key/value grid that
     // runs down into the footer band takes the footer's glyphs with it, and
@@ -3303,7 +3356,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .iter()
                     .all(|s| (b.font_size - s).abs() > 0.15 * s.max(b.font_size))
             });
-            let scrubbed = if retitled {
+            let kept = kept_heads.get(pi).is_some_and(|k| k.contains(text.trim()));
+            let scrubbed = if retitled || kept {
                 text.clone()
             } else if height <= 0.0 {
                 furniture::scrub_block(&text, &scrub_texts)
@@ -5025,6 +5079,44 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_splice_anchor_between_the_parts_keeps_them_one_table() {
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["Name", "Value"], &["alpha", "1"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (b, fb) = part(
+            "elem-00003",
+            1,
+            &[&["beta", "2"], &["gamma", "3"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        // The second part's own anchor, ordered just before it.
+        let anchor = Element {
+            id: "elem-00002".into(),
+            page: 1,
+            bbox: b.bbox,
+            ..Element::new(
+                "doco:Figure",
+                "[[VLMTAB:p1:t0]]",
+                "rust",
+                "table-confidence",
+            )
+        };
+        let mut els = vec![a, anchor, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[2].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[2].header_rows, Some(0));
     }
 
     #[test]

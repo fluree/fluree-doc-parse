@@ -299,12 +299,17 @@ still used — silently, and it inflates the score. That has now happened twice.
 The check is two commands and a diff:
 
 ```bash
-FDOC_TITLE_BOXES=eval/layout-cache \
+FDOC_TITLE_BOXES=eval/layout-cache FDOC_ESCALATE_COLUMNS=0 \
   fdoc dev render-routed <bench>/pdfs /tmp/crops
 diff <(ls /tmp/crops/*.png | xargs -n1 basename | sed 's/\.png$//' | sort) \
      <(ls eval/cascade-cache/*.json | xargs -n1 basename | sed 's/\.json$//' \
        | grep -v '^_' | sort)
 ```
+
+`FDOC_ESCALATE_COLUMNS=0` keeps a `.fdoc/config.toml` with
+`escalation.on_column_doubt` on, in the working directory or above it, from
+writing pages in column doubt whole in place of the crops the scored run
+reads.
 
 Empty output means every reading in the cache is one the binary asks for, and
 every crop it asks for has a reading. A trigger change is what breaks this:

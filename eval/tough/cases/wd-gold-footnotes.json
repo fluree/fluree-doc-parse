@@ -6,7 +6,8 @@
     "about": "Western Digital WD Gold data sheet (4 pages). Page 4 closes on 11 footnotes in two columns, each opening with its number raised at the margin, at the body's leading."
   },
   "notes": [
-    "#189: a raised note number set apart from its line was taken for a list marker and dropped, and notes set at body leading ran together."
+    "#189: a raised note number set apart from its line was taken for a list marker and dropped, and notes set at body leading ran together.",
+    "2026-11-25 (#281): a note's raised `4` set after a comma (`MTBF,⁴`) was glued to it: a word ending in punctuation was no word a note's number could follow."
   ],
   "checks": [
     {
@@ -44,6 +45,12 @@
         "type": "doco:Paragraph",
         "text": "11 5°C ambient temperaure, 60°C device reported temperature."
       }
+    },
+    {
+      "id": "note-after-comma-set-apart",
+      "found": "2026-11-25",
+      "issue": "#281: `MTBF,4` read as one token.",
+      "no_text": "MTBF,4"
     }
   ]
 }
