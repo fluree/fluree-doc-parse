@@ -1597,7 +1597,7 @@ const SCALE_REACH: f64 = 4.0;
 /// logarithmic axis steps (`1 10 100 1,000`)? A plot's scale, its tick
 /// marks drawn at each number, reads as a ruled row or column; a table's
 /// column of figures does not step so, or stands beside its labels.
-fn axis_scale(cells: &[String]) -> bool {
+pub(crate) fn axis_scale(cells: &[String]) -> bool {
     let mut values: Vec<f64> = Vec::new();
     for token in cells.iter().flat_map(|c| c.split_whitespace()) {
         let t = token
@@ -2667,6 +2667,15 @@ fn find_figures(
             &figures,
         );
         figures.extend(charted);
+        let barred = figure::bar_plots(
+            &page.fills,
+            &page.rules,
+            &page.ticks,
+            &page.glyphs,
+            pi,
+            &figures,
+        );
+        figures.extend(barred);
         // A dimension drawing whose lines made a ruled grid of its callouts:
         // the drawing its loose callouts and view names are labels of.
         if let Some(layout) = layouts.get(pi) {

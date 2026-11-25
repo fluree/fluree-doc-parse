@@ -621,6 +621,17 @@ from its text:
   behind a table turns back on itself, and a line with no axis by it is no
   plot. The text of such a plot is left in the measure of the body's size,
   as the page's headings are read against it.
+- A bar chart's bars are fills of one width, three or more at an even pitch,
+  each standing on one base or hanging from it, at lengths that differ.
+  Pieces that abut, each ending where the next starts, are one stacked bar;
+  pieces a gap apart are bars of their own, so charts set one over another
+  are read apart. Bars are a chart when an axis binds them: the base drawn
+  as a rule across them, a column of ticks beside them at an even pitch, or
+  a scale beside them whose numbers step evenly. Bars set across the page
+  are read the same way. A table's shading is no chart: its rows run to one
+  length and hold their text, its figures step unevenly, and its columns of
+  cells end, piece after piece, at the same rows across the table, where a
+  stacked bar's few pieces end at their values.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that
