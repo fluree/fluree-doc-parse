@@ -1573,6 +1573,8 @@ fn is_caption(t: &str) -> bool {
 /// not a figure.
 fn is_year(t: &str) -> bool {
     let t = t.trim();
+    // A year with its note's mark (`2007(1)`, `2004(b)`, `2008*`) is a year.
+    let t = strip_note_mark(t);
     let year = |s: &str| s.len() == 4 && s.parse::<u32>().is_ok_and(|y| (1900..2100).contains(&y));
     if year(t) {
         return true;
@@ -1585,13 +1587,74 @@ fn is_year(t: &str) -> bool {
     }
 }
 
+/// `t` without a note's mark after it: a letter or one or two digits in
+/// brackets (`(1)`, `(b)`), or a run of `*`, `†`, `‡`, `§`.
+fn strip_note_mark(t: &str) -> &str {
+    let t = t.trim_end_matches(['*', '†', '‡', '§']).trim_end();
+    if let Some(open) = t.rfind('(') {
+        let inner = &t[open + 1..];
+        if let Some(mark) = inner.strip_suffix(')') {
+            if !mark.is_empty()
+                && mark.chars().count() <= 2
+                && mark.chars().all(|c| c.is_alphanumeric())
+            {
+                return t[..open].trim_end();
+            }
+        }
+    }
+    t
+}
+
+/// A sample's size set over its column (`n = 59`, `(n=735)`, `N=104`):
+/// the column's population, a header's line, not a value.
+fn is_sample_size(t: &str) -> bool {
+    let t = t
+        .trim()
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim();
+    let Some(rest) = t.strip_prefix(['n', 'N']) else {
+        return false;
+    };
+    let Some(count) = rest.trim_start().strip_prefix('=') else {
+        return false;
+    };
+    let count = count.trim();
+    !count.is_empty()
+        && count
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == ',' || c == ' ')
+}
+
 /// Rows, header and bands from the table's lines.
 fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Option<Grid> {
     let fs = lines.iter().map(|l| l.fs).fold(0.0, f64::max).max(1.0);
     // The header ends above the first line of figures past the label column.
     let first_body = {
         let cols = columns(&lines, x0, x1);
-        lines.iter().position(|l| has_figures(&cols, l))?
+        let first = lines.iter().position(|l| has_figures(&cols, l))?;
+        // Lines of the columns' sample sizes (`(n=735) | (n=640)`) under
+        // their heads, nothing in the stub, are the header's: a row of data
+        // names itself in the stub, and a group's own size sits beside its
+        // label (`Skin/Soft Tissue | n= 175`).
+        let sizes = |l: &Line| {
+            !l.chunks.iter().any(|c| column_of(&cols, c) == Some(0))
+                && l.chunks.iter().any(|c| is_sample_size(&c.text))
+                && l.chunks
+                    .iter()
+                    .all(|c| is_sample_size(&c.text) || !is_figure(&c.text) || is_year(&c.text))
+        };
+        let mut k = first;
+        while k < lines.len() && sizes(lines[k]) {
+            k += 1;
+        }
+        if !lines[k..].iter().any(|l| has_figures(&cols, l)) {
+            k = first;
+        }
+        lines[k..]
+            .iter()
+            .position(|l| has_figures(&cols, l))
+            .map(|p| k + p)?
     };
     let (head, body) = lines.split_at(first_body);
     // Body section labels set above the first figures belong to the body:
@@ -2931,6 +2994,29 @@ mod tests {
         ));
     }
     use crate::rule::Rule;
+
+    #[test]
+    fn a_years_note_mark_and_a_samples_size() {
+        for (t, bare) in [
+            ("2007(1)", "2007"),
+            ("2004(b)", "2004"),
+            ("2008*", "2008"),
+            ("2010 †", "2010"),
+            ("2009", "2009"),
+            // A count in brackets is no note's mark.
+            ("2009(123)", "2009(123)"),
+        ] {
+            assert_eq!(strip_note_mark(t), bare, "{t}");
+        }
+        assert!(is_year("2007(1)") && is_year("2004(b)") && is_year("2008*"));
+        assert!(!is_year("2009(123)"));
+        for t in ["n = 59", "(n=735)", "N=104", "(n= 61)", "n = 1,204"] {
+            assert!(is_sample_size(t), "{t}");
+        }
+        for t in ["59", "n", "n/a", "N (%)", "n = ", "Mean (n)"] {
+            assert!(!is_sample_size(t), "{t}");
+        }
+    }
 
     #[test]
     fn figures_are_dressed_digits_or_a_dash() {

@@ -629,6 +629,18 @@ bottom rule, not a group's, and the label reads the piece under its middle
 as before. So does the labels' column's own head: a run across the header
 under it would make the stub head a title over every column.
 
+### Years and sample sizes under the heads
+
+A table read from its text starts its body at its first line of figures.
+Years are no figures there (`2008 | 2007 | 2006` under `Years Ended December
+31`), and neither is a year with its note's mark (`2007(1)`, `2004(b)`,
+`2008*`): read as a figure, the line of years began the body, and the columns
+were named by the label over them alone. Nor are the columns' sample sizes
+(`(n=735) | (n=640)` under `Overall | NH`): leading lines whose figures are all
+sample sizes, with nothing in the stub, are the header's, and the columns are
+named by both (`Overall / (n=735)`). A group's own size set beside its label
+(`Skin/Soft Tissue | n= 175`) names itself in the stub and stays a row.
+
 ### A header restated partway down
 
 A table can name its columns afresh partway down: a VOC table's `By wt |
