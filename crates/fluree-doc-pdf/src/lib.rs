@@ -287,7 +287,10 @@ pub mod textgrid;
 pub mod watermark;
 
 pub use block::Block;
-pub use extract::{extract_bytes, extract_file, Document, ExtractError, ImagePlacement, Page};
+pub use extract::{
+    extract_bytes, extract_bytes_with, extract_file, Document, ExtractError, ExtractOptions,
+    ImagePlacement, Page,
+};
 pub use furniture::Furniture;
 pub use geom::BBox;
 pub use glyph::Glyph;
