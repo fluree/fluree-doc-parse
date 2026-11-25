@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "owenscorning-procat-accessories.pdf",
+    "url": "https://www.owenscorning.com/dms/10015771",
+    "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
+    "about": "Owens Corning ProCat professional insulation system accessory list (9 pages, numbered 1 to 9 at the foot). The cover sets a four-line right-aligned 28 pt title with a 5.7 pt raised ® after PROCAT. Each product is a two-column table of fields, `CARTON COUNT | 75`, and the last page closes on a bold contact line above the order table."
+  },
+  "notes": [
+    "2026-11-24 (#205): each page's number stands alone at the foot, under a table whose counts run into the foot band. Every bare number in the bands shared one group, and the group's place was the table's, so the page numbers were read nowhere: not in the body, not as folios."
+  ],
+  "checks": [
+    {
+      "id": "folio-on-page-1",
+      "found": "2026-11-24",
+      "issue": "#205: no page had a folio.",
+      "folio": {
+        "page": 1,
+        "value": "1"
+      }
+    },
+    {
+      "id": "folio-on-page-5",
+      "found": "2026-11-24",
+      "issue": "#205: no page had a folio.",
+      "folio": {
+        "page": 5,
+        "value": "5"
+      }
+    },
+    {
+      "id": "folio-on-page-9",
+      "found": "2026-11-24",
+      "issue": "#205: no page had a folio.",
+      "folio": {
+        "page": 9,
+        "value": "9"
+      }
+    }
+  ]
+}

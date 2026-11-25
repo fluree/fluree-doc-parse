@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "eppendorf-multipette-e3.pdf",
+    "url": "https://www.eppendorf.com/product-media/doc/en/148063/Eppendorf_Liquid-Handling_Technical-data_MultipetteE3-E3x_Combitips-advanced_Multipette-E3-E3x-Combitips-advanced-Performance-Data-Sheet.pdf",
+    "sha256": "2d4b6e0e628c0d56eedcc72a7b4e52ec50a3f27ce67b7eb222fcc1c35b48b45e",
+    "about": "Eppendorf Multipette E3/E3x performance data sheet. Its Features and Applications are lists whose items open with `>`, their text hanging after it."
+  },
+  "notes": [
+    "#274: `>` was no list's mark, so each list read as one paragraph."
+  ],
+  "checks": [
+    {
+      "id": "arrow-feature-item",
+      "found": "2026-11-25",
+      "issue": "#274: the Features list was one paragraph of nine `>` items.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Speed adjustment: Program aspiration and dispensing speed to meet your throughput, precision and accuracy goals while also preventing splashing",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "arrow-application-item",
+      "found": "2026-11-25",
+      "issue": "#274: the Applications list was one paragraph of six `>` items.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Pipetting (Pip) for refilling of liquids",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

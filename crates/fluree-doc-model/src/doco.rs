@@ -405,6 +405,108 @@ fn record_width(header: &[String]) -> Option<usize> {
     })
 }
 
+/// A value set once across several data columns, each with a header of its
+/// own, written to each of them.
+///
+/// [`crate::merges::denormalize`] joins a run of columns the ruling leaves
+/// open into its first cell: a prose row a nested table's ruling slices
+/// reads whole. But a value centred across two models' columns, `M17
+/// Series` and `M21 Series`, is each model's: written once, under the first,
+/// the second model had no warranty, and the first one claimed a value that
+/// is not its alone. So, as a value spanning rows is copied onto each row,
+/// a value spanning columns is copied into each column, where:
+///
+/// - the reader set it across the run (`spread_left`), centred on it, not
+///   in its first column with the rest merely left unruled;
+/// - the run starts past the row's label, in the data columns, in a row
+///   of data (not a band, nor a row naming the columns afresh);
+/// - the value is the run's only text, the source's other cells in it
+///   empty (a sliced prose row holds text in several);
+/// - each column of the run has its own header, all of them different;
+/// - the columns have no stacked header's parent in common: a value across
+///   `Description`'s columns describes the group, and is written once,
+///   named by it.
+fn spread_across_columns(
+    rows: &[Vec<String>],
+    raw: &[Vec<String>],
+    header: &[String],
+    n_header: usize,
+    merged_left: Option<&[bool]>,
+    spread_left: Option<&[bool]>,
+    subs: &[usize],
+) -> Spread {
+    let mut found = Spread::default();
+    let (Some(left), Some(spread), Some(ncols)) =
+        (merged_left, spread_left, rows.first().map(Vec::len))
+    else {
+        return found;
+    };
+    if left.len() != rows.len() * ncols || spread.len() != left.len() || raw.len() != rows.len() {
+        return found;
+    }
+    // A stacked header's parent: `Description` of `Description / Screen
+    // size`.
+    let parent = |k: usize| {
+        header
+            .get(k)
+            .and_then(|h| h.rsplit_once(" / "))
+            .map(|(p, _)| p.trim())
+            .filter(|p| !p.is_empty())
+    };
+    let mut out = rows.to_vec();
+    let mut changed = false;
+    for r in n_header..rows.len() {
+        if subs.contains(&r) {
+            continue;
+        }
+        let mut c = 1;
+        while c < ncols {
+            let mut end = c + 1;
+            while end < ncols && left[r * ncols + end] {
+                end += 1;
+            }
+            if end > c + 1 && spread[r * ncols + c] && !rows[r][c].trim().is_empty() {
+                let mut named: Vec<&str> = (c..end)
+                    .map(|k| header.get(k).map_or("", |h| h.trim()))
+                    .collect();
+                let all_named = named.iter().all(|h| !h.is_empty());
+                named.sort_unstable();
+                named.dedup();
+                let alone = (c + 1..end).all(|k| raw[r].get(k).is_none_or(|t| t.trim().is_empty()));
+                // A run over one parent's columns describes the parent, its
+                // columns being the parent's attributes: a software
+                // product's `Terminal GTWIN CD-ROM` set across the
+                // `Description` group's `Screen size` to `SD memory card
+                // slot` is none of them. It is written once, under the
+                // parent's name. Columns with no parent in common are
+                // things of their own, each a model's, and take a copy.
+                let group = parent(c).filter(|p| (c..end).all(|k| parent(k) == Some(p)));
+                if let Some(p) = group {
+                    found.heads.insert((r, c), p.to_string());
+                } else if all_named && named.len() == end - c && alone {
+                    for k in c + 1..end {
+                        out[r][k] = rows[r][c].clone();
+                    }
+                    changed = true;
+                }
+            }
+            c = end;
+        }
+    }
+    found.rows = changed.then_some(out);
+    found
+}
+
+/// What [`spread_across_columns`] makes of a table's spread values: the
+/// rows with values copied into each column they are set across, where any
+/// were, and the header a value written once is named by instead of its
+/// column's, by row and column.
+#[derive(Default)]
+struct Spread {
+    rows: Option<Vec<Vec<String>>>,
+    heads: std::collections::HashMap<(usize, usize), String>,
+}
+
 fn column_headers(
     rows: &[Vec<String>],
     n_header: usize,
@@ -524,6 +626,7 @@ pub fn table_copies(e: &Element) -> Copies {
     let mut text = 0u64;
     let mut d = own.clone();
     let subs = e.sub_header_rows(n);
+    let n_header = e.header_rows.unwrap_or(1).min(n);
     if e.merged_down.is_some() || e.merged_left.is_some() || e.sub_headers.is_some() {
         let flag = |m: &Option<Vec<bool>>, i: usize| {
             m.as_ref().and_then(|m| m.get(i)).copied().unwrap_or(false)
@@ -558,9 +661,19 @@ pub fn table_copies(e: &Element) -> Copies {
                     // joined by are new.
                     let v = joined(&mut (c..end).map(|k| d[row + k]));
                     let parts = d[row + c..row + end].iter().sum::<u64>();
-                    text = text.saturating_add(v.saturating_sub(parts));
+                    // A value set across data columns may be copied into
+                    // each of them ([`spread_across_columns`]): count a copy
+                    // in every column of the run.
+                    let spread =
+                        c > 0 && r >= n_header && !subs[r] && flag(&e.spread_left, row + c);
+                    let copies = if spread { (end - c) as u64 } else { 1 };
+                    text = text.saturating_add(v.saturating_mul(copies).saturating_sub(parts));
                     d[row + c] = v;
-                    d[row + c + 1..row + end].fill(0);
+                    if spread {
+                        d[row + c + 1..row + end].fill(v);
+                    } else {
+                        d[row + c + 1..row + end].fill(0);
+                    }
                 }
                 c = end;
             }
@@ -581,7 +694,6 @@ pub fn table_copies(e: &Element) -> Copies {
     // Each column's name as the writer gives it ([`column_headers`]), and
     // the record a wrapped table's cell belongs to ([`record_width`]): its
     // row label is the record's first cell, not the row's.
-    let n_header = e.header_rows.unwrap_or(1).min(n);
     let names = header_names(e, raw, n_header, &subs);
     let header: Vec<u64> = names.iter().map(|h| text_cost(h)).collect();
     let width = record_width(&names).unwrap_or(cols).max(1);
@@ -1480,6 +1592,23 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             column_headers(rows, n_header, e.merged_left.as_deref()),
                         ),
                     };
+                    let sub_rows = e.sub_headers.clone().unwrap_or_default();
+                    // A value set once across data columns that each have a
+                    // header of their own is each column's value.
+                    let spread = spread_across_columns(
+                        rows,
+                        raw_rows,
+                        &header,
+                        n_header,
+                        e.merged_left.as_deref(),
+                        e.spread_left.as_deref(),
+                        &[
+                            sub_rows.as_slice(),
+                            e.restated_headers.as_deref().unwrap_or(&[]),
+                        ]
+                        .concat(),
+                    );
+                    let rows = spread.rows.as_ref().unwrap_or(rows);
                     let subs = e.sub_header_rows(rows.len());
                     // A row set like the header, partway down, names the
                     // columns of the rows beneath it in the header's place:
@@ -1716,7 +1845,12 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                             em.nodes[cell_idx]
                                 .insert("doc:rowIndex".into(), json!(rows_before + r - n_header));
                             em.nodes[cell_idx].insert("doc:columnIndex".into(), json!(c));
-                            if let Some(h) = header.get(c).filter(|h| !h.is_empty()) {
+                            if let Some(h) = spread
+                                .heads
+                                .get(&(r, c))
+                                .or(header.get(c))
+                                .filter(|h| !h.is_empty())
+                            {
                                 em.nodes[cell_idx]
                                     .insert("doc:columnHeader".into(), Value::String(h.clone()));
                             }
@@ -2503,6 +2637,50 @@ mod tests {
         assert_eq!(header("Method A"), "Surface burning");
         assert_eq!(header("Method B"), "Surface burning");
         assert_eq!(header("Method D"), "Hardness / Edge");
+    }
+
+    #[test]
+    fn a_value_set_across_headed_columns_is_each_columns() {
+        // Two models' columns, the warranty centred across both; a merely
+        // unruled run holds its value in its first column; a run under one
+        // header stays one cell.
+        let table = |spread: bool, head: [&str; 3]| {
+            let mut t = el("doco:Table", "", None);
+            t.cells = Some(
+                [
+                    head,
+                    ["Warranty", "2 years", ""],
+                    ["Weight", "11 kg", "12 kg"],
+                ]
+                .iter()
+                .map(|r| r.iter().map(|c| c.to_string()).collect())
+                .collect(),
+            );
+            t.header_rows = Some(1);
+            let mut left = vec![false; 9];
+            left[5] = true;
+            t.merged_left = Some(left);
+            let mut sp = vec![false; 9];
+            sp[4] = spread;
+            t.spread_left = Some(sp);
+            find(&graph(&[t]), "doc:TableCell")
+                .into_iter()
+                .filter(|c| c["doc:cellValue"] == "2 years")
+                .map(|c| c["doc:columnHeader"].as_str().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
+        };
+        let models = ["Specifications", "M17 Series", "M21 Series"];
+        assert_eq!(table(true, models), ["M17 Series", "M21 Series"]);
+        assert_eq!(table(false, models), ["M17 Series"]);
+        assert_eq!(table(true, ["Specifications", "Value", ""]), ["Value"]);
+        // Across one stacked header's columns, its attributes, a value
+        // describes the group: written once, named by it.
+        let grouped = [
+            "Product",
+            "Description / Screen size",
+            "Description / Power supply",
+        ];
+        assert_eq!(table(true, grouped), ["Description"]);
     }
 
     #[test]
@@ -3353,6 +3531,40 @@ mod tests {
             })
             .sum();
         (cells.len() as u64, text)
+    }
+
+    #[test]
+    fn a_value_spread_across_columns_is_counted_in_each() {
+        // A long value set across four models' columns is written in each
+        // of them: the estimate must not be under the output.
+        let long = "w".repeat(1000);
+        let mut t = el("doco:Table", "", None);
+        t.cells = Some(vec![
+            ["Spec", "A", "B", "C", "D"].map(String::from).to_vec(),
+            vec![
+                "Warranty".into(),
+                long.clone(),
+                "".into(),
+                "".into(),
+                "".into(),
+            ],
+        ]);
+        t.header_rows = Some(1);
+        let mut left = vec![false; 10];
+        left[7..10].fill(true);
+        t.merged_left = Some(left);
+        let mut spread = vec![false; 10];
+        spread[6] = true;
+        t.spread_left = Some(spread);
+        let (nodes, text) = written(&t);
+        assert_eq!(nodes, 5, "the label and four copies");
+        let copies = table_copies(&t);
+        let raw = ["Spec", "A", "B", "C", "D", "Warranty", long.as_str()]
+            .map(crate::budget::text_cost)
+            .iter()
+            .sum::<u64>();
+        assert!(nodes <= 7 + copies.cells, "{nodes} nodes, {copies:?}");
+        assert!(text <= raw + copies.text, "{text} written, {copies:?}");
     }
 
     #[test]

@@ -522,6 +522,11 @@ first, then the row's own label: `FP2 Backplane / Conventional type /
 as the group is read as more of the group, and named as the row's label
 after it: `0.1 mL / white`.
 
+A table set inside one cell of another (an acoustic row's nine columns of
+figures in a property list) is a table of its own, right after the one it
+sits in. Its cells carry the outer row's label as `doc:sectionLabel`
+(`Acoustical Performance`), and the outer cell keeps only its own text.
+
 A list wrapped to fill the page sets its columns again side by side:
 `Competitor | Part no. | Competitor | Part no.`, each copy a record of its
 own. Where the copies' value columns are named alike and each copy opens

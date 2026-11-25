@@ -9,7 +9,7 @@
 //! from a template. It is used to *confirm and level* headings found visually,
 //! never as the sole source.
 
-use hayro_syntax::object::{Array, Dict, Name, Number, ObjRef};
+use hayro_syntax::object::{Array, Dict, Name, Number, ObjRef, Object};
 use hayro_syntax::Pdf;
 use std::collections::HashMap;
 
@@ -59,29 +59,113 @@ pub fn extract(pdf: &Pdf) -> Vec<OutlineItem> {
             Some(((id.obj_number, id.gen_number), (i, f64::from(height))))
         })
         .collect();
+    let named = named_destinations(&catalog, &geometry);
     let mut out = Vec::new();
     if let Some(first) = outlines.get::<Dict>(b"First") {
-        walk(first, 1, &geometry, &mut out);
+        walk(first, 1, &geometry, &named, &mut out);
     }
     out
 }
 
-/// The page and top position a bookmark points at.
+/// Where a bookmark points, as it may say it: an explicit destination
+/// array, or the name of one.
+type Place = (Option<usize>, Option<f64>);
+
+/// Most named destinations read from one document.
+const MAX_NAMED: usize = 100_000;
+
+/// Named destinations, by name: the `/Dests` name tree under the catalog's
+/// `/Names`, and the older `/Dests` dictionary. Layout programs write
+/// bookmarks that point at a destination by name
+/// (`den24-0031_Layout.indd:Appendix 1:309`) rather than at a page.
+fn named_destinations(
+    catalog: &Dict<'_>,
+    geometry: &HashMap<(i32, i32), (usize, f64)>,
+) -> HashMap<Vec<u8>, Place> {
+    let mut out = HashMap::new();
+    if let Some(tree) = catalog
+        .get::<Dict>(b"Names")
+        .and_then(|n| n.get::<Dict>(b"Dests"))
+    {
+        name_tree(&tree, 0, geometry, &mut out);
+    }
+    if let Some(dests) = catalog.get::<Dict>(b"Dests") {
+        for key in dests.keys() {
+            if out.len() >= MAX_NAMED {
+                break;
+            }
+            if let Some(value) = dests.get::<Object>(key.as_ref()) {
+                out.insert(key.as_ref().to_vec(), place_of(value, geometry));
+            }
+        }
+    }
+    out
+}
+
+/// A name tree's entries, its `/Names` pairs and those of its `/Kids`.
+fn name_tree(
+    node: &Dict<'_>,
+    depth: usize,
+    geometry: &HashMap<(i32, i32), (usize, f64)>,
+    out: &mut HashMap<Vec<u8>, Place>,
+) {
+    if depth > MAX_DEPTH || out.len() >= MAX_NAMED {
+        return;
+    }
+    if let Some(names) = node.get::<Array>(b"Names") {
+        let mut items = names.iter::<Object>();
+        while let (Some(key), Some(value)) = (items.next(), items.next()) {
+            if out.len() >= MAX_NAMED {
+                return;
+            }
+            if let Some(key) = key.into_string() {
+                out.insert(key.as_ref().to_vec(), place_of(value, geometry));
+            }
+        }
+    }
+    if let Some(kids) = node.get::<Array>(b"Kids") {
+        for kid in kids.iter::<Dict>() {
+            name_tree(&kid, depth + 1, geometry, out);
+        }
+    }
+}
+
+/// A destination's value: its array, or a dictionary holding it as `/D`.
+fn place_of(value: Object<'_>, geometry: &HashMap<(i32, i32), (usize, f64)>) -> Place {
+    match value {
+        Object::Array(a) => place(&a, geometry),
+        Object::Dict(d) => d
+            .get::<Array>(b"D")
+            .map_or((None, None), |a| place(&a, geometry)),
+        _ => (None, None),
+    }
+}
+
+/// The page and top position a bookmark points at: by its `/Dest` or its
+/// go-to action's `/D`, an array or the name of one.
 fn destination(
     node: &Dict<'_>,
     geometry: &HashMap<(i32, i32), (usize, f64)>,
-) -> (Option<usize>, Option<f64>) {
-    let array = node.get::<Array<'_>>(b"Dest").or_else(|| {
+    named: &HashMap<Vec<u8>, Place>,
+) -> Place {
+    let target = node.get::<Object>(b"Dest").or_else(|| {
         let action = node.get::<Dict<'_>>(b"A")?;
         let is_goto = action
             .get::<Name<'_>>(b"S")
             .is_some_and(|n| n.as_ref() == b"GoTo");
-        is_goto.then(|| action.get::<Array<'_>>(b"D")).flatten()
+        is_goto.then(|| action.get::<Object>(b"D")).flatten()
     });
-    let Some(array) = array else {
-        return (None, None);
-    };
-    let Some(reference) = crate::array_entries(&array)
+    match target {
+        Some(Object::Array(a)) => place(&a, geometry),
+        Some(Object::String(name)) => named.get(name.as_ref()).copied().unwrap_or((None, None)),
+        Some(Object::Name(name)) => named.get(name.as_ref()).copied().unwrap_or((None, None)),
+        _ => (None, None),
+    }
+}
+
+/// The page and top position a destination array names.
+fn place(array: &Array<'_>, geometry: &HashMap<(i32, i32), (usize, f64)>) -> Place {
+    let Some(reference) = crate::array_entries(array)
         .next()
         .and_then(|o| o.as_obj_ref())
     else {
@@ -108,6 +192,7 @@ fn walk(
     node: Dict<'_>,
     level: usize,
     geometry: &HashMap<(i32, i32), (usize, f64)>,
+    named: &HashMap<Vec<u8>, Place>,
     out: &mut Vec<OutlineItem>,
 ) {
     if level > MAX_DEPTH {
@@ -121,7 +206,7 @@ fn walk(
         if let Some(raw) = n.get::<hayro_syntax::object::String>(b"Title") {
             let title = decode_text_string(raw.as_ref()).trim().to_string();
             if !title.is_empty() {
-                let (page, y) = destination(&n, geometry);
+                let (page, y) = destination(&n, geometry, named);
                 out.push(OutlineItem {
                     title,
                     level,
@@ -131,7 +216,7 @@ fn walk(
             }
         }
         if let Some(child) = n.get::<Dict>(b"First") {
-            walk(child, level + 1, geometry, out);
+            walk(child, level + 1, geometry, named, out);
         }
         cur = n.get::<Dict>(b"Next");
     }
