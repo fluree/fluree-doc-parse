@@ -177,8 +177,10 @@ pub(crate) enum HyphenJoin {
     /// (`1-800-222-` over `1222`, `Polish-` over `German`, `(A)-` over
     /// `(L)`): kept, the lines joined without a space.
     Hyphen,
-    /// A dash, set apart from the word before it (`a pause -`): kept, the
-    /// lines joined with a space.
+    /// A dash, set apart from the word before it (`a pause -`), or a
+    /// compound's first half left hanging for the second it shares
+    /// (`wage-` over `and price-setting`): kept, the lines joined with a
+    /// space.
     Dash,
 }
 
@@ -201,6 +203,16 @@ impl HyphenJoin {
         };
         let left = stem.chars().rev().take_while(|c| c.is_alphabetic()).count();
         let right = next.chars().take_while(|c| c.is_alphabetic()).count();
+        // A conjunction after the hyphen joins two compounds that share
+        // their second half: no typesetter's break leaves one of these
+        // words whole on the next line.
+        let first = next
+            .split(|c: char| !c.is_alphabetic())
+            .next()
+            .unwrap_or("");
+        if left >= 2 && matches!(first, "and" | "or" | "nor") {
+            return HyphenJoin::Dash;
+        }
         let one_case = (before.is_lowercase() && after.is_lowercase())
             || (before.is_uppercase() && after.is_uppercase());
         if one_case && left >= 2 && right >= 2 {
@@ -421,13 +433,14 @@ fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f
     if worded && l.bbox.x0 > left_edge + (l.font_size as f64).max(1.0) {
         return false;
     }
-    // A number next to a number is a row of tick labels or figures, not a
+    // A number before a number is a row of tick labels or figures, not a
     // list number and its item: `2023` before `2024` on a chart's axis,
-    // `0.51` over `0.38` on a drawing, the `4.7` under a histogram bin's
-    // `4.6−`. Being at the left edge does not prove it, because a column
-    // may hold nothing else.
+    // `0.51` over `0.38` on a drawing. Being at the left edge does not prove
+    // it, because a column may hold nothing else. Only the line it would
+    // introduce counts: a note's `(1)` under a column of figures still
+    // marks the note after it.
     let number = |n: &Line| marker_shaped(&n.text) && n.text.chars().any(|c| c.is_ascii_digit());
-    if worded && [before, after].into_iter().flatten().any(number) {
+    if worded && number(nb) {
         return false;
     }
     // A list number sits on its item's first line. One a line or more above
@@ -740,6 +753,121 @@ pub fn assemble_with_marks(
 // struct of them would only be unpacked again here.
 #[allow(clippy::too_many_arguments)]
 pub fn assemble_in_measure(
+    lines: &[Line],
+    measure: &[Line],
+    leading: f64,
+    checkboxes: &[BBox],
+    dots: &[BBox],
+    bands: &[BBox],
+    body: f64,
+    ocr: &[(f64, f64)],
+) -> Vec<Block> {
+    let scale = interleaved_scale(lines);
+    if scale.is_empty() {
+        return assemble_lines(lines, measure, leading, checkboxes, dots, bands, body, ocr);
+    }
+    // A chart's scale the column took in among its prose: its numbers are
+    // read as a block of their own, after the paragraph they stood in, so
+    // they neither cut it nor are lost.
+    let (ticks, rest): (Vec<_>, Vec<_>) = lines
+        .iter()
+        .enumerate()
+        .partition(|(i, _)| scale.contains(i));
+    let ticks: Vec<Line> = ticks.into_iter().map(|(_, l)| l.clone()).collect();
+    let rest: Vec<Line> = rest.into_iter().map(|(_, l)| l.clone()).collect();
+    let mut blocks = assemble_lines(&rest, measure, leading, checkboxes, dots, bands, body, ocr);
+    let top = ticks[0].bbox.y0;
+    let at = blocks
+        .iter()
+        .position(|b| b.bbox.y1 >= top)
+        .map_or(blocks.len(), |i| i + 1);
+    // One block, however far apart its ticks stand: a scale is read whole.
+    let bbox = ticks
+        .iter()
+        .skip(1)
+        .fold(ticks[0].bbox, |b, l| b.union(&l.bbox));
+    let scale = Block {
+        page: ticks[0].page,
+        font_size: ticks[0].font_size,
+        bold: false,
+        gap_above: None,
+        marker: None,
+        bbox,
+        lines: ticks,
+    };
+    blocks.insert(at, scale);
+    blocks
+}
+
+/// Fewest numbers that make a scale: as `document`'s axis test asks.
+const MIN_SCALE_TICKS: usize = 3;
+
+/// The lines of `lines`, by index, that are a chart's scale set among a
+/// column's prose: three or more lines of one number each, smaller than
+/// the text beside them, ending at one right edge, stepping evenly down
+/// the page (`2100 1800 1500 …`), with lines of the column's own text
+/// between them. A chart's axis that stands beside a column, its labels
+/// a few points from the column's edge, is taken into it whole, and each
+/// tick would otherwise cut the paragraph it lands in. A column of
+/// figures alone, or a table's, has no text between its numbers.
+fn interleaved_scale(lines: &[Line]) -> Vec<usize> {
+    let number = |l: &Line| {
+        let t = l.text.trim();
+        !t.is_empty()
+            && !t.contains(char::is_whitespace)
+            && t.chars().any(|c| c.is_ascii_digit())
+            && crate::document::axis_value(t).is_some()
+    };
+    let candidates: Vec<usize> = (0..lines.len()).filter(|&i| number(&lines[i])).collect();
+    if candidates.len() < MIN_SCALE_TICKS {
+        return Vec::new();
+    }
+    // Group the numbers by their right edge, to a point.
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for &i in &candidates {
+        let x1 = lines[i].bbox.x1;
+        match groups
+            .iter_mut()
+            .find(|g| (lines[g[0]].bbox.x1 - x1).abs() <= 1.0)
+        {
+            Some(g) => g.push(i),
+            None => groups.push(vec![i]),
+        }
+    }
+    let mut out = Vec::new();
+    for mut g in groups {
+        if g.len() < MIN_SCALE_TICKS {
+            continue;
+        }
+        g.sort_by(|&a, &b| lines[a].bbox.y0.total_cmp(&lines[b].bbox.y0));
+        let values: Vec<String> = g
+            .iter()
+            .map(|&i| lines[i].text.trim().to_string())
+            .collect();
+        if !crate::document::axis_scale(&values) {
+            continue;
+        }
+        let fs = g.iter().map(|&i| lines[i].font_size).fold(0.0f32, f32::max);
+        let (top, bottom) = (lines[g[0]].bbox.y0, lines[*g.last().unwrap()].bbox.y1);
+        // The text the scale stands among: larger lines within its height.
+        let among = lines.iter().enumerate().any(|(i, l)| {
+            !g.contains(&i)
+                && l.font_size > fs * 1.05
+                && l.bbox.y0 > top
+                && l.bbox.y1 < bottom
+                && l.text.chars().filter(|c| c.is_alphabetic()).count() > 1
+        });
+        if among {
+            out.extend(g);
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// [`assemble_in_measure`] once a chart's scale is out of the lines.
+#[allow(clippy::too_many_arguments)]
+fn assemble_lines(
     lines: &[Line],
     measure: &[Line],
     leading: f64,
@@ -4457,6 +4585,74 @@ mod tests {
     }
 
     #[test]
+    fn a_hyphen_left_for_a_shared_half_keeps_its_space() {
+        let lines = vec![
+            l("by affecting wage-", 10.0, 0.0, 10.0),
+            l("and price-setting decisions.", 10.0, 12.0, 10.0),
+        ];
+        assert_eq!(
+            assemble(&lines, 1.2)[0].text(),
+            "by affecting wage- and price-setting decisions."
+        );
+    }
+
+    /// A paragraph's lines at 10 points from `x` = 318, every 16 points
+    /// from `y` = 280, with a chart's scale at 8 points ending at
+    /// `x` = 290 between each two: `2100`, `1800`, … stepping by `step`.
+    fn prose_with_a_scale(step: i32) -> Vec<Line> {
+        let prose = [
+            "with higher interest rates (figure 4.6). Mutual",
+            "fund holdings through the second quarter",
+            "of 2023 were approximately 13 percent of",
+            "all U.S. corporate bonds outstanding. Total",
+        ];
+        let mut lines = Vec::new();
+        for (i, t) in prose.iter().enumerate() {
+            let y = 280.0 + 16.0 * i as f64;
+            let mut p = l(t, 318.0, y, 10.0);
+            p.bbox.x1 = 540.0;
+            lines.push(p);
+            if i + 1 < prose.len() {
+                let v = (2100 - step * i as i32).to_string();
+                lines.push(label(&v, 274.0, 290.0, y + 8.0, 8.0));
+            }
+        }
+        lines
+    }
+
+    #[test]
+    fn a_charts_scale_among_a_paragraph_is_read_apart_from_it() {
+        // An axis's labels stand a few points left of the column and are
+        // taken into it, one between each two of the paragraph's lines.
+        let b = assemble(&prose_with_a_scale(300), 1.2);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].starts_with("with higher") && texts[0].ends_with("Total"));
+        assert_eq!(texts[1], "2100 1800 1500");
+    }
+
+    #[test]
+    fn numbers_that_do_not_step_evenly_are_no_scale() {
+        // Figures a column states among its text, no axis: left where
+        // they stand.
+        let mut lines = prose_with_a_scale(300);
+        lines[3].text = "1750".into();
+        let b = assemble(&lines, 1.2);
+        assert!(
+            b.len() > 2,
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // Nor is a column of numbers alone: there is no text to read apart.
+        let alone: Vec<Line> = ["300", "200", "100", "0"]
+            .iter()
+            .enumerate()
+            .map(|(i, v)| label(v, 274.0, 290.0, 100.0 + 14.0 * i as f64, 8.0))
+            .collect();
+        assert_eq!(interleaved_scale(&alone), Vec::<usize>::new());
+    }
+
+    #[test]
     fn a_hyphen_beside_a_digit_or_a_capital_is_the_texts_own() {
         let joined = |a: &str, b: &str| {
             let lines = vec![l(a, 10.0, 0.0, 10.0), l(b, 10.0, 12.0, 10.0)];
@@ -4529,6 +4725,9 @@ mod tests {
             ("COVID", "19", Hyphen),
             ("subdivisions (v)(1)(A)", "(L), (ae)(1)", Hyphen),
             ("a pause ", "then", Dash),
+            ("by affecting wage", "and price-setting", Dash),
+            ("short", "or long-term", Dash),
+            ("hus", "band", Word),
         ] {
             assert_eq!(HyphenJoin::of(stem, next), want, "{stem}- / {next}");
         }
@@ -4640,6 +4839,29 @@ mod tests {
         ];
         let b = assemble(&lines, 1.2);
         assert!(kept(&b, "4.7"), "{b:?}");
+    }
+
+    #[test]
+    fn a_notes_mark_under_a_column_of_figures_marks_its_note() {
+        // The last figure of a table's column, then a note's mark at the
+        // margin before the note's text, on one row.
+        let lines = vec![
+            label("1,204", 60.0, 80.0, 100.0, 8.0),
+            label("(1)", 60.0, 70.0, 116.0, 8.0),
+            label(
+                "Held to maturity investments are carried at cost.",
+                74.0,
+                260.0,
+                116.0,
+                8.0,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        let note = b
+            .iter()
+            .find(|b| b.text().starts_with("Held to maturity"))
+            .expect("the note");
+        assert_eq!(note.marker.as_deref(), Some("(1)"), "{b:?}");
     }
 
     #[test]
