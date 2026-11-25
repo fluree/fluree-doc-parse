@@ -403,6 +403,14 @@ from its text:
   holding the bars and scattered labels, is part of its chart. A diagram's
   boxes hold labels set well under the page's text, and are part of the
   diagram.
+- A form's fields are no drawing's shapes: an empty box a line or two high,
+  under or after its label's colon (`Job Name:`, set at the text's size, not
+  a title's), and the boxes in line with it at its height. The box that
+  holds them is the form's background. So is a band, at least three times
+  as wide as it is tall, holding marks kept to one end, under half its
+  width, with words along the rest of it: a footer's certification logos
+  beside `APPROVALS:`. A submittal's logo set over its form is a logo, and
+  the form's labels are the page's.
 - A background as large as the page joins nothing. Drawings set close
   together are found as separate drawings, rather than lost as one shape too
   large to be a drawing.
