@@ -98,8 +98,9 @@ structure readings veto, for the structure reader, and marks them
 readings never sends them to a deep reader.
 
 It chooses its crops as `convert` does, config file included: with
-`escalation.on_column_doubt` on in the `.fdoc/config.toml` nearest the
-working directory, or in the per-user one, a page in column doubt is written
+`escalation.on_column_doubt` on in the config file in effect (the
+`.fdoc/config.toml` nearest the working directory, or the per-user one where
+there is none; the two are not merged), a page in column doubt is written
 whole in place of its region and table crops, and a note on stderr says so.
 `FDOC_ESCALATE_COLUMNS=0` turns that off for one run; producing the crops of
 a benchmark cache, set it, so a file left on the machine cannot change them.
