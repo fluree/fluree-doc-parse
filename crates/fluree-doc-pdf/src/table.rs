@@ -10519,14 +10519,16 @@ mod tests {
         // verticals standing on that rule and ending at the band's foot,
         // its labels wrapped over two lines; under it a table read from its
         // alignment, ruled by nothing.
-        let fill = |x0: f64, x1: f64| crate::rule::Fill {
-            bbox: BBox {
-                x0,
-                y0: 100.0,
-                x1,
-                y1: 130.0,
-            },
-            page: 0,
+        let fill = |x0: f64, x1: f64| {
+            crate::rule::Fill::new(
+                BBox {
+                    x0,
+                    y0: 100.0,
+                    x1,
+                    y1: 130.0,
+                },
+                0,
+            )
         };
         let fills = vec![
             fill(50.0, 200.0),
