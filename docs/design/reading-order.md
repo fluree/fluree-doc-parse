@@ -197,6 +197,9 @@ read the same way.
 **A cut runs through no paragraph.** A caption, a table or a rule over some
 of a region's columns must find, in each column it does not cross, white
 space where it falls, as wide as a gap cut needs, or no text on one side.
+A picture fills its column as text does: the rules a benefits column draws
+between its items, level with a photo in the column beside it, part
+nothing there.
 A caption under a picture over two of four columns, a table in two of five,
 and the rules a feature column draws between its own items each cut the
 whole region before this rule, and split every paragraph beside them. A
@@ -213,7 +216,14 @@ one row, each is a flow of its own and no gap parts them. The exception is a
 list's items run on from one column into the next, `1. 8Z Pellicle` beside
 `4. Three sizes`: the list and the section after it part at the gap between
 them. Gaps are judged widest first: the region under a page's title is
-judged on its own, where its columns' titles stand side by side.
+judged on its own, where its columns' titles stand side by side. A gap
+nearly as wide as the widest is taken with it, unless the part it falls in
+opens with titles side by side (a line bold, or larger than the line under
+it) and not every column opens another title under the gap. Then the gap is
+inside one column's section, level with the next column's next title, and
+the text under it is still that section's. Where every column opens a title
+under it, as a contract set in two languages side by side opens its next
+article, the gap parts two sections in the same columns.
 
 **Gutters only a region has.** A region of one column is cut across too, and
 each piece is checked for a gutter only it has: the widest gap no line
