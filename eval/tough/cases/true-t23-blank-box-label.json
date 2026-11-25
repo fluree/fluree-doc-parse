@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 1 centres a three-line address over a form set in small columns."
+  },
+  "notes": [
+    "2026-11-25 (#278): the footer's box for a dealer's stamp is headed `AVAILABLE AT:` with nothing under it."
+  ],
+  "checks": [
+    {
+      "id": "available-at-box-no-heading",
+      "found": "2026-11-25",
+      "issue": "#278: a label over an empty box was an h6.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "AVAILABLE AT:"
+      },
+      "count": 0
+    }
+  ]
+}

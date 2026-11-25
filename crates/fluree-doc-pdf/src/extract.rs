@@ -227,6 +227,11 @@ impl Document {
 /// [`infer_weights`].
 type PageInk = Vec<Option<(u128, Option<f64>)>>;
 
+/// Most, in points, a clip's extent across a rule may exceed the rule's own
+/// thickness for the clip to be drawn round that line alone: a stroke's
+/// half-width and a little rounding, short of any text's height.
+const TIGHT_CLIP: f64 = 3.0;
+
 struct Collector {
     page: usize,
     glyphs: Vec<Glyph>,
@@ -433,6 +438,41 @@ impl Collector {
     /// page and across its text column, and one page-sized path joined every
     /// shape on a catalogue page into a single cluster, too large to be a
     /// drawing, so the page's five dimension drawings had no region at all.
+    /// A rule cut to a clip drawn round its line alone: the clip's extent
+    /// across the rule within [`TIGHT_CLIP`] of the rule's own thickness,
+    /// covering its axis. Some producers draw each table rule far past the
+    /// table, out past the page's edges, and clip it to the stretch that
+    /// shows; read as drawn, every partial rule under a column group was a
+    /// rule across the page. Under a broad clip — the page body, a table's
+    /// region, the foot a table breaks at — a rule stays as drawn. `None`
+    /// where nothing of it shows.
+    fn clip_rule(&self, mut r: rule::Rule) -> Option<rule::Rule> {
+        let Some(clip) = self.clips.last().copied() else {
+            return Some(r);
+        };
+        let b = r.bbox;
+        let horizontal = r.orientation == rule::Orientation::Horizontal;
+        let (c0, c1, t0, t1) = if horizontal {
+            (clip.y0, clip.y1, b.y0, b.y1)
+        } else {
+            (clip.x0, clip.x1, b.x0, b.x1)
+        };
+        let axis = (t0 + t1) * 0.5;
+        let tight =
+            c1 - c0 <= (t1 - t0) + TIGHT_CLIP && c0 <= axis + TIGHT_CLIP && c1 >= axis - TIGHT_CLIP;
+        if !tight {
+            return Some(r);
+        }
+        if horizontal {
+            r.bbox.x0 = b.x0.max(clip.x0);
+            r.bbox.x1 = b.x1.min(clip.x1);
+            (r.bbox.x1 > r.bbox.x0).then_some(r)
+        } else {
+            r.bbox.y0 = b.y0.max(clip.y0);
+            r.bbox.y1 = b.y1.min(clip.y1);
+            (r.bbox.y1 > r.bbox.y0).then_some(r)
+        }
+    }
     fn visible(&self, b: BBox) -> Option<BBox> {
         let area = self.clips.last().copied().unwrap_or(self.page_box);
         let cut = BBox {
@@ -654,11 +694,12 @@ impl<'a> Device<'a> for Collector {
         // whole it was one fill, and the page had no rules. Where every
         // subpath is a rule on its own, each is pushed as one.
         if let Some(rules) = subpath_rules(&path, self.page) {
-            self.rules.extend(
-                rules
-                    .into_iter()
-                    .filter(|x| self.page_box.intersects(&x.bbox)),
-            );
+            let rules: Vec<rule::Rule> = rules
+                .into_iter()
+                .filter_map(|x| self.clip_rule(x))
+                .filter(|x| self.page_box.intersects(&x.bbox))
+                .collect();
+            self.rules.extend(rules);
             return;
         }
         // A rule is kept as drawn: table structure reads a grid's ruling
@@ -672,7 +713,11 @@ impl<'a> Device<'a> for Collector {
             if let Some(boxes) = subpath_fills(&path) {
                 for b in boxes {
                     match rule::classify(b, self.page) {
-                        Some(rule::Shape::Rule(x)) => self.rules.push(x),
+                        Some(rule::Shape::Rule(x)) => {
+                            if let Some(x) = self.clip_rule(x) {
+                                self.rules.push(x);
+                            }
+                        }
                         Some(rule::Shape::Fill(x)) => {
                             if let Some(bbox) = self.visible(x.bbox) {
                                 self.fills.push(rule::Fill { bbox, ..x });
@@ -685,7 +730,11 @@ impl<'a> Device<'a> for Collector {
             }
         }
         match rule::classify(drawn, self.page) {
-            Some(rule::Shape::Rule(x)) => self.rules.push(x),
+            Some(rule::Shape::Rule(x)) => {
+                if let Some(x) = self.clip_rule(x) {
+                    self.rules.push(x);
+                }
+            }
             Some(rule::Shape::Fill(x)) => {
                 if let Some(bbox) = self.visible(x.bbox) {
                     self.fills.push(rule::Fill { bbox, ..x });
