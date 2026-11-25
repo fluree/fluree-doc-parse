@@ -35,10 +35,12 @@ pub struct ImagePlacement {
     /// sharply — the AI-routed reference engine *loses* 0.38 on one and
     /// *gains* 0.62 on the other.
     ///
-    /// Measured for every raster image, unless extraction was told nothing
-    /// will read it ([`ExtractOptions::probe_images`]): an OCR engine reads
-    /// the texty ones too small to be routed to a model
-    /// ([`crate::route::ocr_regions`]), and they read false.
+    /// Measured only where something reads it: a raster image too small to
+    /// be routed to a model, under a tenth of the page, is decoded only for
+    /// an OCR engine, which reads the texty ones ([`crate::route::ocr_regions`],
+    /// [`ExtractOptions::probe_small_images`]), and reads false otherwise;
+    /// so does every image when extraction was told nothing will read it
+    /// ([`ExtractOptions::probe_images`]).
     pub texty: bool,
     /// The image's own pixel grid, `(width, height)`: what it can show,
     /// however large it is drawn. A checkbox drawn from an 8 × 8 mask holds
@@ -53,15 +55,24 @@ pub struct ImagePlacement {
 pub struct ExtractOptions {
     /// Decode raster images to measure [`ImagePlacement::texty`]. The router
     /// reads it ([`crate::route::decide`], for a region it would send to a
-    /// model), and so does an OCR engine ([`crate::route::ocr_regions`]);
-    /// the decode is most of what an image costs. A caller that will
-    /// neither route nor read with an engine can turn it off. On by default.
+    /// model); the decode is most of what an image costs. A caller that will
+    /// not route can turn it off. On by default.
     pub probe_images: bool,
+    /// Decode the images too small to be routed to a model as well, under a
+    /// tenth of the page: only an OCR engine reads those
+    /// ([`crate::route::ocr_regions`]), and a logo or an icon is most of
+    /// what a document's probes would otherwise cost. A caller that reads
+    /// with an engine turns it on. Off by default; nothing is probed while
+    /// [`ExtractOptions::probe_images`] is off.
+    pub probe_small_images: bool,
 }
 
 impl Default for ExtractOptions {
     fn default() -> Self {
-        Self { probe_images: true }
+        Self {
+            probe_images: true,
+            probe_small_images: false,
+        }
     }
 }
 
@@ -305,6 +316,9 @@ struct Collector {
 struct Probes {
     /// No image is probed: nothing will read the result.
     off: bool,
+    /// The images too small to be routed to a model are probed too: an OCR
+    /// engine will read them ([`ExtractOptions::probe_small_images`]).
+    small: bool,
     found: std::collections::HashMap<ObjectIdentifier, bool>,
     /// No dictionary in the document sets a transfer function; `None` until
     /// `again` asked it.
@@ -783,11 +797,24 @@ impl<'a> Device<'a> for Collector {
         };
         let texty = match &i {
             hayro_interpret::Image::Raster(ri) => {
-                // Every image is probed, however small: an OCR engine reads
-                // the texty ones the router leaves to it, a capture an inch
-                // high among them ([`crate::route::ocr_regions`]). An image
-                // drawn again is decoded once ([`Probes`]).
-                self.probes.texty(ri)
+                // The router reads the probe only of an image big enough to
+                // be a region, and decoding a logo or an icon to ask was most
+                // of the probe's cost. An OCR engine reads the texty ones the
+                // router leaves to it, a capture an inch high among them
+                // ([`crate::route::ocr_regions`]), and has them all probed.
+                // The margin keeps the test on the near side of the router's
+                // own, which is made after the page may have been turned. An
+                // image drawn again is decoded once ([`Probes`]).
+                let page_area = ((self.page_box.x1 - self.page_box.x0)
+                    * (self.page_box.y1 - self.page_box.y0))
+                    .max(1.0);
+                let area = (bbox.x1 - bbox.x0) * (bbox.y1 - bbox.y0);
+                if !self.probes.small && area < 0.99 * crate::route::MIN_REGION_FRACTION * page_area
+                {
+                    false
+                } else {
+                    self.probes.texty(ri)
+                }
             }
             // Stencils are 1-bit masks — the format scanned text and line art
             // arrive in. Treat as text-bearing.
@@ -1588,6 +1615,7 @@ pub fn extract_bytes_with(
     let mut weights = std::collections::HashMap::new();
     let mut probes = Probes {
         off: !options.probe_images,
+        small: options.probe_small_images,
         ..Probes::default()
     };
 
@@ -2546,10 +2574,16 @@ mod probe_tests {
     /// A page covered by one grey image of vertical stripes, two pixels
     /// wide: ink on ground across every row, as a scanned table reads.
     fn striped_page() -> Vec<u8> {
+        striped_page_drawn(100)
+    }
+
+    /// A 100-unit page with an image of stripes drawn `side` units square.
+    fn striped_page_drawn(side: u32) -> Vec<u8> {
         let pixels: Vec<u8> = (0..64 * 64)
             .map(|i| if (i % 64) / 2 % 2 == 0 { 0 } else { 255 })
             .collect();
-        let content = b"q 100 0 0 100 0 0 cm /Im0 Do Q";
+        let content = format!("q {side} 0 0 {side} 0 0 cm /Im0 Do Q");
+        let content = content.as_bytes();
         let mut pdf = Vec::new();
         pdf.extend_from_slice(
             b"%PDF-1.4\n\
@@ -2589,5 +2623,21 @@ mod probe_tests {
         let unprobed = extract_bytes_with(striped_page(), &options).expect("pdf");
         assert_eq!(unprobed.pages[0].images.len(), 1);
         assert!(!unprobed.pages[0].images[0].texty);
+    }
+
+    #[test]
+    fn an_image_too_small_to_route_is_probed_only_for_an_engine() {
+        // 20 units square on a 100-unit page: a twenty-fifth of it, under
+        // the tenth a model is sent.
+        let small = || striped_page_drawn(20);
+        let doc = extract_bytes(small()).expect("pdf");
+        assert!(!doc.pages[0].images[0].texty, "no model reads it");
+        let mut options = ExtractOptions::default();
+        options.probe_small_images = true;
+        let doc = extract_bytes_with(small(), &options).expect("pdf");
+        assert!(doc.pages[0].images[0].texty, "an engine reads it");
+        // An image a model is sent is probed either way.
+        let doc = extract_bytes(striped_page_drawn(40)).expect("pdf");
+        assert!(doc.pages[0].images[0].texty);
     }
 }
