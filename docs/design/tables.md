@@ -99,8 +99,10 @@ no table. Read in touching components instead, a table ruled with
 horizontals only falls apart into lines, none touching the next. So where the
 page-wide reading finds nothing, row lines ruled alike are read together: three
 lines or more, one under the next, each with the same extent and broken at
-the same places, a vertical standing on one of the breaks (a shaded header's
-separators). Its ends are not trimmed: the lines are its rows by how they are
+the same places, its columns stated over them: a vertical standing on one
+of the breaks (a shaded header's separators), or a shaded band drawn a
+column at a time, fills of one height meeting end to end across the lines'
+extent with an edge on every break. Its ends are not trimmed: the lines are its rows by how they are
 drawn. It is kept as a table where:
 
 - it has two rows and two columns or more;
@@ -112,7 +114,18 @@ drawn. It is kept as a table where:
 A band the components read inside it on its own, a shaded header whose
 separators touch its rule, is one of its rows. A statement's figures,
 underlined a column at a time, break alike too, but no vertical stands on
-their breaks.
+their breaks and no band shades them; a chart's bars between gridlines
+broken alike stand apart, each its own height.
+
+A stack whose labels stand outside it, to its left, is read from its text
+with them, as tables ruled with horizontals only are. The text's gutters can
+read figures set closer than a gutter's width as one column (`$ 4,137 $ 3,610
+$ 3,547` under `2016 2015 2014`), where the stack's lines break between them.
+A reading that puts in one cell figures on both sides of a break, with no
+glyph across it but a closing bracket hung past the edge, says something
+wrong of every cell it reads so. Neither it nor the stack stands, and the
+text is read as text. The breaks are the stack's own: a grid ruled some other
+way says less of where its columns are drawn.
 
 ## Each box is read on its own
 

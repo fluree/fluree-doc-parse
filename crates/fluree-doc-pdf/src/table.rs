@@ -3626,7 +3626,7 @@ fn detect_framed_rules(
         // lines, none touching the next; its lines ruled alike are read
         // together.
         let mut out = detect_components(rules, fills, glyphs, page, frames);
-        for stack in ruled_stacks(rules) {
+        for stack in ruled_stacks(rules, fills) {
             for g in detect_group_trimmed(&stack, fills, glyphs, page, frames, false) {
                 // Rows and columns: a chart's gridlines, broken alike where
                 // its bars stand, leave one column of tick labels.
@@ -4693,13 +4693,46 @@ fn rules_its_rows(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
     held >= 2
 }
 
+/// Each stack of row lines ruled alike ([`ruled_stacks`]): its extent, and
+/// the places its lines break, the columns' edges as drawn.
+pub(crate) fn stack_columns(rules: &[Rule], fills: &[crate::rule::Fill]) -> Vec<(BBox, Vec<f64>)> {
+    ruled_stacks(rules, fills)
+        .into_iter()
+        .filter_map(|stack| {
+            let hs: Vec<&Rule> = stack
+                .iter()
+                .filter(|r| r.orientation == Orientation::Horizontal)
+                .collect();
+            let lo = hs.iter().map(|r| r.bbox.x0).fold(f64::MAX, f64::min);
+            let hi = hs.iter().map(|r| r.bbox.x1).fold(f64::MIN, f64::max);
+            let top = hs.iter().map(|r| r.bbox.y0).fold(f64::MAX, f64::min);
+            let bottom = hs.iter().map(|r| r.bbox.y1).fold(f64::MIN, f64::max);
+            if hs.is_empty() || hi <= lo {
+                return None;
+            }
+            let ends: Vec<f64> = hs
+                .iter()
+                .flat_map(|r| [r.bbox.x0, r.bbox.x1])
+                .filter(|&e| e > lo + EDGE_TOLERANCE && e < hi - EDGE_TOLERANCE)
+                .collect();
+            let bbox = BBox {
+                x0: lo,
+                y0: top,
+                x1: hi,
+                y1: bottom,
+            };
+            Some((bbox, coalesce(ends, EDGE_TOLERANCE)))
+        })
+        .collect()
+}
+
 /// Stacks of a page's row lines ruled alike: three lines or more, one under
 /// the next, each with the same extent and broken at the same places, a
 /// table ruled with horizontals only that draws each line a column at a
 /// time. Its lines need not touch. With each stack, the verticals standing
 /// within it or a row above it (a shaded header's separators), one of them
 /// at least on a break.
-fn ruled_stacks(rules: &[Rule]) -> Vec<Vec<Rule>> {
+fn ruled_stacks(rules: &[Rule], fills: &[crate::rule::Fill]) -> Vec<Vec<Rule>> {
     let hs: Vec<&Rule> = rules
         .iter()
         .filter(|r| r.orientation == Orientation::Horizontal)
@@ -4764,15 +4797,44 @@ fn ruled_stacks(rules: &[Rule]) -> Vec<Vec<Rule>> {
             // underlined a column at a time break alike too, between columns
             // that rows of text no rule parts carry on above and below.
             let edges = breaks(stack[0]);
-            picked
-                .iter()
-                .any(|r| {
-                    r.orientation == Orientation::Vertical
+            let near = |x: f64, e: f64| (x - e).abs() <= 2.0 * EDGE_TOLERANCE;
+            let separated = picked.iter().any(|r| {
+                r.orientation == Orientation::Vertical
+                    && edges.iter().any(|&e| near(r.axis_pos(), e))
+            });
+            // Or where a shaded band over the rows is drawn a column at a
+            // time: fills of one height, meeting end to end across the
+            // lines' extent, an edge on every break. A chart's bars stand
+            // apart, each its own height.
+            let banded = || {
+                let within: Vec<&crate::rule::Fill> = fills
+                    .iter()
+                    .filter(|f| {
+                        f.bbox.x0 >= lo - EDGE_TOLERANCE
+                            && f.bbox.x1 <= hi + EDGE_TOLERANCE
+                            && f.bbox.y0 >= top - row - EDGE_TOLERANCE
+                            && f.bbox.y1 <= bottom + EDGE_TOLERANCE
+                    })
+                    .collect();
+                within.iter().any(|seed| {
+                    let mut band: Vec<&&crate::rule::Fill> = within
+                        .iter()
+                        .filter(|f| {
+                            (f.bbox.y0 - seed.bbox.y0).abs() <= EDGE_TOLERANCE
+                                && (f.bbox.y1 - seed.bbox.y1).abs() <= EDGE_TOLERANCE
+                        })
+                        .collect();
+                    band.sort_by(|a, b| a.bbox.x0.total_cmp(&b.bbox.x0));
+                    band.len() > edges.len()
+                        && near(band[0].bbox.x0, lo)
+                        && near(band[band.len() - 1].bbox.x1, hi)
+                        && band.windows(2).all(|w| near(w[0].bbox.x1, w[1].bbox.x0))
                         && edges
                             .iter()
-                            .any(|e| (r.axis_pos() - e).abs() <= 2.0 * EDGE_TOLERANCE)
+                            .all(|&e| band.iter().any(|f| near(f.bbox.x1, e)))
                 })
-                .then_some(picked)
+            };
+            (separated || banded()).then_some(picked)
         })
         .collect()
 }
@@ -7980,7 +8042,7 @@ mod header_tests {
         for x in [100.0, 200.0] {
             rules.push(v(7.0, 20.0, x));
         }
-        let stacks = ruled_stacks(&rules);
+        let stacks = ruled_stacks(&rules, &[]);
         assert_eq!(stacks.len(), 1, "got {stacks:?}");
         assert_eq!(stacks[0].len(), rules.len());
         // A statement's figures underlined a column at a time break alike
@@ -7990,14 +8052,29 @@ mod header_tests {
             .filter(|r| r.orientation == Orientation::Horizontal)
             .copied()
             .collect();
-        assert!(ruled_stacks(&underlines).is_empty());
+        assert!(ruled_stacks(&underlines, &[]).is_empty());
         // Nor are unbroken lines, a chart's gridlines: no columns.
         let gridlines: Vec<Rule> = [20.0, 33.0, 46.0, 59.0]
             .iter()
             .map(|&y| h(0.0, 300.0, y))
             .chain([v(7.0, 20.0, 100.0)])
             .collect();
-        assert!(ruled_stacks(&gridlines).is_empty());
+        assert!(ruled_stacks(&gridlines, &[]).is_empty());
+        // A shaded header drawn a column at a time, fills meeting end to end
+        // on the breaks between its first two lines, states the columns as
+        // separators would.
+        let band = [
+            fill(0.0, 20.0, 100.0, 33.0),
+            fill(100.0, 20.0, 200.0, 33.0),
+            fill(200.0, 20.0, 300.0, 33.0),
+        ];
+        let stacks = ruled_stacks(&underlines, &band);
+        assert_eq!(stacks.len(), 1, "got {stacks:?}");
+        assert_eq!(stacks[0].len(), underlines.len());
+        // A chart's bars between broken gridlines stand apart, each its own
+        // height: no band.
+        let bars = [fill(20.0, 40.0, 80.0, 72.0), fill(120.0, 50.0, 180.0, 72.0)];
+        assert!(ruled_stacks(&underlines, &bars).is_empty());
     }
 
     #[test]
