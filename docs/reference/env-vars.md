@@ -10,13 +10,14 @@ tiers](../integration/escalation-tiers.md).
 |---|---|---|
 | `FDOC_TITLE_BOXES` | `--layout-boxes` | layout-detector sidecars (tier 2) |
 | `FDOC_TIER_RESULTS` | `--tier-results` | model readings of crops (tier 4) |
-| `FDOC_ESCALATE_COLUMNS` | `escalation.on_column_doubt` | also escalate pages whose columns the segmentation cannot represent — see below |
+| `FDOC_ESCALATE_COLUMNS` | `escalation.on_column_doubt` | also escalate pages whose columns the segmentation cannot represent, or with `0` do not — see below |
 | `FDOC_STRUCTURE_RESULTS` | `--structure-results` | table-structure readings (tier 3/5) |
 | `FDOC_VLM_ANCHORS` | `--emit-anchors` | emit `[[VLM:…]]` tokens; with a reader, keep the ones it did not answer — see [Anchors](../integration/anchors.md#interaction-with---tier-results) |
 | `FDOC_HOME` | — | where the per-user [config](../cli/config.md) lives, overriding the platform default |
 
 Presence is what counts for the boolean ones — any value, including an empty
-string, enables them.
+string, enables them. `FDOC_ESCALATE_COLUMNS` is the one exception: `0`,
+`false`, `off` or `no`, trimmed and in any case, turn it off.
 
 ```bash
 FDOC_TITLE_BOXES=./layout \
@@ -52,8 +53,12 @@ Unstable, like [`fdoc dev`](../cli/dev.md) itself.
 
 The same switch as `escalation.on_column_doubt` in
 [the config file](../cli/config.md), for one run rather than a deployment.
+Set, it wins over the file either way: `FDOC_ESCALATE_COLUMNS=0` (or
+`false`, `off`, `no`) keeps column doubt off whatever the file says, any other
+value turns it on; one that is not a usual yes (`1`, `true`, `on`, `yes`, or
+empty) is warned about.
 
-Off by default. When set, a page that [`column::doubt`] flags — columns that do
+Off by default. When on, a page that [`column::doubt`] flags — columns that do
 not run the page's full height, which the whitespace projection cannot see — is
 escalated as a whole page.
 

@@ -85,6 +85,14 @@ pub(crate) struct TierConfig {
     /// document — a batch of a thousand files must not read it a thousand
     /// times.
     pub config: crate::config::Config,
+    /// The file `config` was read from, when [`Self::configured`] found one.
+    pub config_path: Option<PathBuf>,
+    /// What [`COLUMNS_ENV`](crate::escalate::jobs::COLUMNS_ENV) decides about
+    /// column doubt for this run, over `config`: `Some(false)` for `0`,
+    /// `Some(true)` for any other value, `None` unset. Read once with the
+    /// rest of the environment, so every command resolves column doubt from
+    /// the same two inputs ([`crate::escalate::jobs::escalates_columns`]).
+    pub columns: Option<bool>,
     pub verbose: bool,
     /// `FDOC_TABLE_CONF`: print each table's confidence signals.
     pub table_conf_debug: bool,
@@ -102,10 +110,32 @@ impl TierConfig {
             emit_anchors: std::env::var_os("FDOC_VLM_ANCHORS").is_some(),
             escalate: false,
             config: crate::config::Config::default(),
+            config_path: None,
+            columns: crate::escalate::jobs::columns_override(
+                std::env::var_os(crate::escalate::jobs::COLUMNS_ENV).as_deref(),
+            ),
             verbose: false,
             table_conf_debug: std::env::var_os("FDOC_TABLE_CONF").is_some(),
             insert_missing_tables: std::env::var_os("FDOC_INSERT_TABLES").is_some(),
         }
+    }
+
+    /// Environment config and the config file, for a command that calls no
+    /// reader but chooses the crops one would be handed: what the file says
+    /// about escalation (`escalation.on_column_doubt`) changes that set, so
+    /// a command that left it out would count a set `convert --escalate`
+    /// does not send. A file that cannot be read is warned about and left
+    /// out, as `convert` leaves it out.
+    pub fn configured() -> Self {
+        let mut tiers = Self::from_env();
+        match crate::config::load() {
+            Ok(l) => {
+                tiers.config_path = l.exists.then_some(l.path);
+                tiers.config = l.config;
+            }
+            Err(e) => eprintln!("warning: {e}"),
+        }
+        tiers
     }
 
     /// Environment config with per-flag overrides on top.
@@ -115,19 +145,27 @@ impl TierConfig {
         structure_results: Option<&Path>,
         emit_anchors: bool,
     ) -> Self {
-        let env = Self::from_env();
+        Self::from_env().with_flags(layout_boxes, tier_results, structure_results, emit_anchors)
+    }
+
+    /// `self` with the flags of [`Self::from_env_with`] on top. What no flag
+    /// overrides is kept, column doubt among it: `convert` takes it from the
+    /// environment as `triage` and `render-routed` do.
+    fn with_flags(
+        self,
+        layout_boxes: Option<&Path>,
+        tier_results: Option<&Path>,
+        structure_results: Option<&Path>,
+        emit_anchors: bool,
+    ) -> Self {
         Self {
-            layout_boxes: layout_boxes.map(Path::to_path_buf).or(env.layout_boxes),
-            tier_results: tier_results.map(Path::to_path_buf).or(env.tier_results),
+            layout_boxes: layout_boxes.map(Path::to_path_buf).or(self.layout_boxes),
+            tier_results: tier_results.map(Path::to_path_buf).or(self.tier_results),
             structure_results: structure_results
                 .map(Path::to_path_buf)
-                .or(env.structure_results),
-            emit_anchors: emit_anchors || env.emit_anchors,
-            escalate: env.escalate,
-            config: env.config,
-            verbose: env.verbose,
-            table_conf_debug: env.table_conf_debug,
-            insert_missing_tables: env.insert_missing_tables,
+                .or(self.structure_results),
+            emit_anchors: emit_anchors || self.emit_anchors,
+            ..self
         }
     }
 
@@ -352,23 +390,33 @@ pub(crate) fn apply_tiers(
         return;
     };
     let vlm = fluree_doc_pdf::arbiter::FixtureBackend::new(dir.to_path_buf());
-    let structure =
-        structure_results.map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()));
+    let structure = structure_backend(structure_results);
     splice(
         emit_anchors,
         elements,
         stem,
         &vlm,
-        structure
-            .as_ref()
-            .map(|s| s as &dyn fluree_doc_pdf::arbiter::TierBackend),
+        structure.as_ref().map(|s| s as _),
         pages,
         furniture,
     );
 }
 
+/// The structure readings in `structure_results`, for the three-way veto.
+/// One per run of a document, so the crops chosen and the splice read each
+/// file once between them.
+pub(crate) fn structure_backend(
+    structure_results: Option<&Path>,
+) -> Option<fluree_doc_pdf::arbiter::FixtureBackend> {
+    structure_results.map(|d| fluree_doc_pdf::arbiter::FixtureBackend::new(d.to_path_buf()))
+}
+
 /// Splice readings into the element stream, from sidecars or from a reader
 /// called in this run.
+///
+/// `structure` is read for the three-way veto whichever produced
+/// `readings`: a table reading is as likely to be wrong from a model called
+/// here as from a sidecar, and the structure reading is what overrules it.
 ///
 /// An anchor no reading answers drops, unless the anchors were asked for
 /// (`--emit-anchors`): then it stays where it is for a later tier to fill,
@@ -405,6 +453,24 @@ mod tests {
             bbox: Some(bbox),
             level: (kind == "doco:SectionTitle").then_some(2),
             ..Element::new(kind, text, "rust", "font-size")
+        }
+    }
+
+    /// `convert`'s flags override the environment they name and keep the
+    /// rest of it: `FDOC_ESCALATE_COLUMNS` decides column doubt for
+    /// `convert` as for the commands that take no flag.
+    #[test]
+    fn the_flags_keep_what_the_environment_says_about_column_doubt() {
+        for columns in [None, Some(false), Some(true)] {
+            let env = TierConfig {
+                tier_results: Some(PathBuf::from("env-readings")),
+                columns,
+                ..Default::default()
+            };
+            let cfg = env.with_flags(None, Some(Path::new("flag-readings")), None, true);
+            assert_eq!(cfg.columns, columns);
+            assert_eq!(cfg.tier_results, Some(PathBuf::from("flag-readings")));
+            assert!(cfg.emit_anchors);
         }
     }
 

@@ -92,7 +92,10 @@ crop `--pages` or `escalation.max_crops` left out, one with no sidecar file)
 stays in the output for you to fill. An anchor that was answered drops
 either way, whether its reading lost [arbitration](../concepts/escalation.md)
 or the reader found nothing printed on the crop: the deterministic text
-standing there was chosen, not left waiting. So do the anchors on a page
+standing there was chosen, not left waiting. So does a table anchor
+`--structure-results` [vetoes](../concepts/escalation.md#the-three-way-veto):
+the veto keeps the grid whatever a reading says, so its crop is not sent to
+a reader called in the run, and no reading could have replaced it. So do the anchors on a page
 that was read whole, whatever that reading made of the page: their regions
 were read with it. With a provider configured, add `--no-escalate` for
 anchors with no reading in the run at all.

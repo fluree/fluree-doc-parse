@@ -47,7 +47,10 @@ where the shapes agree, and with three readers the majority wins.
 
 Supplying all three enables the [three-way
 veto](../concepts/escalation.md#the-three-way-veto) — tier 5, the
-first-place configuration.
+first-place configuration. The VLM reading may also come from a model
+called in the run (`--escalate`) in place of `--tier-results`:
+`--structure-results` vetoes its table readings the same way, and no table
+crop it vetoes is sent to the model.
 
 ```bash
 FDOC_TITLE_BOXES=./layout \
@@ -118,7 +121,8 @@ Renders every routed page and region to PNG at **2×** (≈144 dpi) with a small
 margin, and writes `manifest.jsonl` alongside:
 
 ```jsonl
-{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","table":true}
+{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","table":true,"vetoed":false}
+{"bbox":[72.0,118.4,540.0,402.7],"doc":"datasheet-b","kind":"region","page":34,"png":"datasheet-b_p34_t0.png","reason":"table","table":true,"vetoed":true}
 {"doc":"form","kind":"page","page":0,"png":"form_p0_full.png","reason":"heading_doubt"}
 ```
 
@@ -155,6 +159,20 @@ The distinction is worth passing on: a routing trigger knows a region is
 unreadable but not what it is, and a model left to judge transcribes some
 grids as one value per line — which reads as a plausible answer and scores
 zero for structure.
+
+`vetoed` says the [three-way veto](../concepts/escalation.md#the-three-way-veto)
+keeps this table's grid whatever a deep reader says: the structure readings
+in `FDOC_STRUCTURE_RESULTS` corroborate it. `convert --escalate` does not
+send such a crop and `fdoc triage` does not count it, so a deep reader need
+not read it for runs that always pass these structure readings. A reading
+cache shared with runs that do not — tier 4 alone, say — still needs it:
+there the table is not vetoed and its reading is spliced. It is written all
+the same, because the structure reader reads it: a crop left out on the
+strength of a structure reading could never be read again to refresh that
+reading. `render-routed` says on stderr how many it wrote. Without
+`FDOC_STRUCTURE_RESULTS`, `vetoed` is `false`. A vetoed crop keeps its
+`reason`, `table`: the veto says a deep reader need not read it, not why it
+was cut. Only region records carry `vetoed`; a whole page is never vetoed.
 
 **Render on an opaque background.** If you rasterize pages yourself rather
 than using `render-routed`, note that a transparent background flattens to

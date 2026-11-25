@@ -37,9 +37,13 @@
 //! let opts = document::AnalyzeOptions { emit_anchors: true, ..Default::default() };
 //! let mut analysis = document::analyze_with(&mut doc, &ol, &opts);
 //!
-//! // The crops `fdoc` reads: region crops at this analysis's anchors,
-//! // chosen from the document as extracted.
-//! let jobs = escalate::crops_at_anchors(&extracted, &analysis, &Default::default());
+//! let mut jobs = escalate::crops_at_anchors(&extracted, &analysis, &Default::default());
+//! // A table-structure reader, if you have one. A table its reading vetoes
+//! // keeps its grid whatever a deep reader says, so it is not worth reading.
+//! let structure: Option<&dyn fluree_doc_pdf::arbiter::TierBackend> = None;
+//! if let Some(s) = structure {
+//!     escalate::without_vetoed(&mut jobs, &analysis.elements, "doc", s);
+//! }
 //! let crops = escalate::render_crops(&pdf, &jobs);
 //! let links = fluree_doc_pdf::link::extract(&pdf);
 //! let mut readings = escalate::Readings::default();
@@ -59,7 +63,7 @@
 //!     .map(|p| fluree_doc_pdf::fidelity::page_lines(&p.glyphs))
 //!     .collect();
 //! fluree_doc_pdf::arbiter::splice_with_page(
-//!     &mut analysis.elements, "doc", &readings, None, &page_text);
+//!     &mut analysis.elements, "doc", &readings, structure, &page_text);
 //! fluree_doc_pdf::arbiter::scrub_furniture(
 //!     &mut analysis.elements, &analysis.furniture);
 //! ```
@@ -247,14 +251,19 @@ pub struct CropHints {
 /// The selection reads anchors, which an analysis emits only with
 /// `emit_anchors` on. So a copy is analysed here with anchors on and `opts`
 /// otherwise, and the crops are [`crops_at_anchors`] of that copy: a region
-/// crop is named after the anchor the same analysis mints for it, so the
-/// crops `fdoc dev render-routed` writes for a reader fill the anchors of a
-/// `fdoc convert` run with the same options, and the count `fdoc triage`
-/// prices is the one `fdoc convert --escalate` pays.
+/// crop is named after the anchor the same analysis mints for it, so its
+/// reading fills the anchor of its name in an analysis made with the same
+/// options.
+///
+/// The table crops a structure reading vetoes are among them: whatever a
+/// deep reader answers for those, a splice given that structure reading
+/// keeps the grid. A caller that passes one to the splice leaves them out
+/// with [`without_vetoed`] rather than pay for readings thrown away.
 ///
 /// A caller that splices the readings into an analysis of its own, as
 /// `fdoc convert --escalate` does, takes [`crops_at_anchors`] of that
-/// analysis directly rather than analysing a second copy.
+/// analysis directly rather than analysing a second copy; the `fdoc`
+/// commands all do.
 pub fn plan(
     doc: &Document,
     outline: &[OutlineItem],
@@ -278,6 +287,29 @@ pub fn plan_explained(
     };
     let analysis = crate::document::analyze_with(&mut copy, outline, &opts);
     crops_at_anchors_explained(doc, &analysis, hints)
+}
+
+/// Leave out of `jobs` the table crops the three-way veto discards whatever
+/// a deep reader answers ([`crate::arbiter::vetoed_tables`]), and the pages
+/// left with no crop at all.
+///
+/// `elements` are those of the analysis `jobs` were chosen from. A page
+/// whose every crop is vetoed is dropped rather than kept with an empty
+/// list: [`render_crops`] would render it to cut nothing from it, and a
+/// reader would be told of a page with nothing to read.
+pub fn without_vetoed(
+    jobs: &mut CropJobs,
+    elements: &[crate::document::Element],
+    stem: &str,
+    structure: &dyn TierBackend,
+) {
+    let vetoed = crate::arbiter::vetoed_tables(elements, stem, structure);
+    for (page, regions) in jobs.iter_mut() {
+        if let Some(list) = regions {
+            list.retain(|(tag, _)| !vetoed.contains(&format!("p{page}_{tag}")));
+        }
+    }
+    jobs.retain(|(_, regions)| regions.as_ref().is_none_or(|list| !list.is_empty()));
 }
 
 /// Every crop this document asks for, in page order, without hints.
@@ -1280,6 +1312,55 @@ mod tests {
         );
         assert_eq!(CropReason::of_region_tag("t2"), Some(CropReason::Table));
         assert_eq!(CropReason::of_region_tag("full"), None);
+    }
+
+    /// A table the structure reading vetoes is not read, and a page left
+    /// with nothing to read is not rendered.
+    #[test]
+    fn a_vetoed_table_is_left_out_with_a_page_it_empties() {
+        let elements = vec![
+            crate::document::Element::new(
+                "doco:Figure",
+                "[[VLMTAB:p0:t0]]",
+                "rust",
+                "table-confidence",
+            ),
+            crate::document::Element {
+                cells: Some(vec![
+                    vec!["12".into(), "34".into()],
+                    vec!["56".into(), "78".into()],
+                ]),
+                ..crate::document::Element::new("doco:Table", "12 34 56 78", "rust", "grid")
+            },
+        ];
+        // The same two rows with one column fewer: it corroborates the grid.
+        let mut structure = Readings::default();
+        structure.insert(
+            "p0_t0".into(),
+            "<table><tr><td>12 34</td></tr><tr><td>56 78</td></tr></table>".into(),
+        );
+        let mut jobs: CropJobs = vec![
+            (0, Some(vec![region("t0")])),
+            (1, Some(vec![region("r0"), region("t0")])),
+            (2, None),
+        ];
+        without_vetoed(&mut jobs, &elements, "doc", &structure);
+        let left: Vec<(usize, Option<Vec<String>>)> = jobs
+            .into_iter()
+            .map(|(page, regions)| {
+                (
+                    page,
+                    regions.map(|list| list.into_iter().map(|(tag, _)| tag).collect()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            left,
+            [
+                (1, Some(vec!["r0".to_string(), "t0".to_string()])),
+                (2, None)
+            ]
+        );
     }
 
     #[test]

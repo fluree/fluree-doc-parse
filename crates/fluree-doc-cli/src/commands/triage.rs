@@ -6,17 +6,25 @@ use std::path::{Path, PathBuf};
 
 /// How many crops `convert --escalate` would pay for: the crop set
 /// `render-routed` takes, the anchors of `analysis`, which comes with anchors
-/// on. `extracted` is the document before the analysis changed it.
+/// on, less the tables the structure readings veto; with the reason each
+/// whole page among them was chosen for. `extracted` is the document before
+/// the analysis changed it.
 pub(crate) fn priced(
     extracted: &fluree_doc_pdf::Document,
     analysis: &fluree_doc_pdf::document::Analysis,
     stem: &str,
     tiers: &crate::commands::common::TierConfig,
-) -> usize {
-    let hints = crate::escalate::jobs::hints(extracted, stem, tiers.layout_boxes.as_deref(), false);
-    fluree_doc_pdf::escalate::crop_count(&fluree_doc_pdf::escalate::crops_at_anchors(
-        extracted, analysis, &hints,
-    ))
+) -> (usize, fluree_doc_pdf::escalate::PageReasons) {
+    let hints = crate::escalate::jobs::hints(extracted, stem, tiers);
+    let structure = crate::commands::common::structure_backend(tiers.structure_results.as_deref());
+    let (jobs, reasons) = crate::escalate::jobs::at_anchors(
+        extracted,
+        analysis,
+        stem,
+        &hints,
+        structure.as_ref().map(|s| s as _),
+    );
+    (fluree_doc_pdf::escalate::crop_count(&jobs), reasons)
 }
 
 /// Routing decisions with the signals behind them, one line per routed page,
@@ -53,6 +61,10 @@ pub fn run(path: &Path) -> i32 {
     let mut failed = 0usize;
     let (mut tables_total, mut tables_suspect) = (0usize, 0usize);
     let mut heading_doubt = 0usize;
+    // Once per run: what the config file says about escalation changes the
+    // crops `CROPS` counts, as it changes the ones `convert` sends.
+    let tiers = crate::commands::common::TierConfig::configured();
+    let mut whole_for_columns = 0usize;
     for f in &files {
         let t0 = std::time::Instant::now();
         let doc = match extract_file(f) {
@@ -126,19 +138,20 @@ pub fn run(path: &Path) -> i32 {
                 let a = fluree_doc_pdf::document::analyze_with(&mut d, &ol, &ropts);
                 doubt = a.suspect_headings.clone();
                 figure_doubt = a.suspect_figures.clone();
-                column_doubts = d
+                // From the document as extracted, as the crops are chosen,
+                // so each COLUMN page is one `CROPS` counts when column
+                // doubt escalates.
+                column_doubts = extracted
                     .pages
                     .iter()
                     .filter_map(|p| {
                         fluree_doc_pdf::document::column_doubt(p, &a).map(|c| (p.index, c))
                     })
                     .collect();
-                crops = priced(
-                    &extracted,
-                    &a,
-                    crate::commands::common::stem_of(f),
-                    &crate::commands::common::TierConfig::from_env(),
-                );
+                let stem = crate::commands::common::stem_of(f);
+                let (n, reasons) = priced(&extracted, &a, stem, &tiers);
+                crops = n;
+                whole_for_columns += crate::escalate::jobs::whole_for_columns(&reasons);
                 tables_total += a.tables;
                 tables_suspect += a.suspect_tables.len();
                 for s in &a.suspect_tables {
@@ -191,11 +204,12 @@ pub fn run(path: &Path) -> i32 {
         }
         // The report is only useful if it says what to do about it. These
         // pages are the ones that read across their panels, and they do not
-        // escalate unless a corpus asks for it.
+        // escalate unless a corpus asks for it; where it does, `CROPS`
+        // already counts them.
         if column_doubt && files.len() == 1 {
-            println!(
-                "\nCOLUMN pages do not escalate by default — `fdoc config set escalation.on_column_doubt true`"
-            );
+            if let Some(advice) = crate::escalate::jobs::column_advice(&tiers) {
+                println!("\n{advice}");
+            }
         }
         if routed.is_empty() {
             // For a single file, show the signals even when nothing routes —
@@ -237,6 +251,9 @@ pub fn run(path: &Path) -> i32 {
             pages_routed as f64 * 100.0 / pages_total.max(1) as f64,
             ms_total
         );
+    }
+    if let Some(note) = crate::escalate::jobs::column_note(&tiers, whole_for_columns) {
+        eprintln!("{note}");
     }
     if failed > 0 {
         eprintln!("{failed} file(s) could not be read");

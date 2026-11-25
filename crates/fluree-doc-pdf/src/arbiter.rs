@@ -58,18 +58,24 @@ pub trait TierBackend {
 
 /// Readings from a directory of `{stem}_{crop}.json` files in the cache
 /// format produced by the batch runners.
+///
+/// Each file is read and parsed once: a structure reading is asked for when
+/// the crops are chosen, to leave out the tables it vetoes, and again when
+/// the splice applies the veto.
 pub struct FixtureBackend {
     dir: PathBuf,
+    parsed: std::sync::Mutex<std::collections::HashMap<String, Option<Vec<Block>>>>,
 }
 
 impl FixtureBackend {
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        Self {
+            dir,
+            parsed: Default::default(),
+        }
     }
-}
 
-impl TierBackend for FixtureBackend {
-    fn read(&self, stem: &str, crop: &str) -> Option<Vec<Block>> {
+    fn parse(&self, stem: &str, crop: &str) -> Option<Vec<Block>> {
         let txt = std::fs::read_to_string(self.dir.join(format!("{stem}_{crop}.json"))).ok()?;
         let v: serde_json::Value = serde_json::from_str(&txt).ok()?;
         let mut out = Vec::new();
@@ -98,6 +104,17 @@ impl TierBackend for FixtureBackend {
             }
         }
         Some(out)
+    }
+}
+
+impl TierBackend for FixtureBackend {
+    fn read(&self, stem: &str, crop: &str) -> Option<Vec<Block>> {
+        let key = format!("{stem}_{crop}");
+        let mut parsed = self.parsed.lock().unwrap_or_else(|e| e.into_inner());
+        parsed
+            .entry(key)
+            .or_insert_with(|| self.parse(stem, crop))
+            .clone()
     }
 }
 
@@ -655,6 +672,76 @@ pub fn splice_leaving_unanswered(
     splice_anchors(elements, stem, readings, structure, pages, true)
 }
 
+/// The table crops the three-way veto discards whatever the deep reader
+/// answers, by crop name.
+///
+/// The veto rests on the structure reading and the grid alone, both known
+/// before a deep reader is called, so a caller paying per reading can leave
+/// these crops out of what it sends: the splice drops their anchors as
+/// answered and keeps the grid, as it would have done with a reading.
+pub fn vetoed_tables(elements: &[Element], stem: &str, structure: &dyn TierBackend) -> Vec<String> {
+    elements
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match parse_anchor(&e.text)? {
+            (crop, AnchorKind::Table) => {
+                let cells = labelled_table(elements, i).and_then(|t| elements[t].cells.as_deref());
+                let (rows, cols) = grid_shape(cells);
+                structure_vetoes(structure, stem, &crop, rows, cols).then_some(crop)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The deterministic table a table anchor at `i` labels: the next table
+/// element on the same page (the interleave placed the anchor immediately
+/// before it).
+fn labelled_table(elements: &[Element], i: usize) -> Option<usize> {
+    let page = elements[i].page;
+    elements[i + 1..]
+        .iter()
+        .position(|x| x.kind == "doco:Table" && x.page == page)
+        .map(|k| i + 1 + k)
+}
+
+/// Rows and the widest row of a grid, `(0, 0)` without one.
+fn grid_shape(cells: Option<&[Vec<String>]>) -> (usize, usize) {
+    cells
+        .map(|rows| (rows.len(), rows.iter().map(|r| r.len()).max().unwrap_or(0)))
+        .unwrap_or((0, 0))
+}
+
+/// Three-way veto: an independent structure reading agreeing with the grid
+/// outvotes the deep model.
+///
+/// The veto's corroboration test is the complement of `reading_wins` applied
+/// to the structure reading: the independent reader "agrees" with the grid
+/// exactly when it would NOT have replaced it. The veto's measured form is
+/// narrow: the independent structure reading corroborates the grid only when
+/// it read the same rows with one *fewer* column — the reading-side merge
+/// that consistently marks a grid whose finer split was right. True shape
+/// equality does not veto: escalation still wins there because the deep
+/// reading carries the crop's non-table content too, as measured on a page
+/// mixing prose with its table.
+fn structure_vetoes(
+    structure: &dyn TierBackend,
+    stem: &str,
+    crop: &str,
+    ours_rows: usize,
+    ours_cols: usize,
+) -> bool {
+    structure
+        .read(stem, crop)
+        .and_then(|blocks| {
+            blocks.iter().find(|b| b.label == "table").and_then(|b| {
+                table_shape(&b.content)
+                    .map(|(r, c)| r.abs_diff(ours_rows) <= 1 && c + 1 == ours_cols)
+            })
+        })
+        .unwrap_or(false)
+}
+
 fn splice_anchors(
     elements: &mut Vec<Element>,
     stem: &str,
@@ -725,43 +812,12 @@ fn splice_anchors(
             }
             AnchorKind::Table => {
                 let page_no = e.page;
-                // The deterministic table this anchor labels is the next
-                // table element on the same page (the interleave placed the
-                // anchor immediately before it).
-                let table_at = elements[i + 1..]
-                    .iter()
-                    .position(|x| x.kind == "doco:Table" && x.page == e.page)
-                    .map(|k| i + 1 + k);
+                let table_at = labelled_table(elements, i);
                 let ours_cells: Option<Vec<Vec<String>>> =
                     table_at.and_then(|t| elements[t].cells.clone());
-                let (ours_rows, ours_cols) = ours_cells
-                    .as_ref()
-                    .map(|rows| (rows.len(), rows.iter().map(|r| r.len()).max().unwrap_or(0)))
-                    .unwrap_or((0, 0));
-
-                // Three-way veto: an independent structure reading agreeing
-                // with the grid outvotes the deep model.
-                // The veto's corroboration test is the complement of
-                // `reading_wins` applied to the structure reading: the
-                // independent reader "agrees" with the grid exactly when it
-                // would NOT have replaced it.
-                // The veto's measured form is narrow: the independent
-                // structure reading corroborates the grid only when it read
-                // the same rows with one *fewer* column — the reading-side
-                // merge that consistently marks a grid whose finer split was
-                // right. True shape equality does not veto: escalation still
-                // wins there because the deep reading carries the crop's
-                // non-table content too, as measured on a page mixing prose
-                // with its table.
+                let (ours_rows, ours_cols) = grid_shape(ours_cells.as_deref());
                 let vetoed = structure
-                    .and_then(|s| s.read(stem, &crop))
-                    .and_then(|blocks| {
-                        blocks.iter().find(|b| b.label == "table").and_then(|b| {
-                            table_shape(&b.content)
-                                .map(|(r, c)| r.abs_diff(ours_rows) <= 1 && c + 1 == ours_cols)
-                        })
-                    })
-                    .unwrap_or(false);
+                    .is_some_and(|s| structure_vetoes(s, stem, &crop, ours_rows, ours_cols));
 
                 // Arbitrate on the first table's shape in the reading, but
                 // replace with the *whole* reading — crops often carry a

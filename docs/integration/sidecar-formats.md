@@ -103,6 +103,13 @@ structure model, and the VLM — which is what enables the [three-way
 veto](../concepts/escalation.md#the-three-way-veto). Two agreeing readers
 overrule the deepest model.
 
+The VLM reading need not come from `--tier-results`: the veto applies the
+same way to a model `fdoc convert --escalate` calls in the run. There it
+rests on the structure reading and the grid alone, both known before the
+model is called, so no table crop it vetoes is sent to the model. A page
+read whole still shows the model its tables, and its reading replaces the
+page, grids and all.
+
 ## Worked example
 
 ```bash
