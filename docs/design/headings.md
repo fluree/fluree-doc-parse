@@ -81,6 +81,54 @@ set larger or bolder than body text. Two exceptions:
 - `numbering` and `sequence` evidence yields too, but only inside the drawing
   itself, where `4-M4` is a dimension's callout.
 
+## Where a weight comes from
+
+A glyph's weight is its font's, read once per font in this order:
+
+1. **A weight word in the font's name**, in the PDF's `/BaseFont` or the
+   program's own: whole words anywhere (`TimesNewRomanPS-BoldMT`,
+   `ArialBold`), abbreviations and German names in the style after the
+   family (`HelveticaNeueLTStd-Bd`, `-Md`, `-Lt`, URW's `-Regu` and `-Medi`,
+   `Sohne-Halbfett`, `-Kraftig`). Abbreviations are read only there, so a
+   family's own name is never one.
+2. **The descriptor's `/FontWeight`.**
+3. **The program's weight class**, for TrueType and OpenType programs.
+
+The name goes first because, in the disagreements on bold looked at across
+a corpus of 7,000 documents, the name is the source that matches the page:
+a subset of `NimbusSansL-Regu` whose program states 700 set a whole data
+sheet in bold, `CooperHewitt-Thin` declares 701, `Frutiger-Black` 400. The descriptor goes
+before the program because it describes the face as drawn: Word's
+`Arial,Bold` embeds the regular program and states 700.
+
+Then two document-wide passes:
+
+- **Mediums are weighed, and faces with no weight where the body face
+  states none,** against the body face, the one setting the most letters:
+  bold when their ink covers 15% more of their glyph boxes than the body's,
+  or, for a face setting too few letters to trust its ink, when its
+  descriptor's stems are 1.35 times the body's. Letters alone are weighed,
+  since figures and signs have ink of their own, and only the letters of a
+  face read bold this way are bold: its figures are left with no weight,
+  which neither makes a line bold nor keeps one from being. Kept medium,
+  they outvoted the letters of a header cell (`WD8005FRYZ`); read as bold,
+  they made bold lines of a table's `RCR: 0` and a paper's `doi:` line. A
+  medium is weighed because
+  its look depends on the family: Söhne's Kräftig is set as the bold beside
+  Buch, as heavy as a semibold, where other families' mediums sit close to
+  their regular. A face with no weight beside a body whose weight is stated
+  is left alone: it is mostly a chart's, a logo's or a signature's, and
+  weighing those made bold headings of signatures and axis labels. A face
+  named elsewhere in a silent document, such as a repository's cover page
+  in Frutiger Bold on a paper whose own faces state nothing, does not stop
+  the paper's faces being weighed. Nothing is weighed against a light or a
+  heavy body.
+- **A light body lifts every weight.** A document set in Light (300) uses
+  Medium (500) as its bold, so its weights are raised until the body reads
+  400: the Medium reads 600, bold. The lift is one step at most: over a
+  Thin body (200), a regular face is heavier without being bold, as a
+  sheet's tables set in Helvetica beside its text in Helvetica Neue Thin.
+
 ## Bold, throughout
 
 `bold` reads a line's weight, so a line must be set in bold, not hold some:

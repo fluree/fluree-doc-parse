@@ -139,6 +139,20 @@ line somewhere else: `Fluo-` over `rescent` is `Fluorescent` in a sheet whose
 title says `Fluorescent`. A word the document prints hyphenated, or nowhere
 else, keeps its hyphen.
 
+**A face's weight.** Each glyph takes its weight from its font: from a
+weight its name states (`Arial-BoldMT`, `HelveticaNeueLTStd-Bd`, `Sohne-Halbfett`,
+`NimbusSansL-Regu`), else from the `/FontWeight` its descriptor states, else
+from the font program. The name goes first because it is the source least
+often wrong: a subset whose program says bold for a regular face, or a
+descriptor that says 400 for a black one, still carries its face's name. A
+medium face is weighed by its ink against the body face, or, setting only
+a few letters, by the stem width its descriptor states, since some families
+set their medium as the bold and others barely darker than regular. So is a
+face nothing states a weight for, where the body text's face states none
+either. In a
+document set in a light face, every weight is read against it: a medium
+over a light body reads as bold.
+
 **Bold inside the text.** A heading set in bold is bold from its first word
 to its last, so a line reads as bold only when it is: most of its glyphs
 bold, and its first and last words. A face that declares no weight counts

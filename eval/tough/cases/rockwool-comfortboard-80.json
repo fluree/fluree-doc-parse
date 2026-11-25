@@ -47,8 +47,7 @@
       "issue": "On page 2 the ® was followed by a space glyph on the header line's baseline, and went to that line.",
       "element": {
         "type": "doco:SectionTitle",
-        "text": "Comfortboard® 80",
-        "evidence": "font-size"
+        "text": "Comfortboard® 80"
       }
     },
     {
