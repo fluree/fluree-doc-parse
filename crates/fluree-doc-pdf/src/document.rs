@@ -1725,7 +1725,7 @@ fn find_figures(
             &figures,
         );
         figures.extend(labelled);
-        let taken = figure::attach_beside(
+        let mut taken = figure::attach_beside(
             &mut figures,
             &block_boxes,
             &images,
@@ -1733,6 +1733,11 @@ fn find_figures(
             prose_size(blocks),
             &figure::marks(&page.fills),
         );
+        let items: Vec<(crate::geom::BBox, f32)> = (0..blocks.len())
+            .filter(|i| !candidates.contains(i))
+            .map(|i| (blocks[i].bbox, blocks[i].font_size))
+            .collect();
+        figure::release_lead_ins(&mut taken, &block_boxes, &items);
         // Which figure each block belongs to, if any: the labels its figure
         // took, and whatever lies mostly inside the drawing itself. The
         // rectangle around a drawing and its labels is not membership: a

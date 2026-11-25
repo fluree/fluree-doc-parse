@@ -273,6 +273,24 @@ spacing, as footnotes set at a generous leading have, or across a change to
 bold capitals within the paragraph: the line is full, ends without a full
 stop, and the next goes on in lower case or in the same capitals.
 
+**Lettered items.** Steps and sub-questions lettered in lower case, `a.`,
+`b)`, `(c)`, form a list in two cases:
+
+- the lines count off from `a.` at one left edge, each item's wrapped lines
+  hanging under it;
+- a block opening with `a.` has a block opening with `b.` set where it is
+  under it, each a paragraph long or a step wrapped over lines.
+
+Letters count apart from numbers. So questions numbered `2.` and `3.`, each
+with lettered sub-questions under it, read as two numbered items. The lines
+set left of the last lettered item, where the numbered text goes on
+(`2. When changing…` under `f. The depth of focus…`), are not part of that
+item. A lone `a.` opens a paragraph. Lines that happen to start `(d)` and
+`(e)`, a caption's panels wrapped one to a line, count off from nothing. A
+capital, `A.`, opens an appendix or a section as often as an item, and is
+read as neither here. In Markdown a lettered item is written after a bullet,
+`- a. …`, since Markdown numbers only with digits.
+
 **Footnotes.** A block of footnotes, each opening with its number raised at
 the margin and set at the text's leading, reads one note to a paragraph,
 each opening with its number. A line whose raised number counts on from the
@@ -499,7 +517,8 @@ text in a column of its own beside a drawing, level with it: a heading or a
 note set flush with a paragraph of the page's in that column (`FCC` and its
 caution beside an install guide's drawing), a run of steps wrapped from
 line to line (`… the black fixture lead to the` over `voltage supply …`),
-and the line introducing them on its colon. A label is terse, and stands
+and the line introducing them on its colon. So is a line that introduces a
+list on its colon, the list's items set just under it. A label is terse, and stands
 among the drawing's. An address is no label either. A line that closes on a
 phone number, a web address or an e-mail address says where to reach the
 page's maker, not what the drawing shows. The lines it runs on from go with
