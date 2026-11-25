@@ -42,6 +42,7 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--models <DIR>` | the OCR assets directory: the models and ONNX Runtime. Env: `FDOC_OCR_MODELS` |
 | `--ocr-max-megapixels <MPX>` | most megapixels the OCR engine reads in one pass (default 12.5); a larger image is read in overlapping strips ([how an image is sized](ocr.md#how-an-image-is-sized)). Env: `FDOC_OCR_MAX_MEGAPIXELS`; config: `ocr.max_megapixels` |
 | `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. Env: `FDOC_VLM_ANCHORS` |
+| `--probe-images` | decode the images to tell those holding text from pictures, without reading them: `doc:unreadRegions` then says `Region`, `Small` or `NotTexty` where a plain run says `Unprobed`. Escalation, OCR and the anchors probe already |
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
 | `--strict` | fail a PDF that yields nothing: no text, and no page or region reported unread. See [Exit codes](#exit-codes) |

@@ -26,22 +26,25 @@ const INTERPRET_BOUNDS: f64 = 20_000.0;
 pub struct ImagePlacement {
     /// Placement on the page, clipped to the page box.
     pub bbox: BBox,
-    /// True when the pixels look like text or line structure
+    /// `Some(true)` when the pixels look like text or line structure
     /// ([`fluree_doc_vision::texty`]): bimodal luminance with frequent
     /// dark/light transitions along rows, or lines of text on a ground of
     /// one colour. A raster table, a scanned paragraph, a labelled chart or
-    /// a screen capture with a few lines on it reads true; a photograph
-    /// reads false. This is what separates "the VLM can recover content
-    /// here" from "it is a picture", which placement geometry alone cannot
-    /// see: two documents with near-identical image coverage can still
-    /// diverge sharply — the AI-routed reference engine *loses* 0.38 on one
-    /// and *gains* 0.62 on the other.
+    /// a screen capture with a few lines on it reads `Some(true)`; a
+    /// photograph `Some(false)`. This is what separates "the VLM can recover
+    /// content here" from "it is a picture", which placement geometry alone
+    /// cannot see: two documents with near-identical image coverage can
+    /// still diverge sharply — the AI-routed reference engine *loses* 0.38
+    /// on one and *gains* 0.62 on the other.
     ///
     /// Measured for every raster image, unless extraction was told nothing
     /// will read it ([`ExtractOptions::probe_images`]): an OCR engine reads
     /// the texty ones too small to be routed to a model
-    /// ([`crate::route::ocr_regions`]), and they read false.
-    pub texty: bool,
+    /// ([`crate::route::ocr_regions`]). `None` when the image was not
+    /// probed: nothing is known of its pixels, and the router sends no
+    /// reader to it ([`crate::route::Declined::Unprobed`]). A stencil (an
+    /// image mask) is `Some(true)` either way: it is not decoded for it.
+    pub texty: Option<bool>,
     /// The image's own resolution where it is drawn: its pixels per inch on
     /// the page, along whichever of its axes is drawn coarser. `None` when
     /// unknown.
@@ -81,7 +84,10 @@ pub struct ExtractOptions {
     /// reads it ([`crate::route::decide`], for a region it would send to a
     /// model), and so does an OCR engine ([`crate::route::ocr_regions`]);
     /// the decode is most of what an image costs. A caller that will
-    /// neither route nor read with an engine can turn it off. On by default.
+    /// neither escalate nor read with an engine can turn it off: no image is
+    /// then routed, and each one the text layer does not cover is reported
+    /// unread as not examined ([`crate::route::Declined::Unprobed`]). On by
+    /// default.
     pub probe_images: bool,
 }
 
@@ -359,14 +365,14 @@ struct Probes {
 impl Probes {
     /// Whether the image's pixels look like text, decoding it unless the
     /// document has drawn it before.
-    fn texty(&mut self, image: &hayro_interpret::RasterImage<'_>) -> bool {
+    fn texty(&mut self, image: &hayro_interpret::RasterImage<'_>) -> Option<bool> {
         if self.off {
-            return false;
+            return None;
         }
         let id = image.stream().dict().obj_id();
         if let Some(found) = id.and_then(|id| self.found.get(&id)) {
             if self.plain == Some(true) {
-                return *found;
+                return Some(*found);
             }
             self.again = true;
         }
@@ -382,7 +388,7 @@ impl Probes {
         if let Some(id) = id.filter(|_| self.plain != Some(false)) {
             self.found.insert(id, texty);
         }
-        texty
+        Some(texty)
     }
 
     /// Ask the document whether it sets a transfer function, once an image
@@ -814,15 +820,16 @@ impl<'a> Device<'a> for Collector {
         };
         let texty = match &i {
             hayro_interpret::Image::Raster(ri) => {
-                // Every image is probed, however small: an OCR engine reads
-                // the texty ones the router leaves to it, a capture an inch
-                // high among them ([`crate::route::ocr_regions`]). An image
-                // drawn again is decoded once ([`Probes`]).
+                // Every image is probed when any is, however small: an OCR
+                // engine reads the texty ones the router leaves to it, a
+                // capture an inch high among them
+                // ([`crate::route::ocr_regions`]). An image drawn again is
+                // decoded once ([`Probes`]).
                 self.probes.texty(ri)
             }
             // Stencils are 1-bit masks — the format scanned text and line art
             // arrive in. Treat as text-bearing.
-            hayro_interpret::Image::Stencil(_) => true,
+            hayro_interpret::Image::Stencil(_) => Some(true),
         };
         // A clip that cuts the image shows part of it: another picture than
         // the whole, which a key does not tell apart (a sprite sheet drawn
@@ -2383,7 +2390,7 @@ mod tests {
                 x1: x0 + side,
                 y1: y0 + side,
             },
-            texty: true,
+            texty: Some(true),
             ppi: None,
             bitonal: false,
             grid: (40, 40),
@@ -2914,14 +2921,15 @@ mod probe_tests {
     fn an_image_is_probed_unless_no_router_will_read_it() {
         let probed = extract_bytes(striped_page()).expect("pdf");
         assert_eq!(probed.pages[0].images.len(), 1);
-        assert!(
+        assert_eq!(
             probed.pages[0].images[0].texty,
+            Some(true),
             "stripes read as text structure"
         );
         let mut options = ExtractOptions::default();
         options.probe_images = false;
         let unprobed = extract_bytes_with(striped_page(), &options).expect("pdf");
         assert_eq!(unprobed.pages[0].images.len(), 1);
-        assert!(!unprobed.pages[0].images[0].texty);
+        assert_eq!(unprobed.pages[0].images[0].texty, None);
     }
 }
