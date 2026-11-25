@@ -186,9 +186,11 @@ adding signals:
   column. A guide's `FCC` heading, partway down a column near the top of the
   last page of each language, repeats on three of nine pages under the end of
   the section before it; on most of its pages, body text (a line on too few
-  pages to run, set from the same left edge) stands above it, so it is a
-  heading. A page's banner title over a running label set off to its right
-  is no column the label sits in.
+  pages to run, set from the same left edge, a line of a paragraph) stands
+  above it, so it is a heading. A page's banner title over a running label
+  set off to its right is no column the label sits in, nor is a header
+  block's own line over the next (`INSTALLATION INSTRUCTIONS` over
+  `INSTRUCTIONS D’INSTALLATION`), each a label standing alone.
 - **A short form of a title that varies.** A spec sheet titles some pages
   `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS` and others `DISHWASHER`.
   Taken as a running line, the short form was cut out of the long ones and

@@ -395,7 +395,8 @@ fn detect_all(
 /// Whether body text stands between line `li` of page `pi` and the edge of
 /// the page it is nearer, in the line's column: a line on too few pages to
 /// run (fewer than `needed`), above a line in the top half, below one in
-/// the foot, set from the same left edge. A guide printed in two versions
+/// the foot, set from the same left edge, a line of a paragraph there (see
+/// [`in_paragraph`]). A guide printed in two versions
 /// of a language repeats its body on two pages, and it is the body still.
 /// A page's banner title over a running label set off to its right
 /// (`Federal Reserve Bank of Philadelphia` over `The Beige Book`) is no
@@ -427,8 +428,32 @@ fn beyond_the_body(
                 o.bbox.y0 >= line.bbox.y1
             }
             && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
+            && in_paragraph(lines, lj, li)
     })
 }
+
+/// Whether line `lj` is a line of a paragraph: another line, not `skip`,
+/// set from its left edge a line's leading above or below it. A header
+/// block's lines stand alone, each a label of its own (`INSTALLATION
+/// INSTRUCTIONS` over its translation), and are no body a heading follows.
+fn in_paragraph(lines: &[Line], lj: usize, skip: usize) -> bool {
+    let o = &lines[lj];
+    let fs = f64::from(o.font_size.max(1.0));
+    lines.iter().enumerate().any(|(k, p)| {
+        k != lj
+            && k != skip
+            && p.rotation_bucket == 0
+            && !p.text.trim().is_empty()
+            && (p.bbox.x0 - o.bbox.x0).abs() <= fs
+            && {
+                let d = (p.bbox.y0 - o.bbox.y0).abs();
+                d > fs * 0.5 && d <= fs * LEADING_LIMIT
+            }
+    })
+}
+
+/// How far apart, in font sizes, two lines of one paragraph sit at most.
+const LEADING_LIMIT: f64 = 1.6;
 
 /// The words `longer` sets after or before `short`, where it opens or
 /// closes with it.
@@ -1138,10 +1163,8 @@ mod tests {
             ];
             if i % 3 == 2 {
                 let section = ["one", "two", "three"][i / 3];
-                ls.push(line(
-                    &format!("the end of section {section} goes on here"),
-                    60.0,
-                ));
+                ls.push(line(&format!("the end of section {section} goes"), 48.0));
+                ls.push(line(&format!("on and ends here, {section}"), 60.0));
                 ls.push(line("FCC", 100.0));
             }
             ls
@@ -1149,7 +1172,22 @@ mod tests {
         let marks = detect(&pages);
         assert_eq!(marks[2].get(&0), Some(&Furniture::Header));
         for i in [2, 5, 8] {
-            assert_eq!(marks[i].get(&3), None, "page {i}");
+            assert_eq!(marks[i].get(&4), None, "page {i}");
+        }
+        // A header block's own lines over it are no paragraph: each is a
+        // label of its own, and the block runs.
+        let pages = doc(9, |i| {
+            let mut ls = vec![line(&format!("Body text of page {i}"), 400.0)];
+            if i % 3 == 0 {
+                let title = ["INSTALLATION", "INSTALACIÓN", "INSTALLATION FR"][i / 3];
+                ls.push(line(title, 60.0));
+                ls.push(line("INSTRUCTIONS D’INSTALLATION", 100.0));
+            }
+            ls
+        });
+        let marks = detect(&pages);
+        for i in [0, 3, 6] {
+            assert_eq!(marks[i].get(&2), Some(&Furniture::Header), "page {i}");
         }
     }
 
