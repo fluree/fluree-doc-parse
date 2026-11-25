@@ -1014,10 +1014,10 @@ fn convert_bytes(
     let ol = outline::extract(&raw);
     let opts = cfg.options_for(stem);
     // Images are probed for the router, which runs for escalation, for the
-    // anchors and sidecars analysis routes for, and for the OCR word
-    // readings, asked for up to the page's routed regions; and for an OCR
-    // engine, which reads the texty images too small to route. A
-    // deterministic parse has no use for the decode.
+    // anchors and sidecars analysis routes for, and for OCR words, which go
+    // only where it sends a reader; and for an OCR engine, which reads the
+    // texty images too small to route. A deterministic parse has no use for
+    // the decode.
     let mut eopts = ExtractOptions::default();
     eopts.probe_images = cfg.escalate
         || cfg.ocr_words.is_some()
