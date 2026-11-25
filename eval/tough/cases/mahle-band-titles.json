@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "mahle-ap-90-12.pdf",
+    "url": "https://www.mahle-aftermarket.com/media/local-media-north-america/pdfs-&-thumbnails/catalogs-and-literature/all-products/ap-90-12-web-final.pdf",
+    "sha256": "c236ae54209953878e44be60cff3714bda2614b589cec92e429029842f8dfc99",
+    "about": "MAHLE engine kit catalogue (AP-90-12). Each page lists parts under one column header, in sections that a band names across the list (`CYLINDER BLOCK PARTS`, `ENGINE BEARINGS`, `FILTERS`)."
+  },
+  "notes": [
+    "2026-11-24 (#109): where a band opened a table the page cut at it, the table, read from its text, took the band for its header, naming every column under it."
+  ],
+  "checks": [
+    {
+      "id": "engine-bearings-names-no-column",
+      "found": "2026-11-24",
+      "issue": "`ENGINE BEARINGS` was the column header of the rod bearing rows under it.",
+      "no_column_header": "ENGINE BEARINGS"
+    },
+    {
+      "id": "filters-is-the-title",
+      "found": "2026-11-24",
+      "issue": "`FILTERS` was the column header of the filter rows under it. (`WIX FILTERS` is a real column name in the interchange tables.)",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "FILTERS",
+        "evidence": "table-title"
+      }
+    }
+  ]
+}
