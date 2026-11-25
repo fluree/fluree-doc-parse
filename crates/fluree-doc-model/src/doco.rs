@@ -2267,7 +2267,11 @@ mod tests {
         assert_eq!(table(true, ["Specifications", "Value", ""]), ["Value"]);
         // Across one stacked header's columns, its attributes, a value
         // describes the group: written once, named by it.
-        let grouped = ["Product", "Description / Screen size", "Description / Power supply"];
+        let grouped = [
+            "Product",
+            "Description / Screen size",
+            "Description / Power supply",
+        ];
         assert_eq!(table(true, grouped), ["Description"]);
     }
 
