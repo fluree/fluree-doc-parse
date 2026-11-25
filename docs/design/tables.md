@@ -1128,7 +1128,11 @@ groups of rows, gives one grid of bands, and alignment reads only the rows
 under one group, leaving the header and the other group as text. Of the two
 readings, the one whose cells hold more of the page's text stands: both read
 the same table, and the better leaves less of it out. On such a page only the
-seed is read from its text; runs of figures are left to alignment.
+seed is read from its text; runs of figures are left to alignment. A seed
+whose last band holds the header alone, a top rule and the rule under the
+header with the table run on past the page's foot and no rule under its rows,
+is read on below that rule: alignment reads such a table in pieces, broken at
+each group label in its stub (`Education`, `Occupation` over their rows).
 
 A table ruled under its rows with horizontals alone, with no vertical and
 its rows not lumped, standing beside lines of the page's text on half its

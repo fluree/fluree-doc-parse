@@ -2854,11 +2854,38 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                 && region.y0 >= b.y0 - 1.0
                                 && region.y1 <= b.y1 + 1.0
                         });
-                        let got = if in_stack {
+                        let mut got = if in_stack {
                             crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index)
                         } else {
                             crate::textgrid::read(&lines, &p.rules, region, p.index)
                         };
+                        // Where alignment was preferred, a seed whose last
+                        // region holds the header alone (a top rule and the
+                        // rule under the header, the table run on past the
+                        // page's foot with no rule under it) is read on below
+                        // that rule: its rows, and its group labels among
+                        // them, that alignment reads in pieces. Which reading
+                        // stands is settled below, as for any seed.
+                        if got.is_empty()
+                            && seeded_anyway
+                            && (region.y1 - grids[i].bbox.y1).abs() <= 3.0
+                        {
+                            let below = crate::geom::BBox {
+                                y1: p.height,
+                                ..region
+                            };
+                            got = crate::textgrid::read(&lines, &p.rules, below, p.index);
+                            if debug {
+                                eprintln!(
+                                    "TEXTGRID p{} seed read on below {:?} -> {:?}",
+                                    p.index,
+                                    below,
+                                    got.iter()
+                                        .map(|g| (g.rows(), g.cols(), g.bbox))
+                                        .collect::<Vec<_>>()
+                                );
+                            }
+                        }
                         // A reading across the columns a stack's rules draw
                         // is no table: neither it nor the seed stands, and
                         // its text stays text.
