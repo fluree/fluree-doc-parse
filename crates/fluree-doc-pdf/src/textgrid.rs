@@ -757,6 +757,46 @@ fn has_figures(cols: &[(f64, f64)], l: &Line) -> bool {
 /// The tables in the lines of `region`: each run of rows carrying values
 /// in the region's columns, with the header over it.
 pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid> {
+    read_beside(all, rules, region, page, false)
+}
+
+/// Whether the bands between a stack's row lines (at `ys`, down the page)
+/// hold text, three in four of them or more: a table ruled under its rows
+/// sets a row in every band, a blank row or two aside, where a chart's
+/// gridlines stand over its bars and a drawing's lines over nothing.
+pub fn bands_hold_text(all: &[Line], region: BBox, ys: &[f64]) -> bool {
+    let bands = ys.len().saturating_sub(1);
+    let held = ys
+        .windows(2)
+        .filter(|w| {
+            all.iter().any(|l| {
+                l.base > w[0]
+                    && l.base < w[1]
+                    && l.chunks
+                        .iter()
+                        .any(|c| c.x0 >= region.x0 - 1.0 && c.x1 <= region.x1 + 1.0)
+            })
+        })
+        .count();
+    bands > 0 && held * 4 >= bands * 3
+}
+
+/// [`read`], for a region a stack of unbroken row lines rules: its labels
+/// are never text that stands under another table's rules, rules that cover
+/// it and stop short of the region. A table set beside this one in the
+/// page's next column draws its row lines across its own width, and its last
+/// column is no label column of this one.
+pub fn read_ruled_stack(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid> {
+    read_beside(all, rules, region, page, true)
+}
+
+fn read_beside(
+    all: &[Line],
+    rules: &[Rule],
+    region: BBox,
+    page: usize,
+    own_rules: bool,
+) -> Vec<Grid> {
     let fs = all
         .iter()
         .filter(|l| l.base >= region.y0 && l.y0 <= region.y1)
@@ -783,6 +823,19 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                 && r.bbox.y1 - r.bbox.y0 >= 2.0 * (region.y1 - region.y0)
         })
     };
+    // In a stack's region, text under another table's rules is that
+    // table's ([`read_ruled_stack`]).
+    let ruled_elsewhere = |c: &Chunk| {
+        own_rules
+            && rules.iter().any(|r| {
+                r.orientation == crate::rule::Orientation::Horizontal
+                    && r.bbox.x0 <= c.x0
+                    && r.bbox.x1 >= c.x1
+                    && r.bbox.x1 < region.x0 - fs * 0.5
+                    && r.bbox.y0 >= region.y0 - fs
+                    && r.bbox.y0 <= region.y1 + fs
+            })
+    };
     let mut lefts: Vec<f64> = all
         .iter()
         .filter(|l| in_band(l))
@@ -791,6 +844,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                 .iter()
                 .filter(|c| c.x1 <= region.x0 + fs && c.x0 < region.x0 - fs)
                 .filter(|c| !divided(l, c, region.x0))
+                .filter(|c| !ruled_elsewhere(c))
                 .max_by(|a, b| a.x1.total_cmp(&b.x1))
                 // A statement sets its labels at the margin and its figures
                 // at the far side of the page, with or without leaders.
@@ -831,6 +885,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                         .iter()
                         .filter(|c| c.x1 <= x0 + 0.5 && x0 - c.x1 < fs * 8.0)
                         .filter(|c| !divided(l, c, region.x0))
+                        .filter(|c| !ruled_elsewhere(c))
                         .max_by(|a, b| a.x1.total_cmp(&b.x1))
                         .map(|c| c.x0)
                 })
@@ -2621,6 +2676,79 @@ mod tests {
             "without the rule the labels are taken in: {open:?}"
         );
         assert!(parted.iter().all(|g| g.bbox.x0 > 150.0), "got {parted:?}");
+    }
+
+    #[test]
+    fn a_tables_row_lines_hold_its_rows_and_gridlines_do_not() {
+        // Five lines 15pt apart: a row of text between each pair.
+        let ys = [40.0, 55.0, 70.0, 85.0, 100.0];
+        let region = BBox {
+            x0: 15.0,
+            y0: 40.0,
+            x1: 260.0,
+            y1: 100.0,
+        };
+        let mut gl = Vec::new();
+        for (i, w) in ys.windows(2).enumerate() {
+            gl.extend(set(&format!("Row {i}"), 20.0, w[1] - 4.0));
+            gl.extend(set(&format!("{}.5", 10 + i), 200.0, w[1] - 4.0));
+        }
+        assert!(bands_hold_text(&lines(&gl), region, &ys));
+        // One blank band in four still holds the table's rows.
+        let three: Vec<Glyph> = gl.iter().filter(|g| g.origin.1 < 90.0).cloned().collect();
+        assert!(bands_hold_text(&lines(&three), region, &ys));
+        // A chart's gridlines with a legend set in one band, and its axis
+        // labels at the lines' left, outside them.
+        let mut chart = set("Projections 18", 120.0, 51.0);
+        for &y in &ys {
+            chart.extend(set(&format!("{}", y as i32), 0.0, y + 3.0));
+        }
+        assert!(!bands_hold_text(&lines(&chart), region, &ys));
+    }
+
+    #[test]
+    fn a_stacks_labels_are_not_under_the_next_tables_rules() {
+        // Two tables side by side, each ruled under its rows across its own
+        // width: codes and their names on the left, figures on the right.
+        let rule = |x0: f64, x1: f64, y: f64| Rule {
+            bbox: BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let mut gl = Vec::new();
+        let mut left_rules = Vec::new();
+        let mut right_rules = Vec::new();
+        for (i, y) in [50.0, 64.0, 78.0, 92.0, 106.0].into_iter().enumerate() {
+            gl.extend(set(&format!("{}", 10 + i), 20.0, y));
+            gl.extend(set(&format!("Item {i}"), 190.0, y));
+            gl.extend(set(&format!("{}.5", 30 + i), 310.0, y));
+            gl.extend(set(&format!("{}.0", 60 + i), 380.0, y));
+            left_rules.push(rule(15.0, 250.0, y + 3.0));
+            right_rules.push(rule(295.0, 455.0, y + 3.0));
+        }
+        let ls = lines(&gl);
+        let region = BBox {
+            x0: 295.0,
+            y0: 40.0,
+            x1: 455.0,
+            y1: 110.0,
+        };
+        let both: Vec<Rule> = left_rules.iter().chain(&right_rules).copied().collect();
+        // Read as any region is, the left table's names are taken in as
+        // the labels of the right one's figures.
+        let any = read(&ls, &both, region, 0);
+        assert!(any.iter().any(|g| g.bbox.x0 < 250.0), "got {any:?}");
+        // Read as a stack, they stand under the left table's own rules.
+        let stack = read_ruled_stack(&ls, &both, region, 0);
+        assert!(stack.iter().all(|g| g.bbox.x0 > 290.0), "got {stack:?}");
+        // Labels under no other table's rules are still taken in.
+        let open = read_ruled_stack(&ls, &right_rules, region, 0);
+        assert!(open.iter().any(|g| g.bbox.x0 < 250.0), "got {open:?}");
     }
 
     /// A table of three groups, a size and its colour set once over three

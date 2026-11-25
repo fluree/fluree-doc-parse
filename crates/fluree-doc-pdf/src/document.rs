@@ -2642,6 +2642,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
                 let stacks = table::stack_columns(&p.rules, &p.fills);
+                let unbroken = table::unbroken_stacks(&p.rules);
                 let mut withheld: Vec<usize> = Vec::new();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
                     let beside =
@@ -2657,7 +2658,19 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         })
                         .collect();
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
-                        let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        // A seed drawn from some of a stack's own lines reads
+                        // as the stack does.
+                        let in_stack = unbroken.iter().any(|(b, _)| {
+                            region.x0 >= b.x0 - 1.0
+                                && region.x1 <= b.x1 + 1.0
+                                && region.y0 >= b.y0 - 1.0
+                                && region.y1 <= b.y1 + 1.0
+                        });
+                        let got = if in_stack {
+                            crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index)
+                        } else {
+                            crate::textgrid::read(&lines, &p.rules, region, p.index)
+                        };
                         // A reading across the columns a stack's rules draw
                         // is no table: neither it nor the seed stands, and
                         // its text stays text.
@@ -2691,6 +2704,58 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         }
                         read.extend(got);
                     }
+                }
+                // Row lines drawn unbroken across one stretch, four or more
+                // at an even pitch, beside another such stack: two tables
+                // ruled with horizontals alone, set side by side in a page's
+                // columns. Their lines interleave or fall level, and the
+                // page-wide reading takes neither or both as one. Each is
+                // read from its text, where all of these hold:
+                // - no grid already holds most of it: a table read another
+                //   way keeps that reading;
+                // - its bands hold text ([`crate::textgrid::bands_hold_text`]):
+                //   a chart's gridlines stand over bars, a drawing's over
+                //   nothing;
+                // - the reading stands within its lines: a stack narrower
+                //   than the table it rules is one column's lines in a wider
+                //   table. A twentieth of its width is left for a header
+                //   label hung past them.
+                let stands_beside = |r: &crate::geom::BBox| {
+                    unbroken.iter().map(|(o, _)| o).any(|o| {
+                        let shared = o.y1.min(r.y1) - o.y0.max(r.y0);
+                        (o.x1 <= r.x0 || o.x0 >= r.x1)
+                            && shared > 0.0
+                            && shared >= 0.5 * (o.y1 - o.y0).min(r.y1 - r.y0)
+                    })
+                };
+                for (region, ys) in &unbroken {
+                    let region = *region;
+                    let area = ((region.x1 - region.x0) * (region.y1 - region.y0)).max(1.0);
+                    if grids
+                        .iter()
+                        .any(|g| overlap_area(&g.bbox, &region) >= 0.5 * area)
+                        || !stands_beside(&region)
+                        || !crate::textgrid::bands_hold_text(&lines, region, ys)
+                    {
+                        continue;
+                    }
+                    let mut got =
+                        crate::textgrid::read_ruled_stack(&lines, &p.rules, region, p.index);
+                    let slack = 0.05 * (region.x1 - region.x0);
+                    got.retain(|g| {
+                        g.bbox.x0 >= region.x0 - slack && g.bbox.x1 <= region.x1 + slack
+                    });
+                    if debug {
+                        eprintln!(
+                            "TEXTGRID p{} unbroken stack {:?} -> {:?}",
+                            p.index,
+                            region,
+                            got.iter()
+                                .map(|g| (g.rows(), g.cols(), g.bbox))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    read.extend(got);
                 }
                 // Runs of figures no grid holds: a statement ruled by
                 // nothing but the underlines under its figures. Not where

@@ -137,6 +137,33 @@ wrong of every cell it reads so. Neither it nor the stack stands, and the
 text is read as text. The breaks are the stack's own: a grid ruled some other
 way says less of where its columns are drawn.
 
+### Tables side by side, ruled with whole lines
+
+Two tables set side by side in a page's two columns, each ruled under its rows
+with lines drawn whole across its own width, leave the page-wide reading
+nothing to stand on. Their lines interleave down the page a few points apart,
+or fall level and read as one line across both, and no line breaks where a
+column does. Each stack of such lines is read from its text where all of these
+hold:
+
+- it has four lines or more, one under the next at an even pitch, each drawn
+  unbroken across the same stretch. A line's pieces end only at its two ends;
+  two pieces with a gap between them are two lines, one over each table;
+- another such stack stands beside it, sharing half the height of the shorter;
+- no grid already holds most of it;
+- three bands in four or more between its lines hold text. A table ruled under
+  its rows sets a row in every band, a blank row aside; a chart's gridlines
+  stand over its bars, a drawing's lines over nothing;
+- the reading stands within its lines, give or take a twentieth of their
+  width for a header label hung past them. A stack narrower than the table it
+  rules is one column's lines in a wider table.
+
+Labels left of the stack are not taken in from under the other table's rules:
+a horizontal over the text that ends short of the stack, within its height.
+Read as any region is, the left table's last column would be the right one's
+labels. A grid with no verticals inside such a stack, read again from its
+text, keeps the same guard.
+
 ## Each box is read on its own
 
 Read all at once, a page's rules make one grid before it is cut into tables.

@@ -4833,6 +4833,103 @@ fn rules_its_rows(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
     held >= 2
 }
 
+/// Row lines drawn unbroken, each across the same stretch of the page, four
+/// or more one under the next at an even pitch: a table ruled with
+/// horizontals only, between every row or most, its columns said by its text
+/// alone. Four lines bound three rows, the least a grid is taken for a table
+/// with ([`reads_as_table`]). Two such tables set side by side in a page's two
+/// columns interleave their lines down the page, and the page-wide reading
+/// finds neither. Each stack's extent, from its first line to its last, and
+/// its lines' heights.
+pub(crate) fn unbroken_stacks(rules: &[Rule]) -> Vec<(BBox, Vec<f64>)> {
+    let mut hs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    hs.sort_by(|a, b| a.axis_pos().total_cmp(&b.axis_pos()));
+    // The pieces drawn at each height, grouped as [`cluster`] groups them.
+    let mut levels: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+    for r in hs {
+        match levels.last_mut() {
+            Some((axis, pieces)) if (*axis - r.axis_pos()).abs() <= AXIS_TOLERANCE => {
+                pieces.push((r.bbox.x0, r.bbox.x1))
+            }
+            _ => levels.push((r.axis_pos(), vec![(r.bbox.x0, r.bbox.x1)])),
+        }
+    }
+    // Each level's stretches: pieces that touch or overlap, a stretch apart
+    // from the next where a gap parts them. Two tables side by side whose
+    // row lines fall level draw two lines there, one across each. A line is
+    // unbroken when its pieces end only at its two ends.
+    let mut whole: Vec<(f64, f64, f64)> = Vec::new();
+    for (axis, mut pieces) in levels {
+        pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut runs: Vec<(f64, f64, Vec<(f64, f64)>)> = Vec::new();
+        for p in pieces {
+            match runs.last_mut() {
+                Some((_, hi, run)) if p.0 <= *hi + EDGE_TOLERANCE => {
+                    *hi = hi.max(p.1);
+                    run.push(p);
+                }
+                _ => runs.push((p.0, p.1, vec![p])),
+            }
+        }
+        for (lo, hi, run) in runs {
+            let at_ends =
+                |e: f64| (e - lo).abs() <= EDGE_TOLERANCE || (e - hi).abs() <= EDGE_TOLERANCE;
+            if run.iter().all(|&(a, b)| at_ends(a) && at_ends(b)) {
+                whole.push((axis, lo, hi));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut used = vec![false; whole.len()];
+    for i in 0..whole.len() {
+        if used[i] {
+            continue;
+        }
+        let (_, lo, hi) = whole[i];
+        let same: Vec<usize> = (i..whole.len())
+            .filter(|&j| {
+                !used[j]
+                    && (whole[j].1 - lo).abs() <= EDGE_TOLERANCE
+                    && (whole[j].2 - hi).abs() <= EDGE_TOLERANCE
+            })
+            .collect();
+        for &j in &same {
+            used[j] = true;
+        }
+        let mut ys: Vec<f64> = same.iter().map(|&j| whole[j].0).collect();
+        ys.sort_by(f64::total_cmp);
+        if ys.len() < 4 {
+            continue;
+        }
+        let mut gaps: Vec<f64> = ys.windows(2).map(|w| w[1] - w[0]).collect();
+        gaps.sort_by(f64::total_cmp);
+        let pitch = gaps[gaps.len() / 2];
+        // Runs at the stack's pitch: a gap past three rows parts two tables
+        // of one width.
+        let mut start = 0;
+        for k in 1..=ys.len() {
+            if k == ys.len() || ys[k] - ys[k - 1] > pitch * TABLE_SPLIT_GAP {
+                if k - start >= 4 {
+                    out.push((
+                        BBox {
+                            x0: lo,
+                            y0: ys[start],
+                            x1: hi,
+                            y1: ys[k - 1],
+                        },
+                        ys[start..k].to_vec(),
+                    ));
+                }
+                start = k;
+            }
+        }
+    }
+    out
+}
+
 /// Each stack of row lines ruled alike ([`ruled_stacks`]): its extent, and
 /// the places its lines break, the columns' edges as drawn.
 pub(crate) fn stack_columns(rules: &[Rule], fills: &[crate::rule::Fill]) -> Vec<(BBox, Vec<f64>)> {
@@ -8228,6 +8325,48 @@ mod header_tests {
         // height: no band.
         let bars = [fill(20.0, 40.0, 80.0, 72.0), fill(120.0, 50.0, 180.0, 72.0)];
         assert!(ruled_stacks(&underlines, &bars).is_empty());
+    }
+
+    #[test]
+    fn row_lines_drawn_whole_down_two_columns_are_two_stacks() {
+        // Two tables side by side, each ruled under every row with lines
+        // drawn whole across its own width, at pitches of their own: their
+        // lines interleave down the page, and two fall level.
+        let left: Vec<f64> = (0..6).map(|i| 100.0 + 14.0 * i as f64).collect();
+        let right: Vec<f64> = (0..5).map(|i| 107.0 + 17.0 * i as f64).collect();
+        assert!(left
+            .iter()
+            .any(|a| right.iter().any(|b| (a - b).abs() < 2.0)));
+        let mut rules: Vec<Rule> = left.iter().map(|&y| h(0.0, 250.0, y)).collect();
+        rules.extend(right.iter().map(|&y| h(300.0, 550.0, y)));
+        let stacks = unbroken_stacks(&rules);
+        assert_eq!(stacks.len(), 2, "got {stacks:?}");
+        let near = |a: f64, b: f64| (a - b).abs() < 1.0;
+        assert!(stacks.iter().any(|(s, ys)| near(s.x0, 0.0)
+            && near(s.x1, 250.0)
+            && near(s.y0, 100.0)
+            && near(s.y1, 170.0)
+            && ys.len() == 6));
+        assert!(stacks.iter().any(|(s, ys)| near(s.x0, 300.0)
+            && near(s.x1, 550.0)
+            && near(s.y0, 107.0)
+            && near(s.y1, 175.0)
+            && ys.len() == 5));
+        // Three lines are no stack.
+        assert!(unbroken_stacks(&rules[..3]).is_empty());
+        // Lines drawn a column at a time, their pieces meeting end to end,
+        // say columns: those are ruled stacks', not these.
+        let broken: Vec<Rule> = left
+            .iter()
+            .flat_map(|&y| [h(0.0, 100.0, y), h(100.0, 250.0, y)])
+            .collect();
+        assert!(unbroken_stacks(&broken).is_empty());
+        // A gap of many rows parts two tables of one width.
+        let apart: Vec<Rule> = [100.0, 114.0, 128.0, 142.0, 300.0, 314.0, 328.0, 342.0]
+            .iter()
+            .map(|&y| h(0.0, 250.0, y))
+            .collect();
+        assert_eq!(unbroken_stacks(&apart).len(), 2);
     }
 
     #[test]
