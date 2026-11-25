@@ -405,6 +405,17 @@ body text, a box laid out around paragraphs, a drawing's labels.
   codes starts each line afresh. Made on the first label column as well, the
   same test took statements' wrapped labels for prose and cost their row
   headers, so it stands on the further columns only.
+- **A label set close to its figure.** A label long enough to come within a
+  cell gap of its figure reads as one chunk with it, which no column holds,
+  and the table's rows break there. Such a chunk is cut where the figure
+  starts across a gutter: at the end of its line, where the figure is the
+  row's value (`montmorillonite/smectite 100`); or further in, where the cut
+  figure fills a column the rest of its line leaves empty (`LOC440055 0.721`
+  beside the row's other values). The second only into a column the table's
+  rows fill, on three lines at least and half as many as its fullest
+  column: a receipt sets its amounts where each line's text ends, making
+  columns of a line or two, and a label's own figure (`Antihistamine
+  tablets (30)`) would be cut into one of them.
 
 ## Tables drawn with characters
 

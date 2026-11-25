@@ -647,22 +647,41 @@ fn fits(cols: &[(f64, f64)], l: &Line) -> bool {
 /// starts inside it. A label long enough to bring its figure within a cell
 /// gap reads as one chunk with it (`montmorillonite/smectite 100`), which no
 /// column holds, and the table's rows broke at it. Only a figure ending the
-/// line is cut off: a banner's words across the gutters it spans stay one
-/// label. A cut is kept only where every piece then sits in one column.
-fn split_at_gutters(cols: &[(f64, f64)], l: &Line) -> Line {
+/// line is cut off, or one filling a column its line leaves empty: a
+/// banner's words across the gutters it spans stay one label. A cut is kept
+/// only where every piece then sits in one column. `held` counts the
+/// region's lines with a chunk in each column.
+fn split_at_gutters(cols: &[(f64, f64)], held: &[usize], l: &Line) -> Line {
     let mut chunks: Vec<Chunk> = Vec::new();
     for (i, c) in l.chunks.iter().enumerate() {
-        // Only the line's last chunk: its figure is then the row's value. A
-        // label with its row's value set after it keeps a figure of its own
-        // (`Antihistamine tablets (30) | 30.80`), however wide a monospaced
-        // word space.
-        // A run of prose ending in a figure (a footnote under the table) is
-        // no label and its value; cut, it would fit the columns as a row.
-        if covered(cols, c).len() <= 1
-            || c.words.len() < 2
-            || c.words.len() > MAX_CUT_WORDS
-            || i + 1 < l.chunks.len()
-        {
+        // The line's last chunk: its figure is then the row's value. A run of
+        // prose ending in a figure (a footnote under the table) is no label
+        // and its value; cut, it would fit the columns as a row.
+        // Or a chunk further in whose cut piece would fill a column the rest
+        // of its line leaves empty: a label set close to its first figure
+        // (`LOC440055 0.721`), the row's other values in the columns after.
+        // A label with its row's value set after it keeps a figure of its own
+        // (`Antihistamine tablets (30) | 30.80`): the value fills the column.
+        // Only a column the table's rows fill, three lines at least and half
+        // as many as its fullest column (wrapped lines in other columns
+        // aside): a receipt's amounts, set where each line's text ends, make
+        // columns of a line or two, and a label's own figure (`Antihistamine
+        // tablets (30)`) falls in one of them.
+        let fullest = held.iter().copied().max().unwrap_or(0);
+        let fills_empty = |piece: &Chunk| {
+            column_of(cols, piece).is_some_and(|k| {
+                let filled = held.get(k).copied().unwrap_or(0);
+                filled >= 3
+                    && filled * 2 >= fullest
+                    && !l
+                        .chunks
+                        .iter()
+                        .enumerate()
+                        .any(|(j, d)| j != i && covered(cols, d).contains(&k))
+            })
+        };
+        let last = i + 1 == l.chunks.len();
+        if covered(cols, c).len() <= 1 || c.words.len() < 2 || c.words.len() > MAX_CUT_WORDS {
             chunks.push(c.clone());
             continue;
         }
@@ -707,7 +726,10 @@ fn split_at_gutters(cols: &[(f64, f64)], l: &Line) -> Line {
                 words: ws.into_iter().cloned().collect(),
             })
             .collect();
-        if cut.len() > 1 && cut.iter().all(|p| covered(cols, p).len() <= 1) {
+        if cut.len() > 1
+            && cut.iter().all(|p| covered(cols, p).len() <= 1)
+            && (last || cut[1..].iter().all(&fills_empty))
+        {
             chunks.extend(cut);
         } else {
             chunks.push(c.clone());
@@ -1012,9 +1034,18 @@ fn read_beside(
     if cols0.len() < 2 {
         return Vec::new();
     }
+    // How many of the region's lines set a chunk in each column: a column
+    // the table's rows fill, or one a line or two happen to.
+    let held: Vec<usize> = (0..cols0.len())
+        .map(|k| {
+            band.iter()
+                .filter(|&&i| clipped[i].chunks.iter().any(|c| covered(&cols0, c) == [k]))
+                .count()
+        })
+        .collect();
     let clipped: Vec<Line> = clipped
         .iter()
-        .map(|l| split_at_gutters(&cols0, l))
+        .map(|l| split_at_gutters(&cols0, &held, l))
         .collect();
     let value_row = |l: &Line| fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l);
     // A line ruled off above and below, as the rows around it are, holding
@@ -3381,6 +3412,43 @@ mod tests {
         }
         let grids = read(&lines(&coded), &[], region, 0);
         assert!(grids.iter().any(|g| g.bbox.x0 < 210.0), "{grids:?}");
+    }
+
+    #[test]
+    fn a_label_set_close_to_its_first_figure_keeps_its_row() {
+        // Labels at the margin, three columns of figures. One label, a long
+        // code, runs to a word space from its first figure, and the two read
+        // as one chunk across the gutter; its other figures stand in the
+        // columns after.
+        let mut gl = Vec::new();
+        let rows = [
+            "Alpha", "Beta", "Delta", "Epsilon", "Zeta", "", "Eta", "Theta", "Iota", "Kappa",
+            "Lambda",
+        ];
+        for (i, label) in rows.iter().enumerate() {
+            let y = 50.0 + 12.0 * i as f64;
+            if label.is_empty() {
+                // `15` starts at 100, the first figure column's edge.
+                gl.extend(set("GAMMA4400551 15", 100.0 - 5.5 * 13.0, y));
+            } else {
+                gl.extend(set(label, 12.0, y));
+                gl.extend(set(&format!("{}", 10 + i), 100.0, y));
+            }
+            gl.extend(set(&format!("{}", 30 + i), 140.0, y));
+            gl.extend(set(&format!("{}", 50 + i), 180.0, y));
+        }
+        let region = BBox {
+            x0: 95.0,
+            y0: 40.0,
+            x1: 200.0,
+            y1: 185.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 11, "{grids:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(texts.iter().any(|t| t == "GAMMA4400551"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "15"), "{texts:?}");
     }
 
     /// A table of three groups, a size and its colour set once over three
