@@ -250,10 +250,20 @@ baseline, right against the word it marks, and the text layer joins the two:
 apart from it, `Acrylonitrile a`, by the same rule as an HTML `<sup>`: a
 letter or symbol after a word, or a number after a word too long to be a
 unit, after a quantity (`26TB 1`, not `26TB1`), or after a bracket that
-holds words (`(49 N) 5`, not `(49 N)5`). Raised text that belongs to its
-word stays in it: a unit's power, kept raised (`cm³`, `m/s²`, and the
+holds words (`(49 N) 5`, not `(49 N)5`). So is one after a compound or a
+code joined by hyphens (`3-way 1`, `MACL-153M-XX 2,3`), and after a bracket
+whose slash parts names rather than terms (`(512e/4Kn) 1,2`, `(mm/in, max) 4`).
+A raised number set before a word, after a space or at a line's head, is a
+note's number before its note or the name it is on, and is read apart from
+it the same way (`4 M17 series`, not `4M17 series`). Raised text that belongs
+to its word stays in it: a unit's power, kept raised (`cm³`, `m/s²`, and the
 Spanish square foot `PIES²`), an ordinal's ending (`1st`) and a formula's
 index or power (`ρwLv²`, `Vol(∂Ω)ⁿ`, `(a+b)²`).
+
+A font may draw its own superior figures instead: set at the text's size and
+on its baseline, but drawn small and high. They are read as raised marks by
+their ink, which stands clear of the baseline and short of a figure's height,
+so `Lengths` and its superior `7` read `Lengths 7`, not `Lengths7`.
 
 After a number, the same marks matter more, because the text layer turns
 them into another number. A note's letters stand apart from the value:
