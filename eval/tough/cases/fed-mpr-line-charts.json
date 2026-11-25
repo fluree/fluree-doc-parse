@@ -7,7 +7,7 @@
   },
   "notes": [
     "#338: line charts drawn in strokes alone were found as no drawing; their titles, legends and tick values were the page's paragraphs and their scales a table.",
-    "Open: the stacked bar chart's legend (`Student loans`) is still the page's text; bars are not traces."
+    "#338: the stacked bar chart, its bars filled and standing on and hanging from one base, was found as no drawing: its legend was the page's paragraphs."
   ],
   "checks": [
     {
@@ -41,8 +41,7 @@
     {
       "id": "bar-legend-is-the-charts",
       "found": "2026-11-25",
-      "status": "open",
-      "issue": "The stacked bar chart's legend `Student loans` is a paragraph.",
+      "issue": "#338: the stacked bar chart's legend `Student loans` was a paragraph: bars are fills, not traces, and the column's charts were one cluster of fills.",
       "element": {
         "type": "doco:Figure",
         "text": "Student loans"
