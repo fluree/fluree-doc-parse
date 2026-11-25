@@ -647,8 +647,22 @@ pub fn assemble_in_measure(
         .iter()
         .map(|l| markers.iter().any(|m| marker_beside(m, l)))
         .collect();
+    // The note each line opens, a raised number in it or pulled out beside
+    // it, with where the number stands.
+    let note: Vec<Option<(u32, f64)>> = lines
+        .iter()
+        .map(|l| {
+            raised_number(l).map(|n| (n, l.bbox.x0)).or_else(|| {
+                markers
+                    .iter()
+                    .find(|m| marker_beside(m, l) && note_number(m, l))
+                    .and_then(|m| Some((m.text.trim().parse().ok()?, m.bbox.x0)))
+            })
+        })
+        .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
     let mut marked: Vec<(usize, String)> = Vec::new();
+    let mut start = 0;
     let mark = |i: usize| {
         if ticked[i] {
             Some(CHECKBOX_MARKER.to_string())
@@ -663,6 +677,7 @@ pub fn assemble_in_measure(
             if let Some(m) = mark(i) {
                 marked.push((blocks.len(), m));
             }
+            start = i;
             cur.push(l.clone());
             continue;
         }
@@ -671,6 +686,7 @@ pub fn assemble_in_measure(
         if mark(i).is_none()
             && band[i] == band[i - 1]
             && !set_back(&cur, l)
+            && !counts_on_note(note[start], note[i], l.font_size)
             && (continues(cur.last().unwrap(), l, leading, &edge, !led[i])
                 || runs_on(&cur, l, leading))
         {
@@ -680,6 +696,7 @@ pub fn assemble_in_measure(
             if let Some(m) = mark(i) {
                 marked.push((blocks.len(), m));
             }
+            start = i;
             cur.push(l.clone());
         }
     }
@@ -706,6 +723,7 @@ pub fn assemble_in_measure(
 
     // Attach each marker to the block whose first line it sits nearest, by
     // vertical distance. A bullet belongs to the paragraph it introduces.
+    let mut placed: Vec<(Line, usize, bool)> = Vec::new();
     for m in markers {
         let my = m.bbox.y0;
         // Containment first: a superscript footnote reference sits *inside* the
@@ -728,19 +746,64 @@ pub fn assemble_in_measure(
                 })
                 .map(|(i, _)| i)
         });
-        if let Some(i) = idx {
-            // A list marker stands to the *left* of what it introduces. One
-            // sitting inside the text is an affiliation or footnote reference
-            // annotating a word — an author line with `∗†` set above three
-            // names mid-line read as a marker and turned the whole author
-            // block into a list item. Vertical containment alone cannot tell
-            // them apart.
-            if m.bbox.x1 > blocks[i].bbox.x0 + MARKER_OUTDENT_TOLERANCE {
-                continue;
-            }
-            if blocks[i].marker.is_none() {
-                blocks[i].marker = Some(m.text.clone());
-            }
+        // A list marker stands to the *left* of what it introduces. One
+        // sitting inside the text is an affiliation or footnote reference
+        // annotating a word — an author line with `∗†` set above three
+        // names mid-line read as a marker and turned the whole author
+        // block into a list item. Vertical containment alone cannot tell
+        // them apart.
+        let Some(i) = idx else { continue };
+        let first = &blocks[i].lines[0];
+        if m.bbox.x1 <= blocks[i].bbox.x0 + MARKER_OUTDENT_TOLERANCE {
+            placed.push((m, i, false));
+        } else if note_number(&m, first) && m.bbox.x1 <= first.bbox.x0 + MARKER_OUTDENT_TOLERANCE {
+            // A note's raised number stands left of the line it opens,
+            // however far left a later line of its block starts; it is kept
+            // only as the note's number.
+            placed.push((m, i, true));
+        }
+    }
+    // A footnote's number, raised at the margin before its text, is the
+    // note's: the body's note marks refer to it. It goes back in front of the
+    // text it was pulled from, not into a list, where the notes count: the
+    // block before opens with the number one less, or the one after with the
+    // one more. A chart's tick labels beside the text are raised as often,
+    // and count by tens.
+    let raised: Vec<Option<u32>> = placed
+        .iter()
+        .map(|(m, i, _)| {
+            blocks[*i]
+                .lines
+                .first()
+                .filter(|l| blocks[*i].marker.is_none() && note_number(m, l))
+                .and_then(|_| m.text.trim().parse().ok())
+        })
+        .collect();
+    let mut opens: Vec<Option<u32>> = blocks
+        .iter()
+        .map(|b| b.lines.first().and_then(raised_number))
+        .collect();
+    for ((_, i, _), n) in placed.iter().zip(&raised) {
+        if n.is_some() {
+            opens[*i] = *n;
+        }
+    }
+    let counts = |i: usize, n: u32| {
+        (i > 0 && n > 1 && opens[i - 1] == Some(n - 1)) || opens.get(i + 1) == Some(&Some(n + 1))
+    };
+    for ((m, i, only_note), n) in placed.into_iter().zip(raised) {
+        if n.is_some_and(|n| counts(i, n)) {
+            let b = &mut blocks[i];
+            b.bbox = b.bbox.union(&m.bbox);
+            // Raised, it opens the block as a footnote's mark: no section's
+            // number.
+            let mut m = m;
+            m.opens_with_script = true;
+            b.lines.insert(0, m);
+            continue;
+        }
+        if !only_note && blocks[i].marker.is_none() {
+            blocks[i].marker = Some(m.text.clone());
         }
     }
     blocks
@@ -990,6 +1053,46 @@ fn opens_sentence(l: &Line) -> bool {
         .chars()
         .find(|c| c.is_alphanumeric())
         .is_some_and(|c| c.is_uppercase() || c.is_numeric())
+}
+
+/// Most of the text's size a raised note number is set at.
+const RAISED_RATIO: f64 = 0.85;
+
+/// `m`, a number alone, is raised before `l` as a footnote's number is:
+/// smaller than the text, its top at the text's or above, its foot well
+/// above the text's. A list's number set small sits on the baseline.
+fn note_number(m: &Line, l: &Line) -> bool {
+    let fs = (l.font_size as f64).max(1.0);
+    let t = m.text.trim();
+    !t.is_empty()
+        && t.len() <= 3
+        && t.chars().all(|c| c.is_ascii_digit())
+        && (m.font_size as f64) < fs * RAISED_RATIO
+        && m.bbox.y0 <= l.bbox.y0 + 0.15 * fs
+        && m.bbox.y1 < l.bbox.y1 - 0.15 * fs
+}
+
+/// The number a line opens with when it is raised, a footnote's: its
+/// first glyph a superscript and its first word digits alone.
+fn raised_number(l: &Line) -> Option<u32> {
+    if !l.opens_with_script {
+        return None;
+    }
+    let w = l.text.split_whitespace().next()?;
+    (w.len() <= 3 && w.chars().all(|c| c.is_ascii_digit()))
+        .then(|| w.parse().ok())
+        .flatten()
+}
+
+/// A line opens the footnote after the one the block opens: both raised
+/// numbers at the margin, in the line or pulled out beside it, the line's
+/// one more. A block of notes set at body leading, `7 1 MB/s = …` then `8
+/// Portion of buffer…`, is a note to a number, not one paragraph.
+fn counts_on_note(opens: Option<(u32, f64)>, next: Option<(u32, f64)>, size: f32) -> bool {
+    matches!(
+        (opens, next),
+        (Some((m, x)), Some((n, y))) if n == m + 1 && (y - x).abs() <= 0.5 * (size as f64).max(1.0)
+    )
 }
 
 /// Least shift, in ems, of a line out of an item's hang: the margin
@@ -2594,6 +2697,95 @@ mod tests {
         ];
         let texts: Vec<String> = assemble(&lines, 1.22).iter().map(Block::text).collect();
         assert!(texts.iter().all(|t| !t.starts_with("alien")), "{texts:?}");
+    }
+
+    #[test]
+    fn footnotes_numbered_with_raised_numerals_are_a_note_each() {
+        // A data sheet's notes at body leading, each opening with a raised
+        // numeral at the margin and wrapping under its text.
+        let note = |text: &str, y: f64| {
+            let mut line = l(text, 312.1, y, 5.5);
+            line.opens_with_script = true;
+            line
+        };
+        let lines = vec![
+            note(
+                "7 1 MB/s = 1 million bytes per second. Based on internal",
+                640.1,
+            ),
+            l(
+                "host device, usage conditions and other factors.",
+                318.1,
+                645.9,
+                5.5,
+            ),
+            note(
+                "8 Portion of buffer capacity used for drive firmware.",
+                654.3,
+            ),
+            note("9 Random RW 50/50 4KB QD=4 @40 IOPS.", 662.6),
+            note("10 Based on use of Idle_A.", 670.8),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.5).iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        assert!(texts[3].starts_with("10 Based"), "{texts:?}");
+        // A note's number set apart from its line keeps its place in the
+        // text, and makes no list item, where the notes count: note 1 opens
+        // with its number raised in its line, note 2's was set apart.
+        let raised = |n: &str, y: f64| {
+            let mut m = l(n, 36.1, y, 3.2);
+            m.bbox.x1 = 37.8;
+            m.bbox.y1 = y + 2.3;
+            m
+        };
+        let text = |t: &str, y: f64, x1: f64| {
+            let mut line = l(t, 41.8, y, 5.5);
+            line.bbox.y1 = y + 4.0;
+            line.bbox.x1 = x1;
+            line
+        };
+        let mut one = l(
+            "1 1MB = 1 million bytes, and 1TB = 1 trillion bytes.",
+            36.1,
+            605.5,
+            5.5,
+        );
+        one.opens_with_script = true;
+        one.bbox.x1 = 290.0;
+        let lines = vec![
+            one,
+            text("depending on operating environment.", 611.7, 130.0),
+            raised("2", 619.8),
+            text(
+                "Workload Rate is defined as the amount of user data",
+                620.0,
+                288.0,
+            ),
+            text("transferred to or from the hard drive.", 625.7, 150.0),
+        ];
+        // The page's leading: its notes wrap 6.2pt apart at 5.5pt.
+        let b = assemble(&lines, 1.13);
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert_eq!(b[1].marker, None);
+        assert!(
+            b[1].text().starts_with("2 Workload Rate"),
+            "{:?}",
+            b[1].text()
+        );
+        // A number raised beside a line that counts with nothing, a chart's
+        // tick label, does not go into the text.
+        let b = assemble(
+            &[
+                raised("67", 619.8),
+                text(
+                    "December (figure 14). Although population aging has",
+                    620.0,
+                    288.0,
+                ),
+            ],
+            1.5,
+        );
+        assert!(b.iter().all(|x| !x.text().starts_with("67")), "{b:?}");
     }
 
     #[test]
