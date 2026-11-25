@@ -41,7 +41,7 @@ const NEAR_BLANK_GLYPHS: usize = 20;
 
 /// A raster region must cover at least this fraction of the page before it is
 /// worth a VLM call: below it, whatever text it holds is a logo or ornament.
-const MIN_REGION_FRACTION: f64 = 0.10;
+pub(crate) const MIN_REGION_FRACTION: f64 = 0.10;
 
 /// Below this, in PDF units, on its longer side, a texty image too small for
 /// a model is not listed as declined ([`Declined::Small`]): half an inch,
