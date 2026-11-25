@@ -1079,6 +1079,11 @@ row's cell (`LSM2 homolog, U6 small nuclear RNA` over `associated (S.
 cerevisiae)`). Spacing alone cannot tell it from a row: a journal sets its
 rows and its wrapped lines at the same leading. A row with an empty stub and
 a new value (`Banana` under `Apple`) runs on from nothing and stays a row.
+Nothing is carried on in a column whose text runs on across the rows: where,
+on half the lines that open a row (two at least), the column's text continues
+the line above it, the column is a page's prose read in beside the table, its
+sentences carried down through the rows. A table's cells start afresh on
+each row.
 
 A caption wrapped over the table keeps its lines after the first. Walking
 up from the first row for the header, a line that is the next one under a
