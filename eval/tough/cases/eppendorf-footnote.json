@@ -6,7 +6,8 @@
     "about": "Eppendorf Multipette E3/E3x performance data sheet. Page 1 notes a feature under its features list in a 5pt footnote, `1) Feature only available with Multipette E3x`, under 7pt text."
   },
   "notes": [
-    "2026-11-24 (#192): a numbered line set below the body's size was read as a level-1 numbered heading, and the rest of the document nested under the footnote."
+    "2026-11-24 (#192): a numbered line set below the body's size was read as a level-1 numbered heading, and the rest of the document nested under the footnote.",
+    "2026-11-25 (#281): the sheet numbers its notes `1)`, raised after the word they mark (`dilution series¹⁾`). A note mark had to be figures alone, so the `1)` was glued to its word."
   ],
   "checks": [
     {
@@ -14,6 +15,12 @@
       "found": "2026-11-24",
       "issue": "`1) Feature only available with Multipette E3x` opened a level-1 section holding the rest of the document.",
       "no_section": "1) Feature only available"
+    },
+    {
+      "id": "paren-note-set-apart",
+      "found": "2026-11-25",
+      "issue": "#281: `series1)` read as one word.",
+      "no_text": "series1)"
     }
   ]
 }

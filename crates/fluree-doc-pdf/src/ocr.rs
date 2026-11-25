@@ -2052,10 +2052,8 @@ mod tests {
         let p = &doc.pages[0];
         let shown = p.to_display(p.images[0].bbox);
         let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
-        let crops = crate::escalate::render_crops_displayed(
-            &pdf,
-            &vec![(0, Some(vec![("r0".to_string(), shown)]))],
-        );
+        let crops =
+            crate::escalate::render_crops(&pdf, &vec![(0, Some(vec![("r0".to_string(), shown)]))]);
         let mut reader = png::Decoder::new(std::io::Cursor::new(&crops[0].png))
             .read_info()
             .unwrap();
