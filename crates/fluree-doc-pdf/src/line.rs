@@ -496,8 +496,16 @@ fn rejoin_spanning_lines(
                         && *rot == r.rotation_bucket
                 })
                 .min_by(|a, b| {
+                    // A full stop is placed by its foot: its top stands on
+                    // its baseline, nearer the tops of the next row down.
+                    let stop = low_stop(r, fs);
                     let off = |(_, x1, b, _): &((usize, usize), f64, BBox, i32)| {
-                        (r.bbox.x0 - x1).abs() + (b.y0 - r.bbox.y0).abs()
+                        let rise = if stop {
+                            b.y1 - r.bbox.y1
+                        } else {
+                            b.y0 - r.bbox.y0
+                        };
+                        (r.bbox.x0 - x1).abs() + rise.abs()
                     };
                     off(a).total_cmp(&off(b))
                 })
@@ -508,6 +516,21 @@ fn rejoin_spanning_lines(
         let in_a_word = |r: &Line, gap: f64| gap <= r.font_size.max(1.0) as f64 * SPACE_GAP_RATIO;
         // Count first: if most rows look like spanning fragments, this is a
         // two-column layout and only the words the cut fell inside are one.
+        // A fragment can share its row with a line of this column set a
+        // few points off its baseline, a gutter's width further on: `ss`,
+        // the end of a figure's title the cut bisected, beside a heading's
+        // `moderated in the first quarter`. Only the piece up to that gap is
+        // the fragment; the rest stays where it stands.
+        let rows = std::mem::take(&mut per_col[i + 1]);
+        for r in rows {
+            match joins(&r).and_then(|_| apart_at_gutter(&r, glyphs)) {
+                Some((head, tail)) => {
+                    per_col[i + 1].extend(assemble_subset(glyphs, &head, &[]));
+                    per_col[i + 1].extend(assemble_subset(glyphs, &tail, &[]));
+                }
+                None => per_col[i + 1].push(r),
+            }
+        }
         let candidates = per_col[i + 1].iter().filter(|r| joins(r).is_some()).count();
         let limit = (per_col[i + 1].len().max(per_col[i].len()) as f64 * MAX_SPANNING_FRACTION)
             .ceil() as usize;
@@ -556,15 +579,54 @@ fn rejoin_spanning_lines(
     }
 }
 
+/// Widest gap between two words of one line, in the font size of the word
+/// before it, short of the gutter between two columns: the gutters the
+/// rejoin measured run 2.1 to 2.7 sizes, a justified space well under one.
+const FRAGMENT_GUTTER: f64 = 2.0;
+
+/// `l`'s glyphs, by index into `glyphs`, parted at the first gap a gutter
+/// wide ([`FRAGMENT_GUTTER`]), read left to right: the piece before it and
+/// the rest. `None` when no gap is that wide.
+fn apart_at_gutter(l: &Line, glyphs: &[Glyph]) -> Option<(Vec<usize>, Vec<usize>)> {
+    let mut inked: Vec<usize> = l
+        .glyphs
+        .iter()
+        .copied()
+        .filter(|&g| glyphs.get(g).is_some_and(|g| g.bbox.is_some()))
+        .collect();
+    inked.sort_by(|&a, &b| glyphs[a].origin.0.total_cmp(&glyphs[b].origin.0));
+    let at = inked.windows(2).position(|w| {
+        let (a, b) = (&glyphs[w[0]], &glyphs[w[1]]);
+        let (Some(ab), Some(bb)) = (a.bbox, b.bbox) else {
+            return false;
+        };
+        bb.x0 - ab.x1 > f64::from(a.font_size.max(1.0)) * FRAGMENT_GUTTER
+    })?;
+    let cut = glyphs[inked[at + 1]].origin.0;
+    let (head, tail): (Vec<usize>, Vec<usize>) = l
+        .glyphs
+        .iter()
+        .copied()
+        .partition(|&g| glyphs.get(g).is_some_and(|g| g.origin.0 < cut));
+    (!head.is_empty() && !tail.is_empty()).then_some((head, tail))
+}
+
 /// Do a line, `a`, and the piece of it past a cut, `b`, stand on one row:
 /// their tops level, or `b` the stop that closes `a`'s sentence, standing
 /// on its baseline? A line's last glyph alone, its full stop, is a dot on
 /// the baseline, its top the letters' height below theirs.
 fn one_row(a: &BBox, b: &Line, fs: f64) -> bool {
-    let closing = |c: char| ".,;:!?)]\u{2019}\u{201D}".contains(c);
-    let stop = !b.text.trim().is_empty() && b.text.trim().chars().all(closing);
     (a.y0 - b.bbox.y0).abs() < fs * 0.5
-        || (stop && b.bbox.height() < fs * 0.5 && (a.y1 - b.bbox.y1).abs() <= fs * 0.35)
+        || (low_stop(b, fs) && (a.y1 - b.bbox.y1).abs() <= fs * 0.35)
+}
+
+/// Is `b` nothing but the punctuation that closes a sentence, set low on
+/// its baseline: a full stop, its box well under a size `fs` high? Its
+/// top says nothing of the row it ends; its foot does.
+fn low_stop(b: &Line, fs: f64) -> bool {
+    let closing = |c: char| ".,;:!?)]\u{2019}\u{201D}".contains(c);
+    let t = b.text.trim();
+    !t.is_empty() && t.chars().all(closing) && b.bbox.height() < fs * 0.5
 }
 
 /// Assemble lines from a single column's glyphs.
@@ -3823,6 +3885,65 @@ mod tests {
         rejoin_spanning_lines(&mut split, &[], &cols);
         assert!(split[1].is_empty(), "{:?}", split[1]);
         assert!(split[0][0].text.ends_with("lists."), "{}", split[0][0].text);
+    }
+
+    #[test]
+    fn a_full_stop_past_the_cut_rejoins_the_line_it_ends_not_the_next() {
+        // A note's last line ends at the cut, its full stop past it, and the
+        // next row (`SOURCE: … Labor S|tatistics`) ends at the cut too. The
+        // dot's top stands on the note's baseline, nearer the next row's
+        // top than the note's; its foot is the note's.
+        let cols = vec![
+            crate::column::Column {
+                x0: 60.0,
+                x1: 159.0,
+            },
+            crate::column::Column {
+                x0: 159.0,
+                x1: 287.0,
+            },
+        ];
+        let mut stop = ln(".", 159.6, 160.4, 507.4, 7.2);
+        stop.bbox.y1 = 509.2;
+        let mut split = vec![
+            vec![
+                ln("the Bureau of Labor Statistics", 67.0, 158.8, 502.0, 7.2),
+                ln("SOURCE: Bureau of Labor S", 74.0, 158.9, 508.0, 7.2),
+            ],
+            vec![stop],
+        ];
+        rejoin_spanning_lines(&mut split, &[], &cols);
+        assert!(split[1].is_empty(), "{:?}", split[1]);
+        assert_eq!(split[0][0].text, "the Bureau of Labor Statistics.");
+        assert_eq!(split[0][1].text, "SOURCE: Bureau of Labor S");
+    }
+
+    #[test]
+    fn a_fragment_sharing_its_row_with_the_next_columns_text_rejoins_alone() {
+        // A figure's title ends past the cut (`gro|ss`). On its row, a
+        // gutter further on, the next column's heading stands a little
+        // higher, and line assembly took the two as one line, as it did on
+        // the page this was measured on: `ss moderated`. Only the fragment
+        // is the title's.
+        let cols = vec![
+            crate::column::Column {
+                x0: 60.0,
+                x1: 264.0,
+            },
+            crate::column::Column {
+                x0: 264.0,
+                x1: 540.0,
+            },
+        ];
+        let mut glyphs = laid_word("ss", 264.5, 180.19, 8.9);
+        glyphs.extend(laid_word("moderated", 315.0, 177.88, 12.0));
+        let mut merged = ln("ss moderated", 264.5, 374.4, 168.8, 12.0);
+        merged.glyphs = (0..glyphs.len()).collect();
+        let mut split = vec![vec![ln("and gro", 230.0, 263.7, 173.7, 8.9)], vec![merged]];
+        rejoin_spanning_lines(&mut split, &glyphs, &cols);
+        assert_eq!(split[0][0].text, "and gross");
+        let right: Vec<&str> = split[1].iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(right, vec!["moderated"]);
     }
 
     #[test]
