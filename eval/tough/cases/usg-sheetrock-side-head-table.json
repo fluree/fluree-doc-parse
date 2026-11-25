@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its side heads stand in a column of their own at the left, each level with the top of what it heads; page 2's `TEST DATA` stands beside the test-data table's header row."
+  },
+  "notes": [
+    "#280: a head set level with a table's top row, rather than above it, did not head the table, so the test-data table stayed in `FINISHING AND DECORATING`.",
+    "Open: page 3's sidebar column of notices (`PRODUCT INFORMATION`, `CAUTION`, `TRADEMARKS`) is read after the main column's `Note:` and nests under it, its heads being a smaller style. A heading ending in a colon often heads real subsections (an agreement's definitions article, its title ending in a colon, over its numbered definitions), so a colon alone does not close it."
+  ],
+  "checks": [
+    {
+      "id": "test-data-table-under-its-head",
+      "found": "2026-11-25",
+      "issue": "#280: the test-data table was in the section `FINISHING AND DECORATING`.",
+      "under": {
+        "text": "Noncombustibility",
+        "section": "TEST DATA"
+      }
+    }
+  ]
+}
