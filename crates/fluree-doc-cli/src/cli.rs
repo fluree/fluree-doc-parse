@@ -211,7 +211,9 @@ pub struct ConvertArgs {
     pub structure_results: Option<PathBuf>,
 
     /// Emit [[VLM:...]] anchor tokens where escalated crops belong, for an
-    /// external tier to fill [env: FDOC_VLM_ANCHORS]
+    /// external tier to fill. With a reader (--tier-results, or a model
+    /// called in the run), keep the ones it did not answer
+    /// [env: FDOC_VLM_ANCHORS]
     #[arg(long)]
     pub emit_anchors: bool,
 

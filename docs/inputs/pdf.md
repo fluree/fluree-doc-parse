@@ -134,6 +134,14 @@ broke, and reads as the word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
+**Dashes and addresses at a line's end.** A line ending in an em or en dash
+set closed against the word before it joins the next with no space, as the
+text's own hyphen does: `restore—` over `D2D` is `restore—D2D`, `10–` over
+`20` is `10–20`. A dash with a space before it was set apart and keeps its
+space. A web address broken at a slash (one with `://` or opening `www.`)
+runs on into the next line whole; a slash ending any other word may have
+had a space after it on the line the break took, and keeps it.
+
 A table cell needs one more piece of evidence. A narrow column breaks a
 compound at its own hyphen (`long-` over `term`) far more often than prose
 does, and the letters alone cannot tell the two apart. So a cell's word
@@ -220,7 +228,11 @@ or squares and leave no bullet in the text. A filled mark under a checkbox's
 size, set just left of a line and level with it, opens a list item, as long
 as another such mark at the same place opens another line. A list draws a
 bullet for each item, in a column. A seal's ring of dots or a chart's
-scatter is level with a line of text only by chance. A list of one item
+scatter is level with a line of text only by chance. A drawing's dots also
+crowd one another, where a list's bullets stand a line apart. So a mark with
+another dot closer than half an em, in the size of the line beside it, is a
+drawing's and opens no item. Examples are a map's towns beside the title of
+its district, and the modules of a QR code beside its caption. A list of one item
 draws one bullet, and it marks its line when it is drawn like the page's
 other bullets: their size, as far from its text as theirs.
 The item's marker is `•`. Each item starts where its bullet is, however
@@ -310,7 +322,10 @@ each opening with its number. A line whose raised number counts on from the
 note above it (`7 1 MB/s = …` then `8 Portion of buffer…`) starts the next
 note. A raised number the text layer set apart from its line is the note's,
 not a list's marker: it stays in front of its text, where the body's note
-marks can find it.
+marks can find it. A line opening with its note's reference marks, a run of
+up to four asterisks, daggers or section signs (`*`, `**`, `†`), starts a
+note of its own, even under a full line of the note before: `*** Zero waste
+…` under the `**` note's last line.
 
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
@@ -321,6 +336,10 @@ unit, after a quantity (`26TB 1`, not `26TB1`), or after a bracket that
 holds words (`(49 N) 5`, not `(49 N)5`). So is one after a compound or a
 code joined by hyphens (`3-way 1`, `MACL-153M-XX 2,3`), and after a bracket
 whose slash parts names rather than terms (`(512e/4Kn) 1,2`, `(mm/in, max) 4`).
+So is a number after a word and the comma or stop closing it (`MTBF, 4`,
+`countries. 5`), since no power is raised past a word's punctuation, and a
+number closing on a bracket of its own, as notes are numbered in much of
+Europe (`dilution series 1)`).
 A raised number set before a word, after a space or at a line's head, is a
 note's number before its note or the name it is on, and is read apart from
 it the same way (`4 M17 series`, not `4M17 series`). Raised text that belongs
