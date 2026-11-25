@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro specification submittal 369613a. Its wiring page heads each diagram with a bold title: the first diagram stands bare, the 3-way diagrams in boxes, each title between the diagram above and the box it heads."
+  },
+  "notes": [
+    "#279: the title of the second diagram, set under the first, was taken as the first's label, while its twin over the third read as a heading. A title between two drawings heads the lower; over a framed drawing, a title that is no caption is the page's."
+  ],
+  "checks": [
+    {
+      "id": "title-between-diagrams",
+      "found": "2026-11-25",
+      "issue": "#279: `3-Way Wiring (Using 3-Way Mechanical Switch)` was the first diagram's label, under it.",
+      "section": {
+        "title": "3-Way Wiring (Using 3-Way Mechanical Switch)"
+      }
+    },
+    {
+      "id": "twin-title",
+      "found": "2026-11-25",
+      "issue": "A guard: its twin over the third diagram stays a heading.",
+      "section": {
+        "title": "3-Way Wiring (Using MA-R Companion Dimmer)"
+      }
+    }
+  ]
+}
