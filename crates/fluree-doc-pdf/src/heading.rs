@@ -107,6 +107,12 @@ pub struct Heading {
     pub text: String,
     pub level: usize,
     pub evidence: Evidence,
+    /// Set like a heading, but a form's, a field's or a chart's text, or a
+    /// line that runs on into the next: `(a) (b)`, `Yes No`, `b Refunded
+    /// 37b`, a label over its value, an axis's title. Kept a heading until runs of bold heads have been
+    /// judged, as they were before these were told apart, and read as text
+    /// after: dropping one from a run would leave its neighbours standing.
+    pub form_text: bool,
     style: Style,
 }
 
@@ -430,9 +436,23 @@ fn title_like_within(text: &str, max_words: usize) -> bool {
     !starts_like_list_item(t)
 }
 
+/// Words a title does not end on: an article, a conjunction, `of`, `not`.
+/// A line ending on one runs on into the next: a form's numbered caption
+/// cut at its first line (`5 Expenses recorded on books this year not`), a
+/// side label set a line a word (`Tax and` over `Credits`). In lowercase
+/// only, so that `Part A` and `Schedule A` stay titles.
+const DANGLING_WORDS: &[&str] = &["a", "an", "the", "and", "or", "nor", "of", "not", "but"];
+
+/// The line stops mid-phrase, on one of [`DANGLING_WORDS`].
+fn ends_mid_phrase(t: &str) -> bool {
+    t.split_whitespace()
+        .next_back()
+        .is_some_and(|w| DANGLING_WORDS.contains(&w))
+}
+
 /// The line closes with a web address, a domain, an e-mail address or a
 /// phone number, alone or after a few words leading in to it.
-fn ends_with_contact(text: &str) -> bool {
+pub(crate) fn ends_with_contact(text: &str) -> bool {
     let tokens: Vec<&str> = text
         .split_whitespace()
         .map(|w| w.trim_end_matches(['.', ',', ';', ':', ')', '\u{AE}', '\u{2122}']))
@@ -483,7 +503,8 @@ fn web_address(token: &str) -> bool {
 /// `800.424.8783`, a vanity `1-800-GET-PINK`, or an international number
 /// opening with `+`. North American numbers end in a group of three and a
 /// group of four, which a date (`2019-07-25`), a standard's year
-/// (`2043-2013`) or a count (`COVID-19`) does not.
+/// (`2043-2013`) or a count (`COVID-19`) does not, and a decimal set to four
+/// places (`259.3490`) is no local number.
 fn phone_number(tokens: &[&str]) -> bool {
     let phoneish = |t: &str| {
         t.chars().any(|c| c.is_ascii_digit())
@@ -513,6 +534,11 @@ fn phone_number(tokens: &[&str]) -> bool {
     // apart by a space are not a phone number.
     let joined = groups.len() >= 3 || run.len() == 1;
     let n = groups.len();
+    // Two groups set apart by a point alone are a decimal: a structure's
+    // `Molecular Weight: 259.3490`, not a local number.
+    if n == 2 && run.iter().all(|t| !t.contains(['-', '(', ')', '/'])) {
+        return false;
+    }
     joined && n >= 2 && digits >= 7 && groups[n - 1].len() == 4 && groups[n - 2].len() == 3
 }
 
@@ -685,6 +711,116 @@ pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 
         .unwrap_or(10.0)
 }
 
+/// Whether the size most of the document's glyphs are set at is set mostly
+/// bold, over all of them: its tables' text and figures as much as its
+/// paragraphs'. What the tables leave of a page is no measure of it: a
+/// form's bold labels, a statement's bold title. `None` without glyphs.
+pub fn body_is_bold<'a>(glyphs: impl IntoIterator<Item = &'a crate::glyph::Glyph>) -> Option<bool> {
+    let mut by_size: HashMap<i32, (usize, usize)> = HashMap::new();
+    for g in glyphs {
+        if g.text.trim().is_empty() {
+            continue;
+        }
+        let (all, bold) = by_size
+            .entry((g.font_size * 4.0).round() as i32)
+            .or_default();
+        *all += 1;
+        *bold += usize::from(g.weight.is_some_and(|w| w >= 600));
+    }
+    by_size
+        .into_iter()
+        .max_by_key(|(size, (all, _))| (*all, std::cmp::Reverse(*size)))
+        .map(|(_, (all, bold))| bold * 2 > all)
+}
+
+/// The block each bookmark heads, by page and block index, with the
+/// bookmark's depth. A bookmark heads one place: a running head that
+/// repeats a section's title (`Appendix 1. Supplemental Figures` at the top
+/// of every even page) matches its bookmark on every page, and only the
+/// copy nearest the bookmark's destination is the heading. Nearest by page,
+/// then by the stated position, then the larger type; each block takes one
+/// bookmark, and each bookmark one block. Only bookmarks that name a page
+/// are placed so; the rest are matched by title alone ([`pick_entry`]).
+///
+/// Also the copies no bookmark took that stand where another such copy
+/// stands on another page, within [`RUNNING_SLOT`]: the running head
+/// itself, which is no heading by weight or size either.
+fn claim_outline(
+    pages: &[Vec<Block>],
+    by_title: &HashMap<String, Vec<&OutlineItem>>,
+) -> (
+    HashMap<(usize, usize), usize>,
+    std::collections::HashSet<(usize, usize)>,
+) {
+    let mut pairs = Vec::new();
+    for (pi, blocks) in pages.iter().enumerate() {
+        for (bi, b) in blocks.iter().enumerate() {
+            let Some(entries) = by_title.get(&norm(&b.text())) else {
+                continue;
+            };
+            for e in entries.iter().copied() {
+                let Some(page) = e.page else {
+                    continue;
+                };
+                let dy = e.y.map_or(f64::MAX, |y| (y - b.bbox.y0).abs());
+                pairs.push((
+                    page.abs_diff(b.page),
+                    dy,
+                    -b.font_size,
+                    pi,
+                    bi,
+                    e as *const OutlineItem,
+                    e.level,
+                ));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.total_cmp(&b.1))
+            .then(a.2.total_cmp(&b.2))
+            .then((a.3, a.4).cmp(&(b.3, b.4)))
+    });
+    let mut entries_used = std::collections::HashSet::new();
+    let mut claimed = HashMap::new();
+    let mut copies: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    for &(_, _, _, pi, bi, entry, level) in &pairs {
+        copies
+            .entry(norm(&pages[pi][bi].text()))
+            .or_default()
+            .push((pi, bi));
+        if claimed.contains_key(&(pi, bi)) || !entries_used.insert(entry) {
+            continue;
+        }
+        claimed.insert((pi, bi), level);
+    }
+    let mut running = std::collections::HashSet::new();
+    for blocks in copies.values() {
+        let free: Vec<(usize, usize)> = blocks
+            .iter()
+            .copied()
+            .filter(|k| !claimed.contains_key(k))
+            .collect();
+        for &(pi, bi) in &free {
+            let b = &pages[pi][bi].bbox;
+            let repeated = free.iter().any(|&(pj, bj)| {
+                let o = &pages[pj][bj].bbox;
+                pj != pi
+                    && (o.x0 - b.x0).abs() <= RUNNING_SLOT
+                    && (o.y0 - b.y0).abs() <= RUNNING_SLOT
+            });
+            if repeated {
+                running.insert((pi, bi));
+            }
+        }
+    }
+    (claimed, running)
+}
+
+/// How far, in points, two copies of a line may stand from each other's
+/// place and still be one running line.
+const RUNNING_SLOT: f64 = 2.0;
+
 /// Choose which of several same-titled bookmarks this block is.
 ///
 /// Nearest page first, then nearest stated position. An entry naming no page
@@ -733,11 +869,18 @@ const SAME_TITLE_SIZE: f32 = 0.25;
 const LATE_TITLE_RATIO: f32 = 1.1;
 
 pub fn detect(pages: &[Vec<Block>], outline: &[OutlineItem]) -> Vec<Heading> {
-    detect_with_body(pages, outline, body_font_size(pages))
+    detect_with_body(pages, outline, body_font_size(pages), None)
 }
 
 /// Detect headings across a document whose body size is known.
-pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32) -> Vec<Heading> {
+/// Detect headings over a body size, and over what the page's glyphs say of
+/// whether the body is set bold. Without that, it is read from the blocks.
+pub fn detect_with_body(
+    pages: &[Vec<Block>],
+    outline: &[OutlineItem],
+    body: f32,
+    body_bold: Option<bool>,
+) -> Vec<Heading> {
     // Numbered lines that recur, by their text; see the check in the loop
     // below. Counted as occurrences rather than pages: a form answers
     // several items on one page with the same code. A contents entry does
@@ -933,6 +1076,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
         }
         by_title.entry(k).or_default().push(it);
     }
+    let (claimed, running) = claim_outline(pages, &by_title);
 
     // Distinct heading-sized fonts, largest first, for the typography fallback.
     let mut sizes: Vec<i32> = pages
@@ -971,14 +1115,18 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
     let bold_is_structural = bold_candidates <= MAX_BOLD_HEADINGS_PER_PAGE * pages.len().max(1);
 
     // If most body text is already bold, weight carries no information.
-    let bold_lines: usize = pages
-        .iter()
-        .flatten()
-        .filter(|b| b.bold)
-        .map(|b| b.lines.len())
-        .sum();
-    let all_lines: usize = pages.iter().flatten().map(|b| b.lines.len()).sum();
-    let body_is_bold = all_lines > 0 && bold_lines * 2 > all_lines;
+    // Read from the blocks only where the glyphs were not consulted: what
+    // the tables leave of a form is mostly its bold labels, a dozen lines.
+    let body_is_bold = body_bold.unwrap_or_else(|| {
+        let bold_lines: usize = pages
+            .iter()
+            .flatten()
+            .filter(|b| b.bold)
+            .map(|b| b.lines.len())
+            .sum();
+        let all_lines: usize = pages.iter().flatten().map(|b| b.lines.len()).sum();
+        all_lines > 0 && bold_lines * 2 > all_lines
+    });
 
     let mut out = Vec::new();
     for (page_idx, blocks) in pages.iter().enumerate() {
@@ -1011,6 +1159,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                     text,
                     level: 1,
                     evidence: Evidence::Title,
+                    form_text: false,
                     style: style_of(b),
                 });
                 continue;
@@ -1023,16 +1172,26 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             // Most files write `/Fit`, which names a page and no position, so
             // the page alone carries this most of the time — and that is
             // already enough to tell the fourth "Overview" from the first.
-            if let Some(level) = by_title
-                .get(&norm(&text))
-                .and_then(|entries| pick_entry(entries, b))
-            {
+            // A copy of a bookmarked title set where it is set on other
+            // pages too, not the one its bookmark lands on: a running head.
+            if running.contains(&(page_idx, block_idx)) {
+                continue;
+            }
+            let outline_level = match by_title.get(&norm(&text)) {
+                Some(entries) if entries.iter().any(|e| e.page.is_some()) => {
+                    claimed.get(&(page_idx, block_idx)).copied()
+                }
+                Some(entries) => pick_entry(entries, b),
+                None => None,
+            };
+            if let Some(level) = outline_level {
                 out.push(Heading {
                     page: b.page,
                     block_index: block_idx,
                     text,
                     level,
                     evidence: Evidence::Outline,
+                    form_text: false,
                     style: style_of(b),
                 });
                 continue;
@@ -1043,6 +1202,11 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
             if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
                 continue;
             }
+            // A line that stops mid-phrase runs on into the next, and a
+            // form's keys, captions and labels are its text. Not part of
+            // `title_like`, which also counts the bold lines that decide
+            // whether bold is used for headings at all.
+            let form = ends_mid_phrase(&text) || form_text(&text, blocks, block_idx);
             // A numbered title occurs once in a document: sections are not
             // repeated. A numbered line that recurs is a code — `03 —
             // Partial/Moderate assistance`, an assessment form's answer,
@@ -1065,6 +1229,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                     text,
                     level: 1,
                     evidence: Evidence::Sequence,
+                    form_text: false,
                     style: style_of(b),
                 });
                 continue;
@@ -1099,20 +1264,28 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                     text,
                     level: depth,
                     evidence: Evidence::Numbering,
+                    form_text: form,
                     style: style_of(b),
                 });
                 continue;
             }
-            // Typography alone does not make a heading of a caption or of a
-            // field's label with its value beside it.
-            if not_a_typographic_heading(&text, b, blocks) {
+            // Typography alone does not make a heading of a caption, a
+            // field, a form's label, a list's lead-in or a signature.
+            if not_a_typographic_heading(&text, blocks, block_idx, body) {
+                continue;
+            }
+            // Nor of a letterhead: the sender's name over its address and
+            // numbers, at the head of the document's first page.
+            if page_idx == 0 && at_head(blocks, b) && over_contact(blocks, block_idx) {
                 continue;
             }
             // 4. Bold, at body size. Documents very commonly set section
             // titles in the body face at the body size, differing only in
-            // weight, which no size-based test can see.
+            // weight, which no size-based test can see. Bold set larger is
+            // ranked by its size, as other display type is.
             if b.bold
                 && !body_is_bold
+                && b.font_size as f64 <= body as f64 * (1.0 + HEADING_SIZE_MARGIN)
                 && bold_is_structural
                 && n_chars <= MAX_FONTSIZE_HEADING_CHARS
                 && b.lines.len() <= MAX_FONTSIZE_HEADING_LINES
@@ -1124,6 +1297,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                     text,
                     level: 3,
                     evidence: Evidence::Bold,
+                    form_text: form,
                     style: style_of(b),
                 });
                 continue;
@@ -1150,6 +1324,7 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                     text,
                     level,
                     evidence: Evidence::FontSize,
+                    form_text: form,
                     style: style_of(b),
                 });
                 continue;
@@ -1178,23 +1353,510 @@ const MAX_LABEL_GAP: f64 = 8.0;
 ///   benchmark's ground truth keeps some prominent captions as headings,
 ///   so this costs a little there;
 /// - a label ending in a colon with its value set beside it on its row,
-///   `Color:`: a field.
+///   `Color:`, or after it on its line at the body's size, `CRI: 90+`: a
+///   field (`Current Situation: 2001-2019`, set larger, is a title);
+/// - a form's label, a word or three ending in a colon or `#` set large
+///   with nothing but its blank beside it, `Location:`, `Model #:`, where
+///   only size would make it a heading;
+/// - a value set under its bold label at the label's size, in a lighter
+///   weight, `K25W951` under `PRODUCT NUMBER`;
+/// - a part of a signature block: a party's role and name over the lines
+///   it signs on, `INVESTOR:` over `Acme Fund, LP` over `By:`, and a
+///   signature page's label, `Signature Page to Voting Agreement`.
 ///
 /// A row of cells set side by side is not tested: a slide's card titles
 /// stand side by side as often as a table's header cells do.
-fn not_a_typographic_heading(text: &str, b: &Block, page: &[Block]) -> bool {
-    if is_caption(text) {
+fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) -> bool {
+    let b = &page[i];
+    let t = text.trim();
+    let larger = b.font_size as f64 > body as f64 * (1.0 + HEADING_SIZE_MARGIN);
+    if is_caption(t) || (field_on_its_line(t) && !larger) || signature_page_label(t) {
+        return true;
+    }
+    if !b.bold && form_label(t) {
+        return true;
+    }
+    if signs_off(page, i) || value_under_label(page, i) {
         return true;
     }
     let fs = (b.font_size as f64).max(1.0);
-    text.trim_end().ends_with(':')
-        && page.iter().any(|o| {
-            !std::ptr::eq(o, b)
+    if opens_an_address(b, page) {
+        return true;
+    }
+    t.ends_with(':')
+        && page.iter().enumerate().any(|(k, o)| {
+            k != i
                 && (o.bbox.y0 - b.bbox.y0).abs() <= fs * 0.5
                 && o.bbox.x0 >= b.bbox.x1
                 && o.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP
         })
 }
+
+/// A form's or a chart's text set like a heading: a grid's keys and answer
+/// heads, a line's caption, a footer that refers elsewhere, a label over
+/// its value; an axis's title, set up its side or under its scale.
+fn form_text(text: &str, page: &[Block], i: usize) -> bool {
+    let t = text.trim();
+    keys_or_answers(t)
+        || refers_elsewhere(t)
+        || line_caption(t)
+        || label_over_value(page, i)
+        || turned(page, &page[i])
+        || under_a_scale(page, i)
+        || heads_figures(page, i)
+}
+
+/// Answers a form offers to tick: the heads of its answer columns.
+const ANSWER_WORDS: &[&str] = &["yes", "no", "n/a", "na"];
+
+/// A grid's column keys or a form's answer heads, and nothing else:
+/// `(a) (b)`, `(f) (g)`, `Yes No`. They head columns, not sections.
+fn keys_or_answers(t: &str) -> bool {
+    let key = |w: &str| {
+        w.strip_prefix('(')
+            .and_then(|w| w.strip_suffix(')'))
+            .is_some_and(|k| {
+                (1..=3).contains(&k.chars().count()) && k.chars().all(char::is_alphanumeric)
+            })
+    };
+    let mut words = t.split_whitespace().peekable();
+    words.peek().is_some()
+        && words.all(|w| key(w) || ANSWER_WORDS.contains(&w.to_lowercase().as_str()))
+}
+
+/// A sentence that sends the reader elsewhere, `For Paperwork Reduction
+/// Act Notice, see your tax return instructions.`: a form's footer. No
+/// section is titled with a cross-reference; a title that only mentions
+/// one keeps it in brackets, `Other Information (see instructions)`.
+fn refers_elsewhere(t: &str) -> bool {
+    t.to_lowercase().contains(", see ")
+}
+
+/// A form's line caption with its line's letter before it and its number
+/// after it: `b Refunded 37b`.
+fn line_caption(t: &str) -> bool {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let letter = |w: &str| w.len() == 1 && w.chars().all(|c| c.is_ascii_lowercase());
+    let number = |w: &str| {
+        let digits = w.trim_end_matches(|c: char| c.is_ascii_lowercase());
+        w.len() == digits.len() + 1
+            && (1..=3).contains(&digits.len())
+            && digits.chars().all(|c| c.is_ascii_digit())
+    };
+    words.len() >= 3 && letter(words[0]) && number(words[words.len() - 1])
+}
+
+/// Most words in a value under its label, `Jun 5, 2026`, counting only
+/// words with a letter or figure: a catalogue's group over its first line
+/// (`Coussinets` over `223-3000 Coussinets d'axes de piston`) runs longer.
+const MAX_LABEL_VALUE_WORDS: usize = 3;
+
+/// A bold label over its value on the next line: the value set lighter at
+/// the label's size within an em, a single short line holding a figure or
+/// an answer, and followed by the next label or nothing (`Date of
+/// Preparation` over `Jun 5, 2026`, `FLASH POINT` over `N.A.`,
+/// `Photochemically Reactive` over `No`). A section's heading stands over
+/// sentences, or over more lines than one.
+fn label_over_value(page: &[Block], i: usize) -> bool {
+    let label = &page[i];
+    if !label.bold {
+        return false;
+    }
+    let Some(k) = directly_below(page, i) else {
+        return false;
+    };
+    let v = &page[k];
+    let fs = (label.font_size as f64).max(1.0);
+    // The value stands alone: the next label or nothing follows it. Under a
+    // heading, its first line runs on into more of the same (`Power and
+    // Ratings` over `120 V~ 60 Hz` over the rest of its ratings).
+    let alone = directly_below(page, k).is_none_or(|n| page[n].bold);
+    let text = v.text();
+    alone
+        && !v.bold
+        && (v.font_size - label.font_size).abs() <= 0.25
+        && v.bbox.y0 - label.bbox.y1 <= fs * VALUE_GAP
+        && v.lines.len() == 1
+        && text
+            .split_whitespace()
+            .filter(|w| w.chars().any(char::is_alphanumeric))
+            .count()
+            <= MAX_LABEL_VALUE_WORDS
+        && (text.chars().any(|c| c.is_ascii_digit()) || answers(&text))
+}
+
+/// The line is an answer and nothing else: `No`, `N.A.`.
+fn answers(t: &str) -> bool {
+    let mut words = t.split_whitespace().peekable();
+    words.peek().is_some()
+        && words.all(|w| ANSWER_WORDS.contains(&w.replace('.', "").to_lowercase().as_str()))
+}
+
+/// Most words in a field's label, `Initial Closing Date`, and in its
+/// value after the colon, `May 15, 2019`.
+const MAX_FIELD_LABEL_WORDS: usize = 4;
+const MAX_FIELD_VALUE_WORDS: usize = 6;
+
+/// A label and its value on one line, the value a figure, a date or a
+/// code, short or opening with its figure: `CRI: 90+`, `Hours: 8:30 am -
+/// 6:00 pm EST (Monday - Friday)`. A title with a
+/// subtitle, `Policy Rules: Limitations`, `Part II: Application of
+/// Section 67 Limitation to Specific Deductions`, states no figure, or
+/// runs on past a value's length.
+fn field_on_its_line(t: &str) -> bool {
+    let Some((label, value)) = t.split_once(": ") else {
+        return false;
+    };
+    let lw = label.split_whitespace().count();
+    let vw = value.split_whitespace().count();
+    let figure = value.trim_start().starts_with(|c: char| c.is_ascii_digit());
+    (1..=MAX_FIELD_LABEL_WORDS).contains(&lw)
+        && (figure || (1..=MAX_FIELD_VALUE_WORDS).contains(&vw))
+        && value.chars().any(|c| c.is_ascii_digit())
+}
+
+/// Most words in a form's label.
+const MAX_FORM_LABEL_WORDS: usize = 3;
+
+/// A form's label: a word or three ending in a colon or a `#`, `Location:`,
+/// `Model #:`, `Item #`.
+fn form_label(t: &str) -> bool {
+    (t.ends_with(':') || t.ends_with('#')) && t.split_whitespace().count() <= MAX_FORM_LABEL_WORDS
+}
+
+/// `Signature Page to Voting Agreement`, `[Signature Page Follows]`: the
+/// label an agreement sets on the page its parties sign.
+fn signature_page_label(t: &str) -> bool {
+    t.trim_start_matches(['[', '('])
+        .to_lowercase()
+        .starts_with("signature page")
+}
+
+/// How many blocks after a party's role or name the lines it signs on
+/// may start: `INVESTOR:` over the fund's name over `By:`.
+const SIGNATURE_REACH: usize = 3;
+
+/// Most words in a party's role or name.
+const MAX_SIGNATORY_WORDS: usize = 10;
+
+/// Block `i` is a party's role or name in a signature block: a line to
+/// sign on follows it, `By:`, `Its:`, `(Signature)`, a rule of
+/// underscores, or a `Name:` with a `Title:` after it, with only other
+/// roles and names between. Text between, a paragraph that ends a section
+/// before its signature (`Notation Vote` over the vote's paragraph over
+/// the Secretary's rule), says the block heads that text instead.
+fn signs_off(page: &[Block], i: usize) -> bool {
+    let short = |b: &Block| b.text().split_whitespace().count() <= MAX_SIGNATORY_WORDS;
+    if !short(&page[i]) {
+        return false;
+    }
+    let after: Vec<&Block> = page.iter().skip(i + 1).take(SIGNATURE_REACH).collect();
+    for (k, b) in after.iter().enumerate() {
+        let t = b.text();
+        let lower = t.trim().to_lowercase();
+        let signs = lower.starts_with("by:")
+            || lower.starts_with("its:")
+            || lower.starts_with("(signature")
+            || lower.starts_with("signature:")
+            || lower.starts_with("/s/")
+            || signing_rule(t.trim())
+            || (lower.starts_with("name:")
+                && after
+                    .iter()
+                    .skip(k + 1)
+                    .any(|n| n.text().trim().to_lowercase().starts_with("title:")));
+        if signs {
+            return true;
+        }
+        if !short(b) {
+            return false;
+        }
+    }
+    false
+}
+
+/// A rule to sign on, typed as underscores: most of the line is `_`.
+fn signing_rule(t: &str) -> bool {
+    let underscores = t.chars().filter(|c| *c == '_').count();
+    underscores >= 4 && underscores * 2 >= t.chars().filter(|c| !c.is_whitespace()).count()
+}
+
+/// Block `i`, in a lighter weight, is set at its size directly under a bold
+/// label, alone or under other such lines: the label's value, `K25W951`
+/// under `PRODUCT NUMBER`, a company's name and address under
+/// `MANUFACTURER'S NAME`. A section under its title is set apart from it
+/// by size or a gap; a value sits on the label's next line.
+fn value_under_label(page: &[Block], i: usize) -> bool {
+    if page[i].bold {
+        return false;
+    }
+    let same = |a: &Block, b: &Block| (a.font_size - b.font_size).abs() <= 0.25;
+    let mut below = &page[i];
+    for above in page[..i].iter().rev() {
+        let fs = (below.font_size as f64).max(1.0);
+        let gap = below.bbox.y0 - above.bbox.y1;
+        let overlaps = above.bbox.x1.min(below.bbox.x1) > above.bbox.x0.max(below.bbox.x0);
+        if !same(above, below) || !overlaps || gap < -fs * 0.2 || gap > fs * VALUE_GAP {
+            return false;
+        }
+        if above.bold {
+            return above.lines.len() == 1;
+        }
+        below = above;
+    }
+    false
+}
+
+/// The block runs at an angle to the page's text: an axis's title set up
+/// its side (`Concentration of PFHpS, in ng/L`, `Recovery, in percent`), a
+/// tab or a mark in the margin. A page set on its side as a whole turns
+/// its headings with its text, and they stay. Level text is never turned:
+/// where a table is read, what it leaves may be mostly its turned column
+/// labels.
+fn turned(page: &[Block], b: &Block) -> bool {
+    let mut by_angle: HashMap<i32, usize> = HashMap::new();
+    for l in page.iter().flat_map(|o| &o.lines) {
+        *by_angle.entry(l.rotation_bucket).or_default() += 1;
+    }
+    let text = by_angle
+        .into_iter()
+        .max_by_key(|(angle, n)| (*n, *angle == 0))
+        .map_or(0, |(angle, _)| angle);
+    b.lines
+        .iter()
+        .any(|l| l.rotation_bucket != 0 && l.rotation_bucket != text)
+}
+
+/// A table's figure, a cell of nothing else: `2023 2022`, `1000 -`,
+/// `64.1 - 90.0`, `80.0 (28/35)`, `$ 2,395`.
+fn bare_figures(t: &str) -> bool {
+    let t = t.trim();
+    t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || c.is_whitespace()
+                || ".,%-−–+×/()$€£:".contains(c)
+                || ('\u{2070}'..='\u{209F}').contains(&c)
+        })
+}
+
+/// Widest gap, in ems, from a column's head to the first figure under it:
+/// a table's rows stand further apart than a paragraph's lines.
+const FIGURES_GAP: f64 = 2.5;
+
+/// Most words in a cell set level with a table's column head.
+const MAX_HEAD_CELL_WORDS: usize = 4;
+
+/// A table's column head or the stub's, the table not read as one: the
+/// block stands directly over a line of bare figures (`Total SOMA` over
+/// `2023 2022`, `TWA STEL` over `1000 -`), or stands on a row of other
+/// short cells, it or one of them over such figures (`Item` beside
+/// `2024:Q2–2025:Q2` and `1997–2025:Q2`, `95%CI` beside `95% CI` and `%`).
+/// A slide's card titles stand side by side too, over text, not figures.
+fn heads_figures(page: &[Block], i: usize) -> bool {
+    let over = |k: usize| {
+        let b = &page[k];
+        let fs = (b.font_size as f64).max(1.0);
+        page.iter()
+            .enumerate()
+            .filter(|(n, o)| {
+                *n != k
+                    && o.bbox.y0 >= b.bbox.y1 - fs * 0.2
+                    && o.bbox.y0 - b.bbox.y1 <= fs * FIGURES_GAP
+                    && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+            })
+            .min_by(|(_, x), (_, y)| x.bbox.y0.total_cmp(&y.bbox.y0))
+            .is_some_and(|(_, o)| o.lines.len() == 1 && bare_figures(&o.text()))
+    };
+    if over(i) {
+        return true;
+    }
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    page.iter().enumerate().any(|(k, o)| {
+        k != i
+            && o.lines.len() == 1
+            && o.text().split_whitespace().count() <= MAX_HEAD_CELL_WORDS
+            && (o.bbox.y0 - b.bbox.y0).abs() <= fs * 0.5
+            && (o.bbox.x0 >= b.bbox.x1 || o.bbox.x1 <= b.bbox.x0)
+            && over(k)
+    })
+}
+
+/// Fewest values on a row for the row to be a chart's scale.
+const MIN_SCALE_TICKS: usize = 3;
+
+/// A tick's value: a figure with its signs and separators, `1,000`,
+/// `0.25`, `−30`, `10⁻¹`, `50%`.
+fn tick_value(t: &str) -> bool {
+    let t = t.trim();
+    t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || matches!(c, '.' | ',' | '%' | '-' | '−' | '+' | '×' | ' ')
+                || ('\u{2070}'..='\u{209F}').contains(&c)
+                || matches!(c, '¹' | '²' | '³')
+        })
+}
+
+/// An axis's title under its scale: the block is set directly under a row
+/// of [`MIN_SCALE_TICKS`] or more bare values that spans it (`I
+/// OutputCurrentA` under `1 1.5 2 2.5 3 3.5`, `Expected concentration, in
+/// ng/L` under `1 10 100 1,000`). A chart drawn as vectors keeps its labels
+/// among the page's text, out of any figure region.
+fn under_a_scale(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    let ticks: Vec<&Block> = page
+        .iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i
+                && o.lines.len() == 1
+                && tick_value(&o.text())
+                && o.bbox.y1 <= b.bbox.y0 + fs * 0.3
+                && b.bbox.y0 - o.bbox.y1 <= fs * BELOW_GAP
+        })
+        .map(|(_, o)| o)
+        .collect();
+    // The ticks set on one row, together reaching across the block.
+    ticks.iter().any(|t| {
+        let row: Vec<&&Block> = ticks
+            .iter()
+            .filter(|o| (o.bbox.y0 - t.bbox.y0).abs() <= fs * 0.3)
+            .collect();
+        let x0 = row.iter().map(|o| o.bbox.x0).fold(f64::MAX, f64::min);
+        let x1 = row.iter().map(|o| o.bbox.x1).fold(f64::MIN, f64::max);
+        row.len() >= MIN_SCALE_TICKS && x0 <= b.bbox.x1 && x1 >= b.bbox.x0
+    })
+}
+
+/// Widest gap, in ems, between a label and its value on the next line.
+const VALUE_GAP: f64 = 1.0;
+
+/// Share of a page's text, from its top, that its head takes: where a
+/// letterhead is set.
+const PAGE_HEAD: f64 = 0.15;
+
+/// The block starts in the head of its page's text.
+fn at_head(page: &[Block], b: &Block) -> bool {
+    let top = page.iter().map(|o| o.bbox.y0).fold(f64::MAX, f64::min);
+    let bottom = page.iter().map(|o| o.bbox.y1).fold(f64::MIN, f64::max);
+    b.bbox.y0 <= top + (bottom - top) * PAGE_HEAD
+}
+
+/// Widest gap, in ems, from a block to the one it sets next under it: a
+/// letterhead's name over its smaller address lines.
+const BELOW_GAP: f64 = 1.5;
+
+/// The block set next under block `i`, sharing some of its width, within
+/// a line's space: the next line of what `i` begins, whatever the reading
+/// order puts between them.
+fn directly_below(page: &[Block], i: usize) -> Option<usize> {
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    page.iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i
+                && o.bbox.y0 >= b.bbox.y1 - fs * 0.2
+                && o.bbox.y0 - b.bbox.y1 <= fs * BELOW_GAP
+                && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+        })
+        .min_by(|(_, a), (_, c)| a.bbox.y0.total_cmp(&c.bbox.y0))
+        .map(|(k, _)| k)
+}
+
+/// Lines a letterhead may set between its name and its address: a
+/// division's name.
+const LETTERHEAD_LINES: usize = 2;
+
+/// Widest difference in size, in points, between a letterhead's name and a
+/// line it sets under it as part of the name.
+const LETTERHEAD_SIZE_STEP: f32 = 0.5;
+
+/// Block `i` stands over an address block, directly or over a line or two
+/// set like it: `TRUE MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE
+/// DIVISION` over its street, phone and web address. A line set otherwise
+/// between them is not the name's: an article's title stands over its
+/// authors, and they over the affiliations that give their e-mail.
+fn over_contact(page: &[Block], i: usize) -> bool {
+    let name = &page[i];
+    let mut k = i;
+    for _ in 0..=LETTERHEAD_LINES {
+        let Some(next) = directly_below(page, k) else {
+            return false;
+        };
+        let b = &page[next];
+        if states_contact(b) {
+            return true;
+        }
+        if b.bold != name.bold || (b.font_size - name.font_size).abs() > LETTERHEAD_SIZE_STEP {
+            return false;
+        }
+        k = next;
+    }
+    false
+}
+
+/// Lines an address runs over, at most, from its first to the line with
+/// its phone number or web address.
+const ADDRESS_LINES: usize = 3;
+
+/// Does `b` open an address: the lines set flush under it, each within a
+/// line and a half of the last, reach one closing on a phone number or a
+/// web address (`Owens Corning Insulating Systems, LLC` over `One Owens
+/// Corning Parkway…` over `1-800-GET-PINK® www.owenscorning.com`)? Its
+/// first line names a company or a person, set bold, and is no section's
+/// title.
+fn opens_an_address(b: &Block, page: &[Block]) -> bool {
+    let fs = (b.font_size as f64).max(1.0);
+    // An address's lines are short: a heading over a list of references,
+    // each closing on its link, opens none.
+    let short = |o: &Block| o.text().split_whitespace().count() <= ADDRESS_WORDS;
+    if !short(b) {
+        return false;
+    }
+    let mut last = b;
+    for step in 0..ADDRESS_LINES {
+        let next = page
+            .iter()
+            .filter(|o| {
+                !std::ptr::eq(*o, last)
+                    && (o.bbox.x0 - b.bbox.x0).abs() <= fs
+                    && (-0.5..=fs * 1.5).contains(&(o.bbox.y0 - last.bbox.y1))
+            })
+            .min_by(|p, q| {
+                p.bbox
+                    .y0
+                    .partial_cmp(&q.bbox.y0)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let Some(next) = next else {
+            return false;
+        };
+        if !short(next) {
+            return false;
+        }
+        // A street or a city between the name and the number: a heading
+        // set straight over a line to call is a heading.
+        if ends_with_contact(&next.text()) {
+            return step > 0;
+        }
+        last = next;
+    }
+    false
+}
+
+/// Any line of the block states a web address, an e-mail address or a
+/// phone number: an address block's.
+fn states_contact(b: &Block) -> bool {
+    b.lines.iter().any(|l| ends_with_contact(&l.text))
+        || b.text().split(['•', '|']).any(ends_with_contact)
+}
+
+/// Most words on one line of an address.
+const ADDRESS_WORDS: usize = 10;
 
 /// A kicker is not a section: a category, series name or tagline set in
 /// smaller type directly above the title (`Scalable. Responsive.
@@ -1793,8 +2455,284 @@ mod tests {
         value.bbox.y0 = label.bbox.y0;
         value.bbox.y1 = label.bbox.y1;
         let page = vec![label.clone(), value];
-        assert!(not_a_typographic_heading("Color:", &label, &page));
-        assert!(!not_a_typographic_heading("Color:", &label, &page[..1]));
+        assert!(not_a_typographic_heading("Color:", &page, 0, 10.0));
+        assert!(!not_a_typographic_heading("Color:", &page[..1], 0, 10.0));
+    }
+
+    /// `text` at size `fs`, its top at `y`.
+    fn at(text: &str, fs: f32, y: f64, bold: bool) -> Block {
+        let mut b = blk(text, fs, 1);
+        b.bbox.y0 = y;
+        b.bbox.y1 = y + fs as f64;
+        b.bold = bold;
+        b
+    }
+
+    #[test]
+    fn a_forms_keys_answers_footers_and_line_captions_are_no_headings() {
+        for t in ["(a) (b)", "(f) (g)", "Yes No", "YES NO", "Yes No N/A"] {
+            assert!(keys_or_answers(t), "{t}");
+        }
+        for t in ["Part I", "(a) Definitions", "Notes", "No Surprises"] {
+            assert!(!keys_or_answers(t), "{t}");
+        }
+        assert!(refers_elsewhere(
+            "For Paperwork Reduction Act Notice, see your tax return instructions."
+        ));
+        assert!(!refers_elsewhere("Other Information (see instructions)"));
+        assert!(line_caption("b Refunded 37b"));
+        for t in ["Phase 2b", "a Introduction", "Schedule K", "b Refunded 37"] {
+            assert!(!line_caption(t), "{t}");
+        }
+        // A line that stops mid-phrase runs on into the next.
+        for t in ["5 Expenses recorded on books this year not", "Tax and"] {
+            assert!(ends_mid_phrase(t), "{t}");
+        }
+        for t in ["Part A", "Schedule A", "Terms and Conditions"] {
+            assert!(!ends_mid_phrase(t), "{t}");
+        }
+        let page = vec![
+            blk("(c) (d)", 8.0, 1),
+            blk(
+                "For Paperwork Reduction Act Notice, see separate instructions.",
+                8.0,
+                1,
+            ),
+            body(),
+        ];
+        let mut page = page;
+        page[0].bold = true;
+        page[1].bold = true;
+        // Kept headings until runs of bold heads are judged, marked as a
+        // form's text.
+        let hs = detect(&[page], &[]);
+        assert!(!hs.is_empty() && hs.iter().all(|h| h.form_text), "{hs:?}");
+    }
+
+    #[test]
+    fn a_tables_heads_over_its_figures_are_no_headings() {
+        let cell = |t: &str, x0: f64, x1: f64, y: f64| {
+            let mut b = at(t, 8.0, y, true);
+            b.bbox.x0 = x0;
+            b.bbox.x1 = x1;
+            b
+        };
+        // A header row over rows of figures, the rows 22pt apart.
+        let page = vec![
+            cell("95% CI", 140.0, 170.0, 158.0),
+            cell("%", 210.0, 216.0, 158.0),
+            cell("95%CI", 256.0, 282.0, 158.0),
+            cell("64.1 - 90.0", 141.0, 175.0, 181.0),
+        ];
+        assert!(heads_figures(&page, 2), "a head beside one over figures");
+        assert!(heads_figures(&page, 0));
+        // A stub over its row's figures.
+        let page = vec![
+            cell("Total assets, net", 50.0, 120.0, 100.0),
+            cell("2,482 2,395", 60.0, 110.0, 110.0),
+        ];
+        assert!(heads_figures(&page, 0));
+        // A slide's card titles side by side, over text.
+        let page = vec![
+            cell("Our Purpose", 50.0, 110.0, 100.0),
+            cell("Our Mission", 200.0, 260.0, 100.0),
+            cell("We build tools people trust", 50.0, 180.0, 112.0),
+            cell("Every team, every day", 200.0, 300.0, 112.0),
+        ];
+        assert!(!heads_figures(&page, 0) && !heads_figures(&page, 1));
+        assert!(
+            bare_figures("80.0 (28/35)") && bare_figures("$ 2,395") && !bare_figures("Q2 2025")
+        );
+    }
+
+    #[test]
+    fn a_charts_axis_titles_are_no_headings() {
+        let placed = |t: &str, x0: f64, x1: f64, y: f64, bold: bool| {
+            let mut b = at(t, 8.0, y, bold);
+            b.bbox.x0 = x0;
+            b.bbox.x1 = x1;
+            b
+        };
+        // An x-axis title under its scale's values.
+        let mut page: Vec<Block> = ["0", "0.5", "1", "1.5", "2"]
+            .iter()
+            .enumerate()
+            .map(|(k, t)| {
+                placed(
+                    t,
+                    100.0 + 40.0 * k as f64,
+                    106.0 + 40.0 * k as f64,
+                    300.0,
+                    false,
+                )
+            })
+            .collect();
+        page.push(placed("I - Output Current - A", 140.0, 230.0, 310.0, true));
+        assert!(under_a_scale(&page, 5));
+        // A heading over a paragraph that opens on figures is no axis's.
+        let page = vec![
+            placed("12 14 18", 100.0, 130.0, 300.0, false),
+            placed("Results", 100.0, 140.0, 310.0, true),
+        ];
+        assert!(!under_a_scale(&page, 1));
+        // A y-axis title set up the plot's side; the page's text runs across.
+        let mut side = placed("Recovery, in percent", 40.0, 48.0, 100.0, true);
+        side.lines[0].rotation_bucket = 90;
+        let page = vec![side, body(), body()];
+        assert!(turned(&page, &page[0]));
+        // On a page turned as a whole, its headings turn with its text.
+        let mut landscape = vec![blk("Summary", 10.0, 1), body(), body()];
+        for b in &mut landscape {
+            for l in &mut b.lines {
+                l.rotation_bucket = 90;
+            }
+        }
+        assert!(!turned(&landscape, &landscape[0]));
+        // Level text beside more turned labels than level lines.
+        let mut labels: Vec<Block> = (0..4)
+            .map(|k| {
+                let mut b = placed("SFF Carriers", 40.0, 48.0, 100.0 + 20.0 * k as f64, false);
+                b.lines[0].rotation_bucket = 90;
+                b
+            })
+            .collect();
+        labels.push(blk("HDD SKU Description Decoder", 14.0, 1));
+        assert!(!turned(&labels, &labels[4]));
+    }
+
+    #[test]
+    fn a_bold_label_over_its_value_is_no_heading() {
+        let mut label = at("Date of Preparation", 7.0, 100.0, true);
+        label.bbox.x1 = 200.0;
+        let mut value = at("Jun 5, 2026", 7.0, 108.0, false);
+        value.bbox.x1 = 160.0;
+        let mut head = at("Volatile Ingredients", 7.0, 200.0, true);
+        head.bbox.x1 = 200.0;
+        let mut text = at(
+            "The product contains water and a binder in the amounts below.",
+            7.0,
+            208.0,
+            false,
+        );
+        text.bbox.x1 = 400.0;
+        let mut answered = at("Photochemically Reactive", 7.0, 300.0, true);
+        answered.bbox.x1 = 200.0;
+        let mut answer = at("No", 7.0, 308.0, false);
+        answer.bbox.x1 = 90.0;
+        let mut ratings = at("Power and Ratings", 7.0, 400.0, true);
+        ratings.bbox.x1 = 200.0;
+        let mut first = at("120 V~ 60 Hz", 7.0, 408.0, false);
+        first.bbox.x1 = 150.0;
+        let mut more = at("Load rating 600 W incandescent", 7.0, 416.0, false);
+        more.bbox.x1 = 250.0;
+        let page = vec![
+            label, value, head, text, answered, answer, ratings, first, more,
+        ];
+        assert!(label_over_value(&page, 0));
+        assert!(!label_over_value(&page, 2), "a heading over a sentence");
+        assert!(label_over_value(&page, 4));
+        assert!(
+            !label_over_value(&page, 6),
+            "a heading over lines of specifications"
+        );
+    }
+
+    #[test]
+    fn fields_forms_and_signatures_are_no_headings() {
+        // A label and its value on one line.
+        assert!(field_on_its_line("CRI: 90+"));
+        assert!(field_on_its_line(
+            "Hours: 8:30 am - 6:00 pm EST (Monday - Friday)"
+        ));
+        assert!(field_on_its_line("Initial Closing Date: May 15, 2019"));
+        assert!(!field_on_its_line("Policy Rules: Limitations"));
+        assert!(!field_on_its_line(
+            "Part II: Application of Section 67 Limitation to Specific Deductions"
+        ));
+        // A form's label.
+        assert!(form_label("Model #:") && form_label("Location:"));
+        assert!(!form_label(
+            "The rules for excavations should also address:"
+        ));
+        // A party's role and name over the line it signs on.
+        let page = vec![
+            at("INVESTOR:", 10.0, 0.0, true),
+            at("Acme Fund, LP", 10.0, 14.0, true),
+            at("By: ____________", 10.0, 40.0, false),
+        ];
+        assert!(signs_off(&page, 0) && signs_off(&page, 1));
+        assert!(!signs_off(&page, 2));
+        // A head over its section's last paragraph, before a signature.
+        let page = vec![
+            at("Notation Vote", 10.0, 0.0, true),
+            blk(
+                "By notation vote completed on January 2, the Committee unanimously approved the minutes.",
+                10.0,
+                2,
+            ),
+            at("_______________________", 10.0, 60.0, false),
+            at("A. Secretary", 10.0, 74.0, true),
+        ];
+        assert!(!signs_off(&page, 0));
+        assert!(signature_page_label("[Signature Page to Voting Agreement]"));
+        // A value under its bold label, at its size; not a section under
+        // its title, set apart by a gap.
+        let page = vec![
+            at("PRODUCT NUMBER", 9.6, 0.0, true),
+            at("K25W951", 9.6, 13.4, false),
+            at("Overview", 9.6, 40.0, true),
+            at("A short line", 9.6, 62.0, false),
+        ];
+        assert!(value_under_label(&page, 1));
+        assert!(!value_under_label(&page, 3));
+    }
+
+    #[test]
+    fn a_letterhead_is_no_heading() {
+        let mut name = at("ACME MANUFACTURING CO., INC.", 9.3, 35.0, true);
+        name.bbox.x0 = 200.0;
+        name.bbox.x1 = 400.0;
+        let mut division = at("U.S.A. FOODSERVICE DIVISION", 9.3, 51.0, true);
+        division.bbox.x0 = 210.0;
+        division.bbox.x1 = 390.0;
+        let mut address = at(
+            "2001 East Lane, Springfield, Missouri 63366-4434 (636)240-2400",
+            7.2,
+            69.0,
+            false,
+        );
+        address.bbox.x0 = 180.0;
+        address.bbox.x1 = 420.0;
+        let mut rest = body();
+        rest.bbox.y0 = 600.0;
+        rest.bbox.y1 = 640.0;
+        let page = vec![name, division, address, rest];
+        assert!(over_contact(&page, 0) && over_contact(&page, 1));
+        let hs = detect(&[page], &[]);
+        assert!(hs.is_empty(), "{hs:?}");
+        // An article's title over its authors, over an affiliation that
+        // gives an e-mail address: the authors are not set like the title.
+        let mut title = at(
+            "Effect of Process Parameters on Alloy Properties",
+            17.9,
+            115.0,
+            false,
+        );
+        title.bbox.x0 = 77.0;
+        title.bbox.x1 = 500.0;
+        let mut authors = at("Ann Lee, Bo Chen and Cy Wu *", 10.0, 140.0, false);
+        authors.bbox.x0 = 76.0;
+        authors.bbox.x1 = 400.0;
+        let mut affiliation = at(
+            "School of Materials, Taiyuan 030051, China; ann@example.edu",
+            9.0,
+            155.0,
+            false,
+        );
+        affiliation.bbox.x0 = 82.0;
+        affiliation.bbox.x1 = 520.0;
+        let page = vec![title, authors, affiliation];
+        assert!(!over_contact(&page, 0));
     }
 
     #[test]
@@ -1818,6 +2756,32 @@ mod tests {
         ];
         let hs = detect(&[page], &[]);
         assert!(hs.iter().any(|h| h.text == statement), "{hs:?}");
+    }
+
+    #[test]
+    fn an_addresss_first_line_is_no_heading() {
+        let at = |t: &str, y: f64| {
+            let mut b = blk(t, 9.0, 1);
+            b.bbox.x0 = 449.0;
+            b.bbox.y0 = y;
+            b.bbox.y1 = y + 9.0;
+            for l in &mut b.lines {
+                l.bbox = b.bbox;
+            }
+            b
+        };
+        let page = vec![
+            at("Owens Corning Insulating Systems, LLC", 634.0),
+            at("One Owens Corning Parkway Toledo, OH 43659 USA", 646.0),
+            at("1-800-GET-PINK\u{AE} www.owenscorning.com", 658.0),
+            at("Installation", 700.0),
+            at(
+                "Blow the insulation to the thickness the chart gives",
+                712.0,
+            ),
+        ];
+        assert!(opens_an_address(&page[0], &page));
+        assert!(!opens_an_address(&page[3], &page));
     }
 
     #[test]
@@ -1847,9 +2811,14 @@ mod tests {
             "Highlights 2023 2024",
             "Route 101 2024",
             "T-49-HC",
+            "Molecular Weight: 259.3490",
         ] {
             assert!(title_like(t), "{t}");
         }
+        // A local number is hyphenated; set apart by a point, it is a
+        // decimal.
+        assert!(ends_with_contact("Fax 272-2408"));
+        assert!(!ends_with_contact("Exact Mass: 259.1572"));
     }
 
     #[test]
@@ -2290,6 +3259,46 @@ mod tests {
     }
 
     #[test]
+    fn a_bookmark_heads_one_place_and_its_running_copies_none() {
+        let title = "Appendix 1. Supplemental Figures";
+        let page = |p: usize, heading_y: Option<f64>| {
+            let mut head = blk(title, 10.0, 1);
+            head.page = p;
+            head.bold = true;
+            head.bbox.x0 = 396.0;
+            head.bbox.y0 = 43.0;
+            head.bbox.y1 = 53.0;
+            let mut blocks = vec![head];
+            if let Some(y) = heading_y {
+                let mut real = blk(title, 14.0, 1);
+                real.page = p;
+                real.bold = true;
+                real.bbox.y0 = y;
+                real.bbox.y1 = y + 14.0;
+                blocks.push(real);
+            }
+            let mut text = body();
+            text.page = p;
+            blocks.push(text);
+            blocks
+        };
+        // The heading on page 1, where its bookmark lands; the running head
+        // at the top of pages 2 to 4.
+        let mut pages = vec![page(0, None)];
+        pages[0].remove(0);
+        pages.push(page(1, Some(80.0)));
+        pages[1].remove(0);
+        pages.extend((2..5).map(|p| page(p, None)));
+        let hs = detect(&pages, &[bookmark(title, 1, Some(1), None)]);
+        let found: Vec<(usize, Evidence)> = hs
+            .iter()
+            .filter(|h| h.text == title)
+            .map(|h| (h.page, h.evidence))
+            .collect();
+        assert_eq!(found, [(1, Evidence::Outline)], "{hs:?}");
+    }
+
+    #[test]
     fn bold_line_at_body_size_is_a_heading() {
         let mut h = blk("Market Penetration", 10.0, 1);
         h.bold = true;
@@ -2297,6 +3306,64 @@ mod tests {
         let hs = detect(&pages, &[]);
         assert_eq!(hs.len(), 1);
         assert_eq!(hs[0].evidence, Evidence::Bold);
+    }
+
+    #[test]
+    fn bold_set_larger_than_the_body_is_ranked_by_its_size() {
+        let mut part = blk("Guidance", 12.0, 1);
+        part.bold = true;
+        let mut sub = blk("Market Penetration", 10.0, 1);
+        sub.bold = true;
+        let title = blk("Managing health and safety", 20.0, 1);
+        let pages = vec![vec![title, part, sub, blk("ordinary body prose", 10.0, 30)]];
+        let hs = detect(&pages, &[]);
+        assert_eq!(hs.len(), 3, "{hs:?}");
+        assert_eq!(hs[1].evidence, Evidence::FontSize);
+        assert_eq!(hs[2].evidence, Evidence::Bold);
+        assert!(hs[1].level < hs[2].level, "{hs:?}");
+    }
+
+    #[test]
+    fn the_body_is_bold_where_most_glyphs_at_its_size_are() {
+        let glyph = |text: &str, size: f32, weight: u32| crate::glyph::Glyph {
+            text: text.into(),
+            bbox: None,
+            page: 0,
+            origin: (0.0, 0.0),
+            rotation_deg: 0.0,
+            font_size: size,
+            weight: Some(weight),
+            advance: None,
+            draw_index: 0,
+        };
+        let run = |n: usize, size: f32, weight: u32| (0..n).map(move |_| glyph("a", size, weight));
+        // A form: its lines and figures in regular type, read as tables,
+        // its bold labels, and larger bold titles. Spaces are not counted.
+        let form: Vec<_> = run(400, 9.0, 400)
+            .chain((0..300).map(|_| glyph("1", 9.0, 400)))
+            .chain(run(500, 9.0, 700))
+            .chain((0..900).map(|_| glyph(" ", 9.0, 700)))
+            .chain(run(300, 14.0, 700))
+            .collect();
+        assert_eq!(body_is_bold(&form), Some(false));
+        let bold: Vec<_> = run(300, 10.0, 700).chain(run(100, 10.0, 400)).collect();
+        assert_eq!(body_is_bold(&bold), Some(true));
+        assert_eq!(body_is_bold(&[glyph(" ", 9.0, 700)]), None);
+        // Passed in, the glyphs' answer stands over the blocks': a page of
+        // short bold labels beside fewer regular lines keeps its bold titles.
+        let mut part = blk("Part I Additional Income", 9.0, 1);
+        part.bold = true;
+        let mut label = blk("Your social security number", 9.0, 1);
+        label.bold = true;
+        let pages = vec![vec![part, label, blk("Note: report the amounts", 9.0, 1)]];
+        assert!(detect(&pages, &[])
+            .iter()
+            .all(|h| h.evidence != Evidence::Bold));
+        let hs = detect_with_body(&pages, &[], 9.0, Some(false));
+        assert!(
+            hs.iter().any(|h| h.text == "Part I Additional Income"),
+            "{hs:?}"
+        );
     }
 
     #[test]

@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "plos-one-pmc6203400.pdf",
+    "url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0206576&type=printable",
+    "sha256": "c4eb6cb0ed545b85e05bc6599bb17b7b9457499c4d1633f92443df52033f1290",
+    "about": "PLoS ONE 13(10): e0206576, a research article. Its sections open on their first subsection, the two headings set bold at 12pt one over the other: `Materials and methods` over `Animals`."
+  },
+  "notes": [
+    "Stacked bold heads were one block: entries are parted where each line ends short of the column, but bold lines were left whole there, as a title broken over two lines must be. Bold lines are now parted where the next line opens with a capital and its first word would have fitted on the line before."
+  ],
+  "checks": [
+    {
+      "id": "section-head-alone",
+      "found": "2026-11-25",
+      "issue": "`Materials and methods` and `Animals` were one heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Materials and methods"
+      }
+    },
+    {
+      "id": "subsection-head-alone",
+      "found": "2026-11-25",
+      "issue": "As above, `Animals`.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Animals"
+      }
+    }
+  ]
+}

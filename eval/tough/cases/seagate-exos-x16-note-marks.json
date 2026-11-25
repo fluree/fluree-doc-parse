@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "seagate-exos-x16.pdf",
+    "url": "https://www.seagate.com/www-content/datasheets/pdfs/exos-x16-DS2011-1-1904US-en_US.pdf",
+    "sha256": "f97c80feb3d356c61bde605a02954704343e18bad893e5267164acc18c55c7f2",
+    "about": "Seagate Exos X16 hard drive data sheet (3 pages). The cover sets a 12.7 pt tagline over the 20.2 pt product name, and the back page sets the site name at 10.5 pt above 6 pt legal text."
+  },
+  "notes": [
+    "2026-11-24 (#206): a note's number after a bracket that holds a slash between names (`512e/4Kn`, `mm/in, max`) was read as a formula's power, and ran into the bracket."
+  ],
+  "checks": [
+    {
+      "id": "format-note",
+      "found": "2026-11-24",
+      "issue": "#206: the note's numbers were read into the bracket.",
+      "text": "FastFormat (512e/4Kn) 1,2"
+    },
+    {
+      "id": "format-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: the note's numbers were read into the bracket.",
+      "no_text": "(512e/4Kn)1"
+    },
+    {
+      "id": "dimension-note",
+      "found": "2026-11-24",
+      "issue": "#206: as above.",
+      "text": "Depth (mm/in, max) 4"
+    },
+    {
+      "id": "dimension-note-not-glued",
+      "found": "2026-11-24",
+      "issue": "#206: as above.",
+      "no_text": "max)4"
+    }
+  ]
+}

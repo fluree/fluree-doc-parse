@@ -214,6 +214,10 @@ impl Document {
     }
 }
 
+/// A page's glyphs' fonts and, for letters, ink ratios, in draw order: see
+/// [`infer_weights`].
+type PageInk = Vec<Option<(u128, Option<f64>)>>;
+
 struct Collector {
     page: usize,
     glyphs: Vec<Glyph>,
@@ -233,10 +237,11 @@ struct Collector {
     /// it this shows, not by its whole path; see [`Collector::visible`].
     clips: Vec<BBox>,
     /// Per-glyph `(font identity, ink ratio)`, parallel to `glyphs`, for the
-    /// weight inference in [`infer_weights`]. Kept alongside rather than on
+    /// weight inference in [`infer_weights`]: the font of every outline
+    /// glyph, and the ink ratio of a letter. Kept alongside rather than on
     /// `Glyph` because it is scaffolding: once weights are resolved it has no
     /// further use, and every consumer of `Glyph` would have to carry it.
-    ink: Vec<Option<(u128, f64)>>,
+    ink: PageInk,
     /// The letters a ligature joins, as the document draws them, kept across
     /// pages to read the ligatures it draws unmapped; see [`crate::ligature`].
     letters: crate::ligature::Letters,
@@ -258,6 +263,10 @@ struct Collector {
     /// end of what it covers, held until the page's words are drawn whole;
     /// see [`Collector::read_cased`].
     cased: Vec<(Spoken, usize)>,
+    /// What each font's dictionary says about its face, for the document.
+    faces: crate::faces::Faces,
+    /// The weight each font's glyphs are read at, once found.
+    weights: std::collections::HashMap<u128, Option<u32>>,
 }
 
 /// Marked content whose ActualText stands for the glyphs drawn inside it.
@@ -783,37 +792,35 @@ impl<'a> Device<'a> for Collector {
             _ => None,
         };
 
+        // The weight is what the font's name says (`-Bold`, `-Lt`,
+        // `-Halbfett`), in the PDF or inside the program; else what its
+        // descriptor's `/FontWeight` says; else the program's weight class.
+        // A name is the likeliest to be right: in the disagreements on bold
+        // looked at across a corpus of 7,000 documents, the name is the
+        // source that matches the page (`CooperHewitt-Thin`
+        // declared 701, `Frutiger-Black` 400, a subset of `NimbusSansL-Regu`
+        // whose program says 700). The descriptor goes before the program
+        // because it describes the face as drawn: Word's `Arial,Bold` embeds
+        // the regular program, states 700, and draws it emboldened.
         let weight = match glyph {
-            HGlyph::Outline(o) => o.font_data().and_then(|f| {
-                // Prefer the declared weight; fall back to the PostScript name,
-                // since many embedded subsets omit the weight class but keep a
-                // name like "TimesNewRomanPS-BoldMT".
-                f.weight.or_else(|| {
-                    let n = f
-                        .postscript_name
-                        .as_deref()
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
-                    // URW's Ghostscript families — the standard substitutes in
-                    // pdfTeX output — abbreviate their four styles to `Regu`,
-                    // `Medi`, `Ital` and `Bold`, and there `Medi` *is* the bold
-                    // face: `NimbusRomNo9L-Medi` sets every bold word in a LaTeX
-                    // paper. Full-word "Medium" is the ordinary 500 weight in
-                    // other families and must not be caught with it.
-                    let urw_medium = n.contains("medi") && !n.contains("medium");
-                    (n.contains("bold") || n.contains("black") || n.contains("heavy") || urw_medium)
-                        .then_some(700)
-                })
+            HGlyph::Outline(o) => *self.weights.entry(o.font_cache_key()).or_insert_with(|| {
+                let face = self.faces.get(o.font_cache_key());
+                let data = o.font_data();
+                let program = data.as_ref().and_then(|f| f.postscript_name.as_deref());
+                face.and_then(|f| f.named)
+                    .or_else(|| program.and_then(crate::faces::named_weight))
+                    .or_else(|| face.and_then(|f| f.declared))
+                    .or_else(|| data.as_ref().and_then(|f| f.weight))
             }),
             _ => None,
         };
-
-        // Ink density, for documents that declare no weights at all. Measured
+        // Ink density, for the faces no weight is stated for. Measured
         // here because the transformed outline is already being built for the
         // bounding box, and is not available anywhere later.
         let mut ink = None;
         let bbox = match glyph {
             HGlyph::Outline(o) => {
+                ink = Some((o.font_cache_key(), None));
                 let path = full * o.outline();
                 let r: Rect = path.bounding_box();
                 let b = crate::geom::from_kurbo(r);
@@ -824,7 +831,7 @@ impl<'a> Device<'a> for Collector {
                     // Letters only: punctuation and digits have ink ratios of
                     // their own that swamp the comparison between two faces.
                     if area > 0.0 && text.chars().all(|c| c.is_alphabetic()) {
-                        ink = Some((o.font_cache_key(), path.area().abs() / area));
+                        ink = Some((o.font_cache_key(), Some(path.area().abs() / area)));
                     }
                     Some(b)
                 }
@@ -1258,58 +1265,110 @@ const MIN_INK_GLYPHS: usize = 40;
 /// between a regular face and its italic, which differ by only a few percent.
 const BOLD_INK_MARGIN: f64 = 1.15;
 
-/// Infer font weight from ink density, for documents that declare none.
+/// Most a light body raises a document's weights: one step of the scale.
+const MAX_LIGHT_LIFT: u32 = 100;
+
+/// The weights a face stated to be medium declares: Medium is 500, and
+/// some families' stand a step either side of it.
+const MEDIUM_WEIGHTS: std::ops::RangeInclusive<u32> = 450..=550;
+
+/// How much wider than the body face's stems a face's must be to count as
+/// bold, for a face setting too few letters to be weighed by its ink.
+///
+/// A bold face's stems are 1.4 to 1.7 times its regular's (Helvetica 140 to
+/// 88, Times 139 to 84, Frutiger 136 to 96); a medium's about 1.3 (Söhne
+/// Kräftig 120 to Buch's 92), and an italic's about the regular's own.
+const BOLD_STEM_RATIO: f32 = 1.35;
+
+/// Infer the weight of the faces nothing names one for, from their ink.
 ///
 /// `hayro`'s `font_data()` returns `None` for Type 1 fonts, and many embedded
 /// subsets omit `/FontWeight` and carry a meaningless name. Across the
 /// 200-document benchmark corpus **81 documents — 40% — expose no weight at
 /// all**, which silently disables every weight-based heading signal on exactly
-/// the classic LaTeX papers where bold section titles are the only cue.
+/// the classic LaTeX papers where bold section titles are the only cue. Other
+/// documents name the weight of some faces and not of others.
 ///
 /// A bold face is physically heavier: it covers more of each glyph's box. That
 /// is measurable from the outline regardless of font format or naming. Faces
 /// are compared *within* a document against its body face — absolute ink ratios
-/// vary too much between typefaces to threshold directly.
+/// vary too much between typefaces to threshold directly. A face setting too
+/// few letters for its ink to be trusted is compared by the stem width its
+/// descriptor states, `stem`, against the body's. Letters alone are weighed,
+/// and only a bold face's letters are read as bold: its figures and signs,
+/// whose ink was not weighed, are left with no weight, which neither makes
+/// a line bold nor keeps one from being. A medium's figures read as medium
+/// outvoted its letters in a header cell (`WD8005FRYZ`), and read as bold
+/// they made bold lines of figures set in it (`RCR: 0` in a table, a
+/// paper's `doi:` line).
 ///
-/// Runs only when nothing is declared, so a document with real weight data is
-/// never second-guessed.
-fn infer_weights(pages: &mut [Page], ink: &[Vec<Option<(u128, f64)>>]) {
-    if pages
-        .iter()
-        .flat_map(|p| &p.glyphs)
-        .any(|g| g.weight.is_some())
-    {
-        return;
-    }
-    let mut stats: std::collections::HashMap<u128, (usize, f64)> = Default::default();
-    for page in ink {
-        for (key, ratio) in page.iter().flatten() {
-            let e = stats.entry(*key).or_insert((0, 0.0));
-            e.0 += 1;
-            e.1 += *ratio;
+/// Faces stated to be medium are judged, and, where the body face states no
+/// weight, faces with no weight; a weight the document states is otherwise
+/// never second-guessed. Beside a body whose weight is stated, a face with
+/// none is mostly a chart's, a logo's or a signature's, whose ink says
+/// nothing of headings. Where the body states none, the faces around it are
+/// as silent, and one face named elsewhere (`FrutigerLTStd-Bold` on a cover
+/// page a repository added to a paper) says nothing of them.
+///
+/// Medium is the one step whose look depends on the family. Söhne's Kräftig
+/// and Helvetica Neue's Medium are set as the bold, as heavy beside the
+/// regular as a semibold is; other families' mediums sit close to their
+/// regular. So a medium counts as bold when its ink, or its stems, say it is
+/// as much heavier than the body as a bold is, and otherwise stays medium.
+///
+/// Nothing is judged against a body face stated to be lighter or heavier
+/// than regular: over a light body, a regular face is heavier without being
+/// bold, and [`lift_light_body`] reads the weights against it instead.
+fn infer_weights(pages: &mut [Page], ink: &[PageInk], stem: impl Fn(u128) -> Option<f32>) {
+    // Letters, ink and stated weight by face.
+    let mut stats: std::collections::HashMap<u128, (usize, f64, Option<u32>)> = Default::default();
+    for (page, marks) in pages.iter().zip(ink) {
+        for (glyph, mark) in page.glyphs.iter().zip(marks) {
+            if let Some((key, Some(ratio))) = mark {
+                let e = stats.entry(*key).or_insert((0, 0.0, glyph.weight));
+                e.0 += 1;
+                e.1 += *ratio;
+            }
         }
-    }
-    stats.retain(|_, (n, _)| *n >= MIN_INK_GLYPHS);
-    if stats.len() < 2 {
-        return;
     }
     // The body face is the one setting the most letters. Comparing against the
     // mean of all faces instead would let a heading-heavy page drag the
     // reference upward and hide the very contrast being looked for. Two faces
     // setting as many letters are told apart by their ink, the lighter being
     // the body, and then by font, so the choice is the same on every run.
-    let (_, &(body_n, body_sum)) = stats
+    let Some((&body, &(body_n, body_sum, body_weight))) = stats
         .iter()
-        .max_by(|(ka, (na, sa)), (kb, (nb, sb))| {
+        .filter(|(_, (n, _, _))| *n >= MIN_INK_GLYPHS)
+        .max_by(|(ka, (na, sa, _)), (kb, (nb, sb, _))| {
             na.cmp(nb)
                 .then_with(|| (sb / *nb as f64).total_cmp(&(sa / *na as f64)))
                 .then_with(|| kb.cmp(ka))
         })
-        .expect("non-empty");
+    else {
+        return;
+    };
+    if body_weight.is_some_and(|w| !(400..=500).contains(&w)) {
+        return;
+    }
+    let open = |w: &Option<u32>| match w {
+        None => body_weight.is_none(),
+        Some(w) => MEDIUM_WEIGHTS.contains(w),
+    };
     let threshold = (body_sum / body_n as f64) * BOLD_INK_MARGIN;
+    let body_stem = stem(body);
     let bold: std::collections::HashSet<u128> = stats
         .iter()
-        .filter(|(_, (n, sum))| sum / *n as f64 >= threshold)
+        .filter(|(k, (n, sum, w))| {
+            open(w)
+                && **k != body
+                && if *n >= MIN_INK_GLYPHS {
+                    sum / *n as f64 >= threshold
+                } else {
+                    stem(**k)
+                        .zip(body_stem)
+                        .is_some_and(|(s, b)| s >= b * BOLD_STEM_RATIO)
+                }
+        })
         .map(|(k, _)| *k)
         .collect();
     if bold.is_empty() {
@@ -1317,9 +1376,46 @@ fn infer_weights(pages: &mut [Page], ink: &[Vec<Option<(u128, f64)>>]) {
     }
     for (page, marks) in pages.iter_mut().zip(ink) {
         for (glyph, mark) in page.glyphs.iter_mut().zip(marks) {
-            if mark.is_some_and(|(k, _)| bold.contains(&k)) {
-                glyph.weight = Some(700);
+            if let Some((k, ratio)) = mark {
+                if bold.contains(k) {
+                    glyph.weight = ratio.map(|_| 700);
+                }
             }
+        }
+    }
+}
+
+/// Read every weight against a regular body, for a document set in a light
+/// face.
+///
+/// What reads as bold is a face heavier than the text around it. A document
+/// whose body is Light (300) sets its headings in Medium (500), the step
+/// above regular that its designer uses as the bold; read on the absolute
+/// scale, that is lighter than bold, and every heading reads as body text.
+/// So the weights of a document whose body is lighter than regular are
+/// raised by as much as its body is, by one step at most: over a Light body
+/// the body reads 400 and Medium 600; over a Thin one (200), regular stays
+/// short of bold, as a table set in Helvetica beside text in Helvetica Neue
+/// Thin is.
+fn lift_light_body(pages: &mut [Page]) {
+    let mut letters: std::collections::BTreeMap<Option<u32>, usize> = Default::default();
+    for g in pages.iter().flat_map(|p| &p.glyphs) {
+        if g.text.chars().all(char::is_alphabetic) && !g.text.is_empty() {
+            *letters.entry(g.weight).or_default() += 1;
+        }
+    }
+    // Ties go to the heavier weight, so the lift is never more than needed.
+    let body = letters
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)))
+        .and_then(|(w, _)| *w);
+    let Some(body) = body.filter(|w| *w < 400) else {
+        return;
+    };
+    let lift = (400 - body).min(MAX_LIGHT_LIFT);
+    for g in pages.iter_mut().flat_map(|p| &mut p.glyphs) {
+        if let Some(w) = g.weight.as_mut() {
+            *w += lift;
         }
     }
 }
@@ -1346,12 +1442,15 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
     let cache = InterpreterCache::new();
     let settings = InterpreterSettings::default();
     let mut pages = Vec::new();
-    let mut ink: Vec<Vec<Option<(u128, f64)>>> = Vec::new();
+    let mut ink: Vec<PageInk> = Vec::new();
     let mut letters = crate::ligature::Letters::default();
     let mut unread: Vec<(usize, usize, String, kurbo::BezPath)> = Vec::new();
+    let mut faces = crate::faces::Faces::default();
+    let mut weights = std::collections::HashMap::new();
 
     for (index, page) in pdf.pages().iter().enumerate() {
         let (w, h) = page.render_dimensions();
+        faces.read(page);
         let mut dev = Collector {
             page: index,
             glyphs: Vec::new(),
@@ -1368,6 +1467,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
             symbols: Vec::new(),
             clips: Vec::new(),
             cased: Vec::new(),
+            faces: std::mem::take(&mut faces),
+            weights: std::mem::take(&mut weights),
             page_box: BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -1392,6 +1493,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         dev.read_cased();
         dev.read_symbols();
         letters = std::mem::take(&mut dev.letters);
+        faces = std::mem::take(&mut dev.faces);
+        weights = std::mem::take(&mut dev.weights);
         unread.extend(dev.unread.drain(..).map(|(i, f, o)| (index, i, f, o)));
         let mut page = Page {
             index,
@@ -1410,7 +1513,8 @@ pub fn extract_bytes(data: Vec<u8>) -> Result<Document, ExtractError> {
         ink.push(dev.ink);
         pages.push(page);
     }
-    infer_weights(&mut pages, &ink);
+    infer_weights(&mut pages, &ink, |k| faces.get(k).and_then(|f| f.stem));
+    lift_light_body(&mut pages);
     // Read the unmapped glyphs by their shape, now that every letter the
     // document draws is known. Glyph order is fixed from here on, so an
     // index still names the glyph it was taken from.
@@ -1724,16 +1828,16 @@ mod tests {
     }
 
     /// `body` letters at ratio 0.50, then `heavy` at `ratio`.
-    fn ink(body: usize, heavy: usize, ratio: f64) -> Vec<Vec<Option<(u128, f64)>>> {
-        let mut v: Vec<Option<(u128, f64)>> = (0..body).map(|_| Some((1u128, 0.50))).collect();
-        v.extend((0..heavy).map(|_| Some((2u128, ratio))));
+    fn ink(body: usize, heavy: usize, ratio: f64) -> Vec<PageInk> {
+        let mut v: PageInk = (0..body).map(|_| Some((1u128, Some(0.50)))).collect();
+        v.extend((0..heavy).map(|_| Some((2u128, Some(ratio)))));
         vec![v]
     }
 
     #[test]
     fn a_denser_face_is_inferred_bold() {
         let mut pages = vec![page(200)];
-        infer_weights(&mut pages, &ink(150, 50, 0.65));
+        infer_weights(&mut pages, &ink(150, 50, 0.65), |_| None);
         assert!(
             pages[0].glyphs[0].weight.is_none(),
             "body face stays regular"
@@ -1749,7 +1853,7 @@ mod tests {
     fn of_two_faces_setting_as_many_letters_the_lighter_is_the_body() {
         for _ in 0..8 {
             let mut pages = vec![page(200)];
-            infer_weights(&mut pages, &ink(100, 100, 0.65));
+            infer_weights(&mut pages, &ink(100, 100, 0.65), |_| None);
             assert!(pages[0].glyphs[0].weight.is_none());
             assert_eq!(pages[0].glyphs[199].weight, Some(700));
         }
@@ -1760,26 +1864,131 @@ mod tests {
         // A regular face and its italic differ by a few percent, well inside
         // the margin; promoting italics would flood the Bold heading signal.
         let mut pages = vec![page(200)];
-        infer_weights(&mut pages, &ink(150, 50, 0.53));
+        infer_weights(&mut pages, &ink(150, 50, 0.53), |_| None);
         assert!(pages[0].glyphs.iter().all(|g| g.weight.is_none()));
     }
 
     #[test]
     fn a_declared_weight_is_never_second_guessed() {
         let mut pages = vec![page(200)];
-        pages[0].glyphs[0].weight = Some(400);
-        infer_weights(&mut pages, &ink(150, 50, 0.90));
-        assert!(
-            pages[0].glyphs[199].weight.is_none(),
-            "inference must not run"
-        );
+        for g in &mut pages[0].glyphs[150..] {
+            g.weight = Some(400);
+        }
+        infer_weights(&mut pages, &ink(150, 50, 0.90), |_| None);
+        assert_eq!(pages[0].glyphs[199].weight, Some(400));
+    }
+
+    #[test]
+    fn a_silent_face_beside_a_stated_body_is_not_weighed() {
+        let mut pages = vec![page(200)];
+        for g in &mut pages[0].glyphs[..150] {
+            g.weight = Some(400);
+        }
+        infer_weights(&mut pages, &ink(150, 50, 0.65), |_| None);
+        assert!(pages[0].glyphs[199].weight.is_none());
+    }
+
+    #[test]
+    fn a_face_named_elsewhere_does_not_stop_a_silent_body_being_weighed() {
+        let mut pages = vec![page(201)];
+        pages[0].glyphs[200].weight = Some(700);
+        infer_weights(&mut pages, &ink(150, 50, 0.65), |_| None);
+        assert!(pages[0].glyphs[0].weight.is_none());
+        assert_eq!(pages[0].glyphs[199].weight, Some(700));
+    }
+
+    #[test]
+    fn a_medium_as_heavy_as_a_bold_reads_bold() {
+        for (ratio, weight) in [(0.65, 700), (0.53, 500)] {
+            let mut pages = vec![page(200)];
+            for (i, g) in pages[0].glyphs.iter_mut().enumerate() {
+                g.weight = Some(if i < 150 { 400 } else { 500 });
+            }
+            infer_weights(&mut pages, &ink(150, 50, ratio), |_| None);
+            assert_eq!(pages[0].glyphs[199].weight, Some(weight));
+        }
+    }
+
+    #[test]
+    fn a_medium_read_bold_leaves_its_figures_unweighed() {
+        // A header cell `WD8005FRYZ` in a medium read as bold: its digits,
+        // whose ink was not weighed, must not outvote its letters as medium.
+        let mut pages = vec![page(201)];
+        for (i, g) in pages[0].glyphs.iter_mut().enumerate() {
+            g.weight = Some(if i < 150 { 400 } else { 500 });
+        }
+        let mut marks = ink(150, 50, 0.65);
+        marks[0].push(Some((2u128, None)));
+        infer_weights(&mut pages, &marks, |_| None);
+        assert_eq!(pages[0].glyphs[199].weight, Some(700));
+        assert_eq!(pages[0].glyphs[200].weight, None);
+    }
+
+    #[test]
+    fn nothing_is_weighed_against_a_light_body() {
+        // A regular face is denser than a light one without being bold.
+        let mut pages = vec![page(200)];
+        for g in &mut pages[0].glyphs[..150] {
+            g.weight = Some(300);
+        }
+        infer_weights(&mut pages, &ink(150, 50, 0.65), |_| None);
+        assert!(pages[0].glyphs[199].weight.is_none());
+    }
+
+    #[test]
+    fn a_rare_face_is_weighed_by_its_stems() {
+        let stems = |k: u128| Some(if k == 2 { 140.0 } else { 88.0 });
+        let mut pages = vec![page(200)];
+        infer_weights(&mut pages, &ink(180, 20, 0.50), stems);
+        assert_eq!(pages[0].glyphs[199].weight, Some(700));
+        // A medium's stems are not a bold's.
+        let stems = |k: u128| Some(if k == 2 { 115.0 } else { 88.0 });
+        let mut pages = vec![page(200)];
+        infer_weights(&mut pages, &ink(180, 20, 0.50), stems);
+        assert!(pages[0].glyphs[199].weight.is_none());
+    }
+
+    #[test]
+    fn a_light_body_lifts_every_weight_until_it_reads_regular() {
+        let mut pages = vec![page(200)];
+        for (i, g) in pages[0].glyphs.iter_mut().enumerate() {
+            g.weight = Some(if i < 150 { 300 } else { 500 });
+        }
+        pages[0].glyphs[199].weight = None;
+        lift_light_body(&mut pages);
+        assert_eq!(pages[0].glyphs[0].weight, Some(400));
+        assert_eq!(pages[0].glyphs[150].weight, Some(600));
+        assert_eq!(pages[0].glyphs[199].weight, None);
+    }
+
+    #[test]
+    fn a_thin_body_lifts_by_one_step_only() {
+        let mut pages = vec![page(200)];
+        for (i, g) in pages[0].glyphs.iter_mut().enumerate() {
+            g.weight = Some(if i < 150 { 200 } else { 400 });
+        }
+        lift_light_body(&mut pages);
+        assert_eq!(pages[0].glyphs[0].weight, Some(300));
+        assert_eq!(pages[0].glyphs[199].weight, Some(500));
+    }
+
+    #[test]
+    fn a_regular_body_is_not_lifted() {
+        let mut pages = vec![page(200)];
+        for (i, g) in pages[0].glyphs.iter_mut().enumerate() {
+            g.weight = Some(if i < 150 { 400 } else { 300 });
+        }
+        lift_light_body(&mut pages);
+        assert_eq!(pages[0].glyphs[0].weight, Some(400));
+        assert_eq!(pages[0].glyphs[199].weight, Some(300));
     }
 
     #[test]
     fn a_rare_face_is_ignored() {
-        // Below MIN_INK_GLYPHS: a maths italic or a logo, not a text face.
+        // Below MIN_INK_GLYPHS, and with no stems stated: a maths italic or
+        // a logo, not a text face.
         let mut pages = vec![page(200)];
-        infer_weights(&mut pages, &ink(180, 20, 0.90));
+        infer_weights(&mut pages, &ink(180, 20, 0.90), |_| None);
         assert!(pages[0].glyphs.iter().all(|g| g.weight.is_none()));
     }
 }
@@ -1834,6 +2043,8 @@ mod actual_text_tests {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             cased: Vec::new(),
+            faces: Default::default(),
+            weights: Default::default(),
         };
         c.speak(Spoken {
             text: said.into(),
@@ -1878,6 +2089,8 @@ mod actual_text_tests {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             cased: Vec::new(),
+            faces: Default::default(),
+            weights: Default::default(),
         };
         for &(start, end, said) in spans {
             let span = Spoken {
@@ -1952,6 +2165,8 @@ mod actual_text_tests {
             symbol_fonts: std::collections::HashMap::new(),
             symbols: Vec::new(),
             cased: Vec::new(),
+            faces: Default::default(),
+            weights: Default::default(),
         };
         let circle = BBox {
             x0: 133.0,
