@@ -174,6 +174,30 @@ adding signals:
   page and goes up from one page to the next by as many pages as lie between,
   on most of them: a guide in three languages numbers each from 1, and an
   unnumbered insert skips one.
+- **Any line whose number changes without counting the pages.** The same
+  test holds for a line with words around its number: a catalogue's product
+  pages each open with their kit's title, `EPIC® H-BE 6 Kits` over `… 10 Kits`,
+  matched once digits are set aside, and a flow sheet's clock labels cycle
+  `00:00` to `20:00` at one place. Each says something of its own page. A
+  line whose number changes is running only where the number counts the
+  pages, or the line says it is the page's (`Page`, `3 of 9`).
+- **A line the body reaches past.** A running line stands outside the body:
+  nothing of the page's own lies between it and the page's edge in its
+  column. A guide's `FCC` heading, partway down a column near the top of the
+  last page of each language, repeats on three of nine pages under the end of
+  the section before it; on most of its pages, body text (a line on too few
+  pages to run, set from the same left edge) stands above it, so it is a
+  heading. A page's banner title over a running label set off to its right
+  is no column the label sits in.
+- **A short form of a title that varies.** A spec sheet titles some pages
+  `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS` and others `DISHWASHER`.
+  Taken as a running line, the short form was cut out of the long ones and
+  left `– ELECTRIC`. Where the pages a line is missing from set, in its place,
+  a longer line that opens or closes with its words, the place holds a title
+  that varies, and none of it runs. Not where the longer line is running
+  lines set as one: its other words run themselves (a navigation bar's
+  `Introduction Environmental Initiatives`, a transcript's `June 14, 2023
+  Chair Powell's Press Conference FINAL`), or it runs as it stands.
 
 ## Where it goes
 

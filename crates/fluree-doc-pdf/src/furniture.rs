@@ -167,6 +167,42 @@ fn detect_all(
 
     let needed = ((n_pages as f64 * MIN_PAGE_FRACTION).ceil() as usize).max(MIN_PAGES);
 
+    // The texts of the lines that repeat on enough pages to run, as set.
+    let running: Vec<String> = groups
+        .values()
+        .filter(|occ| {
+            let mut on: Vec<usize> = occ.iter().map(|o| o.0).collect();
+            on.sort_unstable();
+            on.dedup();
+            on.len() >= needed && occ.iter().all(|o| o.3 == occ[0].3)
+        })
+        .map(|occ| occ[0].3.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    // Each line's group, and on how many pages each group's lines could run:
+    // none where its number changes without counting the pages, which makes
+    // it each page's own.
+    let mut keys: Vec<Vec<String>> = pages
+        .iter()
+        .map(|(ls, _)| vec![String::new(); ls.len()])
+        .collect();
+    let mut seen_on: HashMap<String, usize> = HashMap::new();
+    for (sig, occ) in &groups {
+        let mut on: Vec<usize> = occ.iter().map(|o| o.0).collect();
+        on.sort_unstable();
+        on.dedup();
+        let mut texts: Vec<&str> = occ.iter().map(|o| o.3.as_str()).collect();
+        texts.sort_unstable();
+        texts.dedup();
+        let copies: Vec<(usize, &str)> = occ.iter().map(|o| (o.0, o.3.as_str())).collect();
+        let counts =
+            texts.len() < 2 || advances(&copies) || copies.iter().all(|(_, t)| says_page(t));
+        seen_on.insert(sig.clone(), if counts { on.len() } else { 0 });
+        for o in occ {
+            keys[o.0][o.1] = sig.clone();
+        }
+    }
+
     // The page-number group the folios come from: (pages it covers, distinct
     // values of its varying run), then the per-page values.
     let mut folio_sources: Vec<FolioSource> = Vec::new();
@@ -219,22 +255,72 @@ fn detect_all(
         raw.dedup();
         let digits_vary = sig.contains('#') && raw.len() > 1;
 
-        // A number alone at one place on page after page is a page number
-        // only if it counts the pages. An install guide's step numbers, a
-        // figure's callouts and a chart's axis labels sit at the same place
-        // too, and say something different there.
-        if digits_vary && bare_number(&sig) {
+        // A line whose number changes at one place on page after page is a
+        // page number only if the number counts the pages or the line says
+        // it is one. An install guide's step numbers, a figure's callouts
+        // and a chart's axis labels sit at the same place too, and so does a
+        // catalogue's product title on each product's page, `EPIC® H-BE 6
+        // Kits` over `… 10 Kits`: each says something of its own page.
+        if digits_vary {
             let stable: Vec<(usize, &str)> = occ
                 .iter()
                 .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
                 .map(|o| (o.0, o.3.as_str()))
                 .collect();
-            if !advances(&stable) {
+            let says = !bare_number(&sig) && stable.iter().all(|(_, t)| says_page(t));
+            if !advances(&stable) && !says {
                 continue;
             }
         }
 
         let kind = classify(median, digits_vary);
+
+        if kind != Furniture::Watermark {
+            let stable: Vec<&(usize, usize, f64, String)> = occ
+                .iter()
+                .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
+                .collect();
+            // A running line stands outside the body. Where, on most of its
+            // pages, text of that page's own stands between it and the
+            // page's edge in its column, it is a heading the body reached
+            // past: an install guide's `FCC` partway down a column, under
+            // the end of the section before it.
+            let inside = stable
+                .iter()
+                .filter(|o| beyond_the_body(pages, o.0, o.1, &seen_on, &keys, needed))
+                .count();
+            if inside * 2 > stable.len() {
+                continue;
+            }
+            // Nor is a line running where the pages it is missing from set
+            // a longer line in its place that opens or closes with its
+            // words: the place holds a title that varies from page to page
+            // (`DISHWASHER` over `DISHWASHER – ELECTRIC` and `– GAS`), and
+            // the pages that print the short form are that title's too. A
+            // longer line that runs itself is the same running head set as
+            // one line on some pages (`June 14, 2023 Chair Powell's Press
+            // Conference FINAL`), and says nothing of a title.
+            if !digits_vary {
+                let text = stable.first().map_or("", |o| o.3.trim());
+                let held: std::collections::HashSet<usize> = stable.iter().map(|o| o.0).collect();
+                let varied = (0..n_pages)
+                    .filter(|pi| !held.contains(pi))
+                    .filter(|&pi| {
+                        let (lines, height) = &pages[pi];
+                        *height > 0.0
+                            && lines.iter().enumerate().any(|(lj, l)| {
+                                (l.bbox.y0 / height - median).abs() < POSITION_TOLERANCE
+                                    && extends(l.text.trim(), text)
+                                        .is_some_and(|rest| !merges_running(rest, &running))
+                                    && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
+                            })
+                    })
+                    .count();
+                if varied > 0 && varied * 2 >= held.len() {
+                    continue;
+                }
+            }
+        }
 
         // A watermark appears once per page. `发布机构:` ("issuing agency")
         // occurs four times per page in one government filing as a field
@@ -304,6 +390,71 @@ fn detect_all(
         set.retain(|li| out[pi].contains_key(li));
     }
     (out, folios, exact)
+}
+
+/// Whether body text stands between line `li` of page `pi` and the edge of
+/// the page it is nearer, in the line's column: a line on too few pages to
+/// run (fewer than `needed`), above a line in the top half, below one in
+/// the foot, set from the same left edge. A guide printed in two versions
+/// of a language repeats its body on two pages, and it is the body still.
+/// A page's banner title over a running label set off to its right
+/// (`Federal Reserve Bank of Philadelphia` over `The Beige Book`) is no
+/// column of text the label sits in.
+fn beyond_the_body(
+    pages: &[(Vec<Line>, f64)],
+    pi: usize,
+    li: usize,
+    seen_on: &HashMap<String, usize>,
+    keys: &[Vec<String>],
+    needed: usize,
+) -> bool {
+    let (lines, height) = &pages[pi];
+    let line = &lines[li];
+    if *height <= 0.0 || line.rotation_bucket != 0 {
+        return false;
+    }
+    let top = (line.bbox.y0 + line.bbox.y1) / 2.0 < height / 2.0;
+    lines.iter().enumerate().any(|(lj, o)| {
+        lj != li
+            && o.rotation_bucket == 0
+            && !o.text.trim().is_empty()
+            && o.bbox.x0 < line.bbox.x1
+            && o.bbox.x1 > line.bbox.x0
+            && (o.bbox.x0 - line.bbox.x0).abs() <= f64::from(line.font_size.max(1.0))
+            && if top {
+                o.bbox.y1 <= line.bbox.y0
+            } else {
+                o.bbox.y0 >= line.bbox.y1
+            }
+            && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
+    })
+}
+
+/// The words `longer` sets after or before `short`, where it opens or
+/// closes with it.
+fn extends<'a>(longer: &'a str, short: &str) -> Option<&'a str> {
+    if short.is_empty() || longer.len() <= short.len() {
+        return None;
+    }
+    if longer.starts_with(short) && longer[short.len()..].starts_with(char::is_whitespace) {
+        return Some(longer[short.len()..].trim());
+    }
+    let cut = longer.len() - short.len();
+    (longer.ends_with(short) && longer[..cut].ends_with(char::is_whitespace))
+        .then(|| longer[..cut].trim())
+}
+
+/// Whether `rest`, the words a longer line sets beside a running line's,
+/// open or close with another line that runs: the longer line is running
+/// lines set as one (`Introduction Environmental Initiatives`, `Former Doc.:
+/// Contract Review`), not a title of the page's own.
+fn merges_running(rest: &str, running: &[String]) -> bool {
+    running.iter().any(|t| {
+        let t = t.as_str();
+        rest == t
+            || (rest.starts_with(t) && rest[t.len()..].starts_with(char::is_whitespace))
+            || (rest.ends_with(t) && rest[..rest.len() - t.len()].ends_with(char::is_whitespace))
+    })
 }
 
 /// A page-number line the folios may come from: (pages it covers, distinct
@@ -952,13 +1103,84 @@ mod tests {
     }
 
     #[test]
+    fn a_title_numbered_by_its_product_is_not_running() {
+        // A catalogue's product pages each open with their product's title,
+        // a size in it: the number changes, but does not count the pages.
+        let sizes = [6, 10, 16, 24];
+        let pages = doc(9, |i| {
+            let mut ls = vec![
+                line(&format!("Catalogue — {}", 19 + i), 20.0),
+                line(&format!("Body text of page {i}"), 400.0),
+            ];
+            if (4..8).contains(&i) {
+                ls.push(line(&format!("Kit H-BE {} Kits", sizes[i - 4]), 60.0));
+            }
+            ls
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        for (i, m) in marks.iter().enumerate().take(8).skip(4) {
+            assert_eq!(m.get(&2), None, "page {i}");
+        }
+        // The page number beside it still counts the pages.
+        assert_eq!(marks[4].get(&0), Some(&Furniture::PageNumber));
+        assert_eq!(folios[4].as_deref(), Some("23"));
+    }
+
+    #[test]
+    fn a_heading_the_body_reaches_past_is_not_running() {
+        // A guide's `FCC` heading, partway down a column near the top of the
+        // last page of each language, under the end of the section before.
+        // A header with nothing above it on those pages still runs.
+        let pages = doc(9, |i| {
+            let mut ls = vec![
+                line("Install Guide", 20.0),
+                line(&format!("Body text of page {i}"), 400.0),
+            ];
+            if i % 3 == 2 {
+                let section = ["one", "two", "three"][i / 3];
+                ls.push(line(
+                    &format!("the end of section {section} goes on here"),
+                    60.0,
+                ));
+                ls.push(line("FCC", 100.0));
+            }
+            ls
+        });
+        let marks = detect(&pages);
+        assert_eq!(marks[2].get(&0), Some(&Furniture::Header));
+        for i in [2, 5, 8] {
+            assert_eq!(marks[i].get(&3), None, "page {i}");
+        }
+    }
+
+    #[test]
+    fn a_title_that_varies_from_page_to_page_is_not_running() {
+        // A spec sheet's title names the model on some pages and not on
+        // others: `DISHWASHER` alone where the others say which.
+        let pages = doc(8, |i| {
+            let title = match i {
+                1 | 2 => "DISHWASHER – ELECTRIC",
+                3 | 4 => "DISHWASHER – GAS",
+                _ => "DISHWASHER",
+            };
+            vec![
+                line(title, 60.0),
+                line(&format!("Body text of page {i}"), 400.0),
+            ]
+        });
+        let marks = detect(&pages);
+        assert!(marks.iter().all(|m| m.get(&0).is_none()), "{marks:?}");
+    }
+
+    #[test]
     fn a_clock_label_with_few_values_is_not_a_folio() {
         // Six clock times cycling at one position across many pages: the
-        // digits vary, but not once per page.
+        // digits vary, but not once per page. A flow sheet's row label says
+        // something of its page, and is no furniture either.
         let times = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"];
         let pages = doc(30, |i| vec![line(times[i % 6], 60.0)]);
         let (marks, folios) = detect_with_folios(&pages);
-        assert_eq!(marks[0].get(&0), Some(&Furniture::PageNumber));
+        assert_eq!(marks[0].get(&0), None);
         assert!(folios.iter().all(Option::is_none));
     }
 
