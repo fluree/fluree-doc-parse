@@ -167,6 +167,10 @@ impl Grid {
     /// page-level line spans the full grid width. This is the same ordering
     /// constraint as column segmentation: segment first, assemble second.
     pub fn cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
+        crate::cells::texts(glyphs, &self.xs, &self.ys, || self.read_cell_texts(glyphs))
+    }
+
+    fn read_cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
         let mut buckets: Vec<Vec<crate::glyph::Glyph>> =
             vec![Vec::new(); self.rows() * self.cols()];
         for (g, home) in glyphs.iter().zip(self.glyph_cells(glyphs)) {
@@ -222,6 +226,10 @@ impl Grid {
     /// The cell each glyph is read into, as `row * cols + col`; `None` for
     /// a glyph outside the grid or set across it.
     pub(crate) fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
+        crate::cells::homes(glyphs, &self.xs, &self.ys, || self.read_glyph_cells(glyphs))
+    }
+
+    fn read_glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
         let cols = self.cols();
         let mut home: Vec<Option<usize>> = vec![None; glyphs.len()];
 
