@@ -1523,7 +1523,11 @@ impl Grid {
     /// - its names turned on their side in two cells or more, as narrow
     ///   columns' names are.
     ///
-    /// A band across the row is a section's label, not this.
+    /// A band across the row is a section's label, not this, and so is a
+    /// row under another bold row of names: the two are the table's top
+    /// block, a header and its first row set alike (`Class | Mission
+    /// Critical | Business Critical` over `Workload | High | Medium |
+    /// Low`), and nothing above them names the columns for one to rename.
     pub fn restated_header_rows(
         &self,
         rows: &[Vec<String>],
@@ -1615,6 +1619,7 @@ impl Grid {
             .filter(|&r| {
                 !bands.contains(&r)
                     && labels(r)
+                    && !(r > 0 && labels(r - 1) && bold(r - 1))
                     && rows[r]
                         .iter()
                         .zip(&rows[r + 1])
@@ -7795,6 +7800,33 @@ mod header_tests {
             one.extend(set(r, &[false, r == 2 || r == 0, r == 0]));
         }
         assert!(g.restated_header_rows(&rows, 1, &[], &one, &[]).is_empty());
+        // A bold row of names under another is the table's top block
+        // continuing, not a header restated.
+        let top: Vec<Vec<String>> = [
+            ["Class", "Mission Critical", "Business Critical"],
+            ["Workload", "High", "Medium"],
+            ["Usage", "Email, planning", "Backup, archive"],
+            ["Interface", "SAS 12 Gb", "SATA 6 Gb"],
+            ["RPM", "10000", "7200"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(|t| t.to_string()).collect())
+        .collect();
+        let set_top = |r: usize| -> Vec<crate::glyph::Glyph> {
+            top[r]
+                .iter()
+                .enumerate()
+                .map(|(c, t)| {
+                    let mut x = gly(c as f64 * 100.0 + 5.0, r as f64 * 20.0 + 14.0, 30.0, t);
+                    x.weight = Some(if r < 2 { 700 } else { 400 });
+                    x
+                })
+                .collect()
+        };
+        let glyphs: Vec<_> = (0..5).flat_map(set_top).collect();
+        assert!(g
+            .restated_header_rows(&top, 0, &[], &glyphs, &[])
+            .is_empty());
     }
 
     #[test]
