@@ -171,6 +171,13 @@ pub struct Element {
     /// nested table rules columns the outer rows do not have.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub merged_left: Option<Vec<bool>>,
+    /// Row-major, same shape as `cells`: this cell's value is set across the
+    /// cells to its right that continue it (`merged_left`), centred on them,
+    /// and is each of those columns' value as much as its own: a spec
+    /// table's `2 years` set across two models' columns. A run the ruling
+    /// merely leaves open holds its value in its first column alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spread_left: Option<Vec<bool>>,
     /// The id of the table this one carries on, on a table continued from
     /// the page before.
     ///
@@ -335,6 +342,7 @@ impl Element {
             restated_headers: None,
             merged_down: None,
             merged_left: None,
+            spread_left: None,
             continues: None,
             datums: None,
             figure: None,

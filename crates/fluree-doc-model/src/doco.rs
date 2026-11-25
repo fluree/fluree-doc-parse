@@ -388,6 +388,74 @@ fn record_width(header: &[String]) -> Option<usize> {
     })
 }
 
+/// A value set once across several data columns, each with a header of its
+/// own, written to each of them.
+///
+/// [`crate::merges::denormalize`] joins a run of columns the ruling leaves
+/// open into its first cell: a prose row a nested table's ruling slices
+/// reads whole. But a value centred across two models' columns, `M17
+/// Series` and `M21 Series`, is each model's: written once, under the first,
+/// the second model had no warranty, and the first one claimed a value that
+/// is not its alone. So, as a value spanning rows is copied onto each row,
+/// a value spanning columns is copied into each column, where:
+///
+/// - the reader set it across the run (`spread_left`), centred on it, not
+///   in its first column with the rest merely left unruled;
+/// - the run starts past the row's label, in the data columns, in a row
+///   of data (not a band, nor a row naming the columns afresh);
+/// - the value is the run's only text, the source's other cells in it
+///   empty (a sliced prose row holds text in several);
+/// - each column of the run has its own header, all of them different.
+///
+/// `None` where no run qualifies.
+fn spread_across_columns(
+    rows: &[Vec<String>],
+    raw: &[Vec<String>],
+    header: &[String],
+    n_header: usize,
+    merged_left: Option<&[bool]>,
+    spread_left: Option<&[bool]>,
+    subs: &[usize],
+) -> Option<Vec<Vec<String>>> {
+    let left = merged_left?;
+    let spread = spread_left?;
+    let ncols = rows.first()?.len();
+    if left.len() != rows.len() * ncols || spread.len() != left.len() || raw.len() != rows.len() {
+        return None;
+    }
+    let mut out = rows.to_vec();
+    let mut changed = false;
+    for r in n_header..rows.len() {
+        if subs.contains(&r) {
+            continue;
+        }
+        let mut c = 1;
+        while c < ncols {
+            let mut end = c + 1;
+            while end < ncols && left[r * ncols + end] {
+                end += 1;
+            }
+            if end > c + 1 && spread[r * ncols + c] && !rows[r][c].trim().is_empty() {
+                let mut named: Vec<&str> = (c..end)
+                    .map(|k| header.get(k).map_or("", |h| h.trim()))
+                    .collect();
+                let all_named = named.iter().all(|h| !h.is_empty());
+                named.sort_unstable();
+                named.dedup();
+                let alone = (c + 1..end).all(|k| raw[r].get(k).is_none_or(|t| t.trim().is_empty()));
+                if all_named && named.len() == end - c && alone {
+                    for k in c + 1..end {
+                        out[r][k] = rows[r][c].clone();
+                    }
+                    changed = true;
+                }
+            }
+            c = end;
+        }
+    }
+    changed.then_some(out)
+}
+
 fn column_headers(
     rows: &[Vec<String>],
     n_header: usize,
@@ -1133,6 +1201,22 @@ pub fn to_doco(elements: &[Element], opts: &DocoOptions) -> String {
                         ),
                     };
                     let subs = e.sub_headers.clone().unwrap_or_default();
+                    // A value set once across data columns that each have a
+                    // header of their own is each column's value.
+                    let spread = spread_across_columns(
+                        rows,
+                        raw_rows,
+                        &header,
+                        n_header,
+                        e.merged_left.as_deref(),
+                        e.spread_left.as_deref(),
+                        &[
+                            subs.as_slice(),
+                            e.restated_headers.as_deref().unwrap_or(&[]),
+                        ]
+                        .concat(),
+                    );
+                    let rows = spread.as_ref().unwrap_or(rows);
                     // A row set like the header, partway down, names the
                     // columns of the rows beneath it in the header's place:
                     // its labels stand for the header's lowest row, under
@@ -2106,6 +2190,42 @@ mod tests {
         assert_eq!(header("Method A"), "Surface burning");
         assert_eq!(header("Method B"), "Surface burning");
         assert_eq!(header("Method D"), "Hardness / Edge");
+    }
+
+    #[test]
+    fn a_value_set_across_headed_columns_is_each_columns() {
+        // Two models' columns, the warranty centred across both; a merely
+        // unruled run holds its value in its first column; a run under one
+        // header stays one cell.
+        let table = |spread: bool, head: [&str; 3]| {
+            let mut t = el("doco:Table", "", None);
+            t.cells = Some(
+                [
+                    head,
+                    ["Warranty", "2 years", ""],
+                    ["Weight", "11 kg", "12 kg"],
+                ]
+                .iter()
+                .map(|r| r.iter().map(|c| c.to_string()).collect())
+                .collect(),
+            );
+            t.header_rows = Some(1);
+            let mut left = vec![false; 9];
+            left[5] = true;
+            t.merged_left = Some(left);
+            let mut sp = vec![false; 9];
+            sp[4] = spread;
+            t.spread_left = Some(sp);
+            find(&graph(&[t]), "doc:TableCell")
+                .into_iter()
+                .filter(|c| c["doc:cellValue"] == "2 years")
+                .map(|c| c["doc:columnHeader"].as_str().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
+        };
+        let models = ["Specifications", "M17 Series", "M21 Series"];
+        assert_eq!(table(true, models), ["M17 Series", "M21 Series"]);
+        assert_eq!(table(false, models), ["M17 Series"]);
+        assert_eq!(table(true, ["Specifications", "Value", ""]), ["Value"]);
     }
 
     #[test]
