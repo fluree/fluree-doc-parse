@@ -141,6 +141,26 @@ most eight characters and three letters, or a capitalised word and a
 number), the gap after it is a tab stop's, not a gutter's. Splitting there
 cost the heading and footnote statistics in earlier attempts.
 
+Unless the label heads a column of its own. A margin block, `Issued
+07-2025` over `Supersedes 05-2025` at 7pt, stands beside a 6pt note whose
+first line falls on nearly the same baseline. The label reads like a word
+and a number, so the note's first line ran on from it. What sets it apart
+from a heading's number is twofold:
+
+- **The line under the label** starts where the label does, within half an
+  em, at most an em of leading down. It ends an em short of the text past
+  the gap.
+- **Size or baseline.** The label and that text differ in size or baseline
+  by a tenth of an em: a step down in type (6pt beside 7pt is a seventh), or
+  a baseline off by more than one line's jitter.
+
+A heading's number has its text's size and baseline, and the line under it
+runs on across. The label must hold a letter: a bare number over others is a
+chart's ticks or a column of figures beside its label (`20` over `10` beside
+`Energy`), not a block. Without the size-or-baseline test the cut parted
+twice as many documents, most of them chart labels, and lost
+`cUR according to CSA …`'s mark from its text.
+
 A running head set as two groups across the page's top now reads as two
 lines. The title test passes over a one-line block that shares its row with
 another one-line block beside it, so a course code at the right of a

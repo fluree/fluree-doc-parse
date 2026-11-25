@@ -449,7 +449,10 @@ gutter, the gap is measured from the last glyph that put ink down, so a
 column's line and a callout, or the next column's line, are read apart. A
 justified line's stretched space stays a space: the lines of its paragraph
 run across it. A number or a label set off from its text by a tab, `3.1 ⇥
-Results` or `Note 3. ⇥ Business Segment`, stays with its text.
+Results` or `Note 3. ⇥ Business Segment`, stays with its text. A label
+that heads a block of its own in the margin, in another size from the text
+beside it (`Issued 07-2025` over `Supersedes 05-2025` beside a note), is
+read apart from it.
 
 **Drop caps.** A paragraph's first letter set large, its top at the top of
 the first line and its foot on the second's, third's or fourth's baseline,
