@@ -2282,9 +2282,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
-        let mut aligned_full = timed(&mut timings.tables, || {
+        let page_aligned = timed(&mut timings.tables, || {
             table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
         });
+        // Alignment is read again below from the glyphs outside the grids
+        // (`glyphs_outside_grids`, which keeps them in order). Where no grid
+        // took any, those are the page's glyphs as they are here, and so is
+        // their reading.
+        let aligned_in = |glyphs: &[Glyph]| {
+            if glyphs.len() == p.glyphs.len() {
+                page_aligned.clone()
+            } else {
+                table::detect_aligned(glyphs, &p.rules, &p.fills, p.index)
+            }
+        };
+        let mut aligned_full = page_aligned.clone();
         // Justified prose lines its words up into columns; it is no reading
         // to prefer over a ruled table holding a paragraph in a cell.
         aligned_full.retain(|g| !table::reads_as_prose(g, &p.glyphs));
@@ -2359,7 +2371,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut taken: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
                 taken.extend(read.iter().map(|g| g.bbox));
                 let outside = glyphs_outside_grids(&p.glyphs, &grids);
-                let accepted = table::detect_aligned(&outside, &p.rules, &p.fills, p.index);
+                let accepted = aligned_in(&outside);
                 let typed: Vec<crate::geom::BBox> = accepted
                     .iter()
                     .filter(|g| table::typed_layout(g, &outside))
@@ -2527,9 +2539,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // `table::is_corroborated`. An earlier ungated version was
         // net-negative: it converted prose into tables and cost more in reading
         // order (NID 0.868 -> 0.839) than it gained in table structure.
-        let mut aligned = timed(&mut timings.tables, || {
-            table::detect_aligned(&prose, &p.rules, &p.fills, p.index)
-        });
+        let mut aligned = timed(&mut timings.tables, || aligned_in(&prose));
         // A box drawn round a drawing parts the text either side of it: a
         // grid read across its edge put a diagram's labels and the note in
         // the column beside its box in one row.

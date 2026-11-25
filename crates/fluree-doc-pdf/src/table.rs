@@ -5670,25 +5670,34 @@ pub fn detect_aligned(
     fills: &[crate::rule::Fill],
     page: usize,
 ) -> Vec<Grid> {
-    let captions: Vec<BBox> = crate::line::assemble(glyphs)
-        .into_iter()
-        .filter(|line| numbered_table_caption(&line.text))
-        .map(|line| line.bbox)
-        .collect();
+    // The page's lines, read only for a candidate its geometry does not
+    // already accept and big enough for a caption to name.
+    let captions = std::cell::OnceCell::new();
+    let captions = || -> &Vec<BBox> {
+        captions.get_or_init(|| {
+            crate::line::assemble(glyphs)
+                .into_iter()
+                .filter(|line| numbered_table_caption(&line.text))
+                .map(|line| line.bbox)
+                .collect()
+        })
+    };
     let (rows, cells) = aligned_rows(glyphs);
     let mut out: Vec<Grid> = aligned_runs(&rows, &cells, page)
         .into_iter()
         .filter(|g| {
-            let captioned = g.cols() >= 3
-                && g.rows() >= 3
-                && captions.iter().any(|caption| {
-                    caption.y1 <= g.bbox.y0
-                        && g.bbox.y0 - caption.y1 <= g.bbox.height()
-                        && caption.x1 >= g.bbox.x0
-                        && caption.x0 <= g.bbox.x1
-                });
+            let captioned = || {
+                g.cols() >= 3
+                    && g.rows() >= 3
+                    && captions().iter().any(|caption| {
+                        caption.y1 <= g.bbox.y0
+                            && g.bbox.y0 - caption.y1 <= g.bbox.height()
+                            && caption.x1 >= g.bbox.x0
+                            && caption.x0 <= g.bbox.x1
+                    })
+            };
             accepts_aligned_candidate(g, rules, fills)
-                || captioned
+                || captioned()
                 || has_typeset_header(g, glyphs)
                 || has_two_axis_header(g, glyphs)
         })
@@ -5707,7 +5716,7 @@ pub fn detect_aligned(
             out.push(part);
         }
     }
-    for list in colon_field_lists(glyphs, page) {
+    for list in colon_field_lists(glyphs, &rows, page) {
         let taken = out
             .iter()
             .any(|g| g.bbox.y0 < list.bbox.y1 && list.bbox.y0 < g.bbox.y1);
@@ -6012,8 +6021,12 @@ fn label_colon(label: &str) -> Option<bool> {
 /// the same order turns more multi-column prose into tables — two columns
 /// of a report, three panels of a slide — than the gates of
 /// [`detect_aligned`] can turn away.
-fn colon_field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
-    let (mut rows, _) = aligned_rows(glyphs);
+fn colon_field_lists(
+    glyphs: &[crate::glyph::Glyph],
+    rows: &[Vec<&crate::glyph::Glyph>],
+    page: usize,
+) -> Vec<Grid> {
+    let mut rows = rows.to_vec();
     for r in rows.iter_mut() {
         r.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
     }
