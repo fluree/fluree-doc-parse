@@ -116,6 +116,19 @@ Weight and size never make a heading of these:
   which one stands over such figures (`95%CI` beside `95% CI` and `%`). A
   slide's card titles stand side by side too, but over text, not figures.
   Where the table is found, these cells are its headers.
+- **A table's column head left out of the table:** a short line, eight words
+  or fewer, set on a found table's top edge, within a line of it with
+  nothing between, and inside its width. It must also sit over the table's
+  value columns (past its middle), or on a row with two or more of the
+  table's other heads. Examples are `Total SOMA` over two years' columns,
+  `Item` over a stub on the row of the period heads, and `2008 vs. 2007
+  2007 vs. 2006` over a change table's columns. These stay headings:
+  - a table's title, set from the table's left edge or centred over it;
+  - a section's heading over a table, which starts where the text does;
+  - a form's part title beside only its `Part I` label;
+  - a banner over its own paragraph, with the table after that.
+
+  This is judged on the final elements, where the tables are.
 - **A signature block's party:** a role or a name with a line to sign on
   just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
   `(Signature)`), and a signature page's label (`Signature Page to Voting
