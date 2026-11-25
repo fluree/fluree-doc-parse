@@ -346,7 +346,7 @@ impl Grid {
                 })
                 .collect()
         };
-        let suffixed: std::collections::HashSet<usize> = (0..runs.len())
+        let suffixed: rustc_hash::FxHashSet<usize> = (0..runs.len())
             .filter(|&m| after_figure(m) && !prices_next(m))
             .map(|m| line_of[m])
             .collect();
@@ -454,8 +454,7 @@ impl Grid {
         // or watermark drawn over a table runs through several cells, or
         // across text, and stays out of them.
         {
-            let occupied: std::collections::HashSet<usize> =
-                home.iter().flatten().copied().collect();
+            let occupied: rustc_hash::FxHashSet<usize> = home.iter().flatten().copied().collect();
             let mut turned: Vec<usize> = (0..glyphs.len())
                 .filter(|&i| {
                     let g = &glyphs[i];
@@ -1248,16 +1247,25 @@ impl Grid {
         if run >= 2 && run < rows.len() && run <= MAX_HEADER_ROWS {
             return run;
         }
-        // A label column — bold on every row, nothing else bold — makes a
-        // list of fields, whose first row is a field like the others.
+        // Label columns — the leading columns bold on every row, the rest
+        // bold on none, the first row's included — make a list of fields,
+        // whose first row is a field like the others: a field's name, or a
+        // name and the size each value is for (`PRODUCT CODE | 8′2" | …`). A
+        // header row names every column in its weight, the values' too.
         let bold = |(weighted, heavy): (usize, usize)| weighted > 0 && heavy * 2 > weighted;
         let weights: Vec<Vec<(usize, usize)>> = (0..self.rows())
             .map(|r| self.cell_weights(glyphs, r))
             .collect();
+        let labels = (0..self.cols())
+            .take_while(|&c| weights.iter().all(|w| bold(w[c])))
+            .count();
         let label_column = self.cols() >= 2
             && run == 0
-            && weights.iter().all(|w| bold(w[0]))
-            && weights.iter().all(|w| w[1..].iter().all(|c| !bold(*c)));
+            && labels >= 1
+            && labels < self.cols()
+            && weights
+                .iter()
+                .all(|w| w[labels..].iter().all(|c| !bold(*c)));
         // So does one whose labels a colon ends, in any weight.
         let colon_labels =
             self.cols() == 2 && rows.iter().all(|r| r.len() == 2) && colon_fields(&rows.concat());
@@ -1902,6 +1910,7 @@ fn join_cell_lines<'a>(lines: impl Iterator<Item = &'a str>) -> String {
                         out.push(CELL_BREAK);
                     }
                 }
+                _ if crate::block::closed_join(&out, l) => {}
                 _ => out.push(' '),
             }
         }
@@ -5678,25 +5687,34 @@ pub fn detect_aligned(
     fills: &[crate::rule::Fill],
     page: usize,
 ) -> Vec<Grid> {
-    let captions: Vec<BBox> = crate::line::assemble(glyphs)
-        .into_iter()
-        .filter(|line| numbered_table_caption(&line.text))
-        .map(|line| line.bbox)
-        .collect();
+    // The page's lines, read only for a candidate its geometry does not
+    // already accept and big enough for a caption to name.
+    let captions = std::cell::OnceCell::new();
+    let captions = || -> &Vec<BBox> {
+        captions.get_or_init(|| {
+            crate::line::assemble(glyphs)
+                .into_iter()
+                .filter(|line| numbered_table_caption(&line.text))
+                .map(|line| line.bbox)
+                .collect()
+        })
+    };
     let (rows, cells) = aligned_rows(glyphs);
     let mut out: Vec<Grid> = aligned_runs(&rows, &cells, page)
         .into_iter()
         .filter(|g| {
-            let captioned = g.cols() >= 3
-                && g.rows() >= 3
-                && captions.iter().any(|caption| {
-                    caption.y1 <= g.bbox.y0
-                        && g.bbox.y0 - caption.y1 <= g.bbox.height()
-                        && caption.x1 >= g.bbox.x0
-                        && caption.x0 <= g.bbox.x1
-                });
+            let captioned = || {
+                g.cols() >= 3
+                    && g.rows() >= 3
+                    && captions().iter().any(|caption| {
+                        caption.y1 <= g.bbox.y0
+                            && g.bbox.y0 - caption.y1 <= g.bbox.height()
+                            && caption.x1 >= g.bbox.x0
+                            && caption.x0 <= g.bbox.x1
+                    })
+            };
             accepts_aligned_candidate(g, rules, fills)
-                || captioned
+                || captioned()
                 || has_typeset_header(g, glyphs)
                 || has_two_axis_header(g, glyphs)
         })
@@ -5715,7 +5733,7 @@ pub fn detect_aligned(
             out.push(part);
         }
     }
-    for list in colon_field_lists(glyphs, page) {
+    for list in colon_field_lists(glyphs, &rows, page) {
         let taken = out
             .iter()
             .any(|g| g.bbox.y0 < list.bbox.y1 && list.bbox.y0 < g.bbox.y1);
@@ -6020,8 +6038,12 @@ fn label_colon(label: &str) -> Option<bool> {
 /// the same order turns more multi-column prose into tables — two columns
 /// of a report, three panels of a slide — than the gates of
 /// [`detect_aligned`] can turn away.
-fn colon_field_lists(glyphs: &[crate::glyph::Glyph], page: usize) -> Vec<Grid> {
-    let (mut rows, _) = aligned_rows(glyphs);
+fn colon_field_lists(
+    glyphs: &[crate::glyph::Glyph],
+    rows: &[Vec<&crate::glyph::Glyph>],
+    page: usize,
+) -> Vec<Grid> {
+    let mut rows = rows.to_vec();
     for r in rows.iter_mut() {
         r.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
     }
@@ -6219,7 +6241,7 @@ pub fn field_lists_in(
     let baseline = |r: usize| glyphs[rows[r][0]].origin.1;
     let cuts: Vec<f64> = columns.iter().skip(1).map(|c| c.x0).collect();
     // Runs that share rows share their cells: each cell's text is read once.
-    let mut read: std::collections::HashMap<Vec<usize>, String> = Default::default();
+    let mut read: rustc_hash::FxHashMap<Vec<usize>, String> = Default::default();
     let mut used: Vec<Vec<bool>> = segs.iter().map(|r| vec![false; r.len()]).collect();
     let mut out = Vec::new();
     for i in 0..rows.len() {
@@ -9100,6 +9122,58 @@ mod header_tests {
         glyphs.extend(run(5.0, 135.0, "10", false));
         glyphs.extend(run(105.0, 135.0, "12", false));
         let t = rows(&[&["1", "2"], &["10", "12"], &["", ""]]);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
+    }
+
+    #[test]
+    fn two_bold_label_columns_beside_plain_values_make_no_header() {
+        // A field's name and the size each value is for, both bold on every
+        // row, the values plain: a list of fields, the first row one of them.
+        let g = plain_grid(
+            vec![0.0, 100.0, 150.0, 300.0],
+            vec![100.0, 120.0, 140.0, 160.0],
+        );
+        let run = |x: f64, y: f64, text: &str, bold: bool| -> Vec<crate::glyph::Glyph> {
+            text.chars()
+                .enumerate()
+                .map(|(i, c)| {
+                    let mut gl = gly(x + 6.0 * i as f64, y, 5.0, &c.to_string());
+                    gl.weight = Some(if bold { 700 } else { 400 });
+                    gl
+                })
+                .collect()
+        };
+        let mut glyphs = Vec::new();
+        for (y, label, size, value) in [
+            (115.0, "Code", "4 ft", "7712"),
+            (135.0, "Count", "4 ft", "60"),
+            (155.0, "Weight", "4 ft", "12 kg"),
+        ] {
+            glyphs.extend(run(5.0, y, label, true));
+            glyphs.extend(run(105.0, y, size, true));
+            glyphs.extend(run(155.0, y, value, false));
+        }
+        let t = rows(&[
+            &["Code", "4 ft", "7712"],
+            &["Count", "4 ft", "60"],
+            &["Weight", "4 ft", "12 kg"],
+        ]);
+        assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 0);
+        // A header bold across every column, the values' too, still is one.
+        let mut glyphs = Vec::new();
+        glyphs.extend(run(5.0, 115.0, "Item", true));
+        glyphs.extend(run(105.0, 115.0, "Size", true));
+        glyphs.extend(run(155.0, 115.0, "Price", true));
+        for (y, a, b, c) in [(135.0, "Bolt", "M6", "0.40"), (155.0, "Nut", "M6", "0.10")] {
+            glyphs.extend(run(5.0, y, a, true));
+            glyphs.extend(run(105.0, y, b, true));
+            glyphs.extend(run(155.0, y, c, false));
+        }
+        let t = rows(&[
+            &["Item", "Size", "Price"],
+            &["Bolt", "M6", "0.40"],
+            &["Nut", "M6", "0.10"],
+        ]);
         assert_eq!(g.header_rows(&t, &glyphs, &[], &[]), 1);
     }
 
