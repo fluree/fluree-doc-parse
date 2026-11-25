@@ -1571,7 +1571,14 @@ impl Grid {
             let (values, bold) = bold_values(r);
             bold < values || values == 0
         };
-        let shaded = |r: usize| self.band_has_fill(fills, r);
+        // The row and the header shaded by fills of their own: a page's
+        // watermark drawn under the table's top rows, and ending above the
+        // rest, shades none of them. The rows under it unshaded by any fill:
+        // a table laid on a background is shaded throughout, and no row of
+        // it stands apart by its shading.
+        let shaded = |r: usize| self.rows_have_own_fill(fills, r..r + 1);
+        let header_shaded = self.rows_have_own_fill(fills, 0..header_rows.max(1));
+        let unshaded = |r: usize| !self.band_has_fill(fills, r);
         // Turned glyphs inside the table, each with the cell its ink is in.
         let turned_at: Vec<(&crate::glyph::Glyph, (usize, usize))> = glyphs
             .iter()
@@ -1614,9 +1621,9 @@ impl Grid {
                         .any(|(a, b)| !a.trim().is_empty() && !b.trim().is_empty())
                     && ((bold(r) && plain(r + 1))
                         || (shaded(r)
-                            && shaded(0)
-                            && !shaded(r + 1)
-                            && (r + 2 >= n || !shaded(r + 2)))
+                            && header_shaded
+                            && unshaded(r + 1)
+                            && (r + 2 >= n || unshaded(r + 2)))
                         || turned(r))
             })
             .collect()
@@ -1718,6 +1725,33 @@ impl Grid {
     /// not any-single-fill — a header row shaded cell-by-cell is five narrow
     /// fills, none individually wide.
     fn band_has_fill(&self, fills: &[crate::rule::Fill], row: usize) -> bool {
+        self.shaded_across(fills, row, None)
+    }
+
+    /// Whether rows `rows` are shaded by fills of their own, across half the
+    /// table at the first of them: each fill starting and ending within
+    /// those rows. A background laid under the page or the whole table (a
+    /// watermark's grey drawing) runs on past them, and shades no row of its
+    /// own.
+    fn rows_have_own_fill(
+        &self,
+        fills: &[crate::rule::Fill],
+        rows: std::ops::Range<usize>,
+    ) -> bool {
+        let (Some(&top), Some(&bottom)) = (self.ys.get(rows.start), self.ys.get(rows.end)) else {
+            return false;
+        };
+        self.shaded_across(fills, rows.start, Some((top, bottom)))
+    }
+
+    /// Whether fills cover half the table's width across row `row`'s middle,
+    /// counting only those lying `within` the given heights where set.
+    fn shaded_across(
+        &self,
+        fills: &[crate::rule::Fill],
+        row: usize,
+        within: Option<(f64, f64)>,
+    ) -> bool {
         let (Some(&y0), Some(&y1)) = (self.ys.get(row), self.ys.get(row + 1)) else {
             return false;
         };
@@ -1725,6 +1759,11 @@ impl Grid {
         let mut spans: Vec<(f64, f64)> = fills
             .iter()
             .filter(|f| f.bbox.y0 <= mid && f.bbox.y1 >= mid)
+            .filter(|f| {
+                within.is_none_or(|(top, bottom)| {
+                    f.bbox.y0 >= top - EDGE_TOLERANCE && f.bbox.y1 <= bottom + EDGE_TOLERANCE
+                })
+            })
             .map(|f| (f.bbox.x0.max(self.bbox.x0), f.bbox.x1.min(self.bbox.x1)))
             .filter(|(a, b)| b > a)
             .collect();
@@ -7756,6 +7795,35 @@ mod header_tests {
             one.extend(set(r, &[false, r == 2 || r == 0, r == 0]));
         }
         assert!(g.restated_header_rows(&rows, 1, &[], &one, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_row_shaded_like_the_header_restates_it_but_a_watermark_does_not() {
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            (0..6).map(|k| k as f64 * 20.0).collect(),
+        );
+        let rows = rows(&[
+            &["", "Alpha", "Beta"],
+            &["Size", "12", "14"],
+            &["Mode", "Fast", "Slow"],
+            &["Rate", "3", "4"],
+            &["Load", "5", "6"],
+        ]);
+        // The header and the row restating it, each shaded on its own.
+        let bands = [fill(0.0, 0.0, 300.0, 20.0), fill(0.0, 40.0, 300.0, 60.0)];
+        assert_eq!(g.restated_header_rows(&rows, 1, &[], &[], &bands), vec![2]);
+        // A page's watermark drawn under the top three rows, ending above
+        // the rest, shades none of them.
+        let watermark = [fill(0.0, -200.0, 300.0, 60.0)];
+        assert!(g
+            .restated_header_rows(&rows, 1, &[], &[], &watermark)
+            .is_empty());
+        // A table laid on a background is shaded throughout: no row of it
+        // stands apart by its shading.
+        let mut laid = bands.to_vec();
+        laid.push(fill(-10.0, -10.0, 310.0, 110.0));
+        assert!(g.restated_header_rows(&rows, 1, &[], &[], &laid).is_empty());
     }
 
     #[test]
