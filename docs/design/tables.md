@@ -411,7 +411,12 @@ of three ways:
   `Total` is, beside a bold `LB/Gal | g/L`. One bold word beside a label is
   emphasis.
 - **Shaded as the header row is,** over two rows that are not; striped rows
-  alternate.
+  alternate. The row and the header are shaded by fills of their own,
+  starting and ending within them. A drawing laid under the page (a
+  watermark's grey bolts) shades neither: drawn under a table's top rows and
+  ending above the rest, it made the last row over it look like a restated
+  header. The rows under it must be unshaded by any fill: a table laid on a
+  background is shaded throughout, and no row of it stands apart.
 - **Names turned on their side** in two cells or more, as narrow columns'
   names are. A group label turned down the rows it groups runs on past the
   row, and names none.
