@@ -1427,6 +1427,7 @@ pub fn detect_with_body(
     if added {
         out.sort_by_key(|h| (h.page, h.block_index));
     }
+    open_merged_parts(&mut out, pages, outline);
     drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out);
     out
@@ -1463,6 +1464,70 @@ const ACRONYM_LETTERS: std::ops::RangeInclusive<usize> = 2..=3;
 fn short_caps(text: &str) -> bool {
     let t = text.trim();
     ACRONYM_LETTERS.contains(&t.chars().count()) && t.chars().all(|c| c.is_ascii_uppercase())
+}
+
+/// A document merged from files whose outline names the files: no entry's
+/// title is printed anywhere in it (`01 - beigebook - Boston_pdf_final_January_2023`,
+/// `20250728.PressRelease.ImplementationNote.pdf`). Each entry still lands
+/// where its file starts, so the topmost heading on its page, at or below
+/// where it lands, opens a part at the entry's level: the district's title
+/// on its first page, the implementation note's title under the release
+/// line it repeats. An outline that prints any of its titles is the
+/// author's, and an entry it does not print is left alone; one whose
+/// entries land on pages next to each other marks pages, not files.
+fn open_merged_parts(out: &mut [Heading], pages: &[Vec<Block>], outline: &[OutlineItem]) {
+    if outline.len() < 2 {
+        return;
+    }
+    let printed = |title: &str| {
+        let t = norm(title);
+        !t.is_empty() && pages.iter().flatten().any(|b| norm(&b.text()).contains(&t))
+    };
+    if outline.iter().any(|it| printed(&it.title)) {
+        return;
+    }
+    // Each file runs over pages of its own: an outline that marks every
+    // page (`Slide 1`, `Slide 2`) is the pages', not the files'.
+    let mut starts: Vec<usize> = outline.iter().filter_map(|it| it.page).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.windows(2).any(|w| w[1] - w[0] < 2) {
+        return;
+    }
+    for it in outline {
+        let Some(pi) = it.page else {
+            continue;
+        };
+        let top = |h: &Heading| {
+            pages
+                .get(h.page)
+                .and_then(|p| p.get(h.block_index))
+                .map_or(f64::MAX, |b| b.bbox.y0)
+        };
+        let lands = it.y.unwrap_or(f64::MIN);
+        // The page that carries the document's title opens the whole of
+        // it: the entry for the merged document's cover or first file.
+        if out
+            .iter()
+            .any(|h| h.page == pi && h.evidence == Evidence::Title)
+        {
+            continue;
+        }
+        let opening = out
+            .iter_mut()
+            .filter(|h| h.page == pi && !h.form_text)
+            .filter(|h| {
+                pages
+                    .get(h.page)
+                    .and_then(|p| p.get(h.block_index))
+                    .is_some_and(|b| b.bbox.y1 >= lands)
+            })
+            .min_by(|a, b| top(a).total_cmp(&top(b)));
+        if let Some(h) = opening {
+            h.level = it.level;
+            h.evidence = Evidence::Outline;
+        }
+    }
 }
 
 /// Widest gap, in ems, between a field's label and its value beside it.
@@ -3937,6 +4002,78 @@ mod tests {
             ("doco:Paragraph", "layout"),
         ];
         assert!(doubt(&kinds).is_none());
+    }
+
+    #[test]
+    fn a_merged_documents_file_bookmarks_open_its_parts() {
+        // Two files merged, the outline naming them. The second file's
+        // title, under the release line its page repeats at the body's
+        // size, ranks below the first file's title by its size.
+        let page = |title: &str, y0: f64| {
+            let mut p = vec![
+                at("For release at noon", 10.0, y0, false),
+                at(title, 14.0, y0 + 40.0, true),
+            ];
+            for k in 0..6 {
+                let mut para = at(
+                    "The committee decided to hold the rate.",
+                    10.0,
+                    y0 + 70.0 + 40.0 * k as f64,
+                    false,
+                );
+                para.lines = vec![para.lines[0].clone(); 3];
+                para.bbox.y1 = para.bbox.y0 + 34.0;
+                p.push(para);
+            }
+            p
+        };
+        let mut first = vec![at("Policy Statement of the Board", 20.0, 40.0, true)];
+        first.extend(page("Rate Decision", 100.0));
+        // Each file runs over two pages.
+        let mut more = vec![];
+        for k in 0..6 {
+            let mut para = at(
+                "The vote was unanimous.",
+                10.0,
+                60.0 + 40.0 * k as f64,
+                false,
+            );
+            para.lines = vec![para.lines[0].clone(); 3];
+            para.bbox.y1 = para.bbox.y0 + 34.0;
+            para.page = 1;
+            more.push(para);
+        }
+        let mut second = page("Implementation Note", 60.0);
+        for b in &mut second {
+            b.page = 2;
+        }
+        let pages = vec![first, more, second];
+        let files = vec![
+            bookmark("2030-01-01.Statement.pdf", 1, Some(0), None),
+            bookmark("2030-01-01.ImplementationNote.pdf", 1, Some(2), None),
+        ];
+        let hs = detect(&pages, &files);
+        let note = hs.iter().find(|h| h.text == "Implementation Note").unwrap();
+        assert_eq!((note.level, note.evidence), (1, Evidence::Outline));
+        // The first file's page carries the document's title, which opens
+        // the whole: its own heads keep their levels.
+        let decision = hs.iter().find(|h| h.text == "Rate Decision").unwrap();
+        assert_ne!(decision.evidence, Evidence::Outline);
+        // An outline that prints a title is the author's.
+        let mut real = files.clone();
+        real.push(bookmark("Rate Decision", 2, Some(0), None));
+        let hs = detect(&pages, &real);
+        let note = hs.iter().find(|h| h.text == "Implementation Note").unwrap();
+        assert_ne!(note.evidence, Evidence::Outline);
+        // Nor one that marks every page: a deck's `Slide 1`, `Slide 2`.
+        let slides = vec![
+            bookmark("Slide 1", 1, Some(0), None),
+            bookmark("Slide 2", 1, Some(1), None),
+            bookmark("Slide 3", 1, Some(2), None),
+        ];
+        let hs = detect(&pages, &slides);
+        let note = hs.iter().find(|h| h.text == "Implementation Note").unwrap();
+        assert_ne!(note.evidence, Evidence::Outline);
     }
 
     fn bookmark(title: &str, level: usize, page: Option<usize>, y: Option<f64>) -> OutlineItem {

@@ -271,8 +271,10 @@ two-line head's first line, or the address printed beside it, is part of the
 head.
 
 A slot names sections only when at least two of its names are each set as a
-heading where they first appear, and each runs over two pages or more. Set as
-a heading means one of two things:
+heading where they first appear, and each either runs over two pages or more
+or repeats its section's heading, already printed no smaller (see below). A
+report whose sections run two pages names each section once, over the
+section's second page. Set as a heading means one of two things:
 
 - larger than the body text, by the same margin the heading pass needs before
   size alone makes a heading; or

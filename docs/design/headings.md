@@ -521,3 +521,23 @@ itself, and no heading by weight or size either.
 Entries that resolve to nothing keep the old rule. A bookmark naming no
 destination cannot be placed, and promoting is still safer than burying a real
 section.
+
+
+### An outline that names files
+
+Some PDFs are merged from files, and their outline names the files, not
+their sections: `01 - beigebook - Boston_pdf_final_January_2023`,
+`20250728.PressRelease.ImplementationNote.pdf`. No entry's title is printed
+anywhere in the document, so no heading claims one, and levels come from size
+alone. A 36pt summary outranks each district's 18pt title, and the districts
+nest under it.
+
+Each entry still lands where its file starts. So when none of the outline's
+titles is printed, the topmost heading on each entry's page (at or below
+where the entry lands) opens a part at the entry's level, with `outline`
+evidence. There are three exceptions:
+- An outline that prints any of its titles is the author's, and an entry it
+  does not print is left alone.
+- An outline whose entries land on pages next to each other (`Slide 1`,
+  `Slide 2`) marks pages, not files.
+- The page that carries the document's title opens the whole document.
