@@ -6,7 +6,8 @@
     "about": "INSEE Informations rapides no. 270, unemployment in the third quarter of 2026 (Licence Ouverte). A ruled table on page 7 heads its columns Évolution depuis le T2 2026, the year set a narrow space after the quarter and cut from it by the grid."
   },
   "notes": [
-    "The table read its cells' text from their ink alone, dropping the page's space glyphs, and a space between two digits narrower than a digit gap was lost."
+    "The table read its cells' text from their ink alone, dropping the page's space glyphs, and a space between two digits narrower than a digit gap was lost.",
+    "2026-11-24 (#135): the page number, worded in French (`8 sur 8`), counted as naming something, since only English paging words were known. The last page's copy was kept as the document's footer and the first page's put in its running text."
   ],
   "checks": [
     {
@@ -26,6 +27,16 @@
       "found": "2026-11-23",
       "issue": "As above.",
       "no_text": "T22026"
+    },
+    {
+      "id": "page-number-not-kept-as-footer",
+      "found": "2026-11-24",
+      "issue": "`8 sur 8` was kept as the document's footer.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "8 sur 8"
+      },
+      "count": 0
     }
   ]
 }

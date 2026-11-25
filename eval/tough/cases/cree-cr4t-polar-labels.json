@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree CR4T downlight spec sheet (Canada). Its photometry page sets a polar chart in the right page column, beside the left column's prose, parted by a full-height rule."
+  },
+  "notes": [
+    "The chart's axis labels, read as a run of figures, took in the left column's prose lines as their labels across the page divider: one table of prose and chart labels."
+  ],
+  "checks": [
+    {
+      "id": "no-prose-with-chart-labels",
+      "found": "2026-11-24",
+      "issue": "#106: `CONSTRUCTION & MATERIALS` and the chart's `0` were one row.",
+      "no_row": {
+        "#0": "CONSTRUCTION & MATERIALS",
+        "#1": "0"
+      }
+    }
+  ]
+}

@@ -77,12 +77,298 @@ pub struct Analysis {
 /// beneath (`Monotherapy` over `Adult patients with …`) as a header over
 /// the column names (`Establishment` over `Name | Address | ID/FEI`).
 /// `continues_left` is row-major over the whole grid.
-fn names_spanned_columns(rows: &[Vec<String>], continues_left: &[bool]) -> bool {
+/// Most words of a table's title band.
+const MAX_TABLE_TITLE_WORDS: usize = 12;
+
+/// Widest, in ems of a band's text, the columns beside a title band may run
+/// together and the band still stand across the table. A line turned down a
+/// column takes a line's height and its padding, about two ems; a word set
+/// across a column takes three or more.
+const BAND_MARGIN_EMS: f64 = 2.5;
+
+/// A grid whose first row is the table's title rather than its header: one label alone in the row, as one cell across the
+/// whole table (`Hex Cap Screws ASME B18.2.1-2012`, a section band
+/// `Mission Critical (10K rpm)`) or as the only text in the first of a row
+/// of empty cells (a caption the run took in, `Thermo Scientific™ M Series
+/// Centrifuges`), over a row that holds text in two columns or more.
+///
+/// Taken as the header, the title named every column and the rows that do
+/// name the columns read as data. Returns the title's text and the grid
+/// from the row under it.
+fn table_title(
+    g: &table::Grid,
+    page: &crate::extract::Page,
+    scrub: &[(String, bool)],
+    spanning: bool,
+) -> Option<(String, table::Grid)> {
+    if g.rows() < 3 || g.cols() < 2 {
+        return None;
+    }
+    if let Some(lay) = g.layout.as_deref() {
+        return layout_title(g, lay, page, scrub);
+    }
+    let cols = g.cols();
+    let flat = g.cell_texts(&page.glyphs);
+    let filled = |r: usize| {
+        (0..cols)
+            .filter(|&c| !flat[r * cols + c].trim().is_empty())
+            .count()
+    };
+    let mut merges = g.merges(&page.rules, &page.fills);
+    g.text_merges(&page.glyphs, &page.rules, &mut merges);
+    // One cell across the whole row, or one label in the first column with
+    // nothing to its right and nothing in the row spanned: a group label
+    // over some of the columns (`Dates` over `Start | Next review`) is the
+    // header's, and is spanned over them.
+    // A row the alignment read as one cell across (`spanning`) is one too.
+    // Or one cell across all of the table but columns too narrow to hold a
+    // label set across them ([`BAND_MARGIN_EMS`] of the row's text
+    // together): a margin, or the room a label turned down the rows takes,
+    // whose rule may run on up through the band (`Average Luminance Table
+    // (cd/m²)` over every column but the one `Vertical Angle` is turned
+    // in). A group's label over part of the table leaves columns a label
+    // fits.
+    let em = {
+        let mut sizes: Vec<f64> = page
+            .glyphs
+            .iter()
+            .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+            .filter(|gl| {
+                let (x, y) = gl.center();
+                g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
+            })
+            .map(|gl| gl.font_size as f64)
+            .collect();
+        sizes.sort_by(f64::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(0.0)
+    };
+    let banded = (0..cols)
+        .find(|&c| !flat[c].trim().is_empty())
+        .is_some_and(|c0| {
+            let mut end = c0 + 1;
+            while end < cols && merges.continues_left[end] {
+                end += 1;
+            }
+            let held = (0..cols)
+                .filter(|&c| !flat[c].trim().is_empty())
+                .all(|c| c >= c0 && c < end);
+            let outside = (g.xs[c0] - g.xs[0]) + (g.xs[cols] - g.xs[end]);
+            held && end - c0 >= 2 && outside > 0.0 && outside < BAND_MARGIN_EMS * em
+        });
+    let across = spanning || (1..cols).all(|c| merges.continues_left[c]) || banded;
+    let alone = filled(0) == 1
+        && !flat[0].trim().is_empty()
+        && (1..cols).all(|c| !merges.continues_left[c]);
+    if !(across || alone) || filled(1) < 2 {
+        return None;
+    }
+    // Across the row, a title is one label, or set as running text: a line
+    // of it, its words at their ordinary spacing, runs over the cuts
+    // between columns (`Hex Cap Screws` over four of them). Labels set
+    // apart, each within its column, are the columns' own (`Area |
+    // Competence` under one ruled cell).
+    let row_lines = || {
+        let inside: Vec<crate::glyph::Glyph> = page
+            .glyphs
+            .iter()
+            .filter(|gl| {
+                gl.bbox.is_some() && !gl.text.trim().is_empty() && gl.is_horizontal() && {
+                    let (x, y) = gl.center();
+                    g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
+                }
+            })
+            .cloned()
+            .collect();
+        crate::line::assemble(&inside)
+    };
+    let lines = if across { row_lines() } else { Vec::new() };
+    let runs_across = lines.iter().any(|l| {
+        g.xs[1..g.xs.len() - 1]
+            .iter()
+            .any(|&x| l.bbox.x0 < x - 1.0 && l.bbox.x1 > x + 1.0)
+    });
+    let text = if across && runs_across {
+        crate::block::build(lines).text()
+    } else if spanning {
+        g.row_text(&page.glyphs, 0)
+    } else if (across || alone) && filled(0) == 1 {
+        (0..cols)
+            .map(|c| flat[c].trim())
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        return None;
+    };
+    let text = furniture::scrub_cell(
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+        scrub,
+    );
+    let words = text.split_whitespace().count();
+    if words == 0
+        || words > MAX_TABLE_TITLE_WORDS
+        || table::is_numeric_cell(&text)
+        || !text.chars().any(char::is_alphabetic)
+    {
+        return None;
+    }
+    let mut trimmed = g.clone();
+    trimmed.ys.remove(0);
+    trimmed.bbox.y0 = trimmed.ys[0];
+    Some((text, trimmed))
+}
+
+/// [`table_title`] for a table read from its text ([`crate::textgrid`]):
+/// its first row is one label read whole across the row, set as a title
+/// (opening on a capital or a figure, with no colon, at the table's left
+/// edge or centred on it), over a row with text in two columns or more,
+/// and the only row the reading took for the header. A catalogue's
+/// band (`ENGINE BEARINGS` over `Rod Bearing | 2001-2002 | …`) opens a
+/// table the page cut at it, and the reading took the band for the header.
+///
+/// The table goes on from the row under it, its layout moved up a row: its
+/// spans, the labels set down its rows and its row bands with it. The
+/// header the reading found under the band stays the header.
+fn layout_title(
+    g: &table::Grid,
+    lay: &table::TableLayout,
+    page: &crate::extract::Page,
+    scrub: &[(String, bool)],
+) -> Option<(String, table::Grid)> {
+    let (rows, cols) = (g.rows(), g.cols());
+    if lay.cells.len() != rows * cols {
+        return None;
+    }
+    let texts = lay.texts(&page.glyphs, cols);
+    let filled = |r: usize| {
+        (0..cols)
+            .filter(|&c| !texts[r * cols + c].trim().is_empty())
+            .count()
+    };
+    // One cell across the whole row. A first cell alone in its row is, in a
+    // table read from its text, as often a line wrapped from the header
+    // above (`share before cumulative`) or a value cut off its row.
+    let across = lay
+        .spans
+        .iter()
+        .any(|&(r, c0, c1)| r == 0 && c0 == 0 && c1 >= cols);
+    if !across || filled(0) != 1 || texts[0].trim().is_empty() || filled(1) < 2 {
+        return None;
+    }
+    // A banner over the column names the reading found under it heads the
+    // header (`December 31, 2017` over `2017 | 2016`), not the table.
+    if lay.header_rows > 1 {
+        return None;
+    }
+    // Set where a title is: at the table's left edge, or centred on it. A
+    // line cut off a row's cell and read across the row sits where that
+    // cell's text does.
+    let ink: Vec<crate::geom::BBox> = lay.cells[..cols]
+        .iter()
+        .flatten()
+        .filter_map(|&i| page.glyphs.get(i).and_then(|gl| gl.bbox))
+        .collect();
+    let (x0, x1) = ink.iter().fold((f64::MAX, f64::MIN), |(a, b), bb| {
+        (a.min(bb.x0), b.max(bb.x1))
+    });
+    let size = lay.cells[0]
+        .first()
+        .and_then(|&i| page.glyphs.get(i))
+        .map_or(10.0, |gl| gl.font_size.max(1.0) as f64);
+    let width = g.bbox.x1 - g.bbox.x0;
+    let at_edge = (x0 - g.bbox.x0).abs() <= size * 1.5;
+    let centred = ((x0 + x1) / 2.0 - (g.bbox.x0 + g.bbox.x1) / 2.0).abs() <= width * 0.1;
+    if ink.is_empty() || !(at_edge || centred) {
+        return None;
+    }
+    let text = furniture::scrub_cell(
+        texts[0]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+        scrub,
+    );
+    let words = text.split_whitespace().count();
+    // Set as a title is: opening on a capital or a figure, and not a field
+    // or a line run on (`Grand Total:$459.72`, `from operating activities:`).
+    let titled = text.starts_with(|c: char| c.is_uppercase() || c.is_ascii_digit())
+        && !text.ends_with([':', ','])
+        && !text.contains(':');
+    if words == 0
+        || words > MAX_TABLE_TITLE_WORDS
+        || !titled
+        || table::is_numeric_cell(&text)
+        || !text.chars().any(char::is_alphabetic)
+    {
+        return None;
+    }
+    let up = |r: usize| r.checked_sub(1);
+    let mut trimmed = g.clone();
+    trimmed.ys.remove(0);
+    trimmed.bbox.y0 = trimmed.ys[0];
+    trimmed.layout = Some(std::sync::Arc::new(table::TableLayout {
+        header_rows: lay.header_rows.saturating_sub(1),
+        spans: lay
+            .spans
+            .iter()
+            .filter_map(|&(r, c0, c1)| up(r).map(|r| (r, c0, c1)))
+            .collect(),
+        downs: lay
+            .downs
+            .iter()
+            .filter_map(|&(r0, c, r1)| {
+                let (r0, r1) = (r0.saturating_sub(1), up(r1)?);
+                (r1 > r0 + 1).then_some((r0, c, r1))
+            })
+            .collect(),
+        sub_headers: lay.sub_headers.iter().filter_map(|&r| up(r)).collect(),
+        cells: lay.cells[cols..].to_vec(),
+        claimed: lay.claimed.clone(),
+    }));
+    Some((text, trimmed))
+}
+
+fn names_spanned_columns(
+    rows: &[Vec<String>],
+    continues_left: &[bool],
+    continues_above: &[bool],
+) -> bool {
     let cols = rows.first().map(Vec::len).unwrap_or(0);
     if rows.len() < 3 || continues_left.len() < 2 * cols {
         return false;
     }
-    let spans = header_spans(&continues_left[..cols]);
+    let empty = |r: usize, c: usize| rows[r].get(c).is_none_or(|t| t.trim().is_empty());
+    // A span the ruling leaves open over a column its label does not
+    // reach, empty in both rows (the stub's, its rule not drawn up through
+    // the band), names the columns from where the label stands. A span
+    // with no label over it, cells the ruling leaves open over the stub,
+    // names nothing.
+    let spans: Vec<(usize, usize)> = header_spans(&continues_left[..cols])
+        .into_iter()
+        .map(|(a, b)| {
+            let a = (a..b).find(|&c| !(empty(0, c) && empty(1, c))).unwrap_or(b);
+            (a, b)
+        })
+        .filter(|&(a, b)| b > a && (a..b).any(|c| !empty(0, c)))
+        .collect();
+    let spanned = |c: usize| spans.iter().any(|&(a, b)| (a..b).contains(&c));
+    // Keys in figures (`0° | 45° | 90°`, sizes, years) name the columns
+    // under a span as surely as words, where the row's own stub is empty
+    // and the rows under it have one: a row of the data names its row in
+    // the stub, and so does the row of figures under a banner.
+    let stubs: Vec<usize> = (0..cols).filter(|&c| !spanned(c)).collect();
+    let keyed = !stubs.is_empty()
+        && stubs.iter().all(|&c| empty(1, c))
+        && rows[2..]
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| stubs.iter().any(|&c| !empty(i + 2, c)))
+            .count()
+            * 2
+            >= rows.len() - 2;
     let labels = |a: usize, b: usize| {
         let names: Vec<&str> = rows[1][a..b].iter().map(|t| t.trim()).collect();
         let short = b - a < cols || names.iter().all(|t| t.split_whitespace().count() <= 4);
@@ -90,14 +376,33 @@ fn names_spanned_columns(rows: &[Vec<String>], continues_left: &[bool]) -> bool 
             && (a + 1..b).all(|k| !continues_left[cols + k])
             && names
                 .iter()
-                .all(|t| !t.is_empty() && !table::is_numeric_cell(t))
+                .all(|t| !t.is_empty() && (keyed || !table::is_numeric_cell(t)))
             && names.iter().collect::<std::collections::HashSet<_>>().len() == names.len()
     };
+    // A column the first row names without spanning it may take a second
+    // label under the first (`This study` over `MAF (411 patients)`), but
+    // a part number of its own there (`FPWINGRF-JP2` under `Product No.`,
+    // beside two values under a `Type` set across two columns) makes the row
+    // the first of the data. Where the ruling runs the first row's label
+    // down through the second, the second holds nothing of its own.
+    let code = |t: &str| {
+        !t.contains(char::is_whitespace)
+            && t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().any(char::is_alphabetic)
+    };
+    let named_above = (0..cols).filter(|&c| !spanned(c)).all(|c| {
+        let t = rows[1][c].trim();
+        t.is_empty()
+            || rows[0][c].trim().is_empty()
+            || continues_above.get(cols + c).copied().unwrap_or(false)
+            || !code(t)
+    });
     !spans.is_empty()
+        && named_above
         && spans.iter().all(|&(a, b)| labels(a, b))
         && rows[1]
             .iter()
-            .all(|t| t.trim().is_empty() || !table::is_numeric_cell(t.trim()))
+            .all(|t| t.trim().is_empty() || keyed || !table::is_numeric_cell(t.trim()))
 }
 
 /// The columns each spanning label of a header row covers, as `start..end`,
@@ -127,18 +432,22 @@ fn header_spans(continues_left: &[bool]) -> Vec<(usize, usize)> {
 /// `Change`, as sparse as it is. Not a label wrapped onto the next row
 /// either (`Median in` over `months (95% CI)`): a first cell below that
 /// starts lowercase or with a bracket carries this one on. And not in a
-/// two-column list, where a field left empty looks the same.
+/// two-column list, where a field left empty looks the same. A label over
+/// another group label is a group too, over its sub-group.
 fn group_label(rows: &[Vec<String>], r: usize) -> bool {
     let (Some(row), Some(next)) = (rows.get(r), rows.get(r + 1)) else {
         return false;
     };
     let label = row[0].trim();
     let below = next[0].trim();
+    // Over a full row, or over a group of its own: a group over its
+    // sub-group (`Power Management` over `Average power requirements (W)`
+    // over `Operational | 6.7W | …`).
     row.len() >= 3
         && !label.is_empty()
         && !table::is_numeric_cell(label)
         && row[1..].iter().all(|t| t.trim().is_empty())
-        && next.iter().all(|t| !t.trim().is_empty())
+        && (next.iter().all(|t| !t.trim().is_empty()) || group_label(rows, r + 1))
         && !below.starts_with(|c: char| c.is_lowercase() || c == '(' || c == '[')
 }
 
@@ -226,6 +535,16 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
             continue;
         };
         let (before, after) = elements.split_at_mut(i);
+        if before[p].kind == "doco:Table"
+            && after[0].kind == "doco:Table"
+            && after[0].page == before[p].page
+        {
+            if let (Some(a), Some(b)) = (frame(&before[p]), frame(&after[0])) {
+                link_header_box(&mut before[p], &mut after[0], a, b);
+                link_rows_below(&before[p], &mut after[0], a, b);
+            }
+            continue;
+        }
         let (prev, next) = (&before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
@@ -272,6 +591,590 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     }
 }
 
+/// Which cells start a run of merged cells whose value is set across it:
+/// row-major, the run's first cell `true`.
+///
+/// A value centred across two models' columns (`2 years` under `M17
+/// Series` and `M21 Series`) is each column's; a run the ruling merely
+/// leaves open (a statement's `$ 11,452` under its first column, the next
+/// columns unruled on that row) holds its value in its first column. So a
+/// run is spread when its only text, in its first cell, is centred on the
+/// run, and narrower than most of it: a row of figures the grid failed to
+/// part runs the run's whole width, and is no one value. A wider value is
+/// spread where it stands in from both edges alike, by an em or more. Only
+/// a value with a word in it: figures alone across columns are the grid's
+/// cuts off the page's.
+fn spread_runs(
+    g: &table::Grid,
+    glyphs: &[Glyph],
+    rows: &[Vec<String>],
+    left: &[bool],
+) -> Vec<bool> {
+    let cols = g.cols();
+    let n = rows.len();
+    let mut out = vec![false; n * cols];
+    if cols < 2 || left.len() != n * cols || g.xs.len() != cols + 1 {
+        return out;
+    }
+    let mut homes: Option<Vec<Option<usize>>> = None;
+    for (r, row) in rows.iter().enumerate() {
+        let mut c = 1;
+        while c < cols {
+            let mut end = c + 1;
+            while end < cols && left[r * cols + end] {
+                end += 1;
+            }
+            let value = row[c].trim();
+            let only_first =
+                !value.is_empty() && row[c + 1..end].iter().all(|t| t.trim().is_empty());
+            // A value with no word in it, figures and signs alone, set across
+            // columns stands in one of them, the grid's cuts off the page's:
+            // no datasheet sets one `5.5` for its MIN and its NOM, and a row
+            // of figures the grid failed to part is the columns' values.
+            let worded = value.chars().any(char::is_alphabetic);
+            if end > c + 1 && only_first && worded {
+                let cells: Vec<usize> = (c..end).map(|k| r * cols + k).collect();
+                let ids: Vec<usize> = match g.layout.as_deref() {
+                    Some(lay) => cells
+                        .iter()
+                        .filter_map(|&i| lay.cells.get(i))
+                        .flatten()
+                        .copied()
+                        .collect(),
+                    None => {
+                        let homes = homes.get_or_insert_with(|| g.glyph_cells(glyphs));
+                        homes
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, h)| h.is_some_and(|i| cells.contains(&i)))
+                            .map(|(j, _)| j)
+                            .collect()
+                    }
+                };
+                let marks: Vec<&Glyph> = ids
+                    .iter()
+                    .filter_map(|&j| glyphs.get(j))
+                    .filter(|gl| !gl.text.trim().is_empty() && gl.bbox.is_some())
+                    .collect();
+                let ink = marks
+                    .iter()
+                    .filter_map(|gl| gl.bbox)
+                    .reduce(|a, b| a.union(&b));
+                if let Some(ink) = ink {
+                    let (x0, x1) = (g.xs[c], g.xs[end]);
+                    let width = (x1 - x0).max(1.0);
+                    let mid = (ink.x0 + ink.x1) / 2.0;
+                    let centred = (mid - (x0 + x1) / 2.0).abs() <= width * SPREAD_CENTRE;
+                    let narrow = ink.x1 - ink.x0 <= width * SPREAD_WIDTH;
+                    // Wider, it is centred as surely where it stands in from
+                    // both edges alike, an em or more: a weight's lines
+                    // across two models' columns. A value set from the left
+                    // that fills the run stands in by the cell's padding
+                    // alone, under an em.
+                    let mut sizes: Vec<f64> = marks.iter().map(|gl| gl.font_size as f64).collect();
+                    sizes.sort_by(f64::total_cmp);
+                    let em = sizes.get(sizes.len() / 2).copied().unwrap_or(0.0);
+                    let (l, rgt) = (ink.x0 - x0, x1 - ink.x1);
+                    let even = (l - rgt).abs() <= SPREAD_EVEN * em && l.min(rgt) >= em;
+                    out[r * cols + c] = centred && (narrow || even);
+                }
+            }
+            c = end;
+        }
+    }
+    out
+}
+
+/// How far a spread value's middle may stand from its run's, as a share of
+/// the run's width.
+const SPREAD_CENTRE: f64 = 0.15;
+
+/// Widest a spread value's ink runs, as a share of its run's width.
+const SPREAD_WIDTH: f64 = 0.8;
+
+/// Most a wider spread value's margins in its run may differ, in ems of its
+/// text. A typesetter centring a value leaves the same space either side of
+/// its advance; the ink measured from the glyph boxes differs from that by
+/// the side bearings of its first and last glyphs, a fraction of an em.
+const SPREAD_EVEN: f64 = 0.25;
+
+/// How many rows head a grid of figures as its parameters do: each a
+/// name ending in a colon and only figures beside it, over three rows or
+/// more of figures that are not (`RC %: | 80`, `RW %: | 70 | 50 | 30 | 10`
+/// over `RCR: 0 | 119 | 119 | …`, a sweep's `Speed (rpm): | 1500 | 2500 |
+/// 3500` over the readings at each speed). The parameters' values stand
+/// over the columns the body's figures fill, and the row nearest the body
+/// names two of them or more, half or more: it sets the value each column
+/// of figures is for. A list of fields over a grid gives each field one
+/// value, and a table that is such rows all the way down is a list of
+/// fields; none of their rows heads it.
+fn parameter_rows(rows: &[Vec<String>]) -> usize {
+    let parameter = |row: &Vec<String>| {
+        let name = row.first().map_or("", |t| t.trim());
+        let values: Vec<&str> = row[1..]
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        name.ends_with(':')
+            && name.chars().any(char::is_alphabetic)
+            && !values.is_empty()
+            && values.iter().all(|t| table::is_numeric_cell(t))
+    };
+    let k = rows.iter().take_while(|row| parameter(row)).count();
+    let body = &rows[k..];
+    let figures = |row: &&Vec<String>| {
+        let values: Vec<&str> = row[1..]
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        !values.is_empty() && values.iter().all(|t| table::is_numeric_cell(t))
+    };
+    if k == 0 || body.len() < 3 || body.iter().filter(figures).count() * 2 < body.len() {
+        return 0;
+    }
+    let held = |row: &Vec<String>| -> Vec<usize> {
+        (1..row.len())
+            .filter(|&c| !row[c].trim().is_empty())
+            .collect()
+    };
+    let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let filled: Vec<usize> = (1..width)
+        .filter(|&c| {
+            body.iter()
+                .filter(|r| r.get(c).is_some_and(|t| !t.trim().is_empty()))
+                .count()
+                * 2
+                >= body.len()
+        })
+        .collect();
+    let over_body = rows[..k]
+        .iter()
+        .all(|r| held(r).iter().all(|c| filled.contains(c)));
+    let nearest = held(&rows[k - 1]);
+    if !over_body || nearest.len() < 2 || nearest.len() * 2 < filled.len() {
+        return 0;
+    }
+    k
+}
+
+/// Drop the columns no cell starts in, from every part of a table.
+///
+/// A column whose cell on every row is empty and the rest of the one to its
+/// left is none of the table's: the grid cut it where another row's ruling,
+/// a band over the header or a nested table, parts the columns. An
+/// environmental data sheet's three-column VOC tables were ruled as six and
+/// written with an empty column after each, their cells in columns 0, 2 and
+/// 4. A table the page break split is one table: a column goes only where
+/// it goes from every part, so the parts keep one set of columns and read
+/// on as one.
+fn drop_merged_columns(elements: &mut [Element]) {
+    let index: std::collections::HashMap<String, usize> = elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.id.clone(), i))
+        .collect();
+    // Each part's first part: the table it carries on.
+    let first = |mut i: usize| {
+        let mut seen = 0;
+        while let Some(&p) = elements[i].continues.as_ref().and_then(|c| index.get(c)) {
+            i = p;
+            seen += 1;
+            if seen > elements.len() {
+                break;
+            }
+        }
+        i
+    };
+    let mut chains: std::collections::BTreeMap<usize, Vec<usize>> = Default::default();
+    for (i, e) in elements.iter().enumerate() {
+        if e.kind == "doco:Table" && e.cells.is_some() {
+            chains.entry(first(i)).or_default().push(i);
+        }
+    }
+    for parts in chains.values() {
+        let width = |i: usize| {
+            elements[i]
+                .cells
+                .as_ref()
+                .and_then(|r| r.first())
+                .map_or(0, Vec::len)
+        };
+        let cols = width(parts[0]);
+        if cols < 2 || parts.iter().any(|&i| width(i) != cols) {
+            continue;
+        }
+        // A column stays where any part has a cell that starts in it.
+        let starts = |i: usize, c: usize| {
+            let e = &elements[i];
+            let rows = e.cells.as_ref().unwrap();
+            let left = e.merged_left.as_deref();
+            rows.iter().enumerate().any(|(r, row)| {
+                !row[c].trim().is_empty()
+                    || !left.is_some_and(|m| m.get(r * cols + c).copied().unwrap_or(false))
+            })
+        };
+        let keep: Vec<bool> = (0..cols)
+            .map(|c| c == 0 || parts.iter().any(|&i| starts(i, c)))
+            .collect();
+        if keep.iter().all(|k| *k) {
+            continue;
+        }
+        for &i in parts {
+            let e = &mut elements[i];
+            let squeeze = |flags: &Vec<bool>| -> Vec<bool> {
+                flags
+                    .chunks(cols)
+                    .flat_map(|row| row.iter().zip(&keep).filter(|(_, k)| **k).map(|(f, _)| *f))
+                    .collect()
+            };
+            if let Some(rows) = e.cells.as_mut() {
+                for row in rows.iter_mut() {
+                    let mut c = 0;
+                    row.retain(|_| {
+                        c += 1;
+                        keep[c - 1]
+                    });
+                }
+            }
+            e.merged_left = e.merged_left.as_ref().map(squeeze);
+            e.merged_down = e.merged_down.as_ref().map(squeeze);
+            e.spread_left = e.spread_left.as_ref().map(squeeze);
+            if let Some(rows) = e.cells.as_ref() {
+                e.text = rows
+                    .iter()
+                    .map(|r| r.join(" | "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+            }
+        }
+    }
+}
+
+/// Widest gap, in points, between a header drawn as a box of its own and
+/// the box of rows under it: the space a layout leaves between two boxes,
+/// not a paragraph's.
+const HEADER_BOX_GAP: f64 = 24.0;
+
+/// Link a header drawn as a box of its own to the rows boxed under it.
+///
+/// A spreadsheet laid out for print can fill its header in one box and
+/// rule its rows in another a gap below, each read as a table: the header
+/// one names nothing, and the rows have no names. The upper part is the
+/// lower one's header where the two follow one another with nothing
+/// between, share their outer edges, every upper column edge is a lower
+/// one, the upper part sets names and no figures, and the lower sets
+/// figures. A name over two of the lower part's columns heads both
+/// (`Nominal Size` over the size and its decimal), so the upper part is
+/// dealt onto the lower one's columns, a name spanning the columns it
+/// covers, and it is all header.
+fn link_header_box(prev: &mut Element, next: &mut Element, a: &TableFrame, b: &TableFrame) {
+    let tol = CONTINUED_EDGE_TOLERANCE;
+    let (Some(pa), Some(pb)) = (prev.bbox, next.bbox) else {
+        return;
+    };
+    let (Some(&a0), Some(&a1), Some(&b0), Some(&b1)) =
+        (a.xs.first(), a.xs.last(), b.xs.first(), b.xs.last())
+    else {
+        return;
+    };
+    // An upper edge is the lower edge nearest it, within a quarter of the
+    // narrowest lower column: no other edge of the lower part is meant. A
+    // box drawn a row at a time has its sides in pieces a little apart.
+    let narrowest =
+        b.xs.windows(2)
+            .map(|w| w[1] - w[0])
+            .fold(f64::MAX, f64::min);
+    let reach = (narrowest / 4.0).max(tol);
+    let gap = pb.y0 - pa.y1;
+    if !(-tol..=HEADER_BOX_GAP).contains(&gap)
+        || (a0 - b0).abs() > reach
+        || (a1 - b1).abs() > reach
+        || !a
+            .xs
+            .iter()
+            .all(|x| b.xs.iter().any(|y| (x - y).abs() <= reach))
+        || next.continues.is_some()
+    {
+        return;
+    }
+    let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+        return;
+    };
+    let names = head
+        .iter()
+        .flatten()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .all(|t| t.chars().any(char::is_alphabetic) && !table::is_numeric_cell(t));
+    let figures = rows
+        .first()
+        .is_some_and(|r| r.iter().any(|t| table::is_numeric_cell(t.trim())));
+    if !names || !figures || head.is_empty() {
+        return;
+    }
+    // Each lower column under the upper column its middle falls in.
+    let cols = b.xs.len() - 1;
+    let under: Vec<usize> = (0..cols)
+        .map(|j| {
+            let mid = (b.xs[j] + b.xs[j + 1]) / 2.0;
+            a.xs.windows(2)
+                .position(|w| mid >= w[0] && mid < w[1])
+                .unwrap_or(0)
+        })
+        .collect();
+    let old_cols = a.xs.len() - 1;
+    let flag = |m: &Option<Vec<bool>>, r: usize, i: usize| {
+        m.as_ref()
+            .and_then(|m| m.get(r * old_cols + i))
+            .copied()
+            .unwrap_or(false)
+    };
+    let mut cells = Vec::with_capacity(head.len());
+    let mut left = Vec::with_capacity(head.len() * cols);
+    let mut down = Vec::with_capacity(head.len() * cols);
+    for (r, row) in head.iter().enumerate() {
+        let mut out = Vec::with_capacity(cols);
+        for j in 0..cols {
+            let i = under[j];
+            let opens = j == 0 || under[j - 1] != i;
+            out.push(if opens {
+                row.get(i).cloned().unwrap_or_default()
+            } else {
+                String::new()
+            });
+            left.push(!opens || flag(&prev.merged_left, r, i));
+            down.push(flag(&prev.merged_down, r, i));
+        }
+        cells.push(out);
+    }
+    prev.header_rows = Some(cells.len());
+    prev.cells = Some(cells);
+    prev.merged_left = Some(left);
+    prev.merged_down = down.iter().any(|d| *d).then_some(down);
+    next.continues = Some(prev.id.clone());
+    next.header_rows = Some(0);
+}
+
+/// Link rows set a little below a table, on its columns, to that table.
+///
+/// A run of rows read by alignment breaks where a line of something else
+/// falls between two of them: a label centred on the tall row of an outer
+/// table the inner one sits in (`Acoustical Performance` beside rows `1`,
+/// `1.5` | `2`, `3`, `5`). The rows under the break are the same table's
+/// where they follow it with nothing between, a gap of a box's spacing
+/// below, on as many columns lined up with its own, and open on figures
+/// with no header of their own.
+fn link_rows_below(prev: &Element, next: &mut Element, a: &TableFrame, b: &TableFrame) {
+    if next.continues.is_some() || a.xs.len() != b.xs.len() || a.xs.len() < 3 {
+        return;
+    }
+    let (Some(pa), Some(pb)) = (prev.bbox, next.bbox) else {
+        return;
+    };
+    let gap = pb.y0 - pa.y1;
+    if !(-CONTINUED_EDGE_TOLERANCE..=HEADER_BOX_GAP).contains(&gap) {
+        return;
+    }
+    // Column for column, each one's middle inside the other's: edges read
+    // from the text's alignment move with each part's widths.
+    let inside = |p: &[f64], q: &[f64]| {
+        p.windows(2).zip(q.windows(2)).all(|(c, d)| {
+            let mid = (c[0] + c[1]) / 2.0;
+            mid >= d[0] && mid <= d[1]
+        })
+    };
+    if !inside(&a.xs, &b.xs) || !inside(&b.xs, &a.xs) {
+        return;
+    }
+    let (Some(head), Some(rows)) = (prev.cells.as_ref(), next.cells.as_ref()) else {
+        return;
+    };
+    let headed = prev.header_rows.unwrap_or(0);
+    let figures = |row: &Vec<String>| {
+        let filled: Vec<&str> = row
+            .iter()
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .collect();
+        !filled.is_empty()
+            && filled.iter().filter(|t| table::is_numeric_cell(t)).count() * 2 > filled.len()
+    };
+    if headed == 0 || !head.iter().skip(headed).any(figures) || !rows.first().is_some_and(figures) {
+        return;
+    }
+    next.continues = Some(prev.id.clone());
+    next.header_rows = Some(0);
+}
+
+/// Fewest bold lines stacked one after another, with nothing between them,
+/// that are a list of labels rather than a section opening on its first
+/// subsection.
+const STACKED_LABELS: usize = 3;
+
+/// Read headings on their weight alone that head nothing, read as text.
+///
+/// A section head is followed by what it heads: text, a table, a figure,
+/// or a section under it. Bold lines at one level that follow each other
+/// with nothing between them are looked at as a run, and these runs are
+/// no sections:
+///
+/// - **A run that heads nothing:** the end of the document follows it, a
+///   bold heading above its level, or a heading set larger, by its size or
+///   as the title, which ranks above any bold line at the body's size. That
+///   is the name and the role that close minutes or a letter (`Joshua
+///   Gallin` over `Secretary`), a slide's kicker over its title (`LEVEL 2 ·
+///   DERIVED`), or a form's label over a larger line. A label naming a part
+///   of the document (`EXHIBIT B`) heads the title under it and stays, and
+///   so does the document's first heading, which may be its title over a
+///   larger date.
+/// - **A paragraph's bold last line:** a lone bold line set under a
+///   paragraph at its leading, over another bold head (`KEEP OUT OF REACH
+///   OF CHILDREN` closing a caution, over `TRADEMARKS`).
+/// - **A run set as a row:** two of its lines sit side by side, so it is
+///   read across. That is a table's header cells left out of its grid
+///   (`Date | Description`), or an answer scale (`OFTEN`, `SOMETIMES`,
+///   `RARELY`, `NEVER`). Card titles set side by side on a slide are never
+///   a run, because each is followed by its own text. Nor is a division's
+///   label beside its title (`Part I`, then its title, on one line).
+/// - **A run of three lines or more set one under another:** a list of
+///   names, a chart's legend words, a form's labels. Its last line is
+///   followed by text, and keeps the heading.
+///
+/// Two bold lines one over the other, followed by text, stay: that is a
+/// section opening on its first subsection (`Materials and Methods` over
+/// `Apiary selection`) as often as a label over a label.
+///
+/// Only weight is judged, because a numbered, outlined or larger line says
+/// more than its weight does. Only bold lines and larger heads end a run: a
+/// bold line's level says nothing beside a numbered or outlined heading's.
+fn demote_empty_bold_heads(elements: &mut [Element]) {
+    let bold = |e: &Element| e.kind == "doco:SectionTitle" && unflagged(e.evidence) == "bold";
+    // A heading set larger than the body, by its size or as the title,
+    // ranks above any bold line at the body's size.
+    let set_larger = |e: &Element| {
+        e.kind == "doco:SectionTitle" && matches!(unflagged(e.evidence), "font-size" | "title")
+    };
+    let level = |e: &Element| e.level.unwrap_or(6);
+    let same_row = |a: &Element, b: &Element| match (a.bbox, b.bbox) {
+        (Some(a_box), Some(b_box)) if a.page == b.page => {
+            let overlap = a_box.y1.min(b_box.y1) - a_box.y0.max(b_box.y0);
+            let shorter = (a_box.y1 - a_box.y0).min(b_box.y1 - b_box.y0);
+            shorter > 0.0 && overlap >= shorter * 0.5
+        }
+        _ => false,
+    };
+    // The document's first heading may be its title, set bold over a
+    // larger date or subtitle (`Transcript of Chair Powell's Press
+    // Conference` over `April 29, 2026`).
+    let first_heading = elements.iter().position(|e| e.kind == "doco:SectionTitle");
+    let mut demote: Vec<usize> = Vec::new();
+    let mut i = 0;
+    while i < elements.len() {
+        if !bold(&elements[i]) {
+            i += 1;
+            continue;
+        }
+        // A bold line set at its paragraph's leading under it, over another
+        // bold head: the paragraph's last line, in bold (`KEEP OUT OF REACH
+        // OF CHILDREN` closing a caution, over `TRADEMARKS`). The run is
+        // judged from the head after it. A caption closes nothing: what
+        // follows it is the document's next part (`Table 3 Summary of…`,
+        // then a species' heading).
+        if i > 0
+            && elements[i - 1].kind == "doco:Paragraph"
+            && !heading::is_caption(&elements[i - 1].text)
+            && under_at_leading(&elements[i - 1], &elements[i])
+            && elements.get(i + 1).is_some_and(bold)
+        {
+            demote.push(i);
+            i += 1;
+            continue;
+        }
+        let lvl = level(&elements[i]);
+        let mut j = i;
+        while j + 1 < elements.len() && bold(&elements[j + 1]) && level(&elements[j + 1]) == lvl {
+            j += 1;
+        }
+        let heads_nothing = match elements.get(j + 1) {
+            None => true,
+            Some(next) => {
+                (bold(next) && level(next) < lvl)
+                    || (set_larger(next)
+                        && !designated_label(&elements[j].text)
+                        && Some(i) != first_heading)
+            }
+        };
+
+        // A division's label beside its title (`Part I | Annual and Monthly
+        // Contribution Amount`) is one heading set in two blocks, not a row.
+        let row = (i + 1..=j).any(|k| {
+            same_row(&elements[k - 1], &elements[k])
+                && !heading::division_label(&elements[k - 1].text)
+        });
+        if heads_nothing || row {
+            demote.extend(i..=j);
+        } else if j + 1 - i >= STACKED_LABELS {
+            demote.extend(i..j);
+        }
+        i = j + 1;
+    }
+    for i in demote {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
+    }
+}
+
+/// `b` stands under `a`, sharing some of its width, at no more than a
+/// line's spacing: no gap opens between them beyond the leading of `b`'s
+/// own line.
+fn under_at_leading(a: &Element, b: &Element) -> bool {
+    match (a.bbox, b.bbox) {
+        (Some(a_box), Some(b_box)) if a.page == b.page => {
+            let height = (b_box.y1 - b_box.y0).max(1.0);
+            let gap = b_box.y0 - a_box.y1;
+            let shared = a_box.x1.min(b_box.x1) > a_box.x0.max(b_box.x0);
+            shared && gap >= -height * 0.2 && gap <= height * CLOSING_LINE_GAP
+        }
+        _ => false,
+    }
+}
+
+/// Widest gap, in the line's own heights, between a paragraph and a bold
+/// line that closes it: the leading's share of a line, short of the space
+/// a heading takes above it.
+const CLOSING_LINE_GAP: f64 = 0.5;
+
+/// How many of its own line heights above a table's top a heading set
+/// beside it, to its left, may stand and still head it.
+const BESIDE_HEADING_LINES: f64 = 3.0;
+
+/// The heading a table sits under, by its index in `content`: the nearest
+/// heading above the table's top that is in its lane (overlapping it across)
+/// or set beside it, to its left, level with its top: within
+/// [`BESIDE_HEADING_LINES`] of its own height above it.
+fn own_heading(content: &[Element], table: &Element) -> Option<usize> {
+    let t = table.rect();
+    content
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == "doco:SectionTitle" && e.page == table.page)
+        .filter(|(_, e)| {
+            let h = e.rect();
+            if h.y1 > t.y0 + 1.0 {
+                return false;
+            }
+            let lane = h.x1.min(t.x1) > h.x0.max(t.x0);
+            let beside = h.x1 <= t.x0 && t.y0 - h.y1 <= BESIDE_HEADING_LINES * (h.y1 - h.y0);
+            lane || beside
+        })
+        .max_by(|(_, a), (_, b)| a.rect().y1.total_cmp(&b.rect().y1))
+        .map(|(i, _)| i)
+}
+
 /// Insert tables into the existing prose reading stream without reordering
 /// blocks. Horizontal overlap selects the relevant column; within that lane a
 /// table follows only elements that are entirely above its top edge. Blocks
@@ -292,6 +1195,25 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
     });
 
     for table in table_elements {
+        // A table set inside another's box, a grid nested in one of its
+        // cells, follows it, after any others nested in it before.
+        let within = |inner: &Element, host: &Element| {
+            let (h, t) = (host.rect(), inner.rect());
+            host.kind == "doco:Table"
+                && inner.kind == "doco:Table"
+                && t.x0 >= h.x0 - 1.0
+                && t.x1 <= h.x1 + 1.0
+                && t.y0 >= h.y0 - 1.0
+                && t.y1 <= h.y1 + 1.0
+        };
+        if let Some(host) = content.iter().position(|e| within(&table, e)) {
+            let mut at = host + 1;
+            while at < content.len() && within(&content[at], &content[host]) {
+                at += 1;
+            }
+            content.insert(at, table);
+            continue;
+        }
         let mut last_before = None;
         let mut first_after = None;
         for (i, element) in content.iter().enumerate() {
@@ -306,7 +1228,7 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
                 first_after = Some(i);
             }
         }
-        let insertion = last_before
+        let mut insertion = last_before
             .map(|i| i + 1)
             .or(first_after)
             .unwrap_or_else(|| {
@@ -315,6 +1237,22 @@ fn interleave_tables(mut content: Vec<Element>, mut table_elements: Vec<Element>
                     .position(|e| e.rect().y0 >= table.rect().y1)
                     .unwrap_or(content.len())
             });
+        // A table is in the section of the heading it sits under, or beside:
+        // never ahead of it. A catalogue sets each product's heading at the
+        // left over its photo and its table to the right, the heading level
+        // with the table's top; the table overlaps no block of its own
+        // section above it, only the last product's, and went there.
+        if let Some(h) = own_heading(&content, &table).filter(|&h| insertion <= h) {
+            insertion = h + 1;
+            // Past what is set under the heading above the table's top too:
+            // its note (`UPS option`) beside the table's first rows.
+            while insertion < content.len()
+                && content[insertion].kind != "doco:SectionTitle"
+                && content[insertion].rect().y1 <= table.rect().y0
+            {
+                insertion += 1;
+            }
+        }
         content.insert(insertion, table);
     }
     content
@@ -375,27 +1313,150 @@ fn prose_size(blocks: &[Block]) -> f32 {
         .map_or(0.0, |(s, _)| s)
 }
 
-/// Fraction of a block that must lie inside a figure's box for the block to
-/// belong to it. High enough that a paragraph brushing the drawing's margin
-/// stays prose, low enough that a caption tucked under the axis comes along.
+/// Share of a ruled grid's cells that must hold text for it to be a table
+/// drawn over a drawing, rather than the drawing's own lines around its
+/// labels.
+const RULED_TABLE_FILL: f64 = 0.5;
+
+/// How far, as a share of the page's height, a block may stand from a
+/// running line's row and still be on it: a baseline's wobble between pages.
+const FURNITURE_ROW_SLACK: f64 = 0.005;
+
+/// Fraction of a block that must lie inside a figure's drawing for the
+/// block to belong to it without being taken as a label. High enough that a
+/// paragraph brushing the drawing's margin stays prose.
 const FIGURE_CONTAINMENT: f64 = 0.6;
 
-fn heading_yields_to_figure(evidence: Evidence, in_figure: bool) -> bool {
-    in_figure && matches!(evidence, Evidence::FontSize | Evidence::Bold)
+/// Fraction of a grid inferred from its text's alignment, and corroborated by
+/// drawn geometry, that must lie on a drawing for its alignment to be the
+/// drawing's.
+const ALIGNED_IN_DRAWING: f64 = 0.5;
+
+/// How many times its own boundaries the distinct places the strokes inside
+/// a ruled grid stand at may run to, each way, before they are a drawing's.
+const LINE_ART_STROKES: usize = 2;
+
+/// Are the rules inside `g` a drawing's? Its vertical strokes stand at more
+/// than [`LINE_ART_STROKES`] times its column boundaries' count of places
+/// across it, and its horizontal ones at more than as many times its row
+/// boundaries' down it. Places are counted to the point, so a rule drawn in
+/// dashes, or cell by cell, is one.
+fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
+    let inside = |r: &&crate::rule::Rule| {
+        r.bbox.x0 >= g.bbox.x0 - 3.0
+            && r.bbox.x1 <= g.bbox.x1 + 3.0
+            && r.bbox.y0 >= g.bbox.y0 - 3.0
+            && r.bbox.y1 <= g.bbox.y1 + 3.0
+    };
+    let places = |vertical: bool| {
+        let mut at: Vec<i64> = rules
+            .iter()
+            .filter(inside)
+            .filter(|r| matches!(r.orientation, crate::rule::Orientation::Vertical) == vertical)
+            .map(|r| {
+                let mid = if vertical {
+                    (r.bbox.x0 + r.bbox.x1) * 0.5
+                } else {
+                    (r.bbox.y0 + r.bbox.y1) * 0.5
+                };
+                mid.round() as i64
+            })
+            .collect();
+        at.sort_unstable();
+        at.dedup_by(|a, b| (*a - *b).abs() <= 1);
+        at.len()
+    };
+    places(true) > LINE_ART_STROKES * (g.cols() + 1)
+        && places(false) > LINE_ART_STROKES * (g.rows() + 1)
 }
 
+/// Lines of a scale's text, at most, between an axis's scale and the plot
+/// it measures: the space ticks and their labels take, as the axis test of
+/// a scatter's values allows (see `figure::axis`).
+const SCALE_REACH: f64 = 4.0;
+
+/// Do the cells, read in order, say nothing but numbers that step evenly:
+/// three or more, by one difference (`160 140 120 … 0`) or one ratio, as a
+/// logarithmic axis steps (`1 10 100 1,000`)? A plot's scale, its tick
+/// marks drawn at each number, reads as a ruled row or column; a table's
+/// column of figures does not step so, or stands beside its labels.
+fn axis_scale(cells: &[String]) -> bool {
+    let mut values: Vec<f64> = Vec::new();
+    for token in cells.iter().flat_map(|c| c.split_whitespace()) {
+        let t = token
+            .replace(['\u{2212}', '\u{2013}'], "-")
+            .replace(',', "");
+        match t.parse::<f64>() {
+            Ok(v) => values.push(v),
+            Err(_) => return false,
+        }
+    }
+    if values.len() < 3 {
+        return false;
+    }
+    let even = |steps: Vec<f64>| {
+        let first = steps[0];
+        first.abs() > f64::EPSILON
+            && steps
+                .iter()
+                .all(|s| (s - first).abs() <= first.abs() * 0.01)
+    };
+    let differences: Vec<f64> = values.windows(2).map(|w| w[1] - w[0]).collect();
+    let ratios: Option<Vec<f64>> = values
+        .windows(2)
+        .map(|w| (w[0].abs() > f64::EPSILON).then(|| w[1] / w[0]))
+        .collect();
+    even(differences) || ratios.is_some_and(|r| r[0] > 0.0 && (r[0] - 1.0).abs() > 0.01 && even(r))
+}
+
+/// Does a heading give way to the figure it is in? Relative typography does
+/// wherever the figure took it: chart titles, legends and axis labels are
+/// set larger or bolder than body text. A number or a place in a sequence
+/// does only inside the drawing itself, where `4-M4` is a dimension's
+/// callout and not a section; a numbered heading the figure took from
+/// beside it keeps its number's evidence. A title and the outline never do.
+fn heading_yields_to_figure(evidence: Evidence, in_figure: bool, in_drawing: bool) -> bool {
+    match evidence {
+        Evidence::FontSize | Evidence::Bold => in_figure,
+        Evidence::Numbering | Evidence::Sequence => in_drawing,
+        Evidence::Title | Evidence::Outline => false,
+    }
+}
+
+/// Evidence a heading set as a form's text carries until runs of bold
+/// heads are judged: the evidence it would have, with this prefix.
+const FORM_TEXT: &str = "form-";
+
+/// A heading's evidence, without the mark of a form's text.
+fn unflagged(evidence: &'static str) -> &'static str {
+    evidence.strip_prefix(FORM_TEXT).unwrap_or(evidence)
+}
+
+/// A form's text, kept a heading while runs of bold heads were judged
+/// ([`heading::Heading::form_text`]), is read as text from here on.
+fn read_form_text(elements: &mut [Element]) {
+    for e in elements.iter_mut() {
+        if e.kind == "doco:SectionTitle" && e.evidence.starts_with(FORM_TEXT) {
+            e.kind = "doco:Paragraph".into();
+            e.level = None;
+            e.evidence = "layout";
+        }
+    }
+}
+
+/// Two headings that are one, set over two lines: the second goes on in
+/// lower case from where the first starts, or the two are centred on one
+/// axis, one line's spacing apart (`Poly-Lactic-Acid` over `FDA Compliant
+/// for direct food contact`, a sheet's subtitle). Lines set from one left
+/// edge and each opening with a capital are two headings, a section over
+/// its first subsection; so is a division's label over its title.
 fn heading_fragments_join(a: &Element, b: &Element) -> bool {
     if a.kind != "doco:SectionTitle"
         || b.kind != "doco:SectionTitle"
         || a.page != b.page
         || a.level != b.level
-        || a.evidence != b.evidence
-        || !matches!(a.evidence, "font-size" | "bold")
-        || !b
-            .text
-            .chars()
-            .find(|c| c.is_alphabetic())
-            .is_some_and(char::is_lowercase)
+        || unflagged(a.evidence) != unflagged(b.evidence)
+        || !matches!(unflagged(a.evidence), "font-size" | "bold")
     {
         return false;
     }
@@ -403,16 +1464,92 @@ fn heading_fragments_join(a: &Element, b: &Element) -> bool {
         return false;
     };
     let height = ab.height().max(bb.height()).max(1.0);
-    (ab.x0 - bb.x0).abs() <= height && bb.y0 >= ab.y0 && bb.y0 - ab.y1 <= 1.5 * height
+    if bb.y0 < ab.y0 || bb.y0 - ab.y1 > 1.5 * height {
+        return false;
+    }
+    let lower = b
+        .text
+        .chars()
+        .find(|c| c.is_alphabetic())
+        .is_some_and(char::is_lowercase);
+    if lower {
+        return (ab.x0 - bb.x0).abs() <= height;
+    }
+    // Centred: the two lines' midpoints within half a line's height, what a
+    // centred setting's rounding and a trailing space leave between them.
+    // From different left edges, by more than a line's height: two lines of
+    // different lengths, not a left-aligned pair whose midpoints happen to
+    // agree.
+    let centre = |x: &crate::geom::BBox| (x.x0 + x.x1) / 2.0;
+    unflagged(a.evidence) == "font-size"
+        && (centre(&ab) - centre(&bb)).abs() <= height * 0.5
+        && (ab.x0 - bb.x0).abs() > height
+        && !designated_label(&a.text)
+}
+
+/// A label naming a part of a document by its designator, and nothing
+/// else: `ARTICLE VII`, `EXHIBIT B`, `SECTION 4.15`, `Schedule 2.10`,
+/// `Chapter 3`. It heads the title set under it, and stays a heading of its
+/// own.
+fn designated_label(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let (Some(word), Some(designator), None) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    let d = designator.trim_end_matches(['.', ':']);
+    word.chars().all(char::is_alphabetic)
+        && !d.is_empty()
+        && (d.chars().all(|c| c.is_ascii_digit() || c == '.')
+            || d.chars().all(|c| "IVXLCDMivxlcdm".contains(c))
+            || (d.chars().count() == 1 && d.chars().all(char::is_alphabetic)))
 }
 
 fn coalesce_heading_fragments(elements: &mut Vec<Element>) {
+    // Whether each element stands alone on its rows: nothing else is set
+    // level with it, beside it. A subtitle centred over two lines does; the
+    // cells of a table no grid took have neighbours on their rows.
+    let alone: Vec<bool> = elements
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let Some(b) = e.bbox else {
+                return false;
+            };
+            !elements.iter().enumerate().any(|(j, o)| {
+                o.bbox.is_some_and(|ob| {
+                    let overlap = b.y1.min(ob.y1) - b.y0.max(ob.y0);
+                    let shorter = (b.y1 - b.y0).min(ob.y1 - ob.y0);
+                    j != i
+                        && shorter > 0.0
+                        && overlap >= shorter * 0.5
+                        && (ob.x1 <= b.x0 || b.x1 <= ob.x0)
+                })
+            })
+        })
+        .collect();
     let mut out: Vec<Element> = Vec::with_capacity(elements.len());
-    for e in elements.drain(..) {
+    // A heading centred over two lines is joined once: a third centred line
+    // under them is a heading of its own.
+    let mut joined_centred = false;
+    let mut last_alone = false;
+    for (e, alone) in elements.drain(..).zip(alone) {
         if let Some(previous) = out.last_mut() {
-            if heading_fragments_join(previous, &e) {
+            let lower = e
+                .text
+                .chars()
+                .find(|c| c.is_alphabetic())
+                .is_some_and(char::is_lowercase);
+            if heading_fragments_join(previous, &e)
+                && (lower || (!joined_centred && alone && last_alone))
+            {
+                joined_centred = !lower;
                 previous.text.push(' ');
                 previous.text.push_str(&e.text);
+                // Joined, the heading is a form's text only if both parts
+                // were: a line that stopped mid-phrase has found its end.
+                if !e.evidence.starts_with(FORM_TEXT) {
+                    previous.evidence = unflagged(previous.evidence);
+                }
                 if let (Some(a), Some(b)) = (previous.bbox.as_mut(), e.bbox) {
                     a.x0 = a.x0.min(b.x0);
                     a.y0 = a.y0.min(b.y0);
@@ -422,6 +1559,8 @@ fn coalesce_heading_fragments(elements: &mut Vec<Element>) {
                 continue;
             }
         }
+        joined_centred = false;
+        last_alone = alone;
         out.push(e);
     }
     *elements = out;
@@ -537,7 +1676,7 @@ fn prefer_aligned_over_ruled(ruled: &[Grid], aligned: &[Grid], glyphs: &[Glyph])
         return false;
     }
     let coarse = ruled_grid.cell_texts(glyphs).iter().any(|cell| {
-        cell.split_whitespace().count() > 25
+        cell.split_whitespace().count() > PROSE_CELL_WORDS
             || cell
                 .split_whitespace()
                 .collect::<Vec<_>>()
@@ -548,7 +1687,12 @@ fn prefer_aligned_over_ruled(ruled: &[Grid], aligned: &[Grid], glyphs: &[Glyph])
                 })
     });
     let aligned_cells: usize = aligned.iter().map(|grid| grid.rows() * grid.cols()).sum();
-    coarse || aligned_cells >= ruled_grid.rows() * ruled_grid.cols() * 3
+    let wide: Vec<&Grid> = aligned
+        .iter()
+        .filter(|grid| grid.cols() >= ruled_grid.cols() + 3)
+        .collect();
+    (coarse && !nested_in_one_row(ruled_grid, &wide))
+        || aligned_cells >= ruled_grid.rows() * ruled_grid.cols() * 3
 }
 
 /// Prefer a reading from horizontal bands over one coarse ruled grid whose
@@ -566,7 +1710,7 @@ fn prefer_horizontal_bands(ruled: &[Grid], bands: &[Grid], glyphs: &[Glyph]) -> 
     let ruled_grid = &ruled[0];
     let table_not_list = |band: &Grid| !is_marker_list(&band.cell_texts(glyphs), band.cols());
     let coarse = ruled_grid.cell_texts(glyphs).iter().any(|cell| {
-        cell.split_whitespace().count() > 25
+        cell.split_whitespace().count() > PROSE_CELL_WORDS
             || cell
                 .split_whitespace()
                 .collect::<Vec<_>>()
@@ -583,7 +1727,164 @@ fn prefer_horizontal_bands(ruled: &[Grid], bands: &[Grid], glyphs: &[Glyph]) -> 
                     || (ruled_grid.cols() <= 2
                         && band.cols() == ruled_grid.cols()
                         && band.rows() >= ruled_grid.rows() + 2))
+                && !nested_in_one_row(ruled_grid, &[band])
         })
+}
+
+/// The wider readings each lie within one row of a ruled grid of four rows
+/// or more: grids nested in its rows (an acoustic row's nine columns of
+/// figures in a property list), not tables a frame was drawn round. A long
+/// cell is then no sign of a frame, and the ruled grid stands. A frame's
+/// table runs down across the frame's rows, or the frame has too few rows to
+/// tell.
+fn nested_in_one_row(ruled: &Grid, wide: &[&Grid]) -> bool {
+    ruled.rows() >= 4
+        && !wide.is_empty()
+        && wide.iter().all(|w| {
+            ruled.ys.windows(2).any(|row| {
+                w.bbox.y0 >= row[0] - table::EDGE_TOLERANCE
+                    && w.bbox.y1 <= row[1] + table::EDGE_TOLERANCE
+            })
+        })
+}
+
+/// Most of a ruled grid's rows read as a table's rows: two cells or more
+/// filled, each short, over four rows or more. Such a grid is a table
+/// whatever one long cell holds, or a grid nested in one of its rows (a
+/// property list whose acoustic row sets its own nine columns of figures):
+/// its rules account for its cells, and no reading of the text in its place
+/// does better. A frame round a page of prose, or a table set in one of its
+/// cells, has few such rows; a box of three rows holding field lists says
+/// too little either way.
+fn reads_as_rows(grid: &Grid, glyphs: &[Glyph]) -> bool {
+    let cols = grid.cols();
+    if cols < 2 || grid.rows() < 4 {
+        return false;
+    }
+    let cells = grid.cell_texts(glyphs);
+    let rows = cells
+        .chunks(cols)
+        .filter(|row| {
+            let words: Vec<usize> = row
+                .iter()
+                .map(|t| t.split_whitespace().count())
+                .filter(|&w| w > 0)
+                .collect();
+            words.len() >= 2 && words.iter().all(|&w| w <= PROSE_CELL_WORDS)
+        })
+        .count();
+    rows * 2 > grid.rows()
+}
+
+/// Words a cell holds before it is prose rather than a value: the length
+/// at which a ruled grid's cell counts as coarse.
+const PROSE_CELL_WORDS: usize = 25;
+
+/// The table a grid nested in a ruled cell reads as: its own header row,
+/// then a band naming the property it sits under (`Acoustical
+/// Performance`), so its cells carry that as their section, then its rows.
+fn nested_table(
+    n: &Grid,
+    page: &crate::extract::Page,
+    pi: usize,
+    label: Option<String>,
+    scrub: &[(String, bool)],
+) -> Element {
+    let cols = n.cols().max(1);
+    let mut rows: Vec<Vec<String>> = n
+        .cell_texts(&page.glyphs)
+        .chunks(cols)
+        .map(|row| {
+            row.iter()
+                .map(|t| furniture::scrub_cell(t, scrub))
+                .collect()
+        })
+        .collect();
+    // A first row of names over rows of figures is the header; the
+    // ruled-table reading decides otherwise.
+    let figures = |row: &[String]| row.iter().any(|t| table::is_numeric_cell(t.trim()));
+    let header_rows =
+        if rows.len() > 1 && !figures(&rows[0]) && rows[1..].iter().all(|r| figures(r)) {
+            1
+        } else {
+            n.header_rows(&rows, &page.glyphs, &page.rules, &page.fills)
+        };
+    let mut merged_left = vec![false; rows.len() * cols];
+    let mut sub_headers = Vec::new();
+    if let Some(label) = label {
+        let mut band = vec![String::new(); cols];
+        band[0] = label;
+        rows.insert(header_rows, band);
+        let at = header_rows * cols;
+        merged_left.splice(at..at, (0..cols).map(|c| c > 0));
+        sub_headers.push(header_rows);
+    }
+    let text = rows
+        .iter()
+        .map(|r| r.join(" | "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Element {
+        page: pi,
+        bbox: Some(n.bbox),
+        cells: Some(rows),
+        header_rows: Some(header_rows),
+        sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
+        merged_left: merged_left.iter().any(|x| *x).then_some(merged_left),
+        ..Element::new("doco:Table", text, "rust", "rules")
+    }
+}
+
+/// Least glyphs a ruled cell holds before it is read for a grid of its own.
+const NESTED_MIN_GLYPHS: usize = 20;
+
+/// A grid's first row names its columns over rows of figures: a table with
+/// a header of its own. A cell's figures stacked line under line under the
+/// outer table's header line up into columns too, but name nothing.
+fn names_its_columns(n: &Grid, glyphs: &[Glyph]) -> bool {
+    let cols = n.cols().max(1);
+    let cells = n.cell_texts(glyphs);
+    let rows: Vec<&[String]> = cells.chunks(cols).collect();
+    let figures = |row: &[String]| row.iter().any(|t| table::is_numeric_cell(t.trim()));
+    let [head, body @ ..] = rows.as_slice() else {
+        return false;
+    };
+    let names = head.iter().filter(|t| !t.trim().is_empty()).count();
+    names * 2 > cols && !figures(head) && !body.is_empty() && body.iter().all(|r| figures(r))
+}
+
+/// Grids set inside single cells of a ruled table, each with the row and
+/// column of the cell it fills: a property list whose acoustic row sets nine
+/// columns of figures under their own header in its Performance cell. A
+/// cell's text lined up into three columns or more over three rows or more,
+/// taking nearly all of the cell, its first row naming the columns over rows
+/// of figures, is a table of its own; wrapped prose in a cell lines up into
+/// no columns.
+fn nested_grids(g: &Grid, page: &crate::extract::Page) -> Vec<(Grid, usize, usize)> {
+    let cols = g.cols();
+    let mut by_cell: std::collections::BTreeMap<usize, Vec<Glyph>> =
+        std::collections::BTreeMap::new();
+    for (gl, home) in page.glyphs.iter().zip(g.glyph_cells(&page.glyphs)) {
+        if let Some(k) = home.filter(|_| !gl.text.trim().is_empty()) {
+            by_cell.entry(k).or_default().push(gl.clone());
+        }
+    }
+    let mut out = Vec::new();
+    for (k, inside) in by_cell {
+        if inside.len() < NESTED_MIN_GLYPHS {
+            continue;
+        }
+        for n in table::detect_aligned(&inside, &page.rules, &page.fills, page.index) {
+            if n.rows() < 3 || n.cols() < 3 {
+                continue;
+            }
+            let taken = n.takes(&inside).iter().filter(|t| **t).count();
+            if taken * 10 >= inside.len() * 8 && names_its_columns(&n, &inside) {
+                out.push((n, k / cols, k % cols));
+            }
+        }
+    }
+    out
 }
 
 /// A grid's first column holds nothing but list markers (`a)`, `2.`, `(iii)`,
@@ -642,6 +1943,59 @@ enum GridSource {
     Text,
 }
 
+/// Fewest lines of prose a document's body size is read from alone.
+const THIN_PROSE_LINES: usize = 8;
+
+/// The body size of a document whose prose is too short to say it, read
+/// with its tables' text: a page that is a title, a label and a folio over a
+/// table. Its prose alone counts the title's two lines against one of each
+/// other size, and the title, taken for the body, was no heading. Each of
+/// a table's lines counts once, at its size; `None` where the prose runs
+/// to [`THIN_PROSE_LINES`] or more, or no table holds text.
+fn thin_prose_body(
+    blocks: &[Vec<Block>],
+    pages: &[crate::extract::Page],
+    layouts: &[PageLayout],
+) -> Option<f32> {
+    let prose: usize = blocks.iter().flatten().map(|b| b.lines.len()).sum();
+    if prose >= THIN_PROSE_LINES {
+        return None;
+    }
+    let key = |size: f32| (size * 4.0).round() as i32;
+    let mut lines: std::collections::BTreeMap<i32, usize> = Default::default();
+    for b in blocks.iter().flatten() {
+        *lines.entry(key(b.font_size)).or_default() += b.lines.len();
+    }
+    let mut table_lines: std::collections::BTreeSet<(usize, i64, i32)> = Default::default();
+    for (pi, layout) in layouts.iter().enumerate() {
+        let Some(page) = pages.get(pi) else { continue };
+        for g in &layout.grids {
+            for gl in page
+                .glyphs
+                .iter()
+                .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+            {
+                let Some(b) = gl.bbox else { continue };
+                let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                if cx > g.bbox.x0 && cx < g.bbox.x1 && cy > g.bbox.y0 && cy < g.bbox.y1 {
+                    table_lines.insert((pi, gl.origin.1.round() as i64, key(gl.font_size)));
+                }
+            }
+        }
+    }
+    if table_lines.is_empty() {
+        return None;
+    }
+    for (_, _, k) in &table_lines {
+        *lines.entry(*k).or_default() += 1;
+    }
+    // The most lines; of equal counts, the smaller size.
+    lines
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(k, _)| *k as f32 / 4.0)
+}
+
 struct PageLayout {
     grids: Vec<Grid>,
     grid_sources: Vec<GridSource>,
@@ -649,6 +2003,9 @@ struct PageLayout {
     /// alignment rather than drawn; see [`Grid::split_by_alignment`].
     spanning_rows: Vec<Vec<usize>>,
     prose_columns: Vec<Vec<Line>>,
+    /// Per prose column, the page column it is a stretch of, and whether it
+    /// sets its own measure; see [`crate::region::Group`].
+    prose_sources: Vec<(usize, bool)>,
     route: crate::route::Route,
     missing_tables: Vec<crate::geom::BBox>,
     demoted_tables: Vec<bool>,
@@ -711,6 +2068,148 @@ impl StageTimings {
 }
 
 /// Run `f`, adding its wall clock to `slot`.
+/// Is block `i` a caption's title, set on one line with the caption's label
+/// as a block of its own (`FIGURE 17`, then `Renewable energy purchasing…`)?
+fn labelled_caption(blocks: &[Block], i: usize) -> bool {
+    let b = &blocks[i];
+    blocks.iter().enumerate().any(|(j, l)| {
+        let text = l.text();
+        j != i
+            && text.split_whitespace().count() <= 2
+            && heading::is_caption(&text)
+            && l.bbox.y1 > b.bbox.y0
+            && l.bbox.y0 < b.bbox.y1
+            && l.bbox.x1 <= b.bbox.x0 + 1.0
+    })
+}
+
+/// Each page's figures, and the figure each block belongs to, if any: the
+/// labels its figure took, and whatever lies mostly inside the drawing
+/// itself.
+fn find_figures(
+    pages: &[Page],
+    blocks_per_page: &[Vec<Block>],
+) -> Vec<(Vec<figure::Figure>, Vec<Option<usize>>)> {
+    let mut page_figures = Vec::with_capacity(blocks_per_page.len());
+    for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        // Chart and diagram regions. Text inside one is real and its *order*
+        // is not: a donut's labels and percentages interleave by position on
+        // the page, so emitting them as consecutive paragraphs invites a
+        // reader to pair them, and half of those pairings are wrong. They are
+        // gathered into one figure instead, which says what is known (these
+        // fragments belong together, here) without asserting what is not.
+        let page = &pages[pi];
+        let mut figures = figure::detect(
+            &page.fills,
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+        );
+        // The drawing does not contain its own labels; take them, and grow
+        // each region over them. A list item is not a label: a bulleted
+        // list set under a drawing is the page's. A box drawn beside a line
+        // is not a bullet, though: by a chart it is a legend's swatch, and
+        // the line its label.
+        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
+        let candidates: Vec<usize> = (0..blocks.len())
+            .filter(|&i| {
+                blocks[i]
+                    .marker
+                    .as_deref()
+                    .is_none_or(|m| m == block::CHECKBOX_MARKER)
+                    && block::strip_leading_bullet(&block_texts[i]).is_none()
+            })
+            .collect();
+        let block_boxes: Vec<(crate::geom::BBox, f32, &str)> = candidates
+            .iter()
+            .map(|&i| (blocks[i].bbox, blocks[i].font_size, block_texts[i].as_str()))
+            .collect();
+        let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
+        let labelled = figure::pictures(
+            &images,
+            &block_boxes,
+            pi,
+            (page.width, page.height),
+            prose_size(blocks),
+            &figures,
+        );
+        figures.extend(labelled);
+        let plotted = figure::graticules(
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+            &figures,
+        );
+        figures.extend(plotted);
+        let mut taken = figure::attach_beside(
+            &mut figures,
+            &block_boxes,
+            &images,
+            (page.width, page.height),
+            prose_size(blocks),
+            &figure::marks(&page.fills),
+        );
+        let items: Vec<(crate::geom::BBox, f32)> = (0..blocks.len())
+            .filter(|i| !candidates.contains(i))
+            .map(|i| (blocks[i].bbox, blocks[i].font_size))
+            .collect();
+        figure::release_lead_ins(&mut taken, &block_boxes, &items);
+        let item_boxes: Vec<crate::geom::BBox> = items.iter().map(|(b, _)| *b).collect();
+        figure::release_behind_items(&mut taken, &figures, &block_boxes, &item_boxes);
+        figure::reassign_between(&mut taken, &figures, &block_boxes, prose_size(blocks));
+        // Which figure each block belongs to, if any: the labels its figure
+        // took, and whatever lies mostly inside the drawing itself. The
+        // rectangle around a drawing and its labels is not membership: a
+        // paragraph or a heading inside it that was never taken as a label
+        // is the page's.
+        //
+        // Region and heading evidence arbitrate rather than one always
+        // winning. Outline/title/numbering evidence is authoritative enough
+        // to survive an over-grown figure region. Relative typography is not:
+        // chart legends and axis labels are commonly bold or larger than body
+        // text, and treating every one as a section is the dominant
+        // over-promotion failure on the benchmark.
+        let mut member: Vec<Option<usize>> = vec![None; blocks.len()];
+        for (fi, t) in taken.iter().enumerate() {
+            for &k in t {
+                member[candidates[k]].get_or_insert(fi);
+            }
+        }
+        for (i, b) in blocks.iter().enumerate() {
+            if member[i].is_none() {
+                member[i] = figures
+                    .iter()
+                    .position(|f| figure::share_inside(&b.bbox, &f.drawing) >= FIGURE_CONTAINMENT);
+            }
+        }
+        page_figures.push((figures, member));
+    }
+    page_figures
+}
+
+/// The blocks a figure holds, by page: they do not count toward the body
+/// size. The body is the text set as running prose. A wiring diagram's
+/// one-line labels, or a catalogue's drawings, outnumber a page's lines of
+/// prose, and measured over them the body came out at the labels' 4pt:
+/// every caption over it was "larger than body", and a heading.
+///
+/// A picture's labels (see [`figure::pictures`]) still count: a picture
+/// holds a few, and set aside they tipped the body of a slide deck, whose
+/// sizes stand close in count, to another size.
+fn drawn(page_figures: &[(Vec<figure::Figure>, Vec<Option<usize>>)]) -> Vec<Vec<bool>> {
+    page_figures
+        .iter()
+        .map(|(figures, member)| {
+            member
+                .iter()
+                .map(|m| m.is_some_and(|fi| figures[fi].shapes > 0))
+                .collect()
+        })
+        .collect()
+}
+
 fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
     let start = std::time::Instant::now();
     let out = f();
@@ -726,26 +2225,34 @@ fn timed<T>(slot: &mut std::time::Duration, f: impl FnOnce() -> T) -> T {
 /// glyph, rasterises image coverage onto a grid, and tests glyph containment
 /// once per candidate region. Computing a verdict nobody consumes is the
 /// clearest kind of waste, even where the corpus is too noisy to time it.
-fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
+pub fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
     opts.emit_anchors || opts.layout_prefix.is_some()
 }
 
 fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
+    // The glyphs each grid's cells read, so that a glyph is in a cell or
+    // in the prose, never both and never neither (`Grid::takes`).
+    let taken: Vec<Option<Vec<bool>>> = grids
+        .iter()
+        .map(|grid| match grid.layout.as_deref() {
+            Some(lay) if !lay.claimed.is_empty() => None,
+            _ => Some(grid.takes(glyphs)),
+        })
+        .collect();
     glyphs
         .iter()
-        .filter(|g| {
-            let (x, y) = match g.bbox {
-                Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
-                None => g.origin,
-            };
-            !grids.iter().any(|grid| match grid.layout.as_deref() {
-                Some(lay) if !lay.claimed.is_empty() => {
-                    lay.claimed.binary_search(&g.draw_index).is_ok()
-                }
-                _ => grid.cell_at(x, y).is_some(),
-            })
+        .enumerate()
+        .filter(|(i, g)| {
+            !grids
+                .iter()
+                .zip(&taken)
+                .any(|(grid, taken)| match (grid.layout.as_deref(), taken) {
+                    (_, Some(t)) => t[*i],
+                    (Some(lay), None) => lay.claimed.binary_search(&g.draw_index).is_ok(),
+                    (None, None) => false,
+                })
         })
-        .cloned()
+        .map(|(_, g)| g.clone())
         .collect()
 }
 
@@ -789,6 +2296,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // A reviewer's highlighting is drawn as fills fitted to the lines it
         // marks, and is not the page's structure.
         crate::rule::strip_highlights(&mut p.fills, &p.glyphs);
+        // The page's glyphs are final from here: each grid's cells are read
+        // from them once.
+        let _cells = crate::cells::pin(&p.glyphs);
         // `Deterministic` is the right stand-in when nobody asks: both
         // consumers act only on `VlmRegions`, and both are unreachable in the
         // configurations that skip the call.
@@ -824,13 +2334,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .sum()
         };
         let mut grids = timed(&mut timings.tables, || {
-            trim(table::detect_framed(&p.rules, p.index, &char_frames))
+            trim(table::detect_framed(
+                &p.rules,
+                &p.fills,
+                &p.glyphs,
+                p.index,
+                &char_frames,
+            ))
         });
         let mut grid_sources = vec![GridSource::Ruled; grids.len()];
         if !grids.is_empty() {
             let parts = timed(&mut timings.tables, || {
                 trim(table::detect_by_component_framed(
                     &p.rules,
+                    &p.fills,
+                    &p.glyphs,
                     p.index,
                     &char_frames,
                 ))
@@ -877,24 +2395,69 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
-        let aligned_full = timed(&mut timings.tables, || {
+        let page_aligned = timed(&mut timings.tables, || {
             table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
         });
+        // Alignment is read again below from the glyphs outside the grids
+        // (`glyphs_outside_grids`, which keeps them in order). Where no grid
+        // took any, those are the page's glyphs as they are here, and so is
+        // their reading.
+        let aligned_in = |glyphs: &[Glyph]| {
+            if glyphs.len() == p.glyphs.len() {
+                page_aligned.clone()
+            } else {
+                table::detect_aligned(glyphs, &p.rules, &p.fills, p.index)
+            }
+        };
+        let mut aligned_full = page_aligned.clone();
+        // Justified prose lines its words up into columns; it is no reading
+        // to prefer over a ruled table holding a paragraph in a cell.
+        aligned_full.retain(|g| !table::reads_as_prose(g, &p.glyphs));
         let aligned_preferred = prefer_aligned_over_ruled(&grids, &aligned_full, &p.glyphs);
         // Tables ruled with horizontals only, or by nothing but the rules
         // under their figures, are read from their text: their bands are
         // not rows and their rules' ends are not columns. See `textgrid`.
         // Where alignment already reads the page's one coarse grid, it
         // keeps it.
+        let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
         if !aligned_preferred {
             timed(&mut timings.tables, || {
                 let lines = crate::textgrid::lines(&p.glyphs);
                 let mut read: Vec<Grid> = Vec::new();
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
-                for i in crate::textgrid::unruled_grids(&grids, &p.rules, &lines) {
+                let stacks = table::stack_columns(&p.rules, &p.fills);
+                let mut withheld: Vec<usize> = Vec::new();
+                for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
+                    let beside =
+                        crate::textgrid::ruled_beside_prose(&grids[i], &p.rules, &p.fills, &lines);
+                    // The stacks of row lines ruled alike within the seed:
+                    // the places their lines break, their columns' edges as
+                    // drawn.
+                    let within: Vec<&(crate::geom::BBox, Vec<f64>)> = stacks
+                        .iter()
+                        .filter(|(b, _)| {
+                            overlap_area(b, &grids[i].bbox)
+                                >= 0.5 * ((b.x1 - b.x0) * (b.y1 - b.y0)).max(1.0)
+                        })
+                        .collect();
                     for region in crate::textgrid::rule_regions(&p.rules, &grids[i].bbox) {
                         let got = crate::textgrid::read(&lines, &p.rules, region, p.index);
+                        // A reading across the columns a stack's rules draw
+                        // is no table: neither it nor the seed stands, and
+                        // its text stays text.
+                        let (merged, got): (Vec<Grid>, Vec<Grid>) =
+                            got.into_iter().partition(|g| {
+                                within.iter().any(|(b, edges)| {
+                                    crate::textgrid::merges_drawn_columns(g, edges, b, &p.glyphs)
+                                })
+                            });
+                        if !merged.is_empty() && !withheld.contains(&i) {
+                            withheld.push(i);
+                        }
+                        if beside {
+                            beside_prose.extend(got.iter().map(|g| g.bbox));
+                        }
                         if debug {
                             eprintln!(
                                 "TEXTGRID p{} seed grid {i} region {:?} -> {:?}",
@@ -921,7 +2484,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut taken: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
                 taken.extend(read.iter().map(|g| g.bbox));
                 let outside = glyphs_outside_grids(&p.glyphs, &grids);
-                let accepted = table::detect_aligned(&outside, &p.rules, &p.fills, p.index);
+                let _outside_cells = crate::cells::pin(&outside);
+                let accepted = aligned_in(&outside);
                 let typed: Vec<crate::geom::BBox> = accepted
                     .iter()
                     .filter(|g| table::typed_layout(g, &outside))
@@ -974,7 +2538,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         kept.push(g);
                     }
                 }
-                if kept.is_empty() {
+                if kept.is_empty() && withheld.is_empty() {
                     return;
                 }
                 let mut out_grids = Vec::new();
@@ -984,6 +2548,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     // A seed that was read is replaced by its reading; another
                     // grid only where a reading covers much of it.
                     let replaced = seeded.contains(&gi)
+                        || withheld.contains(&gi)
                         || (!crate::textgrid::has_vertical(&p.rules, &g.bbox)
                             && kept
                                 .iter()
@@ -1014,8 +2579,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grids = aligned_full;
             grid_sources = vec![GridSource::Aligned; grids.len()];
         } else {
-            let horizontal_bands = timed(&mut timings.tables, || {
+            let mut horizontal_bands = timed(&mut timings.tables, || {
                 table::detect_horizontal_bands(&p.glyphs, &p.rules, p.index)
+            });
+            // Nor a reading that cuts a ruled table's paragraph into words.
+            horizontal_bands.retain(|g| {
+                !table::reads_as_prose(g, &p.glyphs) && !table::cuts_words(g, &p.glyphs)
             });
             if prefer_horizontal_bands(&grids, &horizontal_bands, &p.glyphs) {
                 grids = horizontal_bands;
@@ -1030,15 +2599,53 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         for (g, source) in grids.iter_mut().zip(&grid_sources) {
             if *source == GridSource::Ruled {
                 g.take_group_labels(&p.rules, &p.glyphs);
+                g.take_column_heads(&p.rules, &p.glyphs);
             }
         }
 
+        // Columns of prose and boxes laid out around paragraphs are not
+        // tables: their glyphs go back to the prose, read column by column.
+        {
+            let keep: Vec<bool> = grids
+                .iter()
+                .map(|g| !table::reads_as_prose(g, &p.glyphs))
+                .collect();
+            let mut k = keep.iter();
+            grids.retain(|_| *k.next().unwrap_or(&true));
+            let mut k = keep.iter();
+            grid_sources.retain(|_| *k.next().unwrap_or(&true));
+        }
         let prose = timed(&mut timings.columns, || {
             glyphs_outside_grids(&p.glyphs, &grids)
         });
+        let _prose_cells = crate::cells::pin(&prose);
 
+        // The prose's columns, which the field lists below look between too.
+        // A table ruled under its rows with horizontals alone, standing
+        // beside a column of the page's prose (`textgrid::ruled_beside_prose`),
+        // is set in a column of its own: its text keeps that column's extent,
+        // as it would read had it been prose.
+        //
+        // The test is pure geometry, made on the ruled grid that seeds the
+        // table read from its text. In practice only such seeds give tables
+        // of this shape. Made on every table the page's readers keep, it
+        // changed two documents more, one for the better and one for the
+        // worse; counted, a table's own gutters part the page's text at them.
+        let prose_cols = timed(&mut timings.columns, || {
+            let elsewhere: Vec<Grid> = grids
+                .iter()
+                .zip(&grid_sources)
+                .filter(|(g, s)| !(**s == GridSource::Text && beside_prose.contains(&g.bbox)))
+                .map(|(g, _)| g.clone())
+                .collect();
+            if elsewhere.len() == grids.len() {
+                crate::column::detect(&prose)
+            } else {
+                crate::column::detect(&glyphs_outside_grids(&p.glyphs, &elsewhere))
+            }
+        });
         let mut cols = timed(&mut timings.columns, || {
-            line::assemble_columns_with_rules(&prose, &p.rules, p.index)
+            line::assemble_columns_in(&prose, &p.rules, p.index, &prose_cols)
         });
 
         // Second table strategy: alignment, for the 14 corpus documents whose
@@ -1047,15 +2654,81 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // `table::is_corroborated`. An earlier ungated version was
         // net-negative: it converted prose into tables and cost more in reading
         // order (NID 0.868 -> 0.839) than it gained in table structure.
-        let mut aligned = timed(&mut timings.tables, || {
-            table::detect_aligned(&prose, &p.rules, &p.fills, p.index)
+        let mut aligned = timed(&mut timings.tables, || aligned_in(&prose));
+        // A box drawn round a drawing parts the text either side of it: a
+        // grid read across its edge put a diagram's labels and the note in
+        // the column beside its box in one row.
+        let walls = table::walls(&p.fills);
+        // Its glyphs are the prose's, outside every grid; but a run of them
+        // either side of a grid can line up into a table laid over it.
+        aligned.retain(|g| {
+            g.rows() >= 2
+                && g.cols() >= 2
+                && !grids.iter().any(|o| overlap_area(&o.bbox, &g.bbox) > 0.0)
+                && !table::reads_as_prose(g, &prose)
+                && !table::walled_in(&g.bbox, &walls)
         });
-        aligned.retain(|g| g.rows() >= 2 && g.cols() >= 2);
+        // Field lists set without rules, found between the page's gutters
+        // where a row across the page holds more than a label and its
+        // value. Their cells hold the prose's glyphs, so they are pointed
+        // at the page's.
+        let (fields, column_tables) = timed(&mut timings.tables, || {
+            let text = table::PageRows::new(&prose);
+            (
+                table::field_lists_in(&prose, p.index, &prose_cols, &text),
+                table::column_tables_in(&prose, p.index, &prose_cols, &text),
+            )
+        });
+        let field_count = fields.len();
+        let fields: Vec<Grid> = fields.into_iter().chain(column_tables).collect();
+        // Whether a table was read within the page's columns: then its
+        // columns stand once it is taken out.
+        let mut in_columns = false;
+        if !fields.is_empty() {
+            let at: std::collections::HashMap<usize, usize> = p
+                .glyphs
+                .iter()
+                .enumerate()
+                .map(|(i, g)| (g.draw_index, i))
+                .collect();
+            for (fi, mut f) in fields.into_iter().enumerate() {
+                if grids
+                    .iter()
+                    .chain(aligned.iter())
+                    .any(|o| overlap_area(&o.bbox, &f.bbox) > 0.0)
+                    || table::walled_in(&f.bbox, &walls)
+                {
+                    continue;
+                }
+                let Some(lay) = f.layout.as_mut() else {
+                    continue;
+                };
+                let lay = std::sync::Arc::make_mut(lay);
+                let mut mapped = true;
+                for i in lay.cells.iter_mut().flatten() {
+                    match at.get(&prose[*i].draw_index) {
+                        Some(&k) => *i = k,
+                        None => mapped = false,
+                    }
+                }
+                if mapped {
+                    in_columns |= fi >= field_count;
+                    aligned.push(f);
+                }
+            }
+        }
         if !aligned.is_empty() {
             // Withhold their glyphs from prose too, and re-assemble what is left.
+            // A table read between the page's gutters leaves them where they
+            // were: found again without its rows, they can fall elsewhere, and
+            // the columns' lines would be read across each other.
             let remaining = glyphs_outside_grids(&prose, &aligned);
             cols = timed(&mut timings.columns, || {
-                line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                if in_columns {
+                    line::assemble_columns_in(&remaining, &p.rules, p.index, &prose_cols)
+                } else {
+                    line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                }
             });
             grid_sources.extend(std::iter::repeat_n(GridSource::Aligned, aligned.len()));
             grids.extend(aligned);
@@ -1106,6 +2779,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .collect()
         });
 
+        // Each region's columns in turn, down the page.
+        let table_boxes: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
+        let pictures: Vec<crate::geom::BBox> = p.images.iter().map(|im| im.bbox).collect();
+        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures);
+        let prose_sources: Vec<(usize, bool)> =
+            groups.iter().map(|g| (g.column, g.own_measure)).collect();
+        let cols: Vec<Vec<Line>> = groups.into_iter().map(|g| g.lines).collect();
         flat_lines.push((cols.iter().flatten().cloned().collect(), p.height));
         if opts.table_conf_debug {
             for (ti, g) in grids.iter().enumerate() {
@@ -1168,13 +2848,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources,
             spanning_rows,
             prose_columns: cols,
+            prose_sources,
             route,
             missing_tables: missing,
             demoted_tables: demoted,
         });
     }
 
-    let (marks, exact) = timed(&mut timings.furniture, || {
+    let (mut marks, exact) = timed(&mut timings.furniture, || {
         furniture::detect_with_exact(&flat_lines)
     });
     // The folio is read from the page's edges over *every* glyph, not from
@@ -1197,8 +2878,31 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 (line::assemble_page(&edge), p.height)
             })
             .collect();
-        furniture::detect_with_folios(&edges).1
+        furniture::detect_folio_places(&edges)
     });
+    let (folios, folio_places): (Vec<Option<String>>, Vec<Option<f64>>) =
+        folios.into_iter().unzip();
+    // A page's folio standing as a line of its own where the folio's line
+    // stands is the page's number, though too few pages left it among
+    // their lines for repetition to tell: a table reaching the foot takes it
+    // on the others, and the first and last pages kept theirs in the body.
+    for (pi, folio) in folios.iter().enumerate() {
+        let (Some(folio), Some(place), Some((lines, height))) =
+            (folio.as_deref(), folio_places[pi], flat_lines.get(pi))
+        else {
+            continue;
+        };
+        if *height <= 0.0 {
+            continue;
+        }
+        for (li, l) in lines.iter().enumerate() {
+            if furniture::is_folio_line(&l.text, folio, l.bbox.y0 / height, place) {
+                marks[pi]
+                    .entry(li)
+                    .or_insert(furniture::Furniture::PageNumber);
+            }
+        }
+    }
     let mut furniture_marks: Vec<(usize, String, furniture::Furniture)> = Vec::new();
     for (pi, m) in marks.iter().enumerate() {
         for (li, kind) in m {
@@ -1271,6 +2975,28 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             .cloned()
             .collect()
     };
+    // The rows each furniture text runs on, as shares of the page's height:
+    // a running line leaks into a block on its own row, where a line the
+    // page set beside it merged with it. Elsewhere its words are content: a
+    // running head parted into its groups (`July 26, 2023`, `Chair Powell's
+    // Press Conference`) is set again in the transcript's title under it.
+    let mut furniture_rows: std::collections::HashMap<String, Vec<(f64, f64)>> = Default::default();
+    for (pi, page_marks) in marks.iter().enumerate() {
+        let (lines, height) = &flat_lines[pi];
+        if *height <= 0.0 {
+            continue;
+        }
+        for (li, kind) in page_marks.iter() {
+            let l = &lines[*li];
+            furniture_rows
+                .entry(furniture_key(
+                    l.text.trim(),
+                    matches!(kind, furniture::Furniture::PageNumber),
+                ))
+                .or_default()
+                .push((l.bbox.y0 / height, l.bbox.y1 / height));
+        }
+    }
     // The sizes each furniture text is printed at, to tell a running head
     // from a title page that sets the same words as its title.
     let mut furniture_sizes: std::collections::HashMap<String, Vec<f32>> = Default::default();
@@ -1283,6 +3009,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .push(l.font_size);
         }
     }
+    // The running strings to scrub from text spanning `top..foot` of its
+    // page, as shares of the page's height: those found on those rows.
+    let on_rows = |top: f64, foot: f64| -> Vec<(String, bool)> {
+        scrub_texts
+            .iter()
+            .filter(|(t, vary)| {
+                furniture_rows
+                    .get(&furniture_key(t, *vary))
+                    .is_none_or(|rows| {
+                        rows.iter().any(|&(y0, y1)| {
+                            y0 < foot + FURNITURE_ROW_SLACK && top < y1 + FURNITURE_ROW_SLACK
+                        })
+                    })
+            })
+            .cloned()
+            .collect()
+    };
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
 
@@ -1303,14 +3046,56 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             idx += col.len();
             kept_columns.push(kept);
         }
-        let contents_layout = is_contents_layout(&kept_columns);
+        // The region pass reads a page column in stretches. A stretch's
+        // measure is its column's, unless it is one side of a box read at
+        // its own gutter; and side heads are read beside their text over
+        // whole columns, as the page-wide pass found them.
+        let sources = &layout.prose_sources;
+        let measures: Vec<Vec<Line>> = (0..kept_columns.len())
+            .map(|i| match sources.get(i) {
+                Some(&(c, false)) => kept_columns
+                    .iter()
+                    .zip(sources)
+                    .filter(|(_, s)| s.0 == c)
+                    .flat_map(|(k, _)| k.iter().cloned())
+                    .collect(),
+                _ => kept_columns[i].clone(),
+            })
+            .collect();
+        let page_columns = {
+            let mut c: Vec<usize> = sources.iter().map(|s| s.0).collect();
+            c.sort_unstable();
+            c.dedup();
+            c.len()
+        };
+        let contents_layout = page_columns > 1 && is_contents_layout(&kept_columns);
         let checkboxes = crate::rule::checkboxes(&raw.pages[pi].fills);
+        let dots = block::marking_dots(
+            &kept_columns.iter().flatten().cloned().collect::<Vec<_>>(),
+            &raw.pages[pi].dots,
+        );
         let bands: Vec<crate::geom::BBox> = raw.pages[pi].fills.iter().map(|f| f.bbox).collect();
+        let body = block::body_size(kept_columns.iter().flatten());
+        let tables: Vec<crate::geom::BBox> = layout.grids.iter().map(|g| g.bbox).collect();
         let block_columns: Vec<Vec<Block>> = timed(&mut timings.blocks, || {
-            kept_columns
-                .iter()
-                .map(|col| block::assemble_with_marks(col, leading, &checkboxes, &bands))
-                .collect()
+            let mut runs: Vec<(usize, Vec<Block>)> = Vec::new();
+            for (i, col) in kept_columns.iter().enumerate() {
+                let blocks = block::assemble_in_measure(
+                    col,
+                    &measures[i],
+                    leading,
+                    &checkboxes,
+                    &dots,
+                    &bands,
+                    body,
+                );
+                let c = sources.get(i).map_or(i, |s| s.0);
+                match runs.last_mut() {
+                    Some((last, run)) if *last == c => run.extend(blocks),
+                    _ => runs.push((c, blocks)),
+                }
+            }
+            block::read_side_heads(runs.into_iter().map(|(_, r)| r).collect(), &tables)
         });
         let mut out: Vec<Block> = block_columns.into_iter().flatten().collect();
         if contents_layout {
@@ -1373,11 +3158,32 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         blocks_per_page.push(out);
     }
 
+    // Each page's figures, and the figure each block belongs to: worked out
+    // before headings are, since the text of drawings is no measure of the
+    // body's size, and before any element is typed, since whether a heading
+    // yields to a figure depends on how the document sets its headings
+    // elsewhere. Gathering a numbered list rewrites the blocks, so the
+    // figures follow it.
+    let mut page_figures = find_figures(&raw.pages, &blocks_per_page);
+    let mut body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
+    let thin = thin_prose_body(&blocks_per_page, &raw.pages, &layouts);
+    if let Some(size) = thin {
+        body_font = size;
+    }
+    let body_bold = heading::body_is_bold(raw.pages.iter().flat_map(|p| p.glyphs.iter()));
     let headings = timed(&mut timings.headings, || {
-        heading::detect(&blocks_per_page, outline)
-    });
-    let body_font = timed(&mut timings.headings, || {
-        heading::body_font_size(&blocks_per_page)
+        let first = heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold);
+        let named = heading::outline_names(outline);
+        let in_section = heading::in_section(&first);
+        if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
+            page_figures = find_figures(&raw.pages, &blocks_per_page);
+            body_font = thin.unwrap_or_else(|| {
+                heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures))
+            });
+            heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold)
+        } else {
+            first
+        }
     });
 
     // Heading lookup by source block. Text is not an identity: repeated chart
@@ -1385,8 +3191,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // one occurrence is structurally a heading.
     let mut is_heading: std::collections::HashMap<(usize, usize), (usize, Evidence)> =
         Default::default();
+    let mut form_text: std::collections::HashSet<(usize, usize)> = Default::default();
     for h in &headings {
         is_heading.insert((h.page, h.block_index), (h.level, h.evidence));
+        if h.form_text {
+            form_text.insert((h.page, h.block_index));
+        }
     }
 
     let mut elements = Vec::new();
@@ -1401,58 +3211,55 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // Each table's column edges and whether it opens with a styled row,
     // for joining a table the page break split.
     let mut frames: Vec<TableFrame> = Vec::new();
+    // The styles the document sets its headings in away from any figure.
+    // A heading in one of them that a figure took as a label is the
+    // document's heading, set near a drawing — `Operation` over a drawing
+    // of the control it describes, a side-head level with a chair's — and
+    // not a chart's title or legend, whose style is the chart's own.
+    let heading_style = |b: &Block| {
+        (
+            (b.font_size * 2.0).round() as i32,
+            b.lines.iter().all(|l| l.bold),
+        )
+    };
+    let mut free_styles: std::collections::HashSet<(i32, bool)> = Default::default();
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        for (bi, b) in blocks.iter().enumerate() {
+            if is_heading.contains_key(&(pi, bi)) && page_figures[pi].1[bi].is_none() {
+                free_styles.insert(heading_style(b));
+            }
+        }
+    }
+    for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        let _cells = crate::cells::pin(&raw.pages[pi].glyphs);
         let mut page_elements = Vec::new();
-        // Chart and diagram regions. Text inside one is real and its *order*
-        // is not: a donut's labels and percentages interleave by position on
-        // the page, so emitting them as consecutive paragraphs invites a
-        // reader to pair them, and half of those pairings are wrong. They are
-        // gathered into one figure instead, which says what is known (these
-        // fragments belong together, here) without asserting what is not.
-        let page = &raw.pages[pi];
-        let mut figures = figure::detect(&page.fills, &page.rules, pi, (page.width, page.height));
-        // The drawing does not contain its own labels; grow each region to
-        // reach them before deciding which blocks belong to it.
-        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
-        let block_boxes: Vec<(crate::geom::BBox, f32, &str)> = blocks
-            .iter()
-            .zip(&block_texts)
-            .map(|(b, t)| (b.bbox, b.font_size, t.as_str()))
-            .collect();
-        let images: Vec<crate::geom::BBox> = page.images.iter().map(|im| im.bbox).collect();
-        figure::attach(
-            &mut figures,
-            &block_boxes,
-            &images,
-            (page.width, page.height),
-            prose_size(blocks),
-        );
-        // Which figure each block falls in, if any. A block counts as inside
-        // when most of it is: a caption sitting just below the drawing is
-        // part of the figure, a paragraph merely overlapping its margin is
-        // not.
-        //
-        // Region and heading evidence arbitrate rather than one always
-        // winning. Outline/title/numbering evidence is authoritative enough
-        // to survive an over-grown figure region. Relative typography is not:
-        // chart legends and axis labels are commonly bold or larger than body
-        // text, and treating every one as a section is the dominant
-        // over-promotion failure on the benchmark.
-        let in_figure = |b: &Block| -> Option<usize> {
-            figures.iter().position(|f| {
-                let bx = b.bbox;
-                let w = (bx.x1.min(f.bbox.x1) - bx.x0.max(f.bbox.x0)).max(0.0);
-                let h = (bx.y1.min(f.bbox.y1) - bx.y0.max(f.bbox.y0)).max(0.0);
-                let area = (bx.width() * bx.height()).max(1.0);
-                w * h / area >= FIGURE_CONTAINMENT
-            })
-        };
+        let (figures, member) = &page_figures[pi];
+        let in_figure = |i: usize| member[i];
         for (block_idx, b) in blocks.iter().enumerate() {
             let text = b.text();
             let heading = is_heading.get(&(pi, block_idx));
-            let figure_idx = in_figure(b);
-            let weak_heading_in_figure =
-                heading.is_some_and(|(_, ev)| heading_yields_to_figure(*ev, figure_idx.is_some()));
+            let figure_idx = in_figure(block_idx);
+            let in_drawing = figure_idx.is_some_and(|fi| {
+                figure::share_inside(&b.bbox, &figures[fi].drawing) >= FIGURE_CONTAINMENT
+            });
+            // Only a size tier is a style of its own, whichever evidence
+            // found the heading: bold at the body's size is how a chart sets
+            // its title too, and the document's other charts, drawn as
+            // pictures, set theirs away from any figure. A caption is its
+            // figure's, in whatever style it is set, and so is a title set
+            // on one line with a caption's label: `FIGURE 17` small, then
+            // the chart's title large.
+            let larger =
+                b.font_size as f64 > body_font as f64 * (1.0 + heading::HEADING_SIZE_MARGIN);
+            let documents_heading = !in_drawing
+                && larger
+                && free_styles.contains(&heading_style(b))
+                && !heading::is_caption(&text)
+                && !labelled_caption(blocks, block_idx);
+            let weak_heading_in_figure = heading.is_some_and(|(_, ev)| {
+                heading_yields_to_figure(*ev, figure_idx.is_some(), in_drawing)
+                    && !documents_heading
+            });
             let figure_of = figure_idx
                 .filter(|_| heading.is_none() || weak_heading_in_figure)
                 .map(|fi| format!("figure-{pi}-{fi}"));
@@ -1460,13 +3267,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 Some((l, ev)) if !weak_heading_in_figure => (
                     "doco:SectionTitle",
                     Some(*l),
-                    match ev {
-                        Evidence::Outline => "outline",
-                        Evidence::Title => "title",
-                        Evidence::Numbering => "numbering",
-                        Evidence::Sequence => "sequence",
-                        Evidence::FontSize => "font-size",
-                        Evidence::Bold => "bold",
+                    match (ev, form_text.contains(&(pi, block_idx))) {
+                        (Evidence::Outline, _) => "outline",
+                        (Evidence::Title, _) => "title",
+                        (Evidence::Sequence, _) => "sequence",
+                        (Evidence::Numbering, false) => "numbering",
+                        (Evidence::FontSize, false) => "font-size",
+                        (Evidence::Bold, false) => "bold",
+                        (Evidence::Numbering, true) => "form-numbering",
+                        (Evidence::FontSize, true) => "form-font-size",
+                        (Evidence::Bold, true) => "form-bold",
                     },
                 ),
                 _ if figure_of.is_some() => ("doco:Figure", None, "fills"),
@@ -1500,8 +3310,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             });
             let scrubbed = if retitled {
                 text.clone()
-            } else if height <= 0.0 || b.bbox.y0 < band || b.bbox.y1 > height - band {
+            } else if height <= 0.0 {
                 furniture::scrub_block(&text, &scrub_texts)
+            } else if b.bbox.y0 < band || b.bbox.y1 > height - band {
+                furniture::scrub_block(&text, &on_rows(b.bbox.y0 / height, b.bbox.y1 / height))
             } else {
                 text.clone()
             };
@@ -1515,8 +3327,20 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if scrubbed.is_empty() || residue {
                 continue;
             }
-            let text = match block::strip_leading_bullet(&scrubbed) {
-                Some(without) if kind == "doc:ListItem" => without.to_string(),
+            // A bullet is a list's mark wherever its block ends up: a list
+            // item set inside a drawing is the drawing's, and its bullet is
+            // no part of what it says.
+            let lead = b
+                .marker
+                .as_deref()
+                .and_then(|m| block::strip_run_lead(&scrubbed, m));
+            let text = match (block::strip_leading_bullet(&scrubbed), lead) {
+                (Some(without), _) if matches!(kind, "doc:ListItem" | "doco:Figure") => {
+                    without.to_string()
+                }
+                // A dash or an arrow that marked a list's item is its marker,
+                // as a bullet is.
+                (_, Some(without)) if kind == "doc:ListItem" => without.to_string(),
                 _ => scrubbed,
             };
             page_elements.push(Element {
@@ -1532,14 +3356,172 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
         for (gi, g) in layout.grids.iter().enumerate() {
+            // A running string leaks into a table only where the table
+            // reaches its row: a grid takes its glyphs before furniture is
+            // read, so a footer crossing it lands in its cells. Elsewhere the
+            // string's words are the table's own: a running head parted into
+            // its groups names the document again in a note under a table.
+            let height = raw.pages[pi].height;
+            let scrub_texts = if height > 0.0 {
+                on_rows(g.bbox.y0 / height, g.bbox.y1 / height)
+            } else {
+                scrub_texts.clone()
+            };
+            // A title band over the table is the table's title, not its
+            // header: it is read out as text above the table, and the table
+            // is read from the row under it.
+            let titled = table_title(
+                g,
+                &raw.pages[pi],
+                &scrub_texts,
+                layout.spanning_rows[gi].contains(&0),
+            );
+            let below_title;
+            let (g, shift) = match &titled {
+                Some((text, trimmed)) => {
+                    let title_box = crate::geom::BBox {
+                        x0: g.bbox.x0,
+                        y0: g.bbox.y0,
+                        x1: g.bbox.x1,
+                        y1: trimmed.bbox.y0,
+                    };
+                    table_elements.push(Element {
+                        page: pi,
+                        bbox: Some(title_box),
+                        ..Element::new("doco:Paragraph", text.clone(), "rust", "table-title")
+                    });
+                    below_title = trimmed.clone();
+                    (&below_title, 1)
+                }
+                None => (g, 0),
+            };
+            // A folio the grid took in, rows `r0..r1` holding it: the page's
+            // own number where page numbers stand (`furniture::is_folio_cell`),
+            // in the grid's row nearest that edge. A table's own figure in a
+            // row above its last can match the page's number, as a tax
+            // table's line 111 does on page 111.
+            let page_h = raw.pages[pi].height.max(1.0);
+            let unfolio = |t: String, r0: usize, r1: usize| {
+                let last = g.ys.len().saturating_sub(1);
+                let mid = (g.ys[r0.min(last)] + g.ys[r1.min(last)]) / 2.0 / page_h;
+                let edge_row = if mid > 0.5 { r1 >= last } else { r0 == 0 };
+                if edge_row && furniture::is_folio_cell(&t, folios[pi].as_deref(), mid) {
+                    String::new()
+                } else {
+                    t
+                }
+            };
+            let cols = g.cols().max(1);
+            // A grid set in one of a ruled table's cells is read as a table
+            // of its own, after this one; the cell keeps only what it does not
+            // take. Only in a table whose rows read as a table's: a frame
+            // round a table set in one of its cells is read as before.
+            let nested = if layout.grid_sources[gi] == GridSource::Ruled
+                && reads_as_rows(g, &raw.pages[pi].glyphs)
+            {
+                nested_grids(g, &raw.pages[pi])
+            } else {
+                Vec::new()
+            };
+            let own_glyphs: Vec<Glyph>;
+            let cell_glyphs: &[Glyph] = if nested.is_empty() {
+                &raw.pages[pi].glyphs
+            } else {
+                let taken: Vec<Vec<bool>> = nested
+                    .iter()
+                    .map(|(n, _, _)| n.takes(&raw.pages[pi].glyphs))
+                    .collect();
+                own_glyphs = raw.pages[pi]
+                    .glyphs
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !taken.iter().any(|t| t[*i]))
+                    .map(|(_, gl)| gl.clone())
+                    .collect();
+                &own_glyphs
+            };
             let flat: Vec<String> = match g.layout.as_deref() {
                 Some(lay) => lay.texts(&raw.pages[pi].glyphs, g.cols()),
-                None => g.cell_texts(&raw.pages[pi].glyphs),
+                None => g.cell_texts(cell_glyphs),
             }
             .into_iter()
-            .map(|c| furniture::scrub_cell(&c, &scrub_texts))
+            .enumerate()
+            .map(|(i, c)| {
+                unfolio(
+                    furniture::scrub_cell(&c, &scrub_texts),
+                    i / cols,
+                    i / cols + 1,
+                )
+            })
             .collect();
-            if layout.demoted_tables[gi] {
+            // A grid inside a drawing is the drawing's labels in rows: a
+            // wiring diagram's wires rule its terminal names into a "table",
+            // and a chart's ticks and legend line up as one. A grid drawn as
+            // a table is one whatever is drawn under it — a watermark behind
+            // a catalogue's table, a table's own grey cells: ruled at every
+            // row and every column, and at least half of it filled. Wires
+            // and dimension lines rule a few of a label grid's boundaries,
+            // or rule it everywhere and leave most of it empty.
+            let ruled = layout.grid_sources[gi] == GridSource::Ruled;
+            // Line art: the strokes inside a grid stand at many more places
+            // than its own boundaries, the outlines of a unit's terminals or
+            // a drawing's dimension and extension lines. A table is ruled at
+            // its boundaries, however many pieces each rule is drawn in.
+            let line_art = ruled && line_art(g, &raw.pages[pi].rules);
+            // An axis's scale ruled by its ticks: a row or a column of
+            // numbers stepping evenly, `160 140 … 0`, set against a plot.
+            let scale = (g.rows() == 1 || g.cols() == 1) && axis_scale(&flat);
+            let drawn_as_table = ruled && !line_art && {
+                let (occ, vertical, horizontal) =
+                    table_confidence_signals(g, &raw.pages[pi].glyphs, &raw.pages[pi].rules);
+                occ >= RULED_TABLE_FILL && horizontal > g.rows() && vertical > g.cols()
+            };
+            // A grid inferred from its text's alignment is kept only where
+            // drawn geometry corroborates it: half of it on a drawing, and
+            // that geometry is the drawing's, its labels lining up.
+            let containment = if layout.grid_sources[gi] == GridSource::Aligned {
+                ALIGNED_IN_DRAWING
+            } else {
+                FIGURE_CONTAINMENT
+            };
+            let drawn_in = figures
+                .iter()
+                .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= containment)
+                .filter(|_| !drawn_as_table);
+            // The plot a scale stands against: the figure whose drawing is
+            // nearest it, within an axis's reach.
+            let scaled = if scale && drawn_in.is_none() {
+                let mut sizes: Vec<f32> = raw.pages[pi]
+                    .glyphs
+                    .iter()
+                    .filter(|gl| {
+                        gl.bbox
+                            .is_some_and(|b| figure::share_inside(&b, &g.bbox) >= 0.5)
+                    })
+                    .map(|gl| gl.font_size)
+                    .collect();
+                sizes.sort_by(f32::total_cmp);
+                let line = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64;
+                figures
+                    .iter()
+                    .enumerate()
+                    .map(|(fi, f)| {
+                        let d = f.drawing;
+                        let gap = (d.x0 - g.bbox.x1)
+                            .max(g.bbox.x0 - d.x1)
+                            .max(d.y0 - g.bbox.y1)
+                            .max(g.bbox.y0 - d.y1)
+                            .max(0.0);
+                        (fi, gap)
+                    })
+                    .filter(|(_, gap)| *gap <= line * SCALE_REACH)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(fi, _)| fi)
+            } else {
+                None
+            };
+            let drawn_in = drawn_in.or(scaled);
+            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
                 let text = (0..g.rows())
@@ -1553,10 +3535,23 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .filter(|t| !t.is_empty())
                     .collect::<Vec<_>>()
                     .join("\n");
-                table_elements.push(Element {
-                    page: pi,
-                    bbox: Some(g.bbox),
-                    ..Element::new("doco:Paragraph", text, "rust", "layout-demoted")
+                table_elements.push(match drawn_in {
+                    Some(fi) => Element {
+                        page: pi,
+                        bbox: Some(g.bbox),
+                        figure: Some(format!("figure-{pi}-{fi}")),
+                        ..Element::new("doco:Figure", text, "rust", "fills")
+                    },
+                    None if line_art || scale => Element {
+                        page: pi,
+                        bbox: Some(g.bbox),
+                        ..Element::new("doco:Figure", text, "rust", "fills")
+                    },
+                    None => Element {
+                        page: pi,
+                        bbox: Some(g.bbox),
+                        ..Element::new("doco:Paragraph", text, "rust", "layout-demoted")
+                    },
                 });
                 continue;
             }
@@ -1584,9 +3579,15 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // would otherwise deal its words out by which side they fell.
             let cols = g.cols();
             let mut rows = rows;
-            for &r in &layout.spanning_rows[gi] {
-                rows[r][0] =
-                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts);
+            for r in layout.spanning_rows[gi]
+                .iter()
+                .filter_map(|&r| r.checked_sub(shift))
+            {
+                rows[r][0] = unfolio(
+                    furniture::scrub_cell(&g.row_text(&raw.pages[pi].glyphs, r), &scrub_texts),
+                    r,
+                    r + 1,
+                );
                 for (c, cell) in rows[r].iter_mut().enumerate().skip(1) {
                     cell.clear();
                     merges.continues_left[r * cols + c] = true;
@@ -1641,9 +3642,25 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // banner repeats itself (`Short | Short`), and no numbers.
             if explicit.is_none()
                 && header_rows == 1
-                && names_spanned_columns(&rows, &merges.continues_left)
+                && names_spanned_columns(&rows, &merges.continues_left, &merges.continues_above)
             {
                 header_rows = 2;
+            }
+            // Under a title read out above the table, the row the title
+            // leaves on top must earn the header.
+            if titled.is_some() {
+                let page = &raw.pages[pi];
+                if !g.heads_its_rows(header_rows, &rows, &page.glyphs, &page.rules, &page.fills) {
+                    header_rows = 0;
+                }
+            }
+            // Under a title or not, a grid of figures headed by its parameters' rows: the IES
+            // coefficients of utilization under `RC %: | 80` and `RW %: | 70
+            // | 50 | 30 | 10`, each row a parameter's name and its values,
+            // over rows keyed by another (`RCR: 0`, `1`, `2`, …). Read as
+            // data, no value was named by the reflectances it is for.
+            if header_rows == 0 {
+                header_rows = parameter_rows(&rows);
             }
             // A merged cell is read whole, into its top-left cell. Its words
             // were dealt out by the grid's cuts through it, which split a
@@ -1652,6 +3669,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // (`Crucible | Logistics`).
             let rcount = rows.len();
             let mut taken = vec![false; rcount * cols];
+            // Cells read row by row out of a block that could not be read
+            // whole: they no longer carry on the cell above.
+            let mut unspanned: Vec<usize> = Vec::new();
             // A table read from its text joined its spans as it read them.
             if explicit.is_some() {
                 taken.iter_mut().for_each(|t| *t = true);
@@ -1686,9 +3706,161 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         .collect();
                     let text =
                         match g.region_text(&raw.pages[pi].glyphs, &merges, r..r_end, c..c_end) {
-                            Some(t) => furniture::scrub_cell(&t, &scrub_texts),
+                            Some(t) => unfolio(furniture::scrub_cell(&t, &scrub_texts), r, r_end),
                             None if held.len() == 1 => rows[held[0].0][held[0].1].clone(),
-                            None => continue,
+                            None => {
+                                // A block across rows and columns that reads
+                                // whole neither way is two spans crossing: a
+                                // group label down its column, and each row's
+                                // label across the columns beside it. Each
+                                // row is read across the columns its own
+                                // ruling leaves open, past the block's edge
+                                // where a rule parting the block's top row
+                                // stops short of it: `Self-diagnostic
+                                // function` under a sub-column `Memory
+                                // backup` rules.
+                                if r_end - r > 1 && c_end - c > 1 {
+                                    let glyphs = &raw.pages[pi].glyphs;
+                                    // Where the top row sets the group label
+                                    // and a value of its own beside it, apart,
+                                    // a row below with nothing under the label
+                                    // and its text in one cell beside it sets
+                                    // that cell's value, and it stays there:
+                                    // `Smoke developed` under `Surface-burning
+                                    // characteristics`, beside `Flame spread`.
+                                    let filled = |row: &[String]| {
+                                        (c..c_end)
+                                            .filter(|&k| !row[k].trim().is_empty())
+                                            .collect::<Vec<_>>()
+                                    };
+                                    let top = filled(&rows[r]);
+                                    let split = top.len() >= 2
+                                        && top[0] == c
+                                        && g.region_text(glyphs, &merges, r..r + 1, c..c_end)
+                                            .is_none();
+                                    for (i, row) in rows.iter_mut().enumerate().take(r_end).skip(r)
+                                    {
+                                        if split
+                                            && i > r
+                                            && matches!(filled(row).as_slice(), [k] if *k > c)
+                                        {
+                                            continue;
+                                        }
+                                        let open = |k: usize| {
+                                            merges.continues_left[i * cols + k]
+                                                && (k < c_end
+                                                    || (!taken[i * cols + k]
+                                                        && !merges.continues_above[i * cols + k]))
+                                        };
+                                        let mut ce = c + 1;
+                                        while ce < cols && open(ce) {
+                                            ce += 1;
+                                        }
+                                        if ce - c < 2 {
+                                            continue;
+                                        }
+                                        let read = |ce: usize| {
+                                            g.region_text(glyphs, &merges, i..i + 1, c..ce)
+                                                .map(|t| (t, ce))
+                                        };
+                                        let inside = ce.min(c_end);
+                                        let Some((t, ce)) = read(ce).or_else(|| {
+                                            (ce > inside && inside - c >= 2)
+                                                .then(|| read(inside))
+                                                .flatten()
+                                        }) else {
+                                            continue;
+                                        };
+                                        row[c..ce].iter_mut().for_each(String::clear);
+                                        row[c] = unfolio(
+                                            furniture::scrub_cell(&t, &scrub_texts),
+                                            i,
+                                            i + 1,
+                                        );
+                                        (c..ce).for_each(|k| taken[i * cols + k] = true);
+                                        unspanned.extend((c..ce).map(|k| i * cols + k));
+                                    }
+                                }
+                                // A cell left holding text of its own beside
+                                // another's is a value, not the rest of the
+                                // cell to its left, unless the two read as one
+                                // across the cut: `Flame spread` beside its
+                                // group label, `Apt. no.` beside an address
+                                // label the cut runs through.
+                                // Cells that do read as one are one, their
+                                // text read whole into the first: a value set
+                                // across two model columns beside its row's
+                                // label (`11/12 seconds (ventilated); 10/12
+                                // seconds (refrigerated)`).
+                                let glyphs = &raw.pages[pi].glyphs;
+                                let homes = g.glyph_cells(glyphs);
+                                // A line runs on across the cut at `k` in row
+                                // `i`: a word left of it and the next on its
+                                // baseline a word space apart. Values in
+                                // columns set close stand further apart.
+                                let runs_across = |i: usize, p: usize, k: usize| {
+                                    let at = |cell: usize| {
+                                        glyphs.iter().zip(&homes).filter(move |(gl, h)| {
+                                            **h == Some(cell)
+                                                && gl.bbox.is_some()
+                                                && !gl.text.trim().is_empty()
+                                        })
+                                    };
+                                    at(i * cols + k).any(|(b, _)| {
+                                        let (bb, fs) =
+                                            (b.bbox.unwrap(), b.font_size.max(1.0) as f64);
+                                        (p..k).any(|q| {
+                                            at(i * cols + q).any(|(a, _)| {
+                                                let ab = a.bbox.unwrap();
+                                                (a.origin.1 - b.origin.1).abs() < 0.3 * fs
+                                                    && ab.x1 <= bb.x0 + 0.5
+                                                    && bb.x0 - ab.x1 <= 0.5 * fs
+                                            })
+                                        })
+                                    })
+                                };
+                                let mut apart: Vec<usize> = Vec::new();
+                                for i in r..r_end {
+                                    let mut start: Option<usize> = None;
+                                    for k in c..c_end {
+                                        if rows[i][k].trim().is_empty() {
+                                            continue;
+                                        }
+                                        let joined = start.and_then(|p| {
+                                            g.region_text(glyphs, &merges, i..i + 1, p..k + 1)
+                                                .map(|t| (p, t))
+                                        });
+                                        // Cells read as one keep the span; their
+                                        // text is joined where a line runs across.
+                                        if let Some((p, _)) = &joined {
+                                            if !runs_across(i, *p, k) {
+                                                start = Some(k);
+                                                continue;
+                                            }
+                                        }
+                                        match joined {
+                                            Some((p, t)) => {
+                                                rows[i][p] = unfolio(
+                                                    furniture::scrub_cell(&t, &scrub_texts),
+                                                    i,
+                                                    i + 1,
+                                                );
+                                                rows[i][k].clear();
+                                            }
+                                            None => {
+                                                if k > c {
+                                                    apart.push(i * cols + k);
+                                                }
+                                                start = Some(k);
+                                            }
+                                        }
+                                    }
+                                }
+                                for k in apart {
+                                    merges.continues_left[k] = false;
+                                }
+                                continue;
+                            }
                         };
                     for row in rows.iter_mut().take(r_end).skip(r) {
                         row[c..c_end].iter_mut().for_each(String::clear);
@@ -1696,22 +3868,40 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     rows[r][c] = text;
                 }
             }
+            for k in unspanned {
+                merges.continues_above[k] = false;
+            }
             // Banner bands below the header block are sub-headers: they label
             // the rows beneath them rather than the columns.
             let sub_headers: Vec<usize> = match explicit {
                 Some(lay) => lay.sub_headers.clone(),
+                // Not a row the ruling leaves open but whose values stand
+                // apart in their own cells: a table ruled with horizontals
+                // only leaves every row open.
                 None => merges
                     .full_width_row
                     .iter()
                     .enumerate()
                     .filter(|(r, full)| {
-                        (**full && rows[*r].iter().any(|c| !c.trim().is_empty())
+                        let spans = (1..cols).all(|c| merges.continues_left[*r * cols + c]);
+                        (**full && spans && rows[*r].iter().any(|c| !c.trim().is_empty())
                             || group_label(&rows, *r))
                             && *r >= header_rows
                     })
                     .map(|(r, _)| r)
                     .collect(),
             };
+            let restated_headers = match explicit {
+                Some(_) => Vec::new(),
+                None => g.restated_header_rows(
+                    &rows,
+                    header_rows,
+                    &sub_headers,
+                    &raw.pages[pi].glyphs,
+                    &raw.pages[pi].fills,
+                ),
+            };
+            let spread = spread_runs(g, &raw.pages[pi].glyphs, &rows, &merges.continues_left);
             tables += 1;
             let text = rows
                 .iter()
@@ -1721,9 +3911,11 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             table_elements.push(Element {
                 page: pi,
                 bbox: Some(g.bbox),
+                spread_left: spread.iter().any(|x| *x).then_some(spread),
                 cells: Some(rows),
                 header_rows: Some(header_rows),
                 sub_headers: (!sub_headers.is_empty()).then_some(sub_headers),
+                restated_headers: (!restated_headers.is_empty()).then_some(restated_headers),
                 merged_down: merges
                     .continues_above
                     .iter()
@@ -1743,6 +3935,18 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 styled: g.opens_styled(&raw.pages[pi].glyphs, &raw.pages[pi].fills),
                 bold: g.opens_bold(&raw.pages[pi].glyphs),
             });
+            for (n, r, c) in &nested {
+                let label = (*c > 0)
+                    .then(|| table_elements.last())
+                    .flatten()
+                    .and_then(|e: &Element| e.cells.as_ref())
+                    .and_then(|rows| rows.get(r.saturating_sub(shift)))
+                    .and_then(|row| row.first())
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty());
+                table_elements.push(nested_table(n, &raw.pages[pi], pi, label, &scrub_texts));
+                tables += 1;
+            }
         }
         // Table-confidence anchors: a grid whose structure was *inferred* from
         // alignment rather than read from drawn rules has guessed column
@@ -1836,6 +4040,15 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     link_continued_tables(&mut elements, &frames);
+    drop_merged_columns(&mut elements);
+    demote_empty_bold_heads(&mut elements);
+    read_form_text(&mut elements);
+    settle_cell_breaks(
+        &mut elements,
+        flat_lines
+            .iter()
+            .flat_map(|(ls, _)| ls.iter().map(|l| l.text.as_str())),
+    );
 
     // Per page. Averaged over a document the ratio disappears: a deck whose
     // stat pages are four fifths headings reads 0.36 across all its pages.
@@ -1891,6 +4104,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
 
+    // A symbol the font mapped to a control character is no character a
+    // reader can show: a list's mark set as 0x17 has been read as one by
+    // now, and what is left of any other goes.
+    for e in &mut elements {
+        e.scrub_controls();
+    }
     Analysis {
         elements,
         suspect_headings,
@@ -1905,6 +4124,98 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         running,
         tables,
         timings,
+    }
+}
+
+/// Settles each hyphen a table cell set down at a line's end as
+/// [`table::CELL_BREAK`]: the word is read whole where the document prints
+/// it whole elsewhere (`Fluo-` over `rescent`, and `Fluorescent` in the
+/// title), and keeps its hyphen otherwise.
+///
+/// A paragraph reads such a break as a word broken, from its letters alone
+/// (see [`block::Block::text`]). A cell needs more: a narrow column breaks a
+/// compound at its own hyphen (`long-` over `term`) far more often than
+/// running prose does, and the letters cannot tell the two apart. The page
+/// usually can: a document printing `Ballasts` in one cell and `Bal-` over
+/// `lasts` in the next was hyphenated by its typesetter. A form printed
+/// hyphenated elsewhere, or no form at all, keeps the hyphen, as cells did
+/// before.
+///
+/// Printed means set on one line: the words of `lines` (the prose, line by
+/// line) and of the tables' cells, whose lines joined only at a space, at a
+/// hyphen kept, or at a break still to settle. A paragraph's text is no
+/// witness, since it has read its own breaks: two columns of a cell
+/// interleaved into a paragraph give `conduc-` over `fixed`, joined there as
+/// `conducfixed`.
+fn settle_cell_breaks<'a>(elements: &mut [Element], lines: impl Iterator<Item = &'a str>) {
+    use std::collections::HashSet;
+    let brk = table::CELL_BREAK;
+    let marked = |e: &Element| {
+        e.text.contains(brk) || e.cells.iter().flatten().flatten().any(|c| c.contains(brk))
+    };
+    if !elements.iter().any(marked) {
+        return;
+    }
+    let is_word_char = |c: char| c.is_alphanumeric() || c == '-' || c == brk;
+    let mut words: HashSet<String> = HashSet::new();
+    let mut witness = |text: &str| {
+        for w in text.split(|c: char| !is_word_char(c)) {
+            if w.is_empty() || w.contains(brk) {
+                continue;
+            }
+            let w = w.to_lowercase();
+            if w.contains('-') {
+                for part in w.split('-').filter(|p| !p.is_empty()) {
+                    words.insert(part.to_string());
+                }
+            }
+            words.insert(w);
+        }
+    };
+    lines.for_each(&mut witness);
+    elements
+        .iter()
+        .filter_map(|e| e.cells.as_ref())
+        .flatten()
+        .flatten()
+        .for_each(|c| witness(c));
+    let settle = |text: &str| -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(at) = rest.find(brk) {
+            // The word around the break: back to its start, on to its end.
+            let start = rest[..at]
+                .char_indices()
+                .rev()
+                .take_while(|&(_, c)| is_word_char(c))
+                .last()
+                .map_or(at, |(i, _)| i);
+            let end = rest[at..]
+                .char_indices()
+                .find(|&(_, c)| !is_word_char(c))
+                .map_or(rest.len(), |(i, _)| at + i);
+            let word = &rest[start..end];
+            let joined = word.replace(brk, "").to_lowercase();
+            let hyphened = word.replace(brk, "-").to_lowercase();
+            let whole = words.contains(&joined) && !words.contains(&hyphened);
+            out.push_str(&rest[..start]);
+            out.push_str(&word.replace(brk, if whole { "" } else { "-" }));
+            rest = &rest[end..];
+        }
+        out.push_str(rest);
+        out
+    };
+    for e in elements.iter_mut() {
+        if e.text.contains(brk) {
+            e.text = settle(&e.text);
+        }
+        if let Some(rows) = e.cells.as_mut() {
+            for cell in rows.iter_mut().flatten() {
+                if cell.contains(brk) {
+                    *cell = settle(cell);
+                }
+            }
+        }
     }
 }
 
@@ -1954,6 +4265,483 @@ fn furniture_key(text: &str, digits_vary: bool) -> String {
 mod tests {
     use super::*;
     use crate::geom::BBox;
+
+    fn line_at(
+        kind: &str,
+        text: &str,
+        evidence: &'static str,
+        level: Option<usize>,
+        y: f64,
+        x: f64,
+    ) -> Element {
+        Element {
+            level,
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 80.0,
+                y1: y + 10.0,
+            }),
+            ..Element::new(kind, text, "rust", evidence)
+        }
+    }
+
+    fn heads(elements: &[Element]) -> Vec<&str> {
+        elements
+            .iter()
+            .filter(|e| e.kind == "doco:SectionTitle")
+            .map(|e| e.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn numbers_stepping_evenly_are_a_scale() {
+        let cells = |c: &[&str]| c.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        // By one difference, falling or rising, signed or with thousands.
+        assert!(axis_scale(&cells(&["90", "75", "60", "45", "30"])));
+        assert!(axis_scale(&cells(&["\u{2212}0.5", "0", "0.5", "1.0"])));
+        assert!(axis_scale(&cells(&["2,000 4,000 6,000"])));
+        // By one ratio, as a logarithmic axis steps.
+        assert!(axis_scale(&cells(&["0.1", "1", "10", "100"])));
+        // A column of counts, two numbers, a label, or no step at all.
+        assert!(!axis_scale(&cells(&["12", "7", "31", "4"])));
+        assert!(!axis_scale(&cells(&["20", "40"])));
+        assert!(!axis_scale(&cells(&["Total", "10", "20", "30"])));
+        assert!(!axis_scale(&cells(&["5", "5", "5"])));
+    }
+
+    #[test]
+    fn a_wide_value_standing_in_alike_from_both_edges_is_spread() {
+        // A label column and two columns a value is set across (x 60–260),
+        // its text at 10 pt.
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 60.0, 160.0, 260.0],
+            ys: vec![0.0, 20.0, 40.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 260.0,
+                y1: 40.0,
+            },
+        };
+        let rows: Vec<Vec<String>> = vec![
+            vec!["Spec".into(), "A".into(), "B".into()],
+            vec![
+                "Warranty".into(),
+                "two years on parts".into(),
+                String::new(),
+            ],
+        ];
+        let left = vec![false, false, false, false, false, true];
+        let ink = |x0: f64, x1: f64| Glyph {
+            text: "two years on parts".into(),
+            bbox: Some(BBox {
+                x0,
+                y0: 25.0,
+                x1,
+                y1: 35.0,
+            }),
+            page: 0,
+            origin: (x0, 35.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            advance: None,
+            draw_index: 0,
+        };
+        let spread = |x0: f64, x1: f64| spread_runs(&g, &[ink(x0, x1)], &rows, &left)[4];
+        // Narrow and centred, as before.
+        assert!(spread(110.0, 210.0));
+        // 85% of the run, 15 pt in from each edge: centred as surely.
+        assert!(spread(75.0, 245.0));
+        // As wide, set from the left: in by the padding at its start.
+        assert!(!spread(63.0, 233.0));
+        // Filling the run: in alike, but by the padding alone, under an em.
+        assert!(!spread(63.0, 257.0));
+        // As wide, an em or more in from each edge, but not alike.
+        assert!(!spread(71.0, 241.0));
+    }
+
+    #[test]
+    fn a_band_over_all_but_a_margin_column_is_the_tables_title() {
+        use crate::rule::{Orientation, Rule};
+        let word = |x0: f64, x1: f64, y: f64, t: &str, i: usize| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 7.0,
+                x1,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            advance: None,
+            draw_index: i,
+        };
+        // A grid whose first column is `first` wide; the band over the rest
+        // of it, the rule at the first column's edge running up through it.
+        let table = |first: f64| {
+            let xs = vec![0.0, first, first + 50.0, first + 100.0];
+            let ys = vec![0.0, 15.0, 30.0, 45.0, 60.0];
+            let right = xs[3];
+            let mut rules: Vec<Rule> = ys
+                .iter()
+                .map(|&y| Rule {
+                    bbox: BBox {
+                        x0: 0.0,
+                        y0: y,
+                        x1: right,
+                        y1: y + 0.5,
+                    },
+                    orientation: Orientation::Horizontal,
+                    page: 0,
+                })
+                .collect();
+            let v = |x: f64, y0: f64| Rule {
+                bbox: BBox {
+                    x0: x,
+                    y0,
+                    x1: x + 0.5,
+                    y1: 60.0,
+                },
+                orientation: Orientation::Vertical,
+                page: 0,
+            };
+            rules.extend([v(0.0, 0.0), v(first, 0.0), v(right, 0.0)]);
+            rules.extend([v(first + 50.0, 15.0)]);
+            let mut glyphs = vec![
+                word(first + 4.0, first + 40.0, 11.0, "Hourly", 0),
+                word(first + 43.0, first + 80.0, 11.0, "readings", 1),
+            ];
+            for (r, row) in [
+                ["Site", "North", "South"],
+                ["1", "3.2", "4.1"],
+                ["2", "3.5", "4.4"],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let y = 26.0 + r as f64 * 15.0;
+                glyphs.push(word(2.0, 10.0, y, row[0], 2 + r * 3));
+                glyphs.push(word(first + 4.0, first + 30.0, y, row[1], 3 + r * 3));
+                glyphs.push(word(first + 54.0, first + 80.0, y, row[2], 4 + r * 3));
+            }
+            let grid = Grid {
+                layout: None,
+                page: 0,
+                bbox: BBox {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: right,
+                    y1: 60.0,
+                },
+                xs,
+                ys,
+            };
+            let page = crate::extract::Page {
+                index: 0,
+                glyphs,
+                images: Vec::new(),
+                rules,
+                fills: Vec::new(),
+                dots: Vec::new(),
+                width: 600.0,
+                height: 800.0,
+                rotation: 0,
+            };
+            (grid, page)
+        };
+        // A first column 12 pt wide at 8 pt text: room for a turned line,
+        // not a label set across it. The band is the table's.
+        let (g, page) = table(12.0);
+        let titled = table_title(&g, &page, &[], false);
+        assert_eq!(titled.map(|(t, _)| t).as_deref(), Some("Hourly readings"));
+        // A first column a label fits beside it: a group's label over part
+        // of the table.
+        let (g, page) = table(60.0);
+        assert!(table_title(&g, &page, &[], false).is_none());
+    }
+
+    #[test]
+    fn rows_of_parameters_head_a_grid_of_figures() {
+        let rows = |rs: &[&[&str]]| -> Vec<Vec<String>> {
+            rs.iter()
+                .map(|r| r.iter().map(|t| t.to_string()).collect())
+                .collect()
+        };
+        let cu = rows(&[
+            &["RC %:", "80", "", ""],
+            &["RW %:", "70", "50", "30"],
+            &["RCR: 0", "119", "119", "119"],
+            &["1", "106", "102", "98"],
+            &["2", "95", "88", "81"],
+        ]);
+        assert_eq!(parameter_rows(&cu), 2);
+        // A sweep: the speed each column of readings is taken at.
+        let sweep = rows(&[
+            &["Speed (rpm):", "1500", "2500", "3500"],
+            &["Torque (N·m)", "5.1", "4.8", "4.2"],
+            &["Power (kW)", "0.5", "1.0", "1.3"],
+            &["Current (A)", "1.1", "2.0", "2.9"],
+        ]);
+        assert_eq!(parameter_rows(&sweep), 1);
+        // Fields over a grid of figures, a value each: they head nothing.
+        let fields_over = rows(&[
+            &["Voltage:", "120", "", ""],
+            &["Watts:", "16", "", ""],
+            &["Size", "1", "2", "3"],
+            &["Width", "10", "20", "30"],
+            &["Depth", "12", "24", "36"],
+        ]);
+        assert_eq!(parameter_rows(&fields_over), 0);
+        // Values beside the columns the body fills name none of them.
+        let beside = rows(&[
+            &["Batch:", "", "", "", "7"],
+            &["Lot:", "", "", "4", "9"],
+            &["A", "1", "2", "", ""],
+            &["B", "3", "4", "", ""],
+            &["C", "5", "6", "", ""],
+        ]);
+        assert_eq!(parameter_rows(&beside), 0);
+        // Fields all the way down: none heads the rest.
+        let fields = rows(&[
+            &["Voltage:", "120", "", ""],
+            &["Watts:", "16", "", ""],
+            &["Lumens:", "1200", "", ""],
+        ]);
+        assert_eq!(parameter_rows(&fields), 0);
+        // Too few rows of figures under them.
+        assert_eq!(parameter_rows(&cu[..4]), 0);
+        // A label without its colon names a row, not a parameter.
+        let mut plain = cu.clone();
+        plain[0][0] = "RC %".into();
+        assert_eq!(parameter_rows(&plain), 0);
+    }
+
+    #[test]
+    fn a_forms_text_stays_in_its_run_of_bold_heads_until_judged() {
+        let head = |t: &str, ev: &'static str, y: f64| {
+            line_at("doco:SectionTitle", t, ev, Some(2), y, 50.0)
+        };
+        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
+        // A grid's caption, its keys, and another caption, stacked: a run
+        // of three, all but the last text. Dropped first, the keys would
+        // leave a run of two, both kept.
+        let mut grid = vec![
+            head("Description of property", "bold", 100.0),
+            head("(a) (b)", "form-bold", 112.0),
+            head("Gain or (loss)", "bold", 124.0),
+            text("Example 100 sh. XYZ Co.", 140.0),
+        ];
+        demote_empty_bold_heads(&mut grid);
+        read_form_text(&mut grid);
+        assert_eq!(heads(&grid), ["Gain or (loss)"]);
+        assert!(grid.iter().all(|e| !e.evidence.starts_with(FORM_TEXT)));
+    }
+
+    #[test]
+    fn a_bold_line_over_a_larger_head_or_closing_its_paragraph_is_text() {
+        let head = |t: &str, ev: &'static str, lvl: usize, y: f64| {
+            line_at("doco:SectionTitle", t, ev, Some(lvl), y, 50.0)
+        };
+        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
+        // A slide's kicker over its title, set larger.
+        let mut deck = vec![
+            head("Quarterly review", "title", 1, 30.0),
+            text("A short note under the title.", 52.0),
+            head("PART 2 · OUTLOOK", "bold", 4, 74.0),
+            head("What the next quarter asks of us", "font-size", 2, 92.0),
+            text("Text the slide sets under its title…", 110.0),
+        ];
+        demote_empty_bold_heads(&mut deck);
+        assert_eq!(
+            heads(&deck),
+            ["Quarterly review", "What the next quarter asks of us"]
+        );
+        // The document's first heading may be its title over a larger date.
+        let mut transcript = vec![
+            head("Record of the Annual Meeting", "bold", 4, 70.0),
+            head("March 3, 2031", "font-size", 2, 88.0),
+            text("THE CHAIR. The meeting will come to order.", 106.0),
+        ];
+        demote_empty_bold_heads(&mut transcript);
+        assert_eq!(heads(&transcript).len(), 2);
+        // A warning's bold last line, at its leading, over the next head.
+        let mut warning = vec![
+            head("WARNING", "bold", 5, 200.0),
+            text("Handle with gloves and wash hands after use…", 212.0),
+            head("STORE IN A DRY PLACE", "bold", 5, 224.0),
+            head("DISPOSAL", "bold", 5, 241.0),
+            text("Dispose of in line with local rules.", 253.0),
+        ];
+        demote_empty_bold_heads(&mut warning);
+        assert_eq!(heads(&warning), ["WARNING", "DISPOSAL"]);
+        // Set apart from the paragraph above, a section opening on its
+        // first subsection keeps both heads.
+        let mut paper = vec![
+            text("…ter analyses was obtained.", 60.0),
+            head("Materials and methods", "bold", 3, 90.0),
+            head("Animals", "bold", 3, 105.0),
+            text("Mice were obtained…", 120.0),
+        ];
+        demote_empty_bold_heads(&mut paper);
+        assert_eq!(heads(&paper), ["Materials and methods", "Animals"]);
+    }
+
+    #[test]
+    fn a_heading_centred_over_two_lines_is_one() {
+        let centred = |t: &str, x0: f64, x1: f64, y: f64| {
+            let mut e = line_at("doco:SectionTitle", t, "font-size", Some(3), y, x0);
+            e.bbox = Some(BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 12.0,
+            });
+            e
+        };
+        // A subtitle over two centred lines, about a page centre of 300.
+        let mut subtitle = vec![
+            centred("Recycled Fibre Board", 250.0, 350.0, 140.0),
+            centred("Rated for use in damp interiors", 205.0, 395.0, 155.0),
+        ];
+        coalesce_heading_fragments(&mut subtitle);
+        assert_eq!(
+            heads(&subtitle),
+            ["Recycled Fibre Board Rated for use in damp interiors"]
+        );
+        // Cells of a table no grid took, centred in their column, with
+        // their row's other cells beside them.
+        let mut cells = vec![
+            line_at("doco:Paragraph", "Capacity", "layout", None, 420.0, 60.0),
+            centred("12 litres", 330.0, 370.0, 420.0),
+            line_at("doco:Paragraph", "Weight", "layout", None, 434.0, 60.0),
+            centred("2.5 kg (empty)", 320.0, 380.0, 434.0),
+        ];
+        coalesce_heading_fragments(&mut cells);
+        assert_eq!(heads(&cells).len(), 2);
+        // Set from one left edge, a section and its first subsection.
+        let mut pair = vec![
+            centred("Materials and methods", 200.0, 330.0, 100.0),
+            centred("Animals", 200.0, 250.0, 114.0),
+        ];
+        coalesce_heading_fragments(&mut pair);
+        assert_eq!(heads(&pair).len(), 2);
+    }
+
+    #[test]
+    fn bold_lines_that_head_nothing_are_text() {
+        let head = |t: &str, y: f64, x: f64| line_at("doco:SectionTitle", t, "bold", Some(2), y, x);
+        let text = |t: &str, y: f64| line_at("doco:Paragraph", t, "layout", None, y, 50.0);
+        // A section, then the name and role closing the minutes.
+        let mut minutes = vec![
+            head("Notation Vote", 100.0, 50.0),
+            text("By notation vote completed on…", 115.0),
+            head("Joshua Gallin", 160.0, 50.0),
+            head("Secretary", 172.0, 50.0),
+        ];
+        demote_empty_bold_heads(&mut minutes);
+        assert_eq!(heads(&minutes), ["Notation Vote"]);
+        // A table's header cells read across one row, then its rows.
+        let mut cells = vec![
+            head("TYPE", 100.0, 50.0),
+            head("DESCRIPTION", 100.0, 150.0),
+            text("I Ground reference voltage", 115.0),
+        ];
+        demote_empty_bold_heads(&mut cells);
+        assert!(heads(&cells).is_empty());
+        // A list of names, one under another: the last is followed by text.
+        let mut names = vec![
+            head("Ann Archer", 100.0, 50.0),
+            head("Ben Baker", 112.0, 50.0),
+            head("Cara Cole", 124.0, 50.0),
+            text("Address for notices", 140.0),
+        ];
+        demote_empty_bold_heads(&mut names);
+        assert_eq!(heads(&names), ["Cara Cole"]);
+        // A section opening on its first subsection, set the same way.
+        let mut paper = vec![
+            head("Materials and Methods", 100.0, 50.0),
+            head("Apiary selection", 115.0, 50.0),
+            text("Colonies were drawn from…", 130.0),
+        ];
+        demote_empty_bold_heads(&mut paper);
+        assert_eq!(heads(&paper), ["Materials and Methods", "Apiary selection"]);
+        // A division's label beside its title, over its table: one heading.
+        let mut form = vec![
+            head("Part I", 100.0, 50.0),
+            head("Annual and Monthly Contribution Amount", 100.0, 140.0),
+            text("1 Tax family size", 115.0),
+        ];
+        demote_empty_bold_heads(&mut form);
+        assert_eq!(
+            heads(&form),
+            ["Part I", "Annual and Monthly Contribution Amount"]
+        );
+        // A heading of another kind after a bold line says nothing of it.
+        let mut outlined = vec![
+            head("Sectors of primary focus", 100.0, 50.0),
+            line_at(
+                "doco:SectionTitle",
+                "Energy",
+                "outline",
+                Some(1),
+                115.0,
+                50.0,
+            ),
+            text("Electricity generation…", 130.0),
+        ];
+        demote_empty_bold_heads(&mut outlined);
+        assert_eq!(heads(&outlined), ["Sectors of primary focus", "Energy"]);
+    }
+
+    #[test]
+    fn a_word_a_cell_breaks_is_read_whole_where_the_document_prints_it_whole() {
+        let brk = table::CELL_BREAK;
+        let cells = vec![vec![
+            format!("3-wire Fluo{brk}rescent Bal{brk}lasts"),
+            "20 Ballasts".to_string(),
+            format!("long{brk}term"),
+            format!("Un{brk}employ{brk}ment"),
+            format!("Wid{brk}gets"),
+        ]];
+        let text = cells[0].join(" | ");
+        let mut elements = vec![
+            // A paragraph's own breaks are read already, and are no witness.
+            Element::new("doco:Paragraph", "widgets for all", "rust", "blocks"),
+            Element {
+                cells: Some(cells),
+                ..Element::new("doco:Table", text, "rust", "rules")
+            },
+        ];
+        let lines = [
+            "Fluorescent Dimmer",
+            "a long-term lease",
+            "UNEMPLOYMENT RATE",
+        ];
+        settle_cell_breaks(&mut elements, lines.into_iter());
+        assert_eq!(
+            elements[1].cells.as_ref().unwrap()[0],
+            [
+                "3-wire Fluorescent Ballasts",
+                "20 Ballasts",
+                // Printed hyphenated elsewhere: the compound's own hyphen.
+                "long-term",
+                "Unemployment",
+                // Printed nowhere else: the hyphen stays, as it was.
+                "Wid-gets",
+            ]
+        );
+        assert_eq!(
+            elements[1].text,
+            "3-wire Fluorescent Ballasts | 20 Ballasts | long-term | Unemployment | Wid-gets"
+        );
+    }
 
     /// A table on `page` with these rows, `header` of them header, framed
     /// by columns at `xs`, and the frame it was read from.
@@ -2012,26 +4800,68 @@ mod tests {
             &["", "NISTmAb", "Amgen mAb", "NISTmAb", "Amgen mAb"],
             &["Channel", "Short", "Short", "Short", "Short"],
         ]);
-        assert!(names_spanned_columns(&methods, &left));
+        assert!(names_spanned_columns(&methods, &left, &[]));
         // Data under a banner repeats itself; it names nothing.
         let data = grid(&[
             &["", "Primary", "", "Secondary", ""],
             &["Channel", "Short", "Short", "Short", "Short"],
             &["Flow", "0.5", "0.5", "1.5", "1.5"],
         ]);
-        assert!(!names_spanned_columns(&data, &left));
+        assert!(!names_spanned_columns(&data, &left, &[]));
         // Nor is a row of numbers, nor a header with no span.
         let numbers = grid(&[
             &["", "Primary", "", "Secondary", ""],
             &["Flow", "0.5", "0.7", "1.5", "1.7"],
             &["Time", "3", "4", "5", "6"],
         ]);
-        assert!(!names_spanned_columns(&numbers, &left));
-        assert!(!names_spanned_columns(&methods, &[false; 15]));
+        assert!(!names_spanned_columns(&numbers, &left, &[]));
+        assert!(!names_spanned_columns(&methods, &[false; 15], &[]));
+        // Keys in figures under a span name its columns where their own
+        // stub is empty and the rows under them have one: sizes over a
+        // model's readings.
+        let mut size_left = vec![false; 16];
+        size_left[2] = true;
+        size_left[3] = true;
+        let sizes = grid(&[
+            &["", "Width (mm)", "", ""],
+            &["", "100", "150", "200"],
+            &["Model A", "2.1", "2.9", "3.8"],
+            &["Model B", "2.4", "3.3", "4.2"],
+        ]);
+        assert!(names_spanned_columns(&sizes, &size_left, &[]));
+        // With no stub under them, they are a row of the data like the rest.
+        let unstubbed = grid(&[
+            &["", "Width (mm)", "", ""],
+            &["", "100", "150", "200"],
+            &["", "2.1", "2.9", "3.8"],
+            &["", "2.4", "3.3", "4.2"],
+        ]);
+        assert!(!names_spanned_columns(&unstubbed, &size_left, &[]));
+        // Nor do keys that repeat.
+        let repeated = grid(&[
+            &["", "Width (mm)", "", ""],
+            &["", "100", "100", "200"],
+            &["Model A", "2.1", "2.9", "3.8"],
+            &["Model B", "2.4", "3.3", "4.2"],
+        ]);
+        assert!(!names_spanned_columns(&repeated, &size_left, &[]));
+        // A span the ruling leaves open over the stub's column too names
+        // the columns from where its label stands.
+        let mut wide = vec![false; 20];
+        wide[2] = true;
+        wide[3] = true;
+        wide[4] = true;
+        let angles = grid(&[
+            &["", "", "Horizontal angle", "", ""],
+            &["", "", "0°", "45°", "90°"],
+            &["Vertical angle", "45°", "23,252", "23,208", "22,970"],
+            &["", "55°", "17,172", "17,146", "16,972"],
+        ]);
+        assert!(names_spanned_columns(&angles, &wide, &[]));
         // A value run across the banner's columns names nothing.
         let mut run = left.clone();
         run[5 + 2] = true;
-        assert!(!names_spanned_columns(&methods, &run));
+        assert!(!names_spanned_columns(&methods, &run, &[]));
         // A band over every column titles rows unless short labels follow.
         let mut band = vec![false; 9];
         band[1] = true;
@@ -2049,13 +4879,38 @@ mod tests {
                 "Until disease progression",
             ],
         ]);
-        assert!(!names_spanned_columns(&titled, &band));
+        assert!(!names_spanned_columns(&titled, &band, &[]));
         let named = grid(&[
             &["Establishment", "", ""],
             &["Name", "Address", "ID/FEI"],
             &["Plant A", "1 Main St", "123"],
         ]);
-        assert!(names_spanned_columns(&named, &band));
+        assert!(names_spanned_columns(&named, &band, &[]));
+        // A label across two columns over a product's row: the columns it
+        // does not span hold the product's own codes, so the row is data.
+        let mut typed = vec![false; 12];
+        typed[1] = true;
+        let products = grid(&[
+            &["Type", "", "Product No.", "Part No."],
+            &[
+                "Japanese version kit",
+                "CD-ROM, with cable",
+                "FPWINGRF-JP2",
+                "AFPS10122",
+            ],
+            &["English version", "CD-ROM", "FPWINGRF-EN2", "AFPS10520"],
+        ]);
+        assert!(!names_spanned_columns(&products, &typed, &[]));
+        // Unless the ruling runs those columns' labels down into the row.
+        let mut down = vec![false; 12];
+        down[4 + 2] = true;
+        down[4 + 3] = true;
+        let stacked = grid(&[
+            &["Type", "", "Product No.", "Part No."],
+            &["Medium", "Cable", "", "No."],
+            &["English version", "CD-ROM", "FPWINGRF-EN2", "AFPS10520"],
+        ]);
+        assert!(names_spanned_columns(&stacked, &typed, &down));
     }
 
     #[test]
@@ -2085,6 +4940,22 @@ mod tests {
         // A field left empty in a two-column list is not a label.
         let list = grid(&[&["Name", "Value"], &["Notes", ""], &["Lot", "A12"]]);
         assert!(!group_label(&list, 1));
+        // A group over its sub-group, both over the rows they label.
+        let stacked = grid(&[
+            &["Model", "A", "B"],
+            &["Power Management", "", ""],
+            &["Average power requirements (W)", "", ""],
+            &["Operational", "6.7W", "6.7W"],
+        ]);
+        assert!(group_label(&stacked, 1));
+        assert!(group_label(&stacked, 2));
+        // Not a label over a row left empty at the table's end.
+        let dangling = grid(&[
+            &["Model", "A", "B"],
+            &["Notes", "", ""],
+            &["See below", "", ""],
+        ]);
+        assert!(!group_label(&dangling, 1));
     }
 
     #[test]
@@ -2341,6 +5212,162 @@ mod tests {
     }
 
     #[test]
+    fn a_table_nested_in_anothers_cell_follows_it() {
+        let content = vec![
+            element("before", 10.0, 10.0, 300.0, 20.0, false),
+            element("after", 10.0, 300.0, 300.0, 310.0, false),
+        ];
+        // A grid set in one of the outer table's cells, further down it.
+        let tables = vec![
+            element("nested", 120.0, 200.0, 290.0, 260.0, true),
+            element("outer", 10.0, 40.0, 300.0, 280.0, true),
+        ];
+        let ordered = interleave_tables(content, tables);
+        assert_eq!(
+            ordered.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            vec!["before", "outer", "nested", "after"]
+        );
+    }
+
+    #[test]
+    fn a_wide_reading_inside_one_row_is_nested_and_one_across_rows_is_not() {
+        let grid = |ys: Vec<f64>, y0: f64, y1: f64| Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 100.0, 300.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0,
+                x1: 300.0,
+                y1,
+            },
+            ys,
+        };
+        let ruled = grid(vec![0.0, 20.0, 40.0, 60.0, 140.0], 0.0, 140.0);
+        // Nine columns of figures set in the last row's cell.
+        let in_row = grid(vec![70.0, 90.0, 110.0, 130.0], 70.0, 130.0);
+        assert!(nested_in_one_row(&ruled, &[&in_row]));
+        // A table running down across the rows of a frame drawn round it.
+        let across = grid(vec![25.0, 50.0, 75.0, 100.0], 25.0, 100.0);
+        assert!(!nested_in_one_row(&ruled, &[&across]));
+        // A box of three rows says too little.
+        let small = grid(vec![0.0, 20.0, 60.0, 140.0], 0.0, 140.0);
+        assert!(!nested_in_one_row(&small, &[&in_row]));
+    }
+
+    #[test]
+    fn a_ruled_grid_of_short_rows_reads_as_rows_and_a_frame_does_not() {
+        let word = |x: f64, y: f64, i: usize| Glyph {
+            text: "Value".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y - 8.0,
+                x1: x + 25.0,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            advance: None,
+            draw_index: i,
+        };
+        let grid = |xs: Vec<f64>, ys: Vec<f64>| Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: xs[0],
+                y0: ys[0],
+                x1: xs[xs.len() - 1],
+                y1: ys[ys.len() - 1],
+            },
+            xs,
+            ys,
+        };
+        // A short value in every cell of four rows.
+        let rows = grid(
+            vec![0.0, 100.0, 200.0, 300.0],
+            vec![0.0, 20.0, 40.0, 60.0, 80.0],
+        );
+        let mut glyphs = Vec::new();
+        for r in 0..4 {
+            for c in 0..3 {
+                glyphs.push(word(
+                    c as f64 * 100.0 + 5.0,
+                    r as f64 * 20.0 + 14.0,
+                    glyphs.len(),
+                ));
+            }
+        }
+        assert!(reads_as_rows(&rows, &glyphs));
+        // A frame round a page of prose: one cell of thirty words.
+        let frame = grid(vec![0.0, 100.0, 300.0], vec![0.0, 20.0, 220.0, 240.0]);
+        let prose: Vec<Glyph> = (0..30)
+            .map(|i| {
+                word(
+                    105.0 + (i % 3) as f64 * 60.0,
+                    34.0 + (i / 3) as f64 * 12.0,
+                    i,
+                )
+            })
+            .collect();
+        assert!(!reads_as_rows(&frame, &prose));
+    }
+
+    #[test]
+    fn a_table_follows_the_heading_set_beside_it() {
+        // A catalogue: each product's heading at the left over its photo,
+        // its table to the right, level with the heading. The first
+        // product's table runs a little under the second's.
+        let heading = |text: &str, y0: f64| Element {
+            level: Some(4),
+            ..Element {
+                kind: "doco:SectionTitle".into(),
+                ..element(text, 30.0, y0, 200.0, y0 + 9.0, false)
+            }
+        };
+        let content = vec![
+            heading("Sill Gasket", 30.0),
+            element(
+                "Sill Gasket seals the gap",
+                30.0,
+                429.0,
+                290.0,
+                445.0,
+                false,
+            ),
+            heading("Framing Gasket", 507.0),
+            element("UPS option", 30.0, 512.0, 68.0, 520.0, false),
+            element(
+                "Framing Gasket seals the gap",
+                361.0,
+                675.0,
+                572.0,
+                691.0,
+                false,
+            ),
+        ];
+        let tables = vec![
+            element("sill table", 30.0, 59.0, 369.0, 404.0, true),
+            element("framing table", 360.0, 520.0, 569.0, 664.0, true),
+        ];
+        let ordered = interleave_tables(content, tables);
+        assert_eq!(
+            ordered.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            vec![
+                "Sill Gasket",
+                "sill table",
+                "Sill Gasket seals the gap",
+                "Framing Gasket",
+                "UPS option",
+                "framing table",
+                "Framing Gasket seals the gap",
+            ]
+        );
+    }
+
+    #[test]
     fn table_stays_with_its_column() {
         // Existing prose order is column-major. A right-column table must not
         // interrupt the left column merely because it is high on the page.
@@ -2393,13 +5420,61 @@ mod tests {
 
     #[test]
     fn only_weak_typography_yields_to_figure_membership() {
-        assert!(heading_yields_to_figure(Evidence::Bold, true));
-        assert!(heading_yields_to_figure(Evidence::FontSize, true));
-        assert!(!heading_yields_to_figure(Evidence::Numbering, true));
-        assert!(!heading_yields_to_figure(Evidence::Sequence, true));
-        assert!(!heading_yields_to_figure(Evidence::Title, true));
-        assert!(!heading_yields_to_figure(Evidence::Outline, true));
-        assert!(!heading_yields_to_figure(Evidence::Bold, false));
+        assert!(heading_yields_to_figure(Evidence::Bold, true, false));
+        assert!(heading_yields_to_figure(Evidence::FontSize, true, false));
+        assert!(!heading_yields_to_figure(Evidence::Numbering, true, false));
+        assert!(!heading_yields_to_figure(Evidence::Sequence, true, false));
+        assert!(!heading_yields_to_figure(Evidence::Title, true, true));
+        assert!(!heading_yields_to_figure(Evidence::Outline, true, true));
+        assert!(!heading_yields_to_figure(Evidence::Bold, false, false));
+    }
+
+    #[test]
+    fn a_number_inside_a_drawing_is_a_callout() {
+        assert!(heading_yields_to_figure(Evidence::Numbering, true, true));
+        assert!(heading_yields_to_figure(Evidence::Sequence, true, true));
+    }
+
+    #[test]
+    fn a_grid_inside_line_art_is_the_drawings() {
+        use crate::rule::{Orientation, Rule};
+        // A 3 x 3 grid, 90pt square.
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 30.0, 60.0, 90.0],
+            ys: vec![0.0, 30.0, 60.0, 90.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 90.0,
+                y1: 90.0,
+            },
+        };
+        let rule = |x0: f64, y0: f64, x1: f64, y1: f64, o: Orientation| Rule {
+            bbox: BBox { x0, y0, x1, y1 },
+            orientation: o,
+            page: 0,
+        };
+        // A table: its four boundaries each way, each drawn cell by cell.
+        let mut table = Vec::new();
+        for k in 0..4 {
+            let at = 30.0 * k as f64;
+            for c in 0..3 {
+                let from = 30.0 * c as f64;
+                table.push(rule(at, from, at, from + 30.0, Orientation::Vertical));
+                table.push(rule(from, at, from + 30.0, at, Orientation::Horizontal));
+            }
+        }
+        assert!(!line_art(&grid, &table));
+        // A unit's front panel: a terminal's outline every 4pt each way.
+        let mut panel = table.clone();
+        for k in 0..20 {
+            let at = 2.0 + 4.0 * k as f64;
+            panel.push(rule(at, 40.0, at, 46.0, Orientation::Vertical));
+            panel.push(rule(40.0, at, 46.0, at, Orientation::Horizontal));
+        }
+        assert!(line_art(&grid, &panel));
     }
 
     #[test]

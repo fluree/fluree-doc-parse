@@ -1,0 +1,71 @@
+{
+  "document": {
+    "file": "usgs-tm5b13.pdf",
+    "url": "https://pubs.usgs.gov/tm/05/b13/tm5b13.pdf",
+    "sha256": "52dfce95f32953ebfa8d7f1af27b0bc4f8ffae16918bba0ceb01af066be8d594",
+    "about": "USGS Techniques and Methods 5-B13 (doi:10.3133/tm5B13), on PFAS in water by direct injection. Its appendix plots measured against expected concentrations and standard deviations as scatters of small square markers, four panels to a page, each page's legend (`EXPLANATION`, `+30 percent`, `1:1 line`, `Method detection level`, `Measured concentration`, `Standard deviation`) set under the panels."
+  },
+  "notes": [
+    "#241: legend entries and axis labels of the appendix's scatter plots read as the page's text, some as bold headings."
+  ],
+  "checks": [
+    {
+      "id": "legend-entry-no-heading",
+      "found": "2026-11-25",
+      "issue": "#241: the legend entry `Measured concentration`, bold, read as a heading: the scatter's markers lined up in rows and columns as a table's shading does, and no figure was found. Open on p67 (0-based), the appendix's first page: its four plots with the legend under them take more than 55% of the page each way, so the region's size bound refuses the legend's last line.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Measured concentration"
+      },
+      "count": 0,
+      "status": "open"
+    },
+    {
+      "id": "legend-entry-figure",
+      "found": "2026-11-25",
+      "issue": "#241: the legend entry `Measured concentration` was the page's text, as a heading or a paragraph, on every page of plots.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Measured concentration"
+      }
+    },
+    {
+      "id": "deviation-entry-no-heading",
+      "found": "2026-11-25",
+      "issue": "#241: the legend entry `Standard deviation` read as a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Standard deviation"
+      },
+      "count": 0
+    },
+    {
+      "id": "detection-entry-no-heading",
+      "found": "2026-11-25",
+      "issue": "#241: the legend entry `Method detection level` read as a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Method detection level"
+      },
+      "count": 0
+    },
+    {
+      "id": "legend-entries-figure",
+      "found": "2026-11-25",
+      "issue": "#241: the legend's entries `+30 percent`, `1:1 line` and `−30 percent` ran together as one paragraph of the page's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "1:1 line"
+      }
+    },
+    {
+      "id": "caption-kept",
+      "found": "2026-11-25",
+      "issue": "A guard: the figure's caption under its legend stays the page's paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Figure 1.16. Graphs comparing the measured concentration to amount spiked for perfluoroheptane sulfonate (PFHpS) in A, reagent water; B, groundwater; C, surface water; and D, wastewater effluent. (ng/L, nanograms per liter)"
+      }
+    }
+  ]
+}

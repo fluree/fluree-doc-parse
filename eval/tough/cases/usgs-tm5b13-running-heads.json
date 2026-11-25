@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "usgs-tm5b13.pdf",
+    "url": "https://pubs.usgs.gov/tm/05/b13/tm5b13.pdf",
+    "sha256": "52dfce95f32953ebfa8d7f1af27b0bc4f8ffae16918bba0ceb01af066be8d594",
+    "about": "USGS Techniques and Methods 5-B13 (doi:10.3133/tm5B13). Each even page heads with the title of the section it is in, and the bookmarks point at their sections by named destinations."
+  },
+  "notes": [
+    "#256: bookmarks named their destinations, which were not read, so every block reading a bookmark's title was the bookmark's heading: the running head `Appendix 1. Supplemental Figures` on 32 even pages, and `Background`, `Summary of Method` and their like on the pages of their sections. A bookmark now heads the one place nearest where it lands, and the copies standing where others stand on other pages are a running line."
+  ],
+  "checks": [
+    {
+      "id": "appendix-heading-once",
+      "found": "2026-11-25",
+      "issue": "The even-page running head `Appendix 1. Supplemental Figures` was an h1 on every even page from 68 to 134.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Appendix 1. Supplemental Figures"
+      },
+      "count": 1
+    },
+    {
+      "id": "background-heading-once",
+      "found": "2026-11-25",
+      "issue": "As above, the running head `Background`.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Background"
+      },
+      "count": 1
+    }
+  ]
+}

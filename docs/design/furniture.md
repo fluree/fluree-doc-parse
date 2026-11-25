@@ -49,6 +49,17 @@ number may differ between the copies if it counts the pages and the line
 says nothing else (`Page 1 of 2`); `Table 1` over one page and `Table 2`
 over the next are headings.
 
+A two-page sheet may set page 2 on another template: its margins 18pt
+further left, its title block 50pt higher. Its copies then agree in text,
+size and weight, and lie in the same band, but not in place. They are still
+the template's when a line beside one moved with it, the same distance (the
+footer's next line, the title's subtitle), or when the copy opens page 2,
+its topmost line, and stands lower on page 1, under a masthead. A copy that
+opens page 2 restates page 1's title there: page 1 keeps it as its title,
+and only page 2's is running. A footer that moved is running on both pages.
+One line alone that moved, with nothing beside it and not opening its page,
+stays text.
+
 A title page that sets the running head's words as its own title, larger
 and in its own place, keeps its title. The copies at the running head's
 place are furniture; the title is not. Nor are the same words elsewhere on
@@ -121,6 +132,16 @@ that held it: `Serrer les vis à 30 po-lb (3,3 Nm)` read `0 po-lb ( , Nm)`,
 and an OCR'd newspaper whose stray letters were furniture lost every `r`
 and `e` from its table.
 
+A page number alone has no text to match a cell's on. A grid that reaches
+into the foot of the page takes its folio in, so a cell is emptied as the
+page's number when it holds that page's own folio and nothing else, and
+stands in the top or bottom band where page numbers are printed. Its width
+is no evidence: matched by width alone, every cell as wide as the page
+numbers was emptied, an accessory list's `CARTON COUNT | 1`, a catalogue's
+column of I/O points (`10`, `14`, `32`), and the minimum and typical columns
+of a datasheet's electrical tables, whose maximums then stood under the
+wrong headings.
+
 Paragraphs are scrubbed too, for a header or footer that merged into a line of
 its own block on one page. There the match is held to where such a leak can
 be: the start or end of a block that reaches into the page's top or bottom
@@ -153,6 +174,32 @@ adding signals:
   page and goes up from one page to the next by as many pages as lie between,
   on most of them: a guide in three languages numbers each from 1, and an
   unnumbered insert skips one.
+- **Any line whose number changes without counting the pages.** The same
+  test holds for a line with words around its number: a catalogue's product
+  pages each open with their kit's title, `EPIC® H-BE 6 Kits` over `… 10 Kits`,
+  matched once digits are set aside, and a flow sheet's clock labels cycle
+  `00:00` to `20:00` at one place. Each says something of its own page. A
+  line whose number changes is running only where the number counts the
+  pages, or the line says it is the page's (`Page`, `3 of 9`).
+- **A line the body reaches past.** A running line stands outside the body:
+  nothing of the page's own lies between it and the page's edge in its
+  column. A guide's `FCC` heading, partway down a column near the top of the
+  last page of each language, repeats on three of nine pages under the end of
+  the section before it; on most of its pages, body text (a line on too few
+  pages to run, set from the same left edge, a line of a paragraph) stands
+  above it, so it is a heading. A page's banner title over a running label
+  set off to its right is no column the label sits in, nor is a header
+  block's own line over the next (`INSTALLATION INSTRUCTIONS` over
+  `INSTRUCTIONS D’INSTALLATION`), each a label standing alone.
+- **A short form of a title that varies.** A spec sheet titles some pages
+  `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS` and others `DISHWASHER`.
+  Taken as a running line, the short form was cut out of the long ones and
+  left `– ELECTRIC`. Where the pages a line is missing from set, in its place,
+  a longer line that opens or closes with its words, the place holds a title
+  that varies, and none of it runs. Not where the longer line is running
+  lines set as one: its other words run themselves (a navigation bar's
+  `Introduction Environmental Initiatives`, a transcript's `June 14, 2023
+  Chair Powell's Press Conference FINAL`), or it runs as it stands.
 
 ## Where it goes
 
@@ -228,14 +275,42 @@ that change on nearly every page are the folio; the MRN and account number
 beside them, which never change, are not, and a flow sheet's `16:00` row
 label — which repeats at a stable position on hundreds of pages and takes six
 values between them — is a clock. The page-number line that covers the most
-pages supplies it. A page it leaves without one takes its folio from another
-page-number line that counts the pages: a guide in three languages words its
-`1 of 3` three ways.
+pages supplies it. A page it leaves without one takes its folio from another:
+a guide in three languages words its `1 of 3` three ways.
+
+A line is a source only if its number is a page's. Digits that vary at the top
+or foot of page after page are not one for that alone: a data sheet's spec
+table opens each page with its largest drive (`26TB`, `16TB`, `8TB`), a parts
+catalogue sets year ranges (`1991-1998`) at the foot several to a page, and a
+translation of a declaration ends each page on an article's number. Each was
+the folio of every page it reached. A page's number counts the pages, going up
+by as many pages as lie between, or says it is one (`Page 352`, `3 of 15`).
+The second is what keeps a shuffled chart's folios, which count nothing in the
+order the pages now stand.
 
 The folio is read from the page's edges over *every* glyph, not from the
 lines left after grids took theirs. A form's key/value grid that runs down
 into the footer band takes the footer's glyphs with it — the furniture pass
 never sees the line, and the page had no folio although it printed one. The
 edge bands are where pagination lives, and assembling them a second time is
-cheap. `fdoc dev furniture` reports what the pipeline stripped and which
-pages carry a folio.
+cheap. A line of the page's own that is nothing but its folio, in those
+bands, is then its page number however few pages left it among their lines:
+a catalogue's tables reach the foot and take the number on most pages, and
+the first and last pages kept theirs in the body. `fdoc dev furniture`
+reports what the pipeline stripped and which pages carry a folio.
+
+A bare number is grouped by the place it stands as well as by its text. All
+of the bands' bare numbers share one signature, the counts of a table that
+runs into the foot with the page number set under them, and the group's
+middle place was the table's: the page numbers, set lower, were read nowhere.
+
+A page's number counts as its folio even where no other page carries one. A
+one-page sheet's `Page 1`, or a data sheet's `2` on the one page after its
+unnumbered cover, has nothing to repeat against. A line alone in the foot band
+that is nothing but the page's place in the file, bare or as `Page N`, is that
+page's number. The page number of another place in the numbering (an extract
+of a catalogue starts at 19) is read by repetition, as before.
+
+A page-number line that says something besides the page is kept in the
+running text with the rest: a document's code beside its page and date
+(`369613g 1 04.08.24`) names the document as a word would.

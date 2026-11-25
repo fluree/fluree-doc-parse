@@ -6,20 +6,82 @@
     "about": "MAHLE aftermarket catalogue AP-90-12. Its interchange lists wrap each competitor number and its MAHLE Clevite number into side-by-side copies of the same columns, two or three to a record, across the page."
   },
   "notes": [
-    "2026-11-23: every cell's doc:rowHeader was the row's first cell, the first copy's key, so a MAHLE number in a later copy was paired with a competitor number it has nothing to do with (#52)."
+    "2026-11-23: every cell's doc:rowHeader was the row's first cell, the first copy's key, so a MAHLE number in a later copy was paired with a competitor number it has nothing to do with (#52).",
+    "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
+    "2026-11-24 (#100): year ranges at the foot of the page (`1991-1998`) were taken for its folio, `1998`, ahead of the footer's own number.",
+    "2026-11-24 (#137): MAHLE is set in small capitals drawn partly with capital codes and partly with lower-case ones, and its ActualText states the word's own case. A statement in case alone was never taken, so the name read `MAhlE` 44 times. It is taken now where the drawn word mixes its cases at one size."
   ],
   "checks": [
     {
       "id": "fourth-copy-keyed-by-its-own-number",
       "found": "2026-11-23",
       "issue": "J17829, in the fourth pair, carried the first pair's FP-1804353 as its row header; it is the MAHLE Clevite number for Fel-Pro 55350.",
-      "cell": {"value": "J17829", "column": "MAHLE CLEVITE", "row": "55350"}
+      "cell": {
+        "value": "J17829",
+        "column": "MAHLE CLEVITE",
+        "row": "55350"
+      }
     },
     {
       "id": "three-column-copy-keyed-by-its-own-number",
       "found": "2026-11-23",
       "issue": "In a list wrapped three columns to a record, the second copy's competitor (IHC, for 1811191-C3) was keyed by the first copy's number, 14079426.",
-      "cell": {"value": "IHC", "column": "COMPETITOR", "row": "1811191-C3"}
+      "cell": {
+        "value": "IHC",
+        "column": "COMPETITOR",
+        "row": "1811191-C3"
+      }
+    },
+    {
+      "id": "service-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "The service phone line was a level-1 heading.",
+      "no_section": "For technical service call"
+    },
+    {
+      "id": "french-service-line-not-a-heading",
+      "found": "2026-11-24",
+      "issue": "As above, in French.",
+      "no_section": "Pour joindre le service technique"
+    },
+    {
+      "id": "folio-on-page-39",
+      "found": "2026-11-24",
+      "issue": "The end year of a range at the foot was the page's folio.",
+      "folio": {
+        "page": 39,
+        "value": "39"
+      }
+    },
+    {
+      "id": "folio-on-page-40",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "folio": {
+        "page": 40,
+        "value": "40"
+      }
+    },
+    {
+      "id": "folio-on-page-45",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "folio": {
+        "page": 45,
+        "value": "45"
+      }
+    },
+    {
+      "id": "name-in-its-own-case",
+      "found": "2026-11-24",
+      "issue": "The name read `MAhlE`.",
+      "no_text": "MAhlE"
+    },
+    {
+      "id": "name-opens-the-sentence",
+      "found": "2026-11-24",
+      "issue": "As above, in the body.",
+      "text": "MAHLE Clevite recommends"
     }
   ]
 }

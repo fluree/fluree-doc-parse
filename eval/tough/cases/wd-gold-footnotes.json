@@ -1,0 +1,56 @@
+{
+  "document": {
+    "file": "wd-gold-datasheet.pdf",
+    "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-gold/data-sheet-wd-gold-hdd.pdf",
+    "sha256": "341f32848640e76bc71a507b17aa0635608ad2191b58dec742df80b3481159e4",
+    "about": "Western Digital WD Gold data sheet (4 pages). Page 4 closes on 11 footnotes in two columns, each opening with its number raised at the margin, at the body's leading."
+  },
+  "notes": [
+    "#189: a raised note number set apart from its line was taken for a list marker and dropped, and notes set at body leading ran together.",
+    "2026-11-25 (#281): a note's raised `4` set after a comma (`MTBF,⁴`) was glued to it: a word ending in punctuation was no word a note's number could follow."
+  ],
+  "checks": [
+    {
+      "id": "note-2-keeps-its-number",
+      "found": "2026-11-24",
+      "issue": "Note 2 was a list item without its number.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "2 Workload Rate is defined as the amount of user data transferred to or from the hard drive. Workload Rate is annualized (TB transferred X (8760 / recorded power-on hours)). Workload Rate will vary depending on your hardware and software components and configurations."
+      }
+    },
+    {
+      "id": "note-4-keeps-its-number",
+      "found": "2026-11-24",
+      "issue": "Notes 3 and 4 were read together, and 4 came out a list item without its number.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "4 Projected values for model numbers WD8006FRYZ, WD6005FRYZ, and WD4005FRYZ. Final MTBF and AFR specifications are based on a sample population and are estimated by statistical measurements and acceleration algorithms under typical operating conditions, workloads of 220TB/year, and 40°C device-reported temperature. Derating of MTBF and AFR will occur above these parameters, up to 550TB/ year and 60°C (device reported temperature). MTBF and AFR ratings do not predict an individual drive’s reliability and do not constitute a warranty."
+      }
+    },
+    {
+      "id": "note-8-alone",
+      "found": "2026-11-24",
+      "issue": "Notes 7 to 11 were one paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "8 Portion of buffer capacity used for drive firmware."
+      }
+    },
+    {
+      "id": "note-11-alone",
+      "found": "2026-11-24",
+      "issue": "Notes 7 to 11 were one paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "11 5°C ambient temperaure, 60°C device reported temperature."
+      }
+    },
+    {
+      "id": "note-after-comma-set-apart",
+      "found": "2026-11-25",
+      "issue": "#281: `MTBF,4` read as one token.",
+      "no_text": "MTBF,4"
+    }
+  ]
+}

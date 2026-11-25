@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Its field angle sets the degree sign as a small raised letter o after the number."
+  },
+  "notes": [
+    "2026-11-25 (#209): the beam angle sets its degree as a raised `o` after two figures and a tilde, `~ 95o`. A raised `o` after one or two figures may be an ordinal's ending, and was kept as one; the field angle's `~ 145°`, three figures, was read as a degree."
+  ],
+  "checks": [
+    {
+      "id": "beam-angle-degree",
+      "found": "2026-11-25",
+      "issue": "#209: `~ 95o`.",
+      "text": "~ 95°"
+    },
+    {
+      "id": "beam-angle-not-o",
+      "found": "2026-11-25",
+      "issue": "#209: as above.",
+      "no_text": "95o"
+    }
+  ]
+}

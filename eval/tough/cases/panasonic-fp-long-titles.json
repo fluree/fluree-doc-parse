@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series PLC digest catalogue (28 pages). Its page titles are set at 17 pt over two lines and run past twelve words."
+  },
+  "notes": [
+    "2026-11-24 (#160): a section title of more than twelve words was never a heading, however large it was set."
+  ],
+  "checks": [
+    {
+      "id": "long-page-title",
+      "found": "2026-11-24",
+      "issue": "Page 5's 17pt title, fifteen words over two lines, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Positioning control available with the more compact body with built-in 4-axis pulse outputs"
+      }
+    }
+  ]
+}

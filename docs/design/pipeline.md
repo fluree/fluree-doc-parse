@@ -96,6 +96,58 @@ plastic bags`, `2. Weigh 20 g of soil`) are an ordered list's items and carry
 their numbers as markers, so a step never passes for a numbered section.
 Centred text is exempt: its left edge wanders, and that is the layout.
 
+**Three shapes the ragged-edge test misses.** It needs three lines, a block
+of one left edge, and most lines ending early against the block's own
+widest line. Lists printed one item per line pass none of that:
+
+- *Numbered items with hanging lines.* `1. Avoid exposure…`, then `2. Avoid
+  exposure…` whose wrapped lines hang an em in, the last running full. A
+  line opening with `n.` set where the latest line opening `n−1.` is, with
+  only lines at or right of that edge between, starts an item, and both carry
+  their labels. Where a slightly wider space parts the list into blocks, the
+  count carries from block to block at one left edge.
+- *A paragraph ended by hand.* `…lo antes / posible.` over `El aislamiento…`
+  at the same leading. The short line stops short of where the paragraph's
+  lines and the next one reach by more than the next line's first word and
+  two ems, and the next opens with a capital. The margin is that wide
+  because typesetters that break a paragraph's lines together, and designers
+  setting a rag, end a line a word short of a greedy break (`…8Z Pellicle,
+  and` over `Harmonic 2 Tilt…`). The test needs the column's text to show a
+  wrap margin, and leaves display type, a weight change, a hyphen or a comma
+  at the line's end to the other tests.
+- *Entries one per line.* Eight standards of about one length agree on a
+  right edge of their own, so against the block none ends early. Against the
+  column's measure every line does, by more than the next line's first word,
+  and none goes on in lower case as a wrapped line of a narrow box does: each
+  line is a block. Measured against the column only here, where every line
+  opens with a capital; a narrow box's prose keeps its paragraphs.
+- *Bold heads stacked.* Bold lines are left whole by the entries test, as a
+  title broken over two lines must be. Two lines, both bold, at one size
+  from the body's up to display type and set at one indent, are parted where
+  the second opens with a capital (not a bracket), and does not open on a
+  word that runs on or hold a year, its first word would have fitted on the
+  line before, and that
+  line ends on no comma, hyphen or word that runs on (`of`, `and`, `in`):
+  `Materials and methods` over `Animals` is two headings, `Effect of AZT on
+  telomerase activity in` over `HO-8910 cells` one.
+
+**And the other way: a sentence that plainly runs on.** Spacing and weight
+can part a paragraph where its sentence goes on. Footnotes set at nearly
+twice their size's leading pass the paragraph spacing after every line,
+and a warning that sets its middle sentences in bold capitals changes
+weight mid-sentence (`…lead dust. LEAD IS` over `TOXIC. EXPOSURE…`), in a
+box narrower than its column, so the column's measure cannot show the line
+ran out of room. The lines stay one paragraph when the line is full against
+the lines at hand, ends without terminal punctuation, and either the next
+opens in lower case (within a quarter again of the paragraph spacing) or
+the break falls inside the run of capitals the weight change belongs to,
+with lines of the paragraph above it (within the paragraph spacing). A
+heading in bold capitals stands alone over text that opens in mixed case,
+and a contents entry's leader is never a full line. Under an item whose
+lines hang under its first, a line opening in lower case where those lines
+are set goes on with it, full line or not: a list's bold-italic `or` under
+an item of two lines whose second is the shorter.
+
 **A size step across a hand-ended line.** The lines of one paragraph do not
 measure alike — an 11pt paper reads 10.9 on one line and 11.1 on the next —
 so the size tolerance between full lines is loose. Across a line that was

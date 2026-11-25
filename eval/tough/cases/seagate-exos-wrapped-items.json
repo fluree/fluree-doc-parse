@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "seagate-exos-x16.pdf",
+    "url": "https://www.seagate.com/www-content/datasheets/pdfs/exos-x16-DS2011-1-1904US-en_US.pdf",
+    "sha256": "f97c80feb3d356c61bde605a02954704343e18bad893e5267164acc18c55c7f2",
+    "about": "Seagate Exos X16 hard drive data sheet (3 pages). The cover sets a 12.7 pt tagline over the 20.2 pt product name, and the back page sets the site name at 10.5 pt above 6 pt legal text."
+  },
+  "notes": [
+    "#230: once the data sheet's body read as regular, its drawn-bullet items were parted as entries set one per line: the list is set narrower than its column, so each first line ends well short of the column's edge, and the wrapped line opens with a name."
+  ],
+  "checks": [
+    {
+      "id": "wrapped-item-whole",
+      "found": "2026-11-24",
+      "issue": "`Distributed file systems, including` and `Hadoop and Ceph` were an item and a paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Distributed file systems, including Hadoop and Ceph",
+        "evidence": "marker"
+      }
+    },
+    {
+      "id": "wrapped-item-after-a-dash-whole",
+      "found": "2026-11-24",
+      "issue": "As above, `Enterprise backup and restore—` and `D2D, virtual tape`. (#281: the closed dash joins the lines with no space, as the page sets `restore—D2D`.)",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Enterprise backup and restore—D2D, virtual tape",
+        "evidence": "marker"
+      }
+    }
+  ]
+}

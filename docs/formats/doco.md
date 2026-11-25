@@ -238,6 +238,11 @@ item, with `doc:xhtmlTag` `li`. DoCO has no list item class: a list's members
 are typed as what they are, and being contained by the list is what makes
 them members. Their order is their `nif:beginIndex`.
 
+A drawing's text read between two items ends the list, unless the items
+count on across it, `3.` then `4.`. A numbered list run on into the next
+column, with a photo's callouts read between the columns, stays one list,
+and the callouts stay figure text where they fall.
+
 ```json
 { "@type": "doco:List", "po:contains": [ "…-element-7", "…-element-8" ] }
 { "@id": "…-element-7", "@type": "doco:Paragraph", "doc:xhtmlTag": "li",
@@ -271,6 +276,18 @@ A table with no header row has no `doc:columnHeader` on its cells, and
 `doc:rowIndex` counts from its first row. A list of fields set `Label |
 value` is one: each value's `doc:rowHeader` is its label. See [a list of
 fields](../design/tables.md#a-list-of-fields-has-no-header-row).
+
+Where a table's first columns are labels set down the rows they group, a
+group over its sub-groups, a cell's `doc:rowHeader` names them all, group
+first, then the row's own label: `FP2 Backplane / Conventional type /
+7-module type (for master and expansion)`. A column spanning the same rows
+as the group is read as more of the group, and named as the row's label
+after it: `0.1 mL / white`.
+
+A table set inside one cell of another (an acoustic row's nine columns of
+figures in a property list) is a table of its own, right after the one it
+sits in. Its cells carry the outer row's label as `doc:sectionLabel`
+(`Acoustical Performance`), and the outer cell keeps only its own text.
 
 A list wrapped to fill the page sets its columns again side by side:
 `Competitor | Part no. | Competitor | Part no.`, each copy a record of its

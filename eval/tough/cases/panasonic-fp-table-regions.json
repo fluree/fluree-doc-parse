@@ -1,0 +1,103 @@
+{
+  "document": {
+    "file": "panasonic-fp-digest.pdf",
+    "url": "https://api.pim.na.industrial.panasonic.com/file_stream/main/fileversion/90",
+    "sha256": "fdd27e4f9ec22ed3a65e05574f6edafd62a6b65ff76fd733aa82a6ad24de5a5d",
+    "about": "Panasonic FP series digest catalogue. Its specification tables rule model columns apart only where the models differ, and leave some columns unruled under a shaded header."
+  },
+  "notes": [
+    "A column rule drawn in a few rows fell short of a grid line, so two models read as one column.",
+    "A table whose middle column is unruled touches in two sets of rules; only its header band joins them.",
+    "A row label read across the sub-columns of the rows above it, where their rule stops short of it, was cut at that rule and its pieces joined with a space (`Rea l-time clock function`).",
+    "2026-11-24 (#112): a header shaded down to its first row with no rule between them was read as one row with it.",
+    "2026-11-24 (#104): a product table shades its header across every column but rules its rows only from the second column on; the product-name column was left out of the table."
+  ],
+  "checks": [
+    {
+      "id": "c10-apart",
+      "found": "2026-11-24",
+      "issue": "#103: C10 and C14 read `10 points 14 points` in one cell.",
+      "cell": {
+        "value": "10 points (Input: 6, Output: 4)",
+        "column": "C10 (Relay output type only)"
+      }
+    },
+    {
+      "id": "c14-apart",
+      "found": "2026-11-24",
+      "issue": "#103: as above.",
+      "cell": {
+        "value": "14 points (Input: 8, Output: 6)",
+        "column": "C14 (Relay output type only)"
+      }
+    },
+    {
+      "id": "fp2sh-whole",
+      "found": "2026-11-24",
+      "issue": "#102: the FP2SH table's header and first row were loose paragraphs.",
+      "cell": {
+        "value": "From 0.03 μs",
+        "column": "Operation speed",
+        "row": "32 k Standard type"
+      }
+    },
+    {
+      "id": "label-past-a-stopped-rule",
+      "found": "2026-11-24",
+      "issue": "#104: `Self -diagnostic function`, `Rea l-time clock function`: the label was cut where a sub-column rule of the rows above it would run.",
+      "cell": {
+        "value": "Self-diagnostic function",
+        "column": "Item"
+      }
+    },
+    {
+      "id": "label-past-a-stopped-rule-2",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "cell": {
+        "value": "Real-time clock function",
+        "column": "Item"
+      }
+    },
+    {
+      "id": "shaded-header-parts-first-row",
+      "found": "2026-11-24",
+      "issue": "#112: `Product No. FPG-PP11`, `Part No. AFPG430` were the header; the first product was no row.",
+      "cell": {
+        "value": "AFPG430",
+        "column": "Part No.",
+        "row": "FPΣ Positioning Unit"
+      }
+    },
+    {
+      "id": "expansion-unit-names-its-rows",
+      "found": "2026-11-24",
+      "issue": "#104: `FP0R-E8 Expansion Unit` was a paragraph beside its table, and its rows lost their product.",
+      "cell": {
+        "value": "AFP0RE8RS",
+        "column": "Part No.",
+        "row": "FP0R-E8 Expansion Unit / Input 4 points DC, Relay output 4 points, Terminal block type"
+      }
+    },
+    {
+      "id": "backplane-in-its-table",
+      "found": "2026-11-24",
+      "issue": "#104: `FP2 Backplane` was a paragraph; each row is named by the product, its type and its own line.",
+      "cell": {
+        "value": "AFP25007",
+        "column": "Part No.",
+        "row": "FP2 Backplane / Conventional type / 7-module type (for master and expansion)"
+      }
+    },
+    {
+      "id": "positioning-unit-in-its-table",
+      "found": "2026-11-24",
+      "issue": "#104: as above, on p26.",
+      "cell": {
+        "value": "AFP243620",
+        "column": "Part No.",
+        "row": "FP2 Positioning Unit RTEX / Network"
+      }
+    }
+  ]
+}

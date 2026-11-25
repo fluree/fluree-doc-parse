@@ -24,6 +24,9 @@ pub const EDGE_BAND: f64 = 0.18;
 /// footer that appears on only a third of pages is still a footer.
 const MIN_PAGE_FRACTION: f64 = 0.30;
 
+/// Parts a bare number's signature from the place its group stands at.
+const PLACE: char = '\u{1f}';
+
 /// Pages a line must repeat on before repetition alone makes it furniture.
 /// A shorter document's running lines are read by [`exact_running`].
 const MIN_PAGES: usize = 3;
@@ -120,6 +123,38 @@ pub fn detect_with_folios(
     (marks, folios)
 }
 
+/// As [`detect_with_folios`], each page's folio with where its line stands,
+/// as a share of the page's height: the place the page number is printed
+/// on that page, `None` where the folio's line is not among `pages`' lines.
+pub fn detect_folio_places(pages: &[(Vec<Line>, f64)]) -> Vec<(Option<String>, Option<f64>)> {
+    let (marks, folios, _) = detect_all(pages);
+    folios
+        .into_iter()
+        .enumerate()
+        .map(|(pi, folio)| {
+            let (lines, height) = &pages[pi];
+            let place = folio.as_ref().and_then(|f| {
+                marks[pi]
+                    .iter()
+                    .filter(|(_, k)| **k == Furniture::PageNumber)
+                    .map(|(li, _)| &lines[*li])
+                    .find(|l| digit_runs(&l.text).iter().any(|r| r == f))
+                    .filter(|_| *height > 0.0)
+                    .map(|l| l.bbox.y0 / height)
+            });
+            (folio, place)
+        })
+        .collect()
+}
+
+/// Whether a line of the page's own is its page number: nothing but the
+/// page's folio, standing where the folio's line does (`place`, a share of
+/// the page's height). A chart's tick in the band, `6` on page 6 among
+/// `20 18 … 4 2`, stands elsewhere.
+pub fn is_folio_line(text: &str, folio: &str, rel_y: f64, place: f64) -> bool {
+    text.trim() == folio && (rel_y - place).abs() < POSITION_TOLERANCE
+}
+
 /// Marks, folios, and the marks read as exact copies.
 #[allow(clippy::type_complexity)]
 fn detect_all(
@@ -134,7 +169,9 @@ fn detect_all(
     let mut folios: Vec<Option<String>> = vec![None; n_pages];
     let mut exact: Vec<std::collections::HashSet<usize>> = vec![Default::default(); n_pages];
     if n_pages < 2 {
-        // Repetition is the only evidence there is, and one page has none.
+        // Repetition is the only evidence there is, and one page has none:
+        // but a page's number says which page it is.
+        lone_folios(pages, &mut out, &mut folios);
         return (out, folios, exact);
     }
 
@@ -165,13 +202,77 @@ fn detect_all(
         }
     }
 
+    // A number alone is grouped by where it stands as well. Every bare
+    // number in the bands shares one signature, a table's figures near the
+    // foot with the page number under them, and the group's middle place was
+    // the table's: the page number, set lower, was not where the group
+    // stands, and went unread.
+    let groups: HashMap<String, Vec<(usize, usize, f64, String)>> = groups
+        .into_iter()
+        .flat_map(|(sig, mut occ)| {
+            if !bare_number(&sig) {
+                return vec![(sig, occ)];
+            }
+            occ.sort_by(|a, b| a.2.total_cmp(&b.2));
+            let mut places: Vec<Vec<(usize, usize, f64, String)>> = Vec::new();
+            for o in occ {
+                match places.last_mut() {
+                    Some(p) if o.2 - p[p.len() - 1].2 < POSITION_TOLERANCE => p.push(o),
+                    _ => places.push(vec![o]),
+                }
+            }
+            places
+                .into_iter()
+                .enumerate()
+                .map(|(i, p)| (format!("{sig}{PLACE}{i}"), p))
+                .collect()
+        })
+        .collect();
+
     let needed = ((n_pages as f64 * MIN_PAGE_FRACTION).ceil() as usize).max(MIN_PAGES);
+
+    // The texts of the lines that repeat on enough pages to run, as set.
+    let running: Vec<String> = groups
+        .values()
+        .filter(|occ| {
+            let mut on: Vec<usize> = occ.iter().map(|o| o.0).collect();
+            on.sort_unstable();
+            on.dedup();
+            on.len() >= needed && occ.iter().all(|o| o.3 == occ[0].3)
+        })
+        .map(|occ| occ[0].3.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    // Each line's group, and on how many pages each group's lines could run:
+    // none where its number changes without counting the pages, which makes
+    // it each page's own.
+    let mut keys: Vec<Vec<String>> = pages
+        .iter()
+        .map(|(ls, _)| vec![String::new(); ls.len()])
+        .collect();
+    let mut seen_on: HashMap<String, usize> = HashMap::new();
+    for (sig, occ) in &groups {
+        let mut on: Vec<usize> = occ.iter().map(|o| o.0).collect();
+        on.sort_unstable();
+        on.dedup();
+        let mut texts: Vec<&str> = occ.iter().map(|o| o.3.as_str()).collect();
+        texts.sort_unstable();
+        texts.dedup();
+        let copies: Vec<(usize, &str)> = occ.iter().map(|o| (o.0, o.3.as_str())).collect();
+        let counts =
+            texts.len() < 2 || advances(&copies) || copies.iter().all(|(_, t)| says_page(t));
+        seen_on.insert(sig.clone(), if counts { on.len() } else { 0 });
+        for o in occ {
+            keys[o.0][o.1] = sig.clone();
+        }
+    }
 
     // The page-number group the folios come from: (pages it covers, distinct
     // values of its varying run), then the per-page values.
     let mut folio_sources: Vec<FolioSource> = Vec::new();
 
-    for (sig, occ) in groups {
+    for (key, occ) in groups {
+        let sig = key.split(PLACE).next().unwrap_or_default();
         if sig.trim().is_empty() {
             continue;
         }
@@ -195,7 +296,9 @@ fn detect_all(
             // Too few pages for repetition alone: a two-page data sheet's
             // letterhead, or a three-page one's head over the pages after
             // its title page.
-            if let Some((kind, hits)) = exact_running(pages, &occ) {
+            if let Some((kind, hits)) =
+                exact_running(pages, &occ).or_else(|| shifted_running(pages, &occ))
+            {
                 for (pi, li, _) in &hits {
                     out[*pi].insert(*li, kind);
                     exact[*pi].insert(*li);
@@ -217,22 +320,72 @@ fn detect_all(
         raw.dedup();
         let digits_vary = sig.contains('#') && raw.len() > 1;
 
-        // A number alone at one place on page after page is a page number
-        // only if it counts the pages. An install guide's step numbers, a
-        // figure's callouts and a chart's axis labels sit at the same place
-        // too, and say something different there.
-        if digits_vary && bare_number(&sig) {
+        // A line whose number changes at one place on page after page is a
+        // page number only if the number counts the pages or the line says
+        // it is one. An install guide's step numbers, a figure's callouts
+        // and a chart's axis labels sit at the same place too, and so does a
+        // catalogue's product title on each product's page, `EPIC® H-BE 6
+        // Kits` over `… 10 Kits`: each says something of its own page.
+        if digits_vary {
             let stable: Vec<(usize, &str)> = occ
                 .iter()
                 .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
                 .map(|o| (o.0, o.3.as_str()))
                 .collect();
-            if !advances(&stable) {
+            let says = !bare_number(sig) && stable.iter().all(|(_, t)| says_page(t));
+            if !advances(&stable) && !says {
                 continue;
             }
         }
 
         let kind = classify(median, digits_vary);
+
+        if kind != Furniture::Watermark {
+            let stable: Vec<&(usize, usize, f64, String)> = occ
+                .iter()
+                .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
+                .collect();
+            // A running line stands outside the body. Where, on most of its
+            // pages, text of that page's own stands between it and the
+            // page's edge in its column, it is a heading the body reached
+            // past: an install guide's `FCC` partway down a column, under
+            // the end of the section before it.
+            let inside = stable
+                .iter()
+                .filter(|o| beyond_the_body(pages, o.0, o.1, &seen_on, &keys, needed))
+                .count();
+            if inside * 2 > stable.len() {
+                continue;
+            }
+            // Nor is a line running where the pages it is missing from set
+            // a longer line in its place that opens or closes with its
+            // words: the place holds a title that varies from page to page
+            // (`DISHWASHER` over `DISHWASHER – ELECTRIC` and `– GAS`), and
+            // the pages that print the short form are that title's too. A
+            // longer line that runs itself is the same running head set as
+            // one line on some pages (`June 14, 2023 Chair Powell's Press
+            // Conference FINAL`), and says nothing of a title.
+            if !digits_vary {
+                let text = stable.first().map_or("", |o| o.3.trim());
+                let held: std::collections::HashSet<usize> = stable.iter().map(|o| o.0).collect();
+                let varied = (0..n_pages)
+                    .filter(|pi| !held.contains(pi))
+                    .filter(|&pi| {
+                        let (lines, height) = &pages[pi];
+                        *height > 0.0
+                            && lines.iter().enumerate().any(|(lj, l)| {
+                                (l.bbox.y0 / height - median).abs() < POSITION_TOLERANCE
+                                    && extends(l.text.trim(), text)
+                                        .is_some_and(|rest| !merges_running(rest, &running))
+                                    && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
+                            })
+                    })
+                    .count();
+                if varied > 0 && varied * 2 >= held.len() {
+                    continue;
+                }
+            }
+        }
 
         // A watermark appears once per page. `发布机构:` ("issuing agency")
         // occurs four times per page in one government filing as a field
@@ -279,11 +432,12 @@ fn detect_all(
     }
 
     // The page-number line that covers the most pages supplies the folios.
-    // A page it leaves without one takes it from another line that counts
-    // the pages: a guide in three languages words its `1 of 3` three ways.
+    // A page it leaves without one takes it from another: a guide in three
+    // languages words its `1 of 3` three ways. Each must be a page's number
+    // (see [`FolioSource`]); the widest line is no more one for its width.
     folio_sources.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    for (k, (_, values, counts)) in folio_sources.into_iter().enumerate() {
-        if k > 0 && !counts {
+    for (_, values, numbers_pages) in folio_sources {
+        if !numbers_pages {
             continue;
         }
         let bare: Vec<bool> = folios.iter().map(Option::is_none).collect();
@@ -296,6 +450,8 @@ fn detect_all(
         }
     }
 
+    lone_folios(pages, &mut out, &mut folios);
+
     // A line read by repetition as well keeps its scrub.
     for (pi, set) in exact.iter_mut().enumerate() {
         set.retain(|li| out[pi].contains_key(li));
@@ -303,16 +459,199 @@ fn detect_all(
     (out, folios, exact)
 }
 
+/// A page's number where no other page's says how they are numbered: a
+/// one-page sheet's `Page 1`, a data sheet's `2` on the one page after its
+/// unnumbered cover. A line in the foot band that is nothing but the page's
+/// place in the file, as `Page N` or bare with nothing else on its row, is
+/// that page's number, whatever the other pages carry: a table's `1` in a
+/// row of figures is the table's. Only one such line on the page, and only
+/// where no line read by repetition gave the page its folio.
+fn lone_folios(
+    pages: &[(Vec<Line>, f64)],
+    out: &mut [BTreeMap<usize, Furniture>],
+    folios: &mut [Option<String>],
+) {
+    for (pi, (lines, height)) in pages.iter().enumerate() {
+        if folios[pi].is_some() || *height <= 0.0 {
+            continue;
+        }
+        let place = (pi + 1).to_string();
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(li, l)| {
+                !out[pi].contains_key(li)
+                    && l.rotation_bucket == 0
+                    && l.bbox.y0 / height > 1.0 - EDGE_BAND
+                    && numbers_page(l.text.trim(), &place, pages.len())
+                    && (says_page(l.text.trim())
+                        || !lines.iter().any(|o| {
+                            !std::ptr::eq(o, *l)
+                                && !o.text.trim().is_empty()
+                                && o.bbox.y0 < l.bbox.y1
+                                && o.bbox.y1 > l.bbox.y0
+                        }))
+            })
+            .map(|(li, _)| li)
+            .collect();
+        if let [li] = hits[..] {
+            out[pi].insert(li, Furniture::PageNumber);
+            folios[pi] = Some(place);
+        }
+    }
+}
+
+/// Whether `text` is nothing but page number `place` of a document of
+/// `pages`: `2`, `Page 2`, `Page 2 of 3`, `2 / 3`. A slash's second number
+/// is the count of pages, or the line is a date (`1/24`).
+fn numbers_page(text: &str, place: &str, pages: usize) -> bool {
+    let runs = digit_runs(text);
+    runs.first().map(String::as_str) == Some(place)
+        && !names_something(text)
+        && (text == place
+            || says_page(text)
+            || runs.len() == 2 && text.contains('/') && runs[1] == pages.to_string())
+}
+
+/// Whether body text stands between line `li` of page `pi` and the edge of
+/// the page it is nearer, in the line's column: a line on too few pages to
+/// run (fewer than `needed`), above a line in the top half, below one in
+/// the foot, set from the same left edge, a line of a paragraph there (see
+/// [`in_paragraph`]). A guide printed in two versions
+/// of a language repeats its body on two pages, and it is the body still.
+/// A page's banner title over a running label set off to its right
+/// (`Federal Reserve Bank of Philadelphia` over `The Beige Book`) is no
+/// column of text the label sits in.
+fn beyond_the_body(
+    pages: &[(Vec<Line>, f64)],
+    pi: usize,
+    li: usize,
+    seen_on: &HashMap<String, usize>,
+    keys: &[Vec<String>],
+    needed: usize,
+) -> bool {
+    let (lines, height) = &pages[pi];
+    let line = &lines[li];
+    if *height <= 0.0 || line.rotation_bucket != 0 {
+        return false;
+    }
+    let top = (line.bbox.y0 + line.bbox.y1) / 2.0 < height / 2.0;
+    lines.iter().enumerate().any(|(lj, o)| {
+        lj != li
+            && o.rotation_bucket == 0
+            && !o.text.trim().is_empty()
+            && o.bbox.x0 < line.bbox.x1
+            && o.bbox.x1 > line.bbox.x0
+            && (o.bbox.x0 - line.bbox.x0).abs() <= f64::from(line.font_size.max(1.0))
+            && if top {
+                o.bbox.y1 <= line.bbox.y0
+            } else {
+                o.bbox.y0 >= line.bbox.y1
+            }
+            && seen_on.get(&keys[pi][lj]).copied().unwrap_or(1) < needed
+            && in_paragraph(lines, lj, li)
+    })
+}
+
+/// Whether line `lj` is a line of a paragraph: another line, not `skip`,
+/// set from its left edge a line's leading above or below it. A header
+/// block's lines stand alone, each a label of its own (`INSTALLATION
+/// INSTRUCTIONS` over its translation), and are no body a heading follows.
+fn in_paragraph(lines: &[Line], lj: usize, skip: usize) -> bool {
+    let o = &lines[lj];
+    let fs = f64::from(o.font_size.max(1.0));
+    lines.iter().enumerate().any(|(k, p)| {
+        k != lj
+            && k != skip
+            && p.rotation_bucket == 0
+            && !p.text.trim().is_empty()
+            && (p.bbox.x0 - o.bbox.x0).abs() <= fs
+            && {
+                let d = (p.bbox.y0 - o.bbox.y0).abs();
+                d > fs * 0.5 && d <= fs * LEADING_LIMIT
+            }
+    })
+}
+
+/// How far apart, in font sizes, two lines of one paragraph sit at most.
+const LEADING_LIMIT: f64 = 1.6;
+
+/// The words `longer` sets after or before `short`, where it opens or
+/// closes with it.
+fn extends<'a>(longer: &'a str, short: &str) -> Option<&'a str> {
+    if short.is_empty() || longer.len() <= short.len() {
+        return None;
+    }
+    if longer.starts_with(short) && longer[short.len()..].starts_with(char::is_whitespace) {
+        return Some(longer[short.len()..].trim());
+    }
+    let cut = longer.len() - short.len();
+    (longer.ends_with(short) && longer[..cut].ends_with(char::is_whitespace))
+        .then(|| longer[..cut].trim())
+}
+
+/// Whether `rest`, the words a longer line sets beside a running line's,
+/// open or close with another line that runs: the longer line is running
+/// lines set as one (`Introduction Environmental Initiatives`, `Former Doc.:
+/// Contract Review`), not a title of the page's own.
+fn merges_running(rest: &str, running: &[String]) -> bool {
+    running.iter().any(|t| {
+        let t = t.as_str();
+        rest == t
+            || (rest.starts_with(t) && rest[t.len()..].starts_with(char::is_whitespace))
+            || (rest.ends_with(t) && rest[..rest.len() - t.len()].ends_with(char::is_whitespace))
+    })
+}
+
 /// A page-number line the folios may come from: (pages it covers, distinct
 /// values of its varying run), the per-page values, and whether its number
-/// counts the pages (see [`advances`]).
+/// is a page's.
+///
+/// A line whose digits vary near the top or foot of page after page is not
+/// a page's number for that alone. A data sheet's spec table opens each
+/// page with its drives' capacities (`26TB`, `16TB`, `8TB`), and a
+/// catalogue's year ranges (`1991-1998`) stand at its foot, several to a
+/// page; each was taken for the folio on every page it reached. A page's
+/// number either counts the pages (see [`advances`]) or says it is one
+/// (see [`says_page`]): a chart whose pages were shuffled and printed again
+/// numbers them `Page 352` where they now stand seventh, and reassembling
+/// such a chart is what folios are for.
 type FolioSource = ((usize, usize), Vec<(usize, String)>, bool);
 
 /// Offer a page-number line's occurrences as a folio source.
 fn offer_folios(sources: &mut Vec<FolioSource>, covers: usize, stable: &[(usize, &str)]) {
     if let Some((distinct, values)) = folio_run(stable) {
-        sources.push(((covers, distinct), values, advances(stable)));
+        let numbers_pages = advances(stable) || stable.iter().all(|(_, t)| says_page(t));
+        sources.push(((covers, distinct), values, numbers_pages));
     }
+}
+
+/// The words a page's number is set with, in the languages documents print
+/// them in: `Page 3`, `p. 3`, `Página 3`, `pág. 3`, `Seite 3`, `Blatt 3`,
+/// `Sida 3`, `Strona 3`.
+const PAGE_WORDS: &[&str] = &[
+    "page", "pages", "pg", "p", "pp", "pag", "pág", "pagina", "página", "seite", "blatt", "sida",
+    "side", "strona", "str",
+];
+
+/// The words that set a page's number against the count of pages: `3 of 15`,
+/// `3 sur 3`, `3 de 9`, `3 von 4`, `3 di 5`, `3 da 5`, `3 z 8`, `3 van 4`,
+/// `3 av 4`.
+const OF_WORDS: &[&str] = &["of", "sur", "de", "von", "di", "da", "z", "van", "av"];
+
+/// Whether a line names its number a page's: `Page 3`, `p. 3`, `Pg 3`,
+/// `3 of 15`, `Página 3`, `3 sur 3`, `Seite 3`.
+fn says_page(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let number = |w: &str| w.chars().all(|c| c.is_ascii_digit());
+    words.iter().any(|w| PAGE_WORDS.contains(&w.as_str()))
+        || words
+            .windows(3)
+            .any(|w| number(&w[0]) && OF_WORDS.contains(&w[1].as_str()) && number(&w[2]))
 }
 
 /// A running line's copies: page, line index, text.
@@ -336,6 +675,8 @@ type Copies<'a> = Vec<(usize, usize, &'a str)>;
 ///   same words somewhere, as a title page sets its running head as its
 ///   title. Two signature pages at the end of an agreement repeat their
 ///   block line for line, and the agreement's first page says none of it.
+///   A page number's words differ on every page, so no page could restate
+///   them: it counts the pages instead, which a signature block does not.
 /// - **Apart from the text beside it**, or set with lines that repeat too.
 ///   A paragraph's first line goes on, at its size and leading, into a
 ///   second that differs from page to page: a legal text opens two
@@ -371,8 +712,15 @@ fn exact_running<'a>(
             .collect::<Vec<_>>()
             .join(" ")
     };
+    let mut texts: Vec<&str> = hits.iter().map(|h| h.3.as_str()).collect();
+    texts.sort_unstable();
+    texts.dedup();
+    let digits_vary = texts.len() > 1;
+    // A page number's words change from page to page, so the page left out
+    // cannot print them: a cover with no number before `Page 2 of 3` and
+    // `Page 3 of 3`. It counts the pages instead (below).
     let says: String = hits[0].3.split_whitespace().collect::<Vec<_>>().join(" ");
-    if (0..pages.len()).any(|pi| !on.contains(&pi) && !words(pi).contains(&says)) {
+    if !digits_vary && (0..pages.len()).any(|pi| !on.contains(&pi) && !words(pi).contains(&says)) {
         return None;
     }
     for h in &hits {
@@ -390,10 +738,6 @@ fn exact_running<'a>(
             }
         }
     }
-    let mut texts: Vec<&str> = hits.iter().map(|h| h.3.as_str()).collect();
-    texts.sort_unstable();
-    texts.dedup();
-    let digits_vary = texts.len() > 1;
     if digits_vary {
         let numbers: Vec<(usize, &str)> = hits.iter().map(|h| (h.0, h.3.as_str())).collect();
         if texts.iter().any(|t| names_something(t)) || !advances(&numbers) {
@@ -410,6 +754,127 @@ fn exact_running<'a>(
         kind,
         hits.iter().map(|h| (h.0, h.1, h.3.as_str())).collect(),
     ))
+}
+
+/// A short document's running line that page 2 sets on another template
+/// than page 1, in another place.
+///
+/// A two-page data sheet may move its margins on page 2, and restate page
+/// 1's title as page 2's running head at the top. The copies then agree in
+/// text, size and weight, and lie in the same band, but not in place. Two
+/// things show they are the template's all the same:
+///
+/// - **A line beside it moved with it**: the footer's next line, the
+///   title's subtitle, each set the same distance off its page 1 copy.
+/// - **It opens page 2**, the topmost line there, and stands lower on page
+///   1, under the masthead above the title.
+///
+/// A title restated as the next page's head keeps its page 1 copy, the
+/// document's title: only the copy that opens a later page, higher on it,
+/// is running. Copies that move otherwise, a footer, are running on both.
+fn shifted_running<'a>(
+    pages: &[(Vec<Line>, f64)],
+    occ: &'a [(usize, usize, f64, String)],
+) -> Option<(Furniture, Copies<'a>)> {
+    if pages.len().saturating_sub(1).max(2) != 2 {
+        return None;
+    }
+    let line = |o: &(usize, usize, f64, String)| &pages[o.0].0[o.1];
+    let band = |rel: f64| {
+        if rel < EDGE_BAND {
+            Some(true)
+        } else if rel > 1.0 - EDGE_BAND {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let alike = |a: &Line, b: &Line| {
+        let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+        a.rotation_bucket == b.rotation_bucket
+            && a.text == b.text
+            && f64::from((a.font_size - b.font_size).abs()) <= EXACT_PLACE * size
+            && a.bold == b.bold
+    };
+    // `b` is where `a` would be, moved by `(dx, dy)`.
+    let moved = |a: &Line, b: &Line, dx: f64, dy: f64| {
+        let size = f64::from(a.font_size.max(b.font_size)).max(1.0);
+        let near = |p: f64, q: f64| (p - q).abs() <= EXACT_PLACE * size;
+        alike(a, b)
+            && near(a.bbox.y0 + dy, b.bbox.y0)
+            && near(a.bbox.y1 + dy, b.bbox.y1)
+            && (near(a.bbox.x0 + dx, b.bbox.x0) || near(a.bbox.x1 + dx, b.bbox.x1))
+    };
+    let first = occ.iter().map(|o| o.0).min()?;
+    let words = |pi: usize| {
+        pages[pi]
+            .0
+            .iter()
+            .flat_map(|l| l.text.split_whitespace())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    for r in occ.iter().filter(|o| o.0 == first) {
+        let Some(top) = band(r.2) else { continue };
+        let a = line(r);
+        // On each later page, the copy the template moved, if any.
+        let mut later: Vec<&(usize, usize, f64, String)> = Vec::new();
+        let mut raised = true;
+        for o in occ.iter().filter(|o| o.0 != first) {
+            let b = line(o);
+            if later.iter().any(|h| h.0 == o.0) || band(o.2) != Some(top) || !alike(a, b) {
+                continue;
+            }
+            let dx = b.bbox.x0 - a.bbox.x0;
+            let dy = b.bbox.y0 - a.bbox.y0;
+            // Its neighbours on page 1 are where they would be, moved alike.
+            let neighbours: Vec<&Line> =
+                pages[first].0.iter().filter(|nb| runs_on(a, nb)).collect();
+            let carried = |nb: &&Line| pages[o.0].0.iter().any(|m| moved(nb, m, dx, dy));
+            let with_a_neighbour = !neighbours.is_empty() && neighbours.iter().all(carried);
+            let opens_page = top
+                && dy < 0.0
+                && pages[o.0]
+                    .0
+                    .iter()
+                    .filter(|l| l.rotation_bucket == 0)
+                    .all(|l| l.bbox.y0 >= b.bbox.y0 - EXACT_PLACE * f64::from(b.font_size));
+            // A line set beside the copy on its page was moved alike, or is
+            // none of the template's.
+            let beside_carried = pages[o.0]
+                .0
+                .iter()
+                .filter(|nb| runs_on(b, nb))
+                .all(|nb| pages[first].0.iter().any(|m| moved(nb, m, -dx, -dy)));
+            if (with_a_neighbour || opens_page) && beside_carried {
+                raised &= top && dy < 0.0;
+                later.push(o);
+            }
+        }
+        let on: Vec<usize> = std::iter::once(first)
+            .chain(later.iter().map(|o| o.0))
+            .collect();
+        if on.len() < 2 {
+            continue;
+        }
+        // A page left out restates the words, as a title page does; two
+        // signature pages that repeat their block do not run it.
+        let says: String = a.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if (0..pages.len()).any(|pi| !on.contains(&pi) && !words(pi).contains(&says)) {
+            continue;
+        }
+        let kind = classify(later[0].2, false);
+        if kind == Furniture::Watermark {
+            return None;
+        }
+        // The title page keeps its title.
+        let mut copies: Copies<'a> = later.iter().map(|o| (o.0, o.1, o.3.as_str())).collect();
+        if !raised {
+            copies.insert(0, (r.0, r.1, r.3.as_str()));
+        }
+        return Some((kind, copies));
+    }
+    None
 }
 
 /// Two lines set as copies of one: the same size and weight, the same top
@@ -550,15 +1015,21 @@ fn folio_run(occ: &[(usize, &str)]) -> Option<(usize, Vec<(usize, String)>)> {
 
 /// Line `li` of a page shows itself as a watermark rather than as text
 /// that repeats: it is turned, it lies on another line, or it stands
-/// beside every other line, sharing none of their width, as a margin note
-/// does.
+/// beside every other line, sharing none of their width, out in a margin
+/// as a note is. In a margin, past the page's other lines to the left or
+/// the right: a page title over a table, whose cells are no lines here,
+/// shares no line's width either, and is set between the running head's
+/// and the footer's ends.
 fn watermark_shown(lines: &[Line], li: usize) -> bool {
     let l = &lines[li];
     if l.rotation_bucket != 0 {
         return true;
     }
     let others = lines.iter().enumerate().filter(|(j, _)| *j != li);
-    let mut beside = true;
+    let (left, right) = others.clone().fold((f64::MAX, f64::MIN), |(a, b), (_, o)| {
+        (a.min(o.bbox.x0), b.max(o.bbox.x1))
+    });
+    let mut beside = left > right || l.bbox.x1 <= left || l.bbox.x0 >= right;
     for (_, o) in others {
         let w = l.bbox.x1.min(o.bbox.x1) - l.bbox.x0.max(o.bbox.x0);
         if w > 0.0 {
@@ -597,13 +1068,20 @@ pub struct Running {
 }
 
 /// Whether a furniture line says anything besides where the reader is.
-/// `Page 3 of 15` and `- 3 -` do not; `ACME LABS`, `Revision 4` and
-/// `Form QA-12 Page 3` do. Nor does `P age 3`, set with its letters apart.
+/// `Page 3 of 15`, `3 sur 3`, `Página 2 de 9` and `- 3 -` do not; `ACME
+/// LABS`, `Revision 4` and `Form QA-12 Page 3` do. Nor does `P age 3`, set
+/// with its letters apart. The paging words are any language's a document
+/// numbers its pages in ([`PAGE_WORDS`], [`OF_WORDS`]): read in English
+/// alone, a French report's `3 sur 3` named something, and its last page's
+/// number was kept as the document's footer.
 pub fn names_something(text: &str) -> bool {
-    const PAGING: &[&str] = &["page", "pages", "pg", "p", "pp", "of"];
+    let paging = |w: &str| {
+        let w = w.to_lowercase();
+        PAGE_WORDS.contains(&w.as_str()) || OF_WORDS.contains(&w.as_str())
+    };
     let names = |text: &str| {
         text.split(|c: char| !c.is_alphabetic())
-            .any(|w| w.chars().count() >= 2 && !PAGING.contains(&w.to_lowercase().as_str()))
+            .any(|w| w.chars().count() >= 2 && !paging(w))
     };
     let closed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     names(text) && names(&closed)
@@ -624,10 +1102,29 @@ pub fn identifies(text: &str, kind: Furniture) -> bool {
 /// telephone number, a revision year, a form number.
 pub fn says_something(text: &str, digits_vary: bool) -> bool {
     if digits_vary {
-        names_something(text)
+        names_something(text) || carries_code(text)
     } else {
         text.chars().any(char::is_alphanumeric)
     }
+}
+
+/// Whether a line carries a code of letters and figures, a document's
+/// number in its footer beside the page's: `369613g 1 04.08.24`. Four
+/// characters or more, a letter and a figure among them, and no paging
+/// word (`p3`).
+fn carries_code(text: &str) -> bool {
+    text.split_whitespace().any(|w| {
+        let w: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+        let lower = w.to_lowercase();
+        w.chars().count() >= 4
+            && w.chars().any(|c| c.is_ascii_digit())
+            && w.chars().any(char::is_alphabetic)
+            && !PAGE_WORDS.iter().any(|p| {
+                lower
+                    .strip_prefix(p)
+                    .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+            })
+    })
 }
 
 /// Put a document's running header and footer into its text, once.
@@ -760,13 +1257,162 @@ mod tests {
     }
 
     #[test]
+    fn a_title_numbered_by_its_product_is_not_running() {
+        // A catalogue's product pages each open with their product's title,
+        // a size in it: the number changes, but does not count the pages.
+        let sizes = [6, 10, 16, 24];
+        let pages = doc(9, |i| {
+            let mut ls = vec![
+                line(&format!("Catalogue — {}", 19 + i), 20.0),
+                line(&format!("Body text of page {i}"), 400.0),
+            ];
+            if (4..8).contains(&i) {
+                ls.push(line(&format!("Kit H-BE {} Kits", sizes[i - 4]), 60.0));
+            }
+            ls
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        for (i, m) in marks.iter().enumerate().take(8).skip(4) {
+            assert_eq!(m.get(&2), None, "page {i}");
+        }
+        // The page number beside it still counts the pages.
+        assert_eq!(marks[4].get(&0), Some(&Furniture::PageNumber));
+        assert_eq!(folios[4].as_deref(), Some("23"));
+    }
+
+    #[test]
+    fn a_heading_the_body_reaches_past_is_not_running() {
+        // A guide's `FCC` heading, partway down a column near the top of the
+        // last page of each language, under the end of the section before.
+        // A header with nothing above it on those pages still runs.
+        let pages = doc(9, |i| {
+            let mut ls = vec![
+                line("Install Guide", 20.0),
+                line(&format!("Body text of page {i}"), 400.0),
+            ];
+            if i % 3 == 2 {
+                let section = ["one", "two", "three"][i / 3];
+                ls.push(line(&format!("the end of section {section} goes"), 48.0));
+                ls.push(line(&format!("on and ends here, {section}"), 60.0));
+                ls.push(line("FCC", 100.0));
+            }
+            ls
+        });
+        let marks = detect(&pages);
+        assert_eq!(marks[2].get(&0), Some(&Furniture::Header));
+        for i in [2, 5, 8] {
+            assert_eq!(marks[i].get(&4), None, "page {i}");
+        }
+        // A header block's own lines over it are no paragraph: each is a
+        // label of its own, and the block runs.
+        let pages = doc(9, |i| {
+            let mut ls = vec![line(&format!("Body text of page {i}"), 400.0)];
+            if i % 3 == 0 {
+                let title = ["INSTALLATION", "INSTALACIÓN", "INSTALLATION FR"][i / 3];
+                ls.push(line(title, 60.0));
+                ls.push(line("INSTRUCTIONS D’INSTALLATION", 100.0));
+            }
+            ls
+        });
+        let marks = detect(&pages);
+        for i in [0, 3, 6] {
+            assert_eq!(marks[i].get(&2), Some(&Furniture::Header), "page {i}");
+        }
+    }
+
+    #[test]
+    fn a_title_that_varies_from_page_to_page_is_not_running() {
+        // A spec sheet's title names the model on some pages and not on
+        // others: `DISHWASHER` alone where the others say which.
+        let pages = doc(8, |i| {
+            let title = match i {
+                1 | 2 => "DISHWASHER – ELECTRIC",
+                3 | 4 => "DISHWASHER – GAS",
+                _ => "DISHWASHER",
+            };
+            vec![
+                line(title, 60.0),
+                line(&format!("Body text of page {i}"), 400.0),
+            ]
+        });
+        let marks = detect(&pages);
+        assert!(marks.iter().all(|m| m.get(&0).is_none()), "{marks:?}");
+    }
+
+    #[test]
+    fn a_page_number_under_a_tables_figures_is_read_where_it_stands() {
+        // An accessory list's table runs into the foot band with its counts,
+        // and the page number stands under it: the bare numbers share one
+        // signature, but not one place.
+        let pages = doc(9, |i| {
+            let mut ls = vec![line(&format!("Body text of page {i}"), 400.0)];
+            for (k, y) in [880.0, 895.0, 910.0, 925.0].into_iter().enumerate() {
+                ls.push(line(&format!("{}", (i * 7 + k * 3) % 40 + 1), y));
+            }
+            ls.push(line(&format!("{}", i + 1), 975.0));
+            ls
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        for (i, f) in folios.iter().enumerate() {
+            assert_eq!(f.as_deref(), Some((i + 1).to_string().as_str()), "page {i}");
+        }
+        assert_eq!(marks[4].get(&5), Some(&Furniture::PageNumber));
+        assert_eq!(marks[4].get(&1), None, "a table figure is no page number");
+    }
+
+    #[test]
+    fn a_page_number_on_its_page_alone_is_the_folio() {
+        // A data sheet numbers the one page after its unnumbered cover, and
+        // a one-page sheet says `Page 1`.
+        let pages = doc(3, |i| {
+            let mut ls = vec![line(&format!("Body text of page {i}"), 400.0)];
+            if i == 1 {
+                ls.push(line("2", 970.0));
+            }
+            ls
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(folios, vec![None, Some("2".to_string()), None]);
+        assert_eq!(marks[1].get(&1), Some(&Furniture::PageNumber));
+        let pages = doc(1, |_| vec![line("Body", 400.0), line("Page 1", 970.0)]);
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(folios, vec![Some("1".to_string())]);
+        assert_eq!(marks[0].get(&1), Some(&Furniture::PageNumber));
+        // Not a number that is not the page's place, nor one up in the body.
+        let pages = doc(3, |i| {
+            vec![
+                line("Body", 400.0),
+                line(if i == 1 { "5" } else { "" }, 970.0),
+                line(if i == 2 { "3" } else { "" }, 500.0),
+            ]
+        });
+        assert!(detect_with_folios(&pages).1.iter().all(Option::is_none));
+        // Nor a table's `1` among the figures of its row, nor a date.
+        let figure = |text: &str, x: f64| Line {
+            bbox: BBox {
+                x0: x,
+                y0: 900.0,
+                x1: x + 20.0,
+                y1: 912.0,
+            },
+            ..line(text, 900.0)
+        };
+        let pages = doc(2, |i| match i {
+            0 => vec![line("Body", 400.0), figure("1", 100.0), figure("27", 200.0)],
+            _ => vec![line("Body", 400.0), line("1/24", 970.0)],
+        });
+        assert!(detect_with_folios(&pages).1.iter().all(Option::is_none));
+    }
+
+    #[test]
     fn a_clock_label_with_few_values_is_not_a_folio() {
         // Six clock times cycling at one position across many pages: the
-        // digits vary, but not once per page.
+        // digits vary, but not once per page. A flow sheet's row label says
+        // something of its page, and is no furniture either.
         let times = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00"];
         let pages = doc(30, |i| vec![line(times[i % 6], 60.0)]);
         let (marks, folios) = detect_with_folios(&pages);
-        assert_eq!(marks[0].get(&0), Some(&Furniture::PageNumber));
+        assert_eq!(marks[0].get(&0), None);
         assert!(folios.iter().all(Option::is_none));
     }
 
@@ -783,6 +1429,68 @@ mod tests {
         });
         let (_, folios) = detect_with_folios(&pages);
         assert_eq!(folios[7].as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn a_tables_figures_near_the_top_are_no_folio() {
+        // A data sheet's spec table opens each page after the first with
+        // its largest drive: the figures vary, and fall.
+        let pages = doc(4, |i| match i {
+            0 => vec![line("Data sheet", 40.0)],
+            _ => vec![line(&format!("{}TB", [26, 16, 8][i - 1]), 160.0)],
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        assert!(folios.iter().all(Option::is_none), "got {folios:?}");
+    }
+
+    #[test]
+    fn year_ranges_at_the_foot_leave_the_footer_its_folio() {
+        // Year ranges stand at the foot several to a page and on more
+        // pages than either form of the footer; the footer counts the
+        // pages and is the folio.
+        let pages = doc(12, |i| {
+            let n = i + 37;
+            let footer = if n % 2 == 1 {
+                format!("© Example 2012/2013 | {n}")
+            } else {
+                format!("{n} | © Example 2012/2013")
+            };
+            vec![
+                line(&format!("{}-{}", 1990 + i, 1998 + i), 900.0),
+                line(&format!("{}-{}", 1991 + i, 2002 + i), 900.5),
+                line(&footer, 960.0),
+            ]
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        assert_eq!(folios[2].as_deref(), Some("39"));
+        assert_eq!(folios[3].as_deref(), Some("40"));
+    }
+
+    #[test]
+    fn a_shuffled_charts_page_numbers_are_its_folios() {
+        // Pages shuffled and some printed twice: the numbers do not count
+        // the pages, but each says it is a page's.
+        let order = [12, 3, 3, 40, 7, 19, 2, 19, 25, 8];
+        let pages = doc(order.len(), |i| {
+            vec![line(&format!("Page {}", order[i]), 960.0)]
+        });
+        let (_, folios) = detect_with_folios(&pages);
+        let got: Vec<Option<&str>> = folios.iter().map(|f| f.as_deref()).collect();
+        let want: Vec<Option<String>> = order.iter().map(|n| Some(n.to_string())).collect();
+        assert_eq!(got, want.iter().map(|w| w.as_deref()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_page_says_it_is_one() {
+        assert!(says_page("Page 3"));
+        assert!(says_page("MRN-2093471 | ACCT-40218563 Page 352"));
+        assert!(says_page("p. 14"));
+        assert!(says_page("3 of 15"));
+        assert!(says_page("Página 4"));
+        assert!(!says_page("26TB"));
+        assert!(!says_page("1991-1998"));
+        assert!(!says_page("© Example 2012/2013 | 39"));
+        assert!(!says_page("Table 3 of the report"));
     }
 
     #[test]
@@ -886,6 +1594,64 @@ mod tests {
         assert!(detect(&pages).iter().all(|m| m.is_empty()));
     }
 
+    /// `line` moved by `(dx, dy)`.
+    fn shifted(text: &str, x: f64, y: f64) -> Line {
+        let mut l = line(text, y);
+        l.bbox.x0 += x;
+        l.bbox.x1 += x;
+        l
+    }
+
+    #[test]
+    fn a_footer_moved_with_page_twos_margins_is_running() {
+        // Page 2 sets its margins 18pt further left: the footer's two lines
+        // move together.
+        let pages = doc(2, |i| {
+            let dx = if i == 0 { 0.0 } else { -18.0 };
+            vec![
+                line(&format!("Body text unique to page {i}"), 400.0),
+                shifted("Website: example.com", dx, 950.0 + 0.7 * i as f64),
+                shifted("US: (800) 555-0100", dx, 962.0 + 0.7 * i as f64),
+            ]
+        });
+        let r = detect(&pages);
+        for m in &r {
+            assert_eq!(m.get(&1), Some(&Furniture::Footer), "{r:?}");
+            assert_eq!(m.get(&2), Some(&Furniture::Footer), "{r:?}");
+        }
+        // One line alone, moved, is not shown to be the template's.
+        let pages = doc(2, |i| {
+            let dx = if i == 0 { 0.0 } else { -18.0 };
+            vec![
+                line(&format!("Body text unique to page {i}"), 400.0),
+                shifted("Website: example.com", dx, 950.0),
+            ]
+        });
+        assert!(detect(&pages).iter().all(|m| m.is_empty()));
+    }
+
+    #[test]
+    fn a_title_restated_as_page_twos_head_is_running_there_only() {
+        // Page 1 sets the title under a masthead; page 2 opens with it.
+        let pages = doc(2, |i| {
+            if i == 0 {
+                vec![
+                    line("Masthead", 30.0),
+                    line("Product Name Series", 80.0),
+                    line("Body text unique to page 0", 400.0),
+                ]
+            } else {
+                vec![
+                    line("Product Name Series", 20.0),
+                    line("Body text unique to page 1", 400.0),
+                ]
+            }
+        });
+        let r = detect(&pages);
+        assert_eq!(r[1].get(&0), Some(&Furniture::Header), "{r:?}");
+        assert!(r[0].is_empty(), "the title page keeps its title: {r:?}");
+    }
+
     #[test]
     fn a_short_documents_exact_copies_are_reported_as_such() {
         let pages = doc(2, |_| vec![line("Flexible Packaging Films", 58.3)]);
@@ -949,6 +1715,31 @@ mod tests {
         // A number that does not go up with the page is not its number.
         let pages = doc(2, |i| vec![line(&format!("{}", 5 - i), 40.0)]);
         assert!(detect(&pages).iter().all(|m| m.is_empty()));
+    }
+
+    #[test]
+    fn a_short_documents_cover_need_not_print_its_page_number() {
+        // Three pages, the first a cover with no number: the page left out
+        // cannot restate a number that changes, and the number counts.
+        let pages = doc(3, |i| match i {
+            0 => vec![line("Annual Review", 300.0)],
+            _ => vec![
+                line(&format!("Body text of page {}", i + 1), 400.0),
+                line(&format!("Page {} of 3", i + 1), 950.0),
+            ],
+        });
+        let (marks, folios) = detect_with_folios(&pages);
+        assert_eq!(marks[1].get(&1), Some(&Furniture::PageNumber));
+        assert_eq!(marks[2].get(&1), Some(&Furniture::PageNumber));
+        assert_eq!(folios[1].as_deref(), Some("2"));
+        assert_eq!(folios[2].as_deref(), Some("3"));
+        assert_eq!(folios[0], None);
+        // A number that falls is no page's, cover or not.
+        let pages = doc(3, |i| match i {
+            0 => vec![line("Annual Review", 300.0)],
+            _ => vec![line(&format!("Page {} of 3", 4 - i), 950.0)],
+        });
+        assert!(detect_with_folios(&pages).1.iter().all(Option::is_none));
     }
 
     #[test]
@@ -1061,6 +1852,29 @@ mod tests {
     }
 
     #[test]
+    fn a_title_over_a_table_is_no_margin_note() {
+        // A page title repeated on every page over a table whose cells are no
+        // lines here: a running head at the top right, a footer's note at the
+        // left and page number at the right, and the title between them.
+        let pages = doc(3, |i| {
+            let mut head = line("www.example.com", 30.0);
+            head.bbox.x0 = 600.0;
+            head.bbox.x1 = 745.0;
+            let mut note = line("NOTE: ALL DIMENSIONS ARE IN INCHES", 960.0);
+            note.bbox.x0 = 50.0;
+            note.bbox.x1 = 250.0;
+            let mut folio = line(&format!("Page {} of 3", i + 1), 960.0);
+            folio.bbox.x0 = 680.0;
+            folio.bbox.x1 = 745.0;
+            let mut title = line("Dimensions of Socket Head Cap Screws", 300.0);
+            title.bbox.x0 = 263.0;
+            title.bbox.x1 = 540.0;
+            vec![head, title, note, folio]
+        });
+        assert!(detect(&pages).iter().all(|m| m.get(&1).is_none()));
+    }
+
+    #[test]
     fn signature_collapses_digit_runs() {
         assert_eq!(signature("Page 13 of 15"), "Page # of #");
         assert_eq!(signature("Page 1 of 15"), "Page # of #");
@@ -1071,6 +1885,10 @@ mod tests {
     fn a_running_line_identifies_when_it_names_something() {
         assert!(identifies("ACME LABS", Furniture::Header));
         assert!(identifies("Form QA-12 Page 3", Furniture::PageNumber));
+        // A document's code beside the page's number, and its date.
+        assert!(identifies("369613g 1 04.08.24", Furniture::PageNumber));
+        assert!(!identifies("p3", Furniture::PageNumber));
+        assert!(!identifies("Page3 of 15", Furniture::PageNumber));
         assert!(!identifies("Page 3 of 15", Furniture::PageNumber));
         assert!(!identifies("- 3 -", Furniture::PageNumber));
         assert!(!identifies("p. 3", Furniture::PageNumber));
@@ -1085,6 +1903,23 @@ mod tests {
         assert!(!identifies("- 3 -", Furniture::PageNumber));
         assert!(names_something("DRAFT"));
         assert!(!names_something("3 of 15"));
+        // In the languages documents number their pages in.
+        for page in [
+            "3 sur 3",
+            "1 de 3",
+            "Página 2 de 9",
+            "pág. 4",
+            "Seite 1 von 4",
+            "Pagina 3 di 5",
+            "Strona 2 z 8",
+            "Sida 3 av 4",
+        ] {
+            assert!(!names_something(page), "{page}");
+            assert!(says_page(page), "{page}");
+        }
+        // A line with a name besides them still names it.
+        assert!(names_something("Banco de España 3"));
+        assert!(names_something("Rapport annuel 3 sur 3"));
     }
 
     #[test]
@@ -1172,35 +2007,37 @@ mod tests {
 /// cells. Furniture whose digits vary across pages (page numbers) matches
 /// digit-insensitively: each digit run in the pattern matches any digit run
 /// in the cell.
+///
+/// A page number alone in a cell has no text to match on; see
+/// [`is_folio_cell`].
 pub fn scrub_cell(cell: &str, furniture: &[(String, bool)]) -> String {
-    scrub(cell, furniture, true)
+    scrub_with(cell, furniture, false)
 }
 
 /// As [`scrub_cell`], for text that already went through positional furniture
-/// removal.
-///
-/// The difference is the bare-number rule. A cell holding nothing but digits
-/// the width of the running folio is taken to *be* the folio, because a grid
-/// took its glyphs before furniture detection ran and nothing else can tell.
-/// A block did not: a running number was removed from it by position, and a
-/// bare number that survived that is content.
-///
-/// A table of contents is where this matters. Its page references are the
-/// same width as the folio and are numbers by nature — every one of them was
-/// being deleted, so a contents page came out as a list of titles pointing
-/// nowhere.
-///
-/// And only at the block's start or end, where a header or footer merged
-/// into it sits: a running header is often a phrase the document uses in
-/// its sentences too, and stripping it wherever it occurs cut
+/// removal, and only at the block's start or end, where a header or footer
+/// merged into it sits: a running header is often a phrase the document uses
+/// in its sentences too, and stripping it wherever it occurs cut
 /// `Federal Open Market Committee` out of every sentence of the minutes
 /// that bore it as their header.
 pub fn scrub_block(text: &str, furniture: &[(String, bool)]) -> String {
-    scrub_with(text, furniture, false, true)
+    scrub_with(text, furniture, true)
 }
 
-fn scrub(cell: &str, furniture: &[(String, bool)], bare_number_is_furniture: bool) -> String {
-    scrub_with(cell, furniture, bare_number_is_furniture, false)
+/// Whether a table cell holding `cell` is its page's number, taken in by a
+/// grid that reaches into the top or foot of the page: the page's own folio
+/// alone, in the cell, where page numbers are printed. `rel_y` is the
+/// cell's middle as a share of the page's height.
+///
+/// A grid takes its glyphs before furniture is read, so a folio it took in
+/// is not removed by position, and a page number has no text to match a
+/// cell's on. Matching by width alone emptied every cell as wide as the
+/// page numbers: an accessory list's `CARTON COUNT | 1` and a catalogue's
+/// column of I/O points, `10`, `14`, `32`. A cell's figure is the folio
+/// only where it is the page's and stands where the folio does.
+pub fn is_folio_cell(cell: &str, folio: Option<&str>, rel_y: f64) -> bool {
+    let t = cell.trim();
+    !t.is_empty() && folio == Some(t) && !(EDGE_BAND..=1.0 - EDGE_BAND).contains(&rel_y)
 }
 
 /// Longest furniture string, in characters other than spaces, that is
@@ -1236,12 +2073,7 @@ fn whole(out: &str, i: usize, j: usize) -> bool {
 /// block's `DATE:` and `DATE`, a cell `DATE: -` loses `DATE:`, and the `-`
 /// left is a pattern of its own. What is left does not depend on the order
 /// the patterns were found in.
-fn scrub_with(
-    cell: &str,
-    furniture: &[(String, bool)],
-    bare_number_is_furniture: bool,
-    ends_only: bool,
-) -> String {
+fn scrub_with(cell: &str, furniture: &[(String, bool)], ends_only: bool) -> String {
     let mut out = cell.to_string();
     let at_end = |out: &str, start: usize, end: usize| {
         !ends_only || out[..start].trim().is_empty() || out[end..].trim().is_empty()
@@ -1300,29 +2132,9 @@ fn scrub_with(
             // literal text to anchor on, so digit-insensitive matching would
             // strip the leading digit run out of *any* cell it is applied to: a
             // financial statement's `85,159` became `,159`, silently changing
-            // the figure. With nothing to anchor, the only safe reading is that
-            // the whole cell is that page number.
-            //
-            // "All digits" alone is not enough to conclude that. Patterns are
-            // deduplicated by digit *shape*, so this list holds one representative
-            // per page-number width (`1`, `10`, `100`) rather than every value —
-            // and matching on shape alone deleted every all-digit block in the
-            // document. A bar chart's `2024` and `2023` axis labels went that way,
-            // leaving four figures with no years attached. Width is the evidence
-            // the pattern actually carries: a four-digit label is not a
-            // three-digit page number.
+            // the figure. It matches nothing here; a cell that is a page's
+            // number is told by where it stands (see [`is_folio_cell`]).
             if segs.iter().all(|s| s.is_empty()) {
-                if !bare_number_is_furniture {
-                    continue;
-                }
-                let t = out.trim();
-                let width = pat.chars().filter(char::is_ascii_digit).count();
-                if !t.is_empty()
-                    && t.chars().all(|c| c.is_ascii_digit())
-                    && t.chars().count() == width
-                {
-                    out = String::new();
-                }
                 continue;
             }
             let mut from = 0;
@@ -1536,29 +2348,23 @@ fn a_bare_page_number_never_truncates_a_figure() {
     assert_eq!(scrub_cell("85,159", &furn), "85,159");
     assert_eq!(scrub_cell("$88,821", &furn), "$88,821");
     assert_eq!(scrub_cell("27,471", &furn), "27,471");
-    // A cell that is only the page number, at that width, is still furniture.
-    assert_eq!(scrub_cell("85", &furn).trim(), "");
-    assert_eq!(scrub_cell(" 12 ", &furn).trim(), "");
+    // Nor does a cell that is only a number of that width: whether it is
+    // the page's number is told by where it stands.
+    assert_eq!(scrub_cell("85", &furn), "85");
+    assert_eq!(scrub_cell(" 12 ", &furn).trim(), "12");
 }
 
 #[test]
-fn a_page_number_pattern_does_not_delete_a_wider_number() {
-    // Patterns are deduplicated by digit *shape*, so the list holds one
-    // representative per page-number width -- `1`, `10`, `100` for a
-    // 140-page document -- not every value. Deleting any all-digit cell
-    // regardless of width therefore removed real content: a bar chart's
-    // `2024` and `2023` axis labels matched a two-digit page number and
-    // were dropped, leaving `$16.7 $15.1 18.8% 17.7%` with no years.
-    //
-    // Width is the evidence the pattern carries. A four-digit label is not
-    // a two-digit page number, and nothing else here can tell them apart.
-    let furn = vec![("85".to_string(), true)];
-    assert_eq!(scrub_cell("2024", &furn), "2024");
-    assert_eq!(scrub_cell("2023", &furn), "2023");
-    // Every width the document actually shows still scrubs, because every
-    // width present produces its own pattern.
-    let widths = vec![("1".to_string(), true), ("10".to_string(), true)];
-    assert_eq!(scrub_cell("7", &widths).trim(), "");
-    assert_eq!(scrub_cell("29", &widths).trim(), "");
-    assert_eq!(scrub_cell("2024", &widths), "2024");
+fn a_cell_is_the_folio_only_as_the_pages_own_number_where_it_stands() {
+    // A grid reaching the foot of page 85 took its folio in.
+    assert!(is_folio_cell("85", Some("85"), 0.95));
+    assert!(is_folio_cell(" 85 ", Some("85"), 0.04));
+    // An accessory list's `CARTON COUNT | 1` on page 3, at the foot or in
+    // the middle of the page, is a count.
+    assert!(!is_folio_cell("1", Some("3"), 0.95));
+    assert!(!is_folio_cell("3", Some("3"), 0.5));
+    // On a page with no folio, no cell is one.
+    assert!(!is_folio_cell("3", None, 0.95));
+    // A wider figure is no page number.
+    assert!(!is_folio_cell("2024", Some("24"), 0.95));
 }

@@ -18,6 +18,7 @@ pub struct Element {
     pub cells: Option<Vec<Vec<String>>>,  // row-major, only on doco:Table
     pub header_rows: Option<usize>,
     pub sub_headers: Option<Vec<usize>>,
+    pub restated_headers: Option<Vec<usize>>,
     pub merged_down: Option<Vec<bool>>,   // cell continues the one above
     pub merged_left: Option<Vec<bool>>,   // cell continues the one to its left
     pub datums: Option<Vec<Vec<Option<Datum>>>>, // each cell's stored value, typed, where declared
@@ -127,6 +128,9 @@ geometry measured and a consumer cannot re-derive:
   beneath them: a single full-width cell (the banner bands that split a matrix
   into sections), or a label set alone in the first column over full rows
   (`Focus-Inject` over the parameters it groups).
+- **`restated_headers`** — row indices below the header block that name the
+  columns afresh for the rows beneath them, until the next such row
+  (`By wt | By vol` under a `LB/Gal | g/L` header). They are not data.
 
 - **`datums`** — the same shape as `cells`: what each cell stores beneath
   the text it shows, as an XSD datatype and a lexical form

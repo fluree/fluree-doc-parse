@@ -6,14 +6,18 @@
     "about": "Eppendorf Multipette E3/E3x performance data sheet (2 pages). Its technical specifications are a list of fields, `Label | value` down two columns, ruled under every row and set in one face throughout, with no header row."
   },
   "notes": [
-    "2026-11-23: the field list's first row was read as its header, so every value was named after the first field (`1 µL – 50,000 µL` under `Positive displacement dispenser`) and the first field was lost as a row (#51)."
+    "2026-11-23: the field list's first row was read as its header, so every value was named after the first field (`1 µL – 50,000 µL` under `Positive displacement dispenser`) and the first field was lost as a row (#51).",
+    "2026-11-25 (#196): the Dimensions list beside the page's column of applications kept only its first two rows. It is read from its text, and a row whose value names no figure (`31.4 cm x 10.9 cm x 15.7 cm`) ended the run. A row ruled off above and below, after rows ruled the same way, is a row whatever its value says. Read into the table, those two rows no longer held the right-hand column open for the prose's column detection, and the Applications list's tail and footnote fell under Dimensions. A table read from its text for the labels beside it now keeps its column's extent."
   ],
   "checks": [
     {
       "id": "first-field-is-a-row",
       "found": "2026-11-23",
       "issue": "The first field was taken for the table's header and was not a row of it.",
-      "row": {"#0": "Pipetting type", "#1": "Positive displacement dispenser"}
+      "row": {
+        "#0": "Pipetting type",
+        "#1": "Positive displacement dispenser"
+      }
     },
     {
       "id": "no-field-names-a-column",
@@ -24,9 +28,37 @@
     {
       "id": "tall-rows-stay-in-the-list",
       "found": "2026-11-23",
-      "status": "open",
       "issue": "The four fields with values several lines tall (Intended use, Storage accessories, Operating conditions, Others) fall out of the table, and their values run together as one paragraph.",
-      "row": {"#0": "Storage accessories"}
+      "row": {
+        "#0": "Storage accessories"
+      }
+    },
+    {
+      "id": "dimensions-packaging-row",
+      "found": "2026-11-25",
+      "issue": "#196: `Packaging (W x H x D)` and its size were loose paragraphs after the table.",
+      "row": {
+        "#0": "Packaging (W x H x D)",
+        "#1": "31.4 cm x 10.9 cm x 15.7 cm"
+      }
+    },
+    {
+      "id": "dimensions-shipping-row",
+      "found": "2026-11-25",
+      "issue": "#196: as above, `Shipping weight`.",
+      "row": {
+        "#0": "Shipping weight",
+        "#1": "388 g"
+      }
+    },
+    {
+      "id": "applications-footnote-stays-under-applications",
+      "found": "2026-11-25",
+      "issue": "#196: with the Dimensions rows in their table, the Applications list's tail, its footnote and the disclaimer fell after the table, under Dimensions.",
+      "under": {
+        "text": "1) Feature only available with Multipette E3x",
+        "section": "Applications"
+      }
     }
   ]
 }
