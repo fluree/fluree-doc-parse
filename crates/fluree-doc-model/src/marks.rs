@@ -37,7 +37,7 @@ pub fn note_mark(text_before: &str, mark: &str) -> bool {
     // mathematical sign or letter (`Vol(∂Ω)ⁿ`).
     let greek = word.chars().any(|c| ('\u{0370}'..='\u{03FF}').contains(&c));
     let math = word.chars().any(|c| {
-        ('\u{2100}'..='\u{214F}').contains(&c)
+        letterlike(c)
             || ('\u{2200}'..='\u{22FF}').contains(&c)
             || ('\u{1D400}'..='\u{1D7FF}').contains(&c)
     });
@@ -80,11 +80,43 @@ pub fn note_mark(text_before: &str, mark: &str) -> bool {
         let roman = word.chars().count() >= 2 && word.chars().all(|c| "IVXLC".contains(c));
         return !(ordinal && roman) && (letters >= 2 || closed);
     }
-    if !mark.chars().all(|c| c.is_ascii_digit() || c == ',') || unit_power(text_before, mark) {
+    // A note's number may close on a bracket of its own, as notes are
+    // numbered in much of Europe (`series¹⁾`): what it marks is the number.
+    let numbered = mark
+        .strip_suffix(')')
+        .filter(|m| !m.is_empty())
+        .unwrap_or(mark);
+    if !numbered.chars().all(|c| c.is_ascii_digit() || c == ',')
+        || unit_power(text_before, numbered)
+    {
         return false;
+    }
+    if numbered.len() < mark.len() {
+        return true;
     }
     // A number after a word too long to be a unit (`Revenue¹`, not `km²`).
     if word.chars().all(char::is_alphabetic) && letters >= 4 {
+        return true;
+    }
+    // After a word and the stop or comma closing it, a note's number
+    // (`MTBF,⁴`, `ratings.²`): no power is raised past a word's punctuation.
+    let stem = word.trim_end_matches([',', '.', ';', ':']);
+    if stem.len() < word.len() && stem.chars().count() >= 2 && stem.chars().all(char::is_alphabetic)
+    {
+        return true;
+    }
+    // After a compound or a code joined by hyphens, a note's number:
+    // `3-way¹`, `Multi-location⁴`, `MACL-153M-XX²,³`. Not after a unit of
+    // length it ends with (`5-mm²`).
+    // A part of two letters or more: `x-y²` is a formula's terms.
+    let joined = word.trim_end_matches(|c: char| !c.is_alphanumeric());
+    if joined.contains('-')
+        && joined
+            .split('-')
+            .any(|p| p.chars().filter(|c| c.is_alphabetic()).count() >= 2)
+        && joined.ends_with(char::is_alphanumeric)
+        && !length(trailing_letters(joined))
+    {
         return true;
     }
     // After a quantity, a note's number (`26TB¹`, `26 TB¹`). A lone letter
@@ -149,6 +181,13 @@ fn length(unit: &str) -> bool {
 /// Unit symbols of length, as written.
 const SYMBOLS: &[&str] = &["m", "dm", "nm", "µm", "μm"];
 
+/// A mathematical letter-like symbol (`ℝ`, `ℏ`, `ℓ`), not one of the
+/// block's marks and units: a trade mark (`™`, `℠`), a number sign (`№`), a
+/// temperature (`℃`, `℉`) or a care-of (`℅`), which a name or a value carries.
+fn letterlike(c: char) -> bool {
+    ('\u{2100}'..='\u{214F}').contains(&c) && !matches!(c, '™' | '℠' | '№' | '℃' | '℉' | '℅')
+}
+
 /// Units of length in any case: symbols that keep their sense in capitals,
 /// and the units' names in English, Spanish and French.
 const LENGTHS: &[&str] = &[
@@ -202,14 +241,31 @@ fn formula(text: &str) -> bool {
         }
         n
     };
-    chars.iter().enumerate().any(|(i, &c)| match c {
-        '+' | '=' | '×' | '·' | '*' | '^' | '±' | '−' | '/' | '<' | '>' | '≤' | '≥' => {
-            true
+    // The run of letters and figures on one side of `i`.
+    let term = |from: usize, step: isize| {
+        let mut n = 0;
+        let mut letters = 0;
+        let mut i = from as isize + step;
+        while i >= 0 && (i as usize) < chars.len() && chars[i as usize].is_alphanumeric() {
+            n += 1;
+            letters += usize::from(chars[i as usize].is_alphabetic());
+            i += step;
         }
+        (n, letters)
+    };
+    // A slash between names or codes parts them, as `mm/in` and `512e/4Kn`
+    // do: an operator's slash stands by a variable or a figure (`a/b`, `x/2`).
+    let names = |i: usize| {
+        let (before, after) = (term(i, -1), term(i, 1));
+        before.0 >= 2 && before.1 >= 1 && after.0 >= 2 && after.1 >= 1
+    };
+    chars.iter().enumerate().any(|(i, &c)| match c {
+        '+' | '=' | '×' | '·' | '*' | '^' | '±' | '−' | '<' | '>' | '≤' | '≥' => true,
+        '/' => !names(i),
         '-' => letters_beside(i, -1) == 1 || letters_beside(i, 1) == 1,
         _ => {
             ('\u{0370}'..='\u{03FF}').contains(&c)
-                || ('\u{2100}'..='\u{214F}').contains(&c)
+                || letterlike(c)
                 || ('\u{2200}'..='\u{22FF}').contains(&c)
                 || ('\u{1D400}'..='\u{1D7FF}').contains(&c)
         }
@@ -246,7 +302,20 @@ pub fn degree(text_before: &str, mark: &str, next: Option<char>) -> bool {
         || (ahead.ends_with(['-', '+'])
             && !ahead[..ahead.len() - 1].ends_with(|c: char| c.is_alphanumeric()));
     let figures = number.chars().filter(char::is_ascii_digit).count();
-    matches!(next, Some('C' | 'F')) || figures >= 3 || number.contains('.') || signed
+    // After an approximation's sign, a raised `o` or `º` is no ordinal: no
+    // text counts `~ 95th`. An angle's degree (`Beam Angle ~ 95°`). After a
+    // bracket's opening only the raised letter `o` is, a font's stand-in for
+    // the sign (`Gloss (45°)`): the ordinal sign itself is how Spanish and
+    // Portuguese set a bracketed ordinal (`(2º)`). Not a raised `0`, which
+    // may be a power there (`(10⁰)`).
+    let opener = ahead.trim_end();
+    let set_apart = !ahead.ends_with(|c: char| c.is_alphanumeric())
+        && match mark.trim() {
+            "o" => opener.ends_with(['~', '≈', '∼', '(', '[']),
+            "º" => opener.ends_with(['~', '≈', '∼']),
+            _ => false,
+        };
+    matches!(next, Some('C' | 'F')) || figures >= 3 || number.contains('.') || signed || set_apart
 }
 
 /// Whether `ending` is the ordinal ending of the whole number `number`.
@@ -282,6 +351,15 @@ mod tests {
         assert!(note_mark("Acrylonitrile", "a"));
         assert!(note_mark("(vinylidene chloride)", "a"));
         assert!(note_mark("Revenue", "1"));
+        // A note's number closing on its own bracket, and one past a word's
+        // punctuation.
+        assert!(note_mark("dilution series", "1)"));
+        assert!(note_mark("Systematic error", "2)"));
+        assert!(note_mark("hours MTBF,", "4"));
+        assert!(note_mark("the ratings.", "2"));
+        assert!(!note_mark("x,", "2"));
+        assert!(!note_mark("10 m,", "2"));
+        assert!(!note_mark("f(x)", ")"));
         assert!(note_mark("Total", "*"));
         assert!(note_mark("April 2026", "r"));
         assert!(note_mark("Lee", "†"));
@@ -338,6 +416,22 @@ mod tests {
     }
 
     #[test]
+    fn a_number_after_a_compound_a_code_or_names_in_a_bracket_is_a_note() {
+        assert!(note_mark("Single-pole / 3-way", "1"));
+        assert!(note_mark("Multi-location", "4"));
+        assert!(note_mark("MACL-153M-XX", "2,3"));
+        assert!(note_mark("FastFormat (512e/4Kn)", "1,2"));
+        assert!(note_mark("FastFormat™ (512e/4Kn)", "1"));
+        assert!(note_mark("Depth (mm/in, max)", "4"));
+        // A formula's terms, a slash by a variable or a figure, and a unit
+        // of length after a hyphen still take a power.
+        assert!(!note_mark("x-y", "2"));
+        assert!(!note_mark("(a/b)", "2"));
+        assert!(!note_mark("(x/2)", "2"));
+        assert!(!note_mark("a 5-mm", "2"));
+    }
+
+    #[test]
     fn a_unit_of_length_takes_a_power() {
         for before in [
             "BOLSAS POR CADA 1000 PIES",
@@ -376,6 +470,13 @@ mod tests {
         // An ordinal stays one, and a power one.
         assert!(!degree("el 1", "o", None));
         assert!(!degree("2", "º", Some('l')));
+        // A bracketed ordinal set with the ordinal sign stays one; the
+        // raised letter in brackets, and either after `~`, is a degree.
+        assert!(!degree("(2", "º", Some(')')));
+        assert!(!degree("[3", "º", Some(']')));
+        assert!(degree("Gloss (45", "o", Some(')')));
+        assert!(degree("~ 95", "º", None));
+        assert!(degree("≈ 30", "o", None));
         assert!(!degree("10", "0", None));
         assert!(!degree("10-15", "o", None));
         assert!(!degree("145", "a", None));
@@ -383,5 +484,12 @@ mod tests {
         // A prime set as a raised `0`, after a list of positions.
         assert!(!degree("4,4", "0", Some('-')));
         assert!(!degree("(upstream),5", "0", Some('(')));
+        // After an approximation's sign or a bracket's opening, an angle.
+        assert!(degree("Beam Angle ~ 95", "o", None));
+        assert!(degree("Gloss (45", "o", Some(')')));
+        assert!(degree("≈ 30", "º", None));
+        // A raised `0` there may be a power; a word before is no sign.
+        assert!(!degree("(10", "0", Some(')')));
+        assert!(!degree("el 2", "o", None));
     }
 }

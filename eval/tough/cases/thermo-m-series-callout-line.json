@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "thermo-m-series-flyer.pdf",
+    "url": "https://documents.thermofisher.com/TFS-Assets/LPD/Flyers/m-series-centrifuges-flyer.pdf",
+    "sha256": "eab219c469c27ab879a87b1b02394735371d630348bb4c2c540bdbb37a86dd23",
+    "about": "Thermo Scientific M Series centrifuges flyer (2 pages). The cover sets a 12 pt category tag in a red box above the 28 pt title, and the back page closes on a link line."
+  },
+  "notes": [
+    "2026-11-25 (#208): a bold callout, `GreenCool Technology`, is set right of a body line at the same 9pt, its baseline 0.29 of the size higher. The body line's raised `™` began a cluster with the callout, the body's glyphs one of their own, and the line was read on from the callout back to the body's start: `GreenCool TechnologyThe refrigerated models…`, the paragraph cut there."
+  ],
+  "checks": [
+    {
+      "id": "body-paragraph-whole",
+      "found": "2026-11-25",
+      "issue": "#208: the paragraph was cut where the callout was read into its first line.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "The refrigerated models feature Thermo Scientific™ GreenCool™ Technology, a next-generation natural refrigerant cooling system for enhanced sustainability."
+      }
+    },
+    {
+      "id": "callout-not-joined",
+      "found": "2026-11-25",
+      "issue": "#208: as above.",
+      "no_text": "TechnologyThe refrigerated"
+    }
+  ]
+}

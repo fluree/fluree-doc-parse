@@ -47,6 +47,7 @@
 
 pub mod arbiter;
 pub mod block;
+pub(crate) mod cells;
 pub mod column;
 pub mod dedup;
 pub mod doco;
@@ -54,6 +55,7 @@ pub mod document;
 #[cfg(feature = "render")]
 pub mod escalate;
 pub(crate) mod extract;
+pub(crate) mod faces;
 pub mod fidelity;
 pub mod figure;
 pub mod forms;
@@ -69,6 +71,7 @@ pub mod link;
 pub(crate) mod marked;
 pub mod outline;
 pub mod overlay;
+pub(crate) mod region;
 
 /// Pages the router says carry content, which the final element stream does
 /// not hold.
@@ -121,7 +124,9 @@ pub mod textgrid;
 pub mod watermark;
 
 pub use block::Block;
-pub use extract::{extract_bytes, extract_file, Document, ExtractError, Page};
+pub use extract::{
+    extract_bytes, extract_bytes_with, extract_file, Document, ExtractError, ExtractOptions, Page,
+};
 pub use furniture::Furniture;
 pub use geom::BBox;
 pub use glyph::Glyph;

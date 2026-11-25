@@ -1,0 +1,72 @@
+{
+  "document": {
+    "file": "cree-noctura-install.pdf",
+    "url": "https://cree.widen.net/content/9yzz8vhx6p/original/Noctura-Series-B-Wall-Mount-Install-Guide---Small_LPN00628X0001A1_A.pdf?u=wk1zzb&download=true",
+    "sha256": "e2f1f1f18974f51e54a258713f2185e037bdd5e39353c79adcd59be79086d482",
+    "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables. Each language numbers its three pages from 1, in its own words, and sets its step numbers at the top of its second and third pages."
+  },
+  "notes": [
+    "#201: in each language the FCC heading and note stand in the column beside step 5's drawing, and the electrical steps in the column beside the wiring diagram; within the drawings' reach, they were taken as the drawings' labels."
+  ],
+  "checks": [
+    {
+      "id": "fcc-heading-not-figure",
+      "found": "2026-11-25",
+      "issue": "`FCC`, heading the column beside the drawing, was a Figure on all three last pages.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "FCC"
+      },
+      "count": 0
+    },
+    {
+      "id": "caution-not-figure",
+      "found": "2026-11-25",
+      "issue": "The FCC caution, a note in the column beside the drawing, was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "CAUTION: Changes or modifications not expressly approved could void your authority to use this equipment."
+      },
+      "count": 0
+    },
+    {
+      "id": "steps-intro-not-figure",
+      "found": "2026-11-25",
+      "issue": "`Make the following Electrical Connections to supply cord:` was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Make the following Electrical Connections to supply cord:"
+      },
+      "count": 0
+    },
+    {
+      "id": "first-step-whole",
+      "found": "2026-11-25",
+      "issue": "The electrical steps a–f beside the wiring diagram were Figures, one per line; released, each wrapped line was its own paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "a. For 120/277/347V connect the black fixture lead to the voltage supply or Hot 1 (for 208/240/480V wiring)."
+      }
+    },
+    {
+      "id": "spanish-intro-not-figure",
+      "found": "2026-11-25",
+      "issue": "`Realice las siguientes conexiones eléctricas al cable de alimentación:` was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Realice las siguientes conexiones eléctricas al cable de alimentación:"
+      },
+      "count": 0
+    },
+    {
+      "id": "french-intro-not-figure",
+      "found": "2026-11-25",
+      "issue": "`Effectuez les connexions électriques suivantes au câble d’alimentation :` was a Figure.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Effectuez les connexions électriques suivantes au câble d’alimentation :"
+      },
+      "count": 0
+    }
+  ]
+}

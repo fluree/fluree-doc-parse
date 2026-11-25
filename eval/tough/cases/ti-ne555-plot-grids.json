@@ -1,0 +1,53 @@
+{
+  "document": {
+    "file": "ti-ne555.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/ne555.pdf",
+    "sha256": "a3756e59fd06d0ba736edf9ffe71d99d2aae33fb7e49fedc86165a241179f4a6",
+    "about": "Texas Instruments NE555 timer datasheet. Its waveforms and characteristic curves are drawn in lines only: a scope's graticule with traces over it, a log plot's grid with curve labels set across its lines, no fills."
+  },
+  "notes": [
+    "#241: a plot drawn in lines alone was read as a ruled table of the notes set in its grid, and its trace names (`Output Voltage`, `Capacitor Voltage`) as bold section heads.",
+    "Open: the circuit schematics' pin and net labels (`DISCH`, `Clock 2`) still read as bold heads; a schematic draws no graticule."
+  ],
+  "checks": [
+    {
+      "id": "scope-notes-no-table",
+      "found": "2026-11-25",
+      "issue": "#241: the monostable waveform's scope notes were a three-row table.",
+      "element": {
+        "type": "doco:Table",
+        "text": "RA = 9.1 kΩ CL = 0.01 µF RL = 1 kΩ See Figure 9\nRA = 9.1 kΩ CL = 0.01 µF RL = 1 kΩ See Figure 9\nRA = 9.1 kΩ CL = 0.01 µF RL = 1 kΩ See Figure 9"
+      },
+      "count": 0
+    },
+    {
+      "id": "log-plot-labels-no-table",
+      "found": "2026-11-25",
+      "issue": "#241: the pulse-duration plot's curve labels were a two-row table.",
+      "element": {
+        "type": "doco:Table",
+        "text": "RA =\t10 MΩ\nRA = 1\tMΩ"
+      },
+      "count": 0
+    },
+    {
+      "id": "trace-name-no-section",
+      "found": "2026-11-25",
+      "issue": "#241: the scope's trace name `Output Voltage` headed a section.",
+      "no_section": "Output Voltage"
+    },
+    {
+      "id": "time-base-no-section",
+      "found": "2026-11-25",
+      "issue": "#241: the scope's time base `Time − 0.1 ms/div` headed a section.",
+      "no_section": "Time − 0.1 ms/div"
+    },
+    {
+      "id": "schematic-label-no-section",
+      "found": "2026-11-25",
+      "status": "open",
+      "issue": "The pulse-width modulator's schematic pin label `DISCH` heads a section.",
+      "no_section": "DISCH"
+    }
+  ]
+}

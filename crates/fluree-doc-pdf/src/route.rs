@@ -41,7 +41,7 @@ const NEAR_BLANK_GLYPHS: usize = 20;
 
 /// A raster region must cover at least this fraction of the page before it is
 /// worth a VLM call: below it, whatever text it holds is a logo or ornament.
-const MIN_REGION_FRACTION: f64 = 0.10;
+pub(crate) const MIN_REGION_FRACTION: f64 = 0.10;
 
 /// Above this many glyphs inside a candidate region, the text layer already
 /// reads it — a figure with overlaid glyph labels, or text drawn on a
@@ -229,6 +229,7 @@ mod tests {
                 .collect(),
             rules: Vec::new(),
             fills: Vec::new(),
+            dots: Vec::new(),
             width: 600.0,
             height: 800.0,
             rotation: 0,

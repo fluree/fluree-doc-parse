@@ -1,0 +1,34 @@
+{
+  "document": {
+    "file": "sherwin-williams-emerald-pds.pdf",
+    "url": "https://www.sherwin-williams.com/document/PDS/en/790417048503/",
+    "sha256": "6b0b5a593bfb3075c36c8819e6450983f5b787daac3797fb92a22c617a469219",
+    "about": "Sherwin-Williams Emerald interior paint product data sheet (2 pages). Its title, `Emerald® Symmetry™` over `Interior Acrylic Matte`, is set at 17pt on page 1 and restated at the head of page 2."
+  },
+  "notes": [
+    "2026-11-24 (#176): a raised sign in a display title broke the title's line at the sign: the `®` 19pt up on 32pt type, or a `™` whose following space was set at the title's size.",
+    "2026-11-24: rewritten for page 2's restated title read as running text (#170). Page 1's title, its sign and the line under it, is the one SectionTitle that names the product."
+  ],
+  "checks": [
+    {
+      "id": "trademark-stays-in-title",
+      "found": "2026-11-24",
+      "issue": "The `™` after `Symmetry` was a paragraph of its own.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Emerald® Symmetry™ Interior Acrylic Matte"
+      },
+      "count": 1
+    },
+    {
+      "id": "no-lone-trademark",
+      "found": "2026-11-24",
+      "issue": "As above.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "™"
+      },
+      "count": 0
+    }
+  ]
+}

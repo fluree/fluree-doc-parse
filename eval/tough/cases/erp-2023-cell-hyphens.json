@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "erp-2023.pdf",
+    "url": "https://www.govinfo.gov/content/pkg/ERP-2023/pdf/ERP-2023.pdf",
+    "sha256": "651e037dc3e12753417c3a565b2ac1b0c963e5c99c77b90808f65db643d7fb5a",
+    "about": "Economic Report of the President, 2023 (513 pages). Its statistical tables set their column heads and stub labels in narrow columns, hyphenated at the line ends."
+  },
+  "notes": [
+    "A cell's lines joined at a line-end hyphen kept it: `Un-employ-ment`, `(Stan-dard & Poor’s)`, `Struc-tures`. A compound the document prints hyphenated keeps its own hyphen (`High-grade`)."
+  ],
+  "checks": [
+    {
+      "id": "column-head-whole",
+      "found": "2026-11-24",
+      "issue": "#113: Table B–28's head read `Un-employ-ment`.",
+      "cell": {"value": "Unemployment"}
+    },
+    {
+      "id": "compound-keeps-its-hyphen",
+      "found": "2026-11-24",
+      "issue": "#113: `(Stan-dard & Poor’s)`; `High-grade` is the compound's own hyphen and stays.",
+      "cell": {"value": "High-grade municipal bonds (Standard & Poor’s)"}
+    },
+    {
+      "id": "no-broken-unemployment",
+      "found": "2026-11-24",
+      "issue": "#113: the breaks' hyphens kept inside the word.",
+      "no_text": "Un-employ-ment"
+    },
+    {
+      "id": "no-broken-structures",
+      "found": "2026-11-24",
+      "issue": "#113: the break's hyphen kept inside the word.",
+      "no_text": "Struc-tures"
+    }
+  ]
+}

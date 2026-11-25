@@ -745,6 +745,21 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
     // The region's lines, the label column taken in on the left: the chunk
     // nearest the region on each of its lines, where those agree.
     let in_band = |l: &Line| l.base >= region.y0 - fs * 0.3 && l.y0 <= region.y1 + fs * 0.3;
+    // A rule standing between a chunk and the figures, running far past
+    // them both ways, divides them: the page's column divider. What lies
+    // across it is the next column's text, not these figures' labels. A
+    // table's own column rules stand between its labels and its figures
+    // too, but run no further than the table.
+    let divided = |l: &Line, c: &Chunk, right: f64| {
+        rules.iter().any(|r| {
+            r.orientation == crate::rule::Orientation::Vertical
+                && r.axis_pos() > c.x1
+                && r.axis_pos() < right
+                && r.bbox.y0 <= l.y0
+                && r.bbox.y1 >= l.base
+                && r.bbox.y1 - r.bbox.y0 >= 2.0 * (region.y1 - region.y0)
+        })
+    };
     let mut lefts: Vec<f64> = all
         .iter()
         .filter(|l| in_band(l))
@@ -752,6 +767,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             l.chunks
                 .iter()
                 .filter(|c| c.x1 <= region.x0 + fs && c.x0 < region.x0 - fs)
+                .filter(|c| !divided(l, c, region.x0))
                 .max_by(|a, b| a.x1.total_cmp(&b.x1))
                 // A statement sets its labels at the margin and its figures
                 // at the far side of the page, with or without leaders.
@@ -791,6 +807,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
                     l.chunks
                         .iter()
                         .filter(|c| c.x1 <= x0 + 0.5 && x0 - c.x1 < fs * 8.0)
+                        .filter(|c| !divided(l, c, region.x0))
                         .max_by(|a, b| a.x1.total_cmp(&b.x1))
                         .map(|c| c.x0)
                 })
@@ -868,6 +885,48 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
         .map(|l| split_at_gutters(&cols0, l))
         .collect();
     let value_row = |l: &Line| fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l);
+    // A line ruled off above and below, as the rows around it are, holding
+    // its label and a value in the columns: a row whatever its value says
+    // (`Packaging (W x H x D) | 31.4 cm x 10.9 cm x 15.7 cm` among lengths
+    // and weights). Rules across most of the region, a line's height or so
+    // from it each side.
+    let row_rules: Vec<f64> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == Orientation::Horizontal
+                && r.bbox.x1.min(x1) - r.bbox.x0.max(x0) >= 0.3 * (x1 - x0)
+        })
+        .map(|r| r.axis_pos())
+        .collect();
+    let boxed = |l: &Line| {
+        row_rules
+            .iter()
+            .any(|&y| y <= l.y0 + 1.0 && l.y0 - y <= fs * 1.5)
+            && row_rules
+                .iter()
+                .any(|&y| y >= l.y1 - 1.0 && y - l.y1 <= fs * 1.5)
+    };
+    // Only after a row ruled off in the same way: a table ruled row by row.
+    // A header ruled above and below, under a table ruled only round its
+    // header, is another table's. Its values carry a measure, not only names
+    // or years: a header ruled off as its rows are (`(millions) | 2017 |
+    // 2016`) starts the next table.
+    let ruled_row = |l: &Line, prev: &Line| {
+        let values: Vec<&Chunk> = l
+            .chunks
+            .iter()
+            .filter(|c| column_of(&cols0, c).is_some_and(|k| k > 0))
+            .collect();
+        boxed(prev)
+            && boxed(l)
+            && fits(&cols0, l)
+            && l.chunks.len() >= 2
+            && l.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))
+            && values
+                .iter()
+                .any(|c| c.text.chars().any(|ch| ch.is_ascii_digit()))
+            && !values.iter().all(|c| is_year(&c.text))
+    };
     let label_row = |l: &Line| {
         l.chunks.len() == 1
             && column_of(&cols0, &l.chunks[0]) == Some(0)
@@ -890,7 +949,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             if l.y0 - clipped[band[j - 1]].y1 > fs * MAX_ROW_GAP {
                 break;
             }
-            if value_row(l) {
+            if value_row(l) || ruled_row(l, &clipped[band[j - 1]]) {
                 end = band[j];
                 labels = 0;
             } else if label_row(l) && labels < 3 {
@@ -919,7 +978,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             if next.y0 - clipped[last].y1 > fs * MAX_ROW_GAP {
                 break;
             }
-            if value_row(next) {
+            if value_row(next) || ruled_row(next, &clipped[last]) {
                 last += 1;
                 continue;
             }
@@ -1927,6 +1986,11 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             }
         }
     }
+    let downs = [
+        downs,
+        body_downs(&all_rows, &cells, rules, &xs, header_rows, &sub_headers),
+    ]
+    .concat();
     Some(Grid {
         page,
         bbox: BBox {
@@ -1948,6 +2012,87 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     })
 }
 
+/// Body cells that span rows, read from the groups the ruling draws:
+/// `(first row, column, end row)`.
+///
+/// A table read here takes each line as a row. One that rules its rows off
+/// in groups, a rule across the whole table under each, sets some columns
+/// once per group, on its first line, and others line by line: a tip size
+/// and its colour over the four volumes tested with it, each volume with
+/// its own errors. A column with a value on a group's first line and none
+/// on its others, where another column fills every line, is one cell over
+/// the group, as [`Grid::text_merges`] reads it in a ruled grid.
+///
+/// Claimed only for groups closed by rules across the table above and
+/// below, and only where two groups or more show it. A table ruled under
+/// its header and at its foot is one group, and a sparse column in it is
+/// values missing from some rows, not a span.
+fn body_downs(
+    rows: &[Vec<&Line>],
+    cells: &[Vec<usize>],
+    rules: &[Rule],
+    xs: &[f64],
+    header_rows: usize,
+    sections: &[usize],
+) -> Vec<(usize, usize, usize)> {
+    let ncols = xs.len().saturating_sub(1);
+    let n = rows.len();
+    if ncols < 2 || n < header_rows + 4 {
+        return Vec::new();
+    }
+    let (left, right) = (xs[0], xs[ncols]);
+    let flat: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.orientation == Orientation::Horizontal)
+        .collect();
+    // A rule across the whole table between row `r - 1` and row `r`, or
+    // under the last row where `r` is `n`.
+    let across = |r: usize| -> bool {
+        let Some(upper) = rows.get(r.wrapping_sub(1)) else {
+            return false;
+        };
+        let base = upper.iter().map(|l| l.base).fold(f64::MIN, f64::max);
+        let fs = upper.iter().map(|l| l.fs).fold(1.0, f64::max);
+        let hi = match rows
+            .get(r)
+            .and_then(|ls| ls.iter().min_by(|a, b| a.base.total_cmp(&b.base)))
+        {
+            Some(lower) => lower.base - lower.fs * 0.5,
+            None => base + fs * 1.5,
+        };
+        let cover: f64 = flat
+            .iter()
+            .filter(|h| h.bbox.y0 >= base - fs * 0.2 && h.bbox.y0 <= hi)
+            .map(|h| (h.bbox.x1.min(right) - h.bbox.x0.max(left)).max(0.0))
+            .sum();
+        cover >= 0.9 * (right - left)
+    };
+    let cuts: Vec<usize> = (header_rows..=n)
+        .filter(|&r| sections.contains(&r) || across(r))
+        .collect();
+    let empty = |r: usize, k: usize| cells[r * ncols + k].is_empty();
+    let mut downs = Vec::new();
+    let mut groups = 0;
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if b - a < 2 || (a..b).any(|r| sections.contains(&r)) || !across(a) || !across(b) {
+            continue;
+        }
+        let full = (0..ncols).any(|k| (a..b).all(|r| !empty(r, k)));
+        let once: Vec<usize> = (0..ncols)
+            .filter(|&k| !empty(a, k) && (a + 1..b).all(|r| empty(r, k)))
+            .collect();
+        if full && !once.is_empty() {
+            groups += 1;
+            downs.extend(once.into_iter().map(|k| (a, k, b)));
+        }
+    }
+    if groups < 2 {
+        return Vec::new();
+    }
+    downs
+}
+
 /// Record on a table read here the glyphs its cells take from the page.
 pub fn claim(g: &mut Grid, glyphs: &[Glyph]) {
     if let Some(lay) = g.layout.as_mut() {
@@ -1966,15 +2111,83 @@ pub fn claim(g: &mut Grid, glyphs: &[Glyph]) {
 
 /// The regions of grids ruled with horizontals only: their bands are not
 /// rows and their segments' ends are not columns.
-pub fn unruled_grids(grids: &[Grid], rules: &[Rule], lines: &[Line]) -> Vec<usize> {
+pub fn unruled_grids(
+    grids: &[Grid],
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    lines: &[Line],
+) -> Vec<usize> {
     (0..grids.len())
         .filter(|&i| {
             !has_vertical(rules, &grids[i].bbox)
-                && !(ruled_row_by_row(&grids[i], rules)
+                && !(ruled_row_by_row(&grids[i], rules, fills)
                     && !lumped(&grids[i], lines)
                     && !labels_outside(&grids[i], lines))
         })
         .collect()
+}
+
+/// A reading that puts in one cell figures the seed's ruling sets in
+/// different columns: figures on both sides of one of the ruled grid's
+/// column edges, no glyph across it (`$ 4,137 $ 3,610 $ 3,547` under one
+/// year, where the rules are drawn a column at a time). Its text read so is
+/// no table; left as text, it says nothing wrong. A figure's glyphs set
+/// across an edge say the edge is no column's.
+pub fn merges_drawn_columns(g: &Grid, edges: &[f64], within: &BBox, glyphs: &[Glyph]) -> bool {
+    let Some(lay) = g.layout.as_deref() else {
+        return false;
+    };
+    lay.cells.iter().any(|cell| {
+        // The cell's glyphs among the stack's rows: its edges say nothing of
+        // a table above or below it read with it.
+        let inked: Vec<(&Glyph, BBox)> = cell
+            .iter()
+            .filter_map(|&i| glyphs.get(i))
+            .filter_map(|gl| gl.bbox.map(|b| (gl, b)))
+            .filter(|(_, b)| {
+                let y = (b.y0 + b.y1) / 2.0;
+                y > within.y0 && y < within.y1
+            })
+            .collect();
+        edges.iter().any(|&e| {
+            let figure = |gl: &Glyph| gl.text.chars().any(|c| c.is_ascii_digit());
+            let fs = inked
+                .iter()
+                .map(|(gl, _)| gl.font_size as f64)
+                .fold(0.0, f64::max)
+                .max(1.0);
+            // A quarter of the type's size clear of the edge, each side;
+            // a closing bracket hung past a column's edge, as statements set
+            // them, is the column's own and crosses nothing.
+            let clear = fs * 0.25;
+            let hung = |gl: &Glyph| matches!(gl.text.as_str(), ")" | "]");
+            !inked
+                .iter()
+                .any(|(gl, b)| b.x0 < e && b.x1 > e && !hung(gl))
+                && inked
+                    .iter()
+                    .any(|(gl, b)| figure(gl) && (b.x0 + b.x1) / 2.0 < e - clear)
+                && inked
+                    .iter()
+                    .any(|(gl, b)| figure(gl) && (b.x0 + b.x1) / 2.0 > e + clear)
+        })
+    })
+}
+
+/// A grid with no vertical, ruled under its rows as a table is and not
+/// lumped, with lines of the page's text standing to its left on half its
+/// rows: a table set beside a column of the page's prose, in a column of its
+/// own. All of it is the grid's geometry and the lines around it.
+pub fn ruled_beside_prose(
+    g: &Grid,
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    lines: &[Line],
+) -> bool {
+    !has_vertical(rules, &g.bbox)
+        && ruled_row_by_row(g, rules, fills)
+        && !lumped(g, lines)
+        && labels_outside(g, lines)
 }
 
 /// Its rows' labels stand outside it, to its left: the grid is a
@@ -1997,23 +2210,31 @@ fn labels_outside(g: &Grid, lines: &[Line]) -> bool {
 
 /// Some band of the grid holds two lines or more that each spread across
 /// it: rows its ruling lumped together. A tall row's further lines (dates
-/// under a description, tax lines indented under an item) sit in one place.
+/// under a description, tax lines indented under an item) sit in one place,
+/// and values wrapped in every column under a labelled line (`1.47 lb (.67
+/// kg)` over `±10%`), the first column left empty, carry that row on.
 fn lumped(g: &Grid, lines: &[Line]) -> bool {
+    let first = (g.xs[0], g.xs.get(1).copied().unwrap_or(g.bbox.x1));
     g.ys.windows(2).any(|w| {
-        lines
-            .iter()
-            .filter(|l| l.base > w[0] && l.base <= w[1])
-            .filter(|l| {
-                l.chunks
-                    .iter()
-                    .filter(|c| {
-                        (c.x0 + c.x1) / 2.0 >= g.bbox.x0 && (c.x0 + c.x1) / 2.0 <= g.bbox.x1
-                    })
-                    .count()
-                    >= 3
-            })
-            .count()
-            >= 2
+        let mut labelled_above = false;
+        let mut count = 0;
+        for l in lines.iter().filter(|l| l.base > w[0] && l.base <= w[1]) {
+            let inside: Vec<f64> = l
+                .chunks
+                .iter()
+                .map(|c| (c.x0 + c.x1) / 2.0)
+                .filter(|&m| m >= g.bbox.x0 && m <= g.bbox.x1)
+                .collect();
+            let labelled = inside.iter().any(|&m| m >= first.0 && m < first.1);
+            // A line of values carrying on under a labelled line: each value
+            // wrapped under itself. Lines with no label under none (a
+            // statement's header, years over units) are lines of their own.
+            if inside.len() >= 3 && (labelled || !labelled_above) {
+                count += 1;
+            }
+            labelled_above = labelled;
+        }
+        count >= 2
     })
 }
 
@@ -2021,9 +2242,15 @@ fn lumped(g: &Grid, lines: &[Line]) -> bool {
 /// band is one row, however many lines it holds (a description, its service
 /// dates, the tax lines indented under it). Three rules around a journal
 /// table's header and body, or the short rules under a statement's figures,
-/// are not that.
-fn ruled_row_by_row(g: &Grid, rules: &[Rule]) -> bool {
+/// are not that. The edge of a band shaded across the table is a line as
+/// plain as a rule: a section's band drawn with no rule over or under it.
+/// Not a table striped row by row: its stripes shade the rows its rules make.
+fn ruled_row_by_row(g: &Grid, rules: &[Rule], fills: &[crate::rule::Fill]) -> bool {
     let width = g.bbox.x1 - g.bbox.x0;
+    // Bands across the table, edge to edge: a section's band drawn a cell
+    // at a time. Not stripes, which shade the rows the rules make, nor a
+    // row of cells a group's cell beside it leaves short.
+    let bands = crate::table::section_bands(fills, &g.xs, &g.ys);
     g.rows() >= 4
         && g.ys[1..g.ys.len() - 1].iter().all(|&y| {
             let spans: Vec<(f64, f64)> = rules
@@ -2031,7 +2258,14 @@ fn ruled_row_by_row(g: &Grid, rules: &[Rule]) -> bool {
                 .filter(|r| {
                     r.orientation == Orientation::Horizontal && (r.axis_pos() - y).abs() <= 3.0
                 })
-                .map(|r| (r.bbox.x0.max(g.bbox.x0), r.bbox.x1.min(g.bbox.x1)))
+                .map(|r| (r.bbox.x0, r.bbox.x1))
+                .chain(
+                    bands
+                        .iter()
+                        .filter(|f| (f.bbox.y0 - y).abs() <= 3.0 || (f.bbox.y1 - y).abs() <= 3.0)
+                        .map(|f| (f.bbox.x0, f.bbox.x1)),
+                )
+                .map(|(a, b)| (a.max(g.bbox.x0), b.min(g.bbox.x1)))
                 .filter(|(a, b)| b > a)
                 .collect();
             spans.iter().map(|(a, b)| b - a).sum::<f64>() >= 0.9 * width
@@ -2137,6 +2371,7 @@ pub fn strip_leaders(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rule::Rule;
 
     #[test]
     fn figures_are_dressed_digits_or_a_dash() {
@@ -2191,6 +2426,287 @@ mod tests {
             .iter()
             .map(|c| c.text.clone())
             .collect()
+    }
+
+    #[test]
+    fn a_table_ruled_row_by_row_and_by_its_bands_is_read_from_its_rules() {
+        // Four columns, five rows: rules under three rows, a band's edge
+        // under the fourth, and a first row whose values each wrap under
+        // themselves, the first column left empty.
+        let g = crate::table::Grid {
+            layout: None,
+            page: 0,
+            xs: vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            ys: vec![0.0, 30.0, 50.0, 70.0, 90.0, 110.0],
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 400.0,
+                y1: 110.0,
+            },
+        };
+        let rule = |y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0: 0.0,
+                y0: y,
+                x1: 400.0,
+                y1: y + 0.5,
+            },
+            orientation: Orientation::Horizontal,
+            page: 0,
+        };
+        let rules = vec![rule(30.0), rule(50.0), rule(90.0)];
+        let band = crate::rule::Fill {
+            bbox: BBox {
+                x0: 0.0,
+                y0: 70.0,
+                x1: 400.0,
+                y1: 82.0,
+            },
+            page: 0,
+        };
+        let mut glyphs = Vec::new();
+        for (x, t) in [
+            (5.0, "Weight"),
+            (105.0, "1.47 lb"),
+            (205.0, "1.47 lb"),
+            (305.0, "1.52 lb"),
+        ] {
+            glyphs.extend(set(t, x, 12.0));
+        }
+        for x in [105.0, 205.0, 305.0] {
+            glyphs.extend(set("10%", x, 24.0));
+        }
+        for (r, y) in [(1, 44.0), (2, 64.0), (3, 84.0), (4, 104.0)] {
+            glyphs.extend(set(&format!("Row {r}"), 5.0, y));
+            for x in [105.0, 205.0, 305.0] {
+                glyphs.extend(set("5 W", x, y));
+            }
+        }
+        let lines = lines(&glyphs);
+        let grids = vec![g.clone()];
+        assert!(
+            unruled_grids(&grids, &rules, std::slice::from_ref(&band), &lines).is_empty(),
+            "its rules and band read its rows"
+        );
+        // Without the band its fourth line is ruled by nothing.
+        assert_eq!(unruled_grids(&grids, &rules, &[], &lines), vec![0]);
+        // Two rows of their own, each labelled, under one rule: lumped.
+        let mut lumped = glyphs.clone();
+        lumped.extend(set("Other", 5.0, 24.0));
+        let lines = super::lines(&lumped);
+        assert_eq!(
+            unruled_grids(&grids, &rules, std::slice::from_ref(&band), &lines),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn labels_across_a_divider_are_not_the_figures_labels() {
+        // A run of figures right of a page's column divider, and the left
+        // column's prose on the same lines.
+        let mut gl = Vec::new();
+        for (i, y) in [50.0, 64.0, 78.0, 92.0, 106.0].into_iter().enumerate() {
+            gl.extend(set(&format!("prose line {i}"), 20.0, y));
+            gl.extend(set(&format!("{}", 10 + i), 200.0, y));
+            gl.extend(set(&format!("{}", 50 + i), 250.0, y));
+        }
+        let ls = lines(&gl);
+        let region = BBox {
+            x0: 195.0,
+            y0: 40.0,
+            x1: 265.0,
+            y1: 110.0,
+        };
+        let divider = Rule {
+            bbox: BBox {
+                x0: 150.0,
+                y0: 0.0,
+                x1: 150.6,
+                y1: 200.0,
+            },
+            orientation: crate::rule::Orientation::Vertical,
+            page: 0,
+        };
+        let open = read(&ls, &[], region, 0);
+        let parted = read(&ls, &[divider], region, 0);
+        assert!(
+            open.iter().any(|g| g.bbox.x0 < 100.0),
+            "without the rule the labels are taken in: {open:?}"
+        );
+        assert!(parted.iter().all(|g| g.bbox.x0 > 150.0), "got {parted:?}");
+    }
+
+    /// A table of three groups, a size and its colour set once over three
+    /// volumes, each with its error; `ruled` rules each group off, and
+    /// otherwise only the header and the foot are ruled.
+    fn grouped(ruled: bool) -> Vec<Grid> {
+        let mut gl = Vec::new();
+        for (t, x) in [
+            ("Size", 20.0),
+            ("Colour", 80.0),
+            ("Volume", 160.0),
+            ("Error", 220.0),
+        ] {
+            gl.extend(set(t, x, 50.0));
+        }
+        let rule = |y: f64| Rule {
+            bbox: BBox {
+                x0: 15.0,
+                y0: y,
+                x1: 260.0,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let mut rules = vec![rule(55.0)];
+        for (g, (size, colour)) in [("Small", "white"), ("Medium", "blue"), ("Large", "red")]
+            .into_iter()
+            .enumerate()
+        {
+            let top = 66.0 + 40.0 * g as f64;
+            gl.extend(set(size, 20.0, top));
+            gl.extend(set(colour, 80.0, top));
+            for (i, y) in [top, top + 12.0, top + 24.0].into_iter().enumerate() {
+                gl.extend(set(&format!("{}", (g + 1) * 10 + i), 160.0, y));
+                gl.extend(set(&format!("{}.5", 9 - i), 220.0, y));
+            }
+            if ruled || g == 2 {
+                rules.push(rule(top + 27.0));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 30.0,
+            x1: 270.0,
+            y1: 190.0,
+        };
+        read(&lines(&gl), &rules, region, 0)
+    }
+
+    #[test]
+    fn a_row_ruled_off_as_its_neighbours_are_stays_whatever_its_value_says() {
+        // Dimensions ruled under every row: lengths and weights, and a
+        // package size that is no figure.
+        let rule = |y: f64| Rule {
+            bbox: BBox {
+                x0: 15.0,
+                y0: y,
+                x1: 260.0,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let mut gl = Vec::new();
+        let mut rules = vec![rule(38.0)];
+        for (i, (label, value)) in [
+            ("Length", "221 mm"),
+            ("Weight", "190 g"),
+            ("Packaging", "31 cm x 10 cm x 15 cm"),
+            ("Shipping", "388 g"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = 50.0 + 13.0 * i as f64;
+            gl.extend(set(label, 20.0, base));
+            gl.extend(set(value, 120.0, base));
+            rules.push(rule(base + 3.0));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 270.0,
+            y1: 95.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
+    }
+
+    #[test]
+    fn a_reading_that_merges_drawn_columns_is_told() {
+        // Three years' figures a word space apart: read from the text alone,
+        // one column.
+        let rows = [
+            ("Reported", ["4,137", "3,610", "3,547"]),
+            ("Related", ["(951)", "(281)", "(751)"]),
+            ("Charges", ["(110)", "(125)", "(116)"]),
+            ("Adjusted", ["3,944", "3,510", "3,356"]),
+        ];
+        let mut gl = Vec::new();
+        for (i, (label, values)) in rows.iter().enumerate() {
+            let base = 50.0 + 13.0 * i as f64;
+            gl.extend(set(label, 20.0, base));
+            for (k, v) in values.iter().enumerate() {
+                gl.extend(set(v, 120.0 + 30.0 * k as f64, base));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 230.0,
+            y1: 95.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let everywhere = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 300.0,
+            y1: 200.0,
+        };
+        // Edges drawn between the years: the reading merges them.
+        assert!(merges_drawn_columns(
+            &grids[0],
+            &[148.5, 178.5],
+            &everywhere,
+            &gl
+        ));
+        // An edge between the labels and the figures parts no cell.
+        assert!(!merges_drawn_columns(&grids[0], &[100.0], &everywhere, &gl));
+        // An edge through the figures' glyphs is no column's.
+        assert!(!merges_drawn_columns(&grids[0], &[132.0], &everywhere, &gl));
+        // A stack's edges say nothing of rows outside it.
+        let elsewhere = BBox {
+            x0: 0.0,
+            y0: 100.0,
+            x1: 300.0,
+            y1: 200.0,
+        };
+        assert!(!merges_drawn_columns(
+            &grids[0],
+            &[148.5, 178.5],
+            &elsewhere,
+            &gl
+        ));
+    }
+
+    #[test]
+    fn a_value_set_once_over_a_ruled_group_spans_it() {
+        let grids = grouped(true);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().unwrap();
+        let mut downs = lay.downs.clone();
+        downs.sort();
+        assert_eq!(
+            downs,
+            [
+                (1, 0, 4),
+                (1, 1, 4),
+                (4, 0, 7),
+                (4, 1, 7),
+                (7, 0, 10),
+                (7, 1, 10)
+            ]
+        );
+        // Ruled only under the header and at the foot, it is one group, and
+        // its empty cells are values missing, not spans.
+        let grids = grouped(false);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert!(grids[0].layout.as_deref().unwrap().downs.is_empty());
     }
 
     #[test]

@@ -66,9 +66,8 @@ pub fn remove_faux_bold(glyphs: &mut Vec<Glyph>, window: usize) -> usize {
 /// second is dropped wherever it comes. Found by baseline, the copies of one
 /// line are all that is compared.
 fn remove_redrawn(glyphs: &mut Vec<Glyph>) -> usize {
-    use std::collections::HashMap;
     let band = |y: f64| (y / 2.0).floor() as i64;
-    let mut seen: HashMap<(&str, i64), Vec<usize>> = HashMap::new();
+    let mut seen: rustc_hash::FxHashMap<(&str, i64), Vec<usize>> = Default::default();
     let mut keep = vec![true; glyphs.len()];
     for i in 0..glyphs.len() {
         let g = &glyphs[i];

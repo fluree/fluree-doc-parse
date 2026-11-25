@@ -108,6 +108,147 @@ because many things draw that shape:
   can set a tick label in the gap between their rules, but that label stands
   a panel's width from the next, not a space, and the rank stays a ruler.
 
+## A space written as a glyph
+
+Many layout tools write the space after a word as a glyph of its own. It
+puts no ink down, so it has no box, and the line pass could not measure the
+gap behind it. When the next glyph on that baseline stood across a gutter,
+the two columns' lines became one. Column segmentation does not catch these
+first when the text across the gutter is ragged: a right-aligned callout, a
+diagram's label, a narrow box.
+
+The gap is measured from the last glyph that put ink down, past any spaces,
+to the next glyph, against the same block gap as an inked pair. That covers a
+footer padded with spaces from its note at the left margin to its page
+number at the right, whose advances walk the pen across: the ink gap is what
+counts.
+
+The split runs after line assembly, so it can look at the rows around. A
+justified line's stretched space can be as wide as a narrow gutter, and
+splitting there broke justified prose apart in earlier attempts. What tells
+them apart is the paragraph: the lines just above and below, set to the same
+measure, put ink in the gap's middle. A gutter stands clear down the rows.
+But where every row of two columns ran together, each row looks set to one
+measure with the next, and the left column's ragged ends reach into each
+other's gaps. A neighbour that is itself cut by a wide gap of its own, ending
+where this one's does or spanning its middle, is cut by the same gutter, so
+it does not count as running across.
+
+Two cases stay whole: a number or a marker set off from its text by a tab,
+`3.1 ⇥ Results` or `12 ⇥ Ibid.`, and a label a word names, `Note 3. ⇥
+Business Segment`. When the line so far is a label alone (one token of at
+most eight characters and three letters, or a capitalised word and a
+number), the gap after it is a tab stop's, not a gutter's. Splitting there
+cost the heading and footnote statistics in earlier attempts.
+
+A running head set as two groups across the page's top now reads as two
+lines. The title test passes over a one-line block that shares its row with
+another one-line block beside it, so a course code at the right of a
+running head is not taken for the document's title. Running strings are
+scrubbed from a block, or from a table's cells, only on the rows where
+furniture was found: a title that shares a word with the running head keeps
+it, and so does a table's note that names the document as its head does
+(`refer to the Server QuickSpecs`), now that the head's groups are furniture
+one by one.
+
+Two costs. A table header set in pieces across its columns, each piece
+bold, used to read as one line, and where the table is not found it now
+reads as one block per piece. On a catalogue that is enough bold one-line
+blocks to pass the bold cap, which then drops bold as a heading signal for
+the whole document. The cap is left as it is here; see #151. And a running
+head parted into its groups on a one-page document has no other page to be
+found on, so a course code at its right set larger than the text reads as
+a heading of its own.
+
+## Regions before columns
+
+Column segmentation finds a page's columns once, from a projection of all
+its ink, and they were then read one at a time from the page's top to its
+foot. Many pages stack regions instead: a title band over two columns, two
+sections in the same pair of columns, columns over full-width notes, a box
+set in two columns under full-width text. Read column by column over the
+whole page, a block at the foot of the left column came before the top of
+the right one, and text beside a title came after all of the left column.
+
+So the page's columns are regrouped by a recursive XY cut. A region is a run
+of adjacent columns over a stretch of the page. It is cut across first, at:
+
+- **a run of lines across its columns**, a title or an author list over
+  several lines, taken with a short last line set under it. The lines of a
+  run stand a line's space apart at the larger type's size: a display
+  title's lines are more than a body line apart. A line set just over the
+  run, at its size and nearer it than to the text above, is its label and
+  goes with it: `Notes:` in the left column over notes set across the page.
+  A run alone in its band that opens with a title reads that title first
+  and as one, whatever columns its lines start in: a right-aligned display
+  title whose first line lies wholly right of the gutter and whose second
+  crosses it. A title's lines are words at one size, set large or bold, one
+  to a row, and no longer than a heading set large may be (twenty words).
+  Lines side by side are columns, and a longer run is a caption, a lead
+  paragraph or body lines run together across a narrow gutter;
+- **a table across two of its columns or more**;
+- **a horizontal rule** across most of the region's width;
+- **a gap no line crosses**, at least twice the page's line height. A
+  picture counts as content: the space a photo stands in is no gap.
+
+Failing a cut, the region is split down its widest gutter, and each part is
+read the same way.
+
+**A cut runs through no paragraph.** A caption, a table or a rule over some
+of a region's columns must find, in each column it does not cross, white
+space where it falls, as wide as a gap cut needs, or no text on one side.
+A picture fills its column as text does: the rules a benefits column draws
+between its items, level with a photo in the column beside it, part
+nothing there.
+A caption under a picture over two of four columns, a table in two of five,
+and the rules a feature column draws between its own items each cut the
+whole region before this rule, and split every paragraph beside them. A
+rule must also stand in a line's space within the text it crosses: a link
+underlined across most of the measure lies in the leading under its line.
+
+**Gaps across columns must dominate.** Two charts side by side, each a
+title, a plot and notes, leave gaps that line up row for row; cut there, they
+were read band by band, a line of one chart's notes and then a line of the
+other's. A gap across columns parts them only when it is wider than one and
+a half times the ninetieth percentile of the gaps inside them. And when
+every column opens with a line at least its text's size, side by side on
+one row, each is a flow of its own and no gap parts them. The exception is a
+list's items run on from one column into the next, `1. 8Z Pellicle` beside
+`4. Three sizes`: the list and the section after it part at the gap between
+them. Gaps are judged widest first: the region under a page's title is
+judged on its own, where its columns' titles stand side by side. A gap
+nearly as wide as the widest is taken with it, unless the part it falls in
+opens with titles side by side (a line bold, or larger than the line under
+it) and not every column opens another title under the gap. Then the gap is
+inside one column's section, level with the next column's next title, and
+the text under it is still that section's. Where every column opens a title
+under it, as a contract set in two languages side by side opens its next
+article, the gap parts two sections in the same columns.
+
+**Gutters only a region has.** A region of one column is cut across too, and
+each piece is checked for a gutter only it has: the widest gap no line
+crosses, at least half a line high, with lines of words on both sides, side
+by side. One side must be running text, a line going on in the next whose
+first word opens in lower case (`350lbs` under `300 lb/136 kg` does not). A
+side of more than two lines that never runs on and has each line level with
+one across the gap is the other's rows, a field list's values, even where a
+sentence above the labels runs on. A line or two across the gutter (a lead
+paragraph over a box, a callout's line run into the column beside it) parts
+the piece, and each part is read at the gutter. Turned text, a side tab's
+labels at the page's edge, is not weighed, either for the gutter or for the
+width a line must span.
+
+**What downstream passes keep.** Blocks are assembled per group, but a
+group that is a stretch of its page column takes the column's measure: a
+two-line display title read as a region of its own reaches the column's
+edge, not the end of its own longer line, and a figure's callout number at
+the head of a stretch is no list marker unless it stands at the column's
+margin. Only a box read at its own gutter sets its own measure. Side heads
+are paired over whole page columns, consecutive groups of one column taken
+together, as before. A list marker must also stand within five of its
+item's sizes of the text it marks; a number farther off is a label of its
+own, a drawing's callout beside another.
+
 ## Missing spaces
 
 PDFs position words rather than emitting space characters. A gap wider than a
@@ -122,10 +263,10 @@ when a word came out wrong.
 
 ## The resulting order
 
-Elements are emitted in the order the layout passes produce them: within a
-column, top to bottom; columns left to right; orientation buckets kept
-separate. There is no `reading_order` field because the list *is* the reading
-order.
+Elements are emitted in the order the layout passes produce them: regions
+top to bottom; within a region, columns left to right; within a column, top
+to bottom; orientation buckets kept separate. There is no `reading_order`
+field because the list *is* the reading order.
 
 ## Rejoining a line the gutter cut, without undoing the columns
 
@@ -152,8 +293,38 @@ Measured in font-size units:
 The bound sits at 0.75 — above any word space, including a justified one that
 has stretched, and far below the narrowest gutter observed.
 
+The halves must stand on one row, their tops level. A line that ends just
+past the cut leaves only its full stop on the far side, a dot on the
+baseline whose top is the letters' height below theirs. Compared by top
+alone, that dot was a row of its own, and a note across the page lost its
+final `.` to a paragraph. So a closing stop (`. , ; : ! ?` or a closing
+bracket or quote) under half a line high counts as the line's when its
+bottom stands on the line's. Overlap in height was tried and dropped: a
+short fragment overlaps the line above or below it as readily, and joined
+the wrong row.
+
 A second guard remains behind it: if more than a quarter of a column's rows
 look like spanning fragments, the page is in columns and none of them are.
 That one catches *justified* two-column text, where every line reaches the
 gutter. Ragged-right text defeats it, because only some lines do — which is
-how this survived until a field report.
+how this survived until a field report. The guard needs six such rows at
+least: justified text gives one on every row of a page's columns, while a
+centred address of three lines over a form's columns of eight or eleven
+lines each is a large share of small columns, and its lines were dealt into
+them.
+
+## A line across more than one cut, or on a page of columns
+
+Two refinements keep the rejoin working where the page's gutters fall across
+full-width lines above or below its columns:
+
+- **A line can cross more than one cut.** A disclaimer under a three-column
+  page is cut twice. At the first cut its middle part moves back into the
+  column it began in, so at the second cut its last part is matched against
+  the lines of every column to its left, not only the next one.
+- **The quarter guard holds back on a page of short columns.** A centred
+  address block or a few full-width lines can be more than a quarter of the
+  rows beside them. Where a cut falls inside a word, the halves sit closer
+  than a space (`Toll F` | `ree`, `FP7 s` | `eries`), and two columns are
+  always held apart by more than that. Over the guard, those halves are still
+  rejoined; halves cut at a space stay apart.

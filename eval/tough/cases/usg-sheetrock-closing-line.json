@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "usg-sheetrock-submittal.pdf",
+    "url": "https://www.usg.com/content/dam/USG_Marketing_Communications/united_states/product_promotional_materials/finished_assets/sheetrock-gypsum-panels-regular-submittal-WB1473.pdf",
+    "sha256": "aadc31f0786326ca37a67d07ae6a9df5ee847dac4cbcdf67536d002509419d37",
+    "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its physical-properties tables footnote a value given in brackets, with the note's number raised right after the closing bracket."
+  },
+  "notes": [
+    "#267: `KEEP OUT OF REACH OF CHILDREN` is the bold last line of the caution, set at the caution's leading, over `TRADEMARKS`."
+  ],
+  "checks": [
+    {
+      "id": "closing-line-no-heading",
+      "found": "2026-11-25",
+      "issue": "`KEEP OUT OF REACH OF CHILDREN`, the caution's last line, was an empty heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "KEEP OUT OF REACH OF CHILDREN"
+      },
+      "count": 0
+    },
+    {
+      "id": "next-head-kept",
+      "found": "2026-11-25",
+      "issue": "Guard: `TRADEMARKS` stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "TRADEMARKS"
+      }
+    }
+  ]
+}

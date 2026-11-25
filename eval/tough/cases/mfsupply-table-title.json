@@ -1,0 +1,45 @@
+{
+  "document": {
+    "file": "mfsupply-hex-cap-screws.pdf",
+    "url": "https://www.mfsupply.com/v/vspfiles/assets/Hex-Head-Cap-Screws-Grade-5-%26-8.pdf",
+    "sha256": "37c91036346a1b8bc859912edfa17b386fa19c8398441e8e841430749c038cf4",
+    "about": "MF Supply hex cap screws sheet (2 pages). Its dimension table opens with a title band, HEX CAP SCREWS / ASME B18.2.1-2012, over a four-row header."
+  },
+  "notes": [
+    "2026-11-24 (#109): a title band or caption in a table's first row was taken as its column header, naming every column, and the rows that do name the columns read as data."
+  ],
+  "checks": [
+    {
+      "id": "band-names-no-column",
+      "found": "2026-11-24",
+      "issue": "Every one of the 248 cells carried the band as its column header.",
+      "no_column_header": "Hex Cap"
+    },
+    {
+      "id": "four-row-header",
+      "found": "2026-11-24",
+      "issue": "The four rows naming the columns read as data rows.",
+      "cell": {
+        "value": "0.2450",
+        "column": "E / Body Diameter / Min",
+        "row": "1/4"
+      }
+    },
+    {
+      "id": "deep-header-path",
+      "found": "2026-11-24",
+      "issue": "As above, for the thread length column.",
+      "cell": {
+        "value": "0.750",
+        "column": "LT / Thread Length / For Screw Lengths ≤ 6 in. / Ref",
+        "row": "1/4"
+      }
+    },
+    {
+      "id": "title-kept-as-text",
+      "found": "2026-11-24",
+      "issue": "The band's text is kept, above the table.",
+      "text": "ASME B18.2.1-2012"
+    }
+  ]
+}
