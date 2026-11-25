@@ -1103,9 +1103,14 @@ pub fn detect_with_body(pages: &[Vec<Block>], outline: &[OutlineItem], body: f32
                 });
                 continue;
             }
-            // Typography alone does not make a heading of a caption or of a
-            // field's label with its value beside it.
-            if not_a_typographic_heading(&text, b, blocks) {
+            // Typography alone does not make a heading of a caption, a
+            // field, a form's label, a list's lead-in or a signature.
+            if not_a_typographic_heading(&text, blocks, block_idx, body) {
+                continue;
+            }
+            // Nor of a letterhead: the sender's name over its address and
+            // numbers, at the head of the document's first page.
+            if page_idx == 0 && at_head(blocks, b) && over_contact(blocks, block_idx) {
                 continue;
             }
             // 4. Bold, at body size. Documents very commonly set section
@@ -1178,22 +1183,230 @@ const MAX_LABEL_GAP: f64 = 8.0;
 ///   benchmark's ground truth keeps some prominent captions as headings,
 ///   so this costs a little there;
 /// - a label ending in a colon with its value set beside it on its row,
-///   `Color:`: a field.
+///   `Color:`, or after it on its line at the body's size, `CRI: 90+`: a
+///   field (`Current Situation: 2001-2019`, set larger, is a title);
+/// - a form's label, a word or three ending in a colon or `#` set large
+///   with nothing but its blank beside it, `Location:`, `Model #:`, where
+///   only size would make it a heading;
+/// - a value set under its bold label at the label's size, in a lighter
+///   weight, `K25W951` under `PRODUCT NUMBER`;
+/// - a part of a signature block: a party's role and name over the lines
+///   it signs on, `INVESTOR:` over `Acme Fund, LP` over `By:`, and a
+///   signature page's label, `Signature Page to Voting Agreement`.
 ///
 /// A row of cells set side by side is not tested: a slide's card titles
 /// stand side by side as often as a table's header cells do.
-fn not_a_typographic_heading(text: &str, b: &Block, page: &[Block]) -> bool {
-    if is_caption(text) {
+fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) -> bool {
+    let b = &page[i];
+    let t = text.trim();
+    let larger = b.font_size as f64 > body as f64 * (1.0 + HEADING_SIZE_MARGIN);
+    if is_caption(t) || (field_on_its_line(t) && !larger) || signature_page_label(t) {
+        return true;
+    }
+    if !b.bold && form_label(t) {
+        return true;
+    }
+    if signs_off(page, i) || value_under_label(page, i) {
         return true;
     }
     let fs = (b.font_size as f64).max(1.0);
-    text.trim_end().ends_with(':')
-        && page.iter().any(|o| {
-            !std::ptr::eq(o, b)
+    t.ends_with(':')
+        && page.iter().enumerate().any(|(k, o)| {
+            k != i
                 && (o.bbox.y0 - b.bbox.y0).abs() <= fs * 0.5
                 && o.bbox.x0 >= b.bbox.x1
                 && o.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP
         })
+}
+
+/// Most words in a field's label, `Initial Closing Date`, and in its
+/// value after the colon, `May 15, 2019`.
+const MAX_FIELD_LABEL_WORDS: usize = 4;
+const MAX_FIELD_VALUE_WORDS: usize = 6;
+
+/// A label and its value on one line, the value a figure, a date or a
+/// code, short or opening with its figure: `CRI: 90+`, `Hours: 8:30 am -
+/// 6:00 pm EST (Monday - Friday)`. A title with a
+/// subtitle, `Policy Rules: Limitations`, `Part II: Application of
+/// Section 67 Limitation to Specific Deductions`, states no figure, or
+/// runs on past a value's length.
+fn field_on_its_line(t: &str) -> bool {
+    let Some((label, value)) = t.split_once(": ") else {
+        return false;
+    };
+    let lw = label.split_whitespace().count();
+    let vw = value.split_whitespace().count();
+    let figure = value.trim_start().starts_with(|c: char| c.is_ascii_digit());
+    (1..=MAX_FIELD_LABEL_WORDS).contains(&lw)
+        && (figure || (1..=MAX_FIELD_VALUE_WORDS).contains(&vw))
+        && value.chars().any(|c| c.is_ascii_digit())
+}
+
+/// Most words in a form's label.
+const MAX_FORM_LABEL_WORDS: usize = 3;
+
+/// A form's label: a word or three ending in a colon or a `#`, `Location:`,
+/// `Model #:`, `Item #`.
+fn form_label(t: &str) -> bool {
+    (t.ends_with(':') || t.ends_with('#')) && t.split_whitespace().count() <= MAX_FORM_LABEL_WORDS
+}
+
+/// `Signature Page to Voting Agreement`, `[Signature Page Follows]`: the
+/// label an agreement sets on the page its parties sign.
+fn signature_page_label(t: &str) -> bool {
+    t.trim_start_matches(['[', '('])
+        .to_lowercase()
+        .starts_with("signature page")
+}
+
+/// How many blocks after a party's role or name the lines it signs on
+/// may start: `INVESTOR:` over the fund's name over `By:`.
+const SIGNATURE_REACH: usize = 3;
+
+/// Most words in a party's role or name.
+const MAX_SIGNATORY_WORDS: usize = 10;
+
+/// Block `i` is a party's role or name in a signature block: a line to
+/// sign on follows it, `By:`, `Its:`, `(Signature)`, a rule of
+/// underscores, or a `Name:` with a `Title:` after it, with only other
+/// roles and names between. Text between, a paragraph that ends a section
+/// before its signature (`Notation Vote` over the vote's paragraph over
+/// the Secretary's rule), says the block heads that text instead.
+fn signs_off(page: &[Block], i: usize) -> bool {
+    let short = |b: &Block| b.text().split_whitespace().count() <= MAX_SIGNATORY_WORDS;
+    if !short(&page[i]) {
+        return false;
+    }
+    let after: Vec<&Block> = page.iter().skip(i + 1).take(SIGNATURE_REACH).collect();
+    for (k, b) in after.iter().enumerate() {
+        let t = b.text();
+        let lower = t.trim().to_lowercase();
+        let signs = lower.starts_with("by:")
+            || lower.starts_with("its:")
+            || lower.starts_with("(signature")
+            || lower.starts_with("signature:")
+            || lower.starts_with("/s/")
+            || signing_rule(t.trim())
+            || (lower.starts_with("name:")
+                && after
+                    .iter()
+                    .skip(k + 1)
+                    .any(|n| n.text().trim().to_lowercase().starts_with("title:")));
+        if signs {
+            return true;
+        }
+        if !short(b) {
+            return false;
+        }
+    }
+    false
+}
+
+/// A rule to sign on, typed as underscores: most of the line is `_`.
+fn signing_rule(t: &str) -> bool {
+    let underscores = t.chars().filter(|c| *c == '_').count();
+    underscores >= 4 && underscores * 2 >= t.chars().filter(|c| !c.is_whitespace()).count()
+}
+
+/// Block `i`, in a lighter weight, is set at its size directly under a bold
+/// label, alone or under other such lines: the label's value, `K25W951`
+/// under `PRODUCT NUMBER`, a company's name and address under
+/// `MANUFACTURER'S NAME`. A section under its title is set apart from it
+/// by size or a gap; a value sits on the label's next line.
+fn value_under_label(page: &[Block], i: usize) -> bool {
+    if page[i].bold {
+        return false;
+    }
+    let same = |a: &Block, b: &Block| (a.font_size - b.font_size).abs() <= 0.25;
+    let mut below = &page[i];
+    for above in page[..i].iter().rev() {
+        let fs = (below.font_size as f64).max(1.0);
+        let gap = below.bbox.y0 - above.bbox.y1;
+        let overlaps = above.bbox.x1.min(below.bbox.x1) > above.bbox.x0.max(below.bbox.x0);
+        if !same(above, below) || !overlaps || gap < -fs * 0.2 || gap > fs * VALUE_GAP {
+            return false;
+        }
+        if above.bold {
+            return above.lines.len() == 1;
+        }
+        below = above;
+    }
+    false
+}
+
+/// Widest gap, in ems, between a label and its value on the next line.
+const VALUE_GAP: f64 = 1.0;
+
+/// Share of a page's text, from its top, that its head takes: where a
+/// letterhead is set.
+const PAGE_HEAD: f64 = 0.15;
+
+/// The block starts in the head of its page's text.
+fn at_head(page: &[Block], b: &Block) -> bool {
+    let top = page.iter().map(|o| o.bbox.y0).fold(f64::MAX, f64::min);
+    let bottom = page.iter().map(|o| o.bbox.y1).fold(f64::MIN, f64::max);
+    b.bbox.y0 <= top + (bottom - top) * PAGE_HEAD
+}
+
+/// Widest gap, in ems, from a block to the one it sets next under it: a
+/// letterhead's name over its smaller address lines.
+const BELOW_GAP: f64 = 1.5;
+
+/// The block set next under block `i`, sharing some of its width, within
+/// a line's space: the next line of what `i` begins, whatever the reading
+/// order puts between them.
+fn directly_below(page: &[Block], i: usize) -> Option<usize> {
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    page.iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i
+                && o.bbox.y0 >= b.bbox.y1 - fs * 0.2
+                && o.bbox.y0 - b.bbox.y1 <= fs * BELOW_GAP
+                && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+        })
+        .min_by(|(_, a), (_, c)| a.bbox.y0.total_cmp(&c.bbox.y0))
+        .map(|(k, _)| k)
+}
+
+/// Lines a letterhead may set between its name and its address: a
+/// division's name.
+const LETTERHEAD_LINES: usize = 2;
+
+/// Widest difference in size, in points, between a letterhead's name and a
+/// line it sets under it as part of the name.
+const LETTERHEAD_SIZE_STEP: f32 = 0.5;
+
+/// Block `i` stands over an address block, directly or over a line or two
+/// set like it: `TRUE MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE
+/// DIVISION` over its street, phone and web address. A line set otherwise
+/// between them is not the name's: an article's title stands over its
+/// authors, and they over the affiliations that give their e-mail.
+fn over_contact(page: &[Block], i: usize) -> bool {
+    let name = &page[i];
+    let mut k = i;
+    for _ in 0..=LETTERHEAD_LINES {
+        let Some(next) = directly_below(page, k) else {
+            return false;
+        };
+        let b = &page[next];
+        if states_contact(b) {
+            return true;
+        }
+        if b.bold != name.bold || (b.font_size - name.font_size).abs() > LETTERHEAD_SIZE_STEP {
+            return false;
+        }
+        k = next;
+    }
+    false
+}
+
+/// Any line of the block states a web address, an e-mail address or a
+/// phone number: an address block's.
+fn states_contact(b: &Block) -> bool {
+    b.lines.iter().any(|l| ends_with_contact(&l.text))
+        || b.text().split(['•', '|']).any(ends_with_contact)
 }
 
 /// A kicker is not a section: a category, series name or tagline set in
@@ -1793,8 +2006,115 @@ mod tests {
         value.bbox.y0 = label.bbox.y0;
         value.bbox.y1 = label.bbox.y1;
         let page = vec![label.clone(), value];
-        assert!(not_a_typographic_heading("Color:", &label, &page));
-        assert!(!not_a_typographic_heading("Color:", &label, &page[..1]));
+        assert!(not_a_typographic_heading("Color:", &page, 0, 10.0));
+        assert!(!not_a_typographic_heading("Color:", &page[..1], 0, 10.0));
+    }
+
+    /// `text` at size `fs`, its top at `y`.
+    fn at(text: &str, fs: f32, y: f64, bold: bool) -> Block {
+        let mut b = blk(text, fs, 1);
+        b.bbox.y0 = y;
+        b.bbox.y1 = y + fs as f64;
+        b.bold = bold;
+        b
+    }
+
+    #[test]
+    fn fields_forms_and_signatures_are_no_headings() {
+        // A label and its value on one line.
+        assert!(field_on_its_line("CRI: 90+"));
+        assert!(field_on_its_line(
+            "Hours: 8:30 am - 6:00 pm EST (Monday - Friday)"
+        ));
+        assert!(field_on_its_line("Initial Closing Date: May 15, 2019"));
+        assert!(!field_on_its_line("Policy Rules: Limitations"));
+        assert!(!field_on_its_line(
+            "Part II: Application of Section 67 Limitation to Specific Deductions"
+        ));
+        // A form's label.
+        assert!(form_label("Model #:") && form_label("Location:"));
+        assert!(!form_label(
+            "The rules for excavations should also address:"
+        ));
+        // A party's role and name over the line it signs on.
+        let page = vec![
+            at("INVESTOR:", 10.0, 0.0, true),
+            at("Acme Fund, LP", 10.0, 14.0, true),
+            at("By: ____________", 10.0, 40.0, false),
+        ];
+        assert!(signs_off(&page, 0) && signs_off(&page, 1));
+        assert!(!signs_off(&page, 2));
+        // A head over its section's last paragraph, before a signature.
+        let page = vec![
+            at("Notation Vote", 10.0, 0.0, true),
+            blk(
+                "By notation vote completed on January 2, the Committee unanimously approved the minutes.",
+                10.0,
+                2,
+            ),
+            at("_______________________", 10.0, 60.0, false),
+            at("A. Secretary", 10.0, 74.0, true),
+        ];
+        assert!(!signs_off(&page, 0));
+        assert!(signature_page_label("[Signature Page to Voting Agreement]"));
+        // A value under its bold label, at its size; not a section under
+        // its title, set apart by a gap.
+        let page = vec![
+            at("PRODUCT NUMBER", 9.6, 0.0, true),
+            at("K25W951", 9.6, 13.4, false),
+            at("Overview", 9.6, 40.0, true),
+            at("A short line", 9.6, 62.0, false),
+        ];
+        assert!(value_under_label(&page, 1));
+        assert!(!value_under_label(&page, 3));
+    }
+
+    #[test]
+    fn a_letterhead_is_no_heading() {
+        let mut name = at("ACME MANUFACTURING CO., INC.", 9.3, 35.0, true);
+        name.bbox.x0 = 200.0;
+        name.bbox.x1 = 400.0;
+        let mut division = at("U.S.A. FOODSERVICE DIVISION", 9.3, 51.0, true);
+        division.bbox.x0 = 210.0;
+        division.bbox.x1 = 390.0;
+        let mut address = at(
+            "2001 East Lane, Springfield, Missouri 63366-4434 (636)240-2400",
+            7.2,
+            69.0,
+            false,
+        );
+        address.bbox.x0 = 180.0;
+        address.bbox.x1 = 420.0;
+        let mut rest = body();
+        rest.bbox.y0 = 600.0;
+        rest.bbox.y1 = 640.0;
+        let page = vec![name, division, address, rest];
+        assert!(over_contact(&page, 0) && over_contact(&page, 1));
+        let hs = detect(&[page], &[]);
+        assert!(hs.is_empty(), "{hs:?}");
+        // An article's title over its authors, over an affiliation that
+        // gives an e-mail address: the authors are not set like the title.
+        let mut title = at(
+            "Effect of Process Parameters on Alloy Properties",
+            17.9,
+            115.0,
+            false,
+        );
+        title.bbox.x0 = 77.0;
+        title.bbox.x1 = 500.0;
+        let mut authors = at("Ann Lee, Bo Chen and Cy Wu *", 10.0, 140.0, false);
+        authors.bbox.x0 = 76.0;
+        authors.bbox.x1 = 400.0;
+        let mut affiliation = at(
+            "School of Materials, Taiyuan 030051, China; ann@example.edu",
+            9.0,
+            155.0,
+            false,
+        );
+        affiliation.bbox.x0 = 82.0;
+        affiliation.bbox.x1 = 520.0;
+        let page = vec![title, authors, affiliation];
+        assert!(!over_contact(&page, 0));
     }
 
     #[test]
