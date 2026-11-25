@@ -3308,9 +3308,13 @@ pub fn detect_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
-    with_header_band_edges(
-        detect_framed_rules(rules, fills, glyphs, page, frames),
-        fills,
+    with_column_bands(
+        with_header_band_edges(
+            detect_framed_rules(rules, fills, glyphs, page, frames),
+            fills,
+            glyphs,
+        ),
+        rules,
         glyphs,
     )
 }
@@ -4063,9 +4067,13 @@ pub fn detect_by_component_framed(
     page: usize,
     frames: &[BBox],
 ) -> Vec<Grid> {
-    with_header_band_edges(
-        detect_components(rules, fills, glyphs, page, frames),
-        fills,
+    with_column_bands(
+        with_header_band_edges(
+            detect_components(rules, fills, glyphs, page, frames),
+            fills,
+            glyphs,
+        ),
+        rules,
         glyphs,
     )
 }
@@ -4142,6 +4150,113 @@ fn with_header_band_edge(
     wider.xs.insert(0, band.x0);
     wider.bbox.x0 = band.x0;
     Some(wider)
+}
+
+/// `grids`, each raised to the top of the band its ruling opens over a
+/// group of its columns (see [`with_column_band`]); not onto another grid.
+fn with_column_bands(
+    mut grids: Vec<Grid>,
+    rules: &[Rule],
+    glyphs: &[crate::glyph::Glyph],
+) -> Vec<Grid> {
+    for i in 0..grids.len() {
+        let Some(taller) = with_column_band(&grids[i], rules, glyphs) else {
+            continue;
+        };
+        if !grids
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != i && overlaps(&o.bbox, &taller.bbox))
+        {
+            grids[i] = taller;
+        }
+    }
+    grids
+}
+
+/// `g` raised by a row where its top rule runs over a group of its columns
+/// only and the rule beside the group runs on above it, up to the top of a
+/// band naming the group.
+///
+/// A table left open at the top sets a band over the columns its figures
+/// share (`BOLSAS ADICIONALES NECESARIAS POR CADA 100 PIES DE LA LÍNEA DEL
+/// TECHO` over three roof pitches) and rules under it across those columns
+/// alone; the column of labels beside them (`VALOR-R`) stands open from the
+/// band's top down through the header, its rule running on up beside the
+/// band. The rules alone start the grid under the band, and the band reads
+/// as a heading over the table. Its text must stand over the group alone:
+/// a title running on over the labels is the table's, not the group's.
+fn with_column_band(g: &Grid, rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Option<Grid> {
+    let cols = g.cols();
+    if g.ys.len() < 3 || cols < 3 || g.xs.len() != cols + 1 {
+        return None;
+    }
+    let top = g.ys[0];
+    let at_top: Vec<(f64, f64)> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == Orientation::Horizontal
+                && (r.bbox.y0 - top).abs() <= EDGE_TOLERANCE * 2.0
+        })
+        .map(|r| (r.bbox.x0, r.bbox.x1))
+        .collect();
+    let ruled: Vec<bool> = (0..cols)
+        .map(|c| {
+            let (x0, x1) = (g.xs[c], g.xs[c + 1]);
+            span_coverage(at_top.iter().copied(), x0, x1) >= 0.6 * (x1 - x0)
+        })
+        .collect();
+    // The group: one run of ruled columns, two or more, the open ones beside
+    // it at the table's edges.
+    let a = ruled.iter().position(|r| *r)?;
+    let b = a + ruled[a..].iter().take_while(|r| **r).count();
+    if b - a < 2 || ruled[b..].iter().any(|r| *r) || (a == 0 && b == cols) {
+        return None;
+    }
+    // The rule at each open side of the group runs on above the top; the
+    // band stands as tall as the shorter.
+    let mut band_top = f64::NEG_INFINITY;
+    for k in [a, b] {
+        if k == 0 || k == cols {
+            continue;
+        }
+        let x = g.xs[k];
+        let up = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Vertical
+                    && (r.axis_pos() - x).abs() <= EDGE_TOLERANCE
+                    && r.bbox.y1 >= top - EDGE_TOLERANCE
+                    && r.bbox.y0 < top - MIN_CELL_EXTENT
+            })
+            .map(|r| r.bbox.y0)
+            .reduce(f64::min)?;
+        band_top = band_top.max(up);
+    }
+    let (left, right) = (g.xs[0], g.xs[cols]);
+    let (gx0, gx1) = (g.xs[a] - EDGE_TOLERANCE, g.xs[b] + EDGE_TOLERANCE);
+    let mut named = false;
+    for b in glyphs
+        .iter()
+        .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+        .filter_map(|gl| gl.bbox)
+    {
+        let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+        if cy <= band_top || cy >= top || cx <= left || cx >= right {
+            continue;
+        }
+        if b.x0 < gx0 || b.x1 > gx1 {
+            return None;
+        }
+        named = true;
+    }
+    if !named {
+        return None;
+    }
+    let mut taller = g.clone();
+    taller.ys.insert(0, band_top);
+    taller.bbox.y0 = band_top;
+    Some(taller)
 }
 
 /// A grid read from a stack of row lines is a table ruled row by row: its
@@ -7772,6 +7887,37 @@ mod header_tests {
             ys,
             bbox,
         }
+    }
+
+    #[test]
+    fn a_band_over_a_group_of_columns_is_the_tables_top_row() {
+        // A label column and three columns under a band; the rule under
+        // the band runs over the three alone, and the label column's rule
+        // runs on up beside the band.
+        let g = plain_grid(
+            vec![0.0, 40.0, 120.0, 200.0, 280.0],
+            vec![114.0, 136.0, 150.0, 164.0, 178.0],
+        );
+        let rules = |stub: bool, top_from: f64| {
+            let mut rs = vec![h(top_from, 280.0, 114.0)];
+            rs.extend([136.0, 150.0, 164.0, 178.0].map(|y| h(0.0, 280.0, y)));
+            rs.push(v(if stub { 100.0 } else { 114.0 }, 178.0, 40.0));
+            rs.extend([120.0, 200.0].map(|x| v(114.0, 178.0, x)));
+            rs
+        };
+        let band = [gly(45.0, 110.0, 150.0, "BAGS PER 100 FT OF RIDGE")];
+        let taller = with_column_band(&g, &rules(true, 40.0), &band).expect("raised");
+        assert_eq!(taller.ys[0], 100.0);
+        assert_eq!(taller.rows(), g.rows() + 1);
+        // Text running on over the label column is the table's title.
+        let title = [gly(5.0, 110.0, 190.0, "ADDITIONAL BAGS PER 100 FT")];
+        assert!(with_column_band(&g, &rules(true, 40.0), &title).is_none());
+        // No rule running on above the top: the grid starts where it did.
+        assert!(with_column_band(&g, &rules(false, 40.0), &band).is_none());
+        // A top rule across every column closes the table; nothing opens.
+        assert!(with_column_band(&g, &rules(true, 0.0), &band).is_none());
+        // Nothing named in the band.
+        assert!(with_column_band(&g, &rules(true, 40.0), &[]).is_none());
     }
 
     #[test]
