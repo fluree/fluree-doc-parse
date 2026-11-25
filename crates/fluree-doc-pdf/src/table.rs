@@ -6613,10 +6613,18 @@ fn segment_rows(glyphs: &[crate::glyph::Glyph]) -> (Vec<Vec<usize>>, Vec<Vec<Seg
         .map(|r| {
             r.sort_by(|&a, &b| bb(a).x0.total_cmp(&bb(b).x0));
             let mut out: Vec<Seg> = Vec::new();
+            // Text after a run of dot leaders starts a cell, as in
+            // [`cell_starts`].
+            let row: Vec<&crate::glyph::Glyph> = r.iter().map(|&i| &glyphs[i]).collect();
+            let contents = crate::textgrid::contents_entry(&row);
+            let mut run = crate::textgrid::LeaderRun::default();
             for &i in r.iter() {
                 let fs = glyphs[i].font_size.max(1.0) as f64;
+                let after_leaders = run.step(&glyphs[i]) >= crate::textgrid::LEADER_DOTS
+                    && crate::textgrid::leader_dots(glyphs[i].text.trim()) == 0
+                    && !contents;
                 match out.last_mut() {
-                    Some(s) if bb(i).x0 - s.x1 <= fs * TABLE_CELL_GAP => {
+                    Some(s) if bb(i).x0 - s.x1 <= fs * TABLE_CELL_GAP && !after_leaders => {
                         s.x1 = s.x1.max(bb(i).x1);
                         s.ids.push(i);
                     }
@@ -7533,6 +7541,24 @@ fn aligned_rows(glyphs: &[crate::glyph::Glyph]) -> (Vec<Vec<&crate::glyph::Glyph
         }
     }
 
+    // A row holding dot leaders, left to right: leaders stand only between
+    // a label and its value, and part them ([`cell_starts`]), but glyphs a
+    // hair off the row's baseline were sorted by height first and come out
+    // of turn. Other rows keep their order (see [`colon_field_lists`]).
+    for r in rows.iter_mut() {
+        let mut run = crate::textgrid::LeaderRun::default();
+        let leads = r.iter().any(|g| {
+            run.step(g);
+            run.leads()
+        });
+        if leads {
+            let mut sorted = r.clone();
+            sorted.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
+            if !crate::textgrid::contents_entry(&sorted) {
+                *r = sorted;
+            }
+        }
+    }
     // Cell starts within each row.
     let cells: Vec<Vec<f64>> = rows.iter().map(|r| cell_starts(r)).collect();
     (rows, cells)
@@ -7675,12 +7701,21 @@ fn has_two_axis_header(g: &Grid, glyphs: &[crate::glyph::Glyph]) -> bool {
 fn cell_starts(row: &[&crate::glyph::Glyph]) -> Vec<f64> {
     let mut out = Vec::new();
     let mut prev_end: Option<f64> = None;
+    // Dot leaders run a label up to the next column's text, a word space or
+    // less short of it: the text after a run of them starts a cell. Not in
+    // a contents entry's line, whose leaders run to its page.
+    let contents = crate::textgrid::contents_entry(row);
+    let mut run = crate::textgrid::LeaderRun::default();
     for g in row {
         let b = g.bbox.unwrap();
         let fs = g.font_size.max(1.0) as f64;
+        let after_leaders = run.step(g) >= crate::textgrid::LEADER_DOTS
+            && crate::textgrid::leader_dots(g.text.trim()) == 0
+            && !contents;
         match prev_end {
             None => out.push(b.x0),
             Some(pe) if b.x0 - pe > fs * TABLE_CELL_GAP => out.push(b.x0),
+            Some(_) if after_leaders => out.push(b.x0),
             _ => {}
         }
         prev_end = Some(b.x1);
@@ -11167,6 +11202,37 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    #[test]
+    fn text_after_dot_leaders_starts_a_cell() {
+        let inked = |gs: &[crate::glyph::Glyph]| -> Vec<crate::glyph::Glyph> {
+            gs.iter().filter(|g| g.bbox.is_some()).cloned().collect()
+        };
+        // A label's leaders run up to the next column's text, a word space
+        // short of it: the leaders are the gutter.
+        let row = inked(&set("Kolkata, India ........ Manufacturing", 40.0, 100.0));
+        let refs: Vec<&crate::glyph::Glyph> = row.iter().collect();
+        assert_eq!(cell_starts(&refs).len(), 2);
+        // An ellipsis in a sentence parts nothing.
+        let row = inked(&set("and so on... more", 40.0, 100.0));
+        let refs: Vec<&crate::glyph::Glyph> = row.iter().collect();
+        assert_eq!(cell_starts(&refs).len(), 1);
+        // A glyph a hair off the row's baseline comes first by height; a row
+        // holding leaders is still read left to right.
+        let mut glyphs = set(
+            "Kolkata, India ........ Manufacturing  Freight",
+            40.0,
+            100.0,
+        );
+        let n = glyphs.len();
+        for g in &mut glyphs[n - 7..] {
+            g.origin.1 -= 0.01;
+        }
+        glyphs.extend(set("Belo Horizonte ........ Office  Freight", 40.0, 112.0));
+        let (_, cells) = aligned_rows(&glyphs);
+        assert_eq!(cells[0].len(), 3);
+        assert_eq!(cells[1].len(), 3);
     }
 
     #[test]

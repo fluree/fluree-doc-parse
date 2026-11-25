@@ -2712,6 +2712,22 @@ pub fn routing_is_consulted(opts: &AnalyzeOptions) -> bool {
     opts.emit_anchors || opts.layout_prefix.is_some()
 }
 
+/// Text that is dot leaders alone: a run of
+/// [`crate::textgrid::LEADER_DOTS`] dots or more, spaced or not, and nothing
+/// else.
+fn leaders_only(text: &str) -> bool {
+    let mut dots = 0usize;
+    for c in text.chars() {
+        match c {
+            c if c.is_whitespace() => {}
+            '…' => dots += 3,
+            '.' | '·' | '․' | '‥' => dots += 1,
+            _ => return false,
+        }
+    }
+    dots >= crate::textgrid::LEADER_DOTS
+}
+
 fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
     // The glyphs each grid's cells read, so that a glyph is in a cell or
     // in the prose, never both and never neither (`Grid::takes`).
@@ -3398,6 +3414,20 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .map(|g| g.split_by_alignment(&p.glyphs))
                 .collect()
         });
+
+        // A line of dot leaders alone, inside a table's box, is the gutter
+        // between a label the table reads and its value, left between their
+        // cells: none of the page's text. Kept among the page's glyphs until
+        // here, it measured the page's word spaces with them.
+        for col in cols.iter_mut() {
+            col.retain(|l| {
+                let (x, y) = ((l.bbox.x0 + l.bbox.x1) / 2.0, (l.bbox.y0 + l.bbox.y1) / 2.0);
+                !(leaders_only(&l.text)
+                    && grids.iter().any(|g| {
+                        x >= g.bbox.x0 && x <= g.bbox.x1 && y >= g.bbox.y0 && y <= g.bbox.y1
+                    }))
+            });
+        }
 
         // Each region's columns in turn, down the page.
         let table_boxes: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
@@ -4260,13 +4290,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     merges.continues_left[r * cols + c] = true;
                 }
             }
+            // A label's dot leaders run it up to the next column: they are
+            // the gutter's, not the cell's text, however the table was read.
+            let min = match explicit {
+                Some(_) => 3,
+                None => crate::textgrid::LEADER_DOTS,
+            };
+            for cell in rows.iter_mut().flatten() {
+                *cell = crate::textgrid::strip_leaders_of(cell, min);
+            }
             let mut header_rows = match explicit {
-                Some(lay) => {
-                    for cell in rows.iter_mut().flatten() {
-                        *cell = crate::textgrid::strip_leaders(cell);
-                    }
-                    lay.header_rows
-                }
+                Some(lay) => lay.header_rows,
                 None => {
                     let page = &raw.pages[pi];
                     let h = g.header_rows(&rows, &page.glyphs, &page.rules, &page.fills);
