@@ -358,7 +358,8 @@ fn says_something(c: char) -> bool {
 ///
 /// Without that proof a bar chart's tick labels destroy each other: `2024` and
 /// `2023` sit side by side on one row, each outdented relative to the other, so
-/// each reads as the other's bullet. Both vanished from every chart in an
+/// each reads as the other's bullet. And a number marks an item, which says
+/// more than a number: a tick label set beside another is none. Both vanished from every chart in an
 /// annual report, leaving four figures with no years attached — the text was in
 /// the glyph layer, and in the assembled lines, and disappeared here.
 ///
@@ -403,6 +404,11 @@ fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f
     // over the `SYMM` mark below it.
     let fs = (l.font_size.max(nb.font_size) as f64).max(1.0);
     if worded && (l.bbox.y1.min(nb.bbox.y1) - l.bbox.y0.max(nb.bbox.y0)) < -fs * 0.5 {
+        return false;
+    }
+    // Nor does it mark another such: a chart's tick labels set side by side,
+    // `2.4−` beside `2.6−`, are no number and its item.
+    if l.text.chars().any(says_something) && marker_shaped(&nb.text) {
         return false;
     }
     // A list's marker is set at most a little larger than its item, never
@@ -539,19 +545,51 @@ const DOT_REACH: f64 = 2.0;
 /// arrow alone could as well be a range, a minus or a dialogue's dash: a
 /// run of lines each opening with one of them makes them a list's.
 const RUN_LEADS: &[char] = &[
-    '-', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2192}', '\u{2794}', '\u{27F6}',
+    '-', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2212}', '\u{2192}', '\u{2794}', '\u{27F6}', '>',
 ];
 
-/// The dash or arrow a line opens with, followed by a space and words.
+/// A glyph that says nothing as text, which a list can open its items with
+/// as it does with a bullet: a code the font maps to a control character
+/// or to the private use area (a `▶` set as 0x17), or an arrow, a shape or
+/// a dingbat no list of bullets names. Taken as a mark only in a run of
+/// lines that open with it, as a dash is.
+fn mark_glyph(c: char) -> bool {
+    !is_bullet(c)
+        && (fluree_doc_model::is_stray_control(c)
+            || ('\u{E000}'..='\u{F8FF}').contains(&c)
+            || ('\u{2190}'..='\u{21FF}').contains(&c)
+            || ('\u{25A0}'..='\u{25FF}').contains(&c)
+            || ('\u{2700}'..='\u{27BF}').contains(&c))
+}
+
+/// A mark a run of lines can open a list's items with: a dash, an arrow,
+/// or a glyph that says nothing as text.
+fn leads_runs(c: char) -> bool {
+    RUN_LEADS.contains(&c) || mark_glyph(c)
+}
+
+/// The dash, arrow or mark a line opens with, followed by a space and
+/// words.
 fn run_lead(l: &Line) -> Option<char> {
     let t = l.text.trim_start();
     let mut chars = t.chars();
     let c = chars.next()?;
     let rest = chars.as_str();
-    (RUN_LEADS.contains(&c)
+    // A `>` opens an item that opens a sentence or a figure and says a few
+    // words, `> Ergonomic design`: a quoted message's lines open with one
+    // too, going on with their sentences in lower case, and a comparison's
+    // sign begins a fragment (`> C`, `> 0`).
+    let opens = rest
+        .trim_start()
+        .chars()
+        .next()
+        .is_some_and(|f| f.is_uppercase() || f.is_ascii_digit())
+        && rest.split_whitespace().count() >= 2;
+    (leads_runs(c)
         && rest.starts_with([' ', '\u{00A0}', '\t'])
-        && rest.chars().any(char::is_alphanumeric))
-    .then_some(c)
+        && rest.chars().any(char::is_alphanumeric)
+        && (c != '>' || opens))
+        .then_some(c)
 }
 
 /// Lines apart, at most, two items of one dash-led list may stand: an item
@@ -567,9 +605,7 @@ const RUN_SEPARATOR_WORDS: usize = 3;
 /// opens with it.
 pub fn strip_run_lead<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
     let mut m = marker.chars();
-    let lead = m
-        .next()
-        .filter(|c| RUN_LEADS.contains(c) && m.next().is_none())?;
+    let lead = m.next().filter(|&c| leads_runs(c) && m.next().is_none())?;
     let rest = text.trim_start().strip_prefix(lead)?;
     let rest = rest.strip_prefix([' ', '\u{00A0}', '\t'])?.trim_start();
     (!rest.is_empty()).then_some(rest)
@@ -658,23 +694,31 @@ pub fn assemble_in_measure(
     let runs: Vec<Option<char>> = (0..lines.len())
         .map(|i| {
             let c = leads[i]?;
-            let lo = i.saturating_sub(RUN_REACH);
-            let hi = (i + RUN_REACH).min(lines.len() - 1);
-            let x = lines[i].bbox.x0;
-            let between = |a: usize, b: usize| {
-                (a + 1..b).all(|k| {
-                    lines[k].bbox.x0 > x + RUN_ALIGN
-                        || lines[k].text.split_whitespace().count() <= RUN_SEPARATOR_WORDS
-                })
+            // A mark that says nothing as text is no range or minus: its
+            // items may wrap over any number of lines hanging under them.
+            let reach = if mark_glyph(c) {
+                lines.len()
+            } else {
+                RUN_REACH
             };
-            (lo..=hi)
-                .any(|j| {
-                    j != i
-                        && leads[j] == Some(c)
-                        && (lines[j].bbox.x0 - x).abs() <= RUN_ALIGN
-                        && between(i.min(j), i.max(j))
-                })
-                .then_some(c)
+            let x = lines[i].bbox.x0;
+            // A line that can stand between two items: it hangs under the
+            // item's text, or says a word or two.
+            let between = |k: usize| {
+                lines[k].bbox.x0 > x + RUN_ALIGN
+                    || lines[k].text.split_whitespace().count() <= RUN_SEPARATOR_WORDS
+            };
+            let partner =
+                |j: usize| leads[j] == Some(c) && (lines[j].bbox.x0 - x).abs() <= RUN_ALIGN;
+            // Outward each way, as far as a line that could stand between.
+            let up = (i.saturating_sub(reach)..i)
+                .rev()
+                .find(|&j| partner(j) || !between(j))
+                .is_some_and(partner);
+            let down = (i + 1..=(i + reach).min(lines.len() - 1))
+                .find(|&j| partner(j) || !between(j))
+                .is_some_and(partner);
+            (up || down).then_some(c)
         })
         .collect();
     // Lines a marker pulled out above stands beside: each is an item of its
@@ -683,9 +727,23 @@ pub fn assemble_in_measure(
         .iter()
         .map(|l| markers.iter().any(|m| marker_beside(m, l)))
         .collect();
+    // The note each line opens, a raised number in it or pulled out beside
+    // it, with where the number stands.
+    let note: Vec<Option<(u32, f64)>> = lines
+        .iter()
+        .map(|l| {
+            raised_number(l).map(|n| (n, l.bbox.x0)).or_else(|| {
+                markers
+                    .iter()
+                    .find(|m| marker_beside(m, l) && note_number(m, l))
+                    .and_then(|m| Some((m.text.trim().parse().ok()?, m.bbox.x0)))
+            })
+        })
+        .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
     let read: Vec<bool> = lines.iter().map(|l| read_by_ocr(l, ocr)).collect();
     let mut marked: Vec<(usize, String)> = Vec::new();
+    let mut start = 0;
     let mark = |i: usize| {
         if ticked[i] {
             Some(CHECKBOX_MARKER.to_string())
@@ -700,6 +758,7 @@ pub fn assemble_in_measure(
             if let Some(m) = mark(i) {
                 marked.push((blocks.len(), m));
             }
+            start = i;
             cur.push(l.clone());
             continue;
         }
@@ -710,20 +769,24 @@ pub fn assemble_in_measure(
             && band[i] == band[i - 1]
             && read[i] == read[i - 1]
             && !set_back(&cur, l)
+            && !counts_on_note(note[start], note[i], l.font_size)
             && (continues(cur.last().unwrap(), l, leading, &edge, !led[i])
                 || runs_on(&cur, l, leading))
         {
             cur.push(l.clone());
         } else {
-            blocks.extend(finish(build(std::mem::take(&mut cur)), &edge));
+            let b = with_mark(build(std::mem::take(&mut cur)), &marked, blocks.len());
+            blocks.extend(finish(b, &edge));
             if let Some(m) = mark(i) {
                 marked.push((blocks.len(), m));
             }
+            start = i;
             cur.push(l.clone());
         }
     }
     if !cur.is_empty() {
-        blocks.extend(finish(build(cur), &edge));
+        let b = with_mark(build(cur), &marked, blocks.len());
+        blocks.extend(finish(b, &edge));
     }
     for (i, m) in marked {
         if let Some(b) = blocks.get_mut(i) {
@@ -745,6 +808,7 @@ pub fn assemble_in_measure(
 
     // Attach each marker to the block whose first line it sits nearest, by
     // vertical distance. A bullet belongs to the paragraph it introduces.
+    let mut placed: Vec<(Line, usize, bool)> = Vec::new();
     for m in markers {
         let my = m.bbox.y0;
         // Containment first: a superscript footnote reference sits *inside* the
@@ -767,19 +831,64 @@ pub fn assemble_in_measure(
                 })
                 .map(|(i, _)| i)
         });
-        if let Some(i) = idx {
-            // A list marker stands to the *left* of what it introduces. One
-            // sitting inside the text is an affiliation or footnote reference
-            // annotating a word — an author line with `∗†` set above three
-            // names mid-line read as a marker and turned the whole author
-            // block into a list item. Vertical containment alone cannot tell
-            // them apart.
-            if m.bbox.x1 > blocks[i].bbox.x0 + MARKER_OUTDENT_TOLERANCE {
-                continue;
-            }
-            if blocks[i].marker.is_none() {
-                blocks[i].marker = Some(m.text.clone());
-            }
+        // A list marker stands to the *left* of what it introduces. One
+        // sitting inside the text is an affiliation or footnote reference
+        // annotating a word — an author line with `∗†` set above three
+        // names mid-line read as a marker and turned the whole author
+        // block into a list item. Vertical containment alone cannot tell
+        // them apart.
+        let Some(i) = idx else { continue };
+        let first = &blocks[i].lines[0];
+        if m.bbox.x1 <= blocks[i].bbox.x0 + MARKER_OUTDENT_TOLERANCE {
+            placed.push((m, i, false));
+        } else if note_number(&m, first) && m.bbox.x1 <= first.bbox.x0 + MARKER_OUTDENT_TOLERANCE {
+            // A note's raised number stands left of the line it opens,
+            // however far left a later line of its block starts; it is kept
+            // only as the note's number.
+            placed.push((m, i, true));
+        }
+    }
+    // A footnote's number, raised at the margin before its text, is the
+    // note's: the body's note marks refer to it. It goes back in front of the
+    // text it was pulled from, not into a list, where the notes count: the
+    // block before opens with the number one less, or the one after with the
+    // one more. A chart's tick labels beside the text are raised as often,
+    // and count by tens.
+    let raised: Vec<Option<u32>> = placed
+        .iter()
+        .map(|(m, i, _)| {
+            blocks[*i]
+                .lines
+                .first()
+                .filter(|l| blocks[*i].marker.is_none() && note_number(m, l))
+                .and_then(|_| m.text.trim().parse().ok())
+        })
+        .collect();
+    let mut opens: Vec<Option<u32>> = blocks
+        .iter()
+        .map(|b| b.lines.first().and_then(raised_number))
+        .collect();
+    for ((_, i, _), n) in placed.iter().zip(&raised) {
+        if n.is_some() {
+            opens[*i] = *n;
+        }
+    }
+    let counts = |i: usize, n: u32| {
+        (i > 0 && n > 1 && opens[i - 1] == Some(n - 1)) || opens.get(i + 1) == Some(&Some(n + 1))
+    };
+    for ((m, i, only_note), n) in placed.into_iter().zip(raised) {
+        if n.is_some_and(|n| counts(i, n)) {
+            let b = &mut blocks[i];
+            b.bbox = b.bbox.union(&m.bbox);
+            // Raised, it opens the block as a footnote's mark: no section's
+            // number.
+            let mut m = m;
+            m.opens_with_script = true;
+            b.lines.insert(0, m);
+            continue;
+        }
+        if !only_note && blocks[i].marker.is_none() {
+            blocks[i].marker = Some(m.text.clone());
         }
     }
     blocks
@@ -959,7 +1068,7 @@ const DISPLAY_LINE_RATIO: f64 = 1.3;
 /// with every line of a justified paragraph. A line that opens with a list
 /// number is a slide's next item, not the title's next line.
 fn display_aligned(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
-    if ordinal_prefix(&next.text).is_some() {
+    if count_prefix(&next.text).is_some() {
         return false;
     }
     let display = |l: &Line| l.font_size as f64 >= edge.body * DISPLAY_LINE_RATIO;
@@ -1004,12 +1113,47 @@ fn hangs_under(prev: &Line, next: &Line, fs: f64, edge: &Edge) -> bool {
         .starts_with(['-', '\u{2013}', '\u{2014}']);
     let ends_sentence = ends_sentence(prev);
     let opens_sentence = opens_sentence(next);
-    (strip_leading_bullet(&prev.text).is_some() || run_lead(prev).is_some())
+    // An item opened by a letter (`a. For 120/277/347V
+    // connect the black fixture lead to the` over `voltage supply …`)
+    // hangs its wrapped lines too, where its sentence plainly goes on, in
+    // lower case: a heading over an indented paragraph does not.
+    // Nor does a line opening an item of its own, a sub-item's `i.`.
+    let enumerated = enumerated_item(&prev.text) && !opens_sentence && !opens_item(&next.text);
+    (strip_leading_bullet(&prev.text).is_some() || run_lead(prev).is_some() || enumerated)
         && !prev.text.trim_end().ends_with(':')
         && !opens_list
         && shift > HANG_SHIFT
         && shift <= HANGING_INDENT
         && (!(ends_sentence && opens_sentence) || edge.ran_out_of_room(prev, next))
+}
+
+/// `text` opens with an item's letter: `a.`, `b)`, `(c)`. Numbered items
+/// are counted and joined to their lines by passes of their own.
+fn enumerated_item(text: &str) -> bool {
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
+    let core = first.trim_start_matches('(');
+    let Some(core) = core.strip_suffix(['.', ')']) else {
+        return false;
+    };
+    core.chars().count() == 1 && core.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// `text` opens with an item's letter, number or roman numeral: `a.`,
+/// `(b)`, `12.`, `iv)`.
+fn opens_item(text: &str) -> bool {
+    let Some(first) = text.split_whitespace().next() else {
+        return false;
+    };
+    let core = first.trim_start_matches('(');
+    let Some(core) = core.strip_suffix(['.', ')']) else {
+        return false;
+    };
+    let letter = core.chars().count() == 1 && core.chars().all(|c| c.is_ascii_alphabetic());
+    let number = (1..=3).contains(&core.len()) && core.chars().all(|c| c.is_ascii_digit());
+    let roman = (1..=4).contains(&core.len()) && core.chars().all(|c| matches!(c, 'i' | 'v' | 'x'));
+    letter || number || roman
 }
 
 /// `l` ends on a sentence's full stop, or a question or exclamation mark,
@@ -1029,6 +1173,46 @@ fn opens_sentence(l: &Line) -> bool {
         .chars()
         .find(|c| c.is_alphanumeric())
         .is_some_and(|c| c.is_uppercase() || c.is_numeric())
+}
+
+/// Most of the text's size a raised note number is set at.
+const RAISED_RATIO: f64 = 0.85;
+
+/// `m`, a number alone, is raised before `l` as a footnote's number is:
+/// smaller than the text, its top at the text's or above, its foot well
+/// above the text's. A list's number set small sits on the baseline.
+fn note_number(m: &Line, l: &Line) -> bool {
+    let fs = (l.font_size as f64).max(1.0);
+    let t = m.text.trim();
+    !t.is_empty()
+        && t.len() <= 3
+        && t.chars().all(|c| c.is_ascii_digit())
+        && (m.font_size as f64) < fs * RAISED_RATIO
+        && m.bbox.y0 <= l.bbox.y0 + 0.15 * fs
+        && m.bbox.y1 < l.bbox.y1 - 0.15 * fs
+}
+
+/// The number a line opens with when it is raised, a footnote's: its
+/// first glyph a superscript and its first word digits alone.
+fn raised_number(l: &Line) -> Option<u32> {
+    if !l.opens_with_script {
+        return None;
+    }
+    let w = l.text.split_whitespace().next()?;
+    (w.len() <= 3 && w.chars().all(|c| c.is_ascii_digit()))
+        .then(|| w.parse().ok())
+        .flatten()
+}
+
+/// A line opens the footnote after the one the block opens: both raised
+/// numbers at the margin, in the line or pulled out beside it, the line's
+/// one more. A block of notes set at body leading, `7 1 MB/s = …` then `8
+/// Portion of buffer…`, is a note to a number, not one paragraph.
+fn counts_on_note(opens: Option<(u32, f64)>, next: Option<(u32, f64)>, size: f32) -> bool {
+    matches!(
+        (opens, next),
+        (Some((m, x)), Some((n, y))) if n == m + 1 && (y - x).abs() <= 0.5 * (size as f64).max(1.0)
+    )
 }
 
 /// Least shift, in ems, of a line out of an item's hang: the margin
@@ -1194,6 +1378,59 @@ fn ordinal_prefix(text: &str) -> Option<(u32, &str)> {
     Some((t[..digits].parse().ok()?, label))
 }
 
+/// Where a lettered label's place in its count starts: `a.` is
+/// `LETTERED + 1`. Letters count apart from numbers, so `b.` follows `a.`
+/// and never `1.`.
+const LETTERED: u32 = 1000;
+
+/// The lower-case letter a line opens with as an ordered list's label,
+/// `a.`, `b)`, `(c)`, with its place in the count (see [`LETTERED`]) and
+/// the label's text. A capital, `A.`, opens an appendix or a section as
+/// often as an item, and is no label here.
+fn letter_prefix(text: &str) -> Option<(u32, &str)> {
+    let t = text.trim_start();
+    let body = t.strip_prefix('(');
+    let inner = body.unwrap_or(t);
+    let c = inner.chars().next().filter(char::is_ascii_lowercase)?;
+    let after = &inner[1..];
+    let rest = match body {
+        Some(_) => after.strip_prefix(')')?,
+        None => after.strip_prefix(['.', ')'])?,
+    };
+    if !rest.starts_with([' ', '\t', '\u{00A0}']) {
+        return None;
+    }
+    let label = &t[..t.len() - rest.len()];
+    Some((LETTERED + (c as u32 - 'a' as u32) + 1, label))
+}
+
+/// Does a count go on from place `m`? A lettered one opens at `a.`, or
+/// carries on from a line already counted: lines that happen to open `(d)`
+/// and `(e)`, a caption's panels wrapped one to a line, count off from
+/// nothing.
+fn opens_or_carries(m: u32, carried: bool) -> bool {
+    m < LETTERED || m == LETTERED + 1 || carried
+}
+
+/// The label a line opens with as an ordered list's item, numbered or
+/// lettered: `1.`, `12)`, `a.`, `(b)`.
+fn count_prefix(text: &str) -> Option<(u32, &str)> {
+    ordinal_prefix(text).or_else(|| letter_prefix(text))
+}
+
+/// The block `at` with the marker that leads it, if a checkbox, a drawn
+/// bullet or a run of dashes does: an item, before it is parted, so the
+/// passes that part blocks see it as the item it is, as they see one a
+/// typed bullet leads. Its wrapped lines are its own: `Distributed file
+/// systems, including` over `Hadoop and Ceph`, beside a drawn dot, was cut
+/// in two as a list of entries set one per line.
+fn with_mark(mut b: Block, marked: &[(usize, String)], at: usize) -> Block {
+    if let Some((_, m)) = marked.last().filter(|(i, _)| *i == at) {
+        b.marker = Some(m.clone());
+    }
+    b
+}
+
 /// A block as assembled, parted where its lines were ended by hand: one
 /// field or entry per line ([`split_hard_breaks`], [`split_entries`]), one
 /// numbered item per line run ([`split_counted`]).
@@ -1203,6 +1440,7 @@ fn finish(b: Block, edge: &Edge) -> Vec<Block> {
         .flat_map(split_counted)
         .flat_map(|b| split_ended(b, edge))
         .flat_map(|b| split_entries(b, edge))
+        .flat_map(|b| split_stacked_heads(b, edge))
         .collect()
 }
 
@@ -1254,7 +1492,10 @@ fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
 /// either
 ///
 /// - the next opens in lower case: `…to see improved` over `performance in
-///   4Kn fomat.`, in footnotes set at twice their size's leading; or
+///   4Kn fomat.`, in footnotes set at twice their size's leading. Under an
+///   item whose lines hang under its first, a line set where they are goes
+///   on whether or not the line above is full: a list's `or` between two of
+///   its items, set in another weight; or
 /// - the break falls inside a run of capitals the weight change belongs to:
 ///   `…lead dust. LEAD IS` over the bold `TOXIC. EXPOSURE…`, in a warning
 ///   set narrower than its column, whose measure says nothing of where the
@@ -1283,15 +1524,24 @@ fn runs_on(cur: &[Line], next: &Line, leading: f64) -> bool {
     {
         return false;
     }
-    let reach = cur.iter().map(|l| l.bbox.x1).fold(next.bbox.x1, f64::max);
-    if reach - prev.bbox.x1 >= first_word_width(next) {
-        return false;
-    }
     let first = next
         .text
         .trim_start()
         .trim_start_matches(['(', '[', '"', '\'', '“', '‘']);
-    if first.chars().next().is_some_and(char::is_lowercase) {
+    let lower = first.chars().next().is_some_and(char::is_lowercase);
+    // A line hanging under an item, where the item's lines after its
+    // first are set: a list's `or` between two of its items, under an
+    // item of two lines whose second is the shorter.
+    let hangs = cur.len() >= 2
+        && cur[0].bbox.x0 + fs * 0.5 < prev.bbox.x0
+        && cur[1..]
+            .iter()
+            .all(|l| (l.bbox.x0 - prev.bbox.x0).abs() <= fs * INDENT_TOLERANCE);
+    let reach = cur.iter().map(|l| l.bbox.x1).fold(next.bbox.x1, f64::max);
+    if reach - prev.bbox.x1 >= first_word_width(next) && !(lower && hangs) {
+        return false;
+    }
+    if lower {
         return dy <= leading * PARAGRAPH_FACTOR * RUN_ON_LEADING;
     }
     let capitals = |w: Option<&str>| {
@@ -1396,16 +1646,86 @@ fn split_entries(b: Block, edge: &Edge) -> Vec<Block> {
     out
 }
 
+/// Words a wrapped line may end on, or its next line open with: the phrase
+/// runs on across the break.
+const RUNS_ON: &[&str] = &[
+    "a", "an", "the", "and", "or", "nor", "but", "not", "of", "to", "in", "on", "at", "by", "for",
+    "from", "with", "as", "into", "via", "among", "between", "through", "within", "without",
+    "across", "over", "under", "after", "before", "during", "per", "versus", "vs", "about",
+    "against", "toward", "towards", "upon", "my", "your", "our", "their", "its", "his", "her",
+];
+
+/// Part two bold lines set one over the other, each a heading of its own:
+/// `Materials and methods` over `Animals`, `V - Etiology` over `A.
+/// Genetics`. Entries are parted the same way ([`split_entries`]), but bold
+/// lines are left whole there, as a title broken over two lines must be.
+/// Here the break is no wrap: both lines are bold, at one size from the
+/// body's up to display type (a diagram's labels are set smaller), set at
+/// one indent; the second opens with a capital, not a bracket (`Hours:
+/// 8:30 am - 6:00 pm EST` over `(Monday - Friday)`), and its first word
+/// would have fitted on the first. The phrase does not run
+/// on across the break (`RIGHT OF FIRST REFUSAL` over `AND CO-SALE
+/// AGREEMENT`, `Where's My` over `Refund?`), and the second line is no
+/// dateline (`Notes to Consolidated Financial Statements` over `December
+/// 31, 2019`). Three or more lines are a title's: a company, a statement
+/// and its date.
+fn split_stacked_heads(b: Block, edge: &Edge) -> Vec<Block> {
+    if b.lines.len() != 2 || !edge.agreed || b.marker.is_some() {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let (first, second) = (&b.lines[0], &b.lines[1]);
+    let set = [first, second].iter().all(|l| {
+        l.bold
+            && (l.font_size - first.font_size).abs() <= 0.25
+            && (l.font_size as f64) >= edge.body - 0.25
+            && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
+            && (l.bbox.x0 - first.bbox.x0).abs() <= fs * 0.5
+    });
+    let runs_on = |w: Option<&str>| w.is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()));
+    let ends_open = first
+        .text
+        .trim_end()
+        .ends_with(['-', '\u{AD}', ',', ':', ';', '&', '/'])
+        || runs_on(first.text.split_whitespace().next_back());
+    let dateline = second
+        .text
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|n| n.len() == 4 && (n.starts_with("19") || n.starts_with("20")));
+    let bracketed = second.text.trim_start().starts_with(['(', '[']);
+    let stacked = opens_capital(second)
+        && !bracketed
+        && !ends_open
+        && !runs_on(second.text.split_whitespace().next())
+        && !dateline
+        && edge.right - first.bbox.x1 > first_word_width(second) + fs * 0.5;
+    if !set || !stacked {
+        return vec![b];
+    }
+    let Block {
+        lines, gap_above, ..
+    } = b;
+    let mut out: Vec<Block> = lines.into_iter().map(|l| build(vec![l])).collect();
+    out[0].gap_above = gap_above;
+    out
+}
+
 /// Carry a count across blocks: a block opening with `n.` set where the
 /// item `n−1.` before it opens is that list's next item, and a block
 /// opening with `n−1.` set where the item `n.` after it opens is the one
 /// before. A list whose items stand a little further apart than its lines
 /// parts into blocks between some items and not others.
+///
+/// A lettered list opens itself: a block opening with `a.` and the block
+/// set where it is under it opening with `b.` are its first two items,
+/// each a paragraph long or a step wrapped over lines. A lone `a.` is a
+/// paragraph's. Numbers wait for [`gather_counted_items`], which tells a
+/// list from numbered sections.
 fn count_on(blocks: &mut [Block]) {
     let ordinal = |b: &Block| {
         b.lines
             .first()
-            .and_then(|l| ordinal_prefix(&l.text))
+            .and_then(|l| count_prefix(&l.text))
             .map(|(n, label)| (n, label.to_string()))
     };
     let item = |b: &Block| {
@@ -1437,6 +1757,17 @@ fn count_on(blocks: &mut [Block]) {
                 if n == m + 1 {
                     blocks[k - 1].marker = Some(label);
                     changed = true;
+                    continue;
+                }
+            }
+            let (a, z) = (&blocks[k - 1], &blocks[k]);
+            if let (None, None, Some((m, first)), Some((n, second))) =
+                (a.marker.as_ref(), z.marker.as_ref(), ordinal(a), ordinal(z))
+            {
+                if m == LETTERED + 1 && n == m + 1 {
+                    blocks[k - 1].marker = Some(first);
+                    blocks[k].marker = Some(second);
+                    changed = true;
                 }
             }
         }
@@ -1448,11 +1779,15 @@ fn count_on(blocks: &mut [Block]) {
 
 /// Split a block where its lines count off, `1. Avoid exposure…` and,
 /// after a line or two hanging under it, `2. Avoid exposure…` set where the
-/// `1.` is: an ordered list's items printed one after another at the
-/// paragraph's leading. Each starts its own block and carries its label as
-/// its marker, as [`split_hard_breaks`] marks a hand-broken list's steps;
-/// the lines it wraps onto hang under it and stay with it. Text before the
-/// first item is a block of its own.
+/// `1.` is, or `a.` over `b.`: an ordered list's items printed one after
+/// another at the paragraph's leading. Each starts its own block and
+/// carries its label as its marker, as [`split_hard_breaks`] marks a
+/// hand-broken list's steps; the lines it wraps onto hang under it and stay
+/// with it. Text before the first item is a block of its own, and so is a
+/// line set left of the last item's label that opens a count of its own,
+/// where the list the items sit under goes on (`f. The depth of focus…`
+/// over `2. When changing…`). A plain line set left of it is the item's,
+/// wrapped back to the margin its first line was indented from.
 fn split_counted(b: Block) -> Vec<Block> {
     if b.lines.len() < 2 {
         return vec![b];
@@ -1461,15 +1796,19 @@ fn split_counted(b: Block) -> Vec<Block> {
     let ordinals: Vec<Option<(u32, String)>> = b
         .lines
         .iter()
-        .map(|l| ordinal_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
+        .map(|l| count_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
         .collect();
     let mut counted: Vec<Option<String>> = vec![None; b.lines.len()];
-    let mut prev: Option<(usize, u32)> = None;
+    // The last line of each count, numbers and letters: a lettered step set
+    // under `2.` leaves the count `3.` goes on from.
+    let mut prev: [Option<(usize, u32)>; 2] = [None; 2];
     for (i, o) in ordinals.iter().enumerate() {
         let Some((n, label)) = o else { continue };
-        if let Some((j, m)) = prev {
+        let kind = usize::from(*n > LETTERED);
+        if let Some((j, m)) = prev[kind] {
             let (a, z) = (&b.lines[j], &b.lines[i]);
             if *n == m + 1
+                && opens_or_carries(m, counted[j].is_some())
                 && (a.bbox.x0 - z.bbox.x0).abs() <= fs * 0.5
                 && b.lines[j + 1..i]
                     .iter()
@@ -1481,7 +1820,7 @@ fn split_counted(b: Block) -> Vec<Block> {
                 }
             }
         }
-        prev = Some((i, *n));
+        prev[kind] = Some((i, *n));
     }
     if counted.iter().all(Option::is_none) {
         return vec![b];
@@ -1495,14 +1834,20 @@ fn split_counted(b: Block) -> Vec<Block> {
     let mut out: Vec<Block> = Vec::new();
     let mut cur: Vec<Line> = Vec::new();
     let mut label: Option<String> = None;
+    let mut item_left: Option<f64> = None;
     for (i, l) in lines.into_iter().enumerate() {
-        if counted[i].is_some() && !cur.is_empty() {
+        let outdented =
+            ordinals[i].is_some() && item_left.is_some_and(|x| l.bbox.x0 < x - fs * 0.5);
+        if (counted[i].is_some() || outdented) && !cur.is_empty() {
             let mut piece = build(std::mem::take(&mut cur));
             piece.marker = label.take();
             out.push(piece);
         }
         if counted[i].is_some() {
             label = counted[i].clone();
+            item_left = Some(l.bbox.x0);
+        } else if outdented {
+            item_left = None;
         }
         cur.push(l);
     }
@@ -1568,21 +1913,24 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     let ordinals: Vec<Option<(u32, String)>> = b
         .lines
         .iter()
-        .map(|l| ordinal_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
+        .map(|l| count_prefix(&l.text).map(|(n, label)| (n, label.to_string())))
         .collect();
     let mut counted: Vec<Option<String>> = vec![None; b.lines.len()];
-    let mut prev: Option<(usize, u32)> = None;
+    // The last line of each count, numbers and letters: a lettered step set
+    // under `2.` leaves the count `3.` goes on from.
+    let mut prev: [Option<(usize, u32)>; 2] = [None; 2];
     for (i, o) in ordinals.iter().enumerate() {
         if let Some((n, label)) = o {
-            if let Some((j, m)) = prev {
-                if *n == m + 1 {
+            let kind = usize::from(*n > LETTERED);
+            if let Some((j, m)) = prev[kind] {
+                if *n == m + 1 && opens_or_carries(m, counted[j].is_some()) {
                     counted[i] = Some(label.clone());
                     if counted[j].is_none() {
                         counted[j] = ordinals[j].as_ref().map(|(_, l)| l.clone());
                     }
                 }
             }
-            prev = Some((i, *n));
+            prev[kind] = Some((i, *n));
         }
     }
     let Block {
@@ -1924,7 +2272,7 @@ pub fn counts_off(b: &Block) -> bool {
     b.marker.as_deref().is_some_and(|m| {
         b.lines
             .first()
-            .and_then(|l| ordinal_prefix(&l.text))
+            .and_then(|l| count_prefix(&l.text))
             .is_some_and(|(_, label)| label == m)
     })
 }
@@ -2233,6 +2581,33 @@ mod tests {
     }
 
     #[test]
+    fn a_drawn_bullet_item_keeps_its_wrapped_line() {
+        // A list set narrower than its column: the item's first line ends
+        // far short of the column's edge, and its wrapped line opens with
+        // a name. Led by a drawn dot, it is one item, not two entries.
+        let mut first = l("Distributed file systems, including", 56.0, 0.0, 9.0);
+        first.bbox.x1 = 240.0;
+        let mut wrapped = l("Hadoop and Ceph", 56.0, 12.0, 9.0);
+        wrapped.bbox.x1 = 125.0;
+        let lines = vec![first, wrapped];
+        let mut measure = lines.clone();
+        for y in [-60.0, -48.0] {
+            let mut wide = l("Text that runs to the column's edge", 56.0, y, 9.0);
+            wide.bbox.x1 = 400.0;
+            measure.push(wide);
+        }
+        let dots = [BBox {
+            x0: 47.0,
+            y0: 4.0,
+            x1: 50.0,
+            y1: 7.0,
+        }];
+        let b = assemble_in_measure(&lines, &measure, 1.2, &[], &dots, &[], 9.0, &[]);
+        assert_eq!(b.len(), 1, "one item, got {b:?}");
+        assert_eq!(b[0].marker.as_deref(), Some(BULLET_MARKER));
+    }
+
+    #[test]
     fn a_dot_alone_is_no_bullet() {
         let dot = |y: f64| BBox {
             x0: 155.0,
@@ -2273,6 +2648,53 @@ mod tests {
     }
 
     #[test]
+    fn a_mark_the_font_maps_to_a_control_code_leads_items() {
+        // A sidebar's `▶` bullets, mapped by the font to 0x17, each item
+        // wrapped over more lines than a dash-led list's reach.
+        let mut lines = vec![l(
+            "\u{17} Designed using the highest quality",
+            446.8,
+            0.0,
+            8.6,
+        )];
+        for k in 1..7 {
+            lines.push(l(
+                "materials and components to provide",
+                456.5,
+                9.3 * k as f64,
+                8.6,
+            ));
+        }
+        lines.push(l(
+            "\u{17} Factory engineered, self-contained,",
+            446.8,
+            70.0,
+            8.6,
+        ));
+        for k in 1..7 {
+            lines.push(l(
+                "capillary tube system using refrigerant",
+                456.2,
+                70.0 + 9.3 * k as f64,
+                8.6,
+            ));
+        }
+        lines.push(l(
+            "\u{17} High capacity, factory balanced",
+            446.8,
+            140.0,
+            8.6,
+        ));
+        let b = assemble(&lines, 1.1);
+        assert_eq!(b.len(), 3, "{b:?}");
+        assert!(b.iter().all(|x| x.marker.as_deref() == Some("\u{17}")));
+        assert_eq!(
+            strip_run_lead(&b[2].text(), "\u{17}"),
+            Some("High capacity, factory balanced")
+        );
+    }
+
+    #[test]
     fn a_lone_dash_line_is_not_an_item() {
         // A range, a minus, a dialogue's dash: one line so opening, among
         // lines of prose at the same place.
@@ -2286,6 +2708,43 @@ mod tests {
         assert!(b.iter().all(|x| x.marker.is_none()), "{b:?}");
         // A minus run into its number opens no item either.
         assert_eq!(run_lead(&l("-2.0%", 46.0, 0.0, 9.0)), None);
+    }
+
+    #[test]
+    fn a_minus_or_an_arrow_opens_a_run_of_items() {
+        // A topic's points, each opening with a minus sign or with `>`,
+        // the text hanging after it.
+        for mark in ["\u{2212}", ">"] {
+            let lines = vec![
+                l(
+                    &format!("{mark} Pre-failure Alerts with the array"),
+                    54.0,
+                    0.0,
+                    9.0,
+                ),
+                l("controller and its firmware.", 72.0, 12.0, 9.0),
+                l(
+                    &format!("{mark} Best-in-class supply assurance"),
+                    54.0,
+                    24.0,
+                    9.0,
+                ),
+            ];
+            let b = assemble(&lines, 1.2);
+            assert_eq!(b.len(), 2, "{mark}: {b:?}");
+            assert!(
+                b.iter().all(|x| x.marker.as_deref() == Some(mark)),
+                "{mark}: {b:?}"
+            );
+        }
+        // A quoted message's lines open with `>` too, going on with their
+        // sentences in lower case: no items.
+        let quote = vec![
+            l("> We met on Tuesday and agreed that", 46.0, 0.0, 9.0),
+            l("> the draft should go out by Friday", 46.0, 12.0, 9.0),
+            l("> once legal has had a look at it.", 46.0, 24.0, 9.0),
+        ];
+        assert!(assemble(&quote, 1.2).iter().all(|x| x.marker.is_none()));
     }
 
     #[test]
@@ -2604,6 +3063,158 @@ mod tests {
         ];
         let texts: Vec<String> = assemble(&lines, 1.22).iter().map(Block::text).collect();
         assert!(texts.iter().all(|t| !t.starts_with("alien")), "{texts:?}");
+    }
+
+    #[test]
+    fn footnotes_numbered_with_raised_numerals_are_a_note_each() {
+        // A data sheet's notes at body leading, each opening with a raised
+        // numeral at the margin and wrapping under its text.
+        let note = |text: &str, y: f64| {
+            let mut line = l(text, 312.1, y, 5.5);
+            line.opens_with_script = true;
+            line
+        };
+        let lines = vec![
+            note(
+                "7 1 MB/s = 1 million bytes per second. Based on internal",
+                640.1,
+            ),
+            l(
+                "host device, usage conditions and other factors.",
+                318.1,
+                645.9,
+                5.5,
+            ),
+            note(
+                "8 Portion of buffer capacity used for drive firmware.",
+                654.3,
+            ),
+            note("9 Random RW 50/50 4KB QD=4 @40 IOPS.", 662.6),
+            note("10 Based on use of Idle_A.", 670.8),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.5).iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        assert!(texts[3].starts_with("10 Based"), "{texts:?}");
+        // A note's number set apart from its line keeps its place in the
+        // text, and makes no list item, where the notes count: note 1 opens
+        // with its number raised in its line, note 2's was set apart.
+        let raised = |n: &str, y: f64| {
+            let mut m = l(n, 36.1, y, 3.2);
+            m.bbox.x1 = 37.8;
+            m.bbox.y1 = y + 2.3;
+            m
+        };
+        let text = |t: &str, y: f64, x1: f64| {
+            let mut line = l(t, 41.8, y, 5.5);
+            line.bbox.y1 = y + 4.0;
+            line.bbox.x1 = x1;
+            line
+        };
+        let mut one = l(
+            "1 1MB = 1 million bytes, and 1TB = 1 trillion bytes.",
+            36.1,
+            605.5,
+            5.5,
+        );
+        one.opens_with_script = true;
+        one.bbox.x1 = 290.0;
+        let lines = vec![
+            one,
+            text("depending on operating environment.", 611.7, 130.0),
+            raised("2", 619.8),
+            text(
+                "Workload Rate is defined as the amount of user data",
+                620.0,
+                288.0,
+            ),
+            text("transferred to or from the hard drive.", 625.7, 150.0),
+        ];
+        // The page's leading: its notes wrap 6.2pt apart at 5.5pt.
+        let b = assemble(&lines, 1.13);
+        assert_eq!(b.len(), 2, "{b:?}");
+        assert_eq!(b[1].marker, None);
+        assert!(
+            b[1].text().starts_with("2 Workload Rate"),
+            "{:?}",
+            b[1].text()
+        );
+        // A number raised beside a line that counts with nothing, a chart's
+        // tick label, does not go into the text.
+        let b = assemble(
+            &[
+                raised("67", 619.8),
+                text(
+                    "December (figure 14). Although population aging has",
+                    620.0,
+                    288.0,
+                ),
+            ],
+            1.5,
+        );
+        assert!(b.iter().all(|x| !x.text().starts_with("67")), "{b:?}");
+    }
+
+    #[test]
+    fn a_lettered_items_wrapped_line_hangs_under_its_text() {
+        let at = |text: &str, x: f64, y: f64, x1: f64| {
+            let mut line = l(text, x, y, 8.0);
+            line.bbox.x1 = x1;
+            line
+        };
+        // Steps beside a wiring diagram: each wrapped line an em and a half
+        // in from its letter, its sentence going on. The column runs on
+        // past them, to the diagram's labels, so none of them is full.
+        let lines = vec![
+            at(
+                "Make the following connections to the supply cord, and see the diagram beside them:",
+                47.5,
+                481.0,
+                560.0,
+            ),
+            at(
+                "a. For 120/277/347V connect the black fixture lead to the",
+                74.0,
+                504.5,
+                300.0,
+            ),
+            at(
+                "voltage supply or Hot 1 (for 208/240/480V wiring).",
+                87.2,
+                514.4,
+                290.0,
+            ),
+            at(
+                "b. For 120/277/347V connect the white fixture lead to the",
+                74.4,
+                529.0,
+                300.0,
+            ),
+            at(
+                "neutral supply or Hot 2 (for 208/240/480V wiring).",
+                87.9,
+                538.9,
+                290.0,
+            ),
+        ];
+        let texts: Vec<String> = assemble(&lines, 1.24).iter().map(Block::text).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.starts_with("a. For") && t.ends_with("wiring).")),
+            "{texts:?}"
+        );
+        // A lettered heading over a paragraph set in under it opens no
+        // item: the paragraph opens a sentence of its own.
+        let lines = vec![
+            at("A. Introduction", 74.0, 504.5, 150.0),
+            at(
+                "The study measured the effect of three treatments.",
+                87.2,
+                514.4,
+                290.0,
+            ),
+        ];
+        assert_eq!(assemble(&lines, 1.24).len(), 2);
     }
 
     #[test]
@@ -3086,6 +3697,135 @@ mod tests {
     }
 
     #[test]
+    fn a_lower_case_letter_labels_an_item_counted_apart_from_numbers() {
+        assert_eq!(count_prefix("a. The size"), Some((LETTERED + 1, "a.")));
+        assert_eq!(count_prefix("b) The field"), Some((LETTERED + 2, "b)")));
+        assert_eq!(count_prefix("(c) The image"), Some((LETTERED + 3, "(c)")));
+        assert_eq!(count_prefix("2. When changing"), Some((2, "2.")));
+        // A capital opens an appendix as often as an item, and an
+        // abbreviation or a word is no label.
+        assert_eq!(count_prefix("A. Appendix"), None);
+        assert_eq!(count_prefix("e.g. this"), None);
+        assert_eq!(count_prefix("ab. Not one"), None);
+        assert_eq!(count_prefix("(c The image"), None);
+    }
+
+    #[test]
+    fn lettered_lines_are_items_and_the_text_set_left_of_them_is_not() {
+        // Six short steps lettered under a numbered question, and the next
+        // question set left of them, all at the paragraph's leading.
+        let lines = vec![
+            row(
+                "a. The size of the field of view decreases",
+                60.0,
+                0.0,
+                230.0,
+            ),
+            row("b. The field of view becomes darker", 60.0, 10.0, 200.0),
+            row("c. The size of the image increases", 60.0, 20.0, 190.0),
+            row(
+                "2. When changing from scanning to low power the field",
+                40.0,
+                30.0,
+                300.0,
+            ),
+            row("of view gets smaller.", 40.0, 40.0, 120.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        let marks: Vec<Option<&str>> = b.iter().map(|b| b.marker.as_deref()).collect();
+        assert_eq!(
+            marks,
+            [Some("a."), Some("b."), Some("c."), None],
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        assert_eq!(b[3].lines.len(), 2);
+        // A note's wrapped line goes back to the margin its number was
+        // indented from, and is the note's.
+        let note = vec![
+            row(
+                "1. Projections of real gross domestic product.",
+                48.0,
+                0.0,
+                250.0,
+            ),
+            row(
+                "2. Measure is the overall consumer price index, the price",
+                48.0,
+                10.0,
+                300.0,
+            ),
+            row("measure that has been most widely used.", 40.0, 20.0, 230.0),
+        ];
+        let b = assemble(&note, 1.2);
+        assert_eq!(
+            b.last().map(|b| b.lines.len()),
+            Some(2),
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // Lines that happen to open `(d)` and `(e)`, a caption's panels
+        // wrapped one to a line, count off from nothing.
+        let caption = vec![
+            row(
+                "Figure 6. Detection results: (a) input frame; (b) truth; (c)",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row(
+                "(d) result of the method based on the wavelet transform;",
+                40.0,
+                10.0,
+                300.0,
+            ),
+            row("(e) result when J = 4.", 40.0, 20.0, 140.0),
+        ];
+        assert!(assemble(&caption, 1.2).iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
+    fn lettered_blocks_open_a_list_of_their_own() {
+        // Wiring steps a step apart, each wrapped over two lines.
+        let lines = vec![
+            row(
+                "a. For 120V connect the black fixture lead to the",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row("voltage supply.", 49.0, 10.0, 120.0),
+            row(
+                "b. For 120V connect the white fixture lead to the",
+                40.0,
+                30.0,
+                300.0,
+            ),
+            row("neutral supply.", 49.0, 40.0, 120.0),
+        ];
+        let b = assemble(&lines, 1.2);
+        let marks: Vec<Option<&str>> = b.iter().map(|b| b.marker.as_deref()).collect();
+        assert_eq!(
+            marks,
+            [Some("a."), Some("b.")],
+            "{:?}",
+            b.iter().map(Block::text).collect::<Vec<_>>()
+        );
+        // A lone `a.` opens a paragraph, not a list.
+        let lone = vec![
+            row(
+                "a. For 120V connect the black fixture lead to the",
+                40.0,
+                0.0,
+                300.0,
+            ),
+            row("voltage supply.", 49.0, 10.0, 120.0),
+            row("Then close the box.", 40.0, 30.0, 140.0),
+        ];
+        assert!(assemble(&lone, 1.2).iter().all(|b| b.marker.is_none()));
+    }
+
+    #[test]
     fn lines_under_different_fills_are_different_rows() {
         // Two form items, each a label wrapped onto two lines inside its own
         // shaded band. The gap between bands is just under the paragraph
@@ -3337,6 +4077,21 @@ mod tests {
             Some(&title),
             150.0
         ));
+    }
+
+    #[test]
+    fn a_tick_label_marks_no_other() {
+        // A chart's tick labels side by side on a row, at the column's
+        // margin: neither is the other's number.
+        let mut tick = l("2.4\u{2212}", 419.1, 169.3, 6.2);
+        tick.bbox.x1 = 430.0;
+        let next = l("2.6\u{2212}", 458.9, 169.3, 6.2);
+        assert!(!is_marker(&tick, None, Some(&next), 419.1));
+        // A number beside the item it opens still marks it.
+        let mut number = l("2.", 10.0, 169.3, 6.2);
+        number.bbox.x1 = 16.0;
+        let item = l("Ergonomic one-button tip ejector", 22.0, 169.3, 6.2);
+        assert!(is_marker(&number, None, Some(&item), 10.0));
     }
 
     #[test]
@@ -3598,6 +4353,43 @@ mod tests {
     }
 
     #[test]
+    fn a_lowercase_line_hanging_under_an_item_goes_on_with_it() {
+        let at = |t: &str, x0: f64, y: f64, x1: f64, bold: bool| {
+            let mut n = l(t, x0, y, 11.0);
+            n.bbox.x1 = x1;
+            n.bold = bold;
+            n
+        };
+        // An item of two lines, its second the shorter, over a bold `or`
+        // set at the item's hanging indent, then the next item.
+        let lines = vec![
+            at(
+                "- Mixed bulb type per Multigang and Mixed Bulb",
+                45.5,
+                256.6,
+                290.0,
+                false,
+            ),
+            at("Type Ratings table (see page 3)", 52.1, 270.5, 210.0, false),
+            at("or", 53.5, 286.6, 63.0, true),
+            at(
+                "- 250 W Lutron LTEA Hi-lume 1% forward-phase",
+                45.5,
+                298.5,
+                288.0,
+                false,
+            ),
+        ];
+        let b = assemble(&lines, 1.2);
+        let texts: Vec<String> = b.iter().map(Block::text).collect();
+        assert!(
+            texts.iter().any(|t| t.ends_with("(see page 3) or")),
+            "{texts:?}"
+        );
+        assert!(texts.iter().all(|t| t != "or"), "{texts:?}");
+    }
+
+    #[test]
     fn a_sentence_runs_on_past_a_wide_leading() {
         // Footnotes at nearly twice their size's leading: the first wraps.
         let note = |t: &str, y: f64, x1: f64| {
@@ -3793,6 +4585,53 @@ mod tests {
             "{:?}",
             b.iter().map(Block::text).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn stacked_bold_heads_part() {
+        let bold = |text: &str, y: f64, x1: f64| {
+            let mut line = row(text, 40.0, y, x1);
+            line.bold = true;
+            line
+        };
+        // A section's heading over its first subsection's.
+        let heads = vec![
+            bold("Materials and methods", 100.0, 130.0),
+            bold("Animals", 110.0, 75.0),
+        ];
+        let mut column = measure(0.0);
+        column.extend(heads.clone());
+        let b = assemble_in_measure(&heads, &column, 1.2, &[], &[], &[], 8.0, &[]);
+        assert_eq!(
+            b.iter().map(Block::text).collect::<Vec<_>>(),
+            ["Materials and methods", "Animals"]
+        );
+        // A title wrapped at the column's edge, or ending on a word that
+        // runs on, stays whole.
+        for title in [
+            vec![
+                bold(
+                    "Inhibition of telomerase activity of human ovarian",
+                    100.0,
+                    295.0,
+                ),
+                bold("Cancer Cells by AZT", 110.0, 140.0),
+            ],
+            vec![
+                bold("Effect of AZT on telomerase activity in", 100.0, 200.0),
+                bold("HO-8910 Cells", 110.0, 110.0),
+            ],
+        ] {
+            let mut column = measure(0.0);
+            column.extend(title.clone());
+            let b = assemble_in_measure(&title, &column, 1.2, &[], &[], &[], 8.0, &[]);
+            assert_eq!(
+                b.len(),
+                1,
+                "{:?}",
+                b.iter().map(Block::text).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

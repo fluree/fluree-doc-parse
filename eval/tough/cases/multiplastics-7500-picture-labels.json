@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "multiplastics-7500.pdf",
+    "url": "https://multi-plastics.com/wp-content/uploads/2016/07/Sell_Sheet_7500.pdf",
+    "sha256": "ba567968030a0029552e911c79ec47e6977829ba0834066eea4dad47957159c5",
+    "about": "Multi-Plastics 7500 PLA film product information sheet (2 pages, Word 2013). Page 1 sets a cutaway of the film as a picture, its layers named in text set over it: `Heat Sealable PLA Layer`, `PLA Core`, `Heat Sealable PLA Layer`, the last half off the picture's lower edge. The next section's heading, `Environmental Certifications`, stands under it."
+  },
+  "notes": [
+    "#201: drawn as an image, the cutaway drew no shapes, so no figure was found and its labels read as the page's paragraphs, between the applications list and the next heading."
+  ],
+  "checks": [
+    {
+      "id": "core-label-figure",
+      "found": "2026-11-25",
+      "issue": "`PLA Core`, a layer's name set on the cutaway, was a paragraph.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "PLA Core"
+      }
+    },
+    {
+      "id": "layer-labels-figure",
+      "found": "2026-11-25",
+      "issue": "`Heat Sealable PLA Layer`, both outer layers' name on the cutaway, was a paragraph, the lower one half off the picture's edge.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Heat Sealable PLA Layer"
+      },
+      "count": 2
+    },
+    {
+      "id": "next-heading-kept",
+      "found": "2026-11-25",
+      "issue": "A guard: `Environmental Certifications`, under the picture, is the next section's heading and no label of it.",
+      "section": {
+        "title": "Environmental Certifications"
+      }
+    }
+  ]
+}

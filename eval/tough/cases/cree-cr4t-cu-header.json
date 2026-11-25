@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "cree-cr4t-canada.pdf",
+    "url": "https://cree.widen.net/content/1mwcqlodrj/original/CR4T-Series_Downlight_SpecSheet_V13-Canada.pdf?u=wk1zzb&download=true",
+    "sha256": "aebe01b3b82a6e33f51d22c09bbab1d3bb97669c12a9a8449cfd735e9d395018",
+    "about": "Cree Lighting CR4T downlight spec sheet, Canada (Word-made, 3 pages). Its field angle sets the degree sign as a small raised letter o after the number."
+  },
+  "notes": [
+    "2026-11-25 (#200): the coefficients of utilization are headed by the ceiling's and the walls' reflectances, `RC %: | 80` over `RW %: | 70 | 50 | 30 | 10`, over rows keyed by the room cavity ratio. Read as data, no value was named by the reflectances it is for."
+  ],
+  "checks": [
+    {
+      "id": "cu-named-by-reflectances",
+      "found": "2026-11-25",
+      "issue": "#200: `119` had no column header.",
+      "cell": {
+        "value": "119",
+        "column": "80 / 70",
+        "row": "RCR: 0"
+      }
+    },
+    {
+      "id": "cu-wall-fifty",
+      "found": "2026-11-25",
+      "issue": "#200: as above.",
+      "cell": {
+        "value": "106",
+        "column": "80 / 50",
+        "row": "1"
+      }
+    }
+  ]
+}

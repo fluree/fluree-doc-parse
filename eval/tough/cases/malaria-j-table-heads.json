@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "malaria-j-2009-8-211.pdf",
+    "url": "https://malariajournal.biomedcentral.com/counter/pdf/10.1186/1475-2875-8-211",
+    "sha256": "80032edbf9c033631ee95a971edcc07f378fdb92aaadf5f554cf97660e052d20",
+    "about": "Malaria Journal 2009, 8:211 (doi:10.1186/1475-2875-8-211). Its table 2 is not read as a table; its header row sets `95% CI`, `%` and `95%CI` side by side over rows of figures."
+  },
+  "notes": [
+    "#242: the bold column head `95%CI`, level with the other heads of its row over rows of figures, was a heading."
+  ],
+  "checks": [
+    {
+      "id": "column-head",
+      "found": "2026-11-25",
+      "issue": "`95%CI`, a column's head over its figures, was an h4.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "95%CI"
+      },
+      "count": 0
+    },
+    {
+      "id": "section-kept",
+      "found": "2026-11-25",
+      "issue": "Guard: `Background` stays a heading.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Background"
+      }
+    }
+  ]
+}

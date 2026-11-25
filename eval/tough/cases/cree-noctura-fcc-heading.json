@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "cree-noctura-install.pdf",
+    "url": "https://cree.widen.net/content/9yzz8vhx6p/original/Noctura-Series-B-Wall-Mount-Install-Guide---Small_LPN00628X0001A1_A.pdf?u=wk1zzb&download=true",
+    "sha256": "e2f1f1f18974f51e54a258713f2185e037bdd5e39353c79adcd59be79086d482",
+    "about": "Cree Lighting Noctura Series B wall-mount install guide (EN/ES/FR, 9 pages). The same figure, with callout numbers 1 to 7, is repeated in each language, so the callouts are taken for furniture, and the step layouts are read as tables. Each language numbers its three pages from 1, in its own words, and sets its step numbers at the top of its second and third pages."
+  },
+  "notes": [
+    "2026-11-24 (#190): the `FCC` heading the guide sets near the top of each language's last page, partway down a column under the end of the section before, repeats on 3 of 9 pages and was read as a running header: the FCC statements lost their heading."
+  ],
+  "checks": [
+    {
+      "id": "fcc-not-running",
+      "found": "2026-11-24",
+      "issue": "#190: `FCC` was running text.",
+      "running": "FCC",
+      "count": 0
+    },
+    {
+      "id": "fcc-heading-kept",
+      "found": "2026-11-24",
+      "issue": "#190: the heading was gone from all three FCC statements.",
+      "element": {
+        "text": "FCC"
+      },
+      "count": 3
+    }
+  ]
+}

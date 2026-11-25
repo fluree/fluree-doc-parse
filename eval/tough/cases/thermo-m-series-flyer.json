@@ -8,7 +8,8 @@
   "notes": [
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
     "2026-11-24 (#128): a kicker set in smaller type directly above the title opened an empty, deeper section ahead of it.",
-    "2026-11-24 (#112): the ordering table's shaded `IVD-MD | General Use Only` row has a rule under its first column only; the shading's edge is the line under the others, and the row and the first values below were read as one."
+    "2026-11-24 (#112): the ordering table's shaded `IVD-MD | General Use Only` row has a rule under its first column only; the shading's edge is the line under the others, and the row and the first values below were read as one.",
+    "2026-11-25 (#195): the Specifications table, ruled with horizontals only, each row line broken at its column edges, ended after three rows: the page-wide reading took in the ordering table's rules too and found no columns, and the lines of a table ruled with horizontals only touch nothing. Its values set across both model columns were cut at the column edge, and every row was read as a section's band."
   ],
   "checks": [
     {
@@ -34,6 +35,35 @@
         "value": "75002576",
         "column": "MT 17 / IVD-MD",
         "row": "120 V, 50/60 Hz"
+      }
+    },
+    {
+      "id": "spec-table-whole",
+      "found": "2026-11-25",
+      "issue": "#195: the table ended at `Max noise level`; the rest were headings and paragraphs.",
+      "cell": {
+        "value": "2 years",
+        "column": "M17 Series",
+        "row": "Warranty"
+      }
+    },
+    {
+      "id": "value-across-models-whole",
+      "found": "2026-11-25",
+      "issue": "#195: a value set across both model columns was cut at the column edge.",
+      "cell": {
+        "value": "11/12 seconds (ventilated); 10/12 seconds (refrigerated)",
+        "row": "Acceleration/deceleration rates"
+      }
+    },
+    {
+      "id": "dimensions-rows-in-their-section",
+      "found": "2026-11-25",
+      "issue": "#195: the rows under the `Dimensions` band were lost, and each row of the table read as a band.",
+      "cell": {
+        "value": "330 x 290 x 440 mm (12.9 x 11.4 x 17.3 in)",
+        "row": "MTR 17 and MTR 21",
+        "section": "Dimensions (H X W x D)"
       }
     }
   ]
