@@ -1,0 +1,52 @@
+{
+  "document": {
+    "file": "pmc5007710.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5007710/",
+    "sha256": "19472989ba1aad0c3c7b494e049c44d2c5953f8559eeb6290dfab50b0854bc80",
+    "about": "Microarrays (2012) article, 'In Silico Analysis of Microarray-Based Gene Expression Profiles Predicts Tumor Cell Response to Withanolides', PMC5007710, 20 pages. Its tables are set landscape on rotated pages, ruled with horizontals only: a top rule, a rule under the header, a rule between groups of rows, a bottom rule. Names and functions wrap onto second lines, set at the same spacing as the rows. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#289): the page-wide ruled reading gave one coarse grid of bands, and alignment, preferred over it, read only the rows under `Cluster 2:`; the header and the Cluster 1 rows were paragraphs and `COMPARE` a heading. Where alignment is preferred over a grid ruled with horizontals only, the grid is read from its text too, and that reading stands where its cells hold more of the page's text. A line carrying on the cells of the row above (nothing in the stub, no figure, each chunk running on from the text above it in its column) joins that row instead of ending the table. The header still names every column after the first `COMPARE / …`: `COMPARE` heads the coefficient alone. On p9 the table breaks where `LOC440055` and its coefficient are set too close to part, and where `member` wraps onto `A1`."
+  ],
+  "checks": [
+    {
+      "id": "cluster-1-rows-in-the-table",
+      "found": "2026-11-25",
+      "issue": "#289: the header and the Cluster 1 rows were paragraphs.",
+      "cell": {
+        "value": "0.650",
+        "column": "COMPARE / Coefficient",
+        "row": "CORO1A",
+        "section": "Cluster 1:"
+      }
+    },
+    {
+      "id": "wrapped-name-one-cell",
+      "found": "2026-11-25",
+      "issue": "#289: a name wrapped onto a second line ended the table there.",
+      "cell": {
+        "value": "LSM2 homolog, U6 small nuclear RNA associated (S. cerevisiae)",
+        "row": "LSM2"
+      }
+    },
+    {
+      "id": "cluster-2-a-group",
+      "found": "2026-11-25",
+      "issue": "#289: `Cluster 2:` was a heading over a table of its own.",
+      "cell": {
+        "value": "0.643",
+        "row": "unknown",
+        "section": "Cluster 2:"
+      }
+    },
+    {
+      "id": "continued-page-wrapped-name",
+      "found": "2026-11-25",
+      "issue": "#289: on the continued page every row wrapping a name or a function was a table of its own, or text.",
+      "cell": {
+        "value": "Uveal autoantigen with coiled-coil domains and ankyrin repeats",
+        "row": "UACA"
+      }
+    }
+  ]
+}

@@ -1068,6 +1068,38 @@ Not a header ruled off as its rows are (`(millions) | 2017 | 2016`), which
 names no measure and starts the next table, nor a header ruled above and
 below under a table ruled only round its own.
 
+It runs on, too, through a line that carries on the cells of the line above.
+That line is the next one under it (within 1.6 of the type's size, where any
+body leading lies and a line with a blank line between does not). It has
+nothing in the stub column and no figure, and each of its chunks stands in a
+column the line above fills and runs on from what stands there: it starts
+mid-phrase, or the text above ends on a word or mark that wants more. Such a
+line is a name or a description wrapped onto a second line, and it joins its
+row's cell (`LSM2 homolog, U6 small nuclear RNA` over `associated (S.
+cerevisiae)`). Spacing alone cannot tell it from a row: a journal sets its
+rows and its wrapped lines at the same leading. A row with an empty stub and
+a new value (`Banana` under `Apple`) runs on from nothing and stays a row.
+Nothing is carried on in a column whose text runs on across the rows: where,
+on half the lines that open a row (two at least), the column's text continues
+the line above it, the column is a page's prose read in beside the table, its
+sentences carried down through the rows. A table's cells start afresh on
+each row.
+
+A caption wrapped over the table keeps its lines after the first. Walking
+up from the first row for the header, a line that is the next one under a
+caption, or under such a line, holding one chunk that runs on from it, ends
+the walk: `human liver microsomes.` under `Table 1. Inhibitory potencies …
+in rat and` is the caption's, not a header row.
+
+Where alignment reads a page better than its one coarse ruled grid, and that
+grid is ruled with horizontals only, the grid is read from its text as well.
+A journal's table between its top and bottom rules, a mid rule between two
+groups of rows, gives one grid of bands, and alignment reads only the rows
+under one group, leaving the header and the other group as text. Of the two
+readings, the one whose cells hold more of the page's text stands: both read
+the same table, and the better leaves less of it out. On such a page only the
+seed is read from its text; runs of figures are left to alignment.
+
 A table ruled under its rows with horizontals alone, with no vertical and
 its rows not lumped, standing beside lines of the page's text on half its
 rows, is set in a column of its own beside a column of prose. The prose's
