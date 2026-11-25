@@ -815,6 +815,15 @@ labelled line (`1.47 lb (.67 kg)` over `±10%`), the first column left empty,
 holds one row, not two; lines with no label under none (a statement's
 header, years over units) are lines of their own.
 
+Read from its text, a table runs on through lines that carry figures in its
+columns. A line ruled off above and below, after a line ruled the same way,
+holding its label and a value that measures something, is a row too, whatever
+the value says: a list of dimensions ruled under every row keeps `Packaging
+(W x H x D) | 31.4 cm x 10.9 cm x 15.7 cm` among its lengths and weights.
+Not a header ruled off as its rows are (`(millions) | 2017 | 2016`), which
+names no measure and starts the next table, nor a header ruled above and
+below under a table ruled only round its own.
+
 ## Tables split by a page break
 
 A table that runs off the foot of one page and on at the head of the next is

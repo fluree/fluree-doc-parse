@@ -885,6 +885,48 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
         .map(|l| split_at_gutters(&cols0, l))
         .collect();
     let value_row = |l: &Line| fits(&cols0, l) && l.chunks.len() >= 2 && has_figures(&cols0, l);
+    // A line ruled off above and below, as the rows around it are, holding
+    // its label and a value in the columns: a row whatever its value says
+    // (`Packaging (W x H x D) | 31.4 cm x 10.9 cm x 15.7 cm` among lengths
+    // and weights). Rules across most of the region, a line's height or so
+    // from it each side.
+    let row_rules: Vec<f64> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == Orientation::Horizontal
+                && r.bbox.x1.min(x1) - r.bbox.x0.max(x0) >= 0.3 * (x1 - x0)
+        })
+        .map(|r| r.axis_pos())
+        .collect();
+    let boxed = |l: &Line| {
+        row_rules
+            .iter()
+            .any(|&y| y <= l.y0 + 1.0 && l.y0 - y <= fs * 1.5)
+            && row_rules
+                .iter()
+                .any(|&y| y >= l.y1 - 1.0 && y - l.y1 <= fs * 1.5)
+    };
+    // Only after a row ruled off in the same way: a table ruled row by row.
+    // A header ruled above and below, under a table ruled only round its
+    // header, is another table's. Its values carry a measure, not only names
+    // or years: a header ruled off as its rows are (`(millions) | 2017 |
+    // 2016`) starts the next table.
+    let ruled_row = |l: &Line, prev: &Line| {
+        let values: Vec<&Chunk> = l
+            .chunks
+            .iter()
+            .filter(|c| column_of(&cols0, c).is_some_and(|k| k > 0))
+            .collect();
+        boxed(prev)
+            && boxed(l)
+            && fits(&cols0, l)
+            && l.chunks.len() >= 2
+            && l.chunks.iter().any(|c| column_of(&cols0, c) == Some(0))
+            && values
+                .iter()
+                .any(|c| c.text.chars().any(|ch| ch.is_ascii_digit()))
+            && !values.iter().all(|c| is_year(&c.text))
+    };
     let label_row = |l: &Line| {
         l.chunks.len() == 1
             && column_of(&cols0, &l.chunks[0]) == Some(0)
@@ -907,7 +949,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             if l.y0 - clipped[band[j - 1]].y1 > fs * MAX_ROW_GAP {
                 break;
             }
-            if value_row(l) {
+            if value_row(l) || ruled_row(l, &clipped[band[j - 1]]) {
                 end = band[j];
                 labels = 0;
             } else if label_row(l) && labels < 3 {
@@ -936,7 +978,7 @@ pub fn read(all: &[Line], rules: &[Rule], region: BBox, page: usize) -> Vec<Grid
             if next.y0 - clipped[last].y1 > fs * MAX_ROW_GAP {
                 break;
             }
-            if value_row(next) {
+            if value_row(next) || ruled_row(next, &clipped[last]) {
                 last += 1;
                 continue;
             }
@@ -2478,6 +2520,47 @@ mod tests {
             y1: 190.0,
         };
         read(&lines(&gl), &rules, region, 0)
+    }
+
+    #[test]
+    fn a_row_ruled_off_as_its_neighbours_are_stays_whatever_its_value_says() {
+        // Dimensions ruled under every row: lengths and weights, and a
+        // package size that is no figure.
+        let rule = |y: f64| Rule {
+            bbox: BBox {
+                x0: 15.0,
+                y0: y,
+                x1: 260.0,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let mut gl = Vec::new();
+        let mut rules = vec![rule(38.0)];
+        for (i, (label, value)) in [
+            ("Length", "221 mm"),
+            ("Weight", "190 g"),
+            ("Packaging", "31 cm x 10 cm x 15 cm"),
+            ("Shipping", "388 g"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let base = 50.0 + 13.0 * i as f64;
+            gl.extend(set(label, 20.0, base));
+            gl.extend(set(value, 120.0, base));
+            rules.push(rule(base + 3.0));
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 270.0,
+            y1: 95.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
     }
 
     #[test]
