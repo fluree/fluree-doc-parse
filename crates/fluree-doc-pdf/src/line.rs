@@ -1505,7 +1505,21 @@ fn raised_mark(
     // Raised: its baseline above the word's, in page space where y grows
     // downward.
     let raised = base.origin.1 - g.origin.1 >= size * MARK_RAISE;
-    if !(SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) || !raised {
+    let scripted_size = (SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio) && raised;
+    // Or a font's own superior figures, set at the text's size on its
+    // baseline: `Lengths` and its `7`, `(48 mm)` and its `6`.
+    let on_line = (g.font_size as f64 - size).abs() <= size * 0.1
+        && (g.origin.1 - base.origin.1).abs() < size * 0.2;
+    // Mid-run when the glyph before is a superior too: `25` is one mark,
+    // not a `5` raised over a `2`.
+    // A superior stands high, its ink's top as high as the word's: a
+    // display font's small figures centred on the line (`1⁰1⁰`) are not.
+    let high = match (g.bbox, base.bbox) {
+        (Some(m), Some(b)) => m.y0 <= b.y0 + size * 0.1,
+        _ => false,
+    };
+    let superiors = !scripted_size && on_line && high && superior(g) && !superior(base);
+    if !scripted_size && !superiors {
         return None;
     }
     // A word that holds a script of its own is a formula's term (`cₚhᵖ`),
@@ -1529,7 +1543,8 @@ fn raised_mark(
         let m = &glyphs[i];
         let same = m.bbox.is_some()
             && (m.font_size - g.font_size).abs() <= g.font_size * 0.1
-            && (m.origin.1 - g.origin.1).abs() < g.font_size.max(1.0) as f64 * 0.2;
+            && (m.origin.1 - g.origin.1).abs() < g.font_size.max(1.0) as f64 * 0.2
+            && (!superiors || superior(m));
         if !same {
             end = j;
             break;
@@ -1541,6 +1556,86 @@ fn raised_mark(
         .flat_map(|&i| glyphs[i].text.chars())
         .find(|c| !c.is_whitespace());
     Some((mark, next))
+}
+
+/// Whether `g` is a superior figure: a digit, or the comma between two, a
+/// font draws small and high above the baseline it is set on. Its ink stands
+/// clear of its own baseline and short of a figure's height. No figure set
+/// on the line is drawn so; a quote or a degree sign is no figure.
+fn superior(g: &Glyph) -> bool {
+    let size = g.font_size.max(1.0) as f64;
+    g.text.chars().count() == 1
+        && g.text.chars().all(|c| c.is_ascii_digit() || c == ',')
+        && g.bbox.is_some_and(|b| {
+            g.origin.1 - b.y1 >= size * MARK_RAISE && b.height() <= size * SUPERIOR_HEIGHT
+        })
+}
+
+/// Tallest a superior figure's ink stands, as a share of its size: a
+/// figure set on the line stands about seven tenths.
+const SUPERIOR_HEIGHT: f64 = 0.5;
+
+/// The run of raised figures `idxs[k]` begins where it leads a word, after a
+/// space or at the line's head: a note's number set before the note, or
+/// before the name the note is on (`⁴M17 series centrifuges only`). Its last
+/// glyph's index, where the word's first glyph follows it with no gap.
+fn leading_mark(glyphs: &[Glyph], idxs: &[usize], k: usize, adv: Advance) -> Option<usize> {
+    if adv.vertical() {
+        return None;
+    }
+    let g = &glyphs[idxs[k]];
+    let figure = |m: &Glyph| m.bbox.is_some() && m.text.chars().all(|c| c.is_ascii_digit());
+    if !figure(g) {
+        return None;
+    }
+    let mut end = k;
+    while let Some(&i) = idxs.get(end + 1) {
+        let m = &glyphs[i];
+        let same = m.bbox.is_some()
+            && (m.font_size - g.font_size).abs() <= g.font_size * 0.1
+            && (m.origin.1 - g.origin.1).abs() < g.font_size.max(1.0) as f64 * 0.2
+            && m.text.chars().all(|c| c.is_ascii_digit() || c == ',');
+        if !same {
+            break;
+        }
+        end += 1;
+    }
+    let last = &glyphs[idxs[end]];
+    let word = glyphs.get(*idxs.get(end + 1)?)?;
+    let first = word.bbox?;
+    // A raised `0` before a temperature's unit is its degree (`75 °F`).
+    if !word.text.starts_with(char::is_alphabetic)
+        || (end == k && g.text == "0" && matches!(word.text.as_str(), "C" | "F"))
+    {
+        return None;
+    }
+    // A word, of three letters and figures or more: a formula's term after
+    // a raised number (`¹τ`, `²Qk`, `¹R(x`) is no note's name.
+    let name: String = idxs[end + 1..]
+        .iter()
+        .map(|&i| &glyphs[i])
+        .take_while(|m| m.bbox.is_some())
+        .flat_map(|m| m.text.chars())
+        .take_while(|c| c.is_alphanumeric())
+        .collect();
+    let latin = |c: char| c.is_ascii_alphanumeric() || ('\u{00C0}'..='\u{024F}').contains(&c);
+    if name.chars().count() < 3 || !name.chars().all(latin) {
+        return None;
+    }
+    let size = word.font_size.max(1.0) as f64;
+    let ratio = g.font_size as f64 / size;
+    let raised = (SCRIPT_MIN_RATIO..=SCRIPT_SIZE_RATIO).contains(&ratio)
+        && word.origin.1 - g.origin.1 >= size * MARK_RAISE;
+    let superiors = (g.font_size as f64 - size).abs() <= size * 0.1
+        && idxs[k..=end].iter().all(|&i| superior(&glyphs[i]))
+        && !superior(word)
+        && g.bbox.is_some_and(|m| m.y0 <= first.y0 + size * 0.1);
+    let pen = last.advance.map_or(
+        last.bbox.map_or(adv.at(last.origin), |b| adv.end(&b)),
+        |a| adv.at(last.origin) + a,
+    );
+    let touching = adv.start(&first) - pen <= size * 0.2;
+    ((raised || superiors) && touching).then_some(end)
 }
 
 /// Whether `idxs[k]`, with nothing inked before it on its line, is a
@@ -1831,8 +1926,11 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
     let mut sizes: Vec<f32> = Vec::new();
-    // A power being read: its size and baseline.
-    let mut exponent: Option<(f32, f64)> = None;
+    // A power being read: its size and baseline, and whether it is set in
+    // superior figures, at the text's own size and baseline.
+    let mut exponent: Option<(f32, f64, bool)> = None;
+    // Where a raised number that leads a word ends, the word parting from it.
+    let mut leading: Option<usize> = None;
     // The last glyph of a mixed number's fraction being read.
     let mut fraction: Option<usize> = None;
     // The glyphs read as degree signs so far.
@@ -1899,6 +1997,17 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     }
                 }
                 let in_fraction = fraction.is_some_and(|end| k <= end);
+                // A raised number that leads a word parts from it, as a
+                // note's number before its note does: `⁴M17`, read `4 M17`.
+                if leading.is_some_and(|end| k == end + 1) && !text.ends_with(' ') {
+                    text.push(' ');
+                }
+                if !in_fraction
+                    && leading.is_none_or(|end| k > end)
+                    && (text.is_empty() || text.ends_with(' '))
+                {
+                    leading = leading_mark(glyphs, idxs, k, adv);
+                }
                 // A note's mark raised after a word parts from it:
                 // `Acrylonitrile` and its `a`, not `Acrylonitrilea`. After a
                 // space, a raised mark is read only as a degree before its
@@ -1932,9 +2041,10 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 // A power raised after a number keeps its place: `10⁶` and
                 // `10⁻³` as superscripts, never flattened into the number as
                 // `106` and `10-3`. So does a unit's: `m²`, `PIES²`.
-                let continues = exponent.is_some_and(|(size, y): (f32, f64)| {
+                let continues = exponent.is_some_and(|(size, y, superiors)| {
                     (g.font_size - size).abs() <= size * 0.1
                         && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
+                        && (!superiors || superior(g))
                 });
                 if in_fraction {
                     exponent = None;
@@ -1948,7 +2058,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                                     .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c));
                             power || marks::unit_power(&text, m)
                         })
-                        .map(|_| (g.font_size, g.origin.1));
+                        .map(|_| (g.font_size, g.origin.1, superior(g)));
                 }
                 // End of the previous glyph in *pen* space, not ink space.
                 // A right overhang (`f`, `y`, `r`) makes the ink box extend
@@ -2305,6 +2415,8 @@ mod tests {
         ];
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1);
+        // Its number stays with a word of two letters, as a formula's term
+        // keeps what is raised before it.
         assert_eq!(lines[0].text, "95Ib");
         assert!(lines[0].opens_with_script);
         assert!(!assemble(&v[2..])[0].opens_with_script);
@@ -3011,6 +3123,63 @@ mod tests {
         }
     }
 
+    /// A superior figure at `x`: set at the text's size on its baseline,
+    /// its ink small and high, as a font draws its own superiors.
+    fn superior_figure(text: &str, x: f64) -> Glyph {
+        let mut s = g(text, x, 0.0, 3.0, 0.0);
+        s.bbox = Some(BBox {
+            x0: x,
+            y0: 0.5,
+            x1: x + 3.0,
+            y1: 4.5,
+        });
+        s.advance = Some(3.5);
+        s
+    }
+
+    #[test]
+    fn a_superior_figure_is_a_raised_mark() {
+        // A note's number after a word or a bracket parts from it, as a
+        // smaller raised one does: `Lengths 7`, not `Lengths7`.
+        for (base, want) in [("Lengths", "Lengths 7"), ("(48 mm)", "(48 mm) 7")] {
+            let mut v = word(base, 0.0, false);
+            v.push(superior_figure("7", 5.0 * base.len() as f64));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+        // After a number it is a power, and the text after it is not.
+        let mut v = word("25", 0.0, false);
+        v.push(superior_figure("5", 10.0));
+        v.extend(word("max", 18.0, false));
+        assert_eq!(assemble(&v)[0].text, "25⁵ max");
+        // Two superiors are one mark, read as the run they are: no power of
+        // the first over the second, no degree.
+        let mut v = word("comfit.", 0.0, false);
+        v.push(superior_figure("5", 35.0));
+        v.push(superior_figure("0", 38.5));
+        assert_eq!(assemble(&v)[0].text, "comfit.50");
+        // A figure set on the line is no superior.
+        let mut v = word("Model7", 0.0, false);
+        v.extend(word("x", 30.0, false));
+        assert_eq!(assemble(&v)[0].text, "Model7x");
+    }
+
+    #[test]
+    fn a_raised_number_leading_a_word_parts_from_it() {
+        // A note's number before the name it is on, and at a note's head.
+        let mut v = word("UK.", 0.0, false);
+        v.extend(word("4", 17.5, true));
+        v.extend(word("M17 series", 20.5, false));
+        let lines: Vec<String> = assemble(&v).into_iter().map(|l| l.text).collect();
+        assert_eq!(lines, ["UK. 4 M17 series"]);
+        let mut v = word("1", 0.0, true);
+        v.extend(word("Biocontainment", 3.0, false));
+        assert_eq!(assemble(&v)[0].text, "1 Biocontainment");
+        // A raised `0` before its temperature's unit is a degree.
+        let mut v = word("0", 0.0, true);
+        v.extend(word("C", 3.0, false));
+        assert_eq!(assemble(&v)[0].text, "°C");
+    }
+
     #[test]
     fn a_power_raised_after_a_number_keeps_its_place() {
         // `kg/10⁶ dscm`, `4.0x10⁻³`: read flat, the unit is a hundredfold
@@ -3098,8 +3267,9 @@ mod tests {
     fn short_figures_on_the_baseline_or_over_full_ones_are_no_fraction() {
         // Old-style figures are as short, and stand on the baseline.
         assert_eq!(mixed("20", ("12", 6.0, 10.0), ("13", 6.0, 10.0)), "2012/13");
-        // A power over a whole number is no fraction's numerator.
-        assert_eq!(mixed("10", ("5", 3.0, 7.0), ("16", 3.0, 10.0)), "105/16");
+        // A power over a whole number is no fraction's numerator: drawn
+        // small and high at the number's size, it is the number's power.
+        assert_eq!(mixed("10", ("5", 3.0, 7.0), ("16", 3.0, 10.0)), "10⁵/16");
     }
 
     #[test]
