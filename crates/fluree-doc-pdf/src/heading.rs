@@ -733,6 +733,94 @@ pub fn body_is_bold<'a>(glyphs: impl IntoIterator<Item = &'a crate::glyph::Glyph
         .map(|(_, (all, bold))| bold * 2 > all)
 }
 
+/// The block each bookmark heads, by page and block index, with the
+/// bookmark's depth. A bookmark heads one place: a running head that
+/// repeats a section's title (`Appendix 1. Supplemental Figures` at the top
+/// of every even page) matches its bookmark on every page, and only the
+/// copy nearest the bookmark's destination is the heading. Nearest by page,
+/// then by the stated position, then the larger type; each block takes one
+/// bookmark, and each bookmark one block. Only bookmarks that name a page
+/// are placed so; the rest are matched by title alone ([`pick_entry`]).
+///
+/// Also the copies no bookmark took that stand where another such copy
+/// stands on another page, within [`RUNNING_SLOT`]: the running head
+/// itself, which is no heading by weight or size either.
+fn claim_outline(
+    pages: &[Vec<Block>],
+    by_title: &HashMap<String, Vec<&OutlineItem>>,
+) -> (
+    HashMap<(usize, usize), usize>,
+    std::collections::HashSet<(usize, usize)>,
+) {
+    let mut pairs = Vec::new();
+    for (pi, blocks) in pages.iter().enumerate() {
+        for (bi, b) in blocks.iter().enumerate() {
+            let Some(entries) = by_title.get(&norm(&b.text())) else {
+                continue;
+            };
+            for e in entries.iter().copied() {
+                let Some(page) = e.page else {
+                    continue;
+                };
+                let dy = e.y.map_or(f64::MAX, |y| (y - b.bbox.y0).abs());
+                pairs.push((
+                    page.abs_diff(b.page),
+                    dy,
+                    -b.font_size,
+                    pi,
+                    bi,
+                    e as *const OutlineItem,
+                    e.level,
+                ));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.total_cmp(&b.1))
+            .then(a.2.total_cmp(&b.2))
+            .then((a.3, a.4).cmp(&(b.3, b.4)))
+    });
+    let mut entries_used = std::collections::HashSet::new();
+    let mut claimed = HashMap::new();
+    let mut copies: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    for &(_, _, _, pi, bi, entry, level) in &pairs {
+        copies
+            .entry(norm(&pages[pi][bi].text()))
+            .or_default()
+            .push((pi, bi));
+        if claimed.contains_key(&(pi, bi)) || !entries_used.insert(entry) {
+            continue;
+        }
+        claimed.insert((pi, bi), level);
+    }
+    let mut running = std::collections::HashSet::new();
+    for blocks in copies.values() {
+        let free: Vec<(usize, usize)> = blocks
+            .iter()
+            .copied()
+            .filter(|k| !claimed.contains_key(k))
+            .collect();
+        for &(pi, bi) in &free {
+            let b = &pages[pi][bi].bbox;
+            let repeated = free.iter().any(|&(pj, bj)| {
+                let o = &pages[pj][bj].bbox;
+                pj != pi
+                    && (o.x0 - b.x0).abs() <= RUNNING_SLOT
+                    && (o.y0 - b.y0).abs() <= RUNNING_SLOT
+            });
+            if repeated {
+                running.insert((pi, bi));
+            }
+        }
+    }
+    (claimed, running)
+}
+
+/// How far, in points, two copies of a line may stand from each other's
+/// place and still be one running line.
+const RUNNING_SLOT: f64 = 2.0;
+
 /// Choose which of several same-titled bookmarks this block is.
 ///
 /// Nearest page first, then nearest stated position. An entry naming no page
@@ -988,6 +1076,7 @@ pub fn detect_with_body(
         }
         by_title.entry(k).or_default().push(it);
     }
+    let (claimed, running) = claim_outline(pages, &by_title);
 
     // Distinct heading-sized fonts, largest first, for the typography fallback.
     let mut sizes: Vec<i32> = pages
@@ -1083,10 +1172,19 @@ pub fn detect_with_body(
             // Most files write `/Fit`, which names a page and no position, so
             // the page alone carries this most of the time — and that is
             // already enough to tell the fourth "Overview" from the first.
-            if let Some(level) = by_title
-                .get(&norm(&text))
-                .and_then(|entries| pick_entry(entries, b))
-            {
+            // A copy of a bookmarked title set where it is set on other
+            // pages too, not the one its bookmark lands on: a running head.
+            if running.contains(&(page_idx, block_idx)) {
+                continue;
+            }
+            let outline_level = match by_title.get(&norm(&text)) {
+                Some(entries) if entries.iter().any(|e| e.page.is_some()) => {
+                    claimed.get(&(page_idx, block_idx)).copied()
+                }
+                Some(entries) => pick_entry(entries, b),
+                None => None,
+            };
+            if let Some(level) = outline_level {
                 out.push(Heading {
                     page: b.page,
                     block_index: block_idx,
@@ -3065,6 +3163,46 @@ mod tests {
         ]];
         let h = detect(&pages, &[]);
         assert_eq!(h[0].level, 3, "numbering states its own depth");
+    }
+
+    #[test]
+    fn a_bookmark_heads_one_place_and_its_running_copies_none() {
+        let title = "Appendix 1. Supplemental Figures";
+        let page = |p: usize, heading_y: Option<f64>| {
+            let mut head = blk(title, 10.0, 1);
+            head.page = p;
+            head.bold = true;
+            head.bbox.x0 = 396.0;
+            head.bbox.y0 = 43.0;
+            head.bbox.y1 = 53.0;
+            let mut blocks = vec![head];
+            if let Some(y) = heading_y {
+                let mut real = blk(title, 14.0, 1);
+                real.page = p;
+                real.bold = true;
+                real.bbox.y0 = y;
+                real.bbox.y1 = y + 14.0;
+                blocks.push(real);
+            }
+            let mut text = body();
+            text.page = p;
+            blocks.push(text);
+            blocks
+        };
+        // The heading on page 1, where its bookmark lands; the running head
+        // at the top of pages 2 to 4.
+        let mut pages = vec![page(0, None)];
+        pages[0].remove(0);
+        pages.push(page(1, Some(80.0)));
+        pages[1].remove(0);
+        pages.extend((2..5).map(|p| page(p, None)));
+        let hs = detect(&pages, &[bookmark(title, 1, Some(1), None)]);
+        let found: Vec<(usize, Evidence)> = hs
+            .iter()
+            .filter(|h| h.text == title)
+            .map(|h| (h.page, h.evidence))
+            .collect();
+        assert_eq!(found, [(1, Evidence::Outline)], "{hs:?}");
     }
 
     #[test]
