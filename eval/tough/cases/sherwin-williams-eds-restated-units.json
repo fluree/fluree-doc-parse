@@ -6,7 +6,8 @@
     "about": "Sherwin-Williams environmental data sheet. Each page sets small ruled VOC tables under larger ones and under full-width section banners."
   },
   "notes": [
-    "2026-11-25 (#200): the two short VOC tables restate their units, `VOC Content | LB/Gal | g/L`, bold over their one `Total` row. A restated header needed two rows under it, and the `Total` values were named `By wt` and `By vol`, the units of the rows above."
+    "2026-11-25 (#200): the two short VOC tables restate their units, `VOC Content | LB/Gal | g/L`, bold over their one `Total` row. A restated header needed two rows under it, and the `Total` values were named `By wt` and `By vol`, the units of the rows above.",
+    "2026-11-25 (#269): under the short VOC tables a unit row names one column alone, `By wt`, bold and shaded as the header is, over `LVP-VOC | 0.0%`. A restated header needed two names, and `By wt` was a value under `LB/Gal`, the row under it named `LB/Gal` too."
   ],
   "checks": [
     {
@@ -26,6 +27,24 @@
         "value": "0.00",
         "column": "K25W951 / LB/Gal",
         "row": "Total"
+      }
+    },
+    {
+      "id": "single-unit-restated",
+      "found": "2026-11-25",
+      "issue": "#269: `0.0%` under `K25W951 / LB/Gal`, the unit row over it read as data.",
+      "cell": {
+        "value": "0.0%",
+        "column": "K25W951 / By wt",
+        "row": "By wt LVP-VOC"
+      }
+    },
+    {
+      "id": "single-unit-not-a-value",
+      "found": "2026-11-25",
+      "issue": "#269: as above; `By wt` was a value of the column it names.",
+      "no_row": {
+        "K25W951 / LB/Gal": "By wt"
       }
     }
   ]
