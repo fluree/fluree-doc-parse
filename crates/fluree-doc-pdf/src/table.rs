@@ -8134,6 +8134,37 @@ mod header_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_grid_is_not_read_across_a_drawings_box() {
+        use crate::geom::BBox;
+        use crate::rule::Fill;
+        let bb = |x0: f64, y0: f64, x1: f64, y1: f64| BBox { x0, y0, x1, y1 };
+        // A wiring diagram's box holding its switches, and a table's shaded
+        // label column holding only text.
+        let mut fills = vec![Fill {
+            bbox: bb(46.0, 95.0, 421.0, 563.0),
+            page: 0,
+        }];
+        for k in 0..3 {
+            let x = 115.0 + 100.0 * k as f64;
+            fills.push(Fill {
+                bbox: bb(x, 135.0, x + 29.0, 180.0),
+                page: 0,
+            });
+        }
+        fills.push(Fill {
+            bbox: bb(50.0, 600.0, 150.0, 700.0),
+            page: 0,
+        });
+        let walls = walls(&fills);
+        assert_eq!(walls.len(), 2, "{walls:?}");
+        // Wire labels inside the box and the note beside it, in one grid.
+        assert!(walled_in(&bb(260.0, 140.0, 590.0, 160.0), &walls));
+        // A grid inside the box, or one with the shaded column, is a grid.
+        assert!(!walled_in(&bb(120.0, 140.0, 400.0, 160.0), &walls));
+        assert!(!walled_in(&bb(50.0, 610.0, 400.0, 690.0), &walls));
+    }
     use super::*;
 
     #[test]
@@ -9645,4 +9676,62 @@ mod tests {
         g.group_label_merges(&gl, &rules, &mut m);
         assert!(!m.continues_left.iter().any(|x| *x));
     }
+}
+
+/// An upright edge of a box drawn on the page, from its top to its foot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Wall {
+    pub x: f64,
+    pub y0: f64,
+    pub y1: f64,
+}
+
+/// Fewest shapes a box holds for it to be a drawing's frame, whose edges
+/// part the text either side of them.
+const FRAMED_SHAPES: usize = 3;
+
+/// The upright edges of the boxes drawn round drawings: a fill holding
+/// other shapes, a wiring diagram's box. A table's shaded column holds
+/// text, not shapes, and its edge parts no row.
+pub fn walls(fills: &[crate::rule::Fill]) -> Vec<Wall> {
+    fills
+        .iter()
+        .filter(|f| {
+            let b = f.bbox;
+            let area = b.width() * b.height();
+            fills
+                .iter()
+                .filter(|o| {
+                    let c = o.bbox;
+                    let (cx, cy) = ((c.x0 + c.x1) * 0.5, (c.y0 + c.y1) * 0.5);
+                    b.contains(cx, cy) && c.width() * c.height() < area * 0.5
+                })
+                .count()
+                >= FRAMED_SHAPES
+        })
+        .flat_map(|f| {
+            let b = f.bbox;
+            [
+                Wall {
+                    x: b.x0,
+                    y0: b.y0,
+                    y1: b.y1,
+                },
+                Wall {
+                    x: b.x1,
+                    y0: b.y0,
+                    y1: b.y1,
+                },
+            ]
+        })
+        .collect()
+}
+
+/// Does one of `walls` stand inside `b`, between its left and right
+/// edges, from its top to its foot? A grid read across it puts a drawing's
+/// labels and the note beside its box in one row.
+pub fn walled_in(b: &crate::geom::BBox, walls: &[Wall]) -> bool {
+    walls
+        .iter()
+        .any(|w| w.x > b.x0 + 1.0 && w.x < b.x1 - 1.0 && w.y0 <= b.y0 && w.y1 >= b.y1)
 }
