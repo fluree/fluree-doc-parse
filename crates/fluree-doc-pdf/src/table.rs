@@ -1064,7 +1064,7 @@ impl Grid {
             return;
         }
         let (left, right) = (self.xs[0], self.xs[cols]);
-        let at = |k: usize| {
+        let on = |k: usize| {
             rules
                 .iter()
                 .filter(|r| {
@@ -1073,9 +1073,40 @@ impl Grid {
                         && r.bbox.x1 > left
                         && r.bbox.x0 < right
                 })
+                .collect::<Vec<_>>()
+        };
+        let at = |k: usize| {
+            on(k)
+                .iter()
                 .map(|r| (r.bbox.x0, r.bbox.x1))
                 .collect::<Vec<_>>()
         };
+        // Underlines under a row's figures, a piece under each column parted
+        // at its gutters ([`cluster`]), close a subtotal's figures and leave
+        // the labels' column open. A label on each side of them is two
+        // rows' labels, not one span (`Japanese yen` over `Total`); a stub
+        // head over a header's underlined groups, its text on one side
+        // alone, still spans.
+        let underlined: Vec<usize> = (1..rows)
+            .filter(|&k| merges.continues_above[k * cols..(k + 1) * cols].contains(&true))
+            .filter(|&k| cluster(&on(k)).iter().any(|l| !l.gutters.is_empty()))
+            .collect();
+        if !underlined.is_empty() {
+            let homes = self.glyph_cells(glyphs);
+            let held = |cell: usize| {
+                glyphs
+                    .iter()
+                    .zip(&homes)
+                    .any(|(g, h)| *h == Some(cell) && !g.text.trim().is_empty())
+            };
+            for k in underlined {
+                for i in k * cols..(k + 1) * cols {
+                    if merges.continues_above[i] && held(i) && held(i - cols) {
+                        merges.continues_above[i] = false;
+                    }
+                }
+            }
+        }
         let across =
             |k: usize| span_coverage(at(k).into_iter(), left, right) >= 0.9 * (right - left);
         // The rows are drawn at an unruled boundary when the table's
@@ -2124,6 +2155,14 @@ struct GridLine {
     /// boundaries, which is why segmented rules are more informative than
     /// continuous ones.
     ends: Vec<f64>,
+    /// Along a row's rule drawn in pieces, the middles of the gaps between
+    /// them narrower than a cell: the gutters a statement's underlines part
+    /// at, one piece under each column of figures.
+    gutters: Vec<f64>,
+    /// Where such a rule's run of pieces starts and ends: the first column
+    /// of figures' left edge and the last one's right, the labels' column
+    /// standing before them unruled.
+    gutter_ends: Vec<f64>,
 }
 
 /// Cluster rules of one orientation into grid lines by axis position.
@@ -2156,6 +2195,8 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
                     lo,
                     hi,
                     ends: vec![lo, hi],
+                    gutters: Vec::new(),
+                    gutter_ends: Vec::new(),
                 });
                 pieces.push(vec![(lo, hi)]);
             }
@@ -2199,9 +2240,204 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
             })
         });
         g.ends.extend(middles);
+        // The rule's runs: its pieces joined where they meet or overlap.
+        let mut sorted = parts.clone();
+        sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in sorted {
+            match runs.last_mut() {
+                Some(r) if a <= r.1 + 0.5 => r.1 = r.1.max(b),
+                _ => runs.push((a, b)),
+            }
+        }
+        // A gutter parts two underlines, each under a column's figures and
+        // as wide as a cell can be. A dashed line's dashes, a chart's
+        // curve drawn a point at a time and its axis's ticks are narrower.
+        let wide = |r: &(f64, f64)| r.1 - r.0 >= MIN_CELL_EXTENT;
+        let parted: Vec<usize> = (1..runs.len())
+            .filter(|&i| {
+                let gap = runs[i].0 - runs[i - 1].1;
+                gap <= MAX_GUTTER && wide(&runs[i - 1]) && wide(&runs[i])
+            })
+            .collect();
+        // A row's underlines under each of its figures: three gutters or
+        // more. Group labels' underlines, one under each group, part at a
+        // gutter or two, and between groups, not columns.
+        if parted.len() >= MIN_GUTTERS_PER_LINE {
+            g.gutters = parted
+                .iter()
+                .map(|&i| (runs[i - 1].1 + runs[i].0) / 2.0)
+                .collect();
+            let first = runs.iter().find(|r| wide(r)).map_or(g.lo, |r| r.0);
+            let last = runs.iter().rev().find(|r| wide(r)).map_or(g.hi, |r| r.1);
+            g.gutter_ends = vec![first, last];
+        }
     }
     out
 }
+
+/// Drop a rule's gutters when text runs across one of them: a caption or a
+/// line of prose over a rule whose pieces happen to part under it, or a
+/// row of cells drawn a cell at a time under a title. A row of underlines
+/// under figures has a column's gap at every gutter; one gutter run across
+/// shows the pieces are not under columns, and none of the rule's gutters
+/// is kept. Only the text on the rule's own row counts, a baseline within
+/// [`GUTTER_ROW_EMS`] of it, so a head set over two columns a line above
+/// their own underlines does not close the gutter between them. Text runs
+/// across a gutter when a glyph spans it, or two glyphs on one baseline
+/// either side of it stand a word space or less apart
+/// ([`GUTTER_WORD_GAP_EMS`]).
+fn clear_crossed_gutters(lines: &mut [GridLine], glyphs: &[crate::glyph::Glyph]) {
+    if lines.iter().all(|g| g.gutters.is_empty()) {
+        return;
+    }
+    // The inked glyphs by baseline, (baseline, x0, x1, size), so each rule
+    // reads only the rows near it.
+    let mut inked: Vec<(f64, f64, f64, f64)> = glyphs
+        .iter()
+        .filter(|c| c.is_horizontal() && !c.text.trim().is_empty())
+        .filter_map(|c| {
+            let b = c.bbox?;
+            Some((c.origin.1, b.x0, b.x1, (c.font_size as f64).max(1.0)))
+        })
+        .collect();
+    inked.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let largest = inked.iter().map(|c| c.3).fold(1.0, f64::max);
+    for g in lines.iter_mut().filter(|g| !g.gutters.is_empty()) {
+        let reach = GUTTER_ROW_EMS * largest;
+        let from = inked.partition_point(|c| c.0 < g.axis - reach);
+        let row: Vec<(f64, f64, f64, f64)> = inked[from..]
+            .iter()
+            .take_while(|c| c.0 <= g.axis + reach)
+            .filter(|&&(y, x0, x1, fs)| {
+                (y - g.axis).abs() <= GUTTER_ROW_EMS * fs && x1 > g.lo - fs && x0 < g.hi + fs
+            })
+            .map(|&(y, x0, x1, fs)| (x0, x1, y, fs))
+            .collect();
+        let crossed = |x: f64| {
+            row.iter().any(|&(a0, a1, ay, fs)| {
+                (a0 < x - 0.5 && a1 > x + 0.5)
+                    || (a1 <= x + 0.5
+                        && row.iter().any(|&(b0, _, by, _)| {
+                            b0 >= x - 0.5
+                                && (by - ay).abs() < 0.3 * fs
+                                && b0 - a1 <= GUTTER_WORD_GAP_EMS * fs
+                        }))
+            })
+        };
+        if g.gutters.iter().any(|&x| crossed(x)) {
+            g.gutters.clear();
+            g.gutter_ends.clear();
+        }
+        // A label run on over where the figures' underlines begin is the
+        // label's, and that end is no column's edge; their gutters still are.
+        g.gutter_ends.retain(|&x| !crossed(x));
+    }
+}
+
+/// A grid ruled by its figures' underlines: one of its column edges is a
+/// gutter the pieces of two of its row rules or more part at, with no text
+/// run across it ([`cluster`], [`clear_crossed_gutters`]), and those rules
+/// start after the rows' labels: after the grid's first column, the labels'
+/// column left unruled, or after labels set left of the grid on two of the
+/// lines its figures are on, a grid of the figures' columns alone. Its rules
+/// close groups of rows, not rows ([`crate::textgrid::split_underlined_bands`]).
+/// A row of cells drawn a cell at a time is ruled from the table's edge,
+/// its labels' cell and all, and each band it rules is a row.
+pub(crate) fn ruled_by_underlines(
+    g: &Grid,
+    rules: &[Rule],
+    glyphs: &[crate::glyph::Glyph],
+) -> bool {
+    let (Some(&x0), Some(&x1)) = (g.xs.first(), g.xs.last()) else {
+        return false;
+    };
+    let (Some(&y0), Some(&y1)) = (g.ys.first(), g.ys.last()) else {
+        return false;
+    };
+    let hs: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == Orientation::Horizontal
+                && r.axis_pos() >= y0 - EDGE_TOLERANCE
+                && r.axis_pos() <= y1 + EDGE_TOLERANCE
+                && r.bbox.x1 > x0
+                && r.bbox.x0 < x1
+        })
+        .collect();
+    let mut lines = cluster(&hs);
+    if lines.iter().all(|l| l.gutters.is_empty()) {
+        return false;
+    }
+    clear_crossed_gutters(&mut lines, glyphs);
+    // The baselines of the grid's figures, and of its rows' labels set left
+    // of it: a label's line carries its row's figures.
+    let on_rows = |c: &&crate::glyph::Glyph| {
+        c.is_horizontal() && c.bbox.is_some() && c.origin.1 > y0 && c.origin.1 < y1
+    };
+    let figures: Vec<(f64, f64)> = glyphs
+        .iter()
+        .filter(on_rows)
+        .filter(|c| {
+            let b = c.bbox.unwrap_or_default();
+            let m = (b.x0 + b.x1) / 2.0;
+            m > x0 && m < x1 && c.text.chars().any(|ch| ch.is_ascii_digit())
+        })
+        .map(|c| (c.origin.1, (c.font_size as f64).max(1.0)))
+        .collect();
+    let labelled_before = |lo: f64| {
+        let mut bases: Vec<f64> = glyphs
+            .iter()
+            .filter(on_rows)
+            .filter(|c| {
+                c.text.chars().any(char::is_alphabetic)
+                    && c.bbox.is_some_and(|b| b.x1 <= lo)
+                    && figures
+                        .iter()
+                        .any(|&(y, fs)| (y - c.origin.1).abs() < 0.3 * fs)
+            })
+            .map(|c| c.origin.1)
+            .collect();
+        bases.sort_by(f64::total_cmp);
+        bases.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+        bases.len() >= 2
+    };
+    g.xs[1..g.xs.len() - 1].iter().any(|&x| {
+        lines
+            .iter()
+            .filter(|l| {
+                l.gutters.iter().any(|e| (e - x).abs() <= EDGE_TOLERANCE)
+                    && (l.lo > x0 + EDGE_TOLERANCE || labelled_before(l.lo))
+            })
+            .count()
+            >= MIN_GUTTER_LINES
+    })
+}
+
+/// How near a rule, in the text's ems, a baseline stands to be on the
+/// rule's row: an underline sits a fraction of an em under its text, and
+/// a row's first line under a rule stands its cap height and padding
+/// below it. The line above an underlined one stands a line's leading,
+/// 1.2 em or more, above that line's own underline.
+const GUTTER_ROW_EMS: f64 = 1.0;
+
+/// The widest gap, in ems, between two glyphs of one run of text: a word
+/// space is a quarter to a third of an em, a justified line's stretch
+/// up to about twice that. Columns of figures stand further apart.
+const GUTTER_WORD_GAP_EMS: f64 = 0.6;
+
+/// Widest gap between two pieces of a row's rule that is a gutter between
+/// columns: narrower than a cell can be. A wider gap leaves columns
+/// unruled, an underline under some columns only.
+const MAX_GUTTER: f64 = MIN_CELL_EXTENT * 1.5;
+
+/// Fewest row rules a gutter between their pieces must recur on to be a
+/// column's edge: one rule parted once is a broken line.
+const MIN_GUTTER_LINES: usize = 2;
+
+/// Fewest gutters a row's rule parts at for its gutters to be columns':
+/// underlines under each figure of a row, four columns or more.
+const MIN_GUTTERS_PER_LINE: usize = 3;
 
 /// Collapse near-equal positions into one, taking the mean of each group.
 fn coalesce(mut vals: Vec<f64>, tol: f64) -> Vec<f64> {
@@ -2738,7 +2974,8 @@ fn detect_group_trimmed(
         return Vec::new();
     }
 
-    let h_lines = cluster(&hs);
+    let mut h_lines = cluster(&hs);
+    clear_crossed_gutters(&mut h_lines, glyphs);
     let v_lines = cluster(&vs);
 
     // Overall extent of the ruled area, from both orientations.
@@ -3040,6 +3277,8 @@ fn row_breakers(
             axis: g.axis,
             lo: g.lo,
             hi: g.hi,
+            gutters: g.gutters.clone(),
+            gutter_ends: g.gutter_ends.clone(),
             ends: g
                 .ends
                 .iter()
@@ -3065,7 +3304,7 @@ fn row_breakers(
 ///
 /// Returns `None` when the band's own rules do not yield a usable set, so the
 /// caller can fall back to the page-wide boundaries.
-fn band_columns(ys: &[f64], rules: &[Rule]) -> Option<Vec<f64>> {
+fn band_columns(ys: &[f64], rules: &[Rule], glyphs: &[crate::glyph::Glyph]) -> Option<Vec<f64>> {
     let (lo, hi) = (ys[0] - EDGE_TOLERANCE, ys[ys.len() - 1] + EDGE_TOLERANCE);
     let inside: Vec<Rule> = rules
         .iter()
@@ -3096,7 +3335,8 @@ fn band_columns(ys: &[f64], rules: &[Rule]) -> Option<Vec<f64>> {
     if hs.is_empty() && vs.is_empty() {
         return None;
     }
-    let h_lines = cluster(&hs);
+    let mut h_lines = cluster(&hs);
+    clear_crossed_gutters(&mut h_lines, glyphs);
     let v_lines = cluster(&vs);
     let x_lo = h_lines
         .iter()
@@ -3344,7 +3584,7 @@ fn split_row_bands(
     };
     let borrows = |i: usize| {
         let (lo, hi) = run_bounds(i);
-        band_columns(&ys[lo..=hi + 1], rules).is_none_or(|xs| xs.len() <= 2)
+        band_columns(&ys[lo..=hi + 1], rules, glyphs).is_none_or(|xs| xs.len() <= 2)
     };
     let changes_after = |i: usize| {
         if i + 1 >= crossed.len() || crossed[i] == crossed[i + 1] {
@@ -3676,7 +3916,7 @@ fn split_row_bands(
                 // Tables stacked on one page rarely share a column layout —
                 // three stacked tables with 5, 4 and 4 columns saw a
                 // page-wide `xs` report 8 for all of them.
-                let band_xs = band_columns(&sub, rules).unwrap_or_else(|| xs.clone());
+                let band_xs = band_columns(&sub, rules, glyphs).unwrap_or_else(|| xs.clone());
                 // A single band stands alone only as a banner: several columns
                 // across one row. Two columns over one row is a box, and the
                 // rules around a paragraph are not a table.
@@ -5352,6 +5592,33 @@ fn boundary_candidates(
                 .filter(|g| g.ends.iter().any(|e| (e - cand).abs() <= EDGE_TOLERANCE))
                 .count();
             if support >= needed {
+                cands.push(cand);
+            }
+        }
+        // A gutter the rows' rules part at again and again is a column's
+        // edge, however few of the table's rules it is on: a statement
+        // ruled with underlines under its figures, a piece under each
+        // column, between rules across the whole table that part nothing.
+        // Only where no edge stands already, which it would move: the run's
+        // two ends are often the table's own.
+        let parts = |g: &GridLine| {
+            g.gutters
+                .iter()
+                .chain(&g.gutter_ends)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        let found = cands.clone();
+        let gutters = coalesce(wide.iter().flat_map(|g| parts(g)).collect(), EDGE_TOLERANCE);
+        for cand in gutters {
+            let support = wide
+                .iter()
+                .filter(|g| parts(g).iter().any(|e| (e - cand).abs() <= EDGE_TOLERANCE))
+                .count();
+            let new = !found
+                .iter()
+                .any(|e| (e - cand).abs() <= 2.0 * EDGE_TOLERANCE);
+            if support >= MIN_GUTTER_LINES && new {
                 cands.push(cand);
             }
         }
@@ -9673,6 +9940,104 @@ mod tests {
         };
         assert!(g.split_by_alignment(&glyphs).is_empty());
         assert_eq!(g.cols(), 1);
+    }
+
+    /// `text` at 10pt from `x` on baseline `base`, one glyph a word.
+    fn set_at(x: f64, base: f64, text: &str) -> crate::glyph::Glyph {
+        let w = 5.0 * text.chars().count() as f64;
+        crate::glyph::Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: base - 8.0,
+                x1: x + w,
+                y1: base + 2.0,
+            }),
+            page: 0,
+            origin: (x, base),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            advance: Some(w),
+            draw_index: 0,
+        }
+    }
+
+    /// A statement's rules: across the table over and under its header and
+    /// under its last row, and between them two rows of underlines, a
+    /// piece under each of four columns of figures with 8pt between them.
+    fn underlined_statement() -> Vec<Rule> {
+        let mut rules = vec![
+            h(50.0, 386.0, 40.0),
+            h(50.0, 386.0, 60.0),
+            h(50.0, 386.0, 140.0),
+        ];
+        for y in [103.0, 123.0] {
+            for (a, b) in [
+                (150.0, 204.0),
+                (212.0, 266.0),
+                (274.0, 328.0),
+                (336.0, 386.0),
+            ] {
+                rules.push(h(a, b, y));
+            }
+        }
+        rules
+    }
+
+    #[test]
+    fn underlines_under_figures_mark_their_columns() {
+        // Two rows of underlines among five rules across the table: their
+        // pieces' ends have too little of the table's rules behind them to
+        // be columns, but the gutters they part at recur, row after row.
+        let rules = underlined_statement();
+        let mut glyphs = vec![
+            set_at(180.0, 55.0, "2023"),
+            set_at(242.0, 55.0, "2022"),
+            set_at(304.0, 55.0, "2021"),
+            set_at(362.0, 55.0, "2020"),
+        ];
+        for (base, label) in [
+            (75.0, "Cash"),
+            (87.0, "Receivables"),
+            (99.0, "Inventory"),
+            (119.0, "Total"),
+            (135.0, "Other"),
+        ] {
+            glyphs.push(set_at(55.0, base, label));
+            for x in [175.0, 237.0, 299.0, 357.0] {
+                glyphs.push(set_at(x, base, "1,234"));
+            }
+        }
+        let grids = detect_framed(&rules, &[], &glyphs, 0, &[]);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let xs = &grids[0].xs;
+        assert_eq!(xs.len(), 6, "a labels' column and four of figures: {xs:?}");
+        for (got, want) in xs.iter().zip([50.0, 150.0, 208.0, 270.0, 332.0, 386.0]) {
+            assert!((got - want).abs() <= 1.0, "{xs:?}");
+        }
+    }
+
+    #[test]
+    fn a_rules_gutters_under_running_text_are_no_columns() {
+        // The same rules, a line of prose set on the first row of
+        // underlines: its words run on across every place they part.
+        let rules = underlined_statement();
+        let mut glyphs = Vec::new();
+        let mut x = 52.0;
+        for w in "the gains and losses on these holdings are reported in the notes to the statements that follow".split(' ') {
+            glyphs.push(set_at(x, 100.0, w));
+            x += 5.0 * w.chars().count() as f64 + 3.0;
+        }
+        assert!(x > 386.0, "the line runs across the table");
+        let grids = detect_framed(&rules, &[], &glyphs, 0, &[]);
+        assert!(
+            grids.iter().all(|g| !g
+                .xs
+                .iter()
+                .any(|&x| (x - 208.0).abs() <= 3.0 || (x - 270.0).abs() <= 3.0)),
+            "{grids:?}"
+        );
     }
 
     fn h(x0: f64, x1: f64, y: f64) -> Rule {
