@@ -404,6 +404,13 @@ The first row of a ruled or aligned grid is the table's title when:
   from the alignment, holding one label or text whose words run at their
   ordinary spacing over the cuts between columns; or it is the only text in
   the row, in its first column, with nothing in the row spanned;
+- or it is one cell across all of the table but columns too narrow to hold
+  a label set across them, 2.5 ems of its text together: a margin, or the
+  room a label turned down the rows takes, whose rule may run on up through
+  the band (`Average Luminance Table (cd/m²)` over every column but the one
+  `Vertical Angle` is turned in). A line turned down a column takes about
+  two ems, a word set across one three or more; a group's label over part
+  of the table leaves columns a label fits;
 - it is short (12 words or fewer) and is not a number.
 
 The title is read out as a paragraph just above the table, and the table is
@@ -937,12 +944,21 @@ Not a header ruled off as its rows are (`(millions) | 2017 | 2016`), which
 names no measure and starts the next table, nor a header ruled above and
 below under a table ruled only round its own.
 
-A table read from its text because lines stand to its left, set as a column
-of the page's prose, stays in that column. The prose's columns are found with
-its text counted in, as it would have been had the table been prose. Read
-without it, the column it stands in can end higher on the page, and the
-prose below would be read straight across the page instead of down that
-column. Other tables are left out, as before.
+A table ruled under its rows with horizontals alone, with no vertical and
+its rows not lumped, standing beside lines of the page's text on half its
+rows, is set in a column of its own beside a column of prose. The prose's
+columns are found with its text counted in, as it would have been had the
+table been prose. Read without it, the column it stands in can end higher
+on the page, and the prose below would be read straight across the page
+instead of down that column.
+
+The test is made on the ruled grid that seeds the table read from its text;
+in practice only such seeds give tables of this shape. Made on every table
+the page's readers keep, it changed two documents more, one for the better
+and one for the worse. Other tables are left out. Counted in, a table's own
+gutters read as the page's columns and part the text that crosses them (a
+title over an invoice table read `MLS-721 40`), and a table across a gutter
+the prose leaves open closes it.
 
 ## Tables split by a page break
 
