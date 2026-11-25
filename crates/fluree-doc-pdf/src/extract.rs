@@ -646,6 +646,31 @@ impl<'a> Device<'a> for Collector {
         _paint: &hayro_interpret::Paint<'a>,
         mode: &hayro_interpret::PathDrawMode,
     ) {
+        // A stroke shorter than its pen is wide is a bar across it: see
+        // [`pen_bars`]. Each bar is read as any shape is, a rule or a fill.
+        if let hayro_interpret::PathDrawMode::Stroke(props) = mode {
+            if let Some(bars) = pen_bars(path, transform, props) {
+                for b in bars {
+                    if !self.page_box.intersects(&b) {
+                        continue;
+                    }
+                    match rule::classify(b, self.page) {
+                        Some(rule::Shape::Rule(x)) => {
+                            if let Some(x) = self.clip_rule(x) {
+                                self.rules.push(x);
+                            }
+                        }
+                        Some(rule::Shape::Fill(x)) => {
+                            if let Some(bbox) = self.visible(x.bbox) {
+                                self.fills.push(rule::Fill { bbox, ..x });
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                return;
+            }
+        }
         // Bounding box only. A table grid is axis-aligned rectangles and
         // segments; curve detail is irrelevant and expensive to keep.
         let path = transform * path.clone();
@@ -1145,6 +1170,79 @@ fn trace_of(path: &kurbo::BezPath, drawn: BBox, page: usize) -> Option<rule::Tra
 /// Shortest underline read out of a path of several, in points: a narrow
 /// figure's width, longer than a chart's tick.
 const MIN_UNDERLINE: f64 = 8.0;
+
+/// The ink of a stroked path whose every subpath is one straight segment
+/// shorter than the pen is wide, each its own bar on the page; `None` for
+/// any other path, which is read by its outline as before.
+///
+/// A pen sweeps its width across the segment it strokes, so a segment
+/// shorter than the pen draws a bar the pen's width long, at right angles
+/// to the segment, as wide as the segment is long: a template that draws
+/// its column rules as 0.5-pt horizontal segments with a 36-pt pen draws
+/// three 0.5 × 36 vertical rules, and its borders, a 1-pt segment with a
+/// 321-pt pen, two 1 × 321 rules. Read by its outline, each was a stub of
+/// horizontal rule, and the three in one path one rule through the header
+/// they divide. A butt cap ends the bar at the segment's ends; a square or
+/// round cap carries it half the pen on past each. A dashed pen, and a
+/// segment of no length, a dot or nothing, are left to the outline. Ordinary rules, their pen thinner than their length, are
+/// not this.
+fn pen_bars(
+    path: &kurbo::BezPath,
+    transform: Affine,
+    props: &hayro_interpret::StrokeProps,
+) -> Option<Vec<BBox>> {
+    let pen = props.line_width as f64;
+    if pen <= 0.0 || !props.dash_array.is_empty() {
+        return None;
+    }
+    let cap = match props.line_cap {
+        kurbo::Cap::Butt => 0.0,
+        _ => pen / 2.0,
+    };
+    // Each subpath's one segment: a second turns it into an outline.
+    let mut segments: Vec<(kurbo::Point, kurbo::Point)> = Vec::new();
+    let mut start: Option<kurbo::Point> = None;
+    for el in path.elements() {
+        match *el {
+            kurbo::PathEl::MoveTo(p) => start = Some(p),
+            kurbo::PathEl::LineTo(p) => segments.push((start.take()?, p)),
+            kurbo::PathEl::ClosePath => {}
+            _ => return None,
+        }
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    let mut bars = Vec::new();
+    for (a, b) in segments {
+        let along = b - a;
+        let length = along.hypot();
+        // No length is a dot, or nothing with a butt cap: the outline's.
+        // And only a bar that is a rule: a segment no longer than a rule is
+        // thick, under a pen at least a rule's aspect longer. A short thick
+        // stroke that paints a block is a shape the outline reads as before.
+        if length == 0.0
+            || length > rule::MAX_RULE_THICKNESS
+            || pen < length * rule::MIN_RULE_ASPECT
+        {
+            return None;
+        }
+        let dir = if length > 0.0 {
+            along / length
+        } else {
+            kurbo::Vec2::new(1.0, 0.0)
+        };
+        let across = kurbo::Vec2::new(-dir.y, dir.x) * (pen / 2.0);
+        let (from, to) = (a - dir * cap, b + dir * cap);
+        let corners = [from + across, from - across, to - across, to + across];
+        let mut r = Rect::from_points(transform * corners[0], transform * corners[1]);
+        for c in &corners[2..] {
+            r = r.union_pt(transform * *c);
+        }
+        bars.push(crate::geom::from_kurbo(r));
+    }
+    Some(bars)
+}
 
 fn subpath_rules(path: &kurbo::BezPath, page: usize) -> Option<Vec<Rule>> {
     let mut boxes: Vec<Rect> = Vec::new();
@@ -2598,6 +2696,44 @@ mod actual_text_tests {
 mod subpath_fill_tests {
     use super::subpath_fills;
     use kurbo::BezPath;
+
+    #[test]
+    fn a_stroke_shorter_than_its_pen_is_a_bar_across_it() {
+        let props = |w: f32| hayro_interpret::StrokeProps {
+            line_width: w,
+            ..Default::default()
+        };
+        // Three 0.5-pt segments along a row, a 36-pt pen: three columns'
+        // rules, 0.5 wide and 36 tall.
+        let mut p = BezPath::new();
+        for x in [0.0, 92.0, 184.0] {
+            p.move_to((x, 0.0));
+            p.line_to((x + 0.5, 0.0));
+        }
+        let bars = super::pen_bars(&p, kurbo::Affine::IDENTITY, &props(36.0)).expect("bars");
+        assert_eq!(bars.len(), 3);
+        for b in &bars {
+            assert!(
+                (b.width() - 0.5).abs() < 1e-6 && (b.height() - 36.0).abs() < 1e-6,
+                "{b:?}"
+            );
+        }
+        // An ordinary rule, its pen thinner than its length, is not one.
+        let mut rule = BezPath::new();
+        rule.move_to((0.0, 0.0));
+        rule.line_to((100.0, 0.0));
+        assert!(super::pen_bars(&rule, kurbo::Affine::IDENTITY, &props(1.0)).is_none());
+        // Nor a dot, a segment of no length, nor a short thick stroke that
+        // paints a block.
+        let mut dot = BezPath::new();
+        dot.move_to((5.0, 5.0));
+        dot.line_to((5.0, 5.0));
+        assert!(super::pen_bars(&dot, kurbo::Affine::IDENTITY, &props(36.0)).is_none());
+        let mut block = BezPath::new();
+        block.move_to((0.0, 0.0));
+        block.line_to((10.0, 0.0));
+        assert!(super::pen_bars(&block, kurbo::Affine::IDENTITY, &props(36.0)).is_none());
+    }
 
     fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> String {
         format!("M{x0},{y0} L{x1},{y0} L{x1},{y1} L{x0},{y1} Z ")

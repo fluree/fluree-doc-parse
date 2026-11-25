@@ -18,7 +18,7 @@ pub(crate) const MAX_RULE_THICKNESS: f64 = 3.0;
 
 /// A rule must be at least this many times longer than it is thick, so a small
 /// square is not mistaken for a very short line.
-const MIN_RULE_ASPECT: f64 = 4.0;
+pub(crate) const MIN_RULE_ASPECT: f64 = 4.0;
 
 /// Fraction of the page a rule must span to count as full-bleed.
 const FULL_PAGE_SPAN: f64 = 0.95;

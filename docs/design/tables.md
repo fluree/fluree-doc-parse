@@ -30,6 +30,22 @@ fdoc dev rules  report.pdf 12    # the raw geometry
 fdoc dev tables report.pdf 12    # the grid that came out of it
 ```
 
+A rule is read by its ink, not its centre line. A template can draw its
+column rules as very short horizontal segments stroked with a thick pen: the
+Fed's Financial Stability Reports divide a header band with three 0.5-pt
+segments under a 36-pt pen, and draw the table's sides as 1-pt segments under
+a 321-pt pen. A pen sweeps its width across the segment it strokes, so each
+is a bar the pen's width long, at right angles to the segment, as wide as the
+segment is long: a vertical rule. Read by its outline, each was a stub of
+horizontal rule, and the three dividers, in one path, one rule through the
+header. Such a stroke is read as its bar, each subpath on its own, the cap
+carrying it on past the segment's ends (none with a butt cap, half the pen
+with a square or round one). Only where the bar is a rule, a segment no
+longer than a rule is thick under a pen at least four times longer: a dot,
+a stroke of no length, or a short thick stroke painting a block is read by
+its outline as before, and so is every ordinary rule, its pen thinner than
+its length.
+
 ## Detection strategies
 
 Multiple passes over one parse, rather than multiple services:
@@ -485,6 +501,42 @@ A row whose text runs across a cut — a boxed notice welded in above the
 list, a banner spanning it — is read whole into its first cell and marked
 `merged_left` across the row, rather than having its words dealt out by which
 side of the cut they fell.
+
+## A shaded header band over a table read from its text
+
+A table can set its header as a band of shaded cells at its top, under a rule
+across them, each divided from the next by a vertical standing on that rule
+and ending at the band's foot, and rule nothing in its body. The body is read
+from its alignment or its text, under the band; the band's labels, wrapped
+over two or three lines within their cells (`Growth,` over `2023:Q4–2024:Q4`
+over `(percent)`), were loose text above the table, or a table of their own.
+
+Such a band is the header row of the table read under it, one cell a column,
+where:
+
+- its cells line up with the table's columns one for one, each column's
+  middle within its cell;
+- the table starts under the band, within the band's own height of its foot;
+- nothing of the page's text stands between but labels in the band's first
+  cell (`Assets` over `Total securities`), which are the table's first rows,
+  each a group's label.
+
+The band's cells are then the table's columns as drawn: their edges are the
+table's, and each cell's lines, its spaces kept, are read into one header
+cell (`Outstanding (billions of dollars)`). Rows the reading made of the
+band's own lines are the band's, and a table read from the band's lines alone
+is dropped. Shading drawn a cell at a time or two cells under one fill is one
+band; the verticals divide it.
+
+## A one-column grid holding prose is no table
+
+A table holds two columns of content or more, as read, or as its text's
+alignment parts it (see above). A grid left with one is a box drawn round
+prose where it holds a row or two (a paragraph and a banner between a rule's
+two side marks, a figure's caption in a ruled box) or where most of its rows
+run as sentences do (12 words or more): its text is the page's prose, its
+headings and lists read as such. A column of short entries, one a row
+(`Np Number of reputation tables…`), is a list read as a table, as before.
 
 ## Banners
 
