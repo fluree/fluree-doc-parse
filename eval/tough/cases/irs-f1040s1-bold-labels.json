@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "irs-f1040s1-2025.pdf",
+    "url": "https://www.irs.gov/pub/irs-pdf/f1040s1.pdf",
+    "sha256": "8dafec719f6a4716c259a2bdaca546d9bb9e262d1eabef885fe116a7327458fa",
+    "about": "IRS Form 1040 Schedule 1 (2025), blank. Most of its lines are read as tables; what is left is a note, the part titles, and short bold labels in the margins."
+  },
+  "notes": [
+    "#240: once #230 read the form's Helvetica Neue faces by name, more of its short labels read bold. Whether the body is bold was read from the blocks the tables leave: on this form 9 bold lines of 16, so bold was taken to carry no information, and the form lost every bold heading. Over all of its glyphs, the 9pt text is mostly regular."
+  ],
+  "checks": [
+    {
+      "id": "part-one-title-kept",
+      "found": "2026-11-24",
+      "issue": "`Part I Additional Income`, the form's bold part title, was a paragraph.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "Part I Additional Income"
+      }
+    }
+  ]
+}

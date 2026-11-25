@@ -80,6 +80,7 @@ Every document is held to the offset contract: each element's `nif:isString`
 | `section` | some section is headed by exactly this `title` and, where given, sits at this `level` and directly inside the section headed by `within` |
 | `no_section` | no section is headed by a title beginning with this text |
 | `under` | an element with exactly this string (`text`), or a table cell with this value, falls in the section headed by `section` |
+| `columns` | the table holding a cell of value `with` has exactly `count` columns, its cells' `doc:columnIndex` running 0 to `count` − 1 |
 | `running` | the document's running text (`doc:runningText`, the heads and feet its pages repeat) holds this line, exactly `count` times where one is given |
 | `folio` | the `page` (its place in the file, from 1) carries this printed `value` in `doc:pages`, or none where it is `null` |
 | `same_every_run` | this many more conversions give the same DoCO, byte for byte |
