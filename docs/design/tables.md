@@ -624,6 +624,13 @@ columns are read as fields, with no header row, when:
   so is one whose values set a phrase bold here and there;
 - a label stands in the first column of every row.
 
+A list of fields can set more than its names bold: a field's name and the
+size each value is for (`PRODUCT CODE | 8′2" | 1198826`), both bold on every
+row beside values bold on none. Leading columns bold on every row, the rest
+bold on none, the first row's included, make a list of fields whatever their
+number. A header row names every column in its weight, the values' too, and
+keeps its place.
+
 A header set no differently from its rows still names its column, and in
 fewer words than any value under it. `Settings | Recommendations` over
 sentences of advice keeps its header row. A field's value is one more value:
