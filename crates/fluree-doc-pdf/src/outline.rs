@@ -176,7 +176,7 @@ fn place(array: &Array<'_>, geometry: &HashMap<(i32, i32), (usize, f64)>) -> Pla
     };
     // `/XYZ left top zoom` is the common form and the only one that states a
     // position; `/Fit` and friends name the page alone.
-    let mut rest = crate::array_entries(&array).skip(1);
+    let mut rest = crate::array_entries(array).skip(1);
     let kind = rest.next().and_then(|o| match o {
         hayro_syntax::object::MaybeRef::NotRef(v) => v.clone().into_name(),
         hayro_syntax::object::MaybeRef::Ref(_) => None,
