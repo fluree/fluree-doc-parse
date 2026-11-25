@@ -45,6 +45,7 @@
 //! reading, not because it is stable, and it may change in any release. This
 //! is the same promise `fdoc dev` makes about its output.
 
+pub(crate) mod accent;
 pub mod arbiter;
 pub mod block;
 pub(crate) mod cells;
