@@ -186,12 +186,16 @@ impl Injected {
 ///
 /// `readings` is `(page index, crop, reading)`. Routing is decided on every
 /// page before any word is added, so two readings of one page are judged
-/// against the page as extracted, not against each other.
+/// against the page as extracted, not against each other; and as the
+/// analysis decides it ([`crate::document::region_routes`]), so a region's
+/// reading and its anchor carry one name.
 pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Vec<Injected> {
-    let routes: Vec<Route> = doc.pages.iter().map(|p| route::decide(p).0).collect();
+    // Numbered as the analysis's anchors and crops are.
+    let pages = crate::document::routing_pages(doc);
+    let routes: Vec<Route> = pages.iter().map(|p| route::decide(p).0).collect();
     // The regions an engine may fill: the routed ones, then those too small
     // for a model (see `route::ocr_regions`).
-    let regions: Vec<Vec<BBox>> = doc.pages.iter().map(route::ocr_regions).collect();
+    let regions: Vec<Vec<BBox>> = pages.iter().map(route::ocr_regions).collect();
     // Each reading judged against the router first: where on its page it may
     // land, or why it may not.
     let judged: Vec<Result<Target, &'static str>> = readings
@@ -1531,8 +1535,9 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 
 /// The crops an OCR engine reads: each page whose text is pixels, whole,
 /// and on every other page its unread raster regions
-/// ([`route::ocr_regions`]), small ones included. Limited to `only`'s pages
-/// when given.
+/// ([`route::ocr_regions`]), small ones included, numbered as the analysis
+/// numbers them ([`crate::document::routing_pages`]). Limited to `only`'s
+/// pages when given.
 ///
 /// At most `max_crops` crops (`0` for no limit), the page order kept, and
 /// how many were left out. Past the limit the crops that lose the most if
@@ -1544,7 +1549,8 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
     // routed region, 2 a small one.
     type Ranked = (u8, usize, Option<(String, BBox)>);
     let mut crops: Vec<Ranked> = Vec::new();
-    for p in &doc.pages {
+    // Numbered as the analysis's anchors and crops are.
+    for p in &crate::document::routing_pages(doc) {
         if only.is_some_and(|keep| !keep.contains(&p.index)) {
             continue;
         }

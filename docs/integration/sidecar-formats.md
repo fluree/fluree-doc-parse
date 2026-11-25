@@ -121,6 +121,12 @@ of the two, it reads the one sized as it is. Readings are looked up by stem,
 so two inputs of one stem in a batch (`report.pdf` and `report.png`) are
 warned about, and `render-routed` crops only the first.
 
+A page's regions are numbered once glyphs drawn twice at one spot (faux bold)
+count once and a watermark laid over the text is taken out, as the analysis
+and its anchors number them: a label in faux bold over a capture covers it as
+drawn, not once cleaned, and `r0` is the same region for the crop, the
+reading and the anchor.
+
 An OCR engine's words, each with its box. Unlike a model reading, which
 replaces elements, these become **glyphs** before analysis, so a scanned page
 goes through the same line, column, table and heading assembly a born-digital
