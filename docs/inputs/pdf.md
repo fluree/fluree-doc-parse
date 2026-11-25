@@ -88,6 +88,17 @@ from their shape instead:
   leaders between a table's labels and its figures, a decimal point, the
   stops in `U.S.`.
 
+**Capitals mapped to lowercase.** Some producers write a font's character
+map with some of its capitals folded to lowercase: the code that draws `F`
+reads `f`, and a reader that trusts the map gets `board of Governors of
+the Federal reserve System`, or a table's row label `foreign currency
+translation adjustments`. Where the font's encoding is a standard one
+(WinAnsi, MacRoman or Standard, with its differences) and names, for a
+code, the same letter as the map in the other case, the encoding's letter is
+read: it names the glyph drawn, and the width the PDF gives the code is that
+glyph's. A map that reads a code as anything else, a small capital, a
+ligature or a symbol font's glyph, is kept.
+
 **Symbol fonts.** A PDF made from Word gives a character set in Symbol or
 Wingdings the font's own code plus `0xF000` as its text, a private-use
 character, and every reader of the text layer gets that code: `1600 μmole`
@@ -237,6 +248,24 @@ draws one bullet, and it marks its line when it is drawn like the page's
 other bullets: their size, as far from its text as theirs.
 The item's marker is `•`. Each item starts where its bullet is, however
 closely the items are spaced.
+
+**Numbers set apart.** A list's number may stand apart from its item, left
+of the item's first line: a form's `2` beside `Transaction reported to you on
+Form 1099-B?`, a datasheet's `(1)` beside its note, `[37]` beside a
+reference. The item's text keeps the number as printed (`2 Transaction
+reported…`, `(1) Stresses beyond…`). A bullet's glyph, by contrast, is only
+the item's mark and is not kept. A number counts as part of a list only when
+all of these hold:
+- the list counts: another item's number is one more or one less, and a
+  letter or roman list runs from its first (`a`, `i`) to this one;
+- it stands level with the item's first line, within three tenths of the
+  line's size;
+- it is set at seven tenths of the item's size or more, and is not raised
+  as a note's mark is.
+
+Anything else is left out of the item's text, as before. That covers a year
+over a table's rows, a fraction, a dimension, a chart's tick labels set
+beside a column, and a word spelled down the margin a letter a line.
 
 **Dashes and arrows.** A line opening with a dash, a minus sign or an
 arrow and a space (`—`, `–`, `-`, `−`, `→`, `>`) is a list item when
@@ -449,7 +478,10 @@ gutter, the gap is measured from the last glyph that put ink down, so a
 column's line and a callout, or the next column's line, are read apart. A
 justified line's stretched space stays a space: the lines of its paragraph
 run across it. A number or a label set off from its text by a tab, `3.1 ⇥
-Results` or `Note 3. ⇥ Business Segment`, stays with its text.
+Results` or `Note 3. ⇥ Business Segment`, stays with its text. A label
+that heads a block of its own in the margin, in another size from the text
+beside it (`Issued 07-2025` over `Supersedes 05-2025` beside a note), is
+read apart from it.
 
 **Drop caps.** A paragraph's first letter set large, its top at the top of
 the first line and its foot on the second's, third's or fourth's baseline,
@@ -550,6 +582,20 @@ from its text:
   A line broken off for a label or a trace leaves its neighbours a whole
   number of steps apart, and the grid still counts. A ruled table's text
   fills most of its cells, and its rows and columns differ in size.
+- A line chart drawn in strokes alone fills nothing: its series are lines
+  of many straight segments, most of them diagonal (a series sampled
+  densely steps under half a point per value, and leans against its own
+  step), and its axes are a rule under the plot with ticks at an even
+  pitch, or a column of ticks beside a scale. A series bound by such an
+  axis is a plot when it runs one way across the page, as a series plotted
+  against its axis does; its drawing is the box its axes bound, up to the
+  top of the axes standing at its sides, so a title set over the plot is
+  measured from the plot's top and not from the series' highest point. A
+  table's rules, a statement's underlines and a form's boxes
+  run square and draw no series. An outline, a symbol or a drawing set
+  behind a table turns back on itself, and a line with no axis by it is no
+  plot. The text of such a plot is left in the measure of the body's size,
+  as the page's headings are read against it.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that
@@ -679,7 +725,12 @@ many more places than its rows and columns: the outlines of a unit's
 terminals, or a drawing's dimension and extension lines. So is a ruled row
 or column holding nothing but three numbers or more that step evenly, by one
 difference (`160 140 … 0`) or one ratio (`1 10 100`): an axis's scale ruled
-by its tick marks. So is a dimension drawing's grid: its lines end in
+by its tick marks. So are charts set side by side whose scales line up
+into one grid (`240 | 240` down to `0 | 0`, each panel's title over its
+scale): every column of numbers steps evenly and stands beside a chart's
+plot. A table whose figures step so (a rank, a conversion) stands beside
+no chart, and a grid holding a line of the page's prose is no chart's
+axes. So is a dimension drawing's grid: its lines end in
 arrowheads, two or more of them, and its cells hold callouts alone, such as
 figures with their units (`83⁵/16"`, `(2117 mm)`), counts (`2X`) and datum
 letters, with no words but units and a dimension's notes (`TYP`, `MAX`).

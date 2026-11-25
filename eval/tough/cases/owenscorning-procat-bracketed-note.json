@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "owenscorning-procat-accessories.pdf",
+    "url": "https://www.owenscorning.com/dms/10015771",
+    "sha256": "dc01a5ad8e30317a0576cb9d31a0b1b97d3a83d3f8764de47447b0b85b906bda",
+    "about": "Owens Corning ProCat accessory list. Each product sets its heading at the left, over its photo, and its table of codes to the right, the heading level with the table's top."
+  },
+  "notes": [
+    "2026-11-25 (#284): each accessory's heading is set in 10pt bold. `raft-R-mate® Attic Vents (Ventilation Baffles)` sets its bracketed note lighter, so the line is not bold throughout. It ranked a level below its siblings and nested inside the section before it."
+  ],
+  "checks": [
+    {
+      "id": "bracketed-head-a-sibling",
+      "found": "2026-11-25",
+      "issue": "#284: the heading was an h5 under `3\" Wood Plugs`.",
+      "section": {
+        "title": "raft-R-mate® Attic Vents (Ventilation Baffles)",
+        "level": 4
+      }
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "fed-fsr-2025-04.pdf",
+    "url": "https://www.federalreserve.gov/publications/files/financial-stability-report-20250425.pdf",
+    "sha256": "81080ea1ebc4d6a1f3027c94f05eb40daec56c4006da6f1e7e85f9044111fb0b",
+    "about": "Federal Reserve Board Financial Stability Report, April 2025. Several of its Franklin Gothic subsets (Type 1C, WinAnsi base with Differences) carry ToUnicode maps whose capitals the producer folded to lowercase."
+  },
+  "notes": [
+    "2026-11-25 (#344): capitals were read as lowercase wherever such a font set them: `box 5.1. Survey of Salient risks`, `Board of Governors of the Federal reserve System`, `april 2025`. The map gives `b` for the code the encoding names `/B`, the glyph drawn and the width given are the capital's, and pdftotext reads the capital. Where a map gives a letter in the other case than a standard base encoding names for the code, alone, the encoding's letter is read."
+  ],
+  "checks": [
+    {
+      "id": "contents-capitals",
+      "found": "2026-11-25",
+      "issue": "#344: the contents read `box 5.1. Survey of Salient risks to Financial Stability`.",
+      "no_text": "Survey of Salient risks"
+    },
+    {
+      "id": "citation-capitals",
+      "found": "2026-11-25",
+      "issue": "#344: read `(Washington: board of Governors of the Federal reserve System, September 3)`.",
+      "text": "(Washington: Board of Governors of the Federal Reserve System, September 3)"
+    },
+    {
+      "id": "no-lowered-reserve",
+      "found": "2026-11-25",
+      "issue": "#344: as above.",
+      "no_text": "Federal reserve System"
+    }
+  ]
+}

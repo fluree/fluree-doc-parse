@@ -668,9 +668,20 @@ fn style_of(b: &Block) -> Style {
         let letters: Vec<char> = t.chars().filter(|c| c.is_alphabetic()).collect();
         !letters.is_empty() && letters.iter().all(|c| c.is_uppercase())
     };
+    // A heading is styled by its leading run: a bracketed note set lighter
+    // after it (`raft-R-mate® Attic Vents` bold, then `(Ventilation
+    // Baffles)`) leaves it a bold heading, ranked with the other bold heads
+    // at its size. A sentence that opens on a bold name runs on unbracketed,
+    // and keeps its weight.
+    let noted = {
+        let t = b.text();
+        let t = t.trim_end();
+        t.ends_with(')') && t.contains(" (")
+    };
+    let leads_bold = noted && b.lines.first().is_some_and(|l| l.opens_bold);
     Style {
         neg_size: -((b.font_size * 4.0).round() as i32),
-        not_bold: !b.bold,
+        not_bold: !(b.bold || leads_bold),
         not_caps: !caps,
     }
 }
@@ -1143,6 +1154,9 @@ pub fn detect_with_body(
     });
 
     let mut out = Vec::new();
+    // Acronyms set on a line of their own, too short to look like a title,
+    // with where they stand: see [`short_caps`].
+    let mut acronyms: Vec<(usize, usize, String, Style)> = Vec::new();
     for (page_idx, blocks) in pages.iter().enumerate() {
         // Lettering is set far smaller than the text, measured either way:
         // by the document's body, or by the size the page's level lines are
@@ -1231,6 +1245,15 @@ pub fn detect_with_body(
             // list counts off from one item to the next, which a section
             // number never does on its own page.
             if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
+                if short_caps(&text)
+                    && b.lines.len() == 1
+                    && b.marker.is_none()
+                    && heads_prose(blocks, block_idx, body)
+                    && !form_text(&text, blocks, block_idx)
+                    && !not_a_typographic_heading(&text, blocks, block_idx, body)
+                {
+                    acronyms.push((b.page, block_idx, text, style_of(b)));
+                }
                 continue;
             }
             // A line that stops mid-phrase runs on into the next, and a
@@ -1373,9 +1396,138 @@ pub fn detect_with_body(
             // put the introduced list adjacent. Rejected; see MHS_ANALYSIS.
         }
     }
+    // An acronym set exactly like a heading on its page, in its size, weight
+    // and case, read on the same evidence, and heading prose as a heading
+    // does, is one too: `FCC` over a guide's compliance notes, set as its
+    // `WATTAGE ADJUSTMENT` is.
+    let mut added = false;
+    for (page, block_index, text, style) in acronyms {
+        let like = out
+            .iter()
+            .find(|h| {
+                h.page == page
+                    && h.style == style
+                    && !h.form_text
+                    && matches!(h.evidence, Evidence::FontSize | Evidence::Bold)
+            })
+            .map(|h| (h.level, h.evidence));
+        if let Some((level, evidence)) = like {
+            out.push(Heading {
+                page,
+                block_index,
+                text,
+                level,
+                evidence,
+                form_text: false,
+                style,
+            });
+            added = true;
+        }
+    }
+    if added {
+        out.sort_by_key(|h| (h.page, h.block_index));
+    }
+    open_merged_parts(&mut out, pages, outline);
     drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out);
     out
+}
+
+/// Block `i` heads prose as a heading does: set apart from the text above
+/// it by more than a line's height, with a paragraph of two lines or more at
+/// the body's size directly under it. A title's middle word (`OF` between
+/// `CERTIFICATE` and the company's name), a person's role under their name,
+/// and a form's code over its value do neither.
+fn heads_prose(page: &[Block], i: usize, body: f32) -> bool {
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    let apart = !page.iter().enumerate().any(|(k, o)| {
+        k != i
+            && o.bbox.y1 <= b.bbox.y0 + fs * 0.2
+            && b.bbox.y0 - o.bbox.y1 < fs
+            && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+    });
+    let over_text = directly_below(page, i).is_some_and(|k| {
+        let p = &page[k];
+        p.lines.len() >= 2 && (p.font_size - body).abs() <= 0.15 * body && !p.bold
+    });
+    apart && over_text
+}
+
+/// Fewest and most letters in an acronym set as a heading.
+const ACRONYM_LETTERS: std::ops::RangeInclusive<usize> = 2..=3;
+
+/// A line of two or three capitals and nothing else, `FCC`, `UL`: shorter
+/// than a title must be to be read as one on its shape alone (a word or
+/// two of a sentence, a page's letter, `No`), and a heading only where it
+/// is set exactly as the document's headings are.
+fn short_caps(text: &str) -> bool {
+    let t = text.trim();
+    ACRONYM_LETTERS.contains(&t.chars().count()) && t.chars().all(|c| c.is_ascii_uppercase())
+}
+
+/// A document merged from files whose outline names the files: no entry's
+/// title is printed anywhere in it (`01 - beigebook - Boston_pdf_final_January_2023`,
+/// `20250728.PressRelease.ImplementationNote.pdf`). Each entry still lands
+/// where its file starts, so the topmost heading on its page, at or below
+/// where it lands, opens a part at the entry's level: the district's title
+/// on its first page, the implementation note's title under the release
+/// line it repeats. An outline that prints any of its titles is the
+/// author's, and an entry it does not print is left alone; one whose
+/// entries land on pages next to each other marks pages, not files.
+fn open_merged_parts(out: &mut [Heading], pages: &[Vec<Block>], outline: &[OutlineItem]) {
+    if outline.len() < 2 {
+        return;
+    }
+    let printed = |title: &str| {
+        let t = norm(title);
+        !t.is_empty() && pages.iter().flatten().any(|b| norm(&b.text()).contains(&t))
+    };
+    if outline.iter().any(|it| printed(&it.title)) {
+        return;
+    }
+    // Each file runs over pages of its own: an outline that marks every
+    // page (`Slide 1`, `Slide 2`) is the pages', not the files'.
+    let mut starts: Vec<usize> = outline.iter().filter_map(|it| it.page).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.windows(2).any(|w| w[1] - w[0] < 2) {
+        return;
+    }
+    for it in outline {
+        let Some(pi) = it.page else {
+            continue;
+        };
+        let top = |h: &Heading| {
+            pages
+                .get(h.page)
+                .and_then(|p| p.get(h.block_index))
+                .map_or(f64::MAX, |b| b.bbox.y0)
+        };
+        let lands = it.y.unwrap_or(f64::MIN);
+        // The page that carries the document's title opens the whole of
+        // it: the entry for the merged document's cover or first file.
+        if out
+            .iter()
+            .any(|h| h.page == pi && h.evidence == Evidence::Title)
+        {
+            continue;
+        }
+        let opening = out
+            .iter_mut()
+            .filter(|h| h.page == pi && !h.form_text)
+            .filter(|h| {
+                pages
+                    .get(h.page)
+                    .and_then(|p| p.get(h.block_index))
+                    .is_some_and(|b| b.bbox.y1 >= lands)
+            })
+            .min_by(|a, b| top(a).total_cmp(&top(b)));
+        if let Some(h) = opening {
+            h.level = it.level;
+            h.evidence = Evidence::Outline;
+        }
+    }
 }
 
 /// Widest gap, in ems, between a field's label and its value beside it.
@@ -2751,6 +2903,68 @@ mod tests {
     }
 
     #[test]
+    fn an_acronym_set_like_the_documents_heads_is_one() {
+        // An 8pt body under 10pt capital heads; an acronym set as they are
+        // is one of them, set at the body's size or at a size no head uses
+        // it is not.
+        let mut page = Vec::new();
+        let mut y = 50.0;
+        for head in ["MOUNTING THE BRACKET", "UL", "WIRING THE FIXTURE"] {
+            page.push(at(head, 10.0, y, false));
+            for k in 0..2 {
+                let mut para = at(
+                    "Fasten the bracket to the box with the screws supplied.",
+                    8.0,
+                    y + 14.0 + 30.0 * k as f64,
+                    false,
+                );
+                para.lines = vec![para.lines[0].clone(); 3];
+                para.bbox.y1 = para.bbox.y0 + 26.0;
+                page.push(para);
+            }
+            y += 90.0;
+        }
+        page.push(at("CE", 8.0, y, false));
+        page.push(at("IP", 14.0, y + 20.0, false));
+        let hs = detect(&[page], &[]);
+        let level = |t: &str| hs.iter().find(|h| h.text == t).map(|h| h.level);
+        assert!(level("UL").is_some());
+        assert_eq!(level("UL"), level("MOUNTING THE BRACKET"));
+        assert_eq!(level("CE"), None);
+        assert_eq!(level("IP"), None);
+        // Nor where it heads no prose: a role under a name, set as the
+        // heads are.
+        let mut page = vec![at("MOUNTING THE BRACKET", 10.0, 50.0, false)];
+        let mut para = at("Fasten the bracket to the box.", 8.0, 64.0, false);
+        para.lines = vec![para.lines[0].clone(); 3];
+        para.bbox.y1 = 90.0;
+        page.push(para);
+        page.push(at("Dana Reyes", 10.0, 120.0, false));
+        page.push(at("CTO", 10.0, 132.0, false));
+        page.push(at("Leads the team.", 8.0, 146.0, false));
+        let hs = detect(&[page], &[]);
+        assert!(hs.iter().all(|h| h.text != "CTO"));
+    }
+
+    #[test]
+    fn a_heads_bracketed_note_set_lighter_keeps_its_weight() {
+        let mut noted = at("Roof Vents (Ventilation Baffles)", 10.0, 0.0, false);
+        noted.lines[0].opens_bold = true;
+        let mut bold = at("Wall Kit", 10.0, 0.0, true);
+        bold.lines[0].opens_bold = true;
+        assert_eq!(style_of(&noted), style_of(&bold));
+        // A sentence opening on a bold name runs on, unbracketed.
+        let mut sentence = at(
+            "Gun Foam accessories include cleaner and guns.",
+            10.0,
+            0.0,
+            false,
+        );
+        sentence.lines[0].opens_bold = true;
+        assert_ne!(style_of(&sentence), style_of(&bold));
+    }
+
+    #[test]
     fn bold_lettering_far_below_the_body_is_form_text() {
         // A 10pt body; a bold head at its size, a bold sidebar head at
         // seven tenths of it, and a badge's bold lettering at two fifths.
@@ -3788,6 +4002,78 @@ mod tests {
             ("doco:Paragraph", "layout"),
         ];
         assert!(doubt(&kinds).is_none());
+    }
+
+    #[test]
+    fn a_merged_documents_file_bookmarks_open_its_parts() {
+        // Two files merged, the outline naming them. The second file's
+        // title, under the release line its page repeats at the body's
+        // size, ranks below the first file's title by its size.
+        let page = |title: &str, y0: f64| {
+            let mut p = vec![
+                at("For release at noon", 10.0, y0, false),
+                at(title, 14.0, y0 + 40.0, true),
+            ];
+            for k in 0..6 {
+                let mut para = at(
+                    "The committee decided to hold the rate.",
+                    10.0,
+                    y0 + 70.0 + 40.0 * k as f64,
+                    false,
+                );
+                para.lines = vec![para.lines[0].clone(); 3];
+                para.bbox.y1 = para.bbox.y0 + 34.0;
+                p.push(para);
+            }
+            p
+        };
+        let mut first = vec![at("Policy Statement of the Board", 20.0, 40.0, true)];
+        first.extend(page("Rate Decision", 100.0));
+        // Each file runs over two pages.
+        let mut more = vec![];
+        for k in 0..6 {
+            let mut para = at(
+                "The vote was unanimous.",
+                10.0,
+                60.0 + 40.0 * k as f64,
+                false,
+            );
+            para.lines = vec![para.lines[0].clone(); 3];
+            para.bbox.y1 = para.bbox.y0 + 34.0;
+            para.page = 1;
+            more.push(para);
+        }
+        let mut second = page("Implementation Note", 60.0);
+        for b in &mut second {
+            b.page = 2;
+        }
+        let pages = vec![first, more, second];
+        let files = vec![
+            bookmark("2030-01-01.Statement.pdf", 1, Some(0), None),
+            bookmark("2030-01-01.ImplementationNote.pdf", 1, Some(2), None),
+        ];
+        let hs = detect(&pages, &files);
+        let note = hs.iter().find(|h| h.text == "Implementation Note").unwrap();
+        assert_eq!((note.level, note.evidence), (1, Evidence::Outline));
+        // The first file's page carries the document's title, which opens
+        // the whole: its own heads keep their levels.
+        let decision = hs.iter().find(|h| h.text == "Rate Decision").unwrap();
+        assert_ne!(decision.evidence, Evidence::Outline);
+        // An outline that prints a title is the author's.
+        let mut real = files.clone();
+        real.push(bookmark("Rate Decision", 2, Some(0), None));
+        let hs = detect(&pages, &real);
+        let note = hs.iter().find(|h| h.text == "Implementation Note").unwrap();
+        assert_ne!(note.evidence, Evidence::Outline);
+        // Nor one that marks every page: a deck's `Slide 1`, `Slide 2`.
+        let slides = vec![
+            bookmark("Slide 1", 1, Some(0), None),
+            bookmark("Slide 2", 1, Some(1), None),
+            bookmark("Slide 3", 1, Some(2), None),
+        ];
+        let hs = detect(&pages, &slides);
+        let note = hs.iter().find(|h| h.text == "Implementation Note").unwrap();
+        assert_ne!(note.evidence, Evidence::Outline);
     }
 
     fn bookmark(title: &str, level: usize, page: Option<usize>, y: Option<f64>) -> OutlineItem {
