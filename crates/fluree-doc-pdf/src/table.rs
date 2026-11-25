@@ -1693,8 +1693,10 @@ impl Grid {
     /// nowhere is open on every row, and following it made a 30-row table
     /// all header. So the rows taken in must read as labels (no numbers),
     /// the block stays within [`MAX_HEADER_ROWS`], and a rule drawn across
-    /// the whole table must close it, the way a header is ruled off from
-    /// its data. Otherwise the measured count stands.
+    /// the table must close it, the way a header is ruled off from its
+    /// data: across every column but those whose cell runs on across the
+    /// line, a stub labelling header and body alike. Otherwise the measured
+    /// count stands.
     pub fn stacked_header_rows(
         &self,
         header_rows: usize,
@@ -1719,19 +1721,57 @@ impl Grid {
         if n == header_rows {
             return header_rows;
         }
+        // Ruled off under the columns the header ends in. A stub whose
+        // label spans the header and the body alike, every row of the table
+        // (`Tolerance on Length` beside every row), runs on across the line
+        // and is ruled under nowhere there.
         let y = self.ys[n];
-        let closing = span_coverage(
-            rules
+        // The stub runs on through every row of the table, from its first:
+        // it labels the whole table. A group's label spanning some rows is
+        // no reason to leave the header open.
+        let runs_on = |c: usize| (1..rows.len()).all(|r| merges.continues_above[r * cols + c]);
+        let runs: Vec<(f64, f64)> = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Horizontal
+                    && (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0
+            })
+            .map(|r| (r.bbox.x0, r.bbox.x1))
+            .collect();
+        let closed_under = |skip: &dyn Fn(usize) -> bool| {
+            let (mut closed, mut width) = (0.0, 0.0);
+            for c in (0..cols).filter(|&c| !skip(c)) {
+                let (x0, x1) = (self.xs[c], self.xs[c + 1]);
+                closed += span_coverage(runs.iter().copied(), x0, x1);
+                width += x1 - x0;
+            }
+            width > 0.0 && closed >= 0.9 * width
+        };
+        if closed_under(&|_| false) {
+            return n;
+        }
+        // Closed under all but the stub: the rows taken in name their
+        // columns, each label its own, none repeated among them or in the
+        // rows of data under them. A table's data repeats itself (`Yes` row
+        // after row) under a stub run down a continued page.
+        let trimmed = |r: usize| -> Vec<&str> {
+            rows[r]
                 .iter()
-                .filter(|r| {
-                    r.orientation == Orientation::Horizontal
-                        && (r.bbox.y0 - y).abs() <= EDGE_TOLERANCE * 2.0
-                })
-                .map(|r| (r.bbox.x0, r.bbox.x1)),
-            self.bbox.x0,
-            self.bbox.x1,
-        );
-        if closing >= 0.9 * (self.bbox.x1 - self.bbox.x0) {
+                .map(|t| t.trim())
+                .filter(|t| !t.is_empty())
+                .collect()
+        };
+        let taken: Vec<&str> = (header_rows..n).flat_map(|r| trimmed(r)).collect();
+        let below: Vec<&str> = (n..rows.len()).flat_map(|r| trimmed(r)).collect();
+        // A stub labels a table's rows: three of data or more under the
+        // header, not a form's box of two.
+        let named = rows.len() >= n + 3
+            && (header_rows..n).all(|r| trimmed(r).len() >= 2)
+            && taken
+                .iter()
+                .enumerate()
+                .all(|(i, a)| !taken[..i].contains(a) && !below.contains(a));
+        if named && closed_under(&runs_on) {
             n
         } else {
             header_rows
@@ -3556,6 +3596,62 @@ fn split_row_bands(
         (rules_run_through(i) && one_row(i, &crossing(i), true))
             || (!crossed[i] && ruled_alike(i).is_some_and(|cols| one_row(i, &cols, false)))
     };
+    // Two tables boxed in one frame, a blank band between them: the band is
+    // crossed by the frame's two sides alone, where the bands either side of
+    // it rule two tables, columns set at different places, and holds no
+    // text. Each table reads its own columns. A band across the table holding a label (a group's
+    // banner) is crossed by the frame alone too, and stays a row.
+    let (left, right) = (xs[0], xs[xs.len() - 1]);
+    let framed_only = |i: usize| {
+        let at = crossing(i);
+        !at.is_empty()
+            && at
+                .iter()
+                .all(|&x| (x - left).abs() <= EDGE_TOLERANCE || (x - right).abs() <= EDGE_TOLERANCE)
+    };
+    let ruled_inside = |i: usize| {
+        crossing(i)
+            .iter()
+            .any(|&x| x > left + EDGE_TOLERANCE && x < right - EDGE_TOLERANCE)
+    };
+    let blank = |i: usize| {
+        !glyphs.iter().any(|g| {
+            !g.text.trim().is_empty()
+                && g.bbox.is_some_and(|b| {
+                    let y = (b.y0 + b.y1) / 2.0;
+                    y > ys[i] && y < ys[i + 1] && b.x0 >= left && b.x1 <= right
+                })
+        })
+    };
+    // The column rules inside the frame differ either side: two tables,
+    // not one with a blank row set between its rows.
+    let inner = |i: usize| -> Vec<f64> {
+        crossing(i)
+            .into_iter()
+            .filter(|&x| x > left + EDGE_TOLERANCE && x < right - EDGE_TOLERANCE)
+            .collect()
+    };
+    let ruled_apart = |a: usize, b: usize| {
+        let (p, q) = (inner(a), inner(b));
+        p.len() != q.len()
+            || p.iter()
+                .zip(&q)
+                .any(|(x, y)| (x - y).abs() > EDGE_TOLERANCE)
+    };
+    // Each side a table by its own ruling: three columns or more, two rules
+    // inside, over three rows or more. A box's one row, a diagram's panel,
+    // a chart's axis are no table to part off.
+    let a_table = |rows: usize, at: usize| rows >= 3 && inner(at).len() >= 2;
+    let boxed_gap = |i: usize| {
+        if !(i > 0 && i + 2 < ys.len() && framed_only(i) && blank(i)) {
+            return false;
+        }
+        let above = (0..i).rev().take_while(|&k| ruled_inside(k)).count();
+        let below = (i + 1..ys.len() - 1)
+            .take_while(|&k| ruled_inside(k))
+            .count();
+        a_table(above, i - 1) && a_table(below, i + 1) && ruled_apart(i - 1, i + 1)
+    };
 
     let mut out = Vec::new();
     let mut start = 0usize;
@@ -3568,7 +3664,8 @@ fn split_row_bands(
         let heads = i == start && rules_run_through(i) && crossing(i).len() >= 3;
         let too_tall =
             (ys[i + 1] - ys[i]) > median * TABLE_SPLIT_GAP && !walled(i) && !runs_on(i) && !heads
-                || is_gap(i);
+                || is_gap(i)
+                || boxed_gap(i);
         let ends_run = !too_tall && (changes_after(i) || boxes_change_after(i));
         if too_tall || is_last || ends_run {
             // A band that is itself too tall is the gap: end the table before it.
@@ -8647,6 +8744,78 @@ mod header_tests {
         let grids = detect_group(&table, &[], &[], 0, &[]);
         assert_eq!(grids.len(), 1);
         assert_eq!(grids[0].rows(), 3);
+    }
+
+    #[test]
+    fn a_stub_beside_header_and_body_leaves_the_header_closed() {
+        // A stub labelling every row, a size label over two header rows, a
+        // group label over its two leaves; the rule under the header runs
+        // under every column but the stub's.
+        let g = plain_grid(
+            vec![0.0, 100.0, 200.0, 300.0, 400.0],
+            vec![0.0, 20.0, 40.0, 60.0, 80.0, 100.0],
+        );
+        let rules = vec![
+            h(0.0, 400.0, 0.0),
+            h(200.0, 400.0, 20.0),
+            h(100.0, 400.0, 40.0),
+            h(100.0, 400.0, 60.0),
+            h(100.0, 400.0, 80.0),
+            h(0.0, 400.0, 100.0),
+            v(0.0, 100.0, 0.0),
+            v(0.0, 100.0, 100.0),
+            v(0.0, 100.0, 200.0),
+            v(20.0, 100.0, 300.0),
+            v(0.0, 100.0, 400.0),
+        ];
+        let merges = g.merges(&rules, &[]);
+        let t = rows(&[
+            &["Tolerance", "Size", "Length", ""],
+            &["", "", "Short", "Long"],
+            &["", "M6", "1.0", "2.0"],
+            &["", "M8", "1.5", "2.5"],
+            &["", "M10", "2.0", "3.0"],
+        ]);
+        assert_eq!(g.stacked_header_rows(1, &t, &merges, &rules), 2);
+    }
+
+    #[test]
+    fn two_tables_boxed_in_one_frame_part_at_the_blank_band() {
+        // One frame round two tables, its sides running on down through the
+        // blank band between them, each ruled at columns of its own.
+        let mut rules: Vec<Rule> = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0, 140.0, 160.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        rules.extend([v(0.0, 160.0, 0.0), v(0.0, 160.0, 300.0)]);
+        rules.extend([
+            v(0.0, 80.0, 100.0),
+            v(0.0, 80.0, 200.0),
+            v(100.0, 160.0, 120.0),
+            v(100.0, 160.0, 220.0),
+        ]);
+        let grids = detect_group(&rules, &[], &[], 0, &[]);
+        assert_eq!(grids.len(), 2, "{grids:?}");
+        assert_eq!(grids[0].cols(), 3);
+        assert_eq!(grids[1].cols(), 3);
+        // A box of one row under a table, its one rule inside set apart from
+        // the table's: no second table to part off.
+        let mut boxed: Vec<Rule> = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0]
+            .iter()
+            .map(|&y| h(0.0, 300.0, y))
+            .collect();
+        boxed.extend([v(0.0, 120.0, 0.0), v(0.0, 120.0, 300.0)]);
+        boxed.extend([
+            v(0.0, 80.0, 100.0),
+            v(0.0, 80.0, 200.0),
+            v(100.0, 120.0, 150.0),
+        ]);
+        let grids = detect_group(&boxed, &[], &[], 0, &[]);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        // A label set across the band, a group's banner: one table.
+        let banner = [gly(120.0, 94.0, 60.0, "Group")];
+        let grids = detect_group(&rules, &[], &banner, 0, &[]);
+        assert_eq!(grids.len(), 1, "{grids:?}");
     }
 
     #[test]

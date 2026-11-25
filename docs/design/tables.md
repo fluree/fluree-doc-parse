@@ -60,6 +60,16 @@ two crossed bands, because in a table ruled with horizontals alone every band
 is uncrossed, and splitting on those alone turns a ruled table of contents into
 one table per entry.
 
+Two tables can share one frame, its sides running on down through the blank
+band between them. The band is crossed by the frame's two sides alone and
+holds no text, and either side of it stands a table by its own ruling: three
+columns or more over three rows or more, the columns set at different places
+above and below. The tables part there, and each reads its own columns. A
+band set across the table with a label in it, a group's banner, is crossed by
+the frame alone too and stays a row; so does a blank row inside one table,
+its columns ruled alike either side, and the band over a box of one row or a
+diagram's panel, which is no table to part off.
+
 A grid's top and bottom are trimmed of bands no vertical crosses: a heading's
 underline welded on above a ruled box. Only verticals within a row's height
 of its rows count.
@@ -485,6 +495,16 @@ by the first row alone: the second row leaves it empty, or the ruling runs its
 label down through it. A value of its own there (`FPWINGRF-JP2` under
 `Product No.`, beside two under a `Type` set across two columns) makes the
 row the first of the data.
+
+A header grows down through the rows a header cell is ruled open into
+(`Nominal Screw Size` beside `Nominal Screw Length` over its five lengths),
+as far as rows of labels go and a rule closes it off from the data. A stub
+labelling header and body alike, its cell running on through every row of
+the table (`Tolerance on Length` beside every row), is ruled under nowhere
+there; the rule closing the header may leave its column open where the rows
+taken in name their columns, each label its own, none repeated among them or
+in the data under them. A table's data repeats itself (`Yes` row after row)
+under a stub run down a continued page, and its rows stay data.
 
 ### A header restated partway down
 
