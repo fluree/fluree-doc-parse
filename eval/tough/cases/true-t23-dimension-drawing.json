@@ -1,0 +1,41 @@
+{
+  "document": {
+    "file": "true-t23-hc.pdf",
+    "url": "https://www.truemfg.com/wp-content/uploads/true-media/spec-sheets/T-23-HC.pdf",
+    "sha256": "43752aab4bf28540b56834df9cb2af8ef79d91c76988475135bb76a8e2c1f191",
+    "about": "True T-23-HC refrigerator spec sheet. Page 2 draws the cabinet's elevation and plan view with dimension lines, arrowed at their ends, and callouts in inches over millimetres."
+  },
+  "notes": [
+    "#279: the dimension and extension lines made a ruled grid of the callouts, read as a table, and the callouts outside it as loose paragraphs."
+  ],
+  "checks": [
+    {
+      "id": "callouts-no-table",
+      "found": "2026-11-25",
+      "issue": "#279: the drawing's callouts were a table (`15/16\" mm)` beside `(1990` …).",
+      "element": {
+        "type": "doco:Table",
+        "text": "\t\t\t83⁵ (2117\t27\" (686 mm) /16\" mm) 29 1/2\" (750 mm)\n\t\t\t83⁵ (2117\t27\" (686 mm) /16\" mm) 29 1/2\" (750 mm)\n15/16\" mm)\t\t(1990\t78 5/16\" mm)\t25¹⁷ (649\t55¹ (1398 /32\" mm)"
+      },
+      "count": 0
+    },
+    {
+      "id": "view-name-is-the-drawings",
+      "found": "2026-11-25",
+      "issue": "#279: the view's name was a paragraph of the page's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "PLAN VIEW"
+      }
+    },
+    {
+      "id": "loose-callout-is-the-drawings",
+      "found": "2026-11-25",
+      "issue": "#279: a callout outside the grid was a paragraph of the page's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "(1955"
+      }
+    }
+  ]
+}
