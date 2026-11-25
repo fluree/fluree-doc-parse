@@ -113,8 +113,10 @@ pub enum CropReason {
     NearBlank,
     /// A whole page whose glyphs' Unicode cannot be trusted.
     BrokenText,
-    /// A raster region of a text page that the text layer does not cover, or
-    /// a whole page read for a doubt that also carries one.
+    /// A raster region of a text page that the text layer does not cover;
+    /// or a whole page read for its regions: for a doubt that also carries
+    /// one, or in place of regions that exist only as extracted, where the
+    /// analysis, once it cleaned the page, minted no anchor for them.
     Region,
     /// A table the deterministic grid found but does not trust.
     Table,
@@ -648,8 +650,11 @@ pub fn crop_count(jobs: &CropJobs) -> usize {
 /// pages ([`plan_explained`], [`crops_at_anchors_explained`],
 /// [`crops_for_with_explained`]), and rank them: a scan, a near-blank page
 /// or broken Unicode first, [`CropReason::Region`] with the routed regions,
-/// any other reason, or none, with the doubts. A page is not routed again
-/// here: routed as extracted, a page whose region exists only once cleaned
+/// any other reason with the doubts. A whole page with no reason is a
+/// caller's mistake, `reasons` taken from another selection than `jobs`:
+/// it fails a debug build, and otherwise ranks with the scans, since
+/// nothing says the deterministic pass has its words. A page is not routed
+/// again here: routed as extracted, a page whose region exists only once cleaned
 /// would rank with the doubts, and routed as analysed, a page read whole in
 /// place of regions the analysis did not mint would rank with the scans.
 pub fn within_budget(jobs: CropJobs, reasons: &PageReasons, max_crops: usize) -> (CropJobs, usize) {
@@ -676,7 +681,11 @@ pub fn within_budget(jobs: CropJobs, reasons: &PageReasons, max_crops: usize) ->
                 let rank = match reasons.get(&page) {
                     Some(CropReason::Scanned | CropReason::NearBlank | CropReason::BrokenText) => 0,
                     Some(CropReason::Region) => 1,
-                    _ => 4,
+                    Some(_) => 4,
+                    None => {
+                        debug_assert!(false, "page {page} is read whole for no reason");
+                        0
+                    }
                 };
                 crops.push(Ranked {
                     rank,

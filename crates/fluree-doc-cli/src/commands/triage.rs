@@ -88,7 +88,11 @@ pub fn run(path: &Path) -> i32 {
                     pages_routed += 1;
                     routed.push(format!(
                         "p{} {:?} glyphs={} unicode={:.2} img={:.2}",
-                        p.index, reason, s.glyphs, s.unicode_rate, s.image_coverage
+                        p.index + 1,
+                        reason,
+                        s.glyphs,
+                        s.unicode_rate,
+                        s.image_coverage
                     ));
                 }
                 fluree_doc_pdf::route::Route::VlmRegions(regions) => {

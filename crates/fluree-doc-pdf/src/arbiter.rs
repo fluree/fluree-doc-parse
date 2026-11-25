@@ -541,54 +541,76 @@ fn replace_read_pages(
     // vanish: the one page the reader was asked to read was the one page
     // never visited. `page_text` is the page count when the caller has one.
     let mut order: Vec<usize> = elements.iter().map(|e| e.page).collect();
-    order.extend((0..page_text.len()).filter(|page| {
-        readings
-            .read(stem, &format!("p{page}_full"))
-            .is_some_and(|blocks| !blocks.is_empty())
-    }));
+    order.extend(0..page_text.len());
     order.sort_unstable();
     order.dedup();
-    if order.is_empty() {
+    // Each page's reading, read once.
+    let read: std::collections::BTreeMap<usize, String> = order
+        .into_iter()
+        .filter_map(|page| {
+            readings
+                .read(stem, &format!("p{page}_full"))
+                .as_deref()
+                .and_then(blocks_to_text)
+                // A reading that lost most of the page's own words did not
+                // read a shorter page; it arrived truncated. Keeping the
+                // deterministic elements is the recoverable failure — half a
+                // page substituted for a whole one is not.
+                .filter(|text| {
+                    page_text
+                        .get(page)
+                        .and_then(|lines| crate::fidelity::letter_retention(text, lines))
+                        .is_none_or(|kept| kept >= MIN_PAGE_RETENTION)
+                })
+                .map(|text| (page, text))
+        })
+        .collect();
+    // No page read whole, the common case: nothing to substitute.
+    if read.is_empty() {
         return;
     }
     let mut out: Vec<Element> = Vec::with_capacity(elements.len());
-    for page in order {
-        let text = readings
-            .read(stem, &format!("p{page}_full"))
-            .as_deref()
-            .and_then(blocks_to_text)
-            // A reading that lost most of the page's own words did not read a
-            // shorter page; it arrived truncated. Keeping the deterministic
-            // elements is the recoverable failure — half a page substituted
-            // for a whole one is not.
-            .filter(|text| {
-                page_text
-                    .get(page)
-                    .and_then(|lines| crate::fidelity::letter_retention(text, lines))
-                    .is_none_or(|kept| kept >= MIN_PAGE_RETENTION)
-            });
-        match text {
-            Some(text) => out.push(Element {
-                page,
-                bbox: elements
-                    .iter()
-                    .find(|e| e.page == page)
-                    .and_then(|e| e.bbox),
-                // A whole-page VLM reading is a block of prose, so it is a
-                // text-bearing leaf like every other one this crate emits
-                // (`overlay.rs`, `link.rs`, `document.rs`). It was
-                // `doco:Section`, which in DoCO is a *container* holding a
-                // `doco:SectionTitle` — and consumers treat it as one:
-                // Solo's embedder recurses into a Section's children for
-                // text and never reads the node's own `nif:isString`, so an
-                // escalated page produced zero chunks and failed the run
-                // with "empty document body?" while carrying the full text.
-                ..Element::new("doco:Paragraph", text, "vlm", "page-tier")
-            }),
-            None => out.extend(elements.iter().filter(|e| e.page == page).cloned()),
+    let mut pending = read.into_iter().peekable();
+    let mut taken: Option<usize> = None;
+    for e in std::mem::take(elements) {
+        // A page read whole with no element before this one, a scan: its
+        // reading goes where its page falls.
+        while let Some((page, text)) = pending.next_if(|(page, _)| *page < e.page) {
+            out.push(page_reading(page, None, text));
+        }
+        if taken == Some(e.page) {
+            continue;
+        }
+        match pending.next_if(|(page, _)| *page == e.page) {
+            // The first element of a page read whole: the reading takes the
+            // place of the page's run, and the rest of the run goes.
+            Some((page, text)) => {
+                out.push(page_reading(page, e.bbox, text));
+                taken = Some(page);
+            }
+            None => out.push(e),
         }
     }
+    out.extend(pending.map(|(page, text)| page_reading(page, None, text)));
     *elements = out;
+}
+
+/// A whole-page reading as the one element that stands for its page.
+fn page_reading(page: usize, bbox: Option<crate::geom::BBox>, text: String) -> Element {
+    Element {
+        page,
+        bbox,
+        // A whole-page VLM reading is a block of prose, so it is a
+        // text-bearing leaf like every other one this crate emits
+        // (`overlay.rs`, `link.rs`, `document.rs`). It was
+        // `doco:Section`, which in DoCO is a *container* holding a
+        // `doco:SectionTitle` — and consumers treat it as one:
+        // Solo's embedder recurses into a Section's children for
+        // text and never reads the node's own `nif:isString`, so an
+        // escalated page produced zero chunks and failed the run
+        // with "empty document body?" while carrying the full text.
+        ..Element::new("doco:Paragraph", text, "vlm", "page-tier")
+    }
 }
 
 /// As [`splice`], with each page's own text so a reading can be checked
