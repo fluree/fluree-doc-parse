@@ -72,6 +72,12 @@ Weight and size never make a heading of these:
   keeps its labels among the page's text when no figure region takes them.
   On a page turned as a whole, the headings turn with the text and stay.
   A legend's entries and a curve's labels are the figure's to take.
+- **A table's column head or stub, the table not read as one:** a line
+  standing within two and a half ems over a line of bare figures (`Total
+  assets, net` over its row's figures), or level with other short cells of
+  which one stands over such figures (`95%CI` beside `95% CI` and `%`). A
+  slide's card titles stand side by side too, but over text, not figures.
+  Where the table is found, these cells are its headers.
 - **A signature block's party:** a role or a name with a line to sign on
   just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
   `(Signature)`), and a signature page's label (`Signature Page to Voting
