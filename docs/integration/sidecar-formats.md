@@ -213,9 +213,12 @@ engine is cheap per pixel, and a capture an inch high still holds a date. So
 OCR reads them all, the routed ones first, numbered as the router numbers
 them (`r0`, `r1`, …), then the small ones after them: a model's `r1` and
 an engine's `r1` are the same region. `render-routed --ocr-regions` crops
-the small ones too, with the reason `small_region`. An image the pixel probe
-does not take for text is no unread region: nothing reads it, and an `r{i}`
-reading names none.
+the small ones too, with the reason `small_region`. Only a run that reads
+with an engine (`--ocr`, `--ocr-words`, `--ocr-regions`) decodes the small
+images to tell which hold text: without one nothing would read them, and
+they are most of what probing a document's images costs. An image the pixel
+probe does not take for text is no unread region: nothing reads it, and an
+`r{i}` reading names none.
 
 A whole-page reading for any other page is refused with a warning, so the
 text layer of a born-digital page is never replaced by a reading of it — a

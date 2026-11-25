@@ -1738,17 +1738,21 @@ fn convert_bytes(
     // Images are probed for whatever reads their pixels' verdict: the
     // router, when it runs for escalation or for the anchors and sidecars
     // analysis routes for; OCR words, which go only where it sends a reader;
-    // an OCR engine, which reads the texty images too small to route; and a
-    // caller who asks for the verdicts (`--probe-images`). A deterministic
-    // parse decodes none, and reports each image the text layer does not
-    // cover as not examined ([`fluree_doc_pdf::route::Declined::Unprobed`]).
+    // an OCR engine; and a caller who asks for the verdicts
+    // (`--probe-images`). The images too small to route are probed only
+    // for OCR, which reads the texty ones, and for that caller: without
+    // them nothing would read those, and they are most of the decode. A
+    // deterministic parse decodes none, and reports each image the text
+    // layer does not cover as not examined
+    // ([`fluree_doc_pdf::route::Declined::Unprobed`]).
+    let ocr = cfg.ocr_words.is_some() || cfg.ocr.is_some();
     let mut eopts = ExtractOptions::default();
     eopts.probe_images = args.probe_images
         || cfg.escalate
-        || cfg.ocr_words.is_some()
-        || cfg.ocr.is_some()
+        || ocr
         || opts.emit_anchors
         || opts.layout_prefix.is_some();
+    eopts.probe_small_images = ocr || args.probe_images;
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer

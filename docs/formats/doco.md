@@ -241,7 +241,7 @@ what the router made of it:
 | `Region` | its pixels look like text or a table, and it covers a tenth of the page or more | a model (`r{i}`), an OCR engine | yes |
 | `Small` | its pixels look like text, but it covers under a tenth of the page; half an inch (36 units) or more on its longer side | an OCR engine only (`small_region`) | no |
 | `NotTexty` | a tenth of the page or more, but the pixel probe does not take it for text: a photograph, a chart, an illustration | nothing | no |
-| `Unprobed` | not examined: a plain run decodes no image, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | once, by page |
+| `Unprobed` | not examined: a plain run decodes no image, and a run without OCR none under a tenth of the page, so nothing tells a capture of text from a photograph; half an inch or more on its longer side, at any share of the page | nothing in this run | once, by page |
 
 The images are probed only by a run that acts on the verdict: escalation,
 OCR (`--ocr`, `--ocr-words`), the anchors or the layout sidecars, or
