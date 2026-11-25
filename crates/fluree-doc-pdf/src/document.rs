@@ -1745,6 +1745,11 @@ fn read_form_text(elements: &mut [Element]) {
 /// little off, or a wider number right-aligned.
 const NEST_INDENT: f64 = 1.0;
 
+/// Farthest before where the item before it starts its text, in its size,
+/// an item's marker stands set under that item: a slide's second-level
+/// bullet stands a little left of the first level's text.
+const NEST_BEFORE: f64 = 1.0;
+
 /// Farthest past where the item before it starts its text, in its size, an
 /// item's marker stands set under that item. A sub-list's marker stands
 /// under its parent's text, or a little into it; further is another column.
@@ -1754,9 +1759,9 @@ const NEST_REACH: f64 = 2.5;
 /// read as one list: a list set with a blank line between its items.
 const LIST_GAP: f64 = 3.0;
 
-/// A list item's marker and text start, its size, and whether its first
-/// line carries on the item before it.
-type ListMark = (f64, f64, f64, bool);
+/// A list item's marker and text start, its size, whether its first line
+/// carries on the item before it, and whether it is marked by a box to tick.
+type ListMark = (f64, f64, f64, bool, bool);
 
 /// A page's list items, nested by where their markers stand.
 ///
@@ -1769,13 +1774,16 @@ type ListMark = (f64, f64, f64, bool);
 /// the next column, starts again at the top. A wrapped line is its item's
 /// own, and a paragraph set with a hanging indent has no marker. A line
 /// read as an item though it carries on the one before, its count standing
-/// beside a later line, is not set under it.
+/// beside a later line, is not set under it. A box to tick marks a choice,
+/// not what a list is set under: a form's `Yes` and `No` boxes, and what is
+/// set beside or under them, stay level.
 fn nest_list_items(elements: &mut [Element], item_text: &[Option<ListMark>]) {
-    // Each open level's marker and text start, outermost first.
-    let mut open: Vec<(f64, f64)> = Vec::new();
+    // Each open level's marker and text start, and whether it is a box to
+    // tick, outermost first.
+    let mut open: Vec<(f64, f64, bool)> = Vec::new();
     let mut prev: Option<crate::geom::BBox> = None;
     for (e, t) in elements.iter_mut().zip(item_text) {
-        let (Some((marker, text_x, size, carried_on)), Some(b)) = (*t, e.bbox) else {
+        let (Some((marker, text_x, size, carried_on, ticked)), Some(b)) = (*t, e.bbox) else {
             open.clear();
             prev = None;
             continue;
@@ -1786,21 +1794,22 @@ fn nest_list_items(elements: &mut [Element], item_text: &[Option<ListMark>]) {
             open.clear();
         }
         match open.last().copied() {
-            None => open.push((marker, text_x)),
-            Some((above, above_text))
+            None => open.push((marker, text_x, ticked)),
+            Some((above, above_text, above_ticked))
                 if !carried_on
+                    && !above_ticked
                     && marker >= above + NEST_INDENT * em
-                    && marker >= above_text - 0.5 * em
+                    && marker >= above_text - NEST_BEFORE * em
                     && marker <= above_text + NEST_REACH * em =>
             {
-                open.push((marker, text_x))
+                open.push((marker, text_x, ticked))
             }
             Some(_) => {
                 while open.len() > 1 && open.last().is_some_and(|l| marker < l.0 - 0.5 * em) {
                     open.pop();
                 }
                 if let Some(level) = open.last_mut() {
-                    *level = (marker, text_x);
+                    *level = (marker, text_x, ticked);
                 }
             }
         }
@@ -2111,7 +2120,7 @@ fn split_block_at_titles(b: Block, boxes: &[crate::geom::BBox]) -> Vec<Block> {
         if last - first + 1 != n_in {
             continue;
         }
-        let marker = b.marker.clone();
+        let (marker, marker_x) = (b.marker.clone(), b.marker_x);
         let mut parts = Vec::new();
         let mut lines = b.lines;
         let tail: Vec<Line> = lines.split_off(last + 1);
@@ -2121,6 +2130,7 @@ fn split_block_at_titles(b: Block, boxes: &[crate::geom::BBox]) -> Vec<Block> {
         }
         let mut title = block::build(mid);
         title.marker = marker;
+        title.marker_x = marker_x;
         parts.push(title);
         if !tail.is_empty() {
             // The remainder may contain further titles.
@@ -4170,9 +4180,21 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .marker
                 .as_deref()
                 .is_some_and(|m| !block::count_values(m).is_empty() && !text.starts_with(m.trim()));
+            // Where the item's marker and text start. A marker set apart
+            // stands left of the block's box, which starts at the text; one
+            // in the text starts the box.
             item_text.push((kind == "doc:ListItem").then(|| {
-                let x = b.lines.first().map_or(b.bbox.x0, |l| l.bbox.x0);
-                (b.bbox.x0, x, (b.font_size as f64).max(1.0), carried_on)
+                let em = (b.font_size as f64).max(1.0);
+                let line = b.lines.first().map_or(b.bbox.x0, |l| l.bbox.x0);
+                // A count beside a later line is no mark of this block's.
+                let ticked = b.marker.as_deref() == Some(block::CHECKBOX_MARKER);
+                match b
+                    .marker_x
+                    .filter(|&x| !carried_on && x < b.bbox.x0 - 0.3 * em)
+                {
+                    Some(x) => (x, b.bbox.x0, em, carried_on, ticked),
+                    None => (b.bbox.x0, line, em, carried_on, ticked),
+                }
             }));
             page_elements.push(Element {
                 page: pi,
@@ -5156,8 +5178,10 @@ mod tests {
             .iter()
             .map(|&(t, x, _, y)| line_at("doc:ListItem", t, "marker", None, y, x))
             .collect();
-        let mut text: Vec<Option<ListMark>> =
-            rows.iter().map(|r| Some((r.1, r.2, 10.0, false))).collect();
+        let mut text: Vec<Option<ListMark>> = rows
+            .iter()
+            .map(|r| Some((r.1, r.2, 10.0, false, false)))
+            .collect();
         // After a paragraph, and in the next column (back up the page), a
         // list starts again at the top.
         elements.push(line_at(
@@ -5177,7 +5201,7 @@ mod tests {
             214.0,
             63.0,
         ));
-        text.push(Some((63.0, 74.0, 10.0, false)));
+        text.push(Some((63.0, 74.0, 10.0, false, false)));
         elements.push(line_at(
             "doc:ListItem",
             "Test it",
@@ -5186,10 +5210,44 @@ mod tests {
             100.0,
             313.0,
         ));
-        text.push(Some((313.0, 324.0, 10.0, false)));
+        text.push(Some((313.0, 324.0, 10.0, false, false)));
         nest_list_items(&mut elements, &text);
         let depths: Vec<usize> = elements.iter().map(|e| e.depth).collect();
         assert_eq!(depths, [0, 1, 1, 2, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn a_list_items_marker_stands_where_it_is_drawn() {
+        let item =
+            |t: &str, y: f64, box_x: f64| line_at("doc:ListItem", t, "marker", None, y, box_x);
+        // One list, its first bullet in the line (the box starts at it) and
+        // the next drawn apart at the same place (the box starts at the
+        // text): siblings. Then a sub-item whose drawn bullet stands under
+        // the text: one deeper.
+        let mut elements = vec![
+            item("Plan the route", 100.0, 40.0),
+            item("Book the rooms", 114.0, 52.0),
+            item("Two nights", 128.0, 64.0),
+        ];
+        let text = vec![
+            Some((40.0, 40.0, 10.0, false, false)),
+            Some((40.0, 52.0, 10.0, false, false)),
+            Some((52.0, 64.0, 10.0, false, false)),
+        ];
+        nest_list_items(&mut elements, &text);
+        let depths: Vec<usize> = elements.iter().map(|e| e.depth).collect();
+        assert_eq!(depths, [0, 0, 1]);
+        // A box to tick marks a choice: what is set under it stays level.
+        let mut elements = vec![
+            item("Yes", 100.0, 52.0),
+            item("Describe below", 114.0, 70.0),
+        ];
+        let text = vec![
+            Some((40.0, 52.0, 10.0, false, true)),
+            Some((58.0, 70.0, 10.0, false, false)),
+        ];
+        nest_list_items(&mut elements, &text);
+        assert_eq!(elements[1].depth, 0);
     }
 
     #[test]
