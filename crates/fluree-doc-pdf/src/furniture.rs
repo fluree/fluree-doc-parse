@@ -723,43 +723,14 @@ fn section_running_heads(
                 _ => runs.push(k..k + 1),
             }
         }
-        // Each name's first copy, and whether it is set as a heading there.
-        let mut first: std::collections::HashMap<&str, bool> = Default::default();
-        for r in &runs {
-            let (pi, li) = slot.lines[r.start];
-            let name = texts[r.start].as_str();
-            first
-                .entry(name)
-                .or_insert_with(|| display(pi, li) || opened(name, pi).is_some());
-        }
-        let sections = first
-            .iter()
-            .filter(|(name, set)| {
-                **set
-                    && runs
-                        .iter()
-                        .any(|r| texts[r.start] == **name && r.len() >= 2)
-            })
-            .count();
-        if sections < 2 {
-            continue;
-        }
-        // A name's later runs go on with its section: only its first run
-        // keeps a copy as the heading.
-        let mut named: std::collections::HashSet<&str> = Default::default();
-        for r in &runs {
-            let name = texts[r.start].as_str();
-            if !first[name] {
-                continue;
-            }
-            let run = &slot.lines[r.clone()];
-            let (first_page, _) = run[0];
-            // The same words set anywhere else on the page, no smaller than
-            // the head: the section's own heading, wherever it stands, on
-            // one line or broken over two in one style (`Federal Reserve
-            // Bank of` over `St. Louis`). An agenda or contents entry naming
-            // the section is set smaller.
-            let size = pages[first_page].0[run[0].1].font_size;
+        // Whether `name`'s section has its heading already, from its head's
+        // first page on: the same words set anywhere else on the page, no
+        // smaller than the head, on one line or broken over two in one style
+        // (`Federal Reserve Bank of` over `St. Louis`), from the page the
+        // outline opened the section at, or the page before, to the head's
+        // first page. An agenda or contents entry naming the section is set
+        // smaller.
+        let headed_by = |name: &str, first_page: usize, size: f32| {
             let in_body = |pi: usize| {
                 pages.get(pi).is_some_and(|(lines, _)| {
                     let own = |li: usize| {
@@ -779,12 +750,51 @@ fn section_running_heads(
                     })
                 })
             };
-            // From the page the outline opened the section at, or the page
-            // before, to the head's first page.
             let from = opened(name, first_page)
                 .unwrap_or(first_page)
                 .min(first_page.saturating_sub(1));
-            let headed = !named.insert(name) || (from..=first_page).any(in_body);
+            (from..=first_page).any(in_body)
+        };
+        // Each name's first copy, whether it is set as a heading there, and
+        // whether its section has its heading already.
+        let mut first: std::collections::HashMap<&str, (bool, bool)> = Default::default();
+        for r in &runs {
+            let (pi, li) = slot.lines[r.start];
+            let name = texts[r.start].as_str();
+            first.entry(name).or_insert_with(|| {
+                let size = pages[pi].0[li].font_size;
+                (
+                    display(pi, li) || opened(name, pi).is_some(),
+                    headed_by(name, pi, size),
+                )
+            });
+        }
+        // A section's name, set as a heading, runs over two pages or more,
+        // or repeats its section's heading printed before it: a report whose
+        // sections run two pages names each once, over its second page.
+        let sections = first
+            .iter()
+            .filter(|(name, (set, headed))| {
+                *set && (*headed
+                    || runs
+                        .iter()
+                        .any(|r| texts[r.start] == **name && r.len() >= 2))
+            })
+            .count();
+        if sections < 2 {
+            continue;
+        }
+        // A name's later runs go on with its section: only its first run
+        // keeps a copy as the heading.
+        let mut named: std::collections::HashSet<&str> = Default::default();
+        for r in &runs {
+            let name = texts[r.start].as_str();
+            let (set, headed_first) = first[name];
+            if !set {
+                continue;
+            }
+            let run = &slot.lines[r.clone()];
+            let headed = !named.insert(name) || headed_first;
             for (k, &(pi, li)) in run.iter().enumerate() {
                 if k == 0 && !headed {
                     out[pi].remove(&li);
@@ -1976,6 +1986,43 @@ mod tests {
             assert_eq!(heads[i].contains(&0), first, "page {i}");
             assert_eq!(marks[i].contains_key(&0), !first, "page {i}");
         }
+    }
+
+    #[test]
+    fn a_section_named_once_over_its_second_page_runs() {
+        // A report of two-page sections: each opens with its title, large,
+        // and names itself once more over its second page, flush right in
+        // the head band.
+        let name = |i: usize| ["Northern Region", "Central Region", "Coastal Region"][i / 2];
+        let pages = doc(6, |i| {
+            let mut ls = vec![];
+            if i % 2 == 0 {
+                let mut l = line(name(i), 120.0);
+                l.font_size = 24.0;
+                ls.push(l);
+            } else {
+                ls.push(head_at(name(i), 40.0, 420.0, 560.0));
+            }
+            ls.push(line(&format!("Text on page {i}."), 400.0));
+            ls
+        });
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
+        assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
+        for i in [1, 3, 5] {
+            assert_eq!(marks[i].get(&0), Some(&Furniture::Header), "page {i}");
+        }
+        // Without the heading before it, a name printed once is each
+        // page's own.
+        let pages = doc(6, |i| {
+            let mut ls = vec![];
+            if i % 2 == 1 {
+                ls.push(head_at(name(i), 40.0, 420.0, 560.0));
+            }
+            ls.push(line(&format!("Text on page {i}."), 400.0));
+            ls
+        });
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[]);
+        assert!(marks.iter().all(|m| m.is_empty()));
     }
 
     #[test]

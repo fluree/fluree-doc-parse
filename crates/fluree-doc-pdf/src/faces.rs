@@ -14,10 +14,11 @@ use std::collections::{HashMap, HashSet};
 
 use hayro_interpret::CacheKey;
 use hayro_syntax::object::dict::keys::{
-    BASE_FONT, DESCENDANT_FONTS, FONT, FONT_DESC, FONT_WEIGHT, FORM, RESOURCES, STEM_V, SUBTYPE,
-    XOBJECT,
+    BASE_ENCODING, BASE_FONT, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR, FONT, FONT_DESC,
+    FONT_WEIGHT, FORM, MAC_ROMAN_ENCODING, MM_TYPE1, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE,
+    TO_UNICODE, TRUE_TYPE, TYPE1, WIDTHS, WIN_ANSI_ENCODING, XOBJECT,
 };
-use hayro_syntax::object::{Array, Dict, Name, Stream};
+use hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use hayro_syntax::page::Page;
 
 /// How deep forms inside forms are followed for their fonts.
@@ -39,6 +40,9 @@ pub(crate) struct Face {
 #[derive(Debug, Default)]
 pub(crate) struct Faces {
     faces: HashMap<u128, Face>,
+    /// Letters each font's ToUnicode map gives in the wrong case, by the
+    /// interpreter's key for the font ([`recased`]).
+    recase: HashMap<u128, Vec<Recase>>,
     /// Resource dictionaries already read, so a form every page draws is
     /// read once.
     read: HashSet<u128>,
@@ -60,6 +64,18 @@ impl Faces {
         self.faces.get(&key)
     }
 
+    /// The letter a glyph drawn in this font draws, where its ToUnicode map
+    /// gives `read` and the font's encoding gives that letter in the other
+    /// case, for a glyph of this width ([`recased`]).
+    pub(crate) fn recase(&self, key: u128, read: char, width: Option<f32>) -> Option<char> {
+        let width = width?;
+        self.recase
+            .get(&key)?
+            .iter()
+            .find(|r| r.read == read && (r.width - width).abs() < 0.5)
+            .map(|r| r.drawn)
+    }
+
     fn fonts(&mut self, fonts: &Dict<'_>) {
         if !self.read.insert(fonts.cache_key()) {
             return;
@@ -69,6 +85,11 @@ impl Faces {
                 self.faces
                     .entry(font.cache_key())
                     .or_insert_with(|| face(&font));
+                if let std::collections::hash_map::Entry::Vacant(e) =
+                    self.recase.entry(font.cache_key())
+                {
+                    e.insert(recased(&font));
+                }
             }
         }
     }
@@ -95,6 +116,110 @@ impl Faces {
             }
         }
     }
+}
+
+/// A letter a font's ToUnicode map gives in the wrong case: glyphs of this
+/// width that the map reads as `read` draw `drawn`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Recase {
+    read: char,
+    width: f32,
+    drawn: char,
+}
+
+/// The codes of a simple font whose ToUnicode map gives a letter in the
+/// other case than its encoding names: `<46> <0066>`, F read as f, in a map
+/// a producer folded the case of. The encoding is the authority on the glyph
+/// drawn: the font draws the glyph the encoding names, `/F`, and the width
+/// the PDF gives the code is that glyph's (611 for F against 278 for f).
+/// Only a standard base encoding (WinAnsi, MacRoman, Standard), with its
+/// `/Differences`, is read, where a code's name is known without the font
+/// program; and only letters that differ in case alone. A map that reads a
+/// glyph as something else on purpose, a small capital's `f.sc` as `F`, a
+/// ligature, a symbol font's glyph, is no case of one letter for another.
+/// Codes are told apart by width, as a glyph is drawn: a reading and width
+/// that another code shares, read as the map reads it, is left alone.
+fn recased(font: &Dict<'_>) -> Vec<Recase> {
+    let simple = matches!(
+        font.get::<Name<'_>>(SUBTYPE).as_deref(),
+        Some(TYPE1 | MM_TYPE1 | TRUE_TYPE)
+    );
+    let Some(encoding) = font.get::<Dict<'_>>(ENCODING) else {
+        return Vec::new();
+    };
+    let standard = matches!(
+        encoding.get::<Name<'_>>(BASE_ENCODING).as_deref(),
+        Some(WIN_ANSI_ENCODING | MAC_ROMAN_ENCODING | STANDARD_ENCODING)
+    );
+    if !simple || !standard {
+        return Vec::new();
+    }
+    let Some(map) = font
+        .get::<Stream<'_>>(TO_UNICODE)
+        .and_then(|s| s.decoded().ok())
+        .and_then(|d| hayro_interpret::hayro_cmap::CMap::parse(&d, |_| None))
+    else {
+        return Vec::new();
+    };
+    // Each code's name: `/Differences` over the base, whose letters stand at
+    // their ASCII codes in all three standard encodings.
+    let mut names: HashMap<u32, Option<char>> = HashMap::new();
+    if let Some(differences) = encoding.get::<Array<'_>>(DIFFERENCES) {
+        let mut code = 0_i64;
+        for obj in differences.iter::<Object<'_>>() {
+            match obj {
+                Object::Number(n) => code = n.as_i64(),
+                Object::Name(n) => {
+                    if let Ok(c) = u32::try_from(code) {
+                        let mut chars = n.as_str().chars();
+                        let one = match (chars.next(), chars.next()) {
+                            (Some(c), None) if c.is_ascii_alphabetic() => Some(c),
+                            _ => None,
+                        };
+                        names.insert(c, one);
+                    }
+                    code += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    let named = |code: u32| match names.get(&code) {
+        Some(n) => *n,
+        None => char::from_u32(code).filter(|c| c.is_ascii_alphabetic()),
+    };
+    let first = font.get::<usize>(FIRST_CHAR).unwrap_or(0) as u32;
+    let widths: Vec<f32> = font
+        .get::<Array<'_>>(WIDTHS)
+        .map(|w| w.iter::<f32>().collect())
+        .unwrap_or_default();
+    let width = |code: u32| {
+        code.checked_sub(first)
+            .and_then(|i| widths.get(i as usize).copied())
+    };
+    let read = |code: u32| match map.lookup_bf_string(code) {
+        Some(hayro_interpret::hayro_cmap::BfString::Char(c)) => Some(c),
+        _ => None,
+    };
+    let mut out: Vec<Recase> = Vec::new();
+    let mut plain: Vec<(char, f32)> = Vec::new();
+    for code in 0..=255u32 {
+        let (Some(read), Some(width)) = (read(code), width(code)) else {
+            continue;
+        };
+        match named(code) {
+            Some(drawn) if drawn != read && drawn.eq_ignore_ascii_case(&read) => {
+                out.push(Recase { read, width, drawn })
+            }
+            _ => plain.push((read, width)),
+        }
+    }
+    out.retain(|r| {
+        !plain
+            .iter()
+            .any(|&(c, w)| c == r.read && (w - r.width).abs() < 0.5)
+    });
+    out
 }
 
 /// What a font dictionary says about its face. A composite font's face is
@@ -297,5 +422,93 @@ mod tests {
         assert_eq!(named_weight("CIDFont+F4"), None);
         assert_eq!(named_weight("Helvetica"), None);
         assert_eq!(named_weight("Symbol"), None);
+    }
+
+    /// A one-page PDF drawing `text` in Helvetica with this `/Encoding`
+    /// entry and a ToUnicode map from each code to `map(code)`.
+    fn pdf_drawing(text: &str, encoding: &str, map: impl Fn(u8) -> u8) -> Vec<u8> {
+        // Helvetica's widths for the letters drawn, 500 for the rest.
+        let width = |c: u8| match c {
+            b'F' => 611,
+            b'f' => 278,
+            b'o' | b'e' | b'g' | b'n' => 556,
+            b'r' => 333,
+            b'i' => 222,
+            _ => 500,
+        };
+        let widths: Vec<String> = (65..=122u8).map(|c| width(c).to_string()).collect();
+        let mut cmap = String::from(
+            "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n\
+             1 begincodespacerange <00> <FF> endcodespacerange\n",
+        );
+        cmap.push_str(&format!("{} beginbfchar\n", 122 - 65 + 1));
+        for c in 65..=122u8 {
+            cmap.push_str(&format!("<{c:02X}> <00{:02X}>\n", map(c)));
+        }
+        cmap.push_str("endbfchar endcmap CMapName currentdict /CMap defineresource pop end end");
+        let content = format!("BT /F1 12 Tf 72 720 Td ({text}) Tj ET");
+        let stream =
+            |body: &str| format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len());
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] \
+             /Resources << /Font << /F1 4 0 R >> >> /Contents 6 0 R >>"
+                .to_string(),
+            format!(
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 65 \
+                 /LastChar 122 /Widths [{}] {encoding} /ToUnicode 5 0 R >>",
+                widths.join(" ")
+            ),
+            stream(&cmap),
+            stream(&content),
+        ];
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+        }
+        let xref = pdf.len();
+        pdf.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes(),
+        );
+        for o in offsets {
+            pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        pdf
+    }
+
+    fn read(pdf: Vec<u8>) -> String {
+        let doc = crate::extract_bytes(pdf).expect("a pdf");
+        doc.pages[0]
+            .glyphs
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn a_tounicode_map_that_folds_a_capital_is_read_by_the_encoding() {
+        let fold = |c: u8| if c == b'F' { b'f' } else { c };
+        let win_ansi = "/Encoding << /BaseEncoding /WinAnsiEncoding >>";
+        // `<46> <0066>`: the F the encoding draws, 611 wide, is read as f.
+        assert_eq!(read(pdf_drawing("Foreign", win_ansi, fold)), "Foreign");
+        // A plain f, its own code and width, stays f.
+        assert_eq!(read(pdf_drawing("foreign", win_ansi, fold)), "foreign");
+        // No standard base encoding: the code's name is the font program's
+        // to say, and the map's reading stands.
+        assert_eq!(read(pdf_drawing("Foreign", "", fold)), "foreign");
+        // A code the encoding names otherwise than one letter (`/F.sc`, a
+        // small capital) keeps the map's reading.
+        let small_caps = "/Encoding << /BaseEncoding /WinAnsiEncoding /Differences [70 /F.sc] >>";
+        assert_eq!(read(pdf_drawing("Foreign", small_caps, fold)), "foreign");
     }
 }
