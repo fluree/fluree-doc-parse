@@ -461,20 +461,30 @@ impl Page<'_> {
         // two of four columns leaves the paragraphs beside it whole, and so
         // do the rules a column draws between its own items.
         // The white space column `j` leaves at `y`: none through a line,
-        // all of it where the column has text on one side only.
+        // all of it where the column has text on one side only. A picture in
+        // the column fills it as its text does: a rule between the items of
+        // the next column, level with a photo, parts nothing beside it.
         let space = |j: usize, y: f64| {
             let (mut above, mut below) = (f64::MIN, f64::MAX);
-            for (_, l) in lines
+            let core = self.cores[j];
+            let pictures = self.pictures.iter().filter(|p| {
+                core.is_some_and(|(x0, x1)| p.x1.min(x1) - p.x0.max(x0) > 0.0)
+                    && p.y1 > top
+                    && p.y0 < foot
+            });
+            for b in lines
                 .iter()
                 .filter(|(c, l)| *c == j && l.rotation_bucket == 0)
+                .map(|(_, l)| &l.bbox)
+                .chain(pictures)
             {
-                if l.bbox.y0 < y - 0.5 && l.bbox.y1 > y + 0.5 {
+                if b.y0 < y - 0.5 && b.y1 > y + 0.5 {
                     return 0.0;
                 }
-                if (l.bbox.y0 + l.bbox.y1) * 0.5 < y {
-                    above = above.max(l.bbox.y1);
+                if (b.y0 + b.y1) * 0.5 < y {
+                    above = above.max(b.y1);
                 } else {
-                    below = below.min(l.bbox.y0);
+                    below = below.min(b.y0);
                 }
             }
             if above == f64::MIN || below == f64::MAX {
@@ -576,22 +586,97 @@ impl Page<'_> {
             0.0
         };
         // The widest first: the region under a page's title is judged on its
-        // own, where its columns' titles stand side by side.
+        // own, where its columns' titles stand side by side. A gap nearly as
+        // wide is taken at the same level, unless the part it falls in,
+        // between the cuts already taken, opens with titles side by side and
+        // not every column opens another under the gap: there it is a gap
+        // inside one column's section that another column's next section
+        // happens to share. Where every column opens a title under it, two
+        // sections set in the same columns part there (a contract's article
+        // set in two languages side by side, then the next).
         let widest = gaps
             .iter()
             .filter(|(y0, y1)| y1 - y0 >= floor)
             .map(|(y0, y1)| y1 - y0)
             .fold(0.0, f64::max);
-        for (y0, y1) in gaps {
-            if y1 - y0 >= floor && y1 - y0 >= widest * WIDEST_SHARE {
-                cuts.push((y0 + y1) * 0.5);
+        let mut wide: Vec<(f64, f64)> = gaps
+            .into_iter()
+            .filter(|(y0, y1)| y1 - y0 >= floor && y1 - y0 >= widest * WIDEST_SHARE)
+            .collect();
+        wide.sort_by(|p, q| {
+            (q.1 - q.0)
+                .partial_cmp(&(p.1 - p.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mid = |l: &Line| (l.bbox.y0 + l.bbox.y1) * 0.5;
+        for (i, (y0, y1)) in wide.into_iter().enumerate() {
+            let y = (y0 + y1) * 0.5;
+            if i > 0 && a < z {
+                let over = cuts
+                    .iter()
+                    .copied()
+                    .filter(|&c| c < y)
+                    .fold(f64::MIN, f64::max);
+                let under = cuts
+                    .iter()
+                    .copied()
+                    .filter(|&c| c > y)
+                    .fold(f64::MAX, f64::min);
+                let part: Vec<(usize, &Line)> = lines
+                    .iter()
+                    .filter(|(_, l)| mid(l) >= over && mid(l) < under)
+                    .copied()
+                    .collect();
+                let below: Vec<(usize, &Line)> =
+                    part.iter().filter(|(_, l)| mid(l) >= y).copied().collect();
+                if opens_titles(a, z, &part) && !opens_titles(a, z, &below) {
+                    continue;
+                }
             }
+            cuts.push(y);
         }
         cuts.retain(|&y| inside(y));
         cuts.sort_by(|p, q| p.partial_cmp(q).unwrap_or(std::cmp::Ordering::Equal));
         cuts.dedup_by(|p, q| (*p - *q).abs() < 0.5);
         cuts
     }
+}
+
+/// Do the columns `a..=z` with text in `lines` each open with a title, side
+/// by side on one row: a line set bold, or larger than the line under it?
+/// Body text carried over from the page before to the top of both columns
+/// is no title, however small the references under it run.
+fn opens_titles(a: usize, z: usize, lines: &[(usize, &Line)]) -> bool {
+    let mut firsts: Vec<&Line> = Vec::new();
+    for c in a..=z {
+        let mut col: Vec<&Line> = lines
+            .iter()
+            .filter(|(k, l)| *k == c && l.rotation_bucket == 0)
+            .map(|(_, l)| *l)
+            .collect();
+        col.sort_by(|p, q| {
+            p.bbox
+                .y0
+                .partial_cmp(&q.bbox.y0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let Some(first) = col.first() else {
+            continue;
+        };
+        let larger = col.get(1).is_some_and(|next| {
+            first.font_size as f64
+                > next.font_size as f64 * (1.0 + crate::heading::HEADING_SIZE_MARGIN)
+        });
+        if !(first.bold || larger) {
+            return false;
+        }
+        firsts.push(first);
+    }
+    firsts.len() >= 2
+        && firsts.windows(2).all(|w| {
+            let (p, q) = (&w[0].bbox, &w[1].bbox);
+            p.y1.min(q.y1) - p.y0.max(q.y0) > 0.0
+        })
 }
 
 /// A region's column cut at a gutter that stands only over it: two columns
@@ -1053,6 +1138,90 @@ mod tests {
         let out = texts(&read_order(vec![left, right], &rules, &[], &[]));
         let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
         assert!(at("left item 7") < at("right feature 0"), "{out:?}");
+    }
+
+    #[test]
+    fn a_rule_level_with_a_photo_parts_nothing_beside_it() {
+        // A photo at the left over a heading and its list; at the right,
+        // benefits with a rule under each. The rules stand level with the
+        // photo, where the left column has no text.
+        let mut left = col("intro", 40.0, 60.0, 3);
+        left.push(line("Best-Fit Applications", 40.0, 214.0, 180.0));
+        left.extend(col("left item", 40.0, 228.0, 6));
+        let right: Vec<Line> = (0..8)
+            .map(|i| {
+                line(
+                    &format!("right benefit {i}"),
+                    220.0,
+                    100.0 + 24.0 * i as f64,
+                    520.0,
+                )
+            })
+            .collect();
+        let rules: Vec<Rule> = (0..7)
+            .map(|i| rule(220.0, 568.0, 112.0 + 24.0 * i as f64))
+            .collect();
+        let photo = BBox {
+            x0: 40.0,
+            y0: 92.0,
+            x1: 178.0,
+            y1: 210.0,
+        };
+        let out = texts(&read_order(vec![left, right], &rules, &[], &[photo]));
+        let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
+        assert!(at("left item 5") < at("right benefit 0"), "{out:?}");
+    }
+
+    #[test]
+    fn a_gap_inside_a_section_beside_the_next_title_parts_nothing() {
+        // Two sections open side by side under a running head. The left
+        // one's text has a gap in it, level with the right column's next
+        // title; the left column's text under the gap is still its own.
+        let big = |t: &str, x: f64, y: f64| {
+            let mut l = line(t, x, y, x + 150.0);
+            l.font_size = 13.0;
+            l.bbox.y1 = y + 13.0;
+            l
+        };
+        let mut left = vec![big("Codes/Standards", 40.0, 90.0)];
+        left.extend(col("compliance", 40.0, 110.0, 2));
+        left.extend(col("standard", 40.0, 160.0, 8));
+        // The gap under the running head is no wider than the one inside.
+        let mut right = vec![line("Running head", 300.0, 55.0, 450.0)];
+        right.push(big("Recommended Products", 300.0, 90.0));
+        right.extend(col("product", 300.0, 110.0, 1));
+        right.push(big("Warranty", 300.0, 155.0));
+        right.extend(col("warranty", 300.0, 175.0, 2));
+        let out = texts(&read_order(vec![left, right], &[], &[], &[]));
+        let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
+        assert!(at("standard 7") < at("Recommended"), "{out:?}");
+    }
+
+    #[test]
+    fn a_gap_under_which_every_column_opens_a_title_parts_them() {
+        // An article in two languages side by side, then the next: each
+        // column opens a title under the gap. The English column opens on
+        // the end of the article before.
+        let head = |t: &str, x: f64, y: f64| {
+            let mut l = line(t, x, y, x + 150.0);
+            l.bold = true;
+            l
+        };
+        let mut left = vec![head("ARTICLE 9 - MATERIEL", 40.0, 80.0)];
+        left.extend(col("fr nine", 40.0, 100.0, 4));
+        left.push(head("ARTICLE 10 - CONFIDENTIALITE", 40.0, 180.0));
+        left.extend(col("fr ten", 40.0, 200.0, 4));
+        let mut right = vec![line("carried over", 220.0, 30.0, 370.0)];
+        right.push(head("ARTICLE 9 - EQUIPMENT", 220.0, 80.0));
+        right.extend(col("en nine", 220.0, 100.0, 4));
+        right.push(head("ARTICLE 10 - CONFIDENTIALITY", 220.0, 180.0));
+        right.extend(col("en ten", 220.0, 200.0, 4));
+        let out = texts(&read_order(vec![left, right], &[], &[], &[]));
+        let at = |t: &str| out.iter().position(|o| o.starts_with(t)).unwrap();
+        assert!(
+            at("en nine 3") < at("ARTICLE 10 - CONFIDENTIALITE"),
+            "{out:?}"
+        );
     }
 
     #[test]
