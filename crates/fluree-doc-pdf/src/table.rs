@@ -32,6 +32,16 @@ const AXIS_TOLERANCE: f64 = 2.5;
 /// Endpoints within this distance are the same grid position.
 pub(crate) const EDGE_TOLERANCE: f64 = 3.0;
 
+/// Fewest lines of text, between two rules that share no stretch of the
+/// page and under one of them, that are a column's running text and not a
+/// table's last row. Two tables set side by side end on rules a little
+/// apart, and between those rules stands what the longer one runs on past
+/// the other: its last row's wrapped lines. A cell wraps to two or three
+/// lines in a table narrow enough to stand beside another; more is a
+/// section's list or paragraphs between the dividers of a page set in
+/// columns.
+const SECTION_LINES: usize = 4;
+
 /// A grid needs at least this many lines each way. Two horizontals and two
 /// verticals is a single cell — a box, not a table.
 const MIN_GRID_LINES: usize = 3;
@@ -157,6 +167,10 @@ impl Grid {
     /// page-level line spans the full grid width. This is the same ordering
     /// constraint as column segmentation: segment first, assemble second.
     pub fn cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
+        crate::cells::texts(glyphs, &self.xs, &self.ys, || self.read_cell_texts(glyphs))
+    }
+
+    fn read_cell_texts(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<String> {
         let mut buckets: Vec<Vec<crate::glyph::Glyph>> =
             vec![Vec::new(); self.rows() * self.cols()];
         for (g, home) in glyphs.iter().zip(self.glyph_cells(glyphs)) {
@@ -212,6 +226,10 @@ impl Grid {
     /// The cell each glyph is read into, as `row * cols + col`; `None` for
     /// a glyph outside the grid or set across it.
     pub(crate) fn glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
+        crate::cells::homes(glyphs, &self.xs, &self.ys, || self.read_glyph_cells(glyphs))
+    }
+
+    fn read_glyph_cells(&self, glyphs: &[crate::glyph::Glyph]) -> Vec<Option<usize>> {
         let cols = self.cols();
         let mut home: Vec<Option<usize>> = vec![None; glyphs.len()];
 
@@ -2815,8 +2833,8 @@ fn detect_group_trimmed(
                 })
         };
         // Lines of text under one of the two rules, in its stretch: a
-        // column's paragraphs or list, not one table's last line beside
-        // the other's.
+        // column's paragraphs or list ([`SECTION_LINES`] or more), not one
+        // table's last row, wrapped or not, beside the other's.
         let lines_under = |lo: f64, hi: f64, (x0, x1): (f64, f64)| {
             let under: Vec<&crate::glyph::Glyph> = glyphs
                 .iter()
@@ -2841,7 +2859,8 @@ fn detect_group_trimmed(
         let divides = |a: f64, b: f64| match (extent(a), extent(b)) {
             (Some((a0, a1)), Some((b0, b1))) => {
                 a1.min(b1) <= a0.max(b0)
-                    && (lines_under(a, b, (a0, a1)) >= 2 || lines_under(a, b, (b0, b1)) >= 2)
+                    && (lines_under(a, b, (a0, a1)) >= SECTION_LINES
+                        || lines_under(a, b, (b0, b1)) >= SECTION_LINES)
             }
             _ => false,
         };
@@ -8563,26 +8582,30 @@ mod header_tests {
         rules.push(h(0.0, 140.0, 300.0));
         rules.push(h(160.0, 300.0, 400.0));
         rules.push(v(335.0, 345.0, 50.0));
-        // Each section holds its lines of text.
-        let text: Vec<crate::glyph::Glyph> = [140.0, 160.0, 240.0, 260.0, 340.0, 360.0]
+        // Each section holds its lines of text: a list of four.
+        let text: Vec<crate::glyph::Glyph> = [
+            130.0, 145.0, 160.0, 175.0, 230.0, 245.0, 260.0, 275.0, 330.0, 345.0, 360.0, 375.0,
+        ]
+        .iter()
+        .flat_map(|&y| {
+            [
+                gly(10.0, y, 100.0, "Section text"),
+                gly(170.0, y, 100.0, "Section text"),
+            ]
+        })
+        .collect();
+        assert!(detect_group(&rules, &[], &text, 0, &[]).is_empty());
+        // Without text between them, or with a last row wrapped to three
+        // lines, rules apart are two tables side by side ending apart, and
+        // the grid stands as before.
+        assert!(!detect_group(&rules, &[], &[], 0, &[]).is_empty());
+        let wrapped: Vec<crate::glyph::Glyph> = [0.0, 100.0, 200.0]
             .iter()
-            .flat_map(|&y| {
-                [
-                    gly(10.0, y, 100.0, "Section text"),
-                    gly(170.0, y, 100.0, "Section text"),
-                ]
+            .flat_map(|&top| {
+                [140.0, 155.0, 170.0].map(move |y| gly(10.0, top + y, 100.0, "Last row"))
             })
             .collect();
-        assert!(detect_group(&rules, &[], &text, 0, &[]).is_empty());
-        // Without text between them, or with one line, rules apart are two
-        // tables side by side ending a little apart, and the grid stands as
-        // before.
-        assert!(!detect_group(&rules, &[], &[], 0, &[]).is_empty());
-        let one_line: Vec<crate::glyph::Glyph> = [150.0, 250.0, 350.0]
-            .iter()
-            .map(|&y| gly(10.0, y, 100.0, "Last row"))
-            .collect();
-        assert!(!detect_group(&rules, &[], &one_line, 0, &[]).is_empty());
+        assert!(!detect_group(&rules, &[], &wrapped, 0, &[]).is_empty());
 
         // A table ruled with horizontals only under a stroke of decoration
         // is still one (`a_horizontally_ruled_table_is_not_split_into_rows`):
