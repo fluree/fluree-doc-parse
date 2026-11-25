@@ -120,7 +120,7 @@ from a photograph; it says how many images it did not examine, by page:
 
 ```html
 <!-- fluree-doc-parse: 2 images on pages 1, 4 were not examined: a parse
-     that probes images (OCR or escalation) can tell whether they hold text. -->
+     that probes images (--probe-images, or OCR) can tell whether they hold text. -->
 ```
 
 One comment says all of these when there are several. A comment rather than text, so
