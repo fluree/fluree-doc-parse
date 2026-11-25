@@ -439,6 +439,19 @@ checked, 456 of 456 bookmarks resolved to a page and none to a position. So
 the page carries this nearly always, and that is already enough: sections
 repeat across a book, not within a page.
 
+A destination may be written out or named: layout programs write the name of
+a destination (`den24-0031_Layout.indd:Appendix 1:309`), kept in the catalog's
+`/Dests` name tree or, in older files, its `/Dests` dictionary. Both are read,
+so a named bookmark lands on its page like any other.
+
+A bookmark heads one place: the copy of its title nearest where it lands, by
+page, then stated position, then the larger type, each copy taking one
+bookmark. A running head repeats its section's title at the top of every page
+the section spans (`Appendix 1. Supplemental Figures` on 32 even pages of a
+USGS report), and every copy matched the bookmark. The copies no bookmark took
+that stand where another such copy stands on another page are the running line
+itself, and no heading by weight or size either.
+
 Entries that resolve to nothing keep the old rule. A bookmark naming no
 destination cannot be placed, and promoting is still safer than burying a real
 section.
