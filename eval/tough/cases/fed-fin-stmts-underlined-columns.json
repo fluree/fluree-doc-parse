@@ -1,0 +1,67 @@
+{
+  "document": {
+    "file": "fed-combined-fin-stmts-2023.pdf",
+    "url": "https://www.federalreserve.gov/aboutthefed/files/combinedfinstmt2023.pdf",
+    "sha256": "ef2e222446c28e78021854b1c335bd2d34a52887eb0ac7aaa014ab8ed078f460",
+    "about": "Federal Reserve Banks Combined Financial Statements for 2023 and 2022. Its statements are ruled by underlines alone: a piece under each column of figures beneath a subtotal, a double rule beneath a total, under a header shaded and ruled a column at a time."
+  },
+  "notes": [
+    "2026-11-25 (#288): the SOMA holdings table (printed page 28) was a grid of three columns, the two years' edge and the frame's, its eight columns of figures folded two to a cell and its header in fragments: the underlines' pieces end at every column, but too few of the page's rules are underlines for their ends to count. The gutters between the pieces, the same on row after row, are the columns' edges.",
+    "2026-11-25 (#288): each band between two rows of underlines was one row, `Treasury securities Bills Notes Bonds` against all their figures. In a grid ruled by its figures' underlines each line of figures is a row.",
+    "2026-11-25 (#288): the label of the row under a subtotal's underline continued the label above it (`Japanese yen Total`): an underline under the figures alone leaves the labels' column open, and that was read as a span."
+  ],
+  "checks": [
+    {
+      "id": "figures-under-their-stacked-header",
+      "found": "2026-11-25",
+      "issue": "#288: the 2023 Par figures shared a cell with the other three 2023 columns', under no header.",
+      "cell": {
+        "value": "2,863,795",
+        "column": "Total SOMA / 2023 / Par",
+        "row": "Notes"
+      }
+    },
+    {
+      "id": "second-year-columns",
+      "found": "2026-11-25",
+      "issue": "#288: as above, for 2022.",
+      "cell": {
+        "value": "3,521,904",
+        "column": "Total SOMA / 2022 / Par",
+        "row": "Notes"
+      }
+    },
+    {
+      "id": "a-row-per-line-of-figures",
+      "found": "2026-11-25",
+      "issue": "#288: `Bonds` and `Total Treasury securities` were one row, between two rows of underlines.",
+      "cell": {
+        "value": "1,704,374",
+        "column": "Total SOMA / 2023 / Par",
+        "row": "Bonds"
+      }
+    },
+    {
+      "id": "second-table-read",
+      "found": "2026-11-25",
+      "issue": "#288: the repurchase agreements table below it was a two-row fragment.",
+      "cell": {
+        "value": "3,922",
+        "column": "Total SOMA / 2023",
+        "row": "Average daily amount outstanding, during the year",
+        "section": "FIMA Repo Facility:"
+      }
+    },
+    {
+      "id": "subtotal-row-its-own-label",
+      "found": "2026-11-25",
+      "issue": "#288: the foreign currency maturity table's rows were one, `December 31, 2023: Euro Japanese yen Total …`.",
+      "cell": {
+        "value": "$ 14,957",
+        "column": "Within 15 days",
+        "row": "Total",
+        "section": "December 31, 2023:"
+      }
+    }
+  ]
+}

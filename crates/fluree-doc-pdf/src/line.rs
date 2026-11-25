@@ -285,26 +285,27 @@ fn ruler_banded(
 
     let mut result: Vec<Vec<Line>> = Vec::with_capacity(cols.len() + 1);
     if !above.is_empty() {
-        result.push(assemble_subset(glyphs, &above));
+        result.push(assemble_subset(glyphs, &above, &[]));
     }
     let band: Vec<Glyph> = inside.iter().map(|&i| glyphs[i].clone()).collect();
     for part in crate::column::partition_indices(&band, &cols) {
         if !part.is_empty() {
             let part: Vec<usize> = part.into_iter().map(|k| inside[k]).collect();
-            result.push(assemble_subset(glyphs, &part));
+            result.push(assemble_subset(glyphs, &part, &[]));
         }
     }
     if !after.is_empty() {
-        result.push(assemble_subset(glyphs, &after));
+        result.push(assemble_subset(glyphs, &after, &[]));
     }
     Some(result)
 }
 
-/// Lines of the glyphs `subset` picks from `glyphs`, their glyph indices
-/// into `glyphs`, so lines of different subsets index one vector.
-fn assemble_subset(glyphs: &[Glyph], subset: &[usize]) -> Vec<Line> {
+/// Lines of the glyphs `subset` picks from `glyphs`, parted at `walls` as
+/// [`assemble_walled`] parts them, their glyph indices into `glyphs`, so
+/// lines of different subsets index one vector.
+fn assemble_subset(glyphs: &[Glyph], subset: &[usize], walls: &[BBox]) -> Vec<Line> {
     let part: Vec<Glyph> = subset.iter().map(|&i| glyphs[i].clone()).collect();
-    let mut lines = assemble(&part);
+    let mut lines = assemble_walled(&part, walls);
     for l in &mut lines {
         for g in &mut l.glyphs {
             *g = subset[*g];
@@ -323,7 +324,60 @@ pub fn assemble_columns_with_rules(
     if let Some(banded) = ruler_banded(glyphs, rules, page) {
         return banded;
     }
-    lines_in_columns(glyphs, &crate::column::detect(glyphs))
+    lines_in_columns(
+        glyphs,
+        &crate::column::detect(glyphs),
+        &walls(rules, glyphs),
+    )
+}
+
+/// The page's vertical rules that stand between two stacks of text, by
+/// their boxes: what may part a row at a word space (see [`part_at_walls`]).
+/// Each crosses no glyph along its length, and has two rows of text or more
+/// beside it at each side within its height: a box's text beside the next
+/// box's. A single row's cell border stands beside one row each way, and
+/// its cells read as one line keep a code with what it names (`B12 Annual
+/// Report`). A chart's gridline drawn behind its labels
+/// crosses them.
+fn walls(rules: &[crate::rule::Rule], glyphs: &[Glyph]) -> Vec<BBox> {
+    // Each inked glyph's box, baseline and size: rows are told apart by
+    // baselines a line apart, as a full stop's box stands lower than its
+    // digit's and a formula's scripts stand off its baseline.
+    let inked: Vec<(BBox, f64, f64)> = glyphs
+        .iter()
+        .filter(|g| !g.text.trim().is_empty())
+        .filter_map(|g| g.bbox.map(|b| (b, g.origin.1, g.font_size.max(1.0) as f64)))
+        .collect();
+    let rows = |w: &BBox, left: bool| {
+        let x = (w.x0 + w.x1) * 0.5;
+        let mut baselines: Vec<(f64, f64)> = inked
+            .iter()
+            .filter(|(b, _, _)| if left { b.x1 < x } else { b.x0 > x })
+            .filter(|(_, base, _)| *base > w.y0 && *base < w.y1)
+            .map(|(_, base, fs)| (*base, *fs))
+            .collect();
+        baselines.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut n = 0;
+        let mut last = f64::MIN;
+        for (base, fs) in baselines {
+            if base - last > fs * WALL_ROW {
+                n += 1;
+                last = base;
+            }
+        }
+        n
+    };
+    rules
+        .iter()
+        .filter(|r| r.orientation == crate::rule::Orientation::Vertical)
+        .map(|r| r.bbox)
+        .filter(|w| {
+            !inked
+                .iter()
+                .any(|(b, _, _)| b.x0 < w.x1 && b.x1 > w.x0 && b.y0 < w.y1 && b.y1 > w.y0)
+        })
+        .filter(|w| rows(w, true) >= WALL_STACK && rows(w, false) >= WALL_STACK)
+        .collect()
 }
 
 /// As [`assemble_columns_with_rules`], given the columns
@@ -338,17 +392,21 @@ pub fn assemble_columns_in(
     if let Some(banded) = ruler_banded(glyphs, rules, page) {
         return banded;
     }
-    lines_in_columns(glyphs, cols)
+    lines_in_columns(glyphs, cols, &walls(rules, glyphs))
 }
 
-fn lines_in_columns(glyphs: &[Glyph], cols: &[crate::column::Column]) -> Vec<Vec<Line>> {
+fn lines_in_columns(
+    glyphs: &[Glyph],
+    cols: &[crate::column::Column],
+    walls: &[BBox],
+) -> Vec<Vec<Line>> {
     if cols.len() <= 1 {
-        return vec![assemble(glyphs)];
+        return vec![assemble_walled(glyphs, walls)];
     }
     let parts = crate::column::partition_indices(glyphs, cols);
     let mut per_col: Vec<Vec<Line>> = parts
         .iter()
-        .map(|part| assemble_subset(glyphs, part))
+        .map(|part| assemble_subset(glyphs, part, walls))
         .collect();
     if std::env::var("FDOC_NO_REJOIN").is_err() {
         rejoin_spanning_lines(&mut per_col, glyphs, cols);
@@ -514,6 +572,12 @@ fn one_row(a: &BBox, b: &Line, fs: f64) -> bool {
 /// `glyphs` must already have been de-duplicated ([`crate::dedup`]); faux-bold
 /// overprint would otherwise double every character in the output.
 pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
+    assemble_walled(glyphs, &[])
+}
+
+/// As [`assemble`], parting a row where a rule drawn up between two of its
+/// words stands: see [`part_at_walls`].
+fn assemble_walled(glyphs: &[Glyph], walls: &[BBox]) -> Vec<Line> {
     let mut buckets: std::collections::BTreeMap<i32, Vec<usize>> = Default::default();
     for (i, g) in glyphs.iter().enumerate() {
         // Keep outline-less glyphs when they carry text. A space character has
@@ -690,6 +754,7 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
     }
 
     let lines = part_at_gutters(lines, glyphs, ratio);
+    let lines = part_at_walls(lines, glyphs, walls, ratio);
     let mut lines = label_display(lines, glyphs, ratio);
 
     // Restore document order across buckets. This is a provisional order —
@@ -1382,6 +1447,84 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
             {
                 cuts.push(k);
             }
+        }
+        if cuts.is_empty() {
+            out.push(l);
+            continue;
+        }
+        let mut edges = vec![0];
+        edges.extend(&cuts);
+        edges.push(idxs.len());
+        let parts: Vec<Line> = edges
+            .windows(2)
+            .filter_map(|w| build_line(glyphs, &idxs[w[0]..w[1]], l.rotation_bucket, ratio))
+            .collect();
+        if parts.len() == cuts.len() + 1 {
+            out.extend(parts);
+        } else {
+            out.push(l);
+        }
+    }
+    out
+}
+
+/// Share of a line's height, at its top and at its foot, a rule beside its
+/// words may fall short by and still stand between them: a box's side runs
+/// the box's height, past the lines in it.
+const WALL_REACH: f64 = 0.25;
+
+/// Narrowest gap, in ems, a rule parts a line at: a word space's width. A
+/// chart's line drawn between two letters of a label parts nothing.
+const WALL_GAP: f64 = 0.25;
+
+/// Fewest rows of text a rule must stand beside on each side to part a
+/// line: two, a box's text beside the next box's, not a row's two cells.
+const WALL_STACK: usize = 2;
+
+/// Least distance, in the text's size, between two rows' baselines: a
+/// line's spacing, short of which a raised or lowered script in a formula
+/// stands on its own line's row.
+const WALL_ROW: f64 = 0.8;
+
+/// A rule drawn up between two words of a row parts it, however narrow the
+/// gap: the side of a box between a letterhead's `… CO., INC.` and the form
+/// box's `Project Name:` beside it, on one baseline. The rule is one of the
+/// page's [`walls`], runs the line's height, and stands in a word space at
+/// least. A rule between two letters of a word, or a short tick under the
+/// baseline, parts nothing.
+fn part_at_walls(lines: Vec<Line>, glyphs: &[Glyph], walls: &[BBox], ratio: f64) -> Vec<Line> {
+    if walls.is_empty() {
+        return lines;
+    }
+    let mut out = Vec::with_capacity(lines.len());
+    for l in lines {
+        let reach = (l.bbox.y1 - l.bbox.y0) * WALL_REACH;
+        let standing: Vec<f64> = walls
+            .iter()
+            .filter(|w| {
+                w.y0 <= l.bbox.y0 + reach
+                    && w.y1 >= l.bbox.y1 - reach
+                    && w.x0 > l.bbox.x0
+                    && w.x1 < l.bbox.x1
+            })
+            .map(|w| (w.x0 + w.x1) * 0.5)
+            .collect();
+        if !l.is_horizontal() || standing.is_empty() {
+            out.push(l);
+            continue;
+        }
+        let idxs = &l.glyphs;
+        let space = l.font_size.max(1.0) as f64 * WALL_GAP;
+        let mut cuts: Vec<usize> = Vec::new();
+        let mut ink: Option<f64> = None;
+        for (k, &j) in idxs.iter().enumerate() {
+            let Some(b) = glyphs[j].bbox else { continue };
+            if ink.is_some_and(|x1| {
+                b.x0 - x1 >= space && standing.iter().any(|&x| x > x1 && x < b.x0)
+            }) {
+                cuts.push(k);
+            }
+            ink = Some(ink.map_or(b.x1, |x1| x1.max(b.x1)));
         }
         if cuts.is_empty() {
             out.push(l);
@@ -2359,6 +2502,38 @@ mod tests {
             .collect()
     }
 
+    /// A word set from `x`, its letters 5 wide and abutting, on the row at
+    /// `y`.
+    fn set(text: &str, x: f64, y: f64) -> Vec<Glyph> {
+        text.chars()
+            .enumerate()
+            .map(|(i, c)| g(&c.to_string(), x + 5.0 * i as f64, y, 5.0, 0.0))
+            .collect()
+    }
+
+    /// A rule drawn up at `x` from `y0` to `y1`.
+    fn wall(x: f64, y0: f64, y1: f64) -> crate::rule::Rule {
+        crate::rule::Rule {
+            bbox: BBox {
+                x0: x - 0.4,
+                y0,
+                x1: x + 0.4,
+                y1,
+            },
+            orientation: crate::rule::Orientation::Vertical,
+            page: 0,
+        }
+    }
+
+    /// The lines of `glyphs`, parted at whichever of `rules` the page's
+    /// text makes walls.
+    fn walled(glyphs: &[Glyph], rules: &[crate::rule::Rule]) -> Vec<String> {
+        assemble_walled(glyphs, &walls(rules, glyphs))
+            .into_iter()
+            .map(|l| l.text)
+            .collect()
+    }
+
     #[test]
     fn a_large_numeral_beside_smaller_text_shares_its_line() {
         // A 20-point section number centred on a 10-point title, its
@@ -2382,6 +2557,44 @@ mod tests {
         let lines = assemble(&v);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].text.contains("Widget®"), "{}", lines[0].text);
+    }
+
+    #[test]
+    fn a_rule_between_two_boxes_parts_their_row() {
+        // A box's side drawn down between a heading's last word and the
+        // label in the next box, 7 apart on one baseline: under the gap a
+        // gutter takes. Two rows stand beside it each way.
+        let mut v = set("ACME", 40.0, 100.0);
+        v.extend(set("Name:", 67.0, 100.0));
+        v.extend(set("Ltd", 40.0, 116.0));
+        v.extend(set("Date:", 67.0, 116.0));
+        let side = [wall(63.5, 92.0, 132.0)];
+        assert_eq!(walled(&v, &[]), vec!["ACME Name:", "Ltd Date:"]);
+        assert_eq!(walled(&v, &side), vec!["ACME", "Name:", "Ltd", "Date:"]);
+        // Drawn through a word of another row, it is a chart's line behind
+        // its labels, and parts nothing.
+        let mut crossed = v.clone();
+        crossed.extend(set("Total", 52.0, 124.0));
+        assert_eq!(walled(&crossed, &side).len(), 3);
+        // Nor does one drawn between two letters of a word.
+        let mut letters = set("Range", 40.0, 100.0);
+        letters.extend(set("Scope", 40.0, 116.0));
+        letters.extend(set("Index", 80.0, 100.0));
+        letters.extend(set("Value", 80.0, 116.0));
+        assert_eq!(walled(&letters, &[wall(50.0, 92.0, 132.0)]).len(), 2);
+        // Nor a single row's cell border, beside one row each way: the
+        // row's code and what it names read as one line.
+        let mut row = set("B12", 40.0, 200.0);
+        row.extend(set("Annual Report", 61.0, 200.0));
+        assert_eq!(
+            walled(&row, &[wall(57.5, 194.0, 216.0)]),
+            vec!["B12 Annual Report"]
+        );
+        // Nor one too short to run the line's height: a tick under it.
+        assert_eq!(
+            walled(&v, &[wall(63.5, 108.0, 112.0)]),
+            vec!["ACME Name:", "Ltd Date:"]
+        );
     }
 
     #[test]
