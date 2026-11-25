@@ -1418,11 +1418,11 @@ mod tests {
 
     impl Sidecars {
         fn holding(kind: &str, html: &str) -> Self {
-            let nonce = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let dir = std::env::temp_dir().join(format!("fdoc-{kind}-{nonce}"));
+            // Unique per test, not per clock tick: tests run in parallel, and
+            // a clock that ticks in microseconds gave two the same name.
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("fdoc-{kind}-{}-{n}", std::process::id()));
             std::fs::create_dir(&dir).unwrap();
             let block = serde_json::json!([{"parsing_res_list": [
                 {"block_label": "table", "block_content": html}
