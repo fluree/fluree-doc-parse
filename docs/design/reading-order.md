@@ -293,6 +293,16 @@ Measured in font-size units:
 The bound sits at 0.75 — above any word space, including a justified one that
 has stretched, and far below the narrowest gutter observed.
 
+The halves must stand on one row, their tops level. A line that ends just
+past the cut leaves only its full stop on the far side, a dot on the
+baseline whose top is the letters' height below theirs. Compared by top
+alone, that dot was a row of its own, and a note across the page lost its
+final `.` to a paragraph. So a closing stop (`. , ; : ! ?` or a closing
+bracket or quote) under half a line high counts as the line's when its
+bottom stands on the line's. Overlap in height was tried and dropped: a
+short fragment overlaps the line above or below it as readily, and joined
+the wrong row.
+
 A second guard remains behind it: if more than a quarter of a column's rows
 look like spanning fragments, the page is in columns and none of them are.
 That one catches *justified* two-column text, where every line reaches the

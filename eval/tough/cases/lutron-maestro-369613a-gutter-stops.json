@@ -1,0 +1,38 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro specification submittal 369613a. Its pages set three columns of product tables and notes, and lines that run across the page, a note or the trademark statement, end just past a column's edge."
+  },
+  "notes": [
+    "#266: a line's full stop, set just past the column edge the line's last word stopped at, was cut off into a paragraph of its own: the rejoin of a line a column edge bisected compared the pieces' tops, and a full stop's top is the baseline."
+  ],
+  "checks": [
+    {
+      "id": "trademark-note-whole",
+      "found": "2026-11-25",
+      "issue": "#266: the trademark statement on p5 lost its final full stop to a paragraph `.`.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Lutron, the Lutron logo, Maestro, Hi-lume, LED+, C)L, Claro, and FASS are trademarks or registered trademarks of Lutron Electronics Co., Inc. in the US and/or other countries. All other product names, logos, and brands are property of their respective owners."
+      }
+    },
+    {
+      "id": "note-two-whole",
+      "found": "2026-11-25",
+      "issue": "#266: note 2 on p1 lost its final full stop to a paragraph `.`.",
+      "text": "see section “Colors and Finishes” on the next page."
+    },
+    {
+      "id": "no-stray-stop",
+      "found": "2026-11-25",
+      "issue": "#266: a full stop stood as a paragraph of its own.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "."
+      },
+      "count": 0
+    }
+  ]
+}
