@@ -1613,9 +1613,12 @@ impl Grid {
                 .collect();
             cells.len() >= 2
         };
-        // Two rows under it at least: one row under a row of names is as
-        // likely its value.
-        (header_rows.max(1)..n.saturating_sub(2))
+        // A row under it at least. One row under a row of names is as
+        // likely its value, but the row is set apart as a header is (bold or
+        // shaded over a plain row), and a header names one row's columns as
+        // surely as ten: a short VOC table's `VOC Content | LB/Gal | g/L`
+        // over its one `Total`.
+        (header_rows.max(1)..n.saturating_sub(1))
             .filter(|&r| {
                 !bands.contains(&r)
                     && labels(r)
