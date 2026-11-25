@@ -769,7 +769,7 @@ impl Notes {
         let unexamined = (images > 0).then(|| {
             format!(
                 "{images} image{} on page{} {} {} not examined: a parse that \
-                 probes images (OCR or escalation) can tell whether {} text",
+                 probes images (--probe-images, or OCR) can tell whether {} text",
                 if images == 1 { "" } else { "s" },
                 if unprobed.len() == 1 { "" } else { "s" },
                 page_runs(&unprobed),
