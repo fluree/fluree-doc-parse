@@ -285,6 +285,20 @@ minus, its items may wrap over any number of lines. No control character
 other than a tab or a line break is written into the output, from any
 source.
 
+**Nested lists.** An item whose marker stands under the text of the item
+before it is in a list nested in that item, one level deeper (`depth`). A
+bulleted `UL Listed to control:` has its dashed loads set under its text,
+and a regulation's `(1) … from—` has its `(a)` and `(b)` set under its own.
+An item whose marker stands back out returns to the level its marker stands
+at. The marker must stand at least an em right of the marker above, from
+half an em before that item's text to two and a half ems past it. A marker
+further out belongs to another column. Only an item that follows the one
+before it down the page nests. A run broken by anything else, carried to
+the next column or onto the next page, starts again at the top. A wrapped
+line is its item's own, and a paragraph set with a hanging indent has no
+marker, so neither nests. Neither does a line read as an item whose number
+stands beside a later line: it carries on the item before.
+
 **Numbered lists.** A feature or safety list often sets each item's number
 in the item's own text, `2. PostureFit SL®`, with a line or two of
 description under it. Such a list is read as a list, each item's title and

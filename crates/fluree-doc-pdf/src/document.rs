@@ -1740,6 +1740,75 @@ fn read_form_text(elements: &mut [Element]) {
     }
 }
 
+/// Least an item's marker stands right of the marker before it, in its
+/// size, to be set under that item: less is the same list's marker drawn a
+/// little off, or a wider number right-aligned.
+const NEST_INDENT: f64 = 1.0;
+
+/// Farthest past where the item before it starts its text, in its size, an
+/// item's marker stands set under that item. A sub-list's marker stands
+/// under its parent's text, or a little into it; further is another column.
+const NEST_REACH: f64 = 2.5;
+
+/// Most space between one item and the next, in their size, for them to be
+/// read as one list: a list set with a blank line between its items.
+const LIST_GAP: f64 = 3.0;
+
+/// A list item's marker and text start, its size, and whether its first
+/// line carries on the item before it.
+type ListMark = (f64, f64, f64, bool);
+
+/// A page's list items, nested by where their markers stand.
+///
+/// An item whose marker stands under the text of the item before it, past
+/// that item's own marker, is set in a list inside it: a bulleted
+/// `UL Listed to control:` with its dashed loads indented under its text.
+/// An item whose marker stands back out returns to the level its marker
+/// stands at. Only an item following the one before it down the page, with
+/// a marker of its own, nests: a run broken by anything else, or carried to
+/// the next column, starts again at the top. A wrapped line is its item's
+/// own, and a paragraph set with a hanging indent has no marker. A line
+/// read as an item though it carries on the one before, its count standing
+/// beside a later line, is not set under it.
+fn nest_list_items(elements: &mut [Element], item_text: &[Option<ListMark>]) {
+    // Each open level's marker and text start, outermost first.
+    let mut open: Vec<(f64, f64)> = Vec::new();
+    let mut prev: Option<crate::geom::BBox> = None;
+    for (e, t) in elements.iter_mut().zip(item_text) {
+        let (Some((marker, text_x, size, carried_on)), Some(b)) = (*t, e.bbox) else {
+            open.clear();
+            prev = None;
+            continue;
+        };
+        let em = size.max(1.0);
+        let follows = prev.is_some_and(|p| b.y0 >= p.y0 && b.y0 - p.y1 <= LIST_GAP * em);
+        if !follows {
+            open.clear();
+        }
+        match open.last().copied() {
+            None => open.push((marker, text_x)),
+            Some((above, above_text))
+                if !carried_on
+                    && marker >= above + NEST_INDENT * em
+                    && marker >= above_text - 0.5 * em
+                    && marker <= above_text + NEST_REACH * em =>
+            {
+                open.push((marker, text_x))
+            }
+            Some(_) => {
+                while open.len() > 1 && open.last().is_some_and(|l| marker < l.0 - 0.5 * em) {
+                    open.pop();
+                }
+                if let Some(level) = open.last_mut() {
+                    *level = (marker, text_x);
+                }
+            }
+        }
+        e.depth = open.len() - 1;
+        prev = Some(b);
+    }
+}
+
 /// Most words in a table's column head left out above it: `2008 vs. 2007
 /// 2007 vs. 2006`, two heads read as one line. A title runs longer.
 const MAX_TABLE_HEAD_WORDS: usize = 8;
@@ -3978,6 +4047,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         let _cells = crate::cells::pin(&raw.pages[pi].glyphs);
         let mut page_elements = Vec::new();
+        // Beside each element, a list item's marker and text start, its
+        // size, and whether its first line carries on the item before it.
+        let mut item_text: Vec<Option<ListMark>> = Vec::new();
         let (figures, member) = &page_figures[pi];
         let in_figure = |i: usize| member[i];
         for (block_idx, b) in blocks.iter().enumerate() {
@@ -4089,6 +4161,19 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 (_, Some(without)) if kind == "doc:ListItem" => without.to_string(),
                 _ => scrubbed,
             };
+            // A count stands in front of its item's text when it is set
+            // beside the item's first line (`block::assemble_in_measure`). A
+            // count the text doesn't open with stood beside a later line:
+            // the block's first line carries on the item before it, and is
+            // no item to set under that one.
+            let carried_on = b
+                .marker
+                .as_deref()
+                .is_some_and(|m| !block::count_values(m).is_empty() && !text.starts_with(m.trim()));
+            item_text.push((kind == "doc:ListItem").then(|| {
+                let x = b.lines.first().map_or(b.bbox.x0, |l| l.bbox.x0);
+                (b.bbox.x0, x, (b.font_size as f64).max(1.0), carried_on)
+            }));
             page_elements.push(Element {
                 page: pi,
                 bbox: Some(b.bbox),
@@ -4097,6 +4182,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 ..Element::new(kind, text, "rust", evidence)
             });
         }
+        nest_list_items(&mut page_elements, &item_text);
         coalesce_heading_fragments(&mut page_elements);
         let mut table_elements = Vec::new();
         let layout = &layouts[pi];
@@ -5048,6 +5134,62 @@ mod tests {
             }),
             ..Element::new(kind, text, "rust", evidence)
         }
+    }
+
+    #[test]
+    fn a_list_item_set_under_the_text_of_the_one_before_nests_in_it() {
+        // 10pt items: (marker x, text x, y), each 10 high, 4 apart.
+        let rows: &[(&str, f64, f64, f64)] = &[
+            ("Before you start:", 50.0, 62.0, 100.0),
+            // Its marker under the text above: one deeper, then two.
+            ("Turn off the power", 63.0, 74.0, 114.0),
+            ("Check the breaker", 64.0, 75.0, 128.0),
+            ("At the panel", 76.0, 86.0, 142.0),
+            // Back out to the first level's marker.
+            ("Mount the bracket", 50.0, 62.0, 156.0),
+            // Half an em right: the same list's marker drawn off.
+            ("Fit the cover", 55.0, 66.0, 170.0),
+            // Far past the text above: another column's list, not a sub-list.
+            ("Order parts", 120.0, 131.0, 184.0),
+        ];
+        let mut elements: Vec<Element> = rows
+            .iter()
+            .map(|&(t, x, _, y)| line_at("doc:ListItem", t, "marker", None, y, x))
+            .collect();
+        let mut text: Vec<Option<ListMark>> =
+            rows.iter().map(|r| Some((r.1, r.2, 10.0, false))).collect();
+        // After a paragraph, and in the next column (back up the page), a
+        // list starts again at the top.
+        elements.push(line_at(
+            "doco:Paragraph",
+            "Note",
+            "layout",
+            None,
+            200.0,
+            50.0,
+        ));
+        text.push(None);
+        elements.push(line_at(
+            "doc:ListItem",
+            "Wire it",
+            "marker",
+            None,
+            214.0,
+            63.0,
+        ));
+        text.push(Some((63.0, 74.0, 10.0, false)));
+        elements.push(line_at(
+            "doc:ListItem",
+            "Test it",
+            "marker",
+            None,
+            100.0,
+            313.0,
+        ));
+        text.push(Some((313.0, 324.0, 10.0, false)));
+        nest_list_items(&mut elements, &text);
+        let depths: Vec<usize> = elements.iter().map(|e| e.depth).collect();
+        assert_eq!(depths, [0, 1, 1, 2, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]

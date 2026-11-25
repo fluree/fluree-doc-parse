@@ -992,7 +992,7 @@ const MARKER_LEVEL: f64 = 0.3;
 /// or a roman numeral (`iv.`, `(III)`); `i`, `v` and `x` alone may be
 /// either a letter or a roman numeral. None for anything else: a year, a
 /// fraction, a dimension, a bullet.
-fn count_values(text: &str) -> Vec<(u8, u32)> {
+pub(crate) fn count_values(text: &str) -> Vec<(u8, u32)> {
     let t = text.trim().trim_matches(['(', ')', '[', ']', '.', ':']);
     let roman = match t.to_ascii_lowercase().as_str() {
         "i" => Some((2, 1)),
