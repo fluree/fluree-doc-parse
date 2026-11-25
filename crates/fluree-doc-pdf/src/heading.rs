@@ -452,7 +452,7 @@ fn ends_mid_phrase(t: &str) -> bool {
 
 /// The line closes with a web address, a domain, an e-mail address or a
 /// phone number, alone or after a few words leading in to it.
-fn ends_with_contact(text: &str) -> bool {
+pub(crate) fn ends_with_contact(text: &str) -> bool {
     let tokens: Vec<&str> = text
         .split_whitespace()
         .map(|w| w.trim_end_matches(['.', ',', ';', ':', ')', '\u{AE}', '\u{2122}']))
@@ -503,7 +503,8 @@ fn web_address(token: &str) -> bool {
 /// `800.424.8783`, a vanity `1-800-GET-PINK`, or an international number
 /// opening with `+`. North American numbers end in a group of three and a
 /// group of four, which a date (`2019-07-25`), a standard's year
-/// (`2043-2013`) or a count (`COVID-19`) does not.
+/// (`2043-2013`) or a count (`COVID-19`) does not, and a decimal set to four
+/// places (`259.3490`) is no local number.
 fn phone_number(tokens: &[&str]) -> bool {
     let phoneish = |t: &str| {
         t.chars().any(|c| c.is_ascii_digit())
@@ -533,6 +534,11 @@ fn phone_number(tokens: &[&str]) -> bool {
     // apart by a space are not a phone number.
     let joined = groups.len() >= 3 || run.len() == 1;
     let n = groups.len();
+    // Two groups set apart by a point alone are a decimal: a structure's
+    // `Molecular Weight: 259.3490`, not a local number.
+    if n == 2 && run.iter().all(|t| !t.contains(['-', '(', ')', '/'])) {
+        return false;
+    }
     joined && n >= 2 && digits >= 7 && groups[n - 1].len() == 4 && groups[n - 2].len() == 3
 }
 
@@ -2485,9 +2491,14 @@ mod tests {
             "Highlights 2023 2024",
             "Route 101 2024",
             "T-49-HC",
+            "Molecular Weight: 259.3490",
         ] {
             assert!(title_like(t), "{t}");
         }
+        // A local number is hyphenated; set apart by a point, it is a
+        // decimal.
+        assert!(ends_with_contact("Fax 272-2408"));
+        assert!(!ends_with_contact("Exact Mass: 259.1572"));
     }
 
     #[test]

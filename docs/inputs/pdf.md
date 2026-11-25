@@ -497,7 +497,11 @@ note set flush with a paragraph of the page's in that column (`FCC` and its
 caution beside an install guide's drawing), a run of steps wrapped from
 line to line (`… the black fixture lead to the` over `voltage supply …`),
 and the line introducing them on its colon. A label is terse, and stands
-among the drawing's. The rectangle
+among the drawing's. An address is no label either. A line that closes on a
+phone number, a web address or an e-mail address says where to reach the
+page's maker, not what the drawing shows. The lines it runs on from go with
+it, such as the company and street over `1-800-…` and `www.…` set under a
+logo. The rectangle
 around a drawing and its labels is not part of the figure. A paragraph or
 heading inside it that was not taken as a label keeps its type.
 
