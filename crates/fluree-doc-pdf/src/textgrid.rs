@@ -1215,7 +1215,13 @@ fn read_beside(
             }
             if value_row(l)
                 || ruled_row(l, &clipped[band[j - 1]])
-                || carries_on(&cols0, &running, &clipped[band[j - 1]], l)
+                || carries_on(
+                    &cols0,
+                    &running,
+                    &clipped[band[j - 1]],
+                    l,
+                    band.get(j + 1).map(|&n| &clipped[n]),
+                )
             {
                 end = band[j];
                 labels = 0;
@@ -1255,7 +1261,13 @@ fn read_beside(
             }
             if value_row(next)
                 || ruled_row(next, &clipped[last])
-                || carries_on(&cols0, &running, &clipped[last], next)
+                || carries_on(
+                    &cols0,
+                    &running,
+                    &clipped[last],
+                    next,
+                    clipped.get(last + 2),
+                )
             {
                 last += 1;
                 continue;
@@ -1527,6 +1539,12 @@ pub fn rule_regions(rules: &[Rule], within: &BBox) -> Vec<BBox> {
 /// a statement's figure columns, short of a page column's gutter.
 const RULE_JOIN: f64 = 24.0;
 
+/// How much further the next row stands under a wrapped cell's line than
+/// that line under its cell: a row pitch with space between rows, a quarter
+/// more than the leading at least, beyond the point or so that the tops of
+/// words move with their letters.
+const TIGHT_WRAP: f64 = 1.25;
+
 /// Whether a label line runs on into the next line, rather than naming the
 /// rows under it: the next line starts mid-phrase, or this one ends on a
 /// word that wants one; and a bold line over a plain one is a heading.
@@ -1541,11 +1559,32 @@ fn continues(l: &Line, n: &Line) -> bool {
 /// are cells and not prose ([`running_columns`]): the next line under it
 /// ([`NEXT_LINE`]), nothing in the stub column and no figure,
 /// each of its words in a column the line above fills, running on from what
-/// stands there ([`runs_on`]). A name or a description wrapped onto a second
-/// line, its row's other cells done on the first.
-fn carries_on(cols: &[(f64, f64)], running: &[bool], above: &Line, l: &Line) -> bool {
+/// stands there ([`runs_on`]), or qualifying a cell of words
+/// ([`qualifies`]; a number's line under it, `3` over `(mg/m )`, is a unit's
+/// broken superscript, not a wrapped name). A name or a description wrapped
+/// onto a second line, its row's other cells done on the first.
+///
+/// Or, under a cell of words, alone on its line between two rows of figures
+/// and within the extent of the cell's first line (the line a wrap fills, to
+/// half the type's size),
+/// set tighter under that cell than the next row's cell in its column is
+/// under it ([`TIGHT_WRAP`]): a cell's own leading, inside its row, where the
+/// row pitch parts rows. So a wrapped cell's second line that starts afresh
+/// carries on its cell (`Gallinarum Pullorum` over `CDC1983 67`), where a
+/// label naming the rows under it sits as near to them.
+fn carries_on(
+    cols: &[(f64, f64)],
+    running: &[bool],
+    above: &Line,
+    l: &Line,
+    below: Option<&Line>,
+) -> bool {
     let fs = l.fs.max(above.fs);
     let d = l.base - above.base;
+    // One cell's line between two rows of figures: the table's own rows on
+    // both sides, not labels about a drawing.
+    let figured = |ln: &Line| ln.chunks.iter().any(|c| is_figure(&c.text));
+    let between_rows = l.chunks.len() == 1 && figured(above) && below.is_some_and(figured);
     d > 0.0
         && d <= fs * NEXT_LINE
         && !l.chunks.is_empty()
@@ -1556,13 +1595,38 @@ fn carries_on(cols: &[(f64, f64)], running: &[bool], above: &Line, l: &Line) -> 
             };
             !running.get(k).copied().unwrap_or(false)
                 && !is_figure(&c.text)
-                && above
-                    .chunks
-                    .iter()
-                    .filter(|a| column_of(cols, a) == Some(k))
-                    .next_back()
-                    .is_some_and(|a| runs_on(a, c))
+                && cell_in(cols, above, k).is_some_and(|a| {
+                    // Within the cell's first line, which the wrap filled.
+                    let under = c.x0 >= a.x0 - fs * 0.5 && c.x1 <= a.x1 + fs * 0.5;
+                    let tight = between_rows
+                        && under
+                        && below.and_then(|n| cell_in(cols, n, k)).is_some_and(|n| {
+                            let up = c.y0 - a.y0;
+                            up > 0.0 && up * TIGHT_WRAP < n.y0 - c.y0
+                        });
+                    // A wrapped name: the cell above holds words.
+                    let named = !is_figure(&a.text) && a.text.chars().any(char::is_alphabetic);
+                    runs_on(a, c) || (named && (tight || qualifies(a, c)))
+                })
         })
+}
+
+/// Whether a cell's line `b` is a qualifier of the cell above, `a`: a
+/// bracket opening on a lowercase word (`Uracil` over `(extracellular)`), as
+/// a line opening mid-phrase runs on ([`runs_on`]). A list's enumerator in
+/// brackets (`(a)`, `(iv)`) starts an item; a bold line over a plain one is a
+/// heading.
+fn qualifies(a: &Chunk, b: &Chunk) -> bool {
+    !(a.bold && !b.bold)
+        && b.text
+            .strip_prefix('(')
+            .is_some_and(|r| r.starts_with(|c: char| c.is_lowercase()))
+        && !crate::table::enumerator(b.text.split_whitespace().next().unwrap_or(""))
+}
+
+/// A line's last chunk in column `k`.
+fn cell_in<'a>(cols: &[(f64, f64)], l: &'a Line, k: usize) -> Option<&'a Chunk> {
+    l.chunks.iter().rfind(|a| column_of(cols, a) == Some(k))
 }
 
 /// The columns whose text runs on across the table's rows: on the lines
@@ -2122,7 +2186,14 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         }
         // A cell wrapped onto this line: the row above's.
         if body_rows.last().is_some_and(|(prev, section)| {
-            !section && carries_on(&cols, &running, prev.last().unwrap(), l)
+            !section
+                && carries_on(
+                    &cols,
+                    &running,
+                    prev.last().unwrap(),
+                    l,
+                    body.get(i + 1).copied(),
+                )
         }) {
             body_rows.last_mut().unwrap().0.push(l);
             i += 1;
@@ -3768,6 +3839,78 @@ mod tests {
         let grids = read(&lines(&list), &[], region, 0);
         assert_eq!(grids.len(), 1, "{grids:?}");
         assert_eq!(grids[0].rows(), 4, "{grids:?}");
+    }
+
+    #[test]
+    fn a_name_wrapped_past_the_stub_stays_in_its_row() {
+        // A code, a name and two figures a row. A name wrapped onto a line
+        // that starts afresh, a strain's code, set closer under it than the rows are
+        // apart; then a name with a bracketed qualifier on its next line,
+        // every line as far apart as the rows.
+        let table = |rows: &[(&str, &str, &str, &str)], wrap: (usize, &str, f64), pitch: f64| {
+            let mut gl = Vec::new();
+            let mut y = 50.0;
+            for (i, (n, name, a, b)) in rows.iter().enumerate() {
+                gl.extend(set(n, 20.0, y));
+                gl.extend(set(name, 60.0, y));
+                gl.extend(set(a, 200.0, y));
+                gl.extend(set(b, 260.0, y));
+                if i == wrap.0 {
+                    gl.extend(set(wrap.1, 60.0, y + wrap.2));
+                    y += wrap.2;
+                }
+                y += pitch;
+            }
+            gl
+        };
+        let region = BBox {
+            x0: 10.0,
+            y0: 36.0,
+            x1: 300.0,
+            y1: 160.0,
+        };
+        let coded = table(
+            &[
+                ("sea", "Agona", "118", "32"),
+                ("seg", "Gallinarum Pullorum", "117", "32"),
+                ("seh", "Heidelberg", "116", "31"),
+                ("see", "Newport", "118", "32"),
+            ],
+            (1, "RKS5078", 8.0),
+            12.0,
+        );
+        let grids = read(&lines(&coded), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
+        let texts = grids[0].cell_texts(&coded);
+        assert!(
+            texts.iter().any(|t| t == "Gallinarum Pullorum RKS5078"),
+            "{texts:?}"
+        );
+        let qualified = table(
+            &[
+                ("A", "Carbamate", "2", "2.772"),
+                ("Co", "Uracil", "1", "2.210"),
+                ("N", "Orotate", "2", "2.182"),
+                ("C", "Melibiose", "1", "2.092"),
+            ],
+            (1, "(extracellular)", 12.0),
+            12.0,
+        );
+        let grids = read(&lines(&qualified), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        assert_eq!(grids[0].rows(), 4, "{grids:?}");
+        let texts = grids[0].cell_texts(&qualified);
+        assert!(
+            texts.iter().any(|t| t == "Uracil (extracellular)"),
+            "{texts:?}"
+        );
+        // A list's enumerator in brackets starts an item of its own.
+        let chunk = |t: &str| lines(&set(t, 60.0, 50.0))[0].chunks[0].clone();
+        assert!(qualifies(&chunk("Uracil"), &chunk("(extracellular)")));
+        for item in ["(a) Glycerol", "(iv) Glycerol", "(S)-Dihydroorotate"] {
+            assert!(!qualifies(&chunk("Uracil"), &chunk(item)), "{item}");
+        }
     }
 
     #[test]

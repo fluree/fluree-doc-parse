@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc2045680.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2045680/",
+    "sha256": "06580169e4d000b0a2f888aa727f2a77371376247ad8a8d27116ab9a00411c9c",
+    "about": "BMC Genomics 2007, 8:307, 'Living with an imperfect cell wall: compensation of femAB inactivation in Staphylococcus aureus', PMC2045680. Its Table 3 (p8) lists metabolites in the page's right column, ruled only at the top, under the header and at the foot. Several names carry a qualifier wrapped onto the next line (`Uracil` over `(extracellular)`), set as far below as the next row. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#371): each `(extracellular)` line ended the table. The rows after the first became pieces headed `(extracellular)` or paragraphs. A bracket opening on a lowercase word runs on from the line above, as a lowercase start does; a list's enumerator in brackets does not."
+  ],
+  "checks": [
+    {
+      "id": "qualifier-in-its-cell",
+      "found": "2026-11-25",
+      "issue": "#371: `(extracellular)` was the header of a new piece of the table.",
+      "cell": {
+        "value": "Uracil (extracellular)",
+        "column": "Metabolite",
+        "row": "Co, N"
+      }
+    },
+    {
+      "id": "last-row-under-the-header",
+      "found": "2026-11-25",
+      "issue": "#371: the table's last rows were a piece of their own, with no column names.",
+      "cell": {
+        "value": "1.650",
+        "column": "Z-score",
+        "row": "L"
+      }
+    }
+  ]
+}
