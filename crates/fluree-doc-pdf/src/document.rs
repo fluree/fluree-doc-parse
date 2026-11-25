@@ -1972,22 +1972,25 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 (line::assemble_page(&edge), p.height)
             })
             .collect();
-        furniture::detect_with_folios(&edges).1
+        furniture::detect_folio_places(&edges)
     });
-    // A page's folio standing as a line of its own in the bands is the
-    // page's number, though too few pages left it among their lines for
-    // repetition to tell: a table reaching the foot takes it on the others,
-    // and the first and last pages kept theirs in the body.
+    let (folios, folio_places): (Vec<Option<String>>, Vec<Option<f64>>) =
+        folios.into_iter().unzip();
+    // A page's folio standing as a line of its own where the folio's line
+    // stands is the page's number, though too few pages left it among
+    // their lines for repetition to tell: a table reaching the foot takes it
+    // on the others, and the first and last pages kept theirs in the body.
     for (pi, folio) in folios.iter().enumerate() {
-        let (Some(folio), Some((lines, height))) = (folio.as_deref(), flat_lines.get(pi)) else {
+        let (Some(folio), Some(place), Some((lines, height))) =
+            (folio.as_deref(), folio_places[pi], flat_lines.get(pi))
+        else {
             continue;
         };
         if *height <= 0.0 {
             continue;
         }
         for (li, l) in lines.iter().enumerate() {
-            let mid = (l.bbox.y0 + l.bbox.y1) / 2.0 / height;
-            if furniture::is_folio_cell(&l.text, Some(folio), mid) {
+            if furniture::is_folio_line(&l.text, folio, l.bbox.y0 / height, place) {
                 marks[pi]
                     .entry(li)
                     .or_insert(furniture::Furniture::PageNumber);

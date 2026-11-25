@@ -123,6 +123,38 @@ pub fn detect_with_folios(
     (marks, folios)
 }
 
+/// As [`detect_with_folios`], each page's folio with where its line stands,
+/// as a share of the page's height: the place the page number is printed
+/// on that page, `None` where the folio's line is not among `pages`' lines.
+pub fn detect_folio_places(pages: &[(Vec<Line>, f64)]) -> Vec<(Option<String>, Option<f64>)> {
+    let (marks, folios, _) = detect_all(pages);
+    folios
+        .into_iter()
+        .enumerate()
+        .map(|(pi, folio)| {
+            let (lines, height) = &pages[pi];
+            let place = folio.as_ref().and_then(|f| {
+                marks[pi]
+                    .iter()
+                    .filter(|(_, k)| **k == Furniture::PageNumber)
+                    .map(|(li, _)| &lines[*li])
+                    .find(|l| digit_runs(&l.text).iter().any(|r| r == f))
+                    .filter(|_| *height > 0.0)
+                    .map(|l| l.bbox.y0 / height)
+            });
+            (folio, place)
+        })
+        .collect()
+}
+
+/// Whether a line of the page's own is its page number: nothing but the
+/// page's folio, standing where the folio's line does (`place`, a share of
+/// the page's height). A chart's tick in the band, `6` on page 6 among
+/// `20 18 … 4 2`, stands elsewhere.
+pub fn is_folio_line(text: &str, folio: &str, rel_y: f64, place: f64) -> bool {
+    text.trim() == folio && (rel_y - place).abs() < POSITION_TOLERANCE
+}
+
 /// Marks, folios, and the marks read as exact copies.
 #[allow(clippy::type_complexity)]
 fn detect_all(
