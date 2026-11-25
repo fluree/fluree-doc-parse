@@ -1504,20 +1504,29 @@ fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
 /// a scatter's values allows (see `figure::axis`).
 const SCALE_REACH: f64 = 4.0;
 
+/// The number a scale's label says: a minus may be set as a true minus or
+/// an en dash, and thousands are grouped with commas (`\u{2212}0.5`,
+/// `2,000`).
+pub(crate) fn axis_value(token: &str) -> Option<f64> {
+    token
+        .replace(['\u{2212}', '\u{2013}'], "-")
+        .replace(',', "")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
 /// Do the cells, read in order, say nothing but numbers that step evenly:
 /// three or more, by one difference (`160 140 120 … 0`) or one ratio, as a
 /// logarithmic axis steps (`1 10 100 1,000`)? A plot's scale, its tick
 /// marks drawn at each number, reads as a ruled row or column; a table's
 /// column of figures does not step so, or stands beside its labels.
-fn axis_scale(cells: &[String]) -> bool {
+pub(crate) fn axis_scale(cells: &[String]) -> bool {
     let mut values: Vec<f64> = Vec::new();
     for token in cells.iter().flat_map(|c| c.split_whitespace()) {
-        let t = token
-            .replace(['\u{2212}', '\u{2013}'], "-")
-            .replace(',', "");
-        match t.parse::<f64>() {
-            Ok(v) => values.push(v),
-            Err(_) => return false,
+        match axis_value(token) {
+            Some(v) => values.push(v),
+            None => return false,
         }
     }
     if values.len() < 3 {
