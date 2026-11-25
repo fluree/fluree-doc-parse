@@ -3369,11 +3369,12 @@ mod tests {
         v.extend(word("max", 18.0, false));
         assert_eq!(assemble(&v)[0].text, "25⁵ max");
         // Two superiors are one mark, read as the run they are: no power of
-        // the first over the second, no degree.
+        // the first over the second, no degree. After the word's stop, a
+        // note's number, set apart.
         let mut v = word("comfit.", 0.0, false);
         v.push(superior_figure("5", 35.0));
         v.push(superior_figure("0", 38.5));
-        assert_eq!(assemble(&v)[0].text, "comfit.50");
+        assert_eq!(assemble(&v)[0].text, "comfit. 50");
         // A figure set on the line is no superior.
         let mut v = word("Model7", 0.0, false);
         v.extend(word("x", 30.0, false));
