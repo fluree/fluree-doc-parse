@@ -466,6 +466,29 @@ struct TableFrame {
 /// layout on both pages, so its edges agree to within a rule's stroke.
 const CONTINUED_EDGE_TOLERANCE: f64 = 3.0;
 
+/// Number `elements` in emission order, `elem-00001` on, after a pass added
+/// or removed some, and keep each continued table naming the part before it.
+/// A part removed with its element leaves the one after it continuing
+/// nothing, rather than naming whatever element took its id.
+pub(crate) fn renumber(elements: &mut [Element]) {
+    let mut renamed = std::collections::HashMap::new();
+    for (i, e) in elements.iter_mut().enumerate() {
+        let id = format!("elem-{:05}", i + 1);
+        let old = std::mem::replace(&mut e.id, id.clone());
+        renamed.insert(old, id);
+    }
+    for e in elements.iter_mut() {
+        e.continues = e.continues.take().and_then(|c| renamed.get(&c).cloned());
+    }
+}
+
+/// An element the analysis minted as an address for a reader's text (a
+/// routed region, a table to confirm, a table the layout found and the
+/// rules did not), not content of the page.
+fn is_splice_anchor(e: &Element) -> bool {
+    matches!(e.evidence, "route" | "table-confidence" | "table-missing")
+}
+
 /// Link a table the page break split to its part on the page before.
 ///
 /// A table that fills the foot of one page and goes on at the head of the
@@ -485,6 +508,12 @@ const CONTINUED_EDGE_TOLERANCE: f64 = 3.0;
 /// part is then nothing but header, and the second opens with a bold row
 /// of labels. That row finishes the header and stays one, so the columns
 /// are named by both.
+///
+/// A splice anchor between the parts is not something between them: it is
+/// an address the reader's text lands at, and the splice drops it. A
+/// table's anchor goes in just before the table, so with anchors on the
+/// second part follows its own anchor, not the first part, and comparing
+/// neighbours alone lost the link on every run that minted anchors.
 fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
     let frame = |e: &Element| {
         frames
@@ -497,19 +526,26 @@ fn link_continued_tables(elements: &mut [Element], frames: &[TableFrame]) {
                 .zip(b)
                 .all(|(x, y)| x.split_whitespace().eq(y.split_whitespace()))
     };
-    for i in 1..elements.len() {
+    let mut last = None;
+    for i in 0..elements.len() {
+        if is_splice_anchor(&elements[i]) {
+            continue;
+        }
+        let Some(p) = last.replace(i) else {
+            continue;
+        };
         let (before, after) = elements.split_at_mut(i);
-        if before[i - 1].kind == "doco:Table"
+        if before[p].kind == "doco:Table"
             && after[0].kind == "doco:Table"
-            && after[0].page == before[i - 1].page
+            && after[0].page == before[p].page
         {
-            if let (Some(a), Some(b)) = (frame(&before[i - 1]), frame(&after[0])) {
-                link_header_box(&mut before[i - 1], &mut after[0], a, b);
-                link_rows_below(&before[i - 1], &mut after[0], a, b);
+            if let (Some(a), Some(b)) = (frame(&before[p]), frame(&after[0])) {
+                link_header_box(&mut before[p], &mut after[0], a, b);
+                link_rows_below(&before[p], &mut after[0], a, b);
             }
             continue;
         }
-        let (prev, next) = (&before[i - 1], &mut after[0]);
+        let (prev, next) = (&before[p], &mut after[0]);
         if prev.kind != "doco:Table" || next.kind != "doco:Table" || next.page != prev.page + 1 {
             continue;
         }
@@ -2212,6 +2248,37 @@ pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
     analyze_with(raw, outline, &AnalyzeOptions::default())
 }
 
+/// Each page's route as [`analyze_with`] decides it: once glyphs drawn twice
+/// at one spot (faux bold) are one, and a watermark laid over the text is
+/// taken out, and before any other cleaning. Those two take glyphs off an
+/// image: a label in faux bold or a watermark over a capture covers it as
+/// drawn, and not once cleaned.
+///
+/// A region is named by its place in its page's route (`r0`, `r1`, …), and
+/// an OCR reading is matched to its region by that name before the analysis
+/// runs: routing the page as drawn there, and cleaned in the analysis, would
+/// give one region two names. The document is not changed: the cleaning is
+/// done on a copy ([`routing_pages`]).
+pub fn region_routes(doc: &RawDoc) -> Vec<crate::route::Route> {
+    routing_pages(doc)
+        .iter()
+        .map(|p| p.routing().route.clone())
+        .collect()
+}
+
+/// A copy of the document's pages as [`analyze_with`] routes them: faux
+/// bold counted once, a watermark laid over the text taken out. What an
+/// OCR engine's regions are found on ([`crate::route::ocr_regions`]), so
+/// they are numbered as the analysis's anchors are ([`region_routes`]).
+pub fn routing_pages(doc: &RawDoc) -> Vec<crate::extract::Page> {
+    let mut pages = doc.pages.clone();
+    for p in pages.iter_mut() {
+        dedup::remove_faux_bold(&mut p.glyphs, 8);
+    }
+    crate::watermark::strip_overlaid(&mut pages);
+    pages
+}
+
 pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOptions) -> Analysis {
     let mut timings = StageTimings::default();
     let mut suspect_tables: Vec<table::SuspectTable> = Vec::new();
@@ -2221,12 +2288,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // Glyphs drawn twice first: a copy laid on its own original is not a
     // watermark laid over text.
     for p in raw.pages.iter_mut() {
-        // Routed before anything below cleans the glyphs, and kept on the
-        // page for whatever reads it after this: the regions are numbered on
-        // the page as drawn, as crop names and OCR word files are, and a
-        // caption drawn twice over a capture, cleaned, can turn the capture
-        // into one more region and renumber every region after it.
-        timed(&mut timings.routing, || p.keep_routing());
         timed(&mut timings.dedup, || {
             dedup::remove_faux_bold(&mut p.glyphs, 8)
         });
@@ -2236,6 +2297,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     timed(&mut timings.furniture, || {
         crate::watermark::strip_overlaid(&mut raw.pages)
     });
+    // Routed here, after the two cleanings that take glyphs off an image and
+    // before any other, and kept on the page for whatever reads it after
+    // this: the page an OCR reading numbers its regions on
+    // ([`routing_pages`]), which kept its routing first when it read one, so
+    // a region's anchor, its crop, its reading and its report carry one name.
+    for p in raw.pages.iter_mut() {
+        timed(&mut timings.routing, || p.keep_routing());
+    }
     for p in raw.pages.iter_mut() {
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
@@ -2804,8 +2873,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         });
     }
 
-    let (mut marks, exact) = timed(&mut timings.furniture, || {
-        furniture::detect_with_exact(&flat_lines)
+    // The page each bookmark lands on, and its title: a running head the
+    // outline names is set as its section's heading there.
+    let bookmarks: Vec<(usize, String)> = outline
+        .iter()
+        .filter_map(|it| it.page.map(|pi| (pi, it.title.clone())))
+        .collect();
+    let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
+        furniture::detect_with_heads(&flat_lines, &bookmarks)
     });
     // A line OCR read is never furniture. Repetition is furniture's only
     // evidence, and on a scan the same content repeats for its own reasons: a
@@ -2836,6 +2911,17 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             all == 0 || ocr * 2 < all
         });
     }
+    // The texts kept as a section's heading on their page, though the same
+    // words run as furniture on the pages after: never scrubbed there.
+    let kept_heads: Vec<std::collections::HashSet<String>> = kept_heads
+        .iter()
+        .enumerate()
+        .map(|(pi, set)| {
+            set.iter()
+                .map(|li| flat_lines[pi].0[*li].text.trim().to_string())
+                .collect()
+        })
+        .collect();
     // The folio is read from the page's edges over *every* glyph, not from
     // the lines left after grids took theirs: a form's key/value grid that
     // runs down into the footer band takes the footer's glyphs with it, and
@@ -3288,7 +3374,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .iter()
                     .all(|s| (b.font_size - s).abs() > 0.15 * s.max(b.font_size))
             });
-            let scrubbed = if retitled {
+            let kept = kept_heads.get(pi).is_some_and(|k| k.contains(text.trim()));
+            let scrubbed = if retitled || kept {
                 text.clone()
             } else if height <= 0.0 {
                 furniture::scrub_block(&text, &scrub_texts)
@@ -4793,12 +4880,12 @@ mod tests {
     }
 
     #[test]
-    fn a_caption_drawn_twice_over_a_capture_does_not_renumber_the_regions() {
+    fn a_caption_drawn_twice_over_a_capture_is_one_caption_to_every_reader() {
         // Prose, then capture A with a caption drawn twice over it (26
-        // glyphs, enough to say the text layer covers it), then capture B
-        // with nothing over it. As drawn, B is the one routed region, r0;
-        // cleaned of the second caption A holds 13 glyphs, a glyph void, and
-        // routed again would be r0, B r1.
+        // glyphs as drawn, enough to say the text layer covers it), then
+        // capture B with nothing over it. Once the caption counts once, A
+        // holds 13 glyphs, a glyph void: A is r0, B r1, for the analysis and
+        // its anchors, the crops, and an OCR reading alike.
         let a = BBox {
             x0: 56.0,
             y0: 262.0,
@@ -4840,48 +4927,51 @@ mod tests {
         let mut page = crate::image::page_of(612, 792, false).pages.remove(0);
         page.glyphs = glyphs;
         page.images = vec![capture(a), capture(b)];
-        let drawn = crate::route::decide(&page).0;
-        assert_eq!(drawn, crate::route::Route::VlmRegions(vec![b]));
+        assert_eq!(
+            crate::route::decide(&page).0,
+            crate::route::Route::VlmRegions(vec![b]),
+            "as drawn, the caption covers A"
+        );
         let mut raw = RawDoc {
             pages_past_limit: 0,
             pages: vec![page],
         };
+        let both = crate::route::Route::VlmRegions(vec![a, b]);
+        // What an OCR reading numbers its regions by, before the analysis.
+        assert_eq!(region_routes(&raw), vec![both.clone()]);
         let opts = AnalyzeOptions {
             emit_anchors: true,
             ..Default::default()
         };
         let analysis = analyze_with(&mut raw, &[], &opts);
-        assert!(
-            matches!(crate::route::decide(&raw.pages[0]).0,
-                crate::route::Route::VlmRegions(ref v) if v.len() == 2),
-            "the cleaned page routes A too"
-        );
-        assert_eq!(raw.pages[0].routing().route, drawn);
+        assert_eq!(raw.pages[0].routing().route, both);
         let anchors: Vec<(&str, Option<BBox>)> = analysis
             .elements
             .iter()
             .filter(|e| e.text.starts_with("[[VLM"))
             .map(|e| (e.text.as_str(), e.bbox))
             .collect();
-        assert_eq!(anchors, vec![("[[VLM:p0:r0]]", Some(b))]);
-        // The crops asked for from the page analysed, as a caller handed it
-        // after analysis asks for them: the one region, under its number.
+        assert_eq!(
+            anchors,
+            vec![("[[VLM:p0:r0]]", Some(a)), ("[[VLM:p0:r1]]", Some(b))]
+        );
+        // The crops asked for from the page analysed, under the same names.
         #[cfg(feature = "render")]
         assert_eq!(
             crate::escalate::crops_for(&raw, &analysis, false),
-            vec![(0, Some(vec![("r0".to_string(), b)]))]
+            vec![(0, Some(vec![("r0".to_string(), a), ("r1".to_string(), b)]))]
         );
-        // Analysed again, the page keeps its routing as drawn.
+        // Analysed again, the page keeps its routing.
         analyze_with(&mut raw, &[], &opts);
-        assert_eq!(raw.pages[0].routing().route, drawn);
+        assert_eq!(raw.pages[0].routing().route, both);
     }
 
     #[test]
-    fn a_page_analysed_is_judged_unread_as_drawn() {
+    fn a_page_analysed_is_judged_unread_as_its_crops_are_chosen() {
         // A small logo and a line drawn twice, as a producer drawing bold
-        // may: 24 glyphs as drawn, a page of text, which asks no reader;
-        // 12 once cleaned, near-blank. Unread is judged as the crops are
-        // chosen, on the page as drawn.
+        // may: 24 glyphs as drawn, a page of text; 12 once the bold counts
+        // once, near-blank. Unread is judged as the crops are chosen, on the
+        // page as the analysis routes it.
         let mut glyphs = Vec::new();
         for _ in 0..2 {
             for (k, c) in "CONFIDENTIAL".chars().enumerate() {
@@ -4912,15 +5002,14 @@ mod tests {
             pages_past_limit: 0,
             pages: vec![page],
         };
+        let near_blank = crate::route::Route::Vlm(crate::route::Reason::NearBlank);
+        // As the crops are chosen, before the analysis.
+        assert_eq!(region_routes(&raw), vec![near_blank.clone()]);
         let analysis = analyze(&mut raw, &[]);
-        assert!(
-            matches!(
-                crate::route::decide(&raw.pages[0]).0,
-                crate::route::Route::Vlm(crate::route::Reason::NearBlank)
-            ),
-            "the cleaned page is near-blank"
-        );
-        assert!(crate::unread_pages(&raw, &analysis.elements).is_empty());
+        assert_eq!(raw.pages[0].routing().route, near_blank);
+        let unread = crate::unread_pages(&raw, &analysis.elements);
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert_eq!(unread[0].reason, "NearBlank");
     }
 
     fn grid(rows: &[&[&str]]) -> Vec<Vec<String>> {
@@ -5164,6 +5253,44 @@ mod tests {
         link_continued_tables(&mut els, &[fa, fb]);
         assert_eq!(els[1].continues.as_deref(), Some("elem-00001"));
         assert_eq!(els[1].header_rows, Some(0));
+    }
+
+    #[test]
+    fn a_splice_anchor_between_the_parts_keeps_them_one_table() {
+        let (a, fa) = part(
+            "elem-00001",
+            0,
+            &[&["Name", "Value"], &["alpha", "1"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        let (b, fb) = part(
+            "elem-00003",
+            1,
+            &[&["beta", "2"], &["gamma", "3"]],
+            1,
+            &XS,
+            false,
+            false,
+        );
+        // The second part's own anchor, ordered just before it.
+        let anchor = Element {
+            id: "elem-00002".into(),
+            page: 1,
+            bbox: b.bbox,
+            ..Element::new(
+                "doco:Figure",
+                "[[VLMTAB:p1:t0]]",
+                "rust",
+                "table-confidence",
+            )
+        };
+        let mut els = vec![a, anchor, b];
+        link_continued_tables(&mut els, &[fa, fb]);
+        assert_eq!(els[2].continues.as_deref(), Some("elem-00001"));
+        assert_eq!(els[2].header_rows, Some(0));
     }
 
     #[test]

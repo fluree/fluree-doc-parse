@@ -71,7 +71,10 @@ machine, where the probe used to leave it out. See
 
 Supplying all three enables the [three-way
 veto](../concepts/escalation.md#the-three-way-veto) — tier 5, the
-first-place configuration.
+first-place configuration. The VLM reading may also come from a model
+called in the run (`--escalate`) in place of `--tier-results`:
+`--structure-results` vetoes its table readings the same way, and no table
+crop it vetoes is sent to the model.
 
 ```bash
 FDOC_TITLE_BOXES=./layout \
@@ -142,7 +145,8 @@ Renders every routed page and region to PNG at **2×** (≈144 dpi) with a small
 margin, and writes `manifest.jsonl` alongside:
 
 ```jsonl
-{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","scale":2.0,"table":true}
+{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","scale":2.0,"table":true,"vetoed":false}
+{"bbox":[72.0,118.4,540.0,402.7],"doc":"datasheet-b","kind":"region","page":34,"png":"datasheet-b_p34_t0.png","reason":"table","scale":2.0,"table":true,"vetoed":true}
 {"doc":"form","kind":"page","page":0,"png":"form_p0_full.png","reason":"heading_doubt","scale":2.0}
 ```
 
@@ -189,17 +193,16 @@ the other, at either scale.
 
 The manifest maps every PNG back to its document, page and PDF-unit box, which
 is what lets a reading be spliced into the right place. The box is in the
-page's reading frame; the PNG is cut from the page as displayed. On a page
-read in a turned frame (`/Rotate`, or text drawn sideways) the two differ by
-the turn, so a consumer mapping pixels to the box goes through the page's
-rotation, as `--ocr-words` does, not through `bbox × scale` alone.
+page's display frame, the frame the PNG is cut from, also on a page read in
+a turned frame (`/Rotate`, or text drawn sideways): `bbox × scale`, less the
+margin, gives the pixels.
 
 `reason` says why the crop exists:
 
 | reason | crop | the text layer |
 |---|---|---|
 | `scanned` (an image over half the page), `near_blank` (a smaller one: a logo, a signature), `broken_text` | whole page | has nothing usable there |
-| `region` | a raster region, or a whole page that also carries one | lacks what the pixels hold |
+| `region` | a raster region, or a whole page read for one, widened by a doubt | lacks what the pixels hold |
 | `small_region` | a raster region under a tenth of the page, cropped only with `--ocr-regions`: not worth a model's call, read by an OCR engine | lacks what the pixels hold |
 | `embedded_image` | an image placed in a DOCX's flow, anchored to an XLSX's cells, or shown in an e-mail's body, once however many figures draw it (`kind: "media"`, with its first `figure`, every one of its `figures` and its `part`: a package part, or an e-mail's `cid:` URL or `attachment <n>`), `<stem>_m<n>.png`; read by OCR and by a model alike (see below) | has the text around it, not the image's |
 | `small_image` | such an image under the pixels a model is sent (400 on its longer side, 48 on its shorter: a logo, an icon, a one-line strip), as `embedded_image` otherwise; read by an OCR engine, not worth a model's call, as `convert` sends it none | has the text around it, not the image's |
@@ -236,6 +239,20 @@ The distinction is worth passing on: a routing trigger knows a region is
 unreadable but not what it is, and a model left to judge transcribes some
 grids as one value per line — which reads as a plausible answer and scores
 zero for structure.
+
+`vetoed` says the [three-way veto](../concepts/escalation.md#the-three-way-veto)
+keeps this table's grid whatever a deep reader says: the structure readings
+in `FDOC_STRUCTURE_RESULTS` corroborate it. `convert --escalate` does not
+send such a crop and `fdoc triage` does not count it, so a deep reader need
+not read it for runs that always pass these structure readings. A reading
+cache shared with runs that do not — tier 4 alone, say — still needs it:
+there the table is not vetoed and its reading is spliced. It is written all
+the same, because the structure reader reads it: a crop left out on the
+strength of a structure reading could never be read again to refresh that
+reading. `render-routed` says on stderr how many it wrote. Without
+`FDOC_STRUCTURE_RESULTS`, `vetoed` is `false`. A vetoed crop keeps its
+`reason`, `table`: the veto says a deep reader need not read it, not why it
+was cut. Only region records carry `vetoed`; a whole page is never vetoed.
 
 **Render on an opaque background.** If you rasterize pages yourself rather
 than using `render-routed`, note that a transparent background flattens to

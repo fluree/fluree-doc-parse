@@ -38,13 +38,15 @@ text or table structure ([below](#the-pixel-probe)) — **gated on a glyph
 void**. A region the text layer
 already covers never routes, however picture-like it looks.
 
-The void is measured on the page as drawn, before analysis cleans its glyphs
-(a word drawn twice to look bold, an underline struck over a word) and before
-OCR words are laid on it, and the page keeps that routing. The routed regions
-are numbered on it (`r0`, `r1`, …), and the number names a region's crop, its
-OCR word file, a model's reading of it and its splice anchor alike. Routed again after cleaning, a
-caption drawn twice over a capture would count half its glyphs, the capture
-would become one more region, and every region after it would be renumbered.
+The void is measured once glyphs drawn twice at one spot (faux bold) count
+once and a watermark laid over the text is taken out, the two cleanings that
+take glyphs off an image, and before any other cleaning or OCR words are laid
+on the page; the page keeps that routing (`document::region_routes`,
+`document::routing_pages`). The routed regions are numbered on it (`r0`,
+`r1`, …), and the number names a region's crop, its OCR word file, a model's
+reading of it, its splice anchor and its report alike. A caption drawn twice
+over a capture is one caption to all of them: the capture is a region for
+each, under one number.
 
 This gate is what makes region routing safe: because our text is never
 replaced, a routed region can only *add*. The tier is therefore
