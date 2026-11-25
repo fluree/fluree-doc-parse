@@ -692,7 +692,8 @@ pub fn assemble_in_measure(
         {
             cur.push(l.clone());
         } else {
-            blocks.extend(finish(build(std::mem::take(&mut cur)), &edge));
+            let b = with_mark(build(std::mem::take(&mut cur)), &marked, blocks.len());
+            blocks.extend(finish(b, &edge));
             if let Some(m) = mark(i) {
                 marked.push((blocks.len(), m));
             }
@@ -701,7 +702,8 @@ pub fn assemble_in_measure(
         }
     }
     if !cur.is_empty() {
-        blocks.extend(finish(build(cur), &edge));
+        let b = with_mark(build(cur), &marked, blocks.len());
+        blocks.extend(finish(b, &edge));
     }
     for (i, m) in marked {
         if let Some(b) = blocks.get_mut(i) {
@@ -1256,6 +1258,19 @@ fn ordinal_prefix(text: &str) -> Option<(u32, &str)> {
     }
     let label = &t[..t.len() - rest.len()];
     Some((t[..digits].parse().ok()?, label))
+}
+
+/// The block `at` with the marker that leads it, if a checkbox, a drawn
+/// bullet or a run of dashes does: an item, before it is parted, so the
+/// passes that part blocks see it as the item it is, as they see one a
+/// typed bullet leads. Its wrapped lines are its own: `Distributed file
+/// systems, including` over `Hadoop and Ceph`, beside a drawn dot, was cut
+/// in two as a list of entries set one per line.
+fn with_mark(mut b: Block, marked: &[(usize, String)], at: usize) -> Block {
+    if let Some((_, m)) = marked.last().filter(|(i, _)| *i == at) {
+        b.marker = Some(m.clone());
+    }
+    b
 }
 
 /// A block as assembled, parted where its lines were ended by hand: one
@@ -2294,6 +2309,33 @@ mod tests {
         let b = assemble_with_marks(&lines, 1.2, &[], &dots, &[], 0.0);
         assert_eq!(b.len(), 4, "one item per bullet, got {b:?}");
         assert!(b.iter().all(|x| x.marker.as_deref() == Some(BULLET_MARKER)));
+    }
+
+    #[test]
+    fn a_drawn_bullet_item_keeps_its_wrapped_line() {
+        // A list set narrower than its column: the item's first line ends
+        // far short of the column's edge, and its wrapped line opens with
+        // a name. Led by a drawn dot, it is one item, not two entries.
+        let mut first = l("Distributed file systems, including", 56.0, 0.0, 9.0);
+        first.bbox.x1 = 240.0;
+        let mut wrapped = l("Hadoop and Ceph", 56.0, 12.0, 9.0);
+        wrapped.bbox.x1 = 125.0;
+        let lines = vec![first, wrapped];
+        let mut measure = lines.clone();
+        for y in [-60.0, -48.0] {
+            let mut wide = l("Text that runs to the column's edge", 56.0, y, 9.0);
+            wide.bbox.x1 = 400.0;
+            measure.push(wide);
+        }
+        let dots = [BBox {
+            x0: 47.0,
+            y0: 4.0,
+            x1: 50.0,
+            y1: 7.0,
+        }];
+        let b = assemble_in_measure(&lines, &measure, 1.2, &[], &dots, &[], 9.0);
+        assert_eq!(b.len(), 1, "one item, got {b:?}");
+        assert_eq!(b[0].marker.as_deref(), Some(BULLET_MARKER));
     }
 
     #[test]
