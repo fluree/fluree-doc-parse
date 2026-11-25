@@ -1361,6 +1361,110 @@ const ALIGNED_IN_DRAWING: f64 = 0.5;
 /// a ruled grid stand at may run to, each way, before they are a drawing's.
 const LINE_ART_STROKES: usize = 2;
 
+/// Fewest of a grid's rules that end in an arrowhead for it to be a
+/// dimension drawing's: one dimension line, arrowed at both ends, or one
+/// broken around its callout.
+const DIMENSION_ARROWS: usize = 2;
+
+/// Largest arrowhead across its line, in the grid's text size: a drawing's
+/// arrows are drawn to its callouts' scale.
+const ARROWHEAD_ACROSS: f64 = 1.0;
+
+/// Largest arrowhead along its line, in the grid's text size.
+const ARROWHEAD_ALONG: f64 = 1.5;
+
+/// Words a dimension drawing sets beside its figures: units, and the notes
+/// a dimension carries (`TYP`, `MAX`).
+const DIMENSION_WORDS: &[&str] = &["mm", "cm", "in", "ft", "typ", "max", "min", "ref"];
+
+/// Is `g` a dimension drawing's? Its rules are dimension and extension
+/// lines, [`DIMENSION_ARROWS`] or more ending in an arrowhead (a small fill
+/// on the line's end, longer along it than across), and its cells hold
+/// callouts alone: figures with their units (`83⁵/16"`, `(2117 mm)`), counts
+/// (`6X`) and datum letters, no words. Read as a table, its callouts are
+/// cells of a grid its lines happen to make. A table's rules end at its
+/// edges and its cells hold words, a header at least.
+fn dimension_drawing(g: &Grid, page: &crate::extract::Page, cells: &[String]) -> bool {
+    if !callouts(cells) {
+        return false;
+    }
+    let mut sizes: Vec<f32> = page
+        .glyphs
+        .iter()
+        .filter(|gl| {
+            gl.bbox
+                .is_some_and(|b| figure::share_inside(&b, &g.bbox) >= 0.5)
+        })
+        .map(|gl| gl.font_size)
+        .collect();
+    sizes.sort_by(f32::total_cmp);
+    let Some(&em) = sizes.get(sizes.len() / 2) else {
+        return false;
+    };
+    let em = em.max(1.0) as f64;
+    let inside = |b: &crate::geom::BBox| {
+        b.x0 >= g.bbox.x0 - 3.0
+            && b.x1 <= g.bbox.x1 + 3.0
+            && b.y0 >= g.bbox.y0 - 3.0
+            && b.y1 <= g.bbox.y1 + 3.0
+    };
+    let arrowed = page
+        .rules
+        .iter()
+        .filter(|r| inside(&r.bbox))
+        .filter(|r| ends_in_arrowhead(r, &page.fills, em))
+        .count();
+    arrowed >= DIMENSION_ARROWS
+}
+
+/// Does the rule end in an arrowhead: a small fill, no larger than
+/// [`ARROWHEAD_ACROSS`] and [`ARROWHEAD_ALONG`] of the text size `em`,
+/// longer along the line than across it, set on its axis over one of its
+/// ends? A line drawn to the arrow's tip or to its base ends inside it.
+fn ends_in_arrowhead(r: &crate::rule::Rule, fills: &[crate::rule::Fill], em: f64) -> bool {
+    let b = r.bbox;
+    let vertical = r.orientation == crate::rule::Orientation::Vertical;
+    let (axis, ends) = if vertical {
+        ((b.x0 + b.x1) * 0.5, [b.y0, b.y1])
+    } else {
+        ((b.y0 + b.y1) * 0.5, [b.x0, b.x1])
+    };
+    fills.iter().any(|f| {
+        let fb = f.bbox;
+        let (across, along) = if vertical {
+            ((fb.x0, fb.x1), (fb.y0, fb.y1))
+        } else {
+            ((fb.y0, fb.y1), (fb.x0, fb.x1))
+        };
+        let (wide, long) = (across.1 - across.0, along.1 - along.0);
+        wide <= em * ARROWHEAD_ACROSS
+            && long <= em * ARROWHEAD_ALONG
+            && long >= wide
+            && across.0 <= axis
+            && across.1 >= axis
+            && ends
+                .iter()
+                .any(|&e| e >= along.0 - 1.0 && e <= along.1 + 1.0)
+    })
+}
+
+/// Do the cells hold callouts alone: some figures, and no word but a unit or
+/// a dimension's note? A count's `X` or a datum's letter stands alone.
+fn callouts(cells: &[String]) -> bool {
+    let mut figures = false;
+    for token in cells.iter().flat_map(|c| c.split_whitespace()) {
+        figures |= token.chars().any(char::is_numeric);
+        let worded = token
+            .split(|c: char| !c.is_alphabetic())
+            .filter(|w| w.chars().count() >= 2)
+            .any(|w| !DIMENSION_WORDS.contains(&w.to_lowercase().as_str()));
+        if worded {
+            return false;
+        }
+    }
+    figures
+}
+
 /// Are the rules inside `g` a drawing's? Its vertical strokes stand at more
 /// than [`LINE_ART_STROKES`] times its column boundaries' count of places
 /// across it, and its horizontal ones at more than as many times its row
@@ -2114,6 +2218,7 @@ fn labelled_caption(blocks: &[Block], i: usize) -> bool {
 fn find_figures(
     pages: &[Page],
     blocks_per_page: &[Vec<Block>],
+    layouts: &[PageLayout],
 ) -> Vec<(Vec<figure::Figure>, Vec<Option<usize>>)> {
     let mut page_figures = Vec::with_capacity(blocks_per_page.len());
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
@@ -2168,6 +2273,37 @@ fn find_figures(
             &figures,
         );
         figures.extend(plotted);
+        // A dimension drawing whose lines made a ruled grid of its callouts:
+        // the drawing its loose callouts and view names are labels of.
+        if let Some(layout) = layouts.get(pi) {
+            let dimensioned: Vec<figure::Figure> = layout
+                .grids
+                .iter()
+                .zip(&layout.grid_sources)
+                .filter(|(g, source)| {
+                    **source == GridSource::Ruled
+                        && !figures
+                            .iter()
+                            .any(|f| figure::share_inside(&g.bbox, &f.drawing) > 0.0)
+                        && dimension_drawing(g, page, &g.cell_texts(&page.glyphs))
+                })
+                .map(|(g, _)| figure::Figure {
+                    bbox: g.bbox,
+                    drawing: g.bbox,
+                    page: pi,
+                    // Its strokes: a drawing's, whose labels lie round it,
+                    // not a picture's, whose labels are set on it.
+                    shapes: page
+                        .rules
+                        .iter()
+                        .filter(|r| figure::share_inside(&r.bbox, &g.bbox) > 0.0)
+                        .count()
+                        .max(1),
+                    frame: None,
+                })
+                .collect();
+            figures.extend(dimensioned);
+        }
         let mut taken = figure::attach_beside(
             &mut figures,
             &block_boxes,
@@ -3206,7 +3342,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // yields to a figure depends on how the document sets its headings
     // elsewhere. Gathering a numbered list rewrites the blocks, so the
     // figures follow it.
-    let mut page_figures = find_figures(&raw.pages, &blocks_per_page);
+    let mut page_figures = find_figures(&raw.pages, &blocks_per_page, &layouts);
     let mut body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
     let thin = thin_prose_body(&blocks_per_page, &raw.pages, &layouts);
     if let Some(size) = thin {
@@ -3218,7 +3354,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let named = heading::outline_names(outline);
         let in_section = heading::in_section(&first);
         if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
-            page_figures = find_figures(&raw.pages, &blocks_per_page);
+            page_figures = find_figures(&raw.pages, &blocks_per_page, &layouts);
             body_font = thin.unwrap_or_else(|| {
                 heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures))
             });
@@ -3510,7 +3646,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // than its own boundaries, the outlines of a unit's terminals or
             // a drawing's dimension and extension lines. A table is ruled at
             // its boundaries, however many pieces each rule is drawn in.
-            let line_art = ruled && line_art(g, &raw.pages[pi].rules);
+            let line_art = ruled
+                && (line_art(g, &raw.pages[pi].rules)
+                    || dimension_drawing(g, &raw.pages[pi], &flat));
             // An axis's scale ruled by its ticks: a row or a column of
             // numbers stepping evenly, `160 140 … 0`, set against a plot.
             let scale = (g.rows() == 1 || g.cols() == 1) && axis_scale(&flat);
@@ -4335,6 +4473,65 @@ mod tests {
             .filter(|e| e.kind == "doco:SectionTitle")
             .map(|e| e.text.as_str())
             .collect()
+    }
+
+    #[test]
+    fn a_dimension_lines_arrowheads_sit_on_its_ends() {
+        use crate::rule::{Fill, Orientation, Rule};
+        // A vertical dimension line drawn to its arrows' bases, its callouts
+        // set at 6.5 pt.
+        let line = Rule {
+            bbox: BBox {
+                x0: 209.7,
+                y0: 320.0,
+                x1: 210.3,
+                y1: 410.0,
+            },
+            orientation: Orientation::Vertical,
+            page: 0,
+        };
+        let head = |x0, y0, x1, y1| Fill {
+            bbox: BBox { x0, y0, x1, y1 },
+            page: 0,
+        };
+        assert!(ends_in_arrowhead(
+            &line,
+            &[head(208.2, 315.5, 211.8, 321.0)],
+            6.5
+        ));
+        assert!(ends_in_arrowhead(
+            &line,
+            &[head(208.1, 409.0, 211.9, 414.6)],
+            6.5
+        ));
+        // Wider than long, halfway along the line, or a box the line runs
+        // into: no arrowhead.
+        assert!(!ends_in_arrowhead(
+            &line,
+            &[head(205.0, 316.0, 215.0, 321.0)],
+            6.5
+        ));
+        assert!(!ends_in_arrowhead(
+            &line,
+            &[head(208.2, 360.0, 211.8, 366.0)],
+            6.5
+        ));
+        assert!(!ends_in_arrowhead(
+            &line,
+            &[head(190.0, 300.0, 230.0, 330.0)],
+            6.5
+        ));
+    }
+
+    #[test]
+    fn callouts_are_figures_units_and_counts() {
+        let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(callouts(&c(&[
+            "31 1/4\"", "(794 mm)", "", "4X", "12.5 TYP", "B"
+        ])));
+        // A label names a row: a table's. Letters alone measure nothing.
+        assert!(!callouts(&c(&["Width", "31 1/4\""])));
+        assert!(!callouts(&c(&["", "A", "B"])));
     }
 
     #[test]
