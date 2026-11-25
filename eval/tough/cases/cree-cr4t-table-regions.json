@@ -22,10 +22,10 @@
     {
       "id": "luminance-table",
       "found": "2026-11-24",
-      "issue": "#102: the Average Luminance table was a column of the CU table.",
+      "issue": "#102: the Average Luminance table was a column of the CU table. (#270: matched by its row, the title band being no column header.)",
       "cell": {
         "value": "17,146",
-        "column": "Average Luminance Table (cd/m²)"
+        "row": "Vertical Angle / 55°"
       }
     },
     {
