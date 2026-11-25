@@ -7,7 +7,8 @@
   },
   "notes": [
     "#241: a chart's y-axis scale, ruled by its tick marks, was a one-column table of its numbers.",
-    "Open: where two panels stand side by side their scales and titles line up into a two-column text table, as in the later recovery charts; a column of evenly stepped numbers under a title is also how a conversion table reads, so text alone does not settle it."
+    "#241: where two panels stand side by side, their scales and titles lined up into a two-column table; each scale beside its panel's plot is the panels' axes.",
+    "Open: a few panels set their x-axis ticks in the scales' cells (`0 5 10 15 20 25 Day`), and those grids stay tables."
   ],
   "checks": [
     {
@@ -38,6 +39,25 @@
         "text": "160\n140 120\n100 80 60 40 20\n0"
       },
       "count": 0
+    },
+    {
+      "id": "side-panel-scales-no-table",
+      "found": "2026-11-25",
+      "issue": "#241: two panels' scales and titles side by side were a two-column table (`34423 Methylene chloride | 34475 Tetrachloroethene` over `240 | 240` …).",
+      "element": {
+        "type": "doco:Table",
+        "text": "34423 Methylene chloride\t34475 Tetrachloroethene\n240\t240\n220\t220\n200\t200\n180\t180\n160\t160\n140\t140\n120\t120\n100\t100\n80\t80\n60\t60\n40\t40\n20\t20\n0\t0\nO-4127\tO-4436 O-4127 O-4436"
+      },
+      "count": 0
+    },
+    {
+      "id": "side-panel-scales-kept",
+      "found": "2026-11-25",
+      "issue": "#241: as above; the scales stay, as the panels' text.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "34423 Methylene chloride 34475 Tetrachloroethene\n240 240\n220 220\n200 200\n180 180\n160 160\n140 140\n120 120\n100 100\n80 80\n60 60\n40 40\n20 20\n0 0\nO-4127 O-4436 O-4127 O-4436"
+      }
     }
   ]
 }
