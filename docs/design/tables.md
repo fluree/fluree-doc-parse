@@ -1208,18 +1208,40 @@ It runs on, too, through a line that carries on the cells of the line above.
 That line is the next one under it (within 1.6 of the type's size, where any
 body leading lies and a line with a blank line between does not). It has
 nothing in the stub column and no figure, and each of its chunks stands in a
-column the line above fills and runs on from what stands there: it starts
-mid-phrase, or the text above ends on a word or mark that wants more. Such a
-line is a name or a description wrapped onto a second line, and it joins its
-row's cell (`LSM2 homolog, U6 small nuclear RNA` over `associated (S.
-cerevisiae)`). Spacing alone cannot tell it from a row: a journal sets its
-rows and its wrapped lines at the same leading. A row with an empty stub and
-a new value (`Banana` under `Apple`) runs on from nothing and stays a row.
-Nothing is carried on in a column whose text runs on across the rows: where,
-on half the lines that open a row (two at least), the column's text continues
-the line above it, the column is a page's prose read in beside the table, its
-sentences carried down through the rows. A table's cells start afresh on
-each row.
+column the line above fills and runs on from what stands there. It starts
+mid-phrase: a lowercase word, or, under a cell of words, a bracket opening on
+one, a qualifier set under what it qualifies (`Uracil` over
+`(extracellular)`). A list's enumerator in brackets (`(a)`, `(iv)`) starts
+an item instead, and under a number such a line is a unit's broken
+superscript (`3` over `(mg/m )`), not a wrapped name. Or the text
+above ends on a word or mark that wants more. Such a line is a name or a
+description wrapped onto a second line, and it joins its row's cell (`LSM2
+homolog, U6 small nuclear RNA` over `associated (S. cerevisiae)`).
+
+A line that starts afresh (`Gallinarum Pullorum` over `CDC1983 67`) joins
+its cell by its spacing, where all of these hold:
+
+- it holds that one cell, under a cell of words;
+- it lies between two rows of figures;
+- it stands within the extent of the cell's first line, to half the type's
+  size (a cell wraps because its first line filled its column);
+- it sits a quarter or more tighter under that cell than the next row's cell
+  in its column sits under it: a cell's own leading inside its row, where the
+  row pitch parts the rows, beyond the point or so the tops of words move
+  with their letters.
+
+A label naming the rows under it sits as near to them as to the row above.
+The spacing test alone, without the other limits, took a drawing's labels
+and a chart's axis for rows. Spacing often cannot tell at all: many
+journals set their rows and their wrapped lines at the same leading, and
+there the text has to show the run-on.
+
+A row with an empty stub and a new value (`Banana` under `Apple`) runs on
+from nothing and stays a row. Nothing is carried on in a column whose text
+runs on across the rows: where, on half the lines that open a row (two at
+least), the column's text continues the line above it, the column is a
+page's prose read in beside the table, its sentences carried down through
+the rows. A table's cells start afresh on each row.
 
 A caption wrapped over the table keeps its lines after the first. Walking
 up from the first row for the header, a line that is the next one under a

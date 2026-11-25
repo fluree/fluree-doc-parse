@@ -7773,7 +7773,7 @@ fn names_its_columns(texts: &[String]) -> bool {
 /// A list's enumerator standing for a label: `(a)`, `b.`, `iv)`, `26a.`,
 /// a number or one letter, or a roman numeral, in brackets or ended by a
 /// stop. `No.` and `Ref.` are words.
-fn enumerator(label: &str) -> bool {
+pub(crate) fn enumerator(label: &str) -> bool {
     let inner = label.trim_start_matches('(').trim_end_matches(['.', ')']);
     if inner.is_empty() || inner.len() == label.len() {
         return false;
