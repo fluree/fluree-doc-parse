@@ -1159,8 +1159,11 @@ mod tests {
                 order.lock().unwrap().push("big");
             });
             asked(2);
+            // 30 fits beside the 60 held, so only its turn holds the small
+            // pass back; it does not fit beside the large one, so it is
+            // served once the large one is done, never alongside it.
             let small = s.spawn(|| {
-                let _g = budget.take(10);
+                let _g = budget.take(30);
                 order.lock().unwrap().push("small");
             });
             asked(3);
