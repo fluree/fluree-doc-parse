@@ -824,6 +824,13 @@ Not a header ruled off as its rows are (`(millions) | 2017 | 2016`), which
 names no measure and starts the next table, nor a header ruled above and
 below under a table ruled only round its own.
 
+A table read from its text because lines stand to its left, set as a column
+of the page's prose, stays in that column. The prose's columns are found with
+its text counted in, as it would have been had the table been prose. Read
+without it, the column it stands in can end higher on the page, and the
+prose below would be read straight across the page instead of down that
+column. Other tables are left out, as before.
+
 ## Tables split by a page break
 
 A table that runs off the foot of one page and on at the head of the next is

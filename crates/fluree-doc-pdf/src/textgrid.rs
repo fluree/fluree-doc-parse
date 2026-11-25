@@ -2127,6 +2127,21 @@ pub fn unruled_grids(
         .collect()
 }
 
+/// Of `unruled_grids`, one read here only for the labels to its left: it is
+/// ruled row by row as a table is, but stands beside lines of a column of
+/// the page's prose. Its text, read as a table's, stays in that column.
+pub fn read_beside_its_labels(
+    g: &Grid,
+    rules: &[Rule],
+    fills: &[crate::rule::Fill],
+    lines: &[Line],
+) -> bool {
+    !has_vertical(rules, &g.bbox)
+        && ruled_row_by_row(g, rules, fills)
+        && !lumped(g, lines)
+        && labels_outside(g, lines)
+}
+
 /// Its rows' labels stand outside it, to its left: the grid is a
 /// statement's columns of figures, ruled by their underlines alone.
 fn labels_outside(g: &Grid, lines: &[Line]) -> bool {
