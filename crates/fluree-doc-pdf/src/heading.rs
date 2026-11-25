@@ -1403,6 +1403,7 @@ fn form_text(text: &str, page: &[Block], i: usize) -> bool {
         || label_over_value(page, i)
         || turned(page, &page[i])
         || under_a_scale(page, i)
+        || heads_figures(page, i)
 }
 
 /// Answers a form offers to tick: the heads of its answer columns.
@@ -1624,6 +1625,62 @@ fn turned(page: &[Block], b: &Block) -> bool {
     b.lines
         .iter()
         .any(|l| l.rotation_bucket != 0 && l.rotation_bucket != text)
+}
+
+/// A table's figure, a cell of nothing else: `2023 2022`, `1000 -`,
+/// `64.1 - 90.0`, `80.0 (28/35)`, `$ 2,395`.
+fn bare_figures(t: &str) -> bool {
+    let t = t.trim();
+    t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || c.is_whitespace()
+                || ".,%-−–+×/()$€£:".contains(c)
+                || ('\u{2070}'..='\u{209F}').contains(&c)
+        })
+}
+
+/// Widest gap, in ems, from a column's head to the first figure under it:
+/// a table's rows stand further apart than a paragraph's lines.
+const FIGURES_GAP: f64 = 2.5;
+
+/// Most words in a cell set level with a table's column head.
+const MAX_HEAD_CELL_WORDS: usize = 4;
+
+/// A table's column head or the stub's, the table not read as one: the
+/// block stands directly over a line of bare figures (`Total SOMA` over
+/// `2023 2022`, `TWA STEL` over `1000 -`), or stands on a row of other
+/// short cells, it or one of them over such figures (`Item` beside
+/// `2024:Q2–2025:Q2` and `1997–2025:Q2`, `95%CI` beside `95% CI` and `%`).
+/// A slide's card titles stand side by side too, over text, not figures.
+fn heads_figures(page: &[Block], i: usize) -> bool {
+    let over = |k: usize| {
+        let b = &page[k];
+        let fs = (b.font_size as f64).max(1.0);
+        page.iter()
+            .enumerate()
+            .filter(|(n, o)| {
+                *n != k
+                    && o.bbox.y0 >= b.bbox.y1 - fs * 0.2
+                    && o.bbox.y0 - b.bbox.y1 <= fs * FIGURES_GAP
+                    && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+            })
+            .min_by(|(_, x), (_, y)| x.bbox.y0.total_cmp(&y.bbox.y0))
+            .is_some_and(|(_, o)| o.lines.len() == 1 && bare_figures(&o.text()))
+    };
+    if over(i) {
+        return true;
+    }
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    page.iter().enumerate().any(|(k, o)| {
+        k != i
+            && o.lines.len() == 1
+            && o.text().split_whitespace().count() <= MAX_HEAD_CELL_WORDS
+            && (o.bbox.y0 - b.bbox.y0).abs() <= fs * 0.5
+            && (o.bbox.x0 >= b.bbox.x1 || o.bbox.x1 <= b.bbox.x0)
+            && over(k)
+    })
 }
 
 /// Fewest values on a row for the row to be a chart's scale.
@@ -2450,6 +2507,42 @@ mod tests {
         // form's text.
         let hs = detect(&[page], &[]);
         assert!(!hs.is_empty() && hs.iter().all(|h| h.form_text), "{hs:?}");
+    }
+
+    #[test]
+    fn a_tables_heads_over_its_figures_are_no_headings() {
+        let cell = |t: &str, x0: f64, x1: f64, y: f64| {
+            let mut b = at(t, 8.0, y, true);
+            b.bbox.x0 = x0;
+            b.bbox.x1 = x1;
+            b
+        };
+        // A header row over rows of figures, the rows 22pt apart.
+        let page = vec![
+            cell("95% CI", 140.0, 170.0, 158.0),
+            cell("%", 210.0, 216.0, 158.0),
+            cell("95%CI", 256.0, 282.0, 158.0),
+            cell("64.1 - 90.0", 141.0, 175.0, 181.0),
+        ];
+        assert!(heads_figures(&page, 2), "a head beside one over figures");
+        assert!(heads_figures(&page, 0));
+        // A stub over its row's figures.
+        let page = vec![
+            cell("Total assets, net", 50.0, 120.0, 100.0),
+            cell("2,482 2,395", 60.0, 110.0, 110.0),
+        ];
+        assert!(heads_figures(&page, 0));
+        // A slide's card titles side by side, over text.
+        let page = vec![
+            cell("Our Purpose", 50.0, 110.0, 100.0),
+            cell("Our Mission", 200.0, 260.0, 100.0),
+            cell("We build tools people trust", 50.0, 180.0, 112.0),
+            cell("Every team, every day", 200.0, 300.0, 112.0),
+        ];
+        assert!(!heads_figures(&page, 0) && !heads_figures(&page, 1));
+        assert!(
+            bare_figures("80.0 (28/35)") && bare_figures("$ 2,395") && !bare_figures("Q2 2025")
+        );
     }
 
     #[test]
