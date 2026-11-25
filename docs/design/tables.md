@@ -515,9 +515,14 @@ names. An IES coefficient-of-utilization table opens with `RC %: | 80` and
 `RW %: | 70 | 50 | 30 | 10` over `RCR: 0 | 119 | 119 | …`. Where nothing else
 heads such a table, the rows that open it with a label ending in a colon and
 only figures beside it are its header, over three rows or more, half of them
-or more figures: each value is named by its parameters (`80 / 70`). A table
-of such rows all the way down is a list of fields, each with its values, and
-none of its rows heads it.
+or more figures: each value is named by its parameters (`80 / 70`). So is a
+sweep's `Speed (rpm): | 1500 | 2500 | 3500` over the readings taken at each
+speed. The parameters' values stand over the columns the body's figures
+fill, and the row nearest the body names two of them or more, half or more:
+it sets the value each column of figures is for. A list of fields over a
+grid of figures gives each field one value, and a table of such rows all
+the way down is a list of fields, each with its values; none of their rows
+heads it.
 
 ### Row headers under a group label
 

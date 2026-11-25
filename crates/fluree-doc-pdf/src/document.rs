@@ -598,8 +598,13 @@ const SPREAD_EVEN: f64 = 0.25;
 /// How many rows head a grid of figures as its parameters do: each a
 /// name ending in a colon and only figures beside it, over three rows or
 /// more of figures that are not (`RC %: | 80`, `RW %: | 70 | 50 | 30 | 10`
-/// over `RCR: 0 | 119 | 119 | …`). A table that is such rows all the way
-/// down is a list of fields, each with its values, and none heads it.
+/// over `RCR: 0 | 119 | 119 | …`, a sweep's `Speed (rpm): | 1500 | 2500 |
+/// 3500` over the readings at each speed). The parameters' values stand
+/// over the columns the body's figures fill, and the row nearest the body
+/// names two of them or more, half or more: it sets the value each column
+/// of figures is for. A list of fields over a grid gives each field one
+/// value, and a table that is such rows all the way down is a list of
+/// fields; none of their rows heads it.
 fn parameter_rows(rows: &[Vec<String>]) -> usize {
     let parameter = |row: &Vec<String>| {
         let name = row.first().map_or("", |t| t.trim());
@@ -624,6 +629,28 @@ fn parameter_rows(rows: &[Vec<String>]) -> usize {
         !values.is_empty() && values.iter().all(|t| table::is_numeric_cell(t))
     };
     if k == 0 || body.len() < 3 || body.iter().filter(figures).count() * 2 < body.len() {
+        return 0;
+    }
+    let held = |row: &Vec<String>| -> Vec<usize> {
+        (1..row.len())
+            .filter(|&c| !row[c].trim().is_empty())
+            .collect()
+    };
+    let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let filled: Vec<usize> = (1..width)
+        .filter(|&c| {
+            body.iter()
+                .filter(|r| r.get(c).is_some_and(|t| !t.trim().is_empty()))
+                .count()
+                * 2
+                >= body.len()
+        })
+        .collect();
+    let over_body = rows[..k]
+        .iter()
+        .all(|r| held(r).iter().all(|c| filled.contains(c)));
+    let nearest = held(&rows[k - 1]);
+    if !over_body || nearest.len() < 2 || nearest.len() * 2 < filled.len() {
         return 0;
     }
     k
@@ -4125,6 +4152,32 @@ mod tests {
             &["2", "95", "88", "81"],
         ]);
         assert_eq!(parameter_rows(&cu), 2);
+        // A sweep: the speed each column of readings is taken at.
+        let sweep = rows(&[
+            &["Speed (rpm):", "1500", "2500", "3500"],
+            &["Torque (N·m)", "5.1", "4.8", "4.2"],
+            &["Power (kW)", "0.5", "1.0", "1.3"],
+            &["Current (A)", "1.1", "2.0", "2.9"],
+        ]);
+        assert_eq!(parameter_rows(&sweep), 1);
+        // Fields over a grid of figures, a value each: they head nothing.
+        let fields_over = rows(&[
+            &["Voltage:", "120", "", ""],
+            &["Watts:", "16", "", ""],
+            &["Size", "1", "2", "3"],
+            &["Width", "10", "20", "30"],
+            &["Depth", "12", "24", "36"],
+        ]);
+        assert_eq!(parameter_rows(&fields_over), 0);
+        // Values beside the columns the body fills name none of them.
+        let beside = rows(&[
+            &["Batch:", "", "", "", "7"],
+            &["Lot:", "", "", "4", "9"],
+            &["A", "1", "2", "", ""],
+            &["B", "3", "4", "", ""],
+            &["C", "5", "6", "", ""],
+        ]);
+        assert_eq!(parameter_rows(&beside), 0);
         // Fields all the way down: none heads the rest.
         let fields = rows(&[
             &["Voltage:", "120", "", ""],

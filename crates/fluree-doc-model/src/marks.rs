@@ -284,13 +284,19 @@ pub fn degree(text_before: &str, mark: &str, next: Option<char>) -> bool {
         || (ahead.ends_with(['-', '+'])
             && !ahead[..ahead.len() - 1].ends_with(|c: char| c.is_alphanumeric()));
     let figures = number.chars().filter(char::is_ascii_digit).count();
-    // After an approximation's sign or a bracket's opening, a raised `o` is
-    // no ordinal: no text counts `~ 95th` or `(45th)`. An angle's degree
-    // (`Beam Angle ~ 95°`, `Gloss (45°)`). Not a raised `0`, which may be
-    // a power there (`(10⁰)`).
-    let set_apart = mark.trim() != "0"
-        && ahead.trim_end().ends_with(['~', '≈', '∼', '(', '['])
-        && !ahead.ends_with(|c: char| c.is_alphanumeric());
+    // After an approximation's sign, a raised `o` or `º` is no ordinal: no
+    // text counts `~ 95th`. An angle's degree (`Beam Angle ~ 95°`). After a
+    // bracket's opening only the raised letter `o` is, a font's stand-in for
+    // the sign (`Gloss (45°)`): the ordinal sign itself is how Spanish and
+    // Portuguese set a bracketed ordinal (`(2º)`). Not a raised `0`, which
+    // may be a power there (`(10⁰)`).
+    let opener = ahead.trim_end();
+    let set_apart = !ahead.ends_with(|c: char| c.is_alphanumeric())
+        && match mark.trim() {
+            "o" => opener.ends_with(['~', '≈', '∼', '(', '[']),
+            "º" => opener.ends_with(['~', '≈', '∼']),
+            _ => false,
+        };
     matches!(next, Some('C' | 'F')) || figures >= 3 || number.contains('.') || signed || set_apart
 }
 
@@ -437,6 +443,13 @@ mod tests {
         // An ordinal stays one, and a power one.
         assert!(!degree("el 1", "o", None));
         assert!(!degree("2", "º", Some('l')));
+        // A bracketed ordinal set with the ordinal sign stays one; the
+        // raised letter in brackets, and either after `~`, is a degree.
+        assert!(!degree("(2", "º", Some(')')));
+        assert!(!degree("[3", "º", Some(']')));
+        assert!(degree("Gloss (45", "o", Some(')')));
+        assert!(degree("~ 95", "º", None));
+        assert!(degree("≈ 30", "o", None));
         assert!(!degree("10", "0", None));
         assert!(!degree("10-15", "o", None));
         assert!(!degree("145", "a", None));
