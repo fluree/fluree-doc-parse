@@ -2540,14 +2540,15 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     // figures follow it.
     let mut page_figures = find_figures(&raw.pages, &blocks_per_page);
     let mut body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
+    let body_bold = heading::body_is_bold(raw.pages.iter().flat_map(|p| p.glyphs.iter()));
     let headings = timed(&mut timings.headings, || {
-        let first = heading::detect_with_body(&blocks_per_page, outline, body_font);
+        let first = heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold);
         let named = heading::outline_names(outline);
         let in_section = heading::in_section(&first);
         if block::gather_counted_items(&mut blocks_per_page, &|t| named(t), &in_section) {
             page_figures = find_figures(&raw.pages, &blocks_per_page);
             body_font = heading::body_font_size_outside(&blocks_per_page, &drawn(&page_figures));
-            heading::detect_with_body(&blocks_per_page, outline, body_font)
+            heading::detect_with_body(&blocks_per_page, outline, body_font, body_bold)
         } else {
             first
         }

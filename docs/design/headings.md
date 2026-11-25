@@ -24,6 +24,14 @@ Bold set larger than the body is ranked by its size, not given `bold`'s one
 level. A part's 12pt bold label over 10pt bold heads stays above them, as it
 does where the face's weight cannot be read at all.
 
+Where the body itself is set bold, weight carries no information, and no
+heading is read from it. Whether it is comes from the glyphs: the size most of
+the document's letters are set at, and whether most of them are bold, its
+tables' text counted with its paragraphs'. The blocks the tables leave are no
+measure of it. On a form they are mostly its bold labels (Schedule 1 to
+Form 1040 has 9 bold lines of 16), and on a financial statement page they are
+its bold titles.
+
 Weight and size never make a heading of these:
 
 - **A caption** (`Figure 5-1. Low-Level Output Voltage`, `Table 4-1. Pin
