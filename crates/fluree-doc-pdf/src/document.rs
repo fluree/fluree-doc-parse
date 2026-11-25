@@ -80,6 +80,12 @@ pub struct Analysis {
 /// Most words of a table's title band.
 const MAX_TABLE_TITLE_WORDS: usize = 12;
 
+/// Widest, in ems of a band's text, the columns beside a title band may run
+/// together and the band still stand across the table. A line turned down a
+/// column takes a line's height and its padding, about two ems; a word set
+/// across a column takes three or more.
+const BAND_MARGIN_EMS: f64 = 2.5;
+
 /// A grid whose first row is the table's title rather than its header: one label alone in the row, as one cell across the
 /// whole table (`Hex Cap Screws ASME B18.2.1-2012`, a section band
 /// `Mission Critical (10K rpm)`) or as the only text in the first of a row
@@ -115,7 +121,41 @@ fn table_title(
     // over some of the columns (`Dates` over `Start | Next review`) is the
     // header's, and is spanned over them.
     // A row the alignment read as one cell across (`spanning`) is one too.
-    let across = spanning || (1..cols).all(|c| merges.continues_left[c]);
+    // Or one cell across all of the table but columns too narrow to hold a
+    // label set across them ([`BAND_MARGIN_EMS`] of the row's text
+    // together): a margin, or the room a label turned down the rows takes,
+    // whose rule may run on up through the band (`Average Luminance Table
+    // (cd/m²)` over every column but the one `Vertical Angle` is turned
+    // in). A group's label over part of the table leaves columns a label
+    // fits.
+    let em = {
+        let mut sizes: Vec<f64> = page
+            .glyphs
+            .iter()
+            .filter(|gl| gl.is_horizontal() && !gl.text.trim().is_empty())
+            .filter(|gl| {
+                let (x, y) = gl.center();
+                g.cell_at(x, y).is_some_and(|(r, _)| r == 0)
+            })
+            .map(|gl| gl.font_size as f64)
+            .collect();
+        sizes.sort_by(f64::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(0.0)
+    };
+    let banded = (0..cols)
+        .find(|&c| !flat[c].trim().is_empty())
+        .is_some_and(|c0| {
+            let mut end = c0 + 1;
+            while end < cols && merges.continues_left[end] {
+                end += 1;
+            }
+            let held = (0..cols)
+                .filter(|&c| !flat[c].trim().is_empty())
+                .all(|c| c >= c0 && c < end);
+            let outside = (g.xs[c0] - g.xs[0]) + (g.xs[cols] - g.xs[end]);
+            held && end - c0 >= 2 && outside > 0.0 && outside < BAND_MARGIN_EMS * em
+        });
+    let across = spanning || (1..cols).all(|c| merges.continues_left[c]) || banded;
     let alone = filled(0) == 1
         && !flat[0].trim().is_empty()
         && (1..cols).all(|c| !merges.continues_left[c]);
@@ -1267,6 +1307,45 @@ fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
         && places(false) > LINE_ART_STROKES * (g.rows() + 1)
 }
 
+/// Lines of a scale's text, at most, between an axis's scale and the plot
+/// it measures: the space ticks and their labels take, as the axis test of
+/// a scatter's values allows (see `figure::axis`).
+const SCALE_REACH: f64 = 4.0;
+
+/// Do the cells, read in order, say nothing but numbers that step evenly:
+/// three or more, by one difference (`160 140 120 … 0`) or one ratio, as a
+/// logarithmic axis steps (`1 10 100 1,000`)? A plot's scale, its tick
+/// marks drawn at each number, reads as a ruled row or column; a table's
+/// column of figures does not step so, or stands beside its labels.
+fn axis_scale(cells: &[String]) -> bool {
+    let mut values: Vec<f64> = Vec::new();
+    for token in cells.iter().flat_map(|c| c.split_whitespace()) {
+        let t = token
+            .replace(['\u{2212}', '\u{2013}'], "-")
+            .replace(',', "");
+        match t.parse::<f64>() {
+            Ok(v) => values.push(v),
+            Err(_) => return false,
+        }
+    }
+    if values.len() < 3 {
+        return false;
+    }
+    let even = |steps: Vec<f64>| {
+        let first = steps[0];
+        first.abs() > f64::EPSILON
+            && steps
+                .iter()
+                .all(|s| (s - first).abs() <= first.abs() * 0.01)
+    };
+    let differences: Vec<f64> = values.windows(2).map(|w| w[1] - w[0]).collect();
+    let ratios: Option<Vec<f64>> = values
+        .windows(2)
+        .map(|w| (w[0].abs() > f64::EPSILON).then(|| w[1] / w[0]))
+        .collect();
+    even(differences) || ratios.is_some_and(|r| r[0] > 0.0 && (r[0] - 1.0).abs() > 0.01 && even(r))
+}
+
 /// Does a heading give way to the figure it is in? Relative typography does
 /// wherever the figure took it: chart titles, legends and axis labels are
 /// set larger or bolder than body text. A number or a place in a sequence
@@ -1993,6 +2072,14 @@ fn find_figures(
             &figures,
         );
         figures.extend(labelled);
+        let plotted = figure::graticules(
+            &page.rules,
+            &page.glyphs,
+            pi,
+            (page.width, page.height),
+            &figures,
+        );
+        figures.extend(plotted);
         let mut taken = figure::attach_beside(
             &mut figures,
             &block_boxes,
@@ -2140,6 +2227,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // A reviewer's highlighting is drawn as fills fitted to the lines it
         // marks, and is not the page's structure.
         crate::rule::strip_highlights(&mut p.fills, &p.glyphs);
+        // The page's glyphs are final from here: each grid's cells are read
+        // from them once.
+        let _cells = crate::cells::pin(&p.glyphs);
         let route = p.routing().route.clone();
 
         // Tables first: a grid's glyphs must not also become paragraphs.
@@ -2239,7 +2329,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // not rows and their rules' ends are not columns. See `textgrid`.
         // Where alignment already reads the page's one coarse grid, it
         // keeps it.
-        let mut beside_labels: Vec<crate::geom::BBox> = Vec::new();
+        let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
         if !aligned_preferred {
             timed(&mut timings.tables, || {
                 let lines = crate::textgrid::lines(&p.glyphs);
@@ -2249,9 +2339,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let stacks = table::stack_columns(&p.rules, &p.fills);
                 let mut withheld: Vec<usize> = Vec::new();
                 for i in crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines) {
-                    let beside = crate::textgrid::read_beside_its_labels(
-                        &grids[i], &p.rules, &p.fills, &lines,
-                    );
+                    let beside =
+                        crate::textgrid::ruled_beside_prose(&grids[i], &p.rules, &p.fills, &lines);
                     // The stacks of row lines ruled alike within the seed:
                     // the places their lines break, their columns' edges as
                     // drawn.
@@ -2277,7 +2366,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                             withheld.push(i);
                         }
                         if beside {
-                            beside_labels.extend(got.iter().map(|g| g.bbox));
+                            beside_prose.extend(got.iter().map(|g| g.bbox));
                         }
                         if debug {
                             eprintln!(
@@ -2305,6 +2394,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 let mut taken: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
                 taken.extend(read.iter().map(|g| g.bbox));
                 let outside = glyphs_outside_grids(&p.glyphs, &grids);
+                let _outside_cells = crate::cells::pin(&outside);
                 let accepted = table::detect_aligned(&outside, &p.rules, &p.fills, p.index);
                 let typed: Vec<crate::geom::BBox> = accepted
                     .iter()
@@ -2438,16 +2528,24 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let prose = timed(&mut timings.columns, || {
             glyphs_outside_grids(&p.glyphs, &grids)
         });
+        let _prose_cells = crate::cells::pin(&prose);
 
         // The prose's columns, which the field lists below look between too.
-        // A table read from its text for the labels beside it stands in a
-        // column of the prose: its text keeps that column's extent, as it
-        // would read had it been prose.
+        // A table ruled under its rows with horizontals alone, standing
+        // beside a column of the page's prose (`textgrid::ruled_beside_prose`),
+        // is set in a column of its own: its text keeps that column's extent,
+        // as it would read had it been prose.
+        //
+        // The test is pure geometry, made on the ruled grid that seeds the
+        // table read from its text. In practice only such seeds give tables
+        // of this shape. Made on every table the page's readers keep, it
+        // changed two documents more, one for the better and one for the
+        // worse; counted, a table's own gutters part the page's text at them.
         let prose_cols = timed(&mut timings.columns, || {
             let elsewhere: Vec<Grid> = grids
                 .iter()
                 .zip(&grid_sources)
-                .filter(|(g, s)| !(**s == GridSource::Text && beside_labels.contains(&g.bbox)))
+                .filter(|(g, s)| !(**s == GridSource::Text && beside_prose.contains(&g.bbox)))
                 .map(|(g, _)| g.clone())
                 .collect();
             if elsewhere.len() == grids.len() {
@@ -3076,6 +3174,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
     }
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
+        let _cells = crate::cells::pin(&raw.pages[pi].glyphs);
         let mut page_elements = Vec::new();
         let (figures, member) = &page_figures[pi];
         let in_figure = |i: usize| member[i];
@@ -3312,6 +3411,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             // a drawing's dimension and extension lines. A table is ruled at
             // its boundaries, however many pieces each rule is drawn in.
             let line_art = ruled && line_art(g, &raw.pages[pi].rules);
+            // An axis's scale ruled by its ticks: a row or a column of
+            // numbers stepping evenly, `160 140 … 0`, set against a plot.
+            let scale = (g.rows() == 1 || g.cols() == 1) && axis_scale(&flat);
             let drawn_as_table = ruled && !line_art && {
                 let (occ, vertical, horizontal) =
                     table_confidence_signals(g, &raw.pages[pi].glyphs, &raw.pages[pi].rules);
@@ -3329,7 +3431,40 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 .iter()
                 .position(|f| figure::share_inside(&g.bbox, &f.drawing) >= containment)
                 .filter(|_| !drawn_as_table);
-            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art {
+            // The plot a scale stands against: the figure whose drawing is
+            // nearest it, within an axis's reach.
+            let scaled = if scale && drawn_in.is_none() {
+                let mut sizes: Vec<f32> = raw.pages[pi]
+                    .glyphs
+                    .iter()
+                    .filter(|gl| {
+                        gl.bbox
+                            .is_some_and(|b| figure::share_inside(&b, &g.bbox) >= 0.5)
+                    })
+                    .map(|gl| gl.font_size)
+                    .collect();
+                sizes.sort_by(f32::total_cmp);
+                let line = sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64;
+                figures
+                    .iter()
+                    .enumerate()
+                    .map(|(fi, f)| {
+                        let d = f.drawing;
+                        let gap = (d.x0 - g.bbox.x1)
+                            .max(g.bbox.x0 - d.x1)
+                            .max(d.y0 - g.bbox.y1)
+                            .max(g.bbox.y0 - d.y1)
+                            .max(0.0);
+                        (fi, gap)
+                    })
+                    .filter(|(_, gap)| *gap <= line * SCALE_REACH)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(fi, _)| fi)
+            } else {
+                None
+            };
+            let drawn_in = drawn_in.or(scaled);
+            if layout.demoted_tables[gi] || drawn_in.is_some() || line_art || scale {
                 // Judged non-table by the layout arbiter: same reading
                 // order, prose form.
                 let text = (0..g.rows())
@@ -3350,7 +3485,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                         figure: Some(format!("figure-{pi}-{fi}")),
                         ..Element::new("doco:Figure", text, "rust", "fills")
                     },
-                    None if line_art => Element {
+                    None if line_art || scale => Element {
                         page: pi,
                         bbox: Some(g.bbox),
                         ..Element::new("doco:Figure", text, "rust", "fills")
@@ -4107,6 +4242,22 @@ mod tests {
     }
 
     #[test]
+    fn numbers_stepping_evenly_are_a_scale() {
+        let cells = |c: &[&str]| c.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        // By one difference, falling or rising, signed or with thousands.
+        assert!(axis_scale(&cells(&["90", "75", "60", "45", "30"])));
+        assert!(axis_scale(&cells(&["\u{2212}0.5", "0", "0.5", "1.0"])));
+        assert!(axis_scale(&cells(&["2,000 4,000 6,000"])));
+        // By one ratio, as a logarithmic axis steps.
+        assert!(axis_scale(&cells(&["0.1", "1", "10", "100"])));
+        // A column of counts, two numbers, a label, or no step at all.
+        assert!(!axis_scale(&cells(&["12", "7", "31", "4"])));
+        assert!(!axis_scale(&cells(&["20", "40"])));
+        assert!(!axis_scale(&cells(&["Total", "10", "20", "30"])));
+        assert!(!axis_scale(&cells(&["5", "5", "5"])));
+    }
+
+    #[test]
     fn a_wide_value_standing_in_alike_from_both_edges_is_spread() {
         // A label column and two columns a value is set across (x 60–260),
         // its text at 10 pt.
@@ -4158,6 +4309,112 @@ mod tests {
         assert!(!spread(63.0, 257.0));
         // As wide, an em or more in from each edge, but not alike.
         assert!(!spread(71.0, 241.0));
+    }
+
+    #[test]
+    fn a_band_over_all_but_a_margin_column_is_the_tables_title() {
+        use crate::rule::{Orientation, Rule};
+        let word = |x0: f64, x1: f64, y: f64, t: &str, i: usize| Glyph {
+            text: t.into(),
+            bbox: Some(BBox {
+                x0,
+                y0: y - 7.0,
+                x1,
+                y1: y,
+            }),
+            page: 0,
+            origin: (x0, y),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            advance: None,
+            draw_index: i,
+        };
+        // A grid whose first column is `first` wide; the band over the rest
+        // of it, the rule at the first column's edge running up through it.
+        let table = |first: f64| {
+            let xs = vec![0.0, first, first + 50.0, first + 100.0];
+            let ys = vec![0.0, 15.0, 30.0, 45.0, 60.0];
+            let right = xs[3];
+            let mut rules: Vec<Rule> = ys
+                .iter()
+                .map(|&y| Rule {
+                    bbox: BBox {
+                        x0: 0.0,
+                        y0: y,
+                        x1: right,
+                        y1: y + 0.5,
+                    },
+                    orientation: Orientation::Horizontal,
+                    page: 0,
+                })
+                .collect();
+            let v = |x: f64, y0: f64| Rule {
+                bbox: BBox {
+                    x0: x,
+                    y0,
+                    x1: x + 0.5,
+                    y1: 60.0,
+                },
+                orientation: Orientation::Vertical,
+                page: 0,
+            };
+            rules.extend([v(0.0, 0.0), v(first, 0.0), v(right, 0.0)]);
+            rules.extend([v(first + 50.0, 15.0)]);
+            let mut glyphs = vec![
+                word(first + 4.0, first + 40.0, 11.0, "Hourly", 0),
+                word(first + 43.0, first + 80.0, 11.0, "readings", 1),
+            ];
+            for (r, row) in [
+                ["Site", "North", "South"],
+                ["1", "3.2", "4.1"],
+                ["2", "3.5", "4.4"],
+            ]
+            .iter()
+            .enumerate()
+            {
+                let y = 26.0 + r as f64 * 15.0;
+                glyphs.push(word(2.0, 10.0, y, row[0], 2 + r * 3));
+                glyphs.push(word(first + 4.0, first + 30.0, y, row[1], 3 + r * 3));
+                glyphs.push(word(first + 54.0, first + 80.0, y, row[2], 4 + r * 3));
+            }
+            let grid = Grid {
+                layout: None,
+                page: 0,
+                bbox: BBox {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: right,
+                    y1: 60.0,
+                },
+                xs,
+                ys,
+            };
+            let page = crate::extract::Page {
+                index: 0,
+                glyphs,
+                images: Vec::new(),
+                rules,
+                fills: Vec::new(),
+                dots: Vec::new(),
+                width: 600.0,
+                height: 800.0,
+                rotation: 0,
+                ocr: None,
+                routing: None,
+                warnings: Vec::new(),
+            };
+            (grid, page)
+        };
+        // A first column 12 pt wide at 8 pt text: room for a turned line,
+        // not a label set across it. The band is the table's.
+        let (g, page) = table(12.0);
+        let titled = table_title(&g, &page, &[], false);
+        assert_eq!(titled.map(|(t, _)| t).as_deref(), Some("Hourly readings"));
+        // A first column a label fits beside it: a group's label over part
+        // of the table.
+        let (g, page) = table(60.0);
+        assert!(table_title(&g, &page, &[], false).is_none());
     }
 
     #[test]

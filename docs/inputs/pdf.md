@@ -507,6 +507,13 @@ from its text:
   A calibration's points, at a few levels across, each at nearly the same
   height, are such a scatter. A matrix of dots, a row of text apart, a
   column of drawn bullets, and a seal's ring of dots are not.
+- A plot drawn in lines alone fills nothing: a scope's graticule under its
+  traces, or a log plot's grid under its curves. It is a drawing when its
+  lines span it both ways, four or more each way, and stand evenly spaced
+  each way, with text in under two of every five of the cells they make.
+  A line broken off for a label or a trace leaves its neighbours a whole
+  number of steps apart, and the grid still counts. A ruled table's text
+  fills most of its cells, and its rows and columns differ in size.
 - A form's fields are no drawing's shapes: an empty box a line or two high,
   under or after its label's colon (`Job Name:`, set at the text's size, not
   a title's), and the boxes in line with it at its height. The box that
@@ -633,8 +640,11 @@ table. A grid inside a drawing is emitted as that figure's text, not as a
 `doco:Table`. So is a grid whose text lines up with no rules of its own,
 when half of it lies on a drawing, and a ruled grid whose strokes stand at
 many more places than its rows and columns: the outlines of a unit's
-terminals, or a drawing's dimension and extension lines. A table drawn over
-a drawing, ruled at its rows and columns and mostly filled, stays a table.
+terminals, or a drawing's dimension and extension lines. So is a ruled row
+or column holding nothing but three numbers or more that step evenly, by one
+difference (`160 140 … 0`) or one ratio (`1 10 100`): an axis's scale ruled
+by its tick marks. A table drawn over a drawing, ruled at its rows and
+columns and mostly filled, stays a table.
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows
