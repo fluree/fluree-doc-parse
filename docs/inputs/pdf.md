@@ -218,9 +218,11 @@ scatter is level with a line of text only by chance.
 The item's marker is `•`. Each item starts where its bullet is, however
 closely the items are spaced.
 
-**Dashes and arrows.** A line opening with a dash or an arrow and a space
-(`—`, `–`, `-`, `→`) is a list item when another line nearby opens with the
-same mark at the same place. The lines between two such lines must hang
+**Dashes and arrows.** A line opening with a dash, a minus sign or an
+arrow and a space (`—`, `–`, `-`, `−`, `→`, `>`) is a list item when
+another line nearby opens with the same mark at the same place. A `>`
+opens an item only before a capital or a figure: a quoted message's lines
+open with one too, going on with their sentences in lower case. The lines between two such lines must hang
 under the item's text or be a word or two (`or`). The mark is the item's
 marker, as a bullet is, and wrapped lines hang under the item's text. A lone
 line so opening, among lines of prose at the same place, is a range, a minus
