@@ -49,6 +49,10 @@ jobs:
     timeout-minutes: 45
     env:
       SECONDS_EACH: 15
+      # cargo-fuzz builds for the target it was itself built for unless told,
+      # and the prebuilt one install-action fetches is a musl build, for
+      # which the toolchain has no standard library.
+      TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
@@ -60,7 +64,7 @@ jobs:
           workspaces: fuzz -> target
       - name: Build the targets
         working-directory: fuzz
-        run: cargo fuzz build -O -a -s none
+        run: cargo fuzz build -O -a -s none --target $TARGET
       - name: Run each target
         working-directory: fuzz
         run: |
@@ -75,7 +79,7 @@ jobs:
           for t in $targets; do
             mkdir -p corpus/$t
             echo "::group::$t"
-            cargo fuzz run "$t" corpus/$t seeds/$t -O -a -s none -- \
+            cargo fuzz run "$t" corpus/$t seeds/$t -O -a -s none --target $TARGET -- \
               -rss_limit_mb=320 -timeout=10 -max_len=262144 \
               -max_total_time=$SECONDS_EACH -print_final_stats=1 \
               || failed="$failed $t"
