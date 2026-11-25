@@ -577,7 +577,7 @@ pub fn assemble(glyphs: &[Glyph]) -> Vec<Line> {
             });
         }
         // Each glyph's cluster, and each cluster's reach along the line.
-        let mut cluster_of: std::collections::HashMap<usize, usize> = Default::default();
+        let mut cluster_of: rustc_hash::FxHashMap<usize, usize> = Default::default();
         let mut spans: Vec<(f64, f64)> = Vec::new();
         for (ci, c) in clusters.iter().enumerate() {
             let mut span = (f64::MAX, f64::MIN);
