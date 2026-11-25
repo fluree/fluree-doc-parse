@@ -4831,7 +4831,7 @@ mod tests {
         }
         let capture = |bbox| crate::extract::ImagePlacement {
             bbox,
-            texty: true,
+            texty: Some(true),
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),
@@ -4898,7 +4898,7 @@ mod tests {
                 x1: 120.0,
                 y1: 80.0,
             },
-            texty: false,
+            texty: Some(false),
             ppi: None,
             bitonal: false,
             grid: (1000, 1000),

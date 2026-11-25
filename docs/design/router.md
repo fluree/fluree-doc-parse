@@ -108,7 +108,16 @@ not judged: a scan's lines are words.
 
 Neither kind is dropped silently: unread, each is listed in
 [`doc:unreadRegions`](../formats/doco.md#regions-nothing-read) as `Small`
-or `NotTexty`, with its box, without a warning. A texty one under half an
+or `NotTexty`, with its box, without a warning.
+
+All of this needs the images' pixels, and decoding them is most of what an
+image costs: extraction probes them only when something acts on the verdict
+(`ExtractOptions::probe_images`; in `fdoc convert`, escalation, OCR, the
+anchors, the layout sidecars or `--probe-images`). Unprobed, an image's
+`texty` is `None`: the router routes none, no engine is offered any, and
+each one the text layer does not cover, half an inch or more on its longer
+side, is listed as `Unprobed`, at any share of the page, with one warning
+that says how many and on which pages. A texty one under half an
 inch on its longer side (`MIN_SMALL_REGION_SIDE`, 36 units: a checkbox, an
 icon) is not listed, though an OCR engine is still offered it when its own
 pixels hold a line of text: a stencil reads as text whatever it draws, and a

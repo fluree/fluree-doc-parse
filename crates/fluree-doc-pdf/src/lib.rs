@@ -182,9 +182,13 @@ pub fn past_limit(doc: &Document) -> impl Iterator<Item = fluree_doc_model::Unre
 /// `Small`, texty but under a tenth of the page (and not a checkbox or an
 /// icon), which an OCR engine reads and is not listed once it has; and
 /// `NotTexty`, a tenth of the page or more whose pixels the probe does not
-/// take for text, which nothing reads and is always listed. Only `Region`
-/// is worth a warning: the declined ones are logos, photographs and charts
-/// as often as content.
+/// take for text, which nothing reads and is always listed; and
+/// `Unprobed`, an image extraction did not decode
+/// ([`ExtractOptions::probe_images`] off), half an inch or more on its
+/// longer side, which nothing reads and is always listed. Only `Region` is
+/// worth a warning of its own: the declined ones are logos, photographs and
+/// charts as often as content, and the unprobed ones are said once, by
+/// page.
 pub fn unread_regions(
     doc: &Document,
     elements: &[fluree_doc_model::Element],
@@ -395,7 +399,7 @@ mod tests {
                 .iter()
                 .map(|&bbox| ImagePlacement {
                     bbox,
-                    texty: true,
+                    texty: Some(true),
                     ppi: None,
                     bitonal: false,
                     grid: (1000, 1000),
@@ -572,12 +576,35 @@ mod tests {
     }
 
     #[test]
+    fn an_image_not_probed_is_listed_as_unprobed_at_any_share_of_the_page() {
+        // Not decoded: a capture, a small one and an icon. Nothing is routed,
+        // no engine is offered any, and the two from half an inch up are
+        // listed; the icon is not.
+        let small = b(50.0, 100.0, 250.0, 130.0);
+        let icon = b(50.0, 140.0, 70.0, 160.0);
+        let mut p = page(&[BIG, small, icon]);
+        for i in &mut p.images {
+            i.texty = None;
+        }
+        let doc = Document {
+            pages: vec![p],
+            pages_past_limit: 0,
+        };
+        assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
+        assert!(route::ocr_regions(&doc.pages[0]).is_empty());
+        assert_eq!(
+            reasons(&doc),
+            [("Unprobed".into(), BIG), ("Unprobed".into(), small)]
+        );
+    }
+
+    #[test]
     fn a_large_image_the_probe_does_not_take_for_text_is_listed_as_not_texty() {
         let mut p = page(&[BIG, b(50.0, 100.0, 70.0, 120.0)]);
         // A photograph a fifth of the page, and an icon: only the first is
         // worth a caller's look.
         for i in &mut p.images {
-            i.texty = false;
+            i.texty = Some(false);
         }
         let doc = Document {
             pages_past_limit: 0,
@@ -624,7 +651,7 @@ mod tests {
             pages: vec![page(&[BIG])],
         };
         let mut photo = doc.clone();
-        photo.pages[0].images[0].texty = false;
+        photo.pages[0].images[0].texty = Some(false);
         let whole = Element::new("doco:Paragraph", "the page", "vlm", "page-tier");
         assert!(unread_regions(&photo, &[whole]).is_empty());
     }
@@ -642,7 +669,7 @@ mod tests {
         );
         let mut p = page(&[BIG, BIG]);
         for i in &mut p.images {
-            i.texty = false;
+            i.texty = Some(false);
         }
         let doc = Document {
             pages_past_limit: 0,
@@ -657,7 +684,7 @@ mod tests {
         // OCR glyphs route the page Deterministic, and its image is not a
         // declined region for that.
         let mut p = page(&[b(0.0, 0.0, 600.0, 800.0)]);
-        p.images[0].texty = false;
+        p.images[0].texty = Some(false);
         for (i, g) in p.glyphs.iter_mut().take(150).enumerate() {
             g.bbox = Some(b(
                 50.0,

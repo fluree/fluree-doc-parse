@@ -110,9 +110,18 @@ fn sidecars(dir: &Path, name: &str, files: &[(&str, String)]) -> PathBuf {
     d
 }
 
-/// `fdoc convert memo.pdf -f doco <args>` with no reader configured: the
-/// document node, stderr, and the whole graph as text.
+/// `fdoc convert memo.pdf -f doco --probe-images <args>` with no reader
+/// configured: the images probed, as a run with a reader probes them, so
+/// each region is reported as the router sees it. The document node,
+/// stderr, and the whole graph as text.
 fn convert(dir: &Path, args: &[&str]) -> (serde_json::Value, String, String) {
+    let mut probed = vec!["--probe-images"];
+    probed.extend_from_slice(args);
+    convert_plain(dir, &probed)
+}
+
+/// [`convert`] without probing the images, as a deterministic run reads.
+fn convert_plain(dir: &Path, args: &[&str]) -> (serde_json::Value, String, String) {
     let home = dir.join("home");
     let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
         .arg("convert")
@@ -166,6 +175,27 @@ fn a_region_nothing_read_is_reported_with_its_box() {
         stderr.contains(
             "warning: memo: fluree-doc-parse: 1 raster region carries content no reader \
              transcribed: page 1 at 56,582,556,732"
+        ),
+        "{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_plain_run_reports_an_image_it_did_not_examine() {
+    // No reader and no probe: the capture is not decoded, so nothing says
+    // whether it holds text. It is listed, and said once, by page.
+    let dir = scratch("plain", &page(true));
+    let (doc, stderr, _) = convert_plain(&dir, &[]);
+    assert_eq!(
+        doc["doc:unreadRegions"]["@value"],
+        serde_json::json!([{ "pageIndex": 0, "bbox": REGION, "reason": "Unprobed" }]),
+        "{doc}"
+    );
+    assert!(
+        stderr.contains(
+            "warning: memo: fluree-doc-parse: 1 image on page 1 was not examined: a parse \
+             that probes images (OCR or escalation) can tell whether it holds text."
         ),
         "{stderr}"
     );

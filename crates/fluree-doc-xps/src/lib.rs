@@ -644,7 +644,7 @@ fn finish(
                 bbox,
                 // Not decoded here: whether it holds text is for a reader
                 // to find out, so the router treats it as though it may.
-                texty: true,
+                texty: Some(true),
                 ppi: None,
                 bitonal: false,
                 // Nor its pixels counted: taken as enough for a line of

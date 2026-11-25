@@ -216,7 +216,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
             glyphs: Vec::new(),
             images: vec![ImagePlacement {
                 bbox,
-                texty: true,
+                texty: Some(true),
                 // One pixel per unit: 72 per inch of the page's units.
                 ppi: Some(72.0),
                 bitonal,
@@ -339,7 +339,11 @@ mod tests {
         assert!(p.glyphs.is_empty());
         assert_eq!((p.width, p.height), (1224.0, 1584.0));
         assert_eq!(p.images.len(), 1);
-        assert!(p.images[0].texty, "must read as recoverable content");
+        assert_eq!(
+            p.images[0].texty,
+            Some(true),
+            "must read as recoverable content"
+        );
     }
 
     #[test]
