@@ -302,8 +302,9 @@ it agrees with (`22nd`, `118th`, `21e`).
 A degree sign set as a raised `o` or `0` reads as `°` wherever it cannot be
 an ordinal's ending or a power: before a temperature's unit (`25°C`, not
 `25oC`), after three figures or more (`~ 145°`, not `~ 145 o`), after a
-decimal, or after a signed number. `1º` and `2º` stay ordinals and `10⁰` a
-power.
+decimal, after a signed number, or after an approximation's sign or a
+bracket's opening, where no ordinal stands (`~ 95°`, `Gloss (45°)`). `1º`
+and `2º` stay ordinals and `10⁰` a power.
 
 **Mixed numbers.** A spec sheet sets `22 3/8"` with no space before the
 fraction. The fraction is set small, in a smaller size or in the font's own
