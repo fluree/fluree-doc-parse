@@ -405,6 +405,10 @@ fn names_spanned_columns(
             .all(|t| t.trim().is_empty() || keyed || !table::is_numeric_cell(t.trim()))
 }
 
+/// Words a row of a one-column grid holds to read as a sentence, not an
+/// entry: a list's entries are a name and a few words of what it is.
+const SENTENCE_WORDS: usize = 12;
+
 /// The columns each spanning label of a header row covers, as `start..end`,
 /// from that row's flags for a cell continuing the one to its left.
 fn header_spans(continues_left: &[bool]) -> Vec<(usize, usize)> {
@@ -3115,6 +3119,62 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 grids = horizontal_bands;
                 grid_sources = vec![GridSource::HorizontalBand; grids.len()];
             }
+        }
+
+        // A header set as a shaded band over a table read under it, from
+        // its text or its alignment, is that table's header row.
+        {
+            let bands = table::header_bands(&p.rules, &p.fills);
+            if !bands.is_empty() {
+                let keep = table::take_header_bands(&mut grids, &bands, &p.glyphs);
+                let mut k = keep.iter();
+                grids.retain(|_| *k.next().unwrap_or(&true));
+                let mut k = keep.iter();
+                grid_sources.retain(|_| *k.next().unwrap_or(&true));
+            }
+        }
+
+        // A table holds two columns of content or more, as read here or as
+        // its text's alignment parts it (`Grid::split_by_alignment`, below).
+        // One left with one is a box drawn round prose, where it holds a row
+        // or two (a paragraph and a banner between a rule's marks, a
+        // figure's caption) or its rows run as sentences do: its text is the
+        // page's prose. A column of short entries, one a row, is a list the
+        // table keeps (`Np Number of reputation tables…`).
+        {
+            let tabular: Vec<bool> = grids
+                .iter()
+                .map(|g| {
+                    let filled = |g: &Grid| {
+                        let cols = g.cols();
+                        let texts = g.cell_texts(&p.glyphs);
+                        (0..cols)
+                            .filter(|&c| {
+                                (0..g.rows()).any(|r| !texts[r * cols + c].trim().is_empty())
+                            })
+                            .count()
+                    };
+                    let prose = || {
+                        let texts = g.cell_texts(&p.glyphs);
+                        let rows: Vec<&String> =
+                            texts.iter().filter(|t| !t.trim().is_empty()).collect();
+                        let sentences = rows
+                            .iter()
+                            .filter(|t| t.split_whitespace().count() >= SENTENCE_WORDS)
+                            .count();
+                        rows.len() <= 2 || sentences * 2 > rows.len()
+                    };
+                    filled(g) >= 2 || !prose() || {
+                        let mut split = g.clone();
+                        split.split_by_alignment(&p.glyphs);
+                        filled(&split) >= 2
+                    }
+                })
+                .collect();
+            let mut k = tabular.iter();
+            grids.retain(|_| *k.next().unwrap_or(&true));
+            let mut k = tabular.iter();
+            grid_sources.retain(|_| *k.next().unwrap_or(&true));
         }
 
         // The labels a ruled table sets over the rules that group its

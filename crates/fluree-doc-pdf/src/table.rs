@@ -4646,6 +4646,314 @@ pub enum SuspectReason {
     MergedRows,
 }
 
+/// A table's header set as a shaded band at its top: shading one height
+/// under a rule across it, divided into cells by verticals that stand on
+/// that rule and end at the band's foot. The body under it is often ruled by nothing, and read from
+/// its text or its alignment; the band is its header row ([`take_header_bands`]).
+#[derive(Debug, Clone)]
+pub(crate) struct HeaderBand {
+    pub bbox: BBox,
+    pub cells: Vec<BBox>,
+}
+
+/// The page's header bands. Shading one height, run together end to end,
+/// is a band; the verticals standing on its top rule and ending at its foot
+/// divide it into its cells, however its shading was drawn (a cell at a
+/// time, or two cells under one fill).
+pub(crate) fn header_bands(rules: &[Rule], fills: &[crate::rule::Fill]) -> Vec<HeaderBand> {
+    let t = EDGE_TOLERANCE;
+    let mut boxes: Vec<BBox> = fills.iter().map(|f| f.bbox).collect();
+    boxes.sort_by(|a, b| a.y0.total_cmp(&b.y0).then(a.x0.total_cmp(&b.x0)));
+    // Runs of shading one height, joined where they meet or overlap.
+    let mut runs: Vec<BBox> = Vec::new();
+    for b in boxes {
+        match runs.iter_mut().find(|r| {
+            (r.y0 - b.y0).abs() <= t
+                && (r.y1 - b.y1).abs() <= t
+                && b.x0 <= r.x1 + t
+                && b.x1 >= r.x0 - t
+        }) {
+            Some(r) => *r = r.union(&b),
+            None => runs.push(b),
+        }
+    }
+    // Runs a later piece of shading joined, merged until none touch.
+    let touch = |r: &BBox, b: &BBox| {
+        (r.y0 - b.y0).abs() <= t && (r.y1 - b.y1).abs() <= t && b.x0 <= r.x1 + t && b.x1 >= r.x0 - t
+    };
+    let mut merged = true;
+    while merged {
+        merged = false;
+        'outer: for i in 0..runs.len() {
+            for j in i + 1..runs.len() {
+                if touch(&runs[i], &runs[j]) {
+                    let b = runs.remove(j);
+                    runs[i] = runs[i].union(&b);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for bbox in runs {
+        let top = rules.iter().any(|r| {
+            r.orientation == Orientation::Horizontal
+                && (r.axis_pos() - bbox.y0).abs() <= t
+                && r.bbox.x0 <= bbox.x0 + t
+                && r.bbox.x1 >= bbox.x1 - t
+        });
+        let mut dividers: Vec<f64> = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == Orientation::Vertical
+                    && r.axis_pos() > bbox.x0 + t
+                    && r.axis_pos() < bbox.x1 - t
+                    && (r.bbox.y0 - bbox.y0).abs() <= t
+                    && (r.bbox.y1 - bbox.y1).abs() <= t
+            })
+            .map(Rule::axis_pos)
+            .collect();
+        dividers.sort_by(f64::total_cmp);
+        dividers.dedup_by(|a, b| (*a - *b).abs() <= t);
+        if !top || dividers.is_empty() {
+            continue;
+        }
+        let mut edges = vec![bbox.x0];
+        edges.extend(dividers);
+        edges.push(bbox.x1);
+        let cells = edges
+            .windows(2)
+            .map(|w| BBox {
+                x0: w[0],
+                y0: bbox.y0,
+                x1: w[1],
+                y1: bbox.y1,
+            })
+            .collect();
+        out.push(HeaderBand { bbox, cells });
+    }
+    out
+}
+
+/// Take each header band over the table read under it as its header row,
+/// one cell a column: the band's cells line up with the table's columns
+/// one for one, the table's first rows below the band start within the
+/// band's own height of its foot, and nothing else of the page's text
+/// stands between. Rows the reading made of the band's own lines (its
+/// labels' second lines, `(billions of dollars)` over `(percent)`) are the
+/// band's; a table read from the band's lines alone, set over nothing, is
+/// dropped. Returns which grids to keep.
+pub(crate) fn take_header_bands(
+    grids: &mut [Grid],
+    bands: &[HeaderBand],
+    glyphs: &[crate::glyph::Glyph],
+) -> Vec<bool> {
+    let t = EDGE_TOLERANCE;
+    let mut keep = vec![true; grids.len()];
+    let centre = |g: &crate::glyph::Glyph| {
+        g.bbox
+            .filter(|_| g.is_horizontal() && !g.text.trim().is_empty())
+            .map(|b| ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0))
+    };
+    let inside = |b: &BBox, (x, y): (f64, f64)| x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1;
+    for band in bands {
+        let Some(gi) = (0..grids.len()).find(|&gi| {
+            let g = &grids[gi];
+            let cols = g.cols();
+            let lined_up = cols == band.cells.len()
+                && (0..cols).all(|c| {
+                    let mid = (g.xs[c] + g.xs[c + 1]) / 2.0;
+                    mid >= band.cells[c].x0 && mid <= band.cells[c].x1
+                });
+            let under = g.bbox.y0 >= band.bbox.y0 - t
+                && g.bbox.y1 > band.bbox.y1 + t
+                && g.bbox.y0 <= band.bbox.y1 + band.bbox.height();
+            keep[gi] && lined_up && under && g.ys[0] > band.bbox.y0 + t
+        }) else {
+            continue;
+        };
+        // Nothing of the page's text between the band and the table, but
+        // what the table holds.
+        let homes = grids[gi].glyph_cells(glyphs);
+        let top_of_body = (0..glyphs.len())
+            .filter(|&i| homes[i].is_some())
+            .filter_map(|i| centre(&glyphs[i]))
+            .filter(|&(_, y)| y > band.bbox.y1)
+            .map(|(_, y)| y)
+            .fold(f64::MAX, f64::min);
+        // Lines between the band and the table's first row are its rows
+        // too where they are labels alone, in the band's first cell: a
+        // section's label (`Assets`) over a group's (`Total securities`).
+        // Anything else between, and the band is not this table's.
+        let stray: Vec<usize> = (0..glyphs.len())
+            .filter(|&i| {
+                homes[i].is_none()
+                    && centre(&glyphs[i]).is_some_and(|(x, y)| {
+                        x > band.bbox.x0 && x < band.bbox.x1 && y > band.bbox.y1 && y < top_of_body
+                    })
+            })
+            .collect();
+        let labels_only = stray
+            .iter()
+            .all(|&i| centre(&glyphs[i]).is_some_and(|(x, _)| x <= band.cells[0].x1));
+        if top_of_body == f64::MAX || !labels_only {
+            continue;
+        }
+        // The label lines, top to bottom: (top, bottom) of each baseline's ink.
+        let mut label_lines: Vec<(f64, f64, f64)> = Vec::new();
+        for &i in &stray {
+            let (Some(b), y) = (glyphs[i].bbox, glyphs[i].origin.1) else {
+                continue;
+            };
+            let fs = (glyphs[i].font_size as f64).max(1.0);
+            match label_lines.iter_mut().find(|l| (l.0 - y).abs() < 0.3 * fs) {
+                Some(l) => {
+                    l.1 = l.1.min(b.y0);
+                    l.2 = l.2.max(b.y1);
+                }
+                None => label_lines.push((y, b.y0, b.y1)),
+            }
+        }
+        label_lines.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Each label line's glyphs, all of them, spaces too.
+        let label_glyphs: Vec<Vec<usize>> = label_lines
+            .iter()
+            .map(|l| {
+                (0..glyphs.len())
+                    .filter(|&i| {
+                        homes[i].is_none()
+                            && (glyphs[i].origin.1 - l.0).abs()
+                                < 0.3 * (glyphs[i].font_size as f64).max(1.0)
+                            && glyphs[i].origin.0 >= band.cells[0].x0
+                            && glyphs[i].origin.0 <= band.cells[0].x1
+                    })
+                    .collect()
+            })
+            .collect();
+        // Each cell's glyphs, its inked ones by their centres and its spaces
+        // by where the pen set them: a word space is the cell's own.
+        let head: Vec<Vec<usize>> = band
+            .cells
+            .iter()
+            .map(|cell| {
+                (0..glyphs.len())
+                    .filter(|&i| match centre(&glyphs[i]) {
+                        Some(p) => inside(cell, p),
+                        None => {
+                            glyphs[i].is_horizontal()
+                                && !glyphs[i].text.is_empty()
+                                && glyphs[i].text.trim().is_empty()
+                                && inside(cell, glyphs[i].origin)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        if head.iter().all(Vec::is_empty) {
+            continue;
+        }
+        let g = &mut grids[gi];
+        let cols = g.cols();
+        if let Some(lay) = g.layout.as_deref() {
+            // Rows of the band's own lines, at the reading's top.
+            let in_band = |r: usize| {
+                let inked: Vec<(f64, f64)> = lay.cells[r * cols..(r + 1) * cols]
+                    .iter()
+                    .flatten()
+                    .filter_map(|&i| centre(&glyphs[i]))
+                    .collect();
+                !inked.is_empty() && inked.iter().all(|&p| inside(&band.bbox, p))
+            };
+            let rows = g.rows();
+            let k = (0..rows).take_while(|&r| in_band(r)).count();
+            if k == rows {
+                continue;
+            }
+            let mut lay = lay.clone();
+            let mut cells: Vec<Vec<usize>> = head.clone();
+            // The label rows, each a group's label across the table.
+            let labels = label_glyphs.len();
+            for ids in &label_glyphs {
+                cells.push(ids.clone());
+                cells.extend(std::iter::repeat_n(Vec::new(), cols - 1));
+            }
+            cells.extend(lay.cells.drain(k * cols..));
+            lay.cells = cells;
+            lay.header_rows = 1 + lay.header_rows.saturating_sub(k);
+            let shift = |r: usize| r + 1 + labels - k;
+            lay.spans = lay
+                .spans
+                .iter()
+                .filter(|s| s.0 >= k)
+                .map(|&(r, a, b)| (shift(r), a, b))
+                .collect();
+            lay.downs = lay
+                .downs
+                .iter()
+                .filter(|d| d.0 >= k)
+                .map(|&(r0, c, r1)| (shift(r0), c, shift(r1)))
+                .collect();
+            lay.sub_headers = (1..=labels)
+                .chain(
+                    lay.sub_headers
+                        .iter()
+                        .filter(|&&r| r >= k)
+                        .map(|&r| shift(r)),
+                )
+                .collect();
+            lay.spans.extend((1..=labels).map(|r| (r, 0, cols)));
+            let mut ys = vec![band.bbox.y0, band.bbox.y1];
+            for w in label_lines.windows(2) {
+                ys.push((w[0].2 + w[1].1) / 2.0);
+            }
+            if let Some(last) = label_lines.last() {
+                ys.push(last.2.max(band.bbox.y1 + 0.1));
+            }
+            let floor = *ys.last().expect("the band's foot");
+            ys.extend(g.ys[k + 1..].iter().map(|&y| y.max(floor + 0.1)));
+            g.ys = ys;
+            g.layout = Some(std::sync::Arc::new(lay));
+            crate::textgrid::claim(g, glyphs);
+        } else {
+            let mut below: Vec<f64> =
+                g.ys.iter()
+                    .copied()
+                    .filter(|&y| y > band.bbox.y1 + t)
+                    .collect();
+            // The table's own top edge goes where its label rows above it
+            // end, or the band's foot is its first row's top.
+            if g.ys[0] > band.bbox.y1 + t && label_lines.is_empty() {
+                below.remove(0);
+            }
+            if below.is_empty() {
+                continue;
+            }
+            let mut ys = vec![band.bbox.y0, band.bbox.y1];
+            // A row for each label line, parted midway between their ink.
+            for w in label_lines.windows(2) {
+                ys.push((w[0].2 + w[1].1) / 2.0);
+            }
+            ys.extend(below);
+            g.ys = ys;
+        }
+        // The band's cells are the table's columns as drawn, the body's
+        // lined up under them: its edges are the table's.
+        let mut xs: Vec<f64> = band.cells.iter().map(|c| c.x0).collect();
+        xs.push(band.bbox.x1);
+        g.xs = xs;
+        g.bbox = g.bbox.union(&band.bbox);
+        // Readings of the band's lines alone.
+        for (oi, o) in grids.iter().enumerate() {
+            let (x, y) = ((o.bbox.x0 + o.bbox.x1) / 2.0, (o.bbox.y0 + o.bbox.y1) / 2.0);
+            if oi != gi && inside(&band.bbox, (x, y)) && o.bbox.y1 <= band.bbox.y1 + t {
+                keep[oi] = false;
+            }
+        }
+    }
+    keep
+}
+
 /// Fraction of a column's populated cells that must carry a number before it
 /// counts as a figures column.
 const NUMERIC_COLUMN: f64 = 0.6;
@@ -10122,6 +10430,90 @@ mod tests {
             }
         }
         rules
+    }
+
+    #[test]
+    fn a_shaded_header_band_heads_the_table_read_under_it() {
+        // A band of four shaded cells under a rule across them, divided by
+        // verticals standing on that rule and ending at the band's foot,
+        // its labels wrapped over two lines; under it a table read from its
+        // alignment, ruled by nothing.
+        let fill = |x0: f64, x1: f64| crate::rule::Fill {
+            bbox: BBox {
+                x0,
+                y0: 100.0,
+                x1,
+                y1: 130.0,
+            },
+            page: 0,
+        };
+        let fills = vec![
+            fill(50.0, 200.0),
+            fill(200.0, 290.0),
+            fill(290.0, 380.0),
+            fill(380.0, 470.0),
+        ];
+        let mut rules = vec![h(50.0, 470.0, 100.0)];
+        for x in [200.0, 290.0, 380.0] {
+            rules.push(v(100.0, 130.0, x));
+        }
+        let bands = header_bands(&rules, &fills);
+        assert_eq!(bands.len(), 1, "{bands:?}");
+        assert_eq!(bands[0].cells.len(), 4);
+        // Shading with no divider standing on its rule, or dividers with no
+        // rule across the top, is no band.
+        assert!(header_bands(&rules[..1], &fills).is_empty());
+        assert!(header_bands(&rules[1..], &fills).is_empty());
+
+        let mut glyphs = vec![
+            set_at(55.0, 112.0, "Item"),
+            set_at(210.0, 112.0, "Outstanding"),
+            set_at(210.0, 124.0, "(billions)"),
+            set_at(300.0, 112.0, "Growth"),
+            set_at(300.0, 124.0, "(percent)"),
+            set_at(390.0, 112.0, "Average"),
+            set_at(390.0, 124.0, "(percent)"),
+        ];
+        for (i, label) in ["Equities", "Farmland", "Bonds"].into_iter().enumerate() {
+            let base = 145.0 + 12.0 * i as f64;
+            glyphs.push(set_at(55.0, base, label));
+            for x in [230.0, 320.0, 410.0] {
+                glyphs.push(set_at(x, base, "1.5"));
+            }
+        }
+        // The alignment's reading: its own column edges, its first row
+        // under the band.
+        let mut grids = vec![Grid {
+            layout: None,
+            page: 0,
+            xs: vec![55.0, 210.0, 305.0, 395.0, 440.0],
+            ys: vec![135.0, 147.5, 159.5, 171.5],
+            bbox: BBox {
+                x0: 55.0,
+                y0: 135.0,
+                x1: 440.0,
+                y1: 171.5,
+            },
+        }];
+        let keep = take_header_bands(&mut grids, &bands, &glyphs);
+        assert_eq!(keep, vec![true]);
+        let g = &grids[0];
+        assert_eq!(g.rows(), 4, "{:?}", g.ys);
+        // The band's divisions are the table's columns.
+        for (x, want) in g.xs.iter().zip([50.0, 200.0, 290.0, 380.0, 470.0]) {
+            assert!((x - want).abs() < 0.5, "{:?}", g.xs);
+        }
+        let texts = g.cell_texts(&glyphs);
+        assert_eq!(
+            &texts[..4],
+            &[
+                "Item",
+                "Outstanding (billions)",
+                "Growth (percent)",
+                "Average (percent)"
+            ]
+        );
+        assert_eq!(&texts[4..8], &["Equities", "1.5", "1.5", "1.5"]);
     }
 
     #[test]
