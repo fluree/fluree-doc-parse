@@ -119,6 +119,13 @@ structure model, and the VLM — which is what enables the [three-way
 veto](../concepts/escalation.md#the-three-way-veto). Two agreeing readers
 overrule the deepest model.
 
+The VLM reading need not come from `--tier-results`: the veto applies the
+same way to a model `fdoc convert --escalate` calls in the run. There it
+rests on the structure reading and the grid alone, both known before the
+model is called, so no table crop it vetoes is sent to the model. A page
+read whole still shows the model its tables, and its reading replaces the
+page, grids and all.
+
 ## 4. OCR words — `--ocr-words`
 
 **Filename:** `{stem}_p{page}_full.json` for a whole page, `{stem}_p{page}_r{i}.json`
@@ -136,6 +143,12 @@ So are the pictures anchored to an XLSX's cells, for the figure
 [E-mail](../inputs/email.md#images-in-the-body)). Readings are looked up by
 stem, so two inputs of one stem in a batch (`report.pdf` and `report.png`)
 are warned about, and `render-routed` crops only the first.
+
+A page's regions are numbered once glyphs drawn twice at one spot (faux bold)
+count once and a watermark laid over the text is taken out, as the analysis
+and its anchors number them: a label in faux bold over a capture covers it as
+drawn, not once cleaned, and `r0` is the same region for the crop, the
+reading and the anchor.
 
 An OCR engine's words, each with its box. Unlike a model reading, which
 replaces elements, these become **glyphs** before analysis, so a scanned page

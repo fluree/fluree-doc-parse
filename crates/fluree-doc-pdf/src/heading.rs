@@ -1846,7 +1846,7 @@ fn opens_an_address(b: &Block, page: &[Block]) -> bool {
         }
         // A street or a city between the name and the number: a heading
         // set straight over a line to call is a heading.
-        if ends_with_contact(&next.text()) {
+        if contact_line(&next.text()) {
             return step > 0;
         }
         last = next;
@@ -1857,8 +1857,18 @@ fn opens_an_address(b: &Block, page: &[Block]) -> bool {
 /// Any line of the block states a web address, an e-mail address or a
 /// phone number: an address block's.
 fn states_contact(b: &Block) -> bool {
-    b.lines.iter().any(|l| ends_with_contact(&l.text))
-        || b.text().split(['•', '|']).any(ends_with_contact)
+    b.lines.iter().any(|l| contact_line(&l.text)) || b.text().split(['•', '|']).any(contact_line)
+}
+
+/// A line of an address: text ending on a web address, an e-mail address
+/// or a phone number that is no sentence closing on it, its stop after the
+/// address and words before it (`Meeting held virtually at
+/// www.example.com/meeting.`). That is prose giving an address, not a line
+/// of one: an address line states the address alone, or after a label or a
+/// phone number, and no stop closes it.
+fn contact_line(t: &str) -> bool {
+    let t = t.trim_end();
+    ends_with_contact(t) && !(t.ends_with('.') && t.split_whitespace().count() > 2)
 }
 
 /// Most words on one line of an address.
@@ -2824,6 +2834,14 @@ mod tests {
         // A local number is hyphenated; set apart by a point, it is a
         // decimal.
         assert!(ends_with_contact("Fax 272-2408"));
+        // A line of an address, not a sentence closing on one.
+        assert!(contact_line("1-800-GET-PINK® www.owenscorning.com"));
+        assert!(contact_line("www.example.com"));
+        assert!(contact_line("Visit www.example.com."));
+        assert!(!contact_line(
+            "Meeting held virtually at www.example.com/meeting2025."
+        ));
+        assert!(!contact_line("Questions may be sent to help@example.com."));
         assert!(!ends_with_contact("Exact Mass: 259.1572"));
     }
 

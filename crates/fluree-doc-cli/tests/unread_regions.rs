@@ -394,11 +394,12 @@ fn page_with_a_caption_drawn_twice() -> Vec<u8> {
 }
 
 #[test]
-fn a_caption_drawn_twice_over_a_capture_keeps_one_region_numbering() {
-    // As drawn, the text layer covers the upper capture and the lower one
-    // is the page's one region, r0: its crop, the OCR words for it, its
-    // splice anchor and the report all name it so. Numbered on the page
-    // analysis cleaned, the upper capture would be r0 and the lower r1.
+fn a_caption_drawn_twice_over_a_capture_is_one_caption_to_every_reader() {
+    // A caption drawn twice over the upper capture covers it as drawn, and
+    // not once it counts once: both captures are regions, the upper r0 and
+    // the lower r1, for the crop, the OCR words for it, its splice anchor
+    // and the report alike.
+    const UPPER: &str = "56.00,450.00,556.00,570.00";
     let dir = scratch("caption-twice", &page_with_a_caption_drawn_twice());
     let crops = dir.join("crops");
     let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
@@ -423,42 +424,56 @@ fn a_caption_drawn_twice_over_a_capture_keeps_one_region_numbering() {
         .collect();
     assert_eq!(
         regions,
-        [(
-            "memo_p0_r0.png".to_string(),
-            serde_json::json!([56.0, 582.0, 556.0, 732.0])
-        )],
+        [
+            (
+                "memo_p0_r0.png".to_string(),
+                serde_json::json!([56.0, 450.0, 556.0, 570.0])
+            ),
+            (
+                "memo_p0_r1.png".to_string(),
+                serde_json::json!([56.0, 582.0, 556.0, 732.0])
+            )
+        ],
         "{manifest}"
     );
 
-    let (doc, stderr, _) = convert(&dir, &[]);
+    let (doc, _, _) = convert(&dir, &[]);
     assert_eq!(
         doc["doc:unreadRegions"]["@value"],
-        serde_json::json!([{ "pageIndex": 0, "bbox": REGION, "reason": "Region" }]),
+        serde_json::json!([
+            { "pageIndex": 0, "bbox": UPPER, "reason": "Region" },
+            { "pageIndex": 0, "bbox": REGION, "reason": "Region" }
+        ]),
         "{doc}"
     );
-    assert!(stderr.contains("page 1 at 56,582,556,732"), "{stderr}");
 
     let (_, _, text) = convert(&dir, &["--emit-anchors"]);
-    assert!(text.contains("[[VLM:p0:r0]]"), "{text}");
-    assert!(!text.contains("[[VLM:p0:r1]]"), "{text}");
     let graph: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let anchor = graph["@graph"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|n| n.to_string().contains("[[VLM:p0:r0]]"))
-        .unwrap();
-    assert!(anchor.to_string().contains(REGION), "{anchor}");
+    let anchor = |name: &str| {
+        graph["@graph"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n.to_string().contains(name))
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| panic!("no {name} in {text}"))
+    };
+    assert!(anchor("[[VLM:p0:r0]]").contains(UPPER));
+    assert!(anchor("[[VLM:p0:r1]]").contains(REGION));
 
+    // Words read for r1 fill the lower capture; the upper stays unread.
     let words = serde_json::json!({
         "coords": "page",
         "words": [{ "text": "Account 4417 ref", "box": [80, 600, 300, 620] }]
     });
-    let w = sidecars(&dir, "words", &[("memo_p0_r0.json", words.to_string())]);
-    let (doc, stderr, text) = convert(&dir, &["--ocr-words", w.to_str().unwrap()]);
+    let w = sidecars(&dir, "words", &[("memo_p0_r1.json", words.to_string())]);
+    let (doc, _, text) = convert(&dir, &["--ocr-words", w.to_str().unwrap()]);
     assert!(text.contains("Account 4417 ref"), "{text}");
-    assert!(doc.get("doc:unreadRegions").is_none(), "{doc}");
-    assert!(!stderr.contains("raster region"), "{stderr}");
+    assert_eq!(
+        doc["doc:unreadRegions"]["@value"],
+        serde_json::json!([{ "pageIndex": 0, "bbox": UPPER, "reason": "Region" }]),
+        "{doc}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }
 
