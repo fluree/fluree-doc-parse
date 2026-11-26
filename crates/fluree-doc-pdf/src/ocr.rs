@@ -1569,7 +1569,30 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// left unread are kept first: a page read whole, whose text is all pixels;
 /// then a region the router sends a reader; then a region too small for a
 /// model's call. Within each kind, the earlier pages first.
+/// The small regions an engine reads on one page by default: every one
+/// (`0`). Correctness first: a drawing's notes and a problem set as an
+/// image sit in small regions too. A deployment that needs a page's time
+/// bounded sets a limit ([`ocr_jobs_within`]); routed regions and whole
+/// pages are always read.
+pub const DEFAULT_SMALL_REGIONS_PER_PAGE: usize = 0;
+
 pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (OcrJobs, usize) {
+    let (jobs, dropped, _) = ocr_jobs_within(doc, only, max_crops, DEFAULT_SMALL_REGIONS_PER_PAGE);
+    (jobs, dropped)
+}
+
+/// As [`ocr_jobs`], reading at most `small_per_page` small regions on a
+/// page (`0` for no limit), the largest by their area: a drawing's
+/// callouts and a paper's figure labels made a hundred crops of one page,
+/// each read on its own, and past the few largest they read a line or
+/// none. Also how many such crops were left, apart from those past
+/// `max_crops`.
+pub fn ocr_jobs_within(
+    doc: &Document,
+    only: Option<&[usize]>,
+    max_crops: usize,
+    small_per_page: usize,
+) -> (OcrJobs, usize, usize) {
     // Every crop, in page order, with its kind: 0 a page read whole, 1 a
     // routed region, 2 a small one.
     type Ranked = (u8, usize, Option<(String, BBox)>);
@@ -1592,6 +1615,32 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
             crops.push((kind, p.index, Some((Crop::Region(i).tag(), b))));
         }
     }
+    // A crowded page's small regions: the largest few, by their area.
+    let small_cap = small_per_page;
+    let before = crops.len();
+    if small_cap > 0 {
+        let mut by_page: std::collections::HashMap<usize, Vec<(f64, usize)>> = Default::default();
+        for (i, (kind, page, crop)) in crops.iter().enumerate() {
+            if let (2, Some((_, b))) = (kind, crop) {
+                by_page
+                    .entry(*page)
+                    .or_default()
+                    .push((b.width() * b.height(), i));
+            }
+        }
+        let mut cut = vec![false; crops.len()];
+        for small in by_page.values_mut() {
+            if small.len() > small_cap {
+                small.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+                for &(_, i) in &small[small_cap..] {
+                    cut[i] = true;
+                }
+            }
+        }
+        let mut k = cut.iter();
+        crops.retain(|_| !*k.next().unwrap_or(&false));
+    }
+    let crowded = before - crops.len();
     let mut dropped = 0;
     if max_crops > 0 && crops.len() > max_crops {
         let mut order: Vec<usize> = (0..crops.len()).collect();
@@ -1612,7 +1661,7 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
             (Some(c), _) => jobs.push((page, Some(vec![c]))),
         }
     }
-    (jobs, dropped)
+    (jobs, dropped, crowded)
 }
 
 /// What one OCR pass over a document did.
@@ -1625,6 +1674,8 @@ pub struct OcrPass {
     pub failed: Vec<(String, String)>,
     /// Crops left unread past the limit ([`ocr_jobs`]).
     pub capped: usize,
+    /// Small regions left unread on crowded pages ([`ocr_jobs_within`]).
+    pub crowded: usize,
     /// Crops read but left to a model ([`left_to_model`]), by crop name
     /// (`p{page}_{tag}`), with why.
     pub left: Vec<(String, &'static str)>,
@@ -1653,10 +1704,20 @@ pub fn read_pages(
     scale: crate::escalate::CropScale,
     max_crops: usize,
 ) -> OcrPass {
-    read_pages_leaving(doc, pdf, engine, only, scale, max_crops, false)
+    read_pages_leaving(
+        doc,
+        pdf,
+        engine,
+        only,
+        scale,
+        (max_crops, DEFAULT_SMALL_REGIONS_PER_PAGE),
+        false,
+    )
 }
 
-/// As [`read_pages`]; with `leave_to_model`, where a model reads too, the
+/// As [`read_pages`], at most `max_crops` crops in all and
+/// `small_per_page` small regions on a page ([`ocr_jobs_within`]); with
+/// `leave_to_model`, where a model reads too, the
 /// readings [`left_to_model`] picks are not laid on their pages, so the
 /// crops they read route to the model as if no engine had read them.
 #[cfg(feature = "render")]
@@ -1666,10 +1727,10 @@ pub fn read_pages_leaving(
     engine: &dyn fluree_doc_vision::OcrEngine,
     only: Option<&[usize]>,
     scale: crate::escalate::CropScale,
-    max_crops: usize,
+    (max_crops, small_per_page): (usize, usize),
     leave_to_model: bool,
 ) -> OcrPass {
-    let (jobs, capped) = ocr_jobs(doc, only, max_crops);
+    let (jobs, capped, crowded) = ocr_jobs_within(doc, only, max_crops, small_per_page);
     // Each crop is read as it is cut, its pixels dropped after; the
     // readings are put back in the jobs' order, which a page rendered at
     // several scales hands its crops over out of.
@@ -1701,6 +1762,7 @@ pub fn read_pages_leaving(
         injected: inject(doc, &readings),
         failed,
         capped,
+        crowded,
         left,
         set_aside,
     }
@@ -4985,5 +5047,65 @@ mod tests {
             tags(&kept),
             [(1, vec!["full".to_string()]), (2, vec!["r0".to_string()])]
         );
+    }
+
+    #[test]
+    fn a_crowded_pages_small_regions_are_read_the_largest_first() {
+        // A drawing's callouts: twelve small captures on one page, of
+        // growing width, beside its own text, and a routed region.
+        let capture = |i: usize| ImagePlacement {
+            bbox: BBox {
+                x0: 40.0,
+                y0: 100.0 + i as f64 * 40.0,
+                x1: 80.0 + i as f64 * 8.0,
+                y1: 130.0 + i as f64 * 40.0,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (200, 60),
+        };
+        let routed = ImagePlacement {
+            bbox: BBox {
+                x0: 300.0,
+                y0: 400.0,
+                x1: 580.0,
+                y1: 700.0,
+            },
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+        };
+        let mut images: Vec<ImagePlacement> = (0..12).map(capture).collect();
+        images.push(routed);
+        let doc = Document {
+            pages: vec![page(
+                native("The assembly drawing lists every part.", 40.0, 40.0),
+                images,
+            )],
+            title: None,
+        };
+        let count = |jobs: &OcrJobs| {
+            jobs.iter()
+                .map(|(_, c)| c.as_ref().map_or(1, Vec::len))
+                .sum::<usize>()
+        };
+        let (all, _, crowded) = ocr_jobs_within(&doc, None, 0, 0);
+        assert_eq!((count(&all), crowded), (13, 0));
+        let (kept, dropped, crowded) = ocr_jobs_within(&doc, None, 0, 4);
+        assert_eq!((count(&kept), dropped, crowded), (5, 0, 8));
+        // The routed region, and the four widest captures.
+        let boxes: Vec<f64> = kept[0]
+            .1
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(_, b)| b.x1)
+            .collect();
+        assert!(boxes.contains(&580.0), "{boxes:?}");
+        let mut small: Vec<f64> = boxes.into_iter().filter(|&x| x < 300.0).collect();
+        small.sort_by(f64::total_cmp);
+        assert_eq!(small, [144.0, 152.0, 160.0, 168.0]);
     }
 }

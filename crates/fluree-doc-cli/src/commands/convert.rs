@@ -978,6 +978,12 @@ fn render(
 }
 
 /// The note when a document has more OCR crops than `ocr.max_crops`.
+pub(crate) fn ocr_crowded_note(stem: &str, small: usize, crowded: usize) -> String {
+    format!(
+        "note: --ocr: {stem}: leaving {crowded} small region(s) unread on crowded pages (the {small} largest on a page are read) — raise `ocr.max_small_regions_per_page` (0 for no limit) to read them all"
+    )
+}
+
 pub(crate) fn ocr_cap_note(stem: &str, max: usize, capped: usize) -> String {
     format!(
         "note: --ocr: {stem}: reading {max} crops and leaving {capped} unread (pages read whole first, then routed regions, then small ones) — raise `ocr.max_crops` (0 for no limit) to read them all"
@@ -1064,15 +1070,19 @@ fn convert_bytes(
         let max = cfg.config.ocr.max_crops();
         // At the stored resolution of what is under each crop (#11): an
         // engine reads small text a 2× render loses.
+        let small = cfg.config.ocr.max_small_regions_per_page();
         let pass = fluree_doc_pdf::ocr::read_pages_leaving(
             &mut doc,
             &raw,
             engine.0.as_ref(),
             pages,
             fluree_doc_pdf::escalate::CropScale::Stored,
-            max,
+            (max, small),
             modelled,
         );
+        if pass.crowded > 0 && !quiet {
+            eprintln!("{}", ocr_crowded_note(stem, small, pass.crowded));
+        }
         report_left(stem, "--ocr", &pass.left, cfg.verbose);
         report_set_aside(stem, "--ocr", &pass.set_aside, cfg.verbose);
         for (crop, e) in &pass.failed {
