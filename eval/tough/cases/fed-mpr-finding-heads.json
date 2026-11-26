@@ -1,0 +1,21 @@
+{
+  "document": {
+    "file": "fed-mpr-2025-06.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20250620_mprfullreport.pdf",
+    "sha256": "6f8538cb4ce2902ac35cc9ec8311feda6c5c94953b76db50de94192741bb07f4",
+    "about": "Federal Reserve Monetary Policy Report, June 2025. Each part of a section opens on its finding in bold, a line or two over its prose: `Inflation remained above 2 percent` and, on two lines, `Most measures of longer-term inflation expectations have been stable, while …`."
+  },
+  "notes": [
+    "2026-11-26 (#403): a finding longer than twelve words was no heading, its shorter siblings in the same style were: only type set at 1.5 times the body may run longer."
+  ],
+  "checks": [
+    {
+      "id": "long-finding-a-heading",
+      "found": "2026-11-26",
+      "issue": "#403: the two-line finding was a paragraph.",
+      "section": {
+        "title": "Most measures of longer-term inflation expectations have been stable, while shorter-term inflation expectations have risen sharply"
+      }
+    }
+  ]
+}

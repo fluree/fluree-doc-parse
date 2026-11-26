@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "kao-kessan-tanshin-fy2024-ja.pdf",
+    "url": "https://www2.jpx.co.jp/disc/44520/140120250206564508.pdf",
+    "sha256": "d2accf43ca8c4197fa92dce9585e1feed416f0890377a2c4fa059d86f60eb38e",
+    "about": "Kao Corporation, consolidated financial results FY2024 (Japanese). Page 10 lists its uses of cash as items opened by the katakana middle dot, with no space after it."
+  },
+  "checks": [
+    {
+      "id": "middle-dot-items",
+      "found": "2026-11-26",
+      "issue": "The katakana middle dot was no bullet: the three items ran together in one paragraph, dots and all.",
+      "list": {"holds": ["将来の発展に向けての投資（設備、M&A等）", "安定的、継続的な配当", "自己株式の取得"]}
+    }
+  ]
+}

@@ -76,13 +76,22 @@ def fetch(case, path):
         path.write_bytes(r.read())
 
 
-def convert(fdoc, path, fmt):
+def convert(fdoc, path, fmt, extra=()):
     out = subprocess.run(
-        [fdoc, "convert", str(path), "--no-escalate", "-f", fmt],
+        [fdoc, "convert", str(path), "--no-escalate", "-f", fmt, *extra],
         capture_output=True,
         check=True,
     ).stdout
     return out.decode("utf-8")
+
+
+def convert_args(case):
+    """Arguments a case's document is converted with: the OCR word readings
+    it names, a directory relative to the case file, read as `--ocr-words`
+    reads them. A reading stored with the case reads the same on every
+    machine, with no engine or models."""
+    words = case["document"].get("ocr_words")
+    return ("--ocr-words", str(case["_dir"] / words)) if words else ()
 
 
 class Reading:
@@ -345,8 +354,9 @@ def main():
             continue
         if doc.get("sha256") and sha256(path) != doc["sha256"]:
             print(f"note    {case['_id']}: {path.name} differs from the copy these checks were written on")
-        again = lambda: convert(args.fdoc, path, "doco")
-        reading = Reading(again(), convert(args.fdoc, path, "text"), again)
+        extra = convert_args(case)
+        again = lambda: convert(args.fdoc, path, "doco", extra)
+        reading = Reading(again(), convert(args.fdoc, path, "text", extra), again)
 
         results = []
         bad = reading.offsets()

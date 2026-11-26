@@ -114,7 +114,15 @@ pub struct Heading {
     /// after: dropping one from a run would leave its neighbours standing.
     pub form_text: bool,
     style: Style,
+    /// How strongly the heading is set, against the document's other
+    /// headings: its size, weight, case, slant and face, as
+    /// [`normalize_levels`] orders them. Smaller is stronger.
+    rank: RankKey,
 }
+
+/// A heading style's place in the document's order of heading styles:
+/// size first, then weight, case, slant and face. Smaller is stronger.
+type RankKey = (i32, bool, bool, bool, usize);
 
 /// Normalize for matching outline titles against block text: outlines often
 /// differ from the rendered heading in whitespace and case, and sometimes omit
@@ -124,6 +132,213 @@ fn norm(s: &str) -> String {
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_lowercase())
         .collect()
+}
+
+/// Whether a document's information title says anything: not empty, not a
+/// file's name (`report.docx`, `BMFG1411_Updated.pdf`), not a placeholder
+/// (`Untitled`, `(anonymous)`, `Microsoft Word - draft3.doc`) and not a
+/// typesetter's job name (`pone.0005054 1..10`).
+pub(crate) fn meaningful_title(meta: &str) -> bool {
+    let m = meta.trim().to_lowercase();
+    let file = m
+        .split(|c: char| !c.is_alphanumeric() && c != '.')
+        .any(|w| {
+            [
+                ".doc", ".docx", ".pdf", ".md", ".ppt", ".pptx", ".xls", ".xlsx", ".indd", ".tex",
+                ".rtf", ".txt", ".dvi", ".ps",
+            ]
+            .iter()
+            .any(|ext| w.ends_with(ext) && w.len() > ext.len())
+        });
+    let placeholder = [
+        "untitled",
+        "anonymous",
+        "microsoft word",
+        "microsoft powerpoint",
+    ]
+    .iter()
+    .any(|p| m.contains(p));
+    let job = m.contains("..");
+    let lettered = m
+        .split(|c: char| !c.is_alphabetic())
+        .any(|w| w.chars().count() >= 3);
+    !m.is_empty() && !file && !placeholder && !job && lettered
+}
+
+/// Words too common to tell two titles apart.
+const TITLE_STOPWORDS: &[&str] = &[
+    "the", "a", "an", "of", "and", "for", "to", "in", "on", "at", "by", "with", "le", "la", "les",
+    "de", "des", "du", "et", "der", "die", "das", "und",
+];
+
+/// A title's words, folded: letters and figures, lowercase, accents kept,
+/// with the commonest words left out.
+fn title_words(t: &str) -> Vec<String> {
+    t.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .filter(|w| !TITLE_STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Whether `text` is a part of the title `meta` names: two words or more,
+/// nearly all of them among `meta`'s. A title's first line, where the file
+/// states the whole of it (`Vascular disease as a cause of death`).
+pub(crate) fn part_of_title(meta: &str, text: &str) -> bool {
+    let (a, b) = (title_words(text), title_words(meta));
+    let b: std::collections::HashSet<&String> = b.iter().collect();
+    let a: std::collections::HashSet<&String> = a.iter().collect();
+    let shared = a.iter().filter(|w| b.contains(*w)).count();
+    shared >= 2 && shared as f64 >= a.len() as f64 * TITLE_WORDS_WITHIN
+}
+
+/// Whether `text` is the title `meta` names: their words alike (a share of
+/// 0.6 of all their words), or `text`'s words nearly all among `meta`'s and
+/// covering half of them or more (`WD Gold® Enterprise Class SATA HDD` in
+/// `Data Sheet: WD Gold Enterprise Class SATA HDD`). Half is the most a
+/// title's date or a heading's fragment covers: `September 20, 2023` of
+/// `Transcript of Chair Powell's Press Conference -- September 20, 2023`,
+/// `Minutes of the` of `Minutes of the Federal Open Market Committee,
+/// December 17-18, 2024`.
+pub(crate) fn names_title(meta: &str, text: &str) -> bool {
+    let (a, b) = (title_words(text), title_words(meta));
+    let (sa, sb): (
+        std::collections::HashSet<&String>,
+        std::collections::HashSet<&String>,
+    ) = (a.iter().collect(), b.iter().collect());
+    if sa.is_empty() || sb.is_empty() {
+        return false;
+    }
+    let shared = sa.intersection(&sb).count();
+    let alike = shared as f64 / sa.union(&sb).count() as f64 >= TITLE_WORDS_ALIKE;
+    let within = shared >= 2 && shared as f64 >= sa.len() as f64 * TITLE_WORDS_WITHIN;
+    let covering = shared as f64 >= sb.len() as f64 * TITLE_WORDS_COVER;
+    alike || (within && covering)
+}
+
+/// Share of all their words two titles must share to be alike.
+const TITLE_WORDS_ALIKE: f64 = 0.6;
+/// Share of its own words a title must share with the one it is read as.
+const TITLE_WORDS_WITHIN: f64 = 0.9;
+/// Share of the stated title's words a title must cover.
+const TITLE_WORDS_COVER: f64 = 0.5;
+
+/// Words a section is named by, in a document of any kind: a page that
+/// opens on one opens on a section, not on the document's title.
+const SECTION_NAMES: &[&str] = &[
+    "contents",
+    "table of contents",
+    "introduction",
+    "abstract",
+    "rationale",
+    "summary",
+    "executive summary",
+    "overview",
+    "background",
+    "preface",
+    "foreword",
+    "acknowledgements",
+    "acknowledgments",
+    "references",
+    "bibliography",
+    "version history",
+    "revision history",
+    "purpose",
+    "scope",
+    "glossary",
+    "index",
+    "conclusion",
+    "conclusions",
+    "methods",
+    "results",
+    "discussion",
+    "appendix",
+];
+
+/// Why a line taken for the document's title, on its type alone, is in
+/// doubt: what a title is not. `None` where nothing doubts it.
+///
+/// - A date (`September 20, 2023` over a transcript).
+/// - A section's number or name (`5. The dynamics`, `1. PURPOSE`,
+///   `Introduction`, `Table of Contents`): a page that opens on a section.
+/// - A section carried on (`NOTES … (Continued)`).
+/// - A lead-in closing on its colon.
+/// - One word: a journal's or a company's mark (`materials`, `FOMC`,
+///   `LAPP`).
+/// - A company's name, closing on its form (`Hanvaro Semiconductor Co.,
+///   Ltd.`, `CVS PHARMACY, INC`, `FLUREE, PBC`): a letterhead's.
+pub(crate) fn title_doubt(text: &str) -> Option<&'static str> {
+    let t = text.trim();
+    let lower = t.to_lowercase();
+    let bare: String = lower
+        .chars()
+        .filter(|c| c.is_alphabetic() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    // A date, or a meeting's days: a month's name and figures alone
+    // (`December 10–11, 2019`).
+    let dated = t.split_whitespace().any(month_name)
+        && t.split(|c: char| c.is_whitespace() || "–-,".contains(c))
+            .filter(|w| !w.is_empty())
+            .all(|w| month_name(w) || w.chars().all(|c| c.is_ascii_digit()));
+    if date_text(t) || dated {
+        return Some("date");
+    }
+    if numbering_depth(t).is_some() {
+        return Some("numbered");
+    }
+    // A division's label, alone or over its title on one line (`PART II`,
+    // `Chapter 3`, `Item 8. Consolidated Financial Statements`): a part of
+    // a document, opening its page.
+    let mut words = t.split_whitespace();
+    let divided = match (words.next(), words.next()) {
+        (Some(w), Some(n)) => {
+            let w = w.to_lowercase();
+            let n = n.trim_end_matches(['.', ':']);
+            (DIVISION_WORDS.contains(&w.as_str()) || w == "item")
+                && !n.is_empty()
+                && ((n.chars().all(|c| c.is_ascii_digit()) && n.len() <= 3)
+                    || is_roman(&n.to_ascii_uppercase())
+                    || (n.chars().count() == 1 && n.chars().all(char::is_alphabetic)))
+        }
+        _ => false,
+    };
+    if divided {
+        return Some("division");
+    }
+    if SECTION_NAMES.contains(&bare.as_str()) {
+        return Some("section-name");
+    }
+    if lower.contains("(continued)") || lower.ends_with("continued") {
+        return Some("continued");
+    }
+    if t.ends_with(':') {
+        return Some("lead-in");
+    }
+    if !t.contains(char::is_whitespace) {
+        return Some("one-word");
+    }
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let forms = [
+        "inc",
+        "llc",
+        "ltd",
+        "corporation",
+        "corp",
+        "pbc",
+        "plc",
+        "gmbh",
+        "subsidiaries",
+    ];
+    if tokens.last().is_some_and(|w| forms.contains(w)) {
+        return Some("company");
+    }
+    None
 }
 
 /// Whether a block's text is a title the outline declares, as the outline
@@ -364,7 +579,7 @@ fn has_bare_number_label(text: &str) -> bool {
 /// 1, …`) is no title, and a bare number is a form's question
 /// (`12 Did you explain to the taxpayer…`), not a section's label. Nor is a
 /// formula (`GFR (mL/min/1.73m²) = 141 x …`) or a bulleted line.
-fn vouched_for(text: &str, b: &Block, body: f32) -> bool {
+fn vouched_for(text: &str, b: &Block, body: f32, styled: bool) -> bool {
     let size = b.font_size as f64 / (body as f64).max(1.0);
     let t = text.trim();
     let shaped = !t.ends_with(['.', '?', '!'])
@@ -377,16 +592,62 @@ fn vouched_for(text: &str, b: &Block, body: f32) -> bool {
     let labelled = numbering_depth(t).is_some() && !has_bare_number_label(t);
     b.lines.len() <= MAX_FONTSIZE_HEADING_LINES
         && shaped
-        && ((labelled && size >= NUMBERED_HEADING_RATIO) || size >= DISPLAY_HEADING_RATIO)
+        && ((labelled && size >= NUMBERED_HEADING_RATIO)
+            || size >= DISPLAY_HEADING_RATIO
+            || (styled && size > 1.0 + HEADING_SIZE_MARGIN))
 }
 
-/// The most words a block may hold and still be a heading.
-fn word_limit(text: &str, b: &Block, body: f32) -> usize {
-    if vouched_for(text, b, body) {
+/// The most words a block may hold and still be a heading. `styled`: the
+/// block is set in a style the document sets its headings in
+/// ([`heading_styles`]).
+fn word_limit(text: &str, b: &Block, body: f32, styled: bool) -> usize {
+    if vouched_for(text, b, body, styled) {
         MAX_LONG_HEADING_WORDS
     } else {
         MAX_HEADING_WORDS
     }
+}
+
+/// Fewest headings of ordinary length a style must set for a longer line
+/// in it to be read as one too.
+const MIN_STYLE_HEADINGS: usize = 2;
+
+/// A block's style, as [`heading_styles`] tells styles apart: its size, to
+/// a quarter point, and its weight.
+fn heading_style(b: &Block) -> (i32, bool) {
+    ((b.font_size * 4.0).round() as i32, b.bold)
+}
+
+/// The styles set larger than the body in which the document sets two
+/// headings or more of ordinary length: a line or two, few enough words.
+/// A longer line in such a style, a title's shape on two lines, is one of
+/// them however long: a financial report heads each part of a section with
+/// its finding in 14pt bold, `Hedge funds' leverage was at or near its
+/// highest level in available data` among `Bank lending to other financial
+/// entities continued to grow at a robust pace`. Set clearly larger than the
+/// body, a line may run that long anyway ([`vouched_for`]).
+fn heading_styles(pages: &[Vec<Block>], body: f32) -> std::collections::HashSet<(i32, bool)> {
+    let mut count: HashMap<(i32, bool), usize> = HashMap::new();
+    for b in pages.iter().flatten() {
+        if b.font_size as f64 <= body as f64 * (1.0 + HEADING_SIZE_MARGIN)
+            || b.marker.is_some()
+            || b.lines.len() > MAX_FONTSIZE_HEADING_LINES
+        {
+            continue;
+        }
+        let text = b.text();
+        if text.chars().count() <= MAX_FONTSIZE_HEADING_CHARS
+            && title_like(&text)
+            && !starts_like_list_item(&text)
+        {
+            *count.entry(heading_style(b)).or_default() += 1;
+        }
+    }
+    count
+        .into_iter()
+        .filter(|&(_, n)| n >= MIN_STYLE_HEADINGS)
+        .map(|(style, _)| style)
+        .collect()
 }
 
 /// Shape tests every heading candidate must pass, regardless of which signal
@@ -767,13 +1028,19 @@ const NAME_PARTICLES: &[&str] = &[
 ];
 
 /// Marks set after an author's name to point to their affiliation or to
-/// the corresponding author: `1`, `2,3`, `*`, `†`.
+/// the corresponding author: `1`, `2,3`, `*`, `†`, and the same numbers
+/// written raised (`¹,²`).
 fn affiliation_mark(c: char) -> bool {
-    c.is_ascii_digit()
+    figure(c)
         || matches!(
             c,
             '*' | '\u{2020}' | '\u{2021}' | '\u{00A7}' | '\u{00B6}' | ',' | '\u{262F}' | '\u{204E}'
         )
+}
+
+/// A figure, set on the line or raised: `2`, `²`.
+fn figure(c: char) -> bool {
+    c.is_ascii_digit() || fluree_doc_model::marks::raised_figure(c).is_some()
 }
 
 /// A line of an article's authors: people's names, each of two to four
@@ -788,9 +1055,12 @@ fn byline(t: &str) -> bool {
     let mut names = 0;
     let mut marked = false;
     let mut strong = false;
+    // Names are listed with commas and `and`, or set apart by a middle
+    // dot (`Michail Hadjipantelis¹ · Onur Son²`).
     let units = t
         .replace(" and ", ", ")
         .replace(" & ", ", ")
+        .replace(" \u{00B7} ", ", ")
         .replace(';', ",");
     for unit in units.split(", ") {
         let unit = unit.trim();
@@ -841,7 +1111,7 @@ fn byline(t: &str) -> bool {
             // A number past two figures is no affiliation's.
             if marks
                 .split(',')
-                .any(|m| m.trim_matches(|c: char| !c.is_ascii_digit()).len() > 2)
+                .any(|m| m.chars().filter(|&c| figure(c)).count() > 2)
             {
                 return false;
             }
@@ -855,8 +1125,8 @@ fn byline(t: &str) -> bool {
 /// symbol for the corresponding author (`2*`), or a list of affiliations
 /// (`1,2`). A symbol alone is as often a note's (`Posted Transactions*`).
 fn strong_mark(marks: &str) -> bool {
-    let digits = marks.chars().any(|c| c.is_ascii_digit());
-    let symbol = marks.chars().any(|c| !c.is_ascii_digit() && c != ',');
+    let digits = marks.chars().any(figure);
+    let symbol = marks.chars().any(|c| !figure(c) && c != ',');
     (digits && symbol) || marks.trim_matches(',').contains(',')
 }
 
@@ -978,6 +1248,28 @@ fn phone_number(tokens: &[&str]) -> bool {
 /// keep their abbreviating dot, and a title ending in a full stop (`CHAPTER 1.`)
 /// has nothing after it and is untouched.
 fn runs_into_prose(text: &str) -> bool {
+    // A stop with a note's number raised on it, and more after: a sentence
+    // ended there (`low.³ Corporate earnings remained strong`). No
+    // abbreviation carries a note, so its word may be short.
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if !matches!(c, '.' | '?' | '!') {
+            continue;
+        }
+        let raised = chars[i + 1..]
+            .iter()
+            .take_while(|&&r| fluree_doc_model::marks::raised_figure(r).is_some() || r == ',')
+            .count();
+        let figures = chars[i + 1..i + 1 + raised]
+            .iter()
+            .any(|&r| fluree_doc_model::marks::raised_figure(r).is_some());
+        if figures && chars.get(i + 1 + raised) == Some(&' ') {
+            let rest: String = chars[i + 1 + raised..].iter().collect();
+            if rest.split_whitespace().count() >= 2 {
+                return true;
+            }
+        }
+    }
     let bytes = text.as_bytes();
     for (i, w) in bytes.windows(2).enumerate() {
         if !matches!(w[0], b'.' | b'?' | b'!') || w[1] != b' ' {
@@ -1068,7 +1360,9 @@ pub(crate) fn is_toc_marker(text: &str) -> bool {
 /// diamonds of the dingbat fonts are set before headings as often as before
 /// items, as an annotation guideline marks each of its subsections
 /// `❖ Gene`, `❖ Disease`. Those the heading pass decides as it would any
-/// block; a block it leaves is still a list item.
+/// block; a block it leaves is still a list item. The hollow bullets are a
+/// list's second level, as a slide sets its sub-points `○ Custom landing
+/// pages` under `●` items.
 fn starts_like_list_item(text: &str) -> bool {
     matches!(
         text.chars().next(),
@@ -1076,7 +1370,12 @@ fn starts_like_list_item(text: &str) -> bool {
             '\u{2022}' // •
                 | '\u{F0B7}' // the Symbol font's •, as Word maps it
                 | '\u{25A0}' // ■
+                | '\u{25AA}' // ▪
+                | '\u{25A1}' // □
+                | '\u{25AB}' // ▫
                 | '\u{25CF}' // ●
+                | '\u{25CB}' // ○
+                | '\u{25E6}' // ◦
                 | '\u{2751}' // ❑
                 | '\u{2752}' // ❒
                 | '-'
@@ -1184,7 +1483,80 @@ pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
 /// labels, and 64 of them outweighed a 25-line column of prose. With
 /// nothing left once drawings are set aside, every block counts.
 pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
-    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    let by_lines = body_font_size_by_lines(pages, drawn);
+    let is_drawn = |p: usize, i: usize| {
+        drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true) || from_picture(&pages[p][i])
+    };
+    // Running prose set larger than the size most lines are set in is the
+    // body, and the many short lines under it are a chart's or a table's:
+    // its labels, its axis's values, its cells, whether or not the chart
+    // or the table was found. Prose set smaller is fine print under the
+    // larger type a form or a deck is mostly set in, and leaves the body
+    // where the lines put it.
+    prose_body_size(pages, &is_drawn)
+        .filter(|&prose| prose > by_lines)
+        .unwrap_or(by_lines)
+}
+
+/// Fewest lines of running prose, at one size, the body is read from:
+/// several paragraphs. A deck's few lines of prose, a quote set large on
+/// a slide, are no body.
+const MIN_PROSE_LINES: usize = 50;
+
+/// Fewest lines in a block of running prose.
+const PROSE_BLOCK_LINES: usize = 3;
+
+/// Share of a block's measure a line of running prose fills.
+const PROSE_LINE_FILL: f64 = 0.8;
+
+/// Fewest words on a line of running prose.
+const PROSE_LINE_WORDS: usize = 4;
+
+/// The size most running prose is set in: blocks of three lines or more
+/// whose lines, all but the last, mostly fill the block's measure and hold
+/// several words each. `None` where fewer than [`MIN_PROSE_LINES`] such
+/// lines share a size.
+fn prose_body_size(pages: &[Vec<Block>], is_drawn: &dyn Fn(usize, usize) -> bool) -> Option<f32> {
+    let mut hist: HashMap<i32, usize> = HashMap::new();
+    for (p, blocks) in pages.iter().enumerate() {
+        for (i, b) in blocks.iter().enumerate() {
+            if is_drawn(p, i) || b.lines.len() < PROSE_BLOCK_LINES {
+                continue;
+            }
+            let measure = b
+                .lines
+                .iter()
+                .map(|l| l.bbox.width())
+                .fold(0.0_f64, f64::max);
+            let running = &b.lines[..b.lines.len() - 1];
+            let full = running
+                .iter()
+                .filter(|l| {
+                    l.bbox.width() >= measure * PROSE_LINE_FILL
+                        && l.text.split_whitespace().count() >= PROSE_LINE_WORDS
+                })
+                .count();
+            if full * 3 >= running.len() * 2 {
+                *hist.entry((b.font_size * 4.0).round() as i32).or_default() += b.lines.len();
+            }
+        }
+    }
+    hist.iter()
+        .filter(|(_, lines)| **lines >= MIN_PROSE_LINES)
+        .max_by(|(size_a, count_a), (size_b, count_b)| {
+            count_a.cmp(count_b).then_with(|| size_b.cmp(size_a))
+        })
+        .map(|(k, _)| *k as f32 / 4.0)
+}
+
+/// [`body_font_size_outside`] by lines alone: the size most of the
+/// blocks' lines are set in.
+fn body_font_size_by_lines(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
+    // A drawing's text, and a picture's an OCR engine read, are no measure
+    // of the body: a chart's labels by the dozen, a logo.
+    let is_drawn = |p: usize, i: usize| {
+        drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true) || from_picture(&pages[p][i])
+    };
     let mut hist: HashMap<i32, usize> = HashMap::new();
     for (p, blocks) in pages.iter().enumerate() {
         for (i, b) in blocks.iter().enumerate() {
@@ -1436,7 +1808,10 @@ pub fn detect_with_body(
     // document-wide half of the form test; the page cap below is the other.
     let shared_bare_numbers: std::collections::HashSet<String> = {
         let mut titles: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-        for b in pages.iter().flatten() {
+        // A list's item or a note, its number set as its marker, is no
+        // title: a paper numbers its affiliations and its notes from 1 too
+        // (`1 Faculty of …`), and its `1 Introduction` is a section still.
+        for b in pages.iter().flatten().filter(|b| b.marker.is_none()) {
             let text = b.text();
             if has_bare_number_label(&text) {
                 let label = text.split_whitespace().next().unwrap_or("").to_string();
@@ -1479,7 +1854,11 @@ pub fn detect_with_body(
     };
 
     let document_title = pages.first().and_then(|blocks| {
-        let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
+        let largest = blocks
+            .iter()
+            .filter(|b| !from_picture(b))
+            .map(|b| b.font_size)
+            .fold(0.0_f32, f32::max);
         // The page's largest type, set for display: an article's title, which
         // may run over four or five lines (`An internal deletion in MTH1
         // enables growth on glucose of pyruvate-decarboxylase negative, …`).
@@ -1492,10 +1871,13 @@ pub fn detect_with_body(
             if display(b) {
                 MAX_DISPLAY_TITLE_WORDS
             } else {
-                word_limit(text, b, body)
+                word_limit(text, b, body, false)
             }
         };
         let candidate = |i: usize, b: &Block| -> bool {
+            if from_picture(b) {
+                return false;
+            }
             let text = b.text();
             // At most three lines, or a few words to a line, as a cover
             // stacks its title: `PROCAT / SISTEMA DE / AISLAMIENTO
@@ -1653,6 +2035,7 @@ pub fn detect_with_body(
     // plausible density the signal is measuring something else and is dropped
     // for the document. Counted before emission because one page's misuse
     // discredits the cue everywhere in the document, not just on that page.
+    let heading_styles = heading_styles(pages, body);
     let bold_candidates = pages
         .iter()
         .flatten()
@@ -1718,7 +2101,7 @@ pub fn detect_with_body(
             }
             // A field parted from a list of fields is a label and its
             // value, no section's title.
-            if b.field {
+            if b.field || from_picture(b) {
                 continue;
             }
             let text = b.text();
@@ -1738,6 +2121,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Title,
                     form_text: false,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1770,13 +2154,18 @@ pub fn detect_with_body(
                     evidence: Evidence::Outline,
                     form_text: false,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
             // An ordered list's item, its number set in its own text: the
             // list counts off from one item to the next, which a section
             // number never does on its own page.
-            if !title_like_within(&text, word_limit(&text, b, body)) || block::counts_off(b) {
+            let styled = heading_styles.contains(&heading_style(b))
+                && heads_prose(blocks, block_idx, body)
+                && directly_below(blocks, block_idx).is_some_and(|k| blocks[k].marker.is_none());
+            if !title_like_within(&text, word_limit(&text, b, body, styled)) || block::counts_off(b)
+            {
                 if short_caps(&text)
                     && b.lines.len() == 1
                     && b.marker.is_none()
@@ -1817,6 +2206,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Sequence,
                     form_text: false,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1853,6 +2243,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Numbering,
                     form_text: form,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1891,13 +2282,16 @@ pub fn detect_with_body(
                     evidence: Evidence::Bold,
                     form_text: form || lettering,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
             // 5. Typography, for documents with neither. Uncorroborated, so
             // it must also look like a heading: short, and not a paragraph.
             // Display type may run longer.
-            let char_limit = if b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO {
+            let char_limit = if b.font_size as f64 >= body as f64 * DISPLAY_HEADING_RATIO
+                || (styled && vouched_for(&text, b, body, true))
+            {
                 MAX_LONG_HEADING_CHARS
             } else {
                 MAX_FONTSIZE_HEADING_CHARS
@@ -1918,6 +2312,7 @@ pub fn detect_with_body(
                     evidence: Evidence::FontSize,
                     form_text: form,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1953,6 +2348,7 @@ pub fn detect_with_body(
                 evidence,
                 form_text: false,
                 style,
+                rank: RankKey::default(),
             });
             added = true;
         }
@@ -1964,6 +2360,15 @@ pub fn detect_with_body(
     drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out, pages);
     out
+}
+
+/// Text an OCR engine read in a picture set on a page that has text of its
+/// own: the picture's, as a drawing's labels are, and never the page's
+/// heading or its title, however large it is set. A logo's `LAW LIBRARY`
+/// over a report's title, a funder's `Co-funded by the European Union`, a
+/// callout in a photograph. A page read whole is the page's text.
+fn from_picture(b: &Block) -> bool {
+    b.ocr() == Some(crate::glyph::OcrSource::Region)
 }
 
 /// Block `i` heads prose as a heading does: set apart from the text above
@@ -3581,6 +3986,7 @@ fn normalize_levels(hs: &mut [Heading], pages: &[Vec<Block>]) {
     let face = |h: &Heading| if variants { face(h) } else { None };
 
     for h in hs.iter_mut() {
+        h.rank = order((h.style, face(h).unwrap_or(0)));
         if !ranked(h) || h.evidence == Evidence::Title {
             continue;
         }
@@ -3589,6 +3995,196 @@ fn normalize_levels(hs: &mut [Heading], pages: &[Vec<Block>]) {
             h.level = (rank + 1).min(MAX_LEVEL);
         }
     }
+}
+
+/// What sets a heading's level once the document's headings are settled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LevelSource {
+    /// The document's title.
+    Title,
+    /// A bookmark, at its depth in the outline.
+    Outline(usize),
+    /// Its number, or its style: size, weight, case, slant and face.
+    Set,
+}
+
+/// The kind of one part of a section number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberKind {
+    Figure,
+    Numeral,
+    Letter,
+}
+
+/// A heading's level, as the document's settled headings set it.
+#[derive(Debug, Clone)]
+pub struct LevelInfo {
+    rank: RankKey,
+    source: LevelSource,
+    /// The kinds of its section number's parts (`2.1` two figures, `IV.A`
+    /// a numeral and a letter), where it opens on one.
+    number: Option<Vec<NumberKind>>,
+}
+
+impl Heading {
+    /// What sets this heading's level among the document's headings.
+    pub fn level_info(&self) -> LevelInfo {
+        let source = match self.evidence {
+            Evidence::Title => LevelSource::Title,
+            Evidence::Outline => LevelSource::Outline(self.level),
+            _ => LevelSource::Set,
+        };
+        LevelInfo {
+            rank: self.rank,
+            number: (source != LevelSource::Title)
+                .then(|| number_kinds(&self.text))
+                .flatten(),
+            source,
+        }
+    }
+}
+
+/// The kinds of a section number's parts, `None` without one.
+fn number_kinds(text: &str) -> Option<Vec<NumberKind>> {
+    numbering_depth(text)?;
+    let head: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+        .collect();
+    let kinds: Vec<NumberKind> = head
+        .split('.')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            if p.chars().all(|c| c.is_ascii_digit()) {
+                NumberKind::Figure
+            } else if p.len() > 1 || matches!(p, "I" | "V" | "X") {
+                NumberKind::Numeral
+            } else {
+                NumberKind::Letter
+            }
+        })
+        .collect();
+    (!kinds.is_empty()).then_some(kinds)
+}
+
+/// Whether the document's title heads its sections, which then start a
+/// level below it. It does not: the title is level 1 and so are the
+/// sections, as a Word document's title, held apart from its sections,
+/// sits over its `Heading 1`s, and as most outlines set a paper's sections
+/// at their first depth.
+const TITLE_HEADS_SECTIONS: bool = false;
+
+/// The levels of a document's settled headings, in reading order, each
+/// set against the headings open above it.
+///
+/// - An outline entry keeps its depth, the author's, counted from the
+///   outline's shallowest depth a printed heading takes: an outline that
+///   sets the paper's title over its sections, the title read as the
+///   title, has its sections at its second depth.
+/// - A numbered heading is a sibling of the nearest open heading numbered
+///   the same way at its depth or deeper, and a child of one a part
+///   shorter: `2.1` under `2`, `3` beside `2.4`'s `2`. A bookmarked
+///   heading counts by its number too.
+/// - Any other heading, and a numbered one with no heading numbered its
+///   way open, is a child of the nearest open heading set stronger than
+///   it and a sibling of the nearest set alike: a 10-K's notes, numbered
+///   afresh from `1.`, under its `Notes to consolidated financial
+///   statements`, and that under `Item 8`. A bookmarked heading is closed
+///   by none set stronger, only by another bookmark, by its number or by
+///   one set alike: the outline's span is the author's.
+///
+/// Levels run as deep as the headings nest, to [`MAX_LEVEL`], however many
+/// styles the document sets them in. `fallback` is a heading's level where
+/// nothing is known of it.
+pub fn settle_levels(hs: &[(Option<&LevelInfo>, usize)]) -> Vec<usize> {
+    struct Open<'a> {
+        level: usize,
+        info: Option<&'a LevelInfo>,
+    }
+    let top = hs
+        .iter()
+        .filter_map(|(i, _)| match i.map(|i| &i.source) {
+            Some(LevelSource::Outline(d)) => Some(*d),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(1);
+    let mut stack: Vec<Open> = Vec::new();
+    // Levels below the title, where it heads the sections.
+    let mut under_title = 0;
+    let mut out = Vec::with_capacity(hs.len());
+    for &(info, fallback) in hs {
+        let level = match info {
+            None => fallback,
+            Some(LevelInfo {
+                source: LevelSource::Title,
+                ..
+            }) => {
+                stack.clear();
+                if TITLE_HEADS_SECTIONS {
+                    under_title = 1;
+                    stack.push(Open { level: 1, info });
+                }
+                out.push(1);
+                continue;
+            }
+            Some(LevelInfo {
+                source: LevelSource::Outline(depth),
+                ..
+            }) => depth + 1 - top.min(*depth) + under_title,
+            Some(info) => {
+                // The nearest open heading numbered the same way, with the
+                // parts of its number and of this one's.
+                let numbered = info.number.as_ref().and_then(|own| {
+                    stack.iter().rev().find_map(|o| {
+                        let open = o.info?.number.as_ref()?;
+                        same_scheme(open, own).then_some((o.level, open.len(), own.len()))
+                    })
+                });
+                match numbered {
+                    Some((level, open, own)) if open >= own => level.saturating_sub(open - own),
+                    Some((level, open, own)) => level + own - open,
+                    None => {
+                        let mut level = 1 + under_title;
+                        while let Some(o) = stack.last() {
+                            let Some(open) = o.info else {
+                                level = o.level + 1;
+                                break;
+                            };
+                            if open.rank == info.rank {
+                                level = o.level;
+                                break;
+                            }
+                            if open.rank < info.rank
+                                || matches!(
+                                    open.source,
+                                    LevelSource::Outline(_) | LevelSource::Title
+                                )
+                            {
+                                level = o.level + 1;
+                                break;
+                            }
+                            stack.pop();
+                        }
+                        level
+                    }
+                }
+            }
+        }
+        .clamp(1 + under_title, MAX_LEVEL);
+        while stack.last().is_some_and(|o| o.level >= level) {
+            stack.pop();
+        }
+        stack.push(Open { level, info });
+        out.push(level);
+    }
+    out
+}
+
+/// Two section numbers are numbered the same way where their shared parts
+/// are of one kind each: `2.1` under `2`, `B.3` under `B`.
+fn same_scheme(a: &[NumberKind], b: &[NumberKind]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x == y)
 }
 
 /// Share by which one face's x-height must fall short of another's, at one
@@ -3817,6 +4413,26 @@ mod tests {
     use crate::geom::BBox;
     use crate::line::Line;
 
+    #[test]
+    fn a_line_opening_with_a_plain_bullet_is_a_list_item() {
+        for t in [
+            "• One",
+            "● One",
+            "○ Custom landing pages",
+            "◦ A sub-point",
+            "▪ One",
+            "□ Tick here",
+            "❑ Peg rack",
+            "– A dash",
+        ] {
+            assert!(starts_like_list_item(t), "{t}");
+        }
+        // The dingbats set before headings as often as before items.
+        for t in ["❖ Gene", "➢ Scope", "Results"] {
+            assert!(!starts_like_list_item(t), "{t}");
+        }
+    }
+
     fn blk(text: &str, fs: f32, lines: usize) -> Block {
         let l = Line {
             text: text.into(),
@@ -3833,6 +4449,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -3996,6 +4613,92 @@ mod tests {
         assert!(beside_a_label(&page, 1) && named_value(&page[1].text()));
         // A step's label beside the step before it is no value.
         assert!(!named_value("STEP 4:"));
+    }
+
+    #[test]
+    fn levels_are_set_against_the_headings_open_above() {
+        // A heading set at `size` points, bold, numbered by its text where
+        // it opens on a number.
+        let at = |source: LevelSource, size: i32, text: &str| LevelInfo {
+            rank: (-size * 4, false, false, false, 0),
+            source,
+            number: number_kinds(text),
+        };
+        let set = |size: i32, text: &str| at(LevelSource::Set, size, text);
+        let levels = |hs: &[LevelInfo]| {
+            let hs: Vec<(Option<&LevelInfo>, usize)> = hs.iter().map(|h| (Some(h), 1)).collect();
+            settle_levels(&hs)
+        };
+
+        // Each style a level under the one before, however many there
+        // are, to six; one set alike is a sibling, one set stronger closes
+        // those under it.
+        let ladder: Vec<LevelInfo> = [20, 16, 14, 12, 11, 10, 9, 14, 12]
+            .iter()
+            .map(|&size| set(size, "Heading"))
+            .collect();
+        assert_eq!(levels(&ladder), [1, 2, 3, 4, 5, 6, 6, 3, 4]);
+
+        // The title heads no section: the sections start beside it.
+        let titled = [
+            at(LevelSource::Title, 24, "A Paper"),
+            set(12, "Introduction"),
+            set(10, "Scope"),
+        ];
+        assert_eq!(levels(&titled), [1, 1, 2]);
+
+        // A 10-K: its notes, numbered afresh from `1.`, under its notes'
+        // title, under its bookmarked Item; a note's topics under it.
+        let annual = [
+            at(LevelSource::Outline(1), 20, "PART II"),
+            at(LevelSource::Outline(2), 18, "Item 8. Financial Statements"),
+            set(16, "Notes to Financial Statements"),
+            set(13, "1. Summary of Accounting Policies"),
+            set(12, "Principles of Consolidation"),
+            set(10, "Recently Adopted Standards"),
+            set(13, "2. Cash and Equivalents"),
+            set(13, "2.1 Restricted Cash"),
+            set(13, "3. Inventories"),
+            at(
+                LevelSource::Outline(2),
+                18,
+                "Item 9. Changes in Accountants",
+            ),
+        ];
+        assert_eq!(levels(&annual), [1, 2, 3, 4, 5, 6, 4, 5, 4, 2]);
+
+        // An outline that sets the title at its first depth has its
+        // sections at its second: they are level 1 beside the title.
+        let outlined = [
+            at(LevelSource::Title, 20, "A Paper"),
+            at(LevelSource::Outline(2), 12, "INTRODUCTION"),
+            at(LevelSource::Outline(3), 11, "Participants"),
+            at(LevelSource::Outline(2), 12, "METHODS"),
+        ];
+        assert_eq!(levels(&outlined), [1, 1, 2, 1]);
+
+        // A bookmarked section in small capitals is closed by none set
+        // larger, only by another numbered its way: an agreement's 10pt
+        // bold clauses under its 8pt sections.
+        let agreement = [
+            at(LevelSource::Outline(1), 8, "2. ASSIGNMENT OF INVENTIONS."),
+            set(10, "2.2 Excluded Inventions."),
+            set(10, "Inventions"),
+            set(10, "2.9 Software Code."),
+            set(8, "5. NO SOLICITATION."),
+            set(10, "5.1 Employees and Consultants."),
+        ];
+        assert_eq!(levels(&agreement), [1, 2, 2, 2, 1, 2]);
+
+        // Set alike, a heading is a bookmarked heading's sibling.
+        let alike = [
+            at(LevelSource::Outline(1), 10, "Abstract"),
+            set(10, "Background"),
+        ];
+        assert_eq!(levels(&alike), [1, 1]);
+
+        // A heading nothing is known of keeps its level.
+        assert_eq!(settle_levels(&[(None, 3)]), [3]);
     }
 
     #[test]
@@ -4383,6 +5086,9 @@ mod tests {
             "Ann B. Lee 1,2, Bo Chen3",
             "3,4, Cy D. Wu5\u{2021}, Ed F. Ng1\u{2021}",
             "Fay Gu and Hal Ito *",
+            // Their marks written raised, the names set apart by dots.
+            "Ann Lee¹,², Bo Chen² and Cy Wu¹",
+            "Ann Lee¹ · Bo Chen2 · Cy Wu¹",
         ] {
             assert!(byline(t), "{t}");
         }
@@ -4396,6 +5102,8 @@ mod tests {
             "Supplementary Figure 1",
             "Terms and Conditions",
             "Ann Lee",
+            "Study²",
+            "Wind · Solar · Storage",
         ] {
             assert!(!byline(t), "{t}");
         }
@@ -5219,6 +5927,31 @@ mod tests {
         let h = detect(&pages, &[]);
         assert_eq!(h.len(), 3);
         assert!(h.iter().all(|h| h.evidence == Evidence::Numbering));
+
+        // A paper numbering its affiliations from 1 under its title, each
+        // number its item's marker, then its first section: `1` opens two
+        // different lines, and the section is a section still.
+        let body = || blk("Body text of the paper runs on here.", 10.0, 4);
+        let item = |n: &str, rest: &str| {
+            let mut b = blk(&format!("{n} {rest}"), 8.0, 1);
+            b.marker = Some(n.into());
+            b
+        };
+        let pages = vec![
+            vec![
+                item("1", "Faculty of Economics, University of Somewhere"),
+                item("2", "School of Finance, Another University"),
+                body(),
+            ],
+            vec![blk("1 Introduction", 10.0, 1), body(), body()],
+        ];
+        let h = detect(&pages, &[]);
+        let numbered: Vec<&str> = h
+            .iter()
+            .filter(|h| h.evidence == Evidence::Numbering)
+            .map(|h| h.text.as_str())
+            .collect();
+        assert_eq!(numbered, vec!["1 Introduction"], "{h:?}");
     }
 
     #[test]
@@ -5309,6 +6042,11 @@ mod tests {
         assert!(runs_into_prose(
             "Results on data contamination. To show the in-"
         ));
+        // A note's number raised on the stop: the sentence ended there,
+        // however short its last word.
+        assert!(runs_into_prose(
+            "low.³ Corporate earnings remained strong through 2023."
+        ));
     }
 
     #[test]
@@ -5319,6 +6057,8 @@ mod tests {
         assert!(!runs_into_prose("Results vs. Baseline Methods"));
         assert!(!runs_into_prose("See Fig. 3 for details"));
         assert!(!runs_into_prose("Method of Doe et al. Revisited"));
+        // A heading's own note, at its end.
+        assert!(!runs_into_prose("Introduction.¹"));
     }
 
     #[test]
@@ -5724,6 +6464,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let run = |n: usize, size: f32, weight: u32| (0..n).map(move |_| glyph("a", size, weight));
         // A form: its lines and figures in regular type, read as tables,
@@ -5779,6 +6520,193 @@ mod tests {
         blocks.push(blk("para", 11.0, 30));
         blocks.push(blk("para", 11.0, 30));
         assert_eq!(body_font_size(&[blocks]), 11.0);
+    }
+
+    #[test]
+    fn the_body_is_read_from_running_prose() {
+        let prose = |fs: f32, blocks: usize| -> Vec<Block> {
+            (0..blocks)
+                .map(|_| blk("the report's prose runs on across its measure", fs, 10))
+                .collect()
+        };
+        let labels = |fs: f32| -> Vec<Block> { (0..200).map(|_| blk("2024", fs, 1)).collect() };
+        // A chart's 8pt labels outnumber the 10pt prose, line for line:
+        // the prose is the body.
+        let charted: Vec<Block> = labels(8.0).into_iter().chain(prose(10.0, 6)).collect();
+        assert_eq!(body_font_size(&[charted]), 10.0);
+        // Prose set smaller than the lines is a form's fine print under its
+        // larger type, and leaves the body where the lines put it.
+        let form: Vec<Block> = labels(8.0).into_iter().chain(prose(6.0, 6)).collect();
+        assert_eq!(body_font_size(&[form]), 8.0);
+        // A few lines of prose, a slide's, are too few to say.
+        let deck: Vec<Block> = labels(8.0).into_iter().chain(prose(10.0, 2)).collect();
+        assert_eq!(body_font_size(&[deck]), 8.0);
+    }
+
+    #[test]
+    fn a_long_head_in_the_documents_heading_style_is_a_heading() {
+        let head = |text: &str, y: f64| -> Block {
+            let mut b = at(text, 14.0, y, true);
+            for l in &mut b.lines {
+                l.bold = true;
+                l.bbox = b.bbox;
+            }
+            b
+        };
+        let para = |y: f64| -> Block {
+            let mut b = blk("the report's prose runs on across its measure", 10.0, 3);
+            b.bbox.y0 = y;
+            b.bbox.y1 = y + 36.0;
+            b
+        };
+        // Two lines of a finding, 17 words, at 1.4 times the body.
+        let mut long = head(
+            "Hedge funds' leverage was at or near its highest level",
+            300.0,
+        );
+        let mut second = long.lines[0].clone();
+        second.text = "in available data across the largest funds".into();
+        long.lines.push(second);
+        long.bbox.y1 = 332.0;
+        let page = |shorter: bool| -> Vec<Block> {
+            let mut p = vec![at("Financial Stability Report", 24.0, 20.0, true)];
+            if shorter {
+                p.extend([
+                    head("Bank lending to other entities grew", 100.0),
+                    para(120.0),
+                    head("Insurers' leverage increased", 200.0),
+                    para(220.0),
+                ]);
+            }
+            p.extend([long.clone(), para(340.0)]);
+            p
+        };
+        let found = |shorter: bool| {
+            detect_with_body(&[page(shorter)], &[], 10.0, None)
+                .iter()
+                .any(|h| h.text.starts_with("Hedge funds"))
+        };
+        // Among shorter findings in its style, it is one of them.
+        assert!(found(true));
+        // Alone in its style, it is held to a title's length.
+        assert!(!found(false));
+    }
+
+    #[test]
+    fn a_title_in_doubt_is_no_documents_title() {
+        // What a document's title is not.
+        for (t, why) in [
+            ("September 20, 2023", "date"),
+            ("December 10–11, 2019", "date"),
+            ("5. The dynamics", "numbered"),
+            ("1. PURPOSE", "numbered"),
+            ("Table of Contents", "section-name"),
+            ("Introduction", "section-name"),
+            (
+                "NOTES TO CONSOLIDATED FINANCIAL STATEMENTS — (Continued)",
+                "continued",
+            ),
+            (
+                "The following table summarizes capitalized costs:",
+                "lead-in",
+            ),
+            ("materials", "one-word"),
+            ("Hanvaro Semiconductor Co., Ltd.", "company"),
+            ("CVS PHARMACY, INC", "company"),
+            ("PART II", "division"),
+            ("Item 8. Consolidated Financial Statements", "division"),
+        ] {
+            assert_eq!(title_doubt(t), Some(why), "{t}");
+        }
+        // What one is.
+        for t in [
+            "Restrictions on Land Ownership by Foreigners in Selected Jurisdictions",
+            "120 V~ Multi-Location 3-Wire Fluorescent Smart Dimmer",
+            "POWER OF ATTORNEY",
+            "The Beige Book",
+            "2019 EQUITY INCENTIVE PLAN",
+        ] {
+            assert_eq!(title_doubt(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_files_own_title_names_its_title() {
+        assert!(meaningful_title("Monetary Policy Report, July 2026"));
+        for m in [
+            "report.docx",
+            "Microsoft Word - 100710.docx",
+            "pone.0005054 1..10",
+            "(anonymous)",
+            "Untitled",
+        ] {
+            assert!(!meaningful_title(m), "{m}");
+        }
+        let meta = "Data Sheet: WD Gold Enterprise Class SATA HDD";
+        assert!(names_title(meta, "WD Gold® Enterprise Class SATA HDD"));
+        // A title's date, or a fragment of it, covers too little of it.
+        let meta = "Transcript of Chair Powell's Press Conference -- September 20, 2023";
+        assert!(!names_title(meta, "September 20, 2023"));
+        assert!(names_title(
+            meta,
+            "Transcript of Chair Powell’s Press Conference"
+        ));
+        assert!(!names_title(
+            "Minutes of the Federal Open Market Committee, December 17-18, 2024",
+            "Minutes of the"
+        ));
+        // A title's first line, where the file states the whole of it.
+        let meta = "Vascular disease as a cause of death in patients with severe disability";
+        assert!(part_of_title(meta, "Vascular disease as a cause of death"));
+        assert!(!part_of_title(meta, "materials"));
+        assert!(
+            names_title("Beige Book - October 18, 2023", "The Beige Book")
+                || part_of_title("Beige Book - October 18, 2023", "The Beige Book")
+        );
+    }
+
+    #[test]
+    fn a_pictures_ocr_text_is_no_heading_and_no_measure_of_the_body() {
+        use crate::glyph::OcrSource;
+        let read = |mut b: Block, source: OcrSource| {
+            for l in &mut b.lines {
+                l.ocr = Some(source);
+            }
+            b
+        };
+        let body = || {
+            let mut b = blk(
+                "the report's prose runs on across its measure here",
+                10.0,
+                3,
+            );
+            b.bbox.y0 = 200.0;
+            b.bbox.y1 = 236.0;
+            b
+        };
+        let title = at("Restrictions on Land Ownership", 18.0, 120.0, false);
+        // A logo read in its picture, set larger than the title.
+        let logo = read(at("LAW LIBRARY", 30.0, 40.0, false), OcrSource::Region);
+        let page = vec![logo.clone(), title.clone(), body()];
+        let hs = detect_with_body(&[page], &[], 10.0, None);
+        assert!(hs.iter().all(|h| h.text != "LAW LIBRARY"), "{hs:?}");
+        assert!(
+            hs.iter().any(
+                |h| h.text == "Restrictions on Land Ownership" && h.evidence == Evidence::Title
+            ),
+            "{hs:?}"
+        );
+        // Read on a page read whole, the same line is the page's.
+        let scanned = read(at("LAW LIBRARY", 30.0, 40.0, false), OcrSource::Page);
+        let hs = detect_with_body(&[vec![scanned, title, body()]], &[], 10.0, None);
+        assert!(hs.iter().any(|h| h.text == "LAW LIBRARY"), "{hs:?}");
+        // A chart's labels read in its picture, many and small, do not set
+        // the body.
+        let mut blocks: Vec<Block> = (0..40)
+            .map(|_| read(blk("Convenience", 6.0, 1), OcrSource::Region))
+            .collect();
+        blocks.push(blk("the page's own two lines of text", 10.0, 2));
+        assert_eq!(body_font_size(&[blocks]), 10.0);
     }
 
     #[test]

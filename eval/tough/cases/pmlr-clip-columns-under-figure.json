@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "pmlr-v139-radford21a.pdf",
+    "url": "https://proceedings.mlr.press/v139/radford21a/radford21a.pdf",
+    "sha256": "2a4952960f350e50a3a4a847371b80b8aaa09ba82d1c2a8f6b30450e392a1fe4",
+    "about": "ICML 2021 (PMLR v139), Learning Transferable Visual Models From Natural Language Supervision. Page 8 sets two columns of text under a full-width figure whose ruled table and labels run across the gutter, with the figure's caption across both columns."
+  },
+  "checks": [
+    {
+      "id": "column-under-figure-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: no gutter runs through the figure, so the columns under it were read line by line across the gutter.",
+      "text": "We conducted de-duplication analysis to investigate this with full details in the supplementary material."
+    },
+    {
+      "id": "right-column-under-figure-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: the right column's lines alternated with the left column's.",
+      "text": "Additionally, given that CLIP does not need task-specific training data, it can unlock certain niche tasks with greater ease."
+    }
+  ]
+}

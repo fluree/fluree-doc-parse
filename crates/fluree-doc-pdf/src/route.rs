@@ -604,6 +604,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             });
         }
         Page {

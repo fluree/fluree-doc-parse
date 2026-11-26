@@ -6,7 +6,8 @@
     "about": "International Journal for Equity in Health (2016) article, 'Socioeconomic Inequality in mortality using 12-year follow-up data from nationally representative surveys in South Korea', PMC4802872. Its Table 2 (p7) groups its rows under labels in the stub (`Education`, `Occupation`, `Monthly household income (USD)`), ruled only above and under its header, and runs on past the page's foot. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
   },
   "notes": [
-    "2026-11-25 (#350): the page's one ruled grid was the header band, alignment was preferred over it, and the text reading of that band alone was empty; alignment read the rows in pieces, broken at each group label, the RR columns of `Occupation` and below left as text. Such a seed is now read on below its last rule, and that reading, holding more of the table, stands. The spanning `Men 30 years of age and older` / `Women …` level of the header is still lost (#351)."
+    "2026-11-25 (#350): the page's one ruled grid was the header band, alignment was preferred over it, and the text reading of that band alone was empty; alignment read the rows in pieces, broken at each group label, the RR columns of `Occupation` and below left as text. Such a seed is now read on below its last rule, and that reading, holding more of the table, stands. The spanning `Men 30 years of age and older` / `Women …` level of the header is still lost (#351).",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -40,10 +41,7 @@
       "id": "long-title-is-the-title",
       "found": "2026-11-25",
       "issue": "#367: the four-line title, set at twice the body's size, was no heading, and the banner's `RESEARCH` above it was the h1.",
-      "section": {
-        "title": "Socioeconomic Inequality in mortality using 12-year follow-up data from nationally representative surveys in South Korea",
-        "level": 1
-      }
+      "element": {"type": "doco:Title", "text": "Socioeconomic Inequality in mortality using 12-year follow-up data from nationally representative surveys in South Korea"}
     }
   ]
 }

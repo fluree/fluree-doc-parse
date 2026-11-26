@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "hse-l118.pdf",
+    "url": "https://www.hse.gov.uk/pubns/priced/l118.pdf",
+    "sha256": "6c33d6148dd19877d80276537dccd87dfc51fba1bccae0a9637acf9ee98e8c97",
+    "about": "HSE L118, Health and safety at quarries. Its outline lists the parts and regulations at one depth, under the booklet's title; each regulation sets `Regulation`, `ACOP`, `Guidance` and its topics in 12pt bold."
+  },
+  "notes": [
+    "2026-11-26 (#393): each regulation was h2, at its outline depth under the booklet's title, and its topics h5, with h3 and h4 held by the contents pages' entries."
+  ],
+  "checks": [
+    {
+      "id": "regulation-at-the-top",
+      "found": "2026-11-26",
+      "issue": "#393: the regulations were h2, at the outline depth under the title, with no h1 section above them.",
+      "section": {
+        "title": "Regulation 6 General duties of the operator",
+        "level": 1
+      }
+    },
+    {
+      "id": "topic-under-its-regulation",
+      "found": "2026-11-26",
+      "issue": "#393: the regulation's topics were h5 directly under its h2.",
+      "section": {
+        "title": "Public safety",
+        "level": 2,
+        "within": "Regulation 6 General duties of the operator"
+      }
+    }
+  ]
+}

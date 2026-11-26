@@ -149,7 +149,8 @@ loads must hash to the value this build of `fdoc` pins: `SHA256SUMS` sits
 beside the files, so whoever can replace a file can rewrite it, and is not what
 is checked. A file that is missing or changed stops the run with its name; a
 pack of other versions needs a build of `fdoc` that pins them (`build.py`
-prints the table).
+prints the table). `fdoc convert` checks the files when it first sends a page
+to the engine, not before: see [OCR](convert.md#ocr).
 
 What is checked is what is used. The models are read once and handed to the
 engine as the bytes that were hashed. On Linux the library is loaded through

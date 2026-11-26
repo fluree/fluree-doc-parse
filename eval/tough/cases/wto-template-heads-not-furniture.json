@@ -1,0 +1,26 @@
+{
+  "document": {
+    "file": "wto-trade-profiles-2023.pdf",
+    "url": "https://www.wto.org/english/res_e/booksp_e/trade_profiles23_e.pdf",
+    "sha256": "7f8a2ed17e363f58e3943e19b108875118e71c14f78e3d4aee98916ed1874cc8",
+    "about": "WTO Trade Profiles 2023: two template pages per economy. The first sets the band MERCHANDISE TRADE under the economy's key figures; the second ends with an INDUSTRIAL PROPERTY table whose heads, Residents and Non-residents, stand over each economy's counts."
+  },
+  "notes": [
+    "2026-11-26 (#420): both repeat at one place on every economy's page, and were removed as running heads and feet: no copy of MERCHANDISE TRADE (197 in the PDF) or of Residents (591) was kept."
+  ],
+  "checks": [
+    {
+      "id": "section-band-kept",
+      "found": "2026-11-26",
+      "issue": "#420: the band MERCHANDISE TRADE, under each economy's key figures, was read as a running head.",
+      "text": "MERCHANDISE TRADE",
+      "count": 197
+    },
+    {
+      "id": "table-heads-kept",
+      "found": "2026-11-26",
+      "issue": "#420: the heads over each economy's patent counts were read as a running foot.",
+      "text": "Patent applications, 2021 Residents Non-residents 23 1 18 -3 12 -24"
+    }
+  ]
+}
