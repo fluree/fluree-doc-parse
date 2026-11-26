@@ -267,7 +267,7 @@ type PageInk = Vec<Option<(u128, Option<f64>)>>;
 /// half-width and a little rounding, short of any text's height.
 const TIGHT_CLIP: f64 = 3.0;
 
-struct Collector {
+struct Collector<'a> {
     page: usize,
     glyphs: Vec<Glyph>,
     images: Vec<ImagePlacement>,
@@ -315,7 +315,7 @@ struct Collector {
     /// see [`Collector::read_cased`].
     cased: Vec<(Spoken, usize)>,
     /// What each font's dictionary says about its face, for the document.
-    faces: crate::faces::Faces,
+    faces: crate::faces::Faces<'a>,
     /// The weight each font's glyphs are read at, once found.
     weights: std::collections::HashMap<u128, Option<u32>>,
     /// Whether each font is italic, by the interpreter's key for it.
@@ -469,7 +469,7 @@ fn is_punctuation(c: char) -> bool {
     )
 }
 
-impl Collector {
+impl<'a> Collector<'a> {
     /// The part of a drawn shape's box that can be painted: the box cut to
     /// the clips in force and to the page, or `None` when none of it shows.
     ///
@@ -718,7 +718,7 @@ fn paint_of(paint: &hayro_interpret::Paint<'_>) -> rule::Paint {
     }
 }
 
-impl<'a> Device<'a> for Collector {
+impl<'a> Device<'a> for Collector<'a> {
     fn set_soft_mask(&mut self, _m: Option<hayro_interpret::SoftMask<'a>>) {}
     fn set_blend_mode(&mut self, _b: hayro_interpret::BlendMode) {}
     fn draw_path(
@@ -956,7 +956,17 @@ impl<'a> Device<'a> for Collector {
         let mut text = match glyph.as_unicode() {
             Some(hayro_interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(hayro_interpret::hayro_cmap::BfString::String(s)) => s,
-            None => String::new(),
+            // No text from the font's ToUnicode map or from a name the
+            // Adobe Glyph List lists whole: the program's own name for the
+            // glyph, read by the list's rules (`h.sc`, `f_i`), if it has one;
+            // see `faces::Faces::named`.
+            None => match glyph {
+                HGlyph::Outline(o) => self
+                    .faces
+                    .named(o.font_cache_key(), o.glyph_id().to_u32())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            },
         };
 
         // A letter the font's ToUnicode map gives in the other case than
@@ -2739,7 +2749,7 @@ mod actual_text_tests {
     }
 
     /// A collector for a letter-size page with nothing drawn on it yet.
-    fn collector() -> Collector {
+    fn collector() -> Collector<'static> {
         Collector {
             page: 0,
             glyphs: Vec::new(),
