@@ -21,56 +21,68 @@ The headline `overall` is the mean of those three per document.
 
 ## Where we stand
 
-Measured 2026-11-23 on the full 200 documents. The reference writes a link as
+Measured 2026-11-26 on the full 200 documents. The reference writes a link as
 its words alone, so our scores are taken with
 [`--md-links text`](../formats/markdown.md#links-as-plain-text), which does
 the same.
 
 | # | engine | overall | NID | TEDS | MHS | s/doc |
 |---|---|---|---|---|---|---|
-| 1 | **fluree-doc-parse** (cascade) | **0.940703** | 0.9512 | 0.9420 | 0.9012 | ~1.5¹ |
-| 2 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463 |
-| 3 | **fluree-doc-parse** (deterministic) | **0.901319** | 0.9264 | 0.8616 | 0.8402 | **~0.011**² |
-| 4 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
-| 5 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
-| 6 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
-| 7 | pdf-inspector | 0.875348 | 0.9147 | 0.8141 | 0.7879 | 0.006 |
-| 8 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
-| 9 | opendataloader-hybrid-helium | 0.845058 | 0.8789 | 0.8068 | 0.7549 | 8.620 |
-| 10 | unstructured-hires | 0.841377 | 0.9038 | 0.5883 | 0.7486 | 3.008 |
-| 11 | edgeparse | 0.836959 | 0.8938 | 0.7174 | 0.7061 | 0.036 |
-| 12 | opendataloader | 0.831209 | 0.9023 | 0.4887 | 0.7395 | 0.015 |
-| 13 | mineru | 0.831135 | 0.8574 | 0.8730 | 0.7430 | 5.962 |
-| 14 | pymupdf4llm | 0.731621 | 0.8851 | 0.4010 | 0.4122 | 0.091 |
-| 15 | unstructured | 0.685777 | 0.8818 | 0.0000 | 0.3877 | 0.077 |
-| 16 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
-| 17 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
+| 1 | **fluree-doc-parse** (VLM) | **0.946972** | 0.9553 | 0.9680 | 0.9140 | 1.371¹ |
+| 2 | **fluree-doc-parse** (OCR) | **0.938328** | 0.9519 | 0.9166 | 0.9015 | 0.356² |
+| 3 | **fluree-doc-parse** (deterministic) | **0.921118** | 0.9337 | 0.9166 | 0.8847 | **0.007**² |
+| 4 | opendataloader-hybrid | 0.906572 | 0.9337 | 0.9276 | 0.8208 | 0.463³ |
+| 5 | nutrient | 0.885067 | 0.9250 | 0.7081 | 0.8190 | 0.008 |
+| 6 | docling | 0.881679 | 0.8984 | 0.8871 | 0.8240 | 0.762 |
+| 7 | opendataloader-hybrid-hydrogen | 0.876816 | 0.9260 | 0.7958 | 0.7685 | 5.068 |
+| 8 | pdf-inspector | 0.875348 | 0.9147 | 0.8141 | 0.7879 | 0.006 |
+| 9 | marker | 0.860836 | 0.8897 | 0.8076 | 0.7956 | 53.932 |
+| 10 | opendataloader-hybrid-helium | 0.845058 | 0.8789 | 0.8068 | 0.7549 | 8.620 |
+| 11 | unstructured-hires | 0.841377 | 0.9038 | 0.5883 | 0.7486 | 3.008 |
+| 12 | edgeparse | 0.836959 | 0.8938 | 0.7174 | 0.7061 | 0.036 |
+| 13 | opendataloader | 0.831209 | 0.9023 | 0.4887 | 0.7395 | 0.015 |
+| 14 | mineru | 0.831135 | 0.8574 | 0.8730 | 0.7430 | 5.962 |
+| 15 | pymupdf4llm | 0.731621 | 0.8851 | 0.4010 | 0.4122 | 0.091 |
+| 16 | unstructured | 0.685777 | 0.8818 | 0.0000 | 0.3877 | 0.077 |
+| 17 | markitdown | 0.588504 | 0.8437 | 0.2729 | 0.0000 | 0.114 |
+| 18 | liteparse | 0.575604 | 0.8660 | 0.0000 | 0.0000 | 1.061 |
 
-The deterministic engine — no model, no GPU, no API key — places third, and
-the cascade places first by 0.034.
+All three modes place above every other engine. The deterministic
+one needs no model, no GPU and no API key, and is ahead of every other engine
+on its own. Reading the text set as pixels with the built-in OCR engine, still
+on CPU and with no key, adds 0.017. A vision-language model, called only for
+what OCR cannot settle, adds 0.009 more.
 
 By [mode](../getting-started/modes.md):
 
-| tier | adds | overall | typical cost/document |
-|---|---|---|---|
-| 1 | deterministic extraction and layout | 0.901319 | 8 ms, CPU |
-| 3 | deep reading of pixels-only content | 0.940703 | ~1.5 s across the corpus¹ |
+| mode | adds | overall | s/doc, one process² | documents/s, 8 workers² |
+|---|---|---|---|---|
+| `deterministic` (the default) | the text layer, its geometry and its drawing | 0.921118 | 0.007 | 571 |
+| `ocr` (`--mode ocr --models <dir>`) | the [built-in OCR engine](../cli/ocr.md), on CPU, for text set as pixels | 0.938328 | 0.356 | 9.9 |
+| `vlm` (`--mode vlm --models <dir>`, with a [model provider](../cli/config.md#setting-up-google-vertex-ai) configured) | a vision-language model for the pages and regions OCR cannot settle | 0.946972 | 1.371¹ | 2.8 |
 
-¹ The harness prints 0.012 s/document for the cascade, which is only the Rust
-pass reading cached model output. Honestly: 87 of 200 documents escalate and
-113 never leave tier 1; the median escalated document costs 1.7 s and the
-worst 18.9 s.
+¹ The model is Gemini 3 Flash (`gemini-3-flash-preview`) on Google Vertex AI.
+39 of the 200 documents call it, with 42 crops between them: 19 raster regions
+OCR cannot settle, 11 tables whose header is in doubt, 6 pages laid out inside
+their drawings, 5 pages whose headings rest on type size alone, and 1
+near-blank page. Each of those documents takes about 5 s longer than in the
+`ocr` mode; the other 161 read as they do there. A model's reading
+varies from run to run: two runs of this mode scored 0.946972 and
+0.948950, and the lower is quoted.
 
-² Warm, median of five, which ranged from 11.2 to 11.8 ms. The harness spawns
-one process per document, so this is substantially process startup rather
-than parsing — an upper bound on the engine, not a profile of it. In one
-process, `fdoc convert <dir> -j 1` reads the same 200 documents at 7.7 ms
-each: the 8 ms in the tier table. A single timing is not a measurement.
+² One `fdoc convert <dir> -j 1` process over the 200 documents, its wall time
+divided by 200, on an Apple M4 Max. No process is started per document. The
+median of five runs (deterministic) or three (OCR) after a warm-up run, and
+one run (`vlm`, which is billed per crop). The last column is the same run with
+`-j 8`.
+
+³ The other engines' times are the harness's own: one process per document,
+each process's start-up included.
 
 ## Reproducing it
 
-The model-tier scores reproduce from committed caches, so every rung runs
-without a GPU and without an API key.
+The `deterministic` and `ocr` scores need no GPU and no API key. The `vlm`
+score needs a model provider configured, and a run is billed per crop.
 
 ```bash
 git clone https://github.com/opendataloader-project/opendataloader-bench
@@ -78,48 +90,54 @@ cd opendataloader-bench && uv sync
 cp <repo>/bench-adapter/pdf_parser_fluree.py src/
 ```
 
-Register both engines in `src/engine_registry.py`, under `ENGINES` and
+Register the engine in `src/engine_registry.py`, under `ENGINES` and
 `_ENGINE_MODULES`:
 
 ```python
-ENGINES         = { ..., "fluree-doc-parse": "0.1.0",
-                         "fluree-doc-parse-cascade": "0.1.0" }
-_ENGINE_MODULES = { ..., "fluree-doc-parse": "pdf_parser_fluree",
-                         "fluree-doc-parse-cascade": "pdf_parser_fluree" }
+ENGINES         = { ..., "fluree-doc-parse": "0.1.0" }
+_ENGINE_MODULES = { ..., "fluree-doc-parse": "pdf_parser_fluree" }
 ```
 
 The adapter runs `fdoc convert <pdf> --format md --md-links text
 --no-escalate` on each document, so links are written as their words, as the
-reference writes them, and no model is called: tier 3 reads the committed
-caches named below.
-Set `FLUREE_DOC_MD_LINKS=inline` to score the default Markdown, links and
-all.
+reference writes them, and no model is called. Set
+`FLUREE_DOC_MD_LINKS=inline` to score the default Markdown, links and all.
 
-Then:
+Then, for the `deterministic` and `ocr` scores:
 
 ```bash
 cargo build --release --manifest-path <repo>/Cargo.toml
 
-# tier 1 — deterministic
+# deterministic
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
   uv run python src/run.py --engine fluree-doc-parse --force
 
-# tier 3 — the full cascade, from the committed caches: model readings are
-# mode vlm, which builds on ocr and so needs the OCR assets
+# ocr, with the OCR engine's assets directory
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
-FDOC_TIER_RESULTS=<repo>/eval/cascade-cache \
-FDOC_OCR_MODELS=<assets>/ocr \
-  uv run python src/run.py --engine fluree-doc-parse-cascade --force
+FDOC_MODE=ocr FDOC_OCR_MODELS=<assets> \
+  uv run python src/run.py --engine fluree-doc-parse --force
 ```
+
+The [assets directory](../cli/ocr.md#the-assets-directory) holds the OCR
+models and their runtime.
 
 `--force` re-parses; without it the harness re-scores the Markdown already on
 disk. Per-document scores land in `prediction/<engine>/evaluation.json` under
 `documents[]`, and the headline is `metrics.score.overall_mean`.
 
-That the caches are committed is a deliberate property rather than a
-convenience: a result nobody else can reproduce is not a result. It also gives
-the [sidecar formats](../integration/sidecar-formats.md) a worked reference,
-since those caches are real files in exactly the documented shape.
+The adapter never calls a model, so the `vlm` score is taken from one
+`fdoc convert` run over the corpus, scored by the harness's evaluator. With a
+provider configured:
+
+```bash
+<repo>/target/release/fdoc convert pdfs --format md --md-links text \
+  --mode vlm --models <assets> \
+  --out-dir prediction/fluree-doc-parse-vlm/markdown
+uv run python src/evaluator.py --engine fluree-doc-parse-vlm
+```
+
+The times in the tables are the same `fdoc convert pdfs … --out-dir <dir>`
+run with `-j 1` and with `-j 8`, its wall time divided by 200.
 
 ## Caveats that belong with the numbers
 
@@ -131,7 +149,7 @@ State these whenever the scores are quoted.
   against this ground truth.
 - **There is no scanned or image-only PDF in the corpus** — which is the
   router's single most important signal, and therefore the least evidenced
-  part of the tier model. Also absent: broken CID fonts, Korean, filled forms,
+  part of what the `ocr` and `vlm` modes decide. Also absent: broken CID fonts, Korean, filled forms,
   multi-column newspapers, and financial statements with nested tables.
 - **MHS does not measure heading depth.** Its evaluator flattens the tree, so
   every ground-truth heading is a top-level one.
@@ -142,19 +160,20 @@ State these whenever the scores are quoted.
   error. See [Where our output differs from the
   reference](where-we-differ.md). The largest such difference, links, is
   left out of these scores by `--md-links text`; the default Markdown scores
-  0.0020 lower on tier 1.
+  0.0019 lower in `deterministic` mode.
 
 ## Rungs that were retired, with their numbers
 
-A layout detector (PP-DocLayoutV3, its boxes read from files) once lifted the
-deterministic engine from 0.901319 to 0.908607, promoting titles it had
-missed and settling which regions were tables. Measured again after the
-deterministic pass caught up, it was worth nothing: −0.00026 under the model
-readings and −0.00019 under OCR. It has been removed.
+A layout detector (PP-DocLayoutV3, its boxes supplied as sidecars) once lifted
+the deterministic reading from 0.901319 to 0.908607, promoting titles it had
+missed and settling which regions were tables. Measured again once the
+deterministic pass had caught up, it added nothing in any mode: −0.00026
+under the model's readings and −0.00019 under OCR. It has been removed.
 
 A separate table-structure model was measured in both roles it could hold. As
-the reading source it scores 0.892130, *below* the layout boxes alone; as a
-corroboration veto over tier 3 it scores 0.927005, *below* tier 3 without it.
+the reading source it scored 0.892130, *below* the layout boxes alone; as a
+corroboration veto over the model's readings it scored 0.927005, *below* those
+readings without it.
 It earned its place under an earlier, coarser table detector — once the
 deterministic grid improved, agreeing with that grid stopped being evidence.
 The arbiter still accepts an independent second opinion; nothing is wired

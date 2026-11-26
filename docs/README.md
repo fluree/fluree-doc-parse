@@ -13,7 +13,7 @@ declare their structure, so those readers map rather than measure.
 ## What you get
 
 - **Deterministic first.** The CPU tier extracts text and structure in about
-  8 ms per document and outscores every non-ML engine on
+  7 ms per document and outscores every other engine on
   [opendataloader-bench](benchmarks/README.md) by itself. No model, no
   GPU, no network.
 - **What is read is earned, not configured.** The mode says what a run may
