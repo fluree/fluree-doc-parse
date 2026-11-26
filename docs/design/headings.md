@@ -80,6 +80,32 @@ Weight and size never make a heading of these:
   or is set larger (`Policy Rules: Limitations`, `Part II: Application of
   Section 67 Limitation to Specific Deductions`, `Current Situation:
   2001-2019` at 14 pt over 10).
+- **A field without its colon:**
+  - A label with its value beside it on its row is a field.
+    - The value can be a date or a code with letters and figures, within
+      8 ems (`Date de facture` … `13/11/2017`, `Réf. marché` … `MSPE2017`).
+    - It can be a sum anywhere along the row, as invoices set their totals
+      against the margin (`Totaal` … `€ 717,97`).
+    - The value stands alone, or among other sums. A margin's heading beside
+      a paragraph's number (`Rescue equipment` … `156` … its text) is a
+      heading.
+  - A label of three words or fewer is a field over a code or a sum on
+    the line under it, within two ems, whatever the code's weight (`GSTIN`
+    over `06AABCO6063D1ZQ`). A title over its date stays a title.
+  - A label sharing its row with such a field is a field when a short
+    line or three stands under it (`Contact commercial` over its contact,
+    beside `Date de facture`).
+  - A label glued to its figure (`Kundennummer:2`) is a field at any size,
+    and so is a label stating a sum (`Gesamtbetrag: 406,82 €`).
+- **A value:** a line beside a label closing on its colon, within 8 ems
+  (`Prélèvement à partir du :` … `05 Juillet 2015`). A date is never a
+  section's number: `05` in `05 Juillet 2015` is its day.
+- **A sentence:** a line closed by its stop, in sentence case, ten words or
+  more or stating a figure (`Bitte überweisen Sie bis zum 04.07.2015.`). A
+  slide may title itself in a shorter sentence, and an agreement closes its
+  title-case headings on a stop. A sentence is never the document's title,
+  however short (`Dat betaal ik zelf wel.` under `FACTUUR.`), and neither is
+  a line of several fields (`BTW nr. NL: … IBAN: … BIC: …`).
 - **A value under its label:** a line in a lighter weight set at its bold
   label's size on the label's next line, alone or with more such lines
   (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
@@ -473,6 +499,15 @@ bold over it: `Owens Corning Insulating Systems, LLC` over the street and
 over `1-800-GET-PINK® www.owenscorning.com`, the lines set flush under it,
 each within a line and a half of the last, reaching one that closes on a
 phone number or a web address within three lines.
+
+A postal address is no heading and no title either. That is a street's
+line (a house number and a name, either way round: `27 rue Henri Rolland`,
+`Bahnstr. 42`) set directly over a postcode's line (four or five figures
+and the town: `69001 Lyon`, `5555 NH TommyCity`, `88802Spielkreis`; or
+`Springfield, IL 62701`). The line or two over the street naming whom it
+reaches, in six words or fewer, belong to it, and so does a label set over
+it (`Adresse de livraison`). The lines are read down the blocks set flush
+under each other within 3.5 ems, as an envelope's window spaces them.
 
 A bare domain needs a lowercase host and a common top-level domain, so a
 name such as `ASP.NET` is not one. A phone number ends in a group of three
