@@ -31,6 +31,15 @@ across twenty pages is unambiguous.
 So furniture is only identifiable **in aggregate**, which is why detection
 takes the whole document rather than working page by page.
 
+One text may run at two places. A classification marking is set over each
+page and again at its foot (`TLP:CLEAR`, `OFFICIAL`, `UNCONTROLLED COPY WHEN
+PRINTED`). Its copies are read as one group per place, so the head's copies
+run as well as the foot's. Read as one group, only the copies near the
+group's middle place ran, and the head's were each page's first heading.
+This holds only where every place that runs lies in the head or foot band.
+A form's answers (`Yes`, `No`) and a table's labels also repeat at fixed
+places down the page, and they are its content.
+
 ## Short documents
 
 Repetition alone needs at least three pages, and three is too many for the

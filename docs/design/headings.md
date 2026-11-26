@@ -485,6 +485,27 @@ Two label shapes look like numbering and are words:
   another block in the document. Otherwise it is an initial (`J. Example`).
   `I.`, `V.` and `X.` keep their roman reading alone.
 
+## Continued sections
+
+A heading that continues a section begun on an earlier page opens no new one.
+It is read as text, so the page's text runs on in the section it continues.
+
+- **Marked:** it restates an earlier heading, or part of one, and closes on
+  a continuation mark: `(continued)`, `—continued`, `- Continued`, `(cont'd)`,
+  `(suite)`, `(Fortsetzung)`, `(continuación)`. Examples: `Box 1—continued`
+  after `Box 1. Employment and Earnings across Demographic Groups`,
+  `Developments Related to Financial Stability (continued)` after `Box 3.
+  Developments Related to Financial Stability`, `5.5 Electrical
+  Characteristics (continued)`. A continuation of nothing read before (an
+  excerpt's first page) stays a heading.
+- **Repeated:** it repeats word for word, on a later page, the nearest
+  heading at its level or above. This is a page's title set over each page
+  a section fills (`PACKAGE OPTION ADDENDUM`), a release line over each
+  page of a table set, or a sheet's title restated over its second page. A
+  section's name repeated under another section (each district's `Labor
+  Markets` in the Beige Book) has that section's heading between, and
+  stays.
+
 ## Addresses are not titles
 
 A line that ends in a web address, a domain, an e-mail address or a phone
