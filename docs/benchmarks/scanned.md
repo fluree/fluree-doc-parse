@@ -100,27 +100,30 @@ What this shows:
   or a misread character costs the whole fact.
 - **The structure of a scan is not read the way the born-digital page's
   is.** On the four pasted pages fdoc reads the 8 headings of the gold,
-  with and without OCR. On the 54 scans, OCR reads 84 headings for 126 in
-  the gold, 70 of them the gold's and 14 not; counted page by page, that
-  is 43 fewer than the gold and one over (the *missing* and *extra*
-  columns), and 44 of the 54 pages have a heading count other than the
-  gold's. OCR has no bold, so a bold line of body size (a signature,
-  `Bill to:`, `Closing balance`) is lost: a scan's heading is a line set
-  larger than its body, or a page's first line. The engine measures each
-  word's ink (see the [OCR words format](../integration/sidecar-formats.md)),
-  so a line is sized to within a few percent of its type, where its box
-  alone said it to about 5% either way; a line within a tenth of its
-  page's body is set at the body's size, and an address or a paragraph is
-  read as one block, as on the born-digital page, not line by line. Of the
-  14 headings read that are not the gold's, 11 are a statement's
-  `Statement of account`, set in 11 pt: the transactions under it are in
-  9 pt, and on the born-digital page the table they make is recognised by
-  its rules and set apart from the body, but a scan's rules are pixels, so
-  its rows count as body text, and 11 pt over 9 is 22% larger (by their
-  boxes, the subtitle read as a heading on 10 of the 18 statements, as
-  their noise fell). One is a letterhead read with two of its words run
-  together (`Harrow OfficeSupply`), one the bank's name and that subtitle
-  read as one line on a JPEG, and one an opening balance at 100 dpi. An
+  with and without OCR. On the 54 scans, OCR reads 90 headings for 126 in
+  the gold, 78 of them the gold's and 12 not; counted page by page, that
+  is 36 fewer than the gold and none over (the *missing* and *extra*
+  columns), and 36 of the 54 pages have a heading count other than the
+  gold's. Most of the gold's headings are bold lines of body size (a
+  signature, `Bill to:`, `Closing balance`), and OCR sees no font: the
+  engine measures each word's ink (see the [OCR words
+  format](../integration/sidecar-formats.md)), its weight from its stems as
+  well as its size, so at 200 and 300 dpi most such lines read as headings;
+  at 100 and 150 dpi and on faxes a stem is a pixel or two, most words are
+  left without a weight, and the line is lost. Measured by its ink, a line
+  is sized to within a few percent of its type, where its box alone said it
+  to about 5% either way; a line within a tenth of its page's body is set
+  at the body's size, and an address or a paragraph is read as one block,
+  as on the born-digital page, not line by line. Of the 12 headings read
+  that are not the gold's, 10 are a statement's `Statement of account`,
+  set in 11 pt: the transactions under it are in 9 pt, and on the
+  born-digital page the table they make is recognised by its rules and set
+  apart from the body, but a scan's rules are pixels, so its rows count as
+  body text, and 11 pt over 9 is 22% larger (by their boxes, the subtitle
+  read as a heading on 10 of the 18 statements too, as their noise fell).
+  One is a letterhead read with two of its words run together (`Harrow
+  OfficeSupply`), and one the bank's name and that subtitle read as one
+  line on a JPEG. An
   address line, `7 Orchard Road`, no longer reads as a numbered heading at
   100 dpi. The
   per-document headings are in the baseline, and a page that no longer
@@ -129,17 +132,17 @@ What this shows:
 
 | headings | pages | gold | OCR read | missing | extra | pages off | gold read |
 |---|---|---|---|---|---|---|---|
-| clean-300 | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
-| clean-200 | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
+| clean-300 | 6 | 14 | 11 | 3 | 0 | 3 | 10 |
+| clean-200 | 6 | 14 | 10 | 4 | 0 | 4 | 10 |
 | clean-150 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
-| clean-100 | 6 | 14 | 11 | 4 | 1 | 5 | 8 |
-| skew-300 | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
-| noisy-300 | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
+| clean-100 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
+| skew-300 | 6 | 14 | 11 | 3 | 0 | 3 | 10 |
+| noisy-300 | 6 | 14 | 11 | 3 | 0 | 3 | 10 |
 | fax-200 | 6 | 14 | 10 | 4 | 0 | 4 | 8 |
-| fax-std | 6 | 14 | 9 | 5 | 0 | 5 | 8 |
+| fax-std | 6 | 14 | 8 | 6 | 0 | 6 | 8 |
 | jpeg-150 | 6 | 14 | 9 | 5 | 0 | 5 | 6 |
 | pasted, both densities | 4 | 8 | 8 | 0 | 0 | 0 | 8 |
-| **all scanned** | 54 | 126 | 84 | 43 | 1 | 44 | 70 |
+| **all scanned** | 54 | 126 | 90 | 36 | 0 | 36 | 78 |
 
 *Missing* and *extra* are a page's headings fewer or more than its gold's,
 summed; *gold read* counts the gold's headings read as headings, word for

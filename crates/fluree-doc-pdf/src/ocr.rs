@@ -1030,12 +1030,12 @@ const INK_MIN_RATIO_WORDS: usize = 3;
 /// fifth larger than its body has 4% to spare over the ratio a heading
 /// needs. Measured on born-digital pages rasterised and read by the built-in
 /// engine at 150 to 300 dpi (Helvetica, Times and Courier; headings a fifth
-/// larger, none bold), converted end to end, 351 of 582 headings read as
-/// headings by their boxes and 581 by their ink, with no line of body size
-/// read as one; in colour, light on dark, over a photo or a gradient,
-/// noisy, blurred, as a JPEG or a fax, turned, underlined, struck through
-/// or in italic, 92% or more, against 17% to 89% by their boxes (the
-/// twins set, `eval/twins`).
+/// larger, none bold), converted end to end, 322 of 582 headings read as
+/// headings by their boxes and 581 by their ink, and one line of body size
+/// of 519; in colour, light on dark, over a photo or a gradient, noisy,
+/// blurred, as a JPEG or a fax, turned, underlined, struck through or in
+/// italic, 91% or more, against 12% to 85% by their boxes (the twins set,
+/// `eval/twins`).
 fn size_by_ink(placed: &mut [Option<Placed>]) {
     let words: Vec<&Placed> = placed
         .iter()
@@ -1046,15 +1046,20 @@ fn size_by_ink(placed: &mut [Option<Placed>]) {
         return;
     }
     let median_of = |v: Vec<f64>| (v.len() >= INK_MIN_RATIO_WORDS).then(|| median(v));
-    let ascender_over_cap = median_of(
-        words
-            .iter()
-            .filter_map(|w| {
-                let ink = w.ink?;
-                (ink.top_line == Some(TopLine::Ascender)).then_some(ink.top? / ink.first_cap?)
-            })
-            .collect(),
-    );
+    // The top line over the opening capital, for each line the top can be.
+    let top_over_cap = |line: TopLine| {
+        median_of(
+            words
+                .iter()
+                .filter_map(|w| {
+                    let ink = w.ink?;
+                    (ink.top_line == Some(line)).then_some(ink.top? / ink.first_cap?)
+                })
+                .collect(),
+        )
+    };
+    let (ascender_over_cap, cap_over_cap) =
+        (top_over_cap(TopLine::Ascender), top_over_cap(TopLine::Cap));
     let cap_over_x = median_of(
         words
             .iter()
@@ -1067,15 +1072,22 @@ fn size_by_ink(placed: &mut [Option<Placed>]) {
             })
             .collect(),
     );
-    // A word's capitals' height, in pixels.
+    // A word's capitals' height, in pixels: its opening capital, unless it
+    // stands well over what its top line says at the reading's ratio of the
+    // two, where it took in more than its letter (a Courier `A` whose foot's
+    // serif touches the `g` beside it measures down to the `g`'s descender,
+    // 27% tall); then its top line over that ratio.
     let cap_height = |ink: &Ink| -> Option<f64> {
-        if let Some(c) = ink.first_cap {
-            return Some(c);
-        }
-        match (ink.top, ink.top_line) {
-            (Some(t), Some(TopLine::Cap)) => Some(t),
+        let by_top = match (ink.top, ink.top_line) {
+            (Some(t), Some(TopLine::Cap)) => Some(cap_over_cap.map_or(t, |r| t / r)),
             (Some(t), Some(TopLine::Ascender)) => ascender_over_cap.map(|r| t / r),
-            _ => cap_over_x.and_then(|r| ink.x_height.map(|x| x * r)),
+            _ => None,
+        };
+        match (ink.first_cap, by_top) {
+            (Some(c), Some(t)) if c / t > 1.0 + FIRST_CAP_OVER => Some(t),
+            (Some(c), _) => Some(c),
+            (None, Some(t)) => Some(t),
+            (None, None) => cap_over_x.and_then(|r| ink.x_height.map(|x| x * r)),
         }
         .filter(|h| h.is_finite() && *h > 0.0)
     };
@@ -1109,6 +1121,14 @@ fn size_by_ink(placed: &mut [Option<Placed>]) {
 /// box is taken: past it, the measure missed.
 const INK_BOX_SPREAD: f64 = 1.4;
 
+/// How far over what its top line says, at its reading's ratio of the two,
+/// a word's opening capital may stand before the top line is taken. A
+/// capital that took in more than its letter (a descender beside it, the
+/// letter after it) only ever reads tall; and a word's top line is the
+/// noisier measure, so a capital is set aside only well over it. At 8%
+/// either way, one-word headings on noisy or coloured pages lost a tenth.
+const FIRST_CAP_OVER: f64 = 0.15;
+
 /// How much wider than its page's stems a bold word's are, and how much
 /// more ink its band holds, both over its size.
 const BOLD_STEM: f64 = 1.25;
@@ -1123,48 +1143,60 @@ const WEIGHT_MIN_BAND_PX: f64 = 12.0;
 const BOLD_WEIGHT: u32 = 700;
 
 /// Weigh the words of one reading by their ink: a word is bold when its
-/// stems, over its capitals' height, and the ink of its band both stand well
-/// over the median of the reading's lines of three words or more. OCR sees
-/// no font, so without this a heading set in bold at body size, the most
-/// common cue after size, is plain text on a scan.
+/// stems, over its type size in pixels, and the ink of its band both stand
+/// well over the median of the reading's lines of three words or more
+/// measured in the same band (the x-height's, or the capitals' for a word
+/// of capitals and figures: a band of capitals holds more ink than one of
+/// small letters at any weight). OCR sees no font, so without this a
+/// heading set in bold at body size, the most common cue after size, is
+/// plain text on a scan.
 ///
-/// A word too small to tell (a band under [`WEIGHT_MIN_BAND_PX`]), or of
-/// fewer than three letters and figures, has no weight; nor has any word of
-/// a reading with fewer than three lines to compare with. Measured on the
-/// scanned set's pages at 200 and 300 dpi, clean, turned or noisy, 137 of
-/// 152 bold lines read as bold and none of 695 others; at 100 and 150 dpi
-/// and on faxes, most lines have no weight, and 1 of 852 others reads bold.
+/// A word whose size its ink does not give ([`size_by_ink`]), too small to
+/// tell (a band under [`WEIGHT_MIN_BAND_PX`]), or of fewer than three letters
+/// and figures has no weight; nor has any word with fewer than three lines
+/// in its band to compare with. On the twins set's `bold` pages (headings at
+/// body size in Helvetica, Times and Courier Bold, `eval/twins`), the
+/// headings read as headings at 200 and 300 dpi, and no line of body size
+/// does; at 150 dpi most words are too small to weigh.
 fn weigh_by_ink(placed: &mut [Option<Placed>]) {
-    // A word's stems over its size, its band's density, the band's pixels.
-    let feature = |w: &Placed| -> Option<(f64, f64, f64)> {
+    // A word's band (whether its x-height's), its stems over its type size
+    // in pixels, its band's density, and the band's pixels.
+    let feature = |w: &Placed| -> Option<(bool, f64, f64, f64)> {
         let ink = w.ink?;
-        let size = ink
-            .first_cap
-            .or(ink.top)
-            .or(ink.x_height.map(|x| x * 1.4))?;
+        let em_px = w.ink_font? * w.px_per_unit?;
+        let x_band = ink.x_height.is_some_and(|x| x >= 3.0);
         let band = ink.x_height.or(ink.first_cap).or(ink.top)?;
-        Some((ink.stem? / size, ink.density?, band))
+        Some((x_band, ink.stem? / em_px, ink.density?, band))
     };
-    let reference: Vec<(f64, f64)> = placed
-        .iter()
-        .flatten()
-        .filter(|w| w.text.split_whitespace().count() >= 3)
-        .filter_map(|w| feature(w).map(|(s, d, _)| (s, d)))
-        .collect();
-    if reference.len() < INK_MIN_RATIO_WORDS {
-        return;
-    }
-    let stems = median(reference.iter().map(|r| r.0).collect());
-    let density = median(reference.iter().map(|r| r.1).collect());
-    if !(stems > 0.0 && density > 0.0) {
-        return;
-    }
+    // Each band's median of its lines of three words or more.
+    let reference = |x_band: bool| -> Option<(f64, f64)> {
+        let lines: Vec<(f64, f64)> = placed
+            .iter()
+            .flatten()
+            .filter(|w| w.text.split_whitespace().count() >= 3)
+            .filter_map(&feature)
+            .filter(|f| f.0 == x_band)
+            .map(|f| (f.1, f.2))
+            .collect();
+        (lines.len() >= INK_MIN_RATIO_WORDS).then(|| {
+            (
+                median(lines.iter().map(|r| r.0).collect()),
+                median(lines.iter().map(|r| r.1).collect()),
+            )
+        })
+    };
+    let references = [reference(false), reference(true)];
     for w in placed.iter_mut().flatten() {
-        let Some((s, d, band)) = feature(w) else {
+        let Some((x_band, s, d, band)) = feature(w) else {
+            continue;
+        };
+        let Some((stems, density)) = references[usize::from(x_band)] else {
             continue;
         };
         let letters = w.text.chars().filter(|c| c.is_alphanumeric()).count();
-        if band >= WEIGHT_MIN_BAND_PX
+        if stems > 0.0
+            && density > 0.0
+            && band >= WEIGHT_MIN_BAND_PX
             && letters >= 3
             && s / stems > BOLD_STEM
             && d / density > BOLD_DENSITY
@@ -8078,6 +8110,10 @@ mod tests {
     /// `stem` px wide, its band `density` ink.
     fn weighted(text: &str, cap: f64, stem: f64, density: f64) -> Option<Placed> {
         let mut w = inked(text, cap);
+        // Sized by its ink: its capitals are its type, at 2 px a unit.
+        if let Some(w) = w.as_mut() {
+            w.ink_font = Some(cap / 2.0);
+        }
         if let Some(Ink {
             stem: s,
             density: d,
@@ -8130,6 +8166,52 @@ mod tests {
     }
 
     #[test]
+    fn a_page_of_bold_labels_weighs_them_against_its_prose() {
+        // A form: six bold labels of a word or two, three lines of prose.
+        // The labels outnumber the prose; the prose is what they are
+        // weighed against.
+        let mut placed: Vec<Option<Placed>> = (0..6)
+            .map(|i| weighted(&format!("Label {i}"), 30.0, 4.5, 0.45))
+            .collect();
+        placed.extend((0..3).map(|i| weighted(&format!("Line {i} of prose"), 30.0, 3.0, 0.30)));
+        weigh_by_ink(&mut placed);
+        let bold = placed
+            .iter()
+            .filter(|w| w.as_ref().unwrap().weight.is_some())
+            .count();
+        assert_eq!(bold, 6);
+    }
+
+    #[test]
+    fn a_word_of_capitals_is_weighed_against_capitals_only() {
+        // `WARRANTY`, light capitals: its band is the capitals', which hold
+        // more ink than the prose's x-height band. With no lines of
+        // capitals to weigh it against, it has no weight.
+        let mut placed: Vec<Option<Placed>> = (0..5)
+            .map(|i| weighted(&format!("Line {i} of prose"), 30.0, 3.0, 0.30))
+            .collect();
+        let mut caps = weighted("WARRANTY", 30.0, 4.5, 0.55);
+        if let Some(Ink { x_height, .. }) = caps.as_mut().and_then(|w| w.ink.as_mut()) {
+            *x_height = None;
+        }
+        placed.push(caps);
+        weigh_by_ink(&mut placed);
+        assert_eq!(placed[5].as_ref().unwrap().weight, None);
+    }
+
+    #[test]
+    fn a_word_its_ink_does_not_size_has_no_weight() {
+        let mut placed: Vec<Option<Placed>> = (0..5)
+            .map(|i| weighted(&format!("Line {i} of prose"), 30.0, 3.0, 0.30))
+            .collect();
+        let mut heavy = weighted("Payments received", 30.0, 4.5, 0.45);
+        heavy.as_mut().unwrap().ink_font = None;
+        placed.push(heavy);
+        weigh_by_ink(&mut placed);
+        assert_eq!(placed[5].as_ref().unwrap().weight, None);
+    }
+
+    #[test]
     fn a_bold_word_lays_bold_glyphs() {
         let mut doc = blank_scan();
         let line = |text: &str, y: f64, stem: f64, density: f64| OcrWord {
@@ -8165,6 +8247,23 @@ mod tests {
         };
         assert_eq!(weight("P"), Some(BOLD_WEIGHT));
         assert_eq!(weight("L"), None);
+    }
+
+    #[test]
+    fn an_opening_capital_off_its_top_line_is_not_taken() {
+        // Lines whose ascenders stand 10% over their capitals, as Courier's
+        // do; one whose opening capital ran into a descender beside it and
+        // measured 27% tall. It is sized by its top line as the others are.
+        let mut placed: Vec<Option<Placed>> = (0..5)
+            .map(|i| inked_lines(&format!("Line {i} of prose"), Some(16.0), 17.6))
+            .collect();
+        placed.push(inked_lines("Agreement of the account", Some(20.3), 17.6));
+        size_by_ink(&mut placed);
+        let fonts: Vec<f64> = placed
+            .iter()
+            .map(|w| w.as_ref().unwrap().ink_font.unwrap())
+            .collect();
+        assert!((fonts[5] / fonts[0] - 1.0).abs() < 1e-9, "{fonts:?}");
     }
 
     #[test]

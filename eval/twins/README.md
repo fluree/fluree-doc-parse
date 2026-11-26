@@ -45,14 +45,16 @@ short lines.
 
 ## The check
 
-A heading counts when a Markdown heading holds its text, normalised; a
-short line counts against when one holds it. On `superscript` a `1` ending
+A heading counts when a Markdown heading holds its text, normalised, each
+copy a page sets once; a short line counts against when one holds it, and
+any other heading counts as *other*. On `superscript` a `1` ending
 a heading's text is the note mark and not part of it. The table gives, per
 set and resolution, the headings OCR reads out of those the page sets, one
 word and a line apart, and the short lines read as headings, each beside
 what the born-digital page reads.
 
 `--baseline` fails on a set whose images read fewer headings of either kind
-than the baseline records, or more short lines as headings. It does not
-hold the born-digital count: that is the general rules', which this set
-does not test.
+than the baseline records, more short lines as headings, or more other lines
+(a line of prose, or a heading whose text OCR misread), and on a set the
+baseline does not hold. It does not hold the born-digital count: that is
+the general rules', which this set does not test.

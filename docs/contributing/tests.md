@@ -89,11 +89,12 @@ has the details, and [Scanned PDFs](../benchmarks/scanned.md) the numbers.
 
 `eval/twins/` holds OCR to the born-digital page: `uv run
 eval/twins/make_twins.py` writes born-digital pages whose headings differ
-from the body by size alone, and their images, plain, recoloured and
+from the body by size or by weight alone, and their images, plain, recoloured and
 degraded; `eval/twins/check.py --models DIR` reads the PDFs by their text
 layer and the images by OCR and counts the headings each reads, and
 `--baseline eval/twins/baseline.json` fails on a set whose images read fewer
-headings, or more short lines as headings, than they did.
+headings, or more short lines or other lines as headings, than they did, and
+on a set the baseline does not hold.
 [`eval/twins/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/twins/README.md)
 has the details, and [Twins](../benchmarks/twins.md) the numbers.
 

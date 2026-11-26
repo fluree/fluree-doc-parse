@@ -50,7 +50,13 @@ pub struct Ink {
     /// names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A name this version does not know (another tool's) is read as none,
+    /// not as a sidecar it cannot read.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
     pub top_line: Option<TopLine>,
     /// The x-height: where the letters without ascenders stop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,6 +82,23 @@ pub enum TopLine {
     /// An ascender's (`b d f h k l`), a little over a capital's in most
     /// faces.
     Ascender,
+}
+
+/// `top_line` read leniently: a name not known is none.
+fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<TopLine>, D::Error> {
+    let name: Option<String> = Option::deserialize(d)?;
+    Ok(match name.as_deref() {
+        Some("cap") => Some(TopLine::Cap),
+        Some("ascender") => Some(TopLine::Ascender),
+        _ => None,
+    })
+}
+
+/// A letter of the Latin script: ASCII's, and the accented ones of
+/// Latin-1 and the Latin Extended blocks.
+fn latin(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c as u32, 0xC0..=0xFF | 0x100..=0x24F | 0x1E00..=0x1EFF) && c.is_alphabetic()
 }
 
 /// Letters that rise to about a capital's height (`t` a little less):
@@ -154,6 +177,8 @@ struct Crop {
     /// Crop pixels per image pixel: under 1 for a box sampled down to
     /// [`MAX_ROWS`].
     scale: f64,
+    /// Rows of margin above and below the box, in the crop.
+    pad: usize,
 }
 
 impl Crop {
@@ -172,7 +197,12 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     let marks = note_mark(text);
     let text = &text[..text.len() - marks.iter().map(|c| c.len_utf8()).sum::<usize>()];
     let letters: Vec<char> = text.chars().filter(|c| c.is_alphanumeric()).collect();
-    if letters.is_empty() || !bbox.iter().all(|v| v.is_finite()) {
+    // The lines read here are the Latin script's: a word with a letter of
+    // another (Greek, Cyrillic, CJK) has no measure, and is sized by its box.
+    if letters.is_empty()
+        || !letters.iter().all(|&c| latin(c))
+        || !bbox.iter().all(|v| v.is_finite())
+    {
         return None;
     }
     let crop = sample(image, bbox, angle)?;
@@ -206,14 +236,29 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     let has_rise = letters.iter().any(|&c| rises(c));
     let has_small = letters.iter().any(|&c| small(c));
     let drop_share = letters.iter().filter(|&&c| drops(c)).count() as f64 / letters.len() as f64;
-    // The baseline: the bottoms of the columns that do not drop, the larger
-    // share of them. A letter alone may have more columns under its bar
-    // than over its foot (`T`, `7`): its baseline is the lowest level a
-    // stem's worth of columns reaches.
-    let base = if letters.len() == 1 && drop_share == 0.0 {
+    // The baseline. In a word with descenders, the bottoms of the columns
+    // that do not drop, the larger share of them. In one without, the
+    // lowest level a stem's worth of columns reaches: capitals' arms and
+    // bars (`T Y V W`, an `A`'s bar) stop over the baseline in more columns
+    // than their feet stand on it, and their median, a quarter of the way
+    // up `WARRANTY`, read its capitals a quarter short.
+    let base = if drop_share == 0.0 {
+        let guess = quantile(&bots, 0.5);
+        let window = 0.1 * (guess - quantile(&tops, 0.5)).max(1.0);
         let mut low = bots.clone();
         low.sort_by(|a, b| b.total_cmp(a));
-        low.get(STEM_COLUMNS - 1).copied().unwrap_or(low[0])
+        low.iter()
+            .copied()
+            .find(|&b| low.iter().filter(|&&v| v <= b && v >= b - window).count() >= STEM_COLUMNS)
+            .map(|b| {
+                let near: Vec<f64> = low
+                    .iter()
+                    .copied()
+                    .filter(|&v| v <= b && v >= b - window)
+                    .collect();
+                quantile(&near, 0.5)
+            })
+            .unwrap_or(guess)
     } else {
         quantile(&bots, ((1.0 - drop_share) * 0.5).max(0.05))
     };
@@ -446,6 +491,7 @@ fn sample(image: &Pixels, bbox: [f64; 4], angle: f64) -> Option<Crop> {
     }
     let mut crop = despeckled(levels(&colour, w, h));
     crop.scale = scale;
+    crop.pad = (pad * scale).round() as usize;
     Some(crop)
 }
 
@@ -506,6 +552,7 @@ fn levels(colour: &[[f32; 3]], w: usize, h: usize) -> Crop {
         h,
         ink,
         scale: 1.0,
+        pad: 0,
     }
 }
 
@@ -575,7 +622,38 @@ fn without_rules(mut c: Crop, several: bool) -> (Crop, bool) {
             run >= 0.8 * width || run >= (0.6 * width).max(1.5 * h)
         })
         .collect();
-    let mut any = !ruled.is_empty();
+    // In the margins over and under the box, a word's letters reach only
+    // with their tips: a long stretch there is the edge of a box drawn round
+    // a line beside, however short against this word's width.
+    let edge_ruled: Vec<(usize, usize, usize)> = (0..c.h)
+        .filter(|&y| y < c.pad || y + c.pad >= c.h)
+        .flat_map(|y| {
+            let mut out = Vec::new();
+            let mut x = 0;
+            while x < c.w {
+                if on[y * c.w + x] {
+                    let start = x;
+                    while x < c.w && on[y * c.w + x] {
+                        x += 1;
+                    }
+                    if (x - start) as f64 >= 0.8 * h {
+                        out.push((y, start, x));
+                    }
+                } else {
+                    x += 1;
+                }
+            }
+            out
+        })
+        .collect();
+    let mut any = !ruled.is_empty() || !edge_ruled.is_empty();
+    for (y, x0, x1) in edge_ruled {
+        for yy in y.saturating_sub(2)..(y + 3).min(c.h) {
+            for x in x0..x1 {
+                c.ink[yy * c.w + x] = 0.0;
+            }
+        }
+    }
     for y in ruled {
         for yy in y.saturating_sub(2)..(y + 3).min(c.h) {
             for x in 0..c.w {
@@ -1047,5 +1125,61 @@ mod tests {
         )
         .unwrap();
         assert!(ink.stem.is_some_and(|s| (s - 3.0).abs() < 0.3), "{ink:?}");
+    }
+
+    #[test]
+    fn a_word_of_capitals_with_arms_is_measured_from_its_feet() {
+        // `TIT`: three letters whose bars cover more columns than their
+        // feet stand on.
+        let mut strokes = Strokes::new();
+        for x in [0.0, 22.0] {
+            strokes.extend([(x, 17.0, x + 15.0, 20.0), (x + 6.0, 0.0, x + 9.0, 20.0)]);
+        }
+        strokes.push((17.0, 0.0, 20.0, 20.0));
+        let bbox = [56.0, 26.0, 101.0, 54.0];
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, 0.0, "TIT").unwrap();
+        assert!(close(ink.top, 20.0), "{ink:?}");
+        assert!(close(ink.first_cap, 20.0), "{ink:?}");
+    }
+
+    #[test]
+    fn a_word_of_another_script_has_no_measure() {
+        let (bbox, angle) = hon_box(0.0);
+        let img = draw(&hon(), 0, 255, 0.0);
+        assert_eq!(measure(&img, bbox, angle, "Ηον"), None);
+        assert_eq!(measure(&img, bbox, angle, "Нон"), None);
+        assert!(measure(&img, bbox, angle, "Hôn").is_some());
+    }
+
+    #[test]
+    fn a_top_line_another_tool_names_is_read_as_none() {
+        let ink: Ink = serde_json::from_str(r#"{"top": 20.0, "top_line": "x-height"}"#).unwrap();
+        assert_eq!((ink.top, ink.top_line), (Some(20.0), None));
+        let ink: Ink = serde_json::from_str(r#"{"top": 20.0, "top_line": "ascender"}"#).unwrap();
+        assert_eq!(ink.top_line, Some(TopLine::Ascender));
+    }
+
+    #[test]
+    fn the_edge_of_a_box_round_the_line_above_is_not_the_word() {
+        // `Hon` and more letters, a long line; a box's bottom edge, drawn
+        // round a short line above, passes through the top margin over its
+        // first letters only.
+        let mut strokes = hon();
+        for k in 1..6 {
+            let dx = 45.0 * f64::from(k);
+            strokes.extend(hon().iter().map(|&(a, b, c, d)| (a + dx, b, c + dx, d)));
+        }
+        // Over the box (its top is 24 px over the baseline), in its margin.
+        strokes.push((-3.0, 25.0, 40.0, 27.0));
+        let img = draw_at(&strokes, 0, 255, 0.0, (400, 80), (20.0, 50.0));
+        let ink = measure(
+            &img,
+            [16.0, 26.0, 290.0, 54.0],
+            0.0,
+            "Hon hon hon hon hon hon",
+        )
+        .unwrap();
+        assert!(close(ink.top, 20.0), "{ink:?}");
+        assert!(close(ink.x_height, 14.0), "{ink:?}");
     }
 }

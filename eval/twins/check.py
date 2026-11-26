@@ -8,20 +8,22 @@ one-word and longer apart, and the short lines at body size that read as
 headings though they are not. The born-digital count is what the image is
 held to.
 
-  eval/twins/check.py --models DIR                        # every set, about four minutes at -j4
+  eval/twins/check.py --models DIR                        # every set, about twelve minutes at -j4
   eval/twins/check.py --models DIR --sets plain-1.2 fax   # some sets
   eval/twins/check.py --models DIR --baseline eval/twins/baseline.json
   eval/twins/check.py --models DIR --write-baseline eval/twins/baseline.json
 
 `--baseline` fails on a set whose images read fewer headings, or more short
-lines as headings, than it records.
+lines or other lines as headings, than it records, and on a set it does not
+hold.
 """
 import argparse, json, os, re, subprocess, sys, tempfile, time
+from collections import Counter
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-KEYS = ("long", "word", "false")
+KEYS = ("long", "word", "false", "other")
 
 
 def norm(s):
@@ -29,32 +31,41 @@ def norm(s):
 
 
 def headings(md, mark):
-    """The normalised headings of a Markdown file; a note mark after a line
-    (`Payments1`) is not part of its text."""
-    out = set()
+    """The normalised headings of a Markdown file, each as often as it is
+    read; a note mark after a line (`Payments1`) is not part of its text."""
+    out = Counter()
     for line in md.splitlines():
         if line.startswith("#"):
             t = re.sub(r"^#+\s*", "", line)
             if mark:
                 t = re.sub(r"\s?1$", "", t)
-            out.add(norm(t))
+            out[norm(t)] += 1
     return out
 
 
 def count(meta, mds, mark):
-    """Headings read, one-word and long, and short lines read as headings,
-    over the pages whose Markdown `mds` gives."""
+    """Headings read, one-word and long, short lines read as headings, and
+    other headings (a line of prose read as one), over the pages whose
+    Markdown `mds` gives. A page may set one heading or short line several
+    times: each copy is matched once, so a page that reads one of three
+    copies reads one."""
     c = dict.fromkeys(KEYS, 0)
     t = dict.fromkeys(KEYS, 0)
     for page, md in mds:
         hs = headings(md, mark)
-        for h in page["headings"]:
-            k = "word" if " " not in h else "long"
-            t[k] += 1
-            c[k] += norm(h) in hs
-        for s in page["short"]:
-            t["false"] += 1
-            c["false"] += norm(s) in hs
+        matched = 0
+        kinds = Counter((norm(h), "long" if " " in h else "word") for h in page["headings"])
+        for (h, k), n in kinds.items():
+            t[k] += n
+            got = min(n, hs[h])
+            c[k] += got
+            matched += got
+        for s_, n in Counter(norm(s) for s in page["short"]).items():
+            t["false"] += n
+            got = min(n, hs[s_])
+            c["false"] += got
+            matched += got
+        c["other"] += sum(hs.values()) - matched
     return c, t
 
 
@@ -123,16 +134,18 @@ def main():
                 results[key] = c
                 b, _ = born_done[twin]
                 rows.append((key, t, b, c))
-    print("| set | headings, one word | headings, a line | short lines as headings |")
-    print("|---|---|---|---|")
+    print("| set | headings, one word | headings, a line | short lines as headings | other headings |")
+    print("|---|---|---|---|---|")
     for key, t, b, c in rows:
         print(f"| {key} | {c['word']} / {t['word']} (born-digital {b['word']}) "
               f"| {c['long']} / {t['long']} (born-digital {b['long']}) "
-              f"| {c['false']} / {t['false']} (born-digital {b['false']}) |")
+              f"| {c['false']} / {t['false']} (born-digital {b['false']}) "
+              f"| {c['other']} (born-digital {b['other']}) |")
     print(f"\n{len(rows)} runs in {time.monotonic() - t0:.0f} s")
     if a.write_baseline:
         a.write_baseline.write_text(json.dumps(
-            {"about": "per set and dpi: headings read by OCR, one-word and longer, and short lines read as headings",
+            {"about": "per set and dpi: headings read by OCR, one-word and longer, short lines read as "
+                      "headings, and other headings read",
              "results": results}, indent=1, sort_keys=True) + "\n")
         print(f"baseline written to {a.write_baseline}")
     if a.baseline:
@@ -141,12 +154,14 @@ def main():
         for key, c in results.items():
             b = base.get(key)
             if b is None:
+                fails.append(f"{key}: not in the baseline (write it again)")
                 continue
             for k in ("long", "word"):
                 if c[k] < b[k]:
                     fails.append(f"{key}: {c[k]} {k} headings read, the baseline {b[k]}")
-            if c["false"] > b["false"]:
-                fails.append(f"{key}: {c['false']} short lines read as headings, the baseline {b['false']}")
+            for k, what in (("false", "short lines read as headings"), ("other", "other headings read")):
+                if c[k] > b.get(k, 0):
+                    fails.append(f"{key}: {c[k]} {what}, the baseline {b.get(k, 0)}")
         for f in fails:
             print("FAIL", f)
         print(f"against the baseline: {len(fails)} failures")

@@ -176,7 +176,7 @@ page does, and every character keeps a position for
 | `words[].box` | yes | `[x0, y0, x1, y1]`, y down: the word's own extent |
 | `words[].angle` | no | baseline direction, degrees counter-clockwise; the word is `box` turned about its center. Absent means level, unless the box is much taller than wide and holds three characters or more: that is text set sideways |
 | `words[].conf` | no | the engine's confidence, 0-1; its mean and minimum over the words taken are reported in [`doc:ocrReadings`](../formats/doco.md#ocr-readings). A score outside 0-1 says the reading is scored on another scale, where its other scores mean something else too (a Tesseract 1 is 1 in 100): the reading then reports no confidence at all, with a warning on stderr, and a reading of a region (`r{i}`) or of a placed picture is judged noise by its boxes alone, as a reading with no `conf` is. A word with no text is not counted, whatever its score: it is never placed, and Tesseract scores its rows of blocks and lines -1. Divide Tesseract's 0-100 scores by 100 |
-| `words[].ink` | no | the word's ink measured in the image read, in its pixels, as heights above the baseline: `first_cap`, a capital opening the word from its foot; `top`, its highest line, which `top_line` names (`cap` or `ascender`); `x_height`; `stem`, its stems' width, and `density`, how much of the band they are measured in is ink (0-1), which say its weight. The built-in engine writes it for Latin text. A reading whose words carry it is sized by their ink rather than their boxes, at the scale its boxes give: see below. Each field is optional, and a word without it is sized by its box. It sizes detector boxes only: a reading whose boxes hug the ink (Tesseract, hOCR, ALTO) is sized by them |
+| `words[].ink` | no | the word's ink measured in the image read, in its pixels: heights above the baseline, `first_cap`, a capital opening the word from its foot; `top`, its highest line, which `top_line` names (`cap` or `ascender`; another name is read as none); `x_height`; `stem`, its stems' width, and `density`, how much of the band they are measured in is ink (0-1), which say its weight. The built-in engine writes it for Latin text. A reading whose words carry it is sized by their ink rather than their boxes, at the scale its boxes give: see below. Each field is optional, and a word without it is sized by its box. It sizes detector boxes only: a reading whose boxes hug the ink (Tesseract, hOCR, ALTO) is sized by them |
 
 The format is stable: `--ocr-words` (`FDOC_OCR_WORDS`), the file names, the
 fields above and their units. A release changes or removes one only as a
@@ -297,13 +297,12 @@ x-height by the ratio of capitals to it), at the scale the reading's boxes
 give in the median. A word whose ink stands more than 40% off its box is
 sized by its box. On born-digital pages rasterised at 150 to 300 dpi and
 read by the built-in engine (Helvetica, Times and Courier, headings a fifth
-larger and not bold), 581 of 582 headings read as headings, against 351
-by their boxes, and no line of body size does; on the same pages in
-colour, light on dark, over a photo or a gradient, noisy, blurred, re-saved
-as a JPEG, through a fax's threshold, turned 1.5 degrees, underlined,
-struck through, boxed or in italic, 92% or more (by their boxes, 17% to
-89%), and short lines with a box drawn round them read as headings 5 times
-in 173 (see [Twins](../benchmarks/twins.md)).
+larger and not bold), 581 of 582 headings read as headings, against 322
+by their boxes, and one line of body size of 519 does; on the same pages
+in colour, light on dark, over a photo or a gradient, noisy, blurred,
+re-saved as a JPEG, through a fax's threshold, turned 1.5 degrees,
+underlined, struck through, boxed or in italic, 91% or more (by their
+boxes, 12% to 85%; see [Twins](../benchmarks/twins.md)).
 
 The same measure gives a word's weight, which OCR otherwise does not see: a
 heading set in bold at body size, the most common cue after size, is plain
