@@ -85,9 +85,27 @@ use crate::route::{self, Route, CROP_MARGIN};
 /// read, from 299, taking half the growth the words fit; 227 taking all of
 /// it), and a word alone on a double-spaced line, set down, was read into
 /// the paragraph above it.
+///
+/// The extra height of a short box is a number of the detector's pixels,
+/// not a share of its type: `SHORT_BOX_PX` times the same difference of
+/// inverses ([`box_font`]). `BOX_SHORT_EM` was fitted on images shrunk to
+/// 2,000 px, where a letter's type ran 20 to 27 px whatever its resolution;
+/// read at their own resolution, the short lines at body size of the
+/// letters above stand 0.56 em taller at 150 dpi, 0.42 at 200 and 0.32 at
+/// 300, and 11.6, 11.6 and 14.4 px. Taken as 0.5 em, a word set a fifth
+/// larger alone on its line read 1.125 of its prose in the median at its
+/// own resolution, against 1.145 shrunk, and 41 of 142 such headings were
+/// read, against 61. Taken as 12 px, 55 are, with no short line at body
+/// size read as a heading (of 281), and the short lines' median goes from
+/// 0.990 of their prose to 1.002 (five fonts, 10 to 12 pt, 150 to 300 dpi).
+/// The term is held to `SHORT_BOX_MAX_EM`, which text under 14 px reaches.
+/// A reading in page units has no pixels and keeps `BOX_SHORT_EM`, the
+/// term at the sizes it was fitted at.
 const BOX_BASE_EM: f64 = 0.62;
 const BOX_INK_SHARE: f64 = 0.5;
 const BOX_SHORT_EM: f64 = 0.5;
+const SHORT_BOX_PX: f64 = 12.0;
+const SHORT_BOX_MAX_EM: f64 = 0.9;
 const SHORT_BOX_ASPECT: f64 = 5.0;
 
 /// Where a letter's ink reaches, in ems from the baseline: capitals, digits
@@ -410,7 +428,7 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 .filter(|w| ink_extent(&w.text).is_some())
                 .map(|w| {
                     let letters = w.text.chars().filter(|c| c.is_alphanumeric()).count();
-                    let size = dist(w.quad[0], w.quad[3]) / box_height_em(&w.text, aspect(&w.quad));
+                    let size = box_font(w, dist(w.quad[0], w.quad[3]), aspect(&w.quad));
                     (pi, size, letters as f64)
                 })
                 .collect();
@@ -869,6 +887,9 @@ struct Placed {
     /// Baseline direction on the page, degrees in (-180, 180].
     angle: f64,
     conf: Option<f64>,
+    /// Pixels of the image read per unit of the page, for a reading in
+    /// pixels.
+    px_per_unit: Option<f64>,
 }
 
 /// Map a reading's words onto the page, or say why the reading cannot be:
@@ -900,6 +921,7 @@ fn place(
     // then has no confidence, rather than one made of its words that
     // happen to fall in 0-1.
     let scored = reading.scores_out_of_range() == 0;
+    let px_per_unit = (reading.coords == Coords::Px).then(|| 1.0 / (sx * sy).sqrt());
     let placed = reading
         .words
         .iter()
@@ -960,6 +982,7 @@ fn place(
                 // too.
                 angle: normalise_deg(angle + f64::from(p.rotation)),
                 conf: w.conf.filter(|_| scored),
+                px_per_unit,
             })
         })
         .collect();
@@ -1141,7 +1164,7 @@ fn add_words(
         .into_iter()
         .partition(|w| normalise_deg(w.angle - sheet).abs() < LEVEL_BELOW_DEG);
     for w in &turned {
-        let font = (dist(w.quad[0], w.quad[3]) / box_height_em(&w.text, aspect(&w.quad))) as f32;
+        let font = box_font(w, dist(w.quad[0], w.quad[3]), aspect(&w.quad)) as f32;
         // Line assembly reads runs along right angles only. A stamp at any
         // other angle is set level about its center, or it comes out in
         // fragments and backwards.
@@ -1600,6 +1623,12 @@ fn ink_extent(text: &str) -> Option<(f64, f64)> {
 /// four fonts at 150 to 300 dpi, against the 0.09 a word's gives). A box of
 /// [`SHORT_BOX_ASPECT`] and over reaches half as far above its capitals.
 fn box_height_em(text: &str, aspect: f64) -> f64 {
+    box_letters_em(text, aspect) + BOX_SHORT_EM * short_share(aspect)
+}
+
+/// The height of a detector box over `text` from its letters alone, in ems
+/// ([`box_height_em`] less what a short box adds).
+fn box_letters_em(text: &str, aspect: f64) -> f64 {
     let (up, down) = ink_extent(text).map_or((CAP_HEIGHT_EM, DESCENDER_EM), |(up, down)| {
         if text.contains(['i', 'j']) {
             (up.max(CAP_HEIGHT_EM), down)
@@ -1613,8 +1642,28 @@ fn box_height_em(text: &str, aspect: f64) -> f64 {
     } else {
         up
     };
-    let short = (1.0 / aspect.max(1.0) - 1.0 / SHORT_BOX_ASPECT).max(0.0);
-    BOX_BASE_EM + BOX_INK_SHARE * (up + down) + BOX_SHORT_EM * short
+    BOX_BASE_EM + BOX_INK_SHARE * (up + down)
+}
+
+/// How much shorter than [`SHORT_BOX_ASPECT`] a box of `aspect` is, as the
+/// difference of their inverses: 0 for a box that long or longer.
+fn short_share(aspect: f64) -> f64 {
+    (1.0 / aspect.max(1.0) - 1.0 / SHORT_BOX_ASPECT).max(0.0)
+}
+
+/// The type size of a detector box `thick` units thick over `w`'s text,
+/// `aspect` times as long: what its letters reach, and for a short box
+/// [`SHORT_BOX_PX`] of the image read, held to [`SHORT_BOX_MAX_EM`]. A
+/// reading in page units takes [`BOX_SHORT_EM`] ([`box_height_em`]).
+fn box_font(w: &Placed, thick: f64, aspect: f64) -> f64 {
+    let Some(px) = w.px_per_unit.filter(|s| s.is_finite() && *s > 0.0) else {
+        return thick / box_height_em(&w.text, aspect);
+    };
+    let (letters, short) = (box_letters_em(&w.text, aspect), short_share(aspect));
+    let h = thick * px;
+    // The larger of the two is the one whose term stays within the cap.
+    let font = ((h - SHORT_BOX_PX * short) / letters).max(h / (letters + SHORT_BOX_MAX_EM * short));
+    font / px
 }
 
 /// A box's length over its thickness, from its corners (top left, top
@@ -1732,7 +1781,7 @@ impl Run {
                     baselines.push(w.bottom - down * font);
                 }
                 _ => {
-                    fonts.push(h / box_height_em(&w.word.text, (w.x1 - w.x0) / h));
+                    fonts.push(box_font(w.word, h, (w.x1 - w.x0) / h));
                     baselines.push(w.top + h * BASELINE_FROM_TOP);
                 }
             }
@@ -7677,6 +7726,53 @@ mod tests {
             ["Account number 4417-0093-21"],
             "{:?}",
             headings(&els)
+        );
+    }
+
+    #[test]
+    fn a_short_box_grows_by_the_engines_pixels_not_by_its_type() {
+        let placed = |px_per_unit| Placed {
+            text: "Total".into(),
+            quad: [(0.0, 0.0); 4],
+            angle: 0.0,
+            conf: None,
+            px_per_unit,
+        };
+        // `Total` at 11 pt alone on its line, boxed as the engine boxes it:
+        // its letters, and 12 px more for its shortness, at 150 and at 300
+        // dpi. Both read 11 pt; taken as a share of the type, the term
+        // reads the 300 dpi box smaller than the 150 dpi one.
+        let aspect = 2.5;
+        let fonts: Vec<f64> = [150.0, 300.0]
+            .iter()
+            .map(|dpi| {
+                let px = dpi / 72.0;
+                let thick = 11.0 * px * box_letters_em("Total", aspect)
+                    + SHORT_BOX_PX * short_share(aspect);
+                box_font(&placed(Some(px)), thick / px, aspect)
+            })
+            .collect();
+        for font in &fonts {
+            assert!((font - 11.0).abs() < 1e-9, "{fonts:?}");
+        }
+        // A reading in page units has no pixels: its term is in ems.
+        assert_eq!(
+            box_font(&placed(None), 13.0, aspect),
+            13.0 / box_height_em("Total", aspect)
+        );
+        // Text a few pixels tall takes no more than the cap.
+        let letters = box_letters_em("Total", 1.0);
+        assert!(
+            (box_font(&placed(Some(1.0)), 10.0, 1.0)
+                - 10.0 / (letters + SHORT_BOX_MAX_EM * short_share(1.0)))
+            .abs()
+                < 1e-9
+        );
+        // A box long enough to be a line has no term, whatever its pixels.
+        let long = 8.0;
+        assert_eq!(
+            box_font(&placed(Some(4.0)), 13.0, long),
+            13.0 / box_letters_em("Total", long)
         );
     }
 

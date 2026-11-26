@@ -255,8 +255,10 @@ capitals and descenders about 1.09 em tall, one with no descenders about
 0.98, one of x-height letters only about 0.87, the dots over `i` and `j`
 counting as tall letters. A box less than five times as long as it is
 thick, over a word or two, is a little taller for its type than one over a
-line (about 0.15 em at twice as long as thick), so `Total` or `Reçu` alone
-on a line reads at the size of the paragraph around it. That margin was
+line, by a number of the image's pixels rather than a share of its type
+(about 4 px at twice as long as thick; 0.15 em in a reading in page
+units, which has no pixels), so `Total` or `Reçu` alone on a line reads at
+the size of the paragraph around it at any resolution. That margin was
 measured in paragraphs set 1.3 em apart: with more room above and below, a
 word alone on its line boxes taller still (about 0.24 em at double
 spacing), and at body size can read as a heading. A box around the
