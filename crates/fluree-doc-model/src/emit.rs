@@ -720,16 +720,25 @@ pub fn to_markdown_with_options(
                     out.push_str(&format!("{indent}- {text}\n"));
                 }
             }
-            _ => match (&e.turn, &e.message) {
-                (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
-                (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
-                // A paragraph whose lines were stacked by hand keeps their
-                // breaks, as CommonMark hard breaks: a plain line end reads
-                // as a space.
-                (None, None) => {
-                    out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
+            _ => {
+                // A list's last item ends its line and no more. A paragraph
+                // set straight under it is a lazy continuation of the item
+                // under CommonMark, read as the item's own text: a blank line
+                // ends the list first.
+                if !out.is_empty() && !out.ends_with("\n\n") {
+                    out.push('\n');
                 }
-            },
+                match (&e.turn, &e.message) {
+                    (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
+                    (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
+                    // A paragraph whose lines were stacked by hand keeps their
+                    // breaks, as CommonMark hard breaks: a plain line end reads
+                    // as a space.
+                    (None, None) => {
+                        out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
+                    }
+                }
+            }
         }
     }
     if let Some(note) = notes.summary() {
@@ -798,10 +807,11 @@ mod tests {
              <p>After</p>\n"
         );
         // Each sub-list is indented to where its parent item's text starts,
-        // past a bullet or past the item's own number.
+        // past a bullet or past the item's own number. The paragraph after
+        // the list stands apart from its last item, a blank line between.
         assert_eq!(
             to_markdown(&els),
-            "- Fruit\n  - Apples\n    - Seedless\n- Vegetables\n  10. Leeks\n      - Onions\nAfter\n\n"
+            "- Fruit\n  - Apples\n    - Seedless\n- Vegetables\n  10. Leeks\n      - Onions\n\nAfter\n\n"
         );
         // Back out of a list two deeper to one deeper: a second list in the
         // same item.
@@ -815,6 +825,40 @@ mod tests {
         let flat = [item("one", 0), item("two", 0)];
         assert_eq!(to_markdown(&flat), "- one\n- two\n");
         assert!(to_xhtml(&flat).contains("<ul>\n<li>one</li>\n<li>two</li>\n</ul>\n"));
+    }
+
+    #[test]
+    fn a_paragraph_after_a_list_is_no_part_of_its_last_item() {
+        let els = [
+            item("Spatula", 0),
+            item("Weigh paper", 0),
+            para("Figure 3.", vec![]),
+        ];
+        assert_eq!(
+            to_markdown(&els),
+            "- Spatula\n- Weigh paper\n\nFigure 3.\n\n"
+        );
+        // Headings and tables after a list already open on a blank line, and
+        // a paragraph after a paragraph has one: none gains a second.
+        let heading = Element {
+            level: Some(2),
+            ..Element::new("doco:SectionTitle", "Method", "rust", "layout")
+        };
+        assert_eq!(
+            to_markdown(&[item("Spatula", 0), heading]),
+            "- Spatula\n\n## Method\n\n"
+        );
+        assert_eq!(
+            to_markdown(&[
+                item("Spatula", 0),
+                table("t", &[&["A", "B"], &["1", "2"]], 1)
+            ]),
+            "- Spatula\n\n|A|B|\n|---|---|\n|1|2|\n\n"
+        );
+        assert_eq!(
+            to_markdown(&[para("One.", vec![]), para("Two.", vec![])]),
+            "One.\n\nTwo.\n\n"
+        );
     }
 
     #[test]
