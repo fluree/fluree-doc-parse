@@ -362,6 +362,27 @@ prose alone counts the title's two lines against one of each other size, so
 the title came out as the body and was no heading. There the tables' text
 counts too, each of their lines once at its size.
 
+## Text read from a picture
+
+An OCR engine reads two kinds of crop. A page read whole is a scan, or a page
+whose text is drawn as shapes: its words are the page's text, and are read
+as any page's are, their size the height of their boxes. A region routed out
+of a page that has text of its own is a picture set on that page: a logo, a
+photograph, a chart drawn as pixels. Its words are the picture's, as a
+drawing's labels are the drawing's:
+
+- **No heading, and no title.** A report's logo, `LAW LIBRARY` set larger than
+  the report's title over it, was read as the document's title, and its title
+  as a paragraph. A funder's logo, a callout in a photograph and a chart's
+  labels were headings by their size.
+- **No measure of the body.** A chart's labels by the dozen, read in its
+  picture, set the body at their size, and two of the page's own lines set
+  larger than them were headings: the last line of a paragraph the chart's
+  crop cut, and the page's folio.
+
+Each glyph an OCR reading adds says which crop it was read in, and a line and
+a block take the crop most of their letters were read in.
+
 ## Headings beside drawings
 
 A heading inside a figure region yields to it when its evidence is

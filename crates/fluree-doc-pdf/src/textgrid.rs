@@ -5353,6 +5353,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
+                    ocr: None,
                 }
             })
             .collect()

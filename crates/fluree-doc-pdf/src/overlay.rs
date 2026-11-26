@@ -435,6 +435,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -536,6 +537,7 @@ mod tests {
                     weight: None,
                     italic: false,
                     draw_index: glyphs.len(),
+                    ocr: None,
                 });
                 x += 5.0;
             }
