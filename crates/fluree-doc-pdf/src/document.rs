@@ -4317,7 +4317,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // Each region's columns in turn, down the page.
         let table_boxes: Vec<crate::geom::BBox> = grids.iter().map(|g| g.bbox).collect();
         let pictures: Vec<crate::geom::BBox> = p.images.iter().map(|im| im.bbox).collect();
-        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures);
+        // Drawn boxes, outlined or filled: a stretch's lines read box by
+        // box where they stand in boxes side by side.
+        let frames: Vec<crate::geom::BBox> = p.fills.iter().map(|f| f.bbox).collect();
+        let groups = crate::region::read_order(cols, &p.rules, &table_boxes, &pictures, &frames);
         let prose_sources: Vec<(usize, bool)> =
             groups.iter().map(|g| (g.column, g.own_measure)).collect();
         let cols: Vec<Vec<Line>> = groups.into_iter().map(|g| g.lines).collect();
@@ -4581,6 +4584,13 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     };
     let bare: Vec<Vec<Line>> = flat_lines.iter().map(|(l, _)| l.clone()).collect();
     let leading = block::modal_leading(&bare);
+    {
+        let mut lines: Vec<&mut Line> = layouts
+            .iter_mut()
+            .flat_map(|l| l.prose_columns.iter_mut().flatten())
+            .collect();
+        crate::line::mark_compounds(&mut lines);
+    }
 
     let mut blocks_per_page: Vec<Vec<Block>> = Vec::new();
     let mut furniture_removed = 0usize;
@@ -7255,6 +7265,7 @@ mod tests {
             opens_with_script: false,
             italic: false,
             x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
     }

@@ -1821,6 +1821,7 @@ mod tests {
             opens_with_script: false,
             italic: false,
             x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
     }

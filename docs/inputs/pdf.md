@@ -153,7 +153,12 @@ lines joined without a space: in a number or a code (`1-800-222-` over
 (`Polish-German`, `t-test`), a range (`(A)-(L)`). A hyphen with a space
 before it is a dash, and a space follows it too. An all-capital compound
 broken at its hyphen cannot be told from an all-capital word the typesetter
-broke, and reads as the word. Some producers map the hyphens they draw to
+broke, and reads as the word. A lowercase compound broken at its own hyphen
+looks the same as a word broken inside, and the document tells them apart:
+where it sets the compound whole on a line elsewhere, and never closed up,
+the hyphen stays (`treatment-` over `emergent` is `treatment-emergent`
+where the text has `treatment-emergent AEs`). A compound the document sets
+only across a line break reads as one word. Some producers map the hyphens they draw to
 U+00AD SOFT HYPHEN; drawn, it is read as the hyphen it prints, and one that
 draws nothing is dropped.
 
@@ -534,6 +539,33 @@ read whole before the next. A box set in two columns of running text under
 full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
+
+**Blocks side by side.** Two blocks of text set side by side within one
+column's stretch are each read whole, the left first, or the right where it
+starts a line or more higher: an invoice's seller beside its customer, an
+article's details beside its abstract, a paragraph beside a chart's title
+and notes. A gutter of a line's height or more parts them, where neither
+runs on as prose does, when either holds:
+- Each is set on baselines of its own: most of the shorter one's lines
+  stand level with none across.
+- The left one goes on alone two lines or more past the right one's last,
+  and its lines are not labels (ending in a colon, or bold). A column of
+  labels beside their values stays as rows, each value read after its
+  label: a value may wrap past its label, but labels do not run on alone.
+Both sides must hold text, half their lines of two words or more, so a
+chart's ticks and a column of figures are not blocks.
+
+**Boxes side by side.** Text set in drawn boxes, outlined or filled, is read
+box by box. Where every line of a stretch stands in a box, the boxes are read
+in flow order: top to bottom, and left to right across a row of boxes level
+with each other, so a flowchart's branch, set lower at a box's side, reads
+after the box it leaves. Elsewhere, a row of two or more boxes side by side,
+each holding text and one of them two lines or more, is read box by box,
+left to right: two boxes of a diagram, two charts' panels with their titles
+in bands. A box holds the boxes inside it. Text over the row, or level with
+it at its left, such as a product's name beside a row of its ratings, is
+read first. A table's cells drawn one box each touch across the row or down
+the column, and are left as rows.
 
 **Tables and boxes in the reading order.** A table is read where it stands
 in its column, under the heading it sits under: one above it in its column,

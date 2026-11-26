@@ -162,6 +162,13 @@ pub struct Line {
     /// heading from another where the size, the weight and the slant are
     /// all the same.
     pub x_height: Option<f32>,
+    /// The words the document sets after this line's closing word and a
+    /// hyphen, whole on one line elsewhere (`treatment-emergent`), lowercase.
+    /// A typesetter breaks a compound at its own hyphen, and the hyphen is
+    /// the compound's where the next line opens on one of them. Filled for
+    /// the whole document once its lines are read
+    /// ([`mark_compounds`]).
+    pub compounds: Vec<String>,
 }
 
 /// Lowercase letters that rise to the x-height and no further.
@@ -2673,7 +2680,86 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         opens_with_script,
         italic,
         x_height,
+        compounds: Vec::new(),
     })
+}
+
+/// The lowercase letters a word ends or opens on, around its punctuation:
+/// `(treatment` → `treatment`, `emergent,` → `emergent`.
+fn letters(word: &str, from_end: bool) -> String {
+    let t: String = if from_end {
+        let v: Vec<char> = word
+            .chars()
+            .rev()
+            .take_while(|c| c.is_alphabetic())
+            .collect();
+        v.into_iter().rev().collect()
+    } else {
+        word.chars().take_while(|c| c.is_alphabetic()).collect()
+    };
+    t.to_lowercase()
+}
+
+/// The lowercase letters a line's text opens on.
+pub(crate) fn opening_letters(text: &str) -> String {
+    letters(text.split_whitespace().next().unwrap_or(""), false)
+}
+
+/// Marks each line that ends on a word and a hyphen with the words the
+/// document sets after that word and a hyphen whole on one line, and never
+/// closed up (`treatment-emergent`, never `treatmentemergent`). A break
+/// inside a word and a break at a compound's own hyphen look alike at a
+/// line's end, both between two lowercase letters; the document's own
+/// text tells them apart.
+pub fn mark_compounds(lines: &mut [&mut Line]) {
+    use std::collections::{HashMap, HashSet};
+    let mut whole: HashMap<String, Vec<String>> = HashMap::new();
+    let mut closed: HashSet<String> = HashSet::new();
+    for l in lines.iter() {
+        let words: Vec<&str> = l.text.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            // A line's closing hyphen is no evidence: it may be the break.
+            let last = i + 1 == words.len() && w.ends_with('-');
+            let parts: Vec<&str> = w.split('-').collect();
+            if parts.len() == 1 {
+                closed.insert(w.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase());
+                continue;
+            }
+            if last {
+                continue;
+            }
+            for p in parts.windows(2) {
+                let (a, b) = (letters(p[0], true), letters(p[1], false));
+                if a.chars().count() >= 2 && b.chars().count() >= 2 {
+                    let v = whole.entry(a).or_default();
+                    if !v.contains(&b) {
+                        v.push(b);
+                    }
+                }
+            }
+        }
+    }
+    if whole.is_empty() {
+        return;
+    }
+    for l in lines.iter_mut() {
+        let Some(stem) = l
+            .text
+            .split_whitespace()
+            .next_back()
+            .and_then(|w| w.strip_suffix('-'))
+        else {
+            continue;
+        };
+        let a = letters(stem, true);
+        if let Some(v) = whole.get(&a) {
+            l.compounds = v
+                .iter()
+                .filter(|b| !closed.contains(&format!("{a}{b}")))
+                .cloned()
+                .collect();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -4105,6 +4191,7 @@ mod tests {
             opens_with_script: false,
             italic: false,
             x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
     }
@@ -4284,5 +4371,27 @@ mod tests {
         rejoin_spanning_lines(&mut v, &cols);
         assert_eq!(v[0][0].text, "Fax (636)272-2408 • Toll Free (800)325-6152");
         assert_eq!(v[1].len(), 6, "rows cut at a space stay apart: {v:?}");
+    }
+
+    #[test]
+    fn a_compound_the_document_sets_whole_keeps_its_hyphen_at_a_break() {
+        let mk = |t: &str| {
+            let mut l = ln(t, 0.0, 100.0, 0.0, 10.0);
+            l.text = t.into();
+            l
+        };
+        let mut a = mk("The most frequent treatment-emergent AEs were");
+        let mut b = mk("Serious treatment-");
+        let mut c = mk("adverse events, each micro-");
+        let mut d = mk("No microscope was used.");
+        let mut e = mk("A break in a long word as well as in a dis-");
+        {
+            let mut lines: Vec<&mut Line> = vec![&mut a, &mut b, &mut c, &mut d, &mut e];
+            mark_compounds(&mut lines);
+        }
+        assert_eq!(b.compounds, vec!["emergent".to_string()]);
+        // A closing hyphen is no evidence, and `micro` is set closed up.
+        assert!(c.compounds.is_empty() && e.compounds.is_empty());
+        assert_eq!(opening_letters("emergent adverse"), "emergent");
     }
 }

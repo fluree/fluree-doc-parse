@@ -143,10 +143,17 @@ impl Block {
                         .next()
                         .is_some_and(crate::line::wraps_anywhere);
                 if let Some(stem) = out.strip_suffix('-') {
+                    // A compound the document sets whole elsewhere keeps
+                    // its hyphen (`treatment-` over `emergent`).
+                    let compound = prev.is_some_and(|p| {
+                        !p.compounds.is_empty()
+                            && p.compounds.contains(&crate::line::opening_letters(&l.text))
+                    });
                     match HyphenJoin::of(stem, &l.text) {
-                        HyphenJoin::Word => {
+                        HyphenJoin::Word if !compound => {
                             out.pop();
                         }
+                        HyphenJoin::Word => {}
                         HyphenJoin::Hyphen => {}
                         HyphenJoin::Dash => out.push(' '),
                     }
@@ -3145,8 +3152,23 @@ mod tests {
             opens_with_script: false,
             italic: false,
             x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
+    }
+
+    #[test]
+    fn a_break_at_a_compounds_own_hyphen_keeps_it() {
+        let mut first = l("The most frequent serious treatment-", 36.0, 100.0, 10.0);
+        let next = l("emergent adverse events were mild", 36.0, 112.0, 10.0);
+        let joined = |a: &Line| {
+            let blocks = assemble(&[a.clone(), next.clone()], 1.2);
+            assert_eq!(blocks.len(), 1);
+            blocks[0].text()
+        };
+        assert!(joined(&first).contains("treatmentemergent"));
+        first.compounds = vec!["emergent".into()];
+        assert!(joined(&first).contains("treatment-emergent adverse"));
     }
 
     #[test]
