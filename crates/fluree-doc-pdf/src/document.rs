@@ -1443,6 +1443,14 @@ const FURNITURE_ROW_SLACK: f64 = 0.005;
 /// paragraph brushing the drawing's margin stays prose.
 const FIGURE_CONTAINMENT: f64 = 0.6;
 
+/// Most words a figure's label says; a block of the page's prose inside a
+/// figure's region says more (see [`find_figures`]).
+const FIGURE_PROSE_WORDS: usize = 15;
+
+/// Share of the body's size a paragraph inside a figure's region may differ
+/// by and still be the page's prose.
+const FIGURE_PROSE_SIZE: f64 = 0.12;
+
 /// Fraction of a grid inferred from its text's alignment, and corroborated by
 /// drawn geometry, that must lie on a drawing for its alignment to be the
 /// drawing's.
@@ -1561,6 +1569,128 @@ fn callouts(cells: &[String]) -> bool {
 /// across it, and its horizontal ones at more than as many times its row
 /// boundaries' down it. Places are counted to the point, so a rule drawn in
 /// dashes, or cell by cell, is one.
+/// Farthest a tick, or a gridline's end, stands from the side of its
+/// number, in the number's size.
+const TICK_REACH: f64 = 1.5;
+
+/// Farthest a tick's middle stands above or below its number's, in the
+/// number's size: level with it, where an underline runs under it.
+const TICK_LEVEL: f64 = 0.3;
+
+/// Is grid `g` a chart's scale beside the page's prose rather than a
+/// table? A column of two numbers or more, each level with a horizontal
+/// stroke that ends beside it (an axis's tick, or a gridline's end), with
+/// at most one other cell, the axis's unit (`Percent`); one column of
+/// running prose, the page's column read across the gutter with the
+/// chart's scale (`spending have deteriorated. Business | 18.0`); and
+/// beyond them only columns of a word or a few, the chart's own labels. A
+/// table's figures stand between its rules, not level with a stroke's end,
+/// and a table holds columns of text of its own.
+fn scale_beside_text(
+    g: &Grid,
+    glyphs: &[crate::glyph::Glyph],
+    rules: &[crate::rule::Rule],
+    ticks: &[crate::rule::Rule],
+) -> bool {
+    let (rows, cols) = (g.rows(), g.cols());
+    if rows < 2 || cols < 2 {
+        return false;
+    }
+    let texts = g.cell_texts(glyphs);
+    let homes = g.glyph_cells(glyphs);
+    // Each cell's ink and its text's size.
+    let mut boxes: Vec<Option<(crate::geom::BBox, f64)>> = vec![None; rows * cols];
+    for (gl, home) in glyphs.iter().zip(&homes) {
+        let (Some(i), Some(b)) = (home, gl.bbox) else {
+            continue;
+        };
+        if gl.text.trim().is_empty() {
+            continue;
+        }
+        let size = (gl.font_size as f64).max(1.0);
+        boxes[*i] = Some(match boxes[*i] {
+            Some((u, s)) => (u.union(&b), s.max(size)),
+            None => (b, size),
+        });
+    }
+    let number = |t: &str| {
+        let t = t.trim();
+        !t.is_empty()
+            && t.chars().count() <= 9
+            && t.chars().any(|c| c.is_ascii_digit())
+            && t.chars()
+                .all(|c| c.is_ascii_digit() || ".,−-+%".contains(c))
+    };
+    let horizontal = rules
+        .iter()
+        .chain(ticks)
+        .filter(|r| r.orientation == crate::rule::Orientation::Horizontal);
+    let ticks: Vec<crate::geom::BBox> = horizontal.map(|r| r.bbox).collect();
+    let ticked = |b: &crate::geom::BBox, size: f64| {
+        let y = (b.y0 + b.y1) / 2.0;
+        ticks.iter().any(|t| {
+            let ty = (t.y0 + t.y1) / 2.0;
+            let left = t.x1 <= b.x0 + 1.0 && b.x0 - t.x1 <= size * TICK_REACH;
+            let right = t.x0 >= b.x1 - 1.0 && t.x0 - b.x1 <= size * TICK_REACH;
+            (ty - y).abs() <= size * TICK_LEVEL && (left || right)
+        })
+    };
+    // Lines of running text, a cell each: words enough to a line, and a
+    // line that carries on into the next (`… Business` over `investment
+    // rose …`). A chart's labels set beside its scale say a word or two,
+    // and stay with it.
+    let prose = |filled: &[usize]| {
+        let lines: Vec<&str> = filled.iter().map(|&i| texts[i].trim()).collect();
+        let worded = lines
+            .iter()
+            .filter(|t| t.split_whitespace().count() >= 4)
+            .count();
+        let runs_on = lines.windows(2).any(|w| {
+            let ends_open = !w[0].ends_with(['.', '!', '?', ':', ';']);
+            let next = w[1].split_whitespace().next().unwrap_or("");
+            ends_open
+                && w[0].split_whitespace().count() >= 4
+                && next.chars().next().is_some_and(char::is_lowercase)
+        });
+        worded >= 2 && runs_on
+    };
+    // Columns of the chart's own scale, of running prose, and of other
+    // text; a column of a word or a few to a cell is the chart's legend
+    // or a series' name (`Yield`), set inside the plot.
+    let mut scales = 0;
+    let mut texted = 0;
+    let mut prosed = 0;
+    for c in 0..cols {
+        let filled: Vec<usize> = (0..rows)
+            .map(|r| r * cols + c)
+            .filter(|&i| !texts[i].trim().is_empty())
+            .collect();
+        if filled.is_empty() {
+            continue;
+        }
+        let numbers: Vec<usize> = filled
+            .iter()
+            .copied()
+            .filter(|&i| number(&texts[i]))
+            .collect();
+        let on_ticks = numbers
+            .iter()
+            .filter(|&&i| boxes[i].is_some_and(|(b, size)| ticked(&b, size)))
+            .count();
+        if numbers.len() >= 2 && on_ticks == numbers.len() && numbers.len() + 1 >= filled.len() {
+            scales += 1;
+        } else if prose(&filled) {
+            prosed += 1;
+        } else if filled
+            .iter()
+            .any(|&i| texts[i].split_whitespace().count() > 3)
+        {
+            texted += 1;
+        }
+    }
+    scales >= 1 && prosed == 1 && texted == 0
+}
+
 fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
     let inside = |r: &&crate::rule::Rule| {
         r.bbox.x0 >= g.bbox.x0 - 3.0
@@ -2926,6 +3056,52 @@ fn find_figures(
                     .position(|f| figure::share_inside(&b.bbox, &f.drawing) >= FIGURE_CONTAINMENT);
             }
         }
+        // A paragraph of the page's prose is no figure's, wherever the
+        // figure's region reaches: set at the body's size, over two lines or
+        // more, more words than a label says, and no caption or note. Shapes
+        // grouped across a column, or a panel of products, enclose the text
+        // beside or between them (a column's `Discussion` under the chart
+        // beside it). A box diagram's steps are its own, set in its boxes.
+        // The heading set over such a paragraph goes with it.
+        let prose = prose_size(blocks) as f64;
+        let mut released = vec![false; blocks.len()];
+        for (i, b) in blocks.iter().enumerate() {
+            let Some(fi) = member[i] else { continue };
+            if figures[fi].frame == Some(figures[fi].drawing) {
+                continue;
+            }
+            let text = &block_texts[i];
+            let size = (b.font_size as f64).max(1.0);
+            if text.split_whitespace().count() > FIGURE_PROSE_WORDS
+                && (size - prose).abs() <= prose * FIGURE_PROSE_SIZE
+                && b.bbox.height() >= size * 1.8
+                && !heading::is_caption(text)
+                && !figure::note_label(text)
+            {
+                member[i] = None;
+                released[i] = true;
+            }
+        }
+        for (i, b) in blocks.iter().enumerate() {
+            if member[i].is_none() {
+                continue;
+            }
+            let text = &block_texts[i];
+            let size = (b.font_size as f64).max(1.0);
+            let heads = blocks.iter().enumerate().any(|(j, p)| {
+                released[j]
+                    && p.bbox.y0 >= b.bbox.y1 - 1.0
+                    && p.bbox.y0 - b.bbox.y1 <= size * 1.5
+                    && (p.bbox.x0 - b.bbox.x0).abs() <= size
+            });
+            if heads
+                && text.split_whitespace().count() <= FIGURE_PROSE_WORDS
+                && !heading::is_caption(text)
+                && !figure::note_label(text)
+            {
+                member[i] = None;
+            }
+        }
         page_figures.push((figures, member));
     }
     page_figures
@@ -3931,6 +4107,33 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = kept_sources;
             if grids.len() != n {
                 // The dropped grids' glyphs belong to prose after all.
+                let remaining = glyphs_outside_grids(&p.glyphs, &grids);
+                cols = timed(&mut timings.columns, || {
+                    line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
+                });
+            }
+        }
+
+        // A chart's scale beside the page's text is no table: a column of
+        // numbers each set level with a tick of the axis, and at most one
+        // other column holding text, the column of prose the chart stands
+        // beside (`spending have deteriorated. Business | 18.0`) or the
+        // chart's own legend. Its lines are the page's prose, and the
+        // scale is the chart's.
+        {
+            let n = grids.len();
+            let mut kept_grids = Vec::with_capacity(n);
+            let mut kept_sources = Vec::with_capacity(n);
+            for (grid, source) in grids.into_iter().zip(grid_sources) {
+                if scale_beside_text(&grid, &p.glyphs, &p.rules, &p.ticks) {
+                    continue;
+                }
+                kept_grids.push(grid);
+                kept_sources.push(source);
+            }
+            grids = kept_grids;
+            grid_sources = kept_sources;
+            if grids.len() != n {
                 let remaining = glyphs_outside_grids(&p.glyphs, &grids);
                 cols = timed(&mut timings.columns, || {
                     line::assemble_columns_with_rules(&remaining, &p.rules, p.index)
@@ -6981,6 +7184,96 @@ mod tests {
         // A box of three rows says too little.
         let small = grid(vec![0.0, 20.0, 60.0, 140.0], 0.0, 140.0);
         assert!(!nested_in_one_row(&small, &[&in_row]));
+    }
+
+    #[test]
+    fn a_column_of_prose_beside_a_charts_scale_is_no_table() {
+        // A row of words from `x`, each word a glyph, at 8 pt on the
+        // baseline `y`.
+        let row = |words: &str, x: f64, y: f64, glyphs: &mut Vec<Glyph>| {
+            let mut at = x;
+            for w in words.split_whitespace() {
+                let width = 4.0 * w.chars().count() as f64;
+                glyphs.push(Glyph {
+                    text: w.into(),
+                    bbox: Some(BBox {
+                        x0: at,
+                        y0: y - 8.0,
+                        x1: at + width,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (at, y),
+                    rotation_deg: 0.0,
+                    font_size: 8.0,
+                    weight: None,
+                    advance: None,
+                    draw_index: glyphs.len(),
+                });
+                at += width + 3.0;
+            }
+        };
+        let grid = Grid {
+            layout: None,
+            page: 0,
+            bbox: BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 300.0,
+                y1: 60.0,
+            },
+            xs: vec![0.0, 240.0, 300.0],
+            ys: vec![0.0, 20.0, 40.0, 60.0],
+        };
+        // A tick of the axis at `y`, just right of the scale's numbers.
+        let tick = |y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0: 272.0,
+                y0: y - 0.2,
+                x1: 277.0,
+                y1: y + 0.2,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let ticks: Vec<crate::rule::Rule> = [16.0, 36.0, 56.0].iter().map(|&y| tick(y)).collect();
+        let scale = |glyphs: &mut Vec<Glyph>| {
+            row("18.0", 252.0, 20.0, glyphs);
+            row("17.5", 252.0, 40.0, glyphs);
+            row("17.0", 252.0, 60.0, glyphs);
+        };
+        // The page's prose, read a line to a row beside the chart's scale.
+        let mut prose = Vec::new();
+        row(
+            "spending have deteriorated. Business",
+            0.0,
+            20.0,
+            &mut prose,
+        );
+        row(
+            "investment rose moderately in the second half",
+            0.0,
+            40.0,
+            &mut prose,
+        );
+        row(
+            "of 2022, although new orders indexes, business",
+            0.0,
+            60.0,
+            &mut prose,
+        );
+        scale(&mut prose);
+        assert!(scale_beside_text(&grid, &prose, &[], &ticks));
+        // With no tick by its numbers, it may be a table's column.
+        assert!(!scale_beside_text(&grid, &prose, &[], &[]));
+        // A chart's own labels beside its scale are no prose: kept, they
+        // stay with the chart.
+        let mut labels = Vec::new();
+        row("Lower", 0.0, 20.0, &mut labels);
+        row("Broadly similar", 0.0, 40.0, &mut labels);
+        row("Higher", 0.0, 60.0, &mut labels);
+        scale(&mut labels);
+        assert!(!scale_beside_text(&grid, &labels, &[], &ticks));
     }
 
     #[test]
