@@ -1131,6 +1131,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(1.0),
                     draw_index: i,
                 })
@@ -1310,6 +1311,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 9.0,
                 weight: None,
+                italic: false,
                 advance: Some(6.0),
                 draw_index: i,
             });
@@ -1588,6 +1590,7 @@ mod tests {
                         rotation_deg: 0.0,
                         font_size: 10.0,
                         weight: None,
+                        italic: false,
                         advance: Some(6.0),
                         draw_index,
                     });
@@ -1690,6 +1693,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index,
                 });

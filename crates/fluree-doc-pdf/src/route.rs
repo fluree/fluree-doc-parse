@@ -281,6 +281,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 10.0,
                 weight: None,
+                italic: false,
                 advance: None,
                 draw_index: i,
             });

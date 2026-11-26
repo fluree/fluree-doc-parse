@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "lutron-maestro-369613a.pdf",
+    "url": "https://assets.lutron.com/a/documents/369613a.pdf",
+    "sha256": "7794c4852922c12312f55df66d1c1a9defcf8b5f0bab15e8d1ee4924bf8f67ed",
+    "about": "Lutron Maestro 369613a. Its wiring diagrams run over two pages, the second headed `Wiring Diagrams (continued)`."
+  },
+  "notes": [
+    "#395: the continued head opened a second level-1 section."
+  ],
+  "checks": [
+    {
+      "id": "diagrams-continue",
+      "found": "2026-11-26",
+      "issue": "#395: the continued head opened a section.",
+      "no_section": "Wiring Diagrams (continued)"
+    }
+  ]
+}

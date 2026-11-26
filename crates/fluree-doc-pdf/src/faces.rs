@@ -14,9 +14,10 @@ use std::collections::{HashMap, HashSet};
 
 use hayro_interpret::CacheKey;
 use hayro_syntax::object::dict::keys::{
-    BASE_ENCODING, BASE_FONT, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR, FONT, FONT_DESC,
-    FONT_WEIGHT, FORM, MAC_ROMAN_ENCODING, MM_TYPE1, RESOURCES, STANDARD_ENCODING, STEM_V, SUBTYPE,
-    TO_UNICODE, TRUE_TYPE, TYPE1, WIDTHS, WIN_ANSI_ENCODING, XOBJECT,
+    BASE_ENCODING, BASE_FONT, DESCENDANT_FONTS, DIFFERENCES, ENCODING, FIRST_CHAR, FLAGS, FONT,
+    FONT_DESC, FONT_WEIGHT, FORM, ITALIC_ANGLE, MAC_ROMAN_ENCODING, MM_TYPE1, RESOURCES,
+    STANDARD_ENCODING, STEM_V, SUBTYPE, TO_UNICODE, TRUE_TYPE, TYPE1, WIDTHS, WIN_ANSI_ENCODING,
+    XOBJECT,
 };
 use hayro_syntax::object::{Array, Dict, Name, Object, Stream};
 use hayro_syntax::page::Page;
@@ -33,6 +34,10 @@ pub(crate) struct Face {
     pub declared: Option<u32>,
     /// The descriptor's `/StemV`, the width of its vertical stems.
     pub stem: Option<f32>,
+    /// An italic or oblique face, as its name says (`MinionPro-BoldIt`,
+    /// `Univers-BoldOblique`) or its descriptor does (an `/ItalicAngle`, the
+    /// italic flag).
+    pub italic: bool,
 }
 
 /// The faces of the fonts a document draws with, by the interpreter's key
@@ -242,11 +247,52 @@ fn face(font: &Dict<'_>) -> Face {
         .as_ref()
         .and_then(|d| d.get::<f32>(STEM_V))
         .filter(|s| *s > 0.0);
+    let italic = font
+        .get::<Name<'_>>(BASE_FONT)
+        .is_some_and(|n| named_italic(n.as_str()))
+        || descriptor.as_ref().is_some_and(|d| {
+            d.get::<f32>(ITALIC_ANGLE)
+                .is_some_and(|a| a.abs() >= MIN_ITALIC_ANGLE)
+                || d.get::<i64>(FLAGS).is_some_and(|f| f & ITALIC_FLAG != 0)
+        });
     Face {
         named,
         declared,
         stem,
+        italic,
     }
+}
+
+/// The descriptor flag for an italic face (bit 7 of `/Flags`).
+const ITALIC_FLAG: i64 = 1 << 6;
+
+/// Degrees of slant from which a descriptor's `/ItalicAngle` makes a face
+/// italic: an upright face states 0, and an italic one 9 to 15. A degree
+/// leaves room for a rounding in the producer.
+const MIN_ITALIC_ANGLE: f32 = 1.0;
+
+/// Whether a font's name names an italic or oblique face: the whole word
+/// anywhere (`TimesNewRomanPS-BoldItalicMT`, `Univers-BoldOblique`,
+/// `TimesItalic`), or a style's abbreviation (`MinionPro-BoldIt`,
+/// `HelveticaNeueLTStd-BdIt`, `Arial-ItalicMT`, `Frutiger-Obl`).
+pub(crate) fn named_italic(name: &str) -> bool {
+    let name = match name.split_once('+') {
+        Some((prefix, rest)) if prefix.len() == 6 => rest,
+        _ => name,
+    };
+    let lower = name.to_ascii_lowercase();
+    if ["italic", "oblique", "kursiv"]
+        .iter()
+        .any(|w| lower.contains(w))
+    {
+        return true;
+    }
+    let Some(i) = name.find(['-', ',']) else {
+        return false;
+    };
+    tokens(&name[i + 1..])
+        .map(str::to_ascii_lowercase)
+        .any(|w| matches!(w.as_str(), "it" | "ital" | "obl" | "ob"))
 }
 
 /// The weight a font's name states, if it names one.
@@ -368,6 +414,31 @@ fn tokens(style: &str) -> impl Iterator<Item = &str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_italic_face_by_its_name() {
+        for name in [
+            "ABCDEF+MinionPro-BoldIt",
+            "HelveticaNeueLTStd-BdIt",
+            "Univers-BoldOblique",
+            "TimesNewRomanPS-BoldItalicMT",
+            "Arial,BoldItalic",
+            "MyriadPro-SemiboldIt",
+            "Frutiger-Obl",
+        ] {
+            assert!(named_italic(name), "{name}");
+        }
+        for name in [
+            "MinionPro-Bold",
+            "Helvetica-Bold",
+            "Arial,Bold",
+            "TitilliumWeb-Bold",
+            "Literata-Regular",
+            "AdvP41461E",
+        ] {
+            assert!(!named_italic(name), "{name}");
+        }
+    }
 
     #[test]
     fn weight_words_anywhere_in_the_name() {

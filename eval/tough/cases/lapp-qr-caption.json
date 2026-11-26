@@ -6,7 +6,8 @@
     "about": "LAPP innovation catalogue, spring 2026 (36 pages). Its product pages share one template: box headings and the close of a standard description stand at the same place on page after page, and a thumb index runs down the side margin."
   },
   "notes": [
-    "2026-11-25 (#276): a QR code's modules, small drawn squares, stood level with the caption beside it and were taken as bullets: its lines read as list items. A drawing's dots crowd one another; a list's bullets stand a line apart."
+    "2026-11-25 (#276): a QR code's modules, small drawn squares, stood level with the caption beside it and were taken as bullets: its lines read as list items. A drawing's dots crowd one another; a list's bullets stand a line apart.",
+    "2026-11-25 (#287): two more of the catalogue's QR captions, read before as one-column tables (one of them with its words dealt across two rows), are paragraphs too: a one-column grid of a row or two is a box round prose. The count is the captions read whole, now four."
   ],
   "checks": [
     {
@@ -17,7 +18,7 @@
         "type": "doco:Paragraph",
         "text": "Scan the QR code to view all available variants, technical data, datasheets, as well as suitable accessories and comparable products - including current availability directly in our online shop"
       },
-      "count": 2
+      "count": 4
     }
   ]
 }

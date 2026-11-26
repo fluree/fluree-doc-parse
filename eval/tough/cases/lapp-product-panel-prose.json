@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "lapp-innovation-catalogue.pdf",
+    "url": "https://lappespana.lappgroup.com/fileadmin/DAM/Lapp_Espana/1R_05_DESCARGAS/Catalogos_y_folletos/PDF/lapp_innovation-catalogue_spring26_en.pdf",
+    "sha256": "23355150efc339a27675fe73bf66a881292ef6bb9a858e9dd5ee0f93c1a3af24",
+    "about": "LAPP innovation catalogue, spring 2026 (36 pages). Page 5 sets its product families in panels, each a name, a sentence about it and photographs, over a background drawn as one group of shapes."
+  },
+  "notes": [
+    "2026-11-26: the panels were found as one drawing, whose region took in each product's sentence and name as figure text."
+  ],
+  "checks": [
+    {
+      "id": "epic-sentence-is-text",
+      "found": "2026-11-26",
+      "issue": "#389: the EPIC® panel's sentence was figure text.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "EPIC® industrial connectors can be found everywhere in industrial machinery and plant engineering, for measuring, control and drives."
+      }
+    }
+  ]
+}

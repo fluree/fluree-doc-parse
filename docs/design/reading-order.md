@@ -281,6 +281,40 @@ paragraph breaks. `fdoc dev gaps` shows the distribution a document actually
 has, and `fdoc dev pair` measures the gap around a specific character pair
 when a word came out wrong.
 
+### A line set tighter than its column
+
+The threshold is drawn from all of a column's lines, so a line set tighter
+than the rest can space its words under it:
+- a table caption in a small face under body text spaced wider:
+  `TABLE2 | Modelfitandmeasurement…`;
+- references in a smaller face: `RademakerM, OakleyA.Digitalmonitoring…`;
+- a heading in capitals: `SCHEDULEII—VALUATIONANDQUALIFYINGACCOUNTS`;
+- a display title with one word space narrower than the rest:
+  `Treasury andAgency`.
+
+A line that writes no space characters spaces its words by its own gaps
+where they part into two groups:
+- **Letters:** three gaps or more of at most 0.08 em (kerning, a hair of
+  tracking).
+- **Words:** two gaps or more of 0.12 em or more (a tight justified line's
+  are an eighth of an em and up).
+- **A valley:** at least 0.1 em wide between the widest letter gap and the
+  narrowest word gap, with nothing in it.
+
+The line's cut is the valley's middle, and it only ever lowers the column's
+threshold. These keep the column's threshold:
+- **Pairs of figures:** they have their own threshold.
+- **Glyphs of two sizes:** a raised note mark's gap, measured in its own
+  smaller ems, reads wide.
+- **Punctuation against a word:** a kern before a full stop or inside a
+  bracket is no word space. Nor is the room a lone italic letter's
+  overhang leaves before a bracket, a slash or a hyphen (`P(h, v)`, `P/P0`,
+  `T-gate`): a maths symbol's. A word's gap before a bracket, roman or
+  italic, is still read by the line's own gaps (`solve (34)`, a title's
+  `Bethe (The Bethe wavefunction)`).
+- **A line that writes its spaces:** it says where its words part, and a
+  wider gap there is a kern (`CETIRIZ INE`'s `Z` and `I`).
+
 ## The resulting order
 
 Elements are emitted in the order the layout passes produce them: regions
