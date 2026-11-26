@@ -117,9 +117,13 @@ for routed region *i* — the names of the crops `fdoc dev render-routed`
 writes, with `.json` for `.png`. Other tags are ignored: a table crop is a
 question about structure, and an OCR engine reads text. A bare image also
 takes `{stem}.json`, the name `fdoc ocr` gives the words of an image file;
-of the two, it reads the one sized as it is. Readings are looked up by stem,
-so two inputs of one stem in a batch (`report.pdf` and `report.png`) are
-warned about, and `render-routed` crops only the first.
+of the two, it reads the one sized as it is. A DOCX's pictures are read from
+`{stem}_m{n}.json`, for the figure `figure-0-{n}`, and `{stem}_m{n}_{k}.json`
+for the figure's `k`-th image after the first; their text follows the figure.
+An image several figures draw is read once, from the name of the first figure
+drawing it, and its text follows each of them (see [Office files](../inputs/office-and-web.md)). Readings are looked up by
+stem, so two inputs of one stem in a batch (`report.pdf` and `report.png`)
+are warned about, and `render-routed` crops only the first.
 
 A page's regions are numbered once glyphs drawn twice at one spot (faux bold)
 count once and a watermark laid over the text is taken out, as the analysis
@@ -207,8 +211,10 @@ Only those names are looked up — `full` on every page, `r{i}` for each unread 
 **What to read.** The `render-routed` manifest says why each crop exists
 ([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine
 needs to read only the crops whose `reason` is `scanned`, `near_blank`,
-`broken_text`, `region` or `small_region`: those are the ones whose readings
-the page takes. [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
+`broken_text`, `region`, `small_region` or `embedded_image` (a DOCX's
+picture): those are the ones whose readings the document takes. A
+`table_missing` crop it reads only where the page's text does not cover it
+(see [escalation tiers](escalation-tiers.md#producing-the-crops)). [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
 and a `table` or `table_missing` crop asks about structure; read, they would
 only be refused or ignored. Skipping `table_missing` has the one known gap
@@ -283,7 +289,7 @@ skipped silently: it comes from your pipeline, not from a partial batch. A
 ```bash
 fdoc dev render-routed scan.pdf ./crops --ocr-regions --stored-resolution
 # the crops whose readings the page takes
-jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region")) | "./crops/" + .png' \
+jq -r 'select(.reason | IN("scanned", "near_blank", "broken_text", "region", "small_region", "embedded_image")) | "./crops/" + .png' \
   ./crops/manifest.jsonl > ./crops/for-ocr.txt
 your-ocr $(cat ./crops/for-ocr.txt) --out ./words   # one {stem}_p{N}_{tag}.json per crop
 fdoc convert scan.pdf -f doco --ocr-words ./words

@@ -33,13 +33,13 @@ a PDF engine.**
 | `fluree-doc-text` | `parse(&str) -> Vec<Element>`; `decode(&[u8])`; `is_markdown` |
 | `fluree-doc-html` | `parse(&str) -> Vec<Element>`, via html5ever |
 | `fluree-doc-ooxml` | `Package`: a `.docx`, `.pptx` or `.xlsx` opened as parts, its relationships with targets resolved to part names, its main part and core properties as the package declares them |
-| `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening |
+| `fluree-doc-docx` | `parse(&[u8]) -> Result<Vec<Element>, DocxError>`; `parse_with_info` adds the core properties from the same opening, `parse_with_media` where each figure's images are, `read_pictures` each image once within a per-document `Allowance`, `read_media` one image's bytes from an opened `Package`; feature `ocr`: `parse_with_ocr`, the pictures' text read and placed after their figures |
 | `fluree-doc-pptx` | `parse(&[u8]) -> Result<Vec<Element>, PptxError>`, incl. charts; `parse_with_info` |
 | `fluree-doc-xlsx` | `parse(&[u8]) -> Result<Vec<Element>, XlsxError>`; `parse_with_info` |
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
-| `fluree-doc-image` | `decode` (PNG, JPEG, TIFF, upright by EXIF, at most 128 million pixels), `header` and `upright_size` (size upright, one-bit, page count: header only), `document`, `read` and `elements`: a bare image read by an `OcrEngine` and laid out as a scanned page |
+| `fluree-doc-image` | `decode` (PNG, JPEG, TIFF, upright by EXIF, at most 128 million pixels), `header` and `upright_size` (size upright, one-bit, page count: header only), `document`, `read` and `elements`: a bare image read by an `OcrEngine` and laid out as a scanned page; `elements_from_words` the same from words already read; `place_after_figures` puts a document's image text after its figures |
 | `fluree-doc-vision` | `WordReading`, `OcrWord`, `Coords`: the words an OCR engine read in one image, and the `--ocr-words` sidecar format (`from_json`, `to_json`); `OcrEngine` and `Pixels`, the engine interface. Feature `oar`: `oar::OarEngine` (PP-OCRv6 through oar-ocr, ONNX Runtime loaded at run time) and `assets`, the checked assets directory |
 | `fluree-doc-cli` | argument parsing and the commands |
 

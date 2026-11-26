@@ -44,6 +44,7 @@ base64 = "0.22"
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 tiff = "0.11"
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
 
 [features]
 default = ["ocr"]

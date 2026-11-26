@@ -89,6 +89,37 @@ picture is, in the graph and in `-f json`, and adds nothing to the text. Word
 also keeps a fallback copy of a drawing for readers that cannot show it,
 which is not read a second time.
 
+**The text in a picture** — a screenshot pasted into the report — is read by
+OCR when `convert` has an engine (`--ocr`) or the words one wrote
+(`--ocr-words`, `<stem>_m<n>.json` for the figure `figure-0-<n>`; `fdoc dev
+render-routed` writes the image as `<stem>_m<n>.png`, reason
+`embedded_image`). A group of pictures is one figure holding several images:
+the second and later are `m<n>_1`, `m<n>_2`, … and their text follows the
+first's. An image several figures draw (a logo, a capture pasted twice) is
+read once, by the name of the first figure drawing it, and its text follows
+each of them. What it reads follows the figure in the flow, marked
+`provenance: "ocr"`: its paragraphs and tables, with no `bbox` (the image's
+pixels are no position in the document), and a heading of the screen read
+as a paragraph so the document's outline stays its own. A picture deleted
+under tracked changes is no figure and is not read, and a shape's image fill
+(a texture) is not one of its pictures. A picture whose image is not in the
+package (a link to an outside file, a missing part) is counted among those
+not read; a part name is matched ignoring case, with backslashes read as
+slashes. Without OCR, a note on stderr counts the pictures not read, and no
+image is even decompressed. An
+image Word keeps as a vector drawing (EMF, WMF) has no pixels to read. Images
+are read one at a time, each at most 64 MiB decompressed and 128 million pixels
+decoded; one past either is reported and left as its figure. A document as a
+whole has at most 256 images read, holding 512 million pixels together, as
+their headers state them: a few kilobytes of archive can hold hundreds of
+large images, and past that allowance the rest are counted among those not
+read, with a note saying why. In a library,
+`fluree_doc_docx::parse_with_ocr` (feature `ocr`) does it with an engine;
+`parse_with_media` says where each figure's images are, `read_pictures`
+reads each image once within that allowance (`read_media` reads one part of
+an opened package), and `fluree_doc_image::place_after_figures` puts what
+was read where it belongs.
+
 **A list set side by side with itself.** A long list is often set two-up to
 fill the page: `Group | Code | | Group | Code`, the list running down
 the left pair and on down the right. Read as one table, each row joins two

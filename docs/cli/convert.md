@@ -101,7 +101,8 @@ crops](../integration/escalation-tiers.md#producing-the-crops)), where a model
 gets 2×.
 
 A bare PNG, JPEG or TIFF is read the same way, as one page decoded upright;
-see [Images](../inputs/images.md).
+see [Images](../inputs/images.md). So are the pictures in a DOCX, whose text
+follows their figure; see [Office files](../inputs/office-and-web.md).
 
 What either reads is the same: the pages whose text is pixels (scanned,
 near-blank, broken text), whole, and on other pages the raster regions the
