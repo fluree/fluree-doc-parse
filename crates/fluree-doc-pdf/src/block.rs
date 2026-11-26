@@ -809,58 +809,137 @@ pub fn assemble_in_measure(
     body: f64,
     ocr: &[(f64, f64)],
 ) -> Vec<Block> {
-    let scale = interleaved_scale(lines);
-    if scale.is_empty() {
+    let scales = interleaved_scales(lines);
+    if scales.is_empty() {
         return assemble_lines(lines, measure, leading, checkboxes, dots, bands, body, ocr);
     }
     // A chart's scale the column took in among its prose: its numbers are
     // read as a block of their own, after the paragraph they stood in, so
     // they neither cut it nor are lost.
-    let (ticks, rest): (Vec<_>, Vec<_>) = lines
+    let held: Vec<usize> = scales.iter().flatten().copied().collect();
+    let rest: Vec<Line> = lines
         .iter()
         .enumerate()
-        .partition(|(i, _)| scale.contains(i));
-    let ticks: Vec<Line> = ticks.into_iter().map(|(_, l)| l.clone()).collect();
-    let rest: Vec<Line> = rest.into_iter().map(|(_, l)| l.clone()).collect();
+        .filter(|(i, _)| !held.contains(i))
+        .map(|(_, l)| l.clone())
+        .collect();
     let mut blocks = assemble_lines(&rest, measure, leading, checkboxes, dots, bands, body, ocr);
-    let top = ticks[0].bbox.y0;
-    let at = blocks
+    let mut placed: Vec<(usize, Block)> = scales
         .iter()
-        .position(|b| b.bbox.y1 >= top)
-        .map_or(blocks.len(), |i| i + 1);
-    // One block, however far apart its ticks stand: a scale is read whole.
-    let bbox = ticks
-        .iter()
-        .skip(1)
-        .fold(ticks[0].bbox, |b, l| b.union(&l.bbox));
-    let scale = Block {
-        page: ticks[0].page,
-        font_size: ticks[0].font_size,
-        bold: false,
-        gap_above: None,
-        marker: None,
-        marker_x: None,
-        stacked: false,
-        field: false,
-        bbox,
-        lines: ticks,
-    };
-    blocks.insert(at, scale);
+        .map(|scale| {
+            let ticks: Vec<Line> = scale.iter().map(|&i| lines[i].clone()).collect();
+            let top = ticks[0].bbox.y0;
+            let at = blocks
+                .iter()
+                .position(|b| b.bbox.y1 >= top)
+                .map_or(blocks.len(), |i| i + 1);
+            // One block, however far apart its ticks stand: a scale is read
+            // whole.
+            let bbox = ticks
+                .iter()
+                .skip(1)
+                .fold(ticks[0].bbox, |b, l| b.union(&l.bbox));
+            let block = Block {
+                page: ticks[0].page,
+                font_size: ticks[0].font_size,
+                bold: false,
+                gap_above: None,
+                marker: None,
+                marker_x: None,
+                stacked: false,
+                field: false,
+                bbox,
+                lines: ticks,
+            };
+            (at, block)
+        })
+        .collect();
+    // From the last place back, so each place still counts the blocks it
+    // was taken against; two scales after one paragraph keep their order.
+    placed.sort_by_key(|(at, _)| *at);
+    for (at, block) in placed.into_iter().rev() {
+        blocks.insert(at, block);
+    }
     blocks
 }
 
 /// Fewest numbers that make a scale: as `document`'s axis test asks.
 const MIN_SCALE_TICKS: usize = 3;
 
-/// The lines of `lines`, by index, that are a chart's scale set among a
-/// column's prose: three or more lines of one number each, smaller than
+/// Most a scale's ticks may stray from one pitch, as a share of it. Ticks
+/// are drawn at exact intervals; the feet of their figures differ only by
+/// rounding.
+const PITCH_SLACK: f64 = 0.1;
+
+/// Does `run`, numbers sorted down the page, read as one chart's vertical
+/// scale so far? It counts up the page, as a chart's scale does and a
+/// list's numbers do not; from three numbers on, they step evenly
+/// (`axis_scale`) and stand at one pitch.
+fn steps_as_scale(lines: &[Line], run: &[usize]) -> bool {
+    let values: Vec<f64> = run
+        .iter()
+        .filter_map(|&i| crate::document::axis_value(lines[i].text.trim()))
+        .collect();
+    if values.len() != run.len() || values.windows(2).any(|w| w[1] >= w[0]) {
+        return false;
+    }
+    if run.len() < MIN_SCALE_TICKS {
+        return true;
+    }
+    let texts: Vec<String> = run
+        .iter()
+        .map(|&i| lines[i].text.trim().to_string())
+        .collect();
+    let feet: Vec<f64> = run.iter().map(|&i| lines[i].bbox.y1).collect();
+    let pitch = feet[1] - feet[0];
+    crate::document::axis_scale(&texts)
+        && pitch > 0.0
+        && feet
+            .windows(2)
+            .all(|w| (w[1] - w[0] - pitch).abs() <= pitch * PITCH_SLACK)
+}
+
+/// The scales in `g`, numbers at one right edge sorted down the page, and
+/// whether they were split from it: `g` whole where it steps evenly; else
+/// its longest runs that read as scales of their own. Charts set one under
+/// another beside a column put their scales at one edge (`30 … −15`, then
+/// `8 … 1`, then `5.5 … 2.5`), and the numbers step evenly within each
+/// scale, not across them.
+fn scales_in(lines: &[Line], g: &[usize]) -> (Vec<Vec<usize>>, bool) {
+    let values: Vec<String> = g
+        .iter()
+        .map(|&i| lines[i].text.trim().to_string())
+        .collect();
+    if crate::document::axis_scale(&values) {
+        return (vec![g.to_vec()], false);
+    }
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < g.len() {
+        let mut j = i + 1;
+        while j < g.len() && steps_as_scale(lines, &g[i..=j]) {
+            j += 1;
+        }
+        if j - i >= MIN_SCALE_TICKS {
+            runs.push(g[i..j].to_vec());
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    (runs, true)
+}
+
+/// The scales of `lines`, each its lines by index, that a chart set among
+/// a column's prose: three or more lines of one number each, smaller than
 /// the text beside them, ending at one right edge, stepping evenly down
 /// the page (`2100 1800 1500 …`), with lines of the column's own text
 /// between them. A chart's axis that stands beside a column, its labels
 /// a few points from the column's edge, is taken into it whole, and each
-/// tick would otherwise cut the paragraph it lands in. A column of
-/// figures alone, or a table's, has no text between its numbers.
-fn interleaved_scale(lines: &[Line]) -> Vec<usize> {
+/// tick would otherwise cut the paragraph it lands in, or be read as the
+/// number of the line beside it. A column of figures alone, or a table's,
+/// has no text between its numbers.
+fn interleaved_scales(lines: &[Line]) -> Vec<Vec<usize>> {
     let number = |l: &Line| {
         let t = l.text.trim();
         !t.is_empty()
@@ -890,28 +969,53 @@ fn interleaved_scale(lines: &[Line]) -> Vec<usize> {
             continue;
         }
         g.sort_by(|&a, &b| lines[a].bbox.y0.total_cmp(&lines[b].bbox.y0));
-        let values: Vec<String> = g
-            .iter()
-            .map(|&i| lines[i].text.trim().to_string())
-            .collect();
-        if !crate::document::axis_scale(&values) {
-            continue;
-        }
-        let fs = g.iter().map(|&i| lines[i].font_size).fold(0.0f32, f32::max);
-        let (top, bottom) = (lines[g[0]].bbox.y0, lines[*g.last().unwrap()].bbox.y1);
-        // The text the scale stands among: larger lines within its height.
-        let among = lines.iter().enumerate().any(|(i, l)| {
-            !g.contains(&i)
-                && l.font_size > fs * 1.05
-                && l.bbox.y0 > top
-                && l.bbox.y1 < bottom
-                && l.text.chars().filter(|c| c.is_alphabetic()).count() > 1
-        });
-        if among {
-            out.extend(g);
+        let (scales, split) = scales_in(lines, &g);
+        for s in scales {
+            let fs = s.iter().map(|&i| lines[i].font_size).fold(0.0f32, f32::max);
+            let (top, bottom) = (lines[s[0]].bbox.y0, lines[*s.last().unwrap()].bbox.y1);
+            // The text the scale stands among: larger lines within its
+            // height. A scale split from others stands among running prose:
+            // a chart's own titles and labels between scales are no column
+            // it was taken into.
+            let among = lines.iter().enumerate().any(|(i, l)| {
+                !s.contains(&i)
+                    && l.font_size > fs * 1.05
+                    && l.bbox.y0 > top
+                    && l.bbox.y1 < bottom
+                    && l.text.chars().filter(|c| c.is_alphabetic()).count() > 1
+                    && (!split || crate::document::prose_line(&l.text))
+            });
+            if among {
+                out.push(s);
+            }
         }
     }
-    out.sort_unstable();
+    // One axis whose labels end at two edges (`0.5` beside `0.45`, set
+    // flush left) is grouped as two scales, each stepping by twice the
+    // axis's step: read as one where together they step evenly down the
+    // page. Two charts' scales side by side do not (`12 10 10 8 8 …`).
+    let mut i = 0;
+    while i < out.len() {
+        let partner = (i + 1..out.len()).find(|&j| {
+            let mut both: Vec<usize> = out[i].iter().chain(&out[j]).copied().collect();
+            both.sort_by(|&a, &b| lines[a].bbox.y0.total_cmp(&lines[b].bbox.y0));
+            let values: Vec<String> = both
+                .iter()
+                .map(|&k| lines[k].text.trim().to_string())
+                .collect();
+            crate::document::axis_scale(&values)
+        });
+        match partner {
+            Some(j) => {
+                let other = out.remove(j);
+                out[i].extend(other);
+            }
+            None => i += 1,
+        }
+    }
+    for s in &mut out {
+        s.sort_unstable();
+    }
     out
 }
 
@@ -5362,6 +5466,56 @@ mod tests {
     }
 
     #[test]
+    fn charts_set_one_under_another_beside_a_paragraph_read_each_scale_apart() {
+        // Two charts beside a column, their scales at one right edge: `30
+        // … 15` at one pitch, then `8 … 5` at another. Together they step
+        // unevenly; each reads as a scale, and no number is taken as the
+        // number of the line it stands beside.
+        let mut lines = Vec::new();
+        for i in 0..10 {
+            let y = 100.0 + 16.0 * i as f64;
+            let mut p = l(
+                "and the paragraph runs on beside the charts here",
+                318.0,
+                y,
+                10.0,
+            );
+            p.bbox.x1 = 540.0;
+            lines.push(p);
+        }
+        for (i, v) in ["30", "25", "20", "15"].iter().enumerate() {
+            lines.push(label(v, 278.0, 287.0, 104.0 + 11.0 * i as f64, 8.0));
+        }
+        for (i, v) in ["8", "7", "6", "5"].iter().enumerate() {
+            lines.push(label(v, 283.0, 287.0, 190.0 + 14.0 * i as f64, 8.0));
+        }
+        lines.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        let texts: Vec<String> = assemble(&lines, 1.2).iter().map(Block::text).collect();
+        assert_eq!(texts.len(), 3, "{texts:?}");
+        assert!(texts[0].starts_with("and the paragraph") && !texts[0].contains(char::is_numeric));
+        assert_eq!(texts[1], "30 25 20 15");
+        assert_eq!(texts[2], "8 7 6 5");
+        // Numbers counting down the page are a list's, not a scale's.
+        let mut list = Vec::new();
+        for i in 0..6 {
+            let y = 100.0 + 16.0 * i as f64;
+            let mut p = l(
+                "and the paragraph runs on beside the charts here",
+                318.0,
+                y,
+                10.0,
+            );
+            p.bbox.x1 = 540.0;
+            list.push(p);
+        }
+        for (i, v) in ["9", "1", "2", "3"].iter().enumerate() {
+            list.push(label(v, 283.0, 287.0, 104.0 + 22.0 * i as f64, 8.0));
+        }
+        list.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        assert_eq!(interleaved_scales(&list), Vec::<Vec<usize>>::new());
+    }
+
+    #[test]
     fn numbers_that_do_not_step_evenly_are_no_scale() {
         // Figures a column states among its text, no axis: left where
         // they stand.
@@ -5379,7 +5533,7 @@ mod tests {
             .enumerate()
             .map(|(i, v)| label(v, 274.0, 290.0, 100.0 + 14.0 * i as f64, 8.0))
             .collect();
-        assert_eq!(interleaved_scale(&alone), Vec::<usize>::new());
+        assert_eq!(interleaved_scales(&alone), Vec::<Vec<usize>>::new());
     }
 
     #[test]

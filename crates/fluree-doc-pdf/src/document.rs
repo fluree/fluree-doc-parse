@@ -1781,7 +1781,7 @@ const PROSE_WORDS: usize = 5;
 const PROSE_LOWER: f64 = 0.6;
 
 /// Does the cell read as a line of prose?
-fn prose_line(text: &str) -> bool {
+pub(crate) fn prose_line(text: &str) -> bool {
     let words: Vec<&str> = text.split_whitespace().collect();
     let lower = words
         .iter()

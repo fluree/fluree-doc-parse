@@ -922,6 +922,20 @@ legend). The prose is read back into its paragraphs, and the scale stays
 with the chart. A table's figures stand between its rules, never level with
 a stroke's end. A grid of a chart's own labels beside its scale, with no
 prose in it, is kept as it is.
+
+**A chart's scale taken into a column.** A scale set a few points from a
+column's edge is read with the column, its ticks falling between the prose's
+lines. Three numbers or more at one right edge, smaller than the text, that
+step evenly with the column's lines between them are a scale. A scale is
+read as one block after the paragraph it stood in, so its ticks neither cut
+the paragraph nor are read as the numbers of a list. Charts set one under
+another beside a column put their scales at one edge (`30 … −15`, then
+`8 … 1`), and together the numbers step unevenly. They are read as the runs
+that do step evenly, each with running prose between its ticks, counting up
+the page and set at one pitch. A list's numbers count down the page. Two
+runs that step evenly together are one axis whose labels end at two edges
+(`0.5` beside `0.45`), and are read as one scale. Two charts' scales side by
+side are read apart (`25 … 0`, then `1400 … 0`).
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows
