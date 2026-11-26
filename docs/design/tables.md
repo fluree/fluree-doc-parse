@@ -397,6 +397,17 @@ body text, a box laid out around paragraphs, a drawing's labels.
   on. A table's figures and codes do not, whatever its one description
   column does. Such a grid is dropped before the page's prose is read, so
   its text is read column by column.
+- **A bulleted list.** Its bullets line up down the page as a column does,
+  and its items beside them as another, so alignment reads a list as a
+  table of two columns, `• | Transfer pipettes`, often under a heading or a
+  running head set level with it. A grid read from alignment whose first
+  column holds nothing but bullets, at least two, below at most one first
+  row of other text, is a list, and is read as one. Bullets only, each
+  marker one character: a numbered or lettered list read back as prose sets
+  each item as a numbered line of its own, and a numbered line reads as a
+  numbered section, as a contract's `(b) "Board" means …` did. Those stay
+  as they are read until heading detection can tell a list's numbering
+  from a section's (#451).
 - **A box round paragraphs.** A ruled box whose one row under its labels
   holds a paragraph (sixty words or more in a cell) is a page laid out in
   columns, not a table.
@@ -1592,7 +1603,10 @@ paragraphs, which is right for a page ruled into a frame with a table set in
 one of its columns. But a band reading whose first column is nothing but list
 markers is the list in a cell, read cell by cell (`a) | Change the pump
 frit`), and taking it for the table pulled the settings beside the lists out
-into a table of their own.
+into a table of their own. Any bullet a list item opens with is such a
+marker, `●` and `■` as well as `•`: a competence framework whose outcomes
+are lists of `●` beside `Knowledge`, `Skills` and `Attitudes and Values`
+read as a table of its bullets, with its labels left out of it.
 
 Nor is a long cell a sign of a frame when the wider reading lies within one
 row of a ruled grid of four rows or more: that is a grid nested in the row
