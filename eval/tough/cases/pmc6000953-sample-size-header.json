@@ -28,6 +28,12 @@
         "column": "Overall",
         "row": "Skin/Soft Tissue"
       }
+    },
+    {
+      "id": "banner-no-heading",
+      "found": "2026-11-25",
+      "issue": "#367: the journal's `Open Access` banner label was a heading.",
+      "no_section": "Open Access"
     }
   ]
 }
