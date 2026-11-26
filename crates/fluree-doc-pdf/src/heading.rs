@@ -114,7 +114,15 @@ pub struct Heading {
     /// after: dropping one from a run would leave its neighbours standing.
     pub form_text: bool,
     style: Style,
+    /// How strongly the heading is set, against the document's other
+    /// headings: its size, weight, case, slant and face, as
+    /// [`normalize_levels`] orders them. Smaller is stronger.
+    rank: RankKey,
 }
+
+/// A heading style's place in the document's order of heading styles:
+/// size first, then weight, case, slant and face. Smaller is stronger.
+type RankKey = (i32, bool, bool, bool, usize);
 
 /// Normalize for matching outline titles against block text: outlines often
 /// differ from the rendered heading in whitespace and case, and sometimes omit
@@ -1741,6 +1749,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Title,
                     form_text: false,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1773,6 +1782,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Outline,
                     form_text: false,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1820,6 +1830,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Sequence,
                     form_text: false,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1856,6 +1867,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Numbering,
                     form_text: form,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1894,6 +1906,7 @@ pub fn detect_with_body(
                     evidence: Evidence::Bold,
                     form_text: form || lettering,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1921,6 +1934,7 @@ pub fn detect_with_body(
                     evidence: Evidence::FontSize,
                     form_text: form,
                     style: style_of(b),
+                    rank: RankKey::default(),
                 });
                 continue;
             }
@@ -1956,6 +1970,7 @@ pub fn detect_with_body(
                 evidence,
                 form_text: false,
                 style,
+                rank: RankKey::default(),
             });
             added = true;
         }
@@ -3584,6 +3599,7 @@ fn normalize_levels(hs: &mut [Heading], pages: &[Vec<Block>]) {
     let face = |h: &Heading| if variants { face(h) } else { None };
 
     for h in hs.iter_mut() {
+        h.rank = order((h.style, face(h).unwrap_or(0)));
         if !ranked(h) || h.evidence == Evidence::Title {
             continue;
         }
@@ -3592,6 +3608,196 @@ fn normalize_levels(hs: &mut [Heading], pages: &[Vec<Block>]) {
             h.level = (rank + 1).min(MAX_LEVEL);
         }
     }
+}
+
+/// What sets a heading's level once the document's headings are settled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LevelSource {
+    /// The document's title.
+    Title,
+    /// A bookmark, at its depth in the outline.
+    Outline(usize),
+    /// Its number, or its style: size, weight, case, slant and face.
+    Set,
+}
+
+/// The kind of one part of a section number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberKind {
+    Figure,
+    Numeral,
+    Letter,
+}
+
+/// A heading's level, as the document's settled headings set it.
+#[derive(Debug, Clone)]
+pub struct LevelInfo {
+    rank: RankKey,
+    source: LevelSource,
+    /// The kinds of its section number's parts (`2.1` two figures, `IV.A`
+    /// a numeral and a letter), where it opens on one.
+    number: Option<Vec<NumberKind>>,
+}
+
+impl Heading {
+    /// What sets this heading's level among the document's headings.
+    pub fn level_info(&self) -> LevelInfo {
+        let source = match self.evidence {
+            Evidence::Title => LevelSource::Title,
+            Evidence::Outline => LevelSource::Outline(self.level),
+            _ => LevelSource::Set,
+        };
+        LevelInfo {
+            rank: self.rank,
+            number: (source != LevelSource::Title)
+                .then(|| number_kinds(&self.text))
+                .flatten(),
+            source,
+        }
+    }
+}
+
+/// The kinds of a section number's parts, `None` without one.
+fn number_kinds(text: &str) -> Option<Vec<NumberKind>> {
+    numbering_depth(text)?;
+    let head: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '.')
+        .collect();
+    let kinds: Vec<NumberKind> = head
+        .split('.')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            if p.chars().all(|c| c.is_ascii_digit()) {
+                NumberKind::Figure
+            } else if p.len() > 1 || matches!(p, "I" | "V" | "X") {
+                NumberKind::Numeral
+            } else {
+                NumberKind::Letter
+            }
+        })
+        .collect();
+    (!kinds.is_empty()).then_some(kinds)
+}
+
+/// Whether the document's title heads its sections, which then start a
+/// level below it. It does not: the title is level 1 and so are the
+/// sections, as a Word document's title, held apart from its sections,
+/// sits over its `Heading 1`s, and as most outlines set a paper's sections
+/// at their first depth.
+const TITLE_HEADS_SECTIONS: bool = false;
+
+/// The levels of a document's settled headings, in reading order, each
+/// set against the headings open above it.
+///
+/// - An outline entry keeps its depth, the author's, counted from the
+///   outline's shallowest depth a printed heading takes: an outline that
+///   sets the paper's title over its sections, the title read as the
+///   title, has its sections at its second depth.
+/// - A numbered heading is a sibling of the nearest open heading numbered
+///   the same way at its depth or deeper, and a child of one a part
+///   shorter: `2.1` under `2`, `3` beside `2.4`'s `2`. A bookmarked
+///   heading counts by its number too.
+/// - Any other heading, and a numbered one with no heading numbered its
+///   way open, is a child of the nearest open heading set stronger than
+///   it and a sibling of the nearest set alike: a 10-K's notes, numbered
+///   afresh from `1.`, under its `Notes to consolidated financial
+///   statements`, and that under `Item 8`. A bookmarked heading is closed
+///   by none set stronger, only by another bookmark, by its number or by
+///   one set alike: the outline's span is the author's.
+///
+/// Levels run as deep as the headings nest, to [`MAX_LEVEL`], however many
+/// styles the document sets them in. `fallback` is a heading's level where
+/// nothing is known of it.
+pub fn settle_levels(hs: &[(Option<&LevelInfo>, usize)]) -> Vec<usize> {
+    struct Open<'a> {
+        level: usize,
+        info: Option<&'a LevelInfo>,
+    }
+    let top = hs
+        .iter()
+        .filter_map(|(i, _)| match i.map(|i| &i.source) {
+            Some(LevelSource::Outline(d)) => Some(*d),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(1);
+    let mut stack: Vec<Open> = Vec::new();
+    // Levels below the title, where it heads the sections.
+    let mut under_title = 0;
+    let mut out = Vec::with_capacity(hs.len());
+    for &(info, fallback) in hs {
+        let level = match info {
+            None => fallback,
+            Some(LevelInfo {
+                source: LevelSource::Title,
+                ..
+            }) => {
+                stack.clear();
+                if TITLE_HEADS_SECTIONS {
+                    under_title = 1;
+                    stack.push(Open { level: 1, info });
+                }
+                out.push(1);
+                continue;
+            }
+            Some(LevelInfo {
+                source: LevelSource::Outline(depth),
+                ..
+            }) => depth + 1 - top.min(*depth) + under_title,
+            Some(info) => {
+                // The nearest open heading numbered the same way, with the
+                // parts of its number and of this one's.
+                let numbered = info.number.as_ref().and_then(|own| {
+                    stack.iter().rev().find_map(|o| {
+                        let open = o.info?.number.as_ref()?;
+                        same_scheme(open, own).then_some((o.level, open.len(), own.len()))
+                    })
+                });
+                match numbered {
+                    Some((level, open, own)) if open >= own => level.saturating_sub(open - own),
+                    Some((level, open, own)) => level + own - open,
+                    None => {
+                        let mut level = 1 + under_title;
+                        while let Some(o) = stack.last() {
+                            let Some(open) = o.info else {
+                                level = o.level + 1;
+                                break;
+                            };
+                            if open.rank == info.rank {
+                                level = o.level;
+                                break;
+                            }
+                            if open.rank < info.rank
+                                || matches!(
+                                    open.source,
+                                    LevelSource::Outline(_) | LevelSource::Title
+                                )
+                            {
+                                level = o.level + 1;
+                                break;
+                            }
+                            stack.pop();
+                        }
+                        level
+                    }
+                }
+            }
+        }
+        .clamp(1 + under_title, MAX_LEVEL);
+        while stack.last().is_some_and(|o| o.level >= level) {
+            stack.pop();
+        }
+        stack.push(Open { level, info });
+        out.push(level);
+    }
+    out
+}
+
+/// Two section numbers are numbered the same way where their shared parts
+/// are of one kind each: `2.1` under `2`, `B.3` under `B`.
+fn same_scheme(a: &[NumberKind], b: &[NumberKind]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x == y)
 }
 
 /// Share by which one face's x-height must fall short of another's, at one
@@ -3999,6 +4205,92 @@ mod tests {
         assert!(beside_a_label(&page, 1) && named_value(&page[1].text()));
         // A step's label beside the step before it is no value.
         assert!(!named_value("STEP 4:"));
+    }
+
+    #[test]
+    fn levels_are_set_against_the_headings_open_above() {
+        // A heading set at `size` points, bold, numbered by its text where
+        // it opens on a number.
+        let at = |source: LevelSource, size: i32, text: &str| LevelInfo {
+            rank: (-size * 4, false, false, false, 0),
+            source,
+            number: number_kinds(text),
+        };
+        let set = |size: i32, text: &str| at(LevelSource::Set, size, text);
+        let levels = |hs: &[LevelInfo]| {
+            let hs: Vec<(Option<&LevelInfo>, usize)> = hs.iter().map(|h| (Some(h), 1)).collect();
+            settle_levels(&hs)
+        };
+
+        // Each style a level under the one before, however many there
+        // are, to six; one set alike is a sibling, one set stronger closes
+        // those under it.
+        let ladder: Vec<LevelInfo> = [20, 16, 14, 12, 11, 10, 9, 14, 12]
+            .iter()
+            .map(|&size| set(size, "Heading"))
+            .collect();
+        assert_eq!(levels(&ladder), [1, 2, 3, 4, 5, 6, 6, 3, 4]);
+
+        // The title heads no section: the sections start beside it.
+        let titled = [
+            at(LevelSource::Title, 24, "A Paper"),
+            set(12, "Introduction"),
+            set(10, "Scope"),
+        ];
+        assert_eq!(levels(&titled), [1, 1, 2]);
+
+        // A 10-K: its notes, numbered afresh from `1.`, under its notes'
+        // title, under its bookmarked Item; a note's topics under it.
+        let annual = [
+            at(LevelSource::Outline(1), 20, "PART II"),
+            at(LevelSource::Outline(2), 18, "Item 8. Financial Statements"),
+            set(16, "Notes to Financial Statements"),
+            set(13, "1. Summary of Accounting Policies"),
+            set(12, "Principles of Consolidation"),
+            set(10, "Recently Adopted Standards"),
+            set(13, "2. Cash and Equivalents"),
+            set(13, "2.1 Restricted Cash"),
+            set(13, "3. Inventories"),
+            at(
+                LevelSource::Outline(2),
+                18,
+                "Item 9. Changes in Accountants",
+            ),
+        ];
+        assert_eq!(levels(&annual), [1, 2, 3, 4, 5, 6, 4, 5, 4, 2]);
+
+        // An outline that sets the title at its first depth has its
+        // sections at its second: they are level 1 beside the title.
+        let outlined = [
+            at(LevelSource::Title, 20, "A Paper"),
+            at(LevelSource::Outline(2), 12, "INTRODUCTION"),
+            at(LevelSource::Outline(3), 11, "Participants"),
+            at(LevelSource::Outline(2), 12, "METHODS"),
+        ];
+        assert_eq!(levels(&outlined), [1, 1, 2, 1]);
+
+        // A bookmarked section in small capitals is closed by none set
+        // larger, only by another numbered its way: an agreement's 10pt
+        // bold clauses under its 8pt sections.
+        let agreement = [
+            at(LevelSource::Outline(1), 8, "2. ASSIGNMENT OF INVENTIONS."),
+            set(10, "2.2 Excluded Inventions."),
+            set(10, "Inventions"),
+            set(10, "2.9 Software Code."),
+            set(8, "5. NO SOLICITATION."),
+            set(10, "5.1 Employees and Consultants."),
+        ];
+        assert_eq!(levels(&agreement), [1, 2, 2, 2, 1, 2]);
+
+        // Set alike, a heading is a bookmarked heading's sibling.
+        let alike = [
+            at(LevelSource::Outline(1), 10, "Abstract"),
+            set(10, "Background"),
+        ];
+        assert_eq!(levels(&alike), [1, 1]);
+
+        // A heading nothing is known of keeps its level.
+        assert_eq!(settle_levels(&[(None, 3)]), [3]);
     }
 
     #[test]

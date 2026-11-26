@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "fed-beigebook-2023-01.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/BeigeBook_20230118.pdf",
+    "sha256": "cb7be8a6ea4382d1ebd46187ed1f203786b0f7a0348f9b4a8d38e823835b0ed3",
+    "about": "Federal Reserve Beige Book, January 2023. Each district's report opens on `Summary of Economic Activity` in 16pt bold and runs on through its topics in 12pt bold, under the district's bookmarked name."
+  },
+  "notes": [
+    "2026-11-26 (#393): levels came from one rank of the document's heading styles, and the styles past the fifth all clamped to h6: the summary was h4 and its topics h6, with h5 unused, wherever the district's name stood."
+  ],
+  "checks": [
+    {
+      "id": "summary-under-its-district",
+      "found": "2026-11-26",
+      "issue": "#393: the summary was h4 directly under the district's h1.",
+      "section": {
+        "title": "Summary of Economic Activity",
+        "level": 2,
+        "within": "Federal Reserve Bank of Boston"
+      }
+    },
+    {
+      "id": "topic-under-the-summary",
+      "found": "2026-11-26",
+      "issue": "#393: the district's topics were h6 at the foot of a level ladder with a step missing.",
+      "section": {
+        "title": "Retail and Tourism",
+        "level": 3,
+        "within": "Summary of Economic Activity"
+      }
+    }
+  ]
+}

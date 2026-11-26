@@ -468,6 +468,11 @@ struct TableFrame {
     bold: bool,
 }
 
+/// What a heading element's id opens with until elements are numbered,
+/// then its page and block: `\0h3:12`. A NUL opens no id an element
+/// is given.
+const HEADING_BLOCK: &str = "\0h";
+
 /// How far apart, in points, two parts' column edges may be drawn and still
 /// be one table's columns. A table the page break splits is drawn by one
 /// layout on both pages, so its edges agree to within a rule's stroke.
@@ -5080,6 +5085,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let mut is_heading: std::collections::HashMap<(usize, usize), (usize, Evidence)> =
         Default::default();
     let mut form_text: std::collections::HashSet<(usize, usize)> = Default::default();
+    let level_info: std::collections::HashMap<(usize, usize), heading::LevelInfo> = headings
+        .iter()
+        .map(|h| ((h.page, h.block_index), h.level_info()))
+        .collect();
     for h in &headings {
         is_heading.insert((h.page, h.block_index), (h.level, h.evidence));
         if h.form_text {
@@ -5095,6 +5104,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         .count();
 
     let mut n = 0usize;
+    // Each heading's block, by its element's id.
+    let mut heading_block: std::collections::HashMap<String, (usize, usize)> = Default::default();
     let mut tables = 0usize;
     // Each table's column edges and whether it opens with a styled row,
     // for joining a table the page break split.
@@ -5282,6 +5293,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 bbox: Some(b.bbox),
                 level,
                 figure: figure_of,
+                // A heading names its block until elements are numbered,
+                // for its level to be settled once the passes below have
+                // read some headings as text.
+                id: if kind == "doco:SectionTitle" {
+                    format!("{HEADING_BLOCK}{pi}:{block_idx}")
+                } else {
+                    String::new()
+                },
                 ..Element::new(kind, text, "rust", evidence)
             });
         }
@@ -5989,7 +6008,16 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         }
         for mut element in interleave_tables(page_elements, table_elements) {
             n += 1;
-            element.id = format!("elem-{n:05}");
+            let id = format!("elem-{n:05}");
+            if let Some(block) = element
+                .id
+                .strip_prefix(HEADING_BLOCK)
+                .and_then(|r| r.split_once(':'))
+                .and_then(|(p, b)| Some((p.parse::<usize>().ok()?, b.parse::<usize>().ok()?)))
+            {
+                heading_block.insert(id.clone(), block);
+            }
+            element.id = id;
             elements.push(element);
         }
     }
@@ -6003,6 +6031,27 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     read_entry_lists(&mut elements);
     read_contents_rows(&mut elements);
     read_continued_heads(&mut elements);
+    // The levels of the headings that stand, each against those open above
+    // it: a pass above may have read a heading as text.
+    {
+        let at: Vec<usize> = (0..elements.len())
+            .filter(|&i| elements[i].kind == "doco:SectionTitle")
+            .collect();
+        let hs: Vec<(Option<&heading::LevelInfo>, usize)> = at
+            .iter()
+            .map(|&i| {
+                let e = &elements[i];
+                (
+                    heading_block.get(&e.id).and_then(|k| level_info.get(k)),
+                    e.level.unwrap_or(1),
+                )
+            })
+            .collect();
+        let levels = heading::settle_levels(&hs);
+        for (i, level) in at.into_iter().zip(levels) {
+            elements[i].level = Some(level);
+        }
+    }
     settle_cell_breaks(
         &mut elements,
         flat_lines
