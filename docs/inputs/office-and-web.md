@@ -39,7 +39,8 @@ carries, multi-level labels (`%1.%2.%3.`), decimal, letter and roman formats,
 legal numbering, where a list restarts or carries on, and a numbered
 paragraph with no text, such as a step column's `1.` and `2.`. Bullets add no
 text. Formats spelled out in words (`First`, `Second`) are written as
-numbers.
+numbers. A list item's level, on the paragraph or from its style, is its
+`depth`, so a list under an item nests inside it.
 
 A document whose outline is only in its numbering is read for it. Many
 procedures use no heading style: `1. SCOPE` and `4.2. Sample Handling` are
@@ -207,7 +208,8 @@ invite consumers to treat a deck like a scanned page.
 A shape whose placeholder type is `title` or `ctrTitle` becomes the slide
 heading, except the `ctrTitle` on the first slide — the title slide's title —
 which is the deck's `doco:Title`; `a:tbl` is a real table with `gridSpan` / `rowSpan` merges;
-paragraphs with a bullet character or a non-zero outline level are list items.
+paragraphs with a bullet character or a non-zero outline level are list items,
+nested by their outline level (`lvl`).
 
 **Charts become tables.** Values come from the cached `c:strCache` /
 `c:numCache` blocks — what the chart actually plots — because the `c:f`
@@ -347,6 +349,11 @@ Nesting resolves **innermost wins**. A `<p>` inside a `<td>` inside a
 the text, the same double-emission the PDF engine guards against when a grid's
 glyphs would also become prose.
 
+A `<ul>` or `<ol>` inside an `<li>` is a list nested in that item: its items
+are one deeper (`depth`). So is a list set straight inside another list,
+outside any item, as hand-written markup often has it and browsers show it.
+A list in a table's cell starts again at the top.
+
 Text set straight in a container, with no `<p>` around it, is read the way a
 browser lays it out: each run of it between blocks is a paragraph, and two
 `<br>` in a row end one. That is how pages built from `<div>`s, and nearly
@@ -467,8 +474,8 @@ Infallible: HTML is defined so that every byte sequence parses.
 fdoc convert notes.md -f doco
 ```
 
-The most direct mapping. A heading states its level, a list states its items,
-a table states where its header ends. Where the PDF engine reports a
+The most direct mapping. A heading states its level, a list states its items
+and how they nest, and a table states where its header ends. Where the PDF engine reports a
 *measurement* — `header_rows` inferred from shading and value types — this
 reports a *fact*.
 

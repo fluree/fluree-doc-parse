@@ -139,6 +139,16 @@ class Reading:
             for n in graph
             if n.get("@type") == "doco:List"
         ]
+        # Each list nested in an item, under that item's string: the items
+        # of every list the item contains.
+        self.nested = defaultdict(list)
+        for n in graph:
+            for c in n.get("po:contains", []):
+                sub = self.nodes.get(c, {})
+                if n.get("doc:xhtmlTag") == "li" and sub.get("@type") == "doco:List":
+                    self.nested[n.get("nif:isString", "")].append(
+                        [self.nodes.get(k, {}).get("nif:isString") for k in sub.get("po:contains", [])]
+                    )
         # Each page's printed number, by its place in the file from 1.
         pages = next((n["doc:pages"]["@value"] for n in graph if "doc:pages" in n), [])
         self.folios = {p["pageIndex"] + 1: p.get("folio") for p in pages}
@@ -238,6 +248,18 @@ def run_check(check, reading):
             return True, None
         parts = [items for items in reading.lists if any(w in items for w in want)]
         return False, f"in {len(parts)} lists"
+    if "nested" in check:
+        # A list nested in an item whose string begins with `under`, holding
+        # all these items: a sub-list set under its parent's text.
+        want = check["nested"]
+        lists = [
+            items
+            for item, subs in reading.nested.items()
+            if item.startswith(want["under"])
+            for items in subs
+        ]
+        ok = any(all(w in items for w in want["holds"]) for items in lists)
+        return ok, None if ok else f"{len(lists)} lists nested under it"
     if "no_column_header" in check:
         # Anywhere in the name: under a stacked header a row read as header
         # is one label in a path (`A / B / C`).

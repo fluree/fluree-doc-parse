@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "hse-l153.pdf",
+    "url": "https://www.hse.gov.uk/pubns/priced/l153.pdf",
+    "sha256": "b89e9812cd6756cc245ea0c7926179ad13d5b020884cc74fb2dd00cd5fb6d80e",
+    "about": "HSE L153, Managing health and safety in construction (CDM 2015). Its guidance numbers its paragraphs, and some close on a colon over lettered clauses."
+  },
+  "notes": [
+    "#396: a numbered paragraph introducing its lettered clauses was a section at depth 1, h1, so the rest of its page nested under it."
+  ],
+  "checks": [
+    {
+      "id": "lead-in-no-heading",
+      "found": "2026-11-26",
+      "issue": "#396: the lead-in was an h1.",
+      "no_section": "72 A designer is an organisation or individual, who:"
+    }
+  ]
+}

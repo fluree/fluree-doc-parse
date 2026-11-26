@@ -1,0 +1,43 @@
+{
+  "document": {
+    "file": "pmc2747013.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2747013/",
+    "sha256": "b027cb9ffb8f6575bec81284935ca1d3226c360d9882399e7f7e726f53bb8dc6",
+    "about": "PLoS ONE (2009) article, 'New Insights into the Diversity of Marine Picoeukaryotes', PMC2747013, set by a journal production system that draws each accented letter as the letter and a spacing accent placed over it (`e` then `´`), and an accented i as a dotless `ı` under the accent. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#345): every accent was read as a character of its own after or before its letter, `Balague´`, `Cie`ncies`, `Lo´pez Garc´ıa`, and the raised accent after `Balague` parted the author's note number from the name."
+  ],
+  "checks": [
+    {
+      "id": "acute-composed-with-its-letter",
+      "found": "2026-11-25",
+      "issue": "#345: `Vanessa Balague´` in the author line.",
+      "text": "Vanessa Balagué"
+    },
+    {
+      "id": "grave-composed-with-its-letter",
+      "found": "2026-11-25",
+      "issue": "#345: the affiliation read `Institut de Cie`ncies del Mar`.",
+      "text": "Institut de Ciències del Mar"
+    },
+    {
+      "id": "two-accents-in-one-word",
+      "found": "2026-11-25",
+      "issue": "#345: `Pale´oOce´ans`.",
+      "text": "Evolution du Plancton et PaléoOcéans"
+    },
+    {
+      "id": "accent-over-dotless-i-is-an-accented-i",
+      "found": "2026-11-25",
+      "issue": "#345: reference 3 read `Lo´pez Garc´ıa`, the acute before the dotless i it stands over.",
+      "text": "López García"
+    },
+    {
+      "id": "no-spacing-acute-left",
+      "found": "2026-11-25",
+      "issue": "#345: the author line, the citation and the references each read `Balague´`.",
+      "no_text": "Balague´"
+    }
+  ]
+}

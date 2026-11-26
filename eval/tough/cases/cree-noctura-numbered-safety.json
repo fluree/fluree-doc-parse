@@ -35,6 +35,20 @@
         "text": "3 de 3"
       },
       "count": 0
+    },
+    {
+      "id": "french-safety-heading-one-label",
+      "found": "2026-11-25",
+      "issue": "#380: the French safety heading, set over two lines beside the instructions' smaller text, was read as two headings, `MESURES DE` and `SÉCURITÉ IMPORTANTES`.",
+      "section": {
+        "title": "MESURES DE SÉCURITÉ IMPORTANTES"
+      }
+    },
+    {
+      "id": "french-safety-heading-not-split",
+      "found": "2026-11-25",
+      "issue": "#380: as above.",
+      "no_section": "SÉCURITÉ IMPORTANTES"
     }
   ]
 }
