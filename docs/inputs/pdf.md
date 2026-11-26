@@ -547,6 +547,24 @@ full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
 
+The columns of running text in such a region read one after the other, even
+where a few lines run across their gutter:
+- **A row or two at the region's top or foot.** A title over the columns,
+  wrapped to a second line, or the page's number centred under them, is read
+  apart: the title before the columns, the number after. Its lines must cross
+  the gutter the rest stand at. A title set bold or larger than the columns
+  takes the line under it when that line continues it. The line must be set
+  the same, start under the title (or hang under its text past a number) and
+  sit a line's leading down, as in `4. Taux de fécondité … conjoncturel` over
+  `moyen à l'accouchement depuis 2005`.
+- **Bands under or over a figure.** A figure set across the columns, with its
+  caption across both, leaves no gutter through the whole region. The
+  caption's lines part the region into bands, and each band reads at a gutter
+  of its own. The caption's lines stay together, with a short last line that
+  continues them, alone on its row. A band whose text does not run on as
+  prose, such as a figure's labels or a chart's ticks, is left as it was. A
+  region in which no band has a gutter is read as before.
+
 **Blocks side by side.** Two blocks of text set side by side within one
 column's stretch are each read whole, the left first, or the right where it
 starts a line or more higher: an invoice's seller beside its customer, an
