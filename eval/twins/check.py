@@ -5,8 +5,9 @@ For each set make_twins.py wrote, fdoc converts the born-digital PDFs (their
 text layer, no OCR) and the images (by OCR, `--ocr oar-ocr`), both to
 Markdown, and counts on each: the headings set larger that read as headings,
 one-word and longer apart, and the short lines at body size that read as
-headings though they are not. The born-digital count is what the image is
-held to.
+headings though they are not, each beside what the born-digital page
+reads. The baseline holds the image's counts; the born-digital count is
+what they are read against, not a gate.
 
   eval/twins/check.py --models DIR                        # every set, about twelve minutes at -j4
   eval/twins/check.py --models DIR --sets plain-1.2 fax   # some sets

@@ -62,9 +62,9 @@
    "word": 88
   },
   "italic@200": {
-   "false": 4,
+   "false": 0,
    "long": 106,
-   "other": 1,
+   "other": 0,
    "word": 87
   },
   "jpeg@200": {
@@ -120,6 +120,12 @@
    "long": 103,
    "other": 0,
    "word": 84
+  },
+  "punct@200": {
+   "false": 0,
+   "long": 103,
+   "other": 0,
+   "word": 88
   },
   "red-ink@200": {
    "false": 0,

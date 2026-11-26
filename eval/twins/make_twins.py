@@ -26,6 +26,8 @@ Sets, each written to corpus/<set>/ as <page>.pdf and <page>-<dpi>.png:
   underline, boxed, strike, superscript, italic
                          headings a fifth larger with rules, note marks or
                          italic faces drawn on the page, at 200 dpi
+  punct                  headings a fifth larger, lines with commas, brackets
+                         and `Q`s, marks that reach under the baseline, at 200 dpi
   blue-ink, red-ink, grey-ink, inverted, white-on-blue, yellow-paper,
   gradient, photo-bg, noise, blur, fax, skew, jpeg
                          plain-1.2's 200 dpi images recoloured or degraded
@@ -54,6 +56,13 @@ WORDS = ("the account statement shows every payment made during the period "
          "and any balance left unpaid after the due date is charged interest "
          "at the rate set out in your agreement please keep this notice with "
          "your records and write to the billing desk with any question").split()
+# The `punct` set's: marks that reach under the baseline (a comma, a
+# bracket, a `Q`'s tail) in lines at body size, which must not read them
+# taller.
+SHORT_PUNCT = ["Total (USD)", "Notes (cont.)", "Q1 Revenue", "Paid, in full",
+               "Fees (net)", "Quarter, year", "Balance [est.]", "Queries"]
+WORDS_PUNCT = WORDS + ["(net)", "account,", "Quarter", "date;", "(see", "notes)",
+                       "query,", "[a]"]
 UPRIGHT = {"helv": "Helvetica", "times": "Times-Roman", "cour": "Courier"}
 BOLD = {"Helvetica": "Helvetica-Bold", "Times-Roman": "Times-Bold", "Courier": "Courier-Bold"}
 ITALIC = {"helv": "Helvetica-Oblique", "times": "Times-Italic", "cour": "Courier-Oblique"}
@@ -109,6 +118,7 @@ def pages(scale, mode, seed=11):
     headings and short lines."""
     r = random.Random(seed)
     fonts = ITALIC if mode == "italic" else UPRIGHT
+    short, words = (SHORT_PUNCT, WORDS_PUNCT) if mode == "punct" else (SHORT, WORDS)
     for fam, font in fonts.items():
         for pt in (10, 11, 12):
             for variant in range(3):
@@ -125,15 +135,15 @@ def pages(scale, mode, seed=11):
                         y -= pt * scale * 1.3
                     elif kind == 1:
                         for _ in range(r.randint(2, 4)):
-                            line = " ".join(r.choice(WORDS) for _ in range(r.randint(9, 12)))
+                            line = " ".join(r.choice(words) for _ in range(r.randint(9, 12)))
                             lines.append((x0, y, pt, line.capitalize()))
                             y -= pt * 1.3
                     else:
-                        s = r.choice(SHORT)
+                        s = r.choice(short)
                         lines.append((x0, y, pt, s))
                         shorts.append(s)
                         y -= pt * 1.3
-                        line = " ".join(r.choice(WORDS) for _ in range(r.randint(9, 12)))
+                        line = " ".join(r.choice(words) for _ in range(r.randint(9, 12)))
                         lines.append((x0, y, pt, line.capitalize()))
                         y -= pt * 1.3
                     k += 1
@@ -198,7 +208,7 @@ def main():
     plain = write_set(out, "plain-1.2", 1.2, "plain", (150, 200, 300))
     write_set(out, "plain-1.3", 1.3, "plain", (150, 200, 300))
     write_set(out, "bold", 1.0, "bold", (150, 200, 300))
-    for mode in ("underline", "boxed", "strike", "superscript", "italic"):
+    for mode in ("underline", "boxed", "strike", "superscript", "italic", "punct"):
         write_set(out, mode, 1.2, mode, (200,))
     rng = np.random.default_rng(5)
     made = {}

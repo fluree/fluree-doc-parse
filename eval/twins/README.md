@@ -34,6 +34,7 @@ go by only in its pixels.
 | `underline`, `strike`, `boxed` | every line underlined; the prose struck through; a box drawn round each short line (200 dpi) |
 | `superscript` | a raised `1` after every line, which OCR reads into it (200 dpi) |
 | `italic` | the oblique and italic faces (200 dpi) |
+| `punct` | short lines and prose with commas, brackets and `Q`s, whose marks reach under the baseline (`Total (USD)`, `Q1 Revenue`; 200 dpi) |
 | `blue-ink`, `red-ink`, `grey-ink` | `plain-1.2` at 200 dpi in coloured or faint ink |
 | `inverted`, `white-on-blue` | light text on a dark ground |
 | `yellow-paper`, `gradient`, `photo-bg` | a coloured paper, a ground that runs from white to grey, a soft photo-like ground |

@@ -1188,6 +1188,10 @@ const WEIGHT_MIN_BAND_PX: f64 = 12.0;
 /// The weight OCR gives a word it reads as bold (an OpenType weight class).
 const BOLD_WEIGHT: u32 = 700;
 
+/// The weight a word its ink weighs and finds no heavier than its
+/// reading's lines in its band is given.
+const REGULAR_WEIGHT: u32 = 400;
+
 /// Weigh the words of one reading by their ink: a word is bold when its
 /// stems, over its type size in pixels, and the ink of its band both stand
 /// well over the median of the reading's lines of three words or more
@@ -1240,15 +1244,18 @@ fn weigh_by_ink(placed: &mut [Option<Placed>]) {
             continue;
         };
         let letters = w.text.chars().filter(|c| c.is_alphanumeric()).count();
-        if stems > 0.0
-            && density > 0.0
-            && band >= WEIGHT_MIN_BAND_PX
-            && letters >= 3
-            && s / stems > BOLD_STEM
-            && d / density > BOLD_DENSITY
-        {
-            w.weight = Some(BOLD_WEIGHT);
+        if stems <= 0.0 || density <= 0.0 || band < WEIGHT_MIN_BAND_PX || letters < 3 {
+            continue;
         }
+        // A word weighed and not bold is regular, said so: a table's header
+        // is told by the share of its weighed cells that are bold, and a word
+        // left unweighed there counts for nothing, so one bold word would
+        // make a row of unweighed ones bold.
+        w.weight = Some(if s / stems > BOLD_STEM && d / density > BOLD_DENSITY {
+            BOLD_WEIGHT
+        } else {
+            REGULAR_WEIGHT
+        });
     }
 }
 
@@ -8662,15 +8669,15 @@ mod tests {
         assert_eq!(
             weights,
             [
-                None,
-                None,
-                None,
-                None,
-                None,
+                Some(REGULAR_WEIGHT),
+                Some(REGULAR_WEIGHT),
+                Some(REGULAR_WEIGHT),
+                Some(REGULAR_WEIGHT),
+                Some(REGULAR_WEIGHT),
                 Some(BOLD_WEIGHT),
                 None,
                 None,
-                None
+                Some(REGULAR_WEIGHT)
             ]
         );
     }
@@ -8687,7 +8694,7 @@ mod tests {
         weigh_by_ink(&mut placed);
         let bold = placed
             .iter()
-            .filter(|w| w.as_ref().unwrap().weight.is_some())
+            .filter(|w| w.as_ref().unwrap().weight == Some(BOLD_WEIGHT))
             .count();
         assert_eq!(bold, 6);
     }
@@ -8756,7 +8763,7 @@ mod tests {
                 .weight
         };
         assert_eq!(weight("P"), Some(BOLD_WEIGHT));
-        assert_eq!(weight("L"), None);
+        assert_eq!(weight("L"), Some(REGULAR_WEIGHT));
     }
 
     #[test]

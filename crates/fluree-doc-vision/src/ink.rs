@@ -146,7 +146,7 @@ fn note_mark(text: &str) -> Vec<char> {
 }
 
 /// Which line the highest of `text`'s letters reach, if any.
-pub fn top_line(text: &str) -> Option<TopLine> {
+fn top_line(text: &str) -> Option<TopLine> {
     if text.chars().any(ascends) {
         Some(TopLine::Ascender)
     } else if text.chars().any(|c| c.is_uppercase() || c.is_ascii_digit()) {
@@ -241,7 +241,10 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     // lowest level a stem's worth of columns reaches: capitals' arms and
     // bars (`T Y V W`, an `A`'s bar) stop over the baseline in more columns
     // than their feet stand on it, and their median, a quarter of the way
-    // up `WARRANTY`, read its capitals a quarter short.
+    // up `WARRANTY`, read its capitals a quarter short. A stem's worth, or a
+    // sixth of the columns in a long word: a comma, a bracket or a `Q`'s
+    // tail (Courier's: a tenth of `Queries`) reaches under the baseline in
+    // fewer columns, the feet of a word's letters in a quarter or more.
     let base = if drop_share == 0.0 {
         let guess = quantile(&bots, 0.5);
         let window = 0.1 * (guess - quantile(&tops, 0.5)).max(1.0);
@@ -249,7 +252,10 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
         low.sort_by(|a, b| b.total_cmp(a));
         low.iter()
             .copied()
-            .find(|&b| low.iter().filter(|&&v| v <= b && v >= b - window).count() >= STEM_COLUMNS)
+            .find(|&b| {
+                low.iter().filter(|&&v| v <= b && v >= b - window).count()
+                    >= STEM_COLUMNS.max(low.len() / 6)
+            })
             .map(|b| {
                 let near: Vec<f64> = low
                     .iter()
@@ -431,8 +437,9 @@ fn weight(c: &Crop, base: f64, h: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
 /// about 60 rows.
 const MAX_ROWS: f64 = 160.0;
 
-/// Most cells a crop holds, about 24 MB of colours: a box longer than that
-/// at [`MAX_ROWS`] is not measured.
+/// Most cells a crop holds, about 24 MB of colours and 60 MB at the peak of
+/// the measure (the distances, the levels and the masks): a box longer than
+/// that at [`MAX_ROWS`] is not measured.
 const MAX_CELLS: f64 = 2.0e6;
 
 /// The box's region set level, a sixth of its height more above and below,
@@ -557,9 +564,10 @@ fn levels(colour: &[[f32; 3]], w: usize, h: usize) -> Crop {
 }
 
 /// The crop with its specks of noise taken out: inked pixels with at most
-/// one inked neighbour. A stroke's pixels all have more, so no letter loses
-/// any (a median over the crop rounds a stem's corners off, and with them a
-/// pixel of its height).
+/// one inked neighbour. A stroke's pixels have more, but for the tip of one a
+/// pixel wide (a fax's, Courier's at 150 dpi), which loses that pixel: the
+/// same on every word of a reading, where a median over the crop rounds every
+/// stem's corners off, and with them a pixel of its height.
 fn despeckled(mut c: Crop) -> Crop {
     let on: Vec<bool> = c.ink.iter().map(|&v| v > ON).collect();
     let at = |x: isize, y: isize| {
@@ -1179,6 +1187,35 @@ mod tests {
             "Hon hon hon hon hon hon",
         )
         .unwrap();
+        assert!(close(ink.top, 20.0), "{ink:?}");
+        assert!(close(ink.x_height, 14.0), "{ink:?}");
+    }
+
+    #[test]
+    fn a_comma_under_the_baseline_does_not_set_it() {
+        // `Hon hon hon hon, hon`: the comma's tail, 4 columns wide, reaches
+        // 6 px under the baseline; the letters' feet stand on it.
+        let mut strokes = Vec::new();
+        for k in 0..5 {
+            let dx = 45.0 * f64::from(k);
+            strokes.extend(hon().iter().map(|&(a, b, c, d)| (a + dx, b, c + dx, d)));
+        }
+        strokes.push((168.0, -6.0, 172.0, 3.0));
+        let img = draw_at(&strokes, 0, 255, 0.0, (400, 80), (20.0, 50.0));
+        let ink = measure(&img, [16.0, 26.0, 260.0, 60.0], 0.0, "Hon hon hon hon, hon").unwrap();
+        assert!(close(ink.top, 20.0), "{ink:?}");
+        assert!(close(ink.x_height, 14.0), "{ink:?}");
+    }
+
+    #[test]
+    fn a_tail_under_a_tenth_of_the_word_does_not_set_the_baseline() {
+        // `Hon hon`, a `Q`'s tail under its first letters (Courier's is a
+        // tenth of `Queries`): 8 columns of some 70, 4 px under.
+        let mut strokes = hon();
+        strokes.extend(hon().iter().map(|&(a, b, c, d)| (a + 45.0, b, c + 45.0, d)));
+        strokes.push((0.0, -4.0, 8.0, 0.0));
+        let img = draw_at(&strokes, 0, 255, 0.0, (300, 80), (20.0, 50.0));
+        let ink = measure(&img, [16.0, 26.0, 100.0, 60.0], 0.0, "Hon hon").unwrap();
         assert!(close(ink.top, 20.0), "{ink:?}");
         assert!(close(ink.x_height, 14.0), "{ink:?}");
     }

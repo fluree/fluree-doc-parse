@@ -53,13 +53,13 @@ misread.
 | `strike` | 56 / 88 | 88 | 69 / 106 | 105 | 2 / 173 | 0 | 3 | 0 |
 | `boxed` | 73 / 88 | 81 | 56 / 106 | 102 | 27 / 173 | 3 | 3 | 3 |
 | `superscript` | 74 / 88 | 84 | 72 / 106 | 104 | 20 / 173 | 1 | 7 | 4 |
-| `italic` | 56 / 88 | 87 | 68 / 106 | 106 | 1 / 173 | 4 | 0 | 1 |
-| **all** | **1,274 / 2,379** | **2,269** | **1,672 / 2,853** | **2,741** | **148 / 4,677** | **9** | **63** | **14** |
+| `italic` | 56 / 88 | 87 | 68 / 106 | 106 | 1 / 173 | 0 | 0 | 0 |
+| `punct` | 48 / 89 | 88 | 62 / 103 | 103 | 0 / 168 | 0 | 2 | 0 |
+| **all** | **1,322 / 2,468** | **2,357** | **1,734 / 2,956** | **2,844** | **148 / 4,845** | **5** | **65** | **13** |
 
 The born-digital pages read every heading of every set but some of `bold`'s
-(87 of 93 one-word headings, 103 of 106 lines) and two of `superscript`'s
-(the mark ends their text), and two other lines as headings on each of
-those two sets.
+(87 of 93 one-word headings, 103 of 106 lines), and two other lines as
+headings there.
 
 - **A box says a line's size to about 5% either way.** Its margin moves
   with the letters under it, the pixels its text spans and the room around
@@ -80,10 +80,16 @@ those two sets.
   a turned page, rules and italic** leave it at 91% or more of each kind,
   blur the lowest; by their boxes, 12% to 85%, and an underline under a
   short line made it a heading 69 times in 173.
-- **What is left.** Italic reads four short lines as headings, a box drawn
-  round a short line three, and lines whose text OCR misread (a box's side
-  read as a letter, `Payment$`; a note mark read into a word) are most of
-  the other lines.
+- **Marks under the baseline.** A comma, a bracket or a `Q`'s tail
+  (`Total (USD)`, `Q1 Revenue`, the `punct` set) reaches under the
+  baseline in a few columns of its word: measured from them, a short line
+  at body size read a fifth larger, and 54 in 168 as headings. The
+  baseline is the level a sixth of the word's columns stand on, and none
+  does.
+- **What is left.** A box drawn round a short line reads it as a heading
+  three times, and lines whose text OCR misread (a box's side read as a
+  letter, `Payment$`; a note mark read into a word) are most of the other
+  lines.
 
 The set does not test the general rules, which read its headings from a
 text layer.

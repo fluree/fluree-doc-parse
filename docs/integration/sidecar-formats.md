@@ -306,13 +306,15 @@ boxes, 12% to 85%; see [Twins](../benchmarks/twins.md)).
 
 The same measure gives a word's weight, which OCR otherwise does not see: a
 heading set in bold at body size, the most common cue after size, is plain
-text on a scan without it. A word whose stems, over its capitals' height,
-stand more than 1.25 times the median of its reading's lines of three words
-or more, and whose band holds more than 1.3 times their ink, is bold (weight
-700). A word whose band spans fewer than 12 pixels, of fewer than three
-letters and figures, or with a rule taken out of it (an underline, a strike,
-a box's edge), has no weight, nor has any word of a reading with fewer than
-three such lines.
+text on a scan without it. A word is weighed against its reading's lines of
+three words or more measured in the same band (its x-height's, or its
+capitals' for a word of capitals): one whose stems, over its type size,
+stand more than 1.25 times their median, and whose band holds more than 1.3
+times their ink, is bold (weight 700), and any other regular (400). A word
+whose band spans fewer than 12 pixels, of fewer than three letters and
+figures, with a rule taken out of it (an underline, a strike, a box's edge),
+or that its ink does not size, has no weight, nor has a word whose band has
+fewer than three such lines in its reading.
 Punctuation alone in a box takes the size of its run. The sheet's
 skew, stated by `angle` or measured between neighbouring words, is taken out
 first, and the runs of one visual line share one baseline. Lines are set
