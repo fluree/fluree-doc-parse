@@ -6,7 +6,8 @@
     "about": "USG Sheetrock gypsum panels submittal sheet (3 pages). Its physical-properties tables footnote a value given in brackets, with the note's number raised right after the closing bracket."
   },
   "notes": [
-    "2026-11-24 (#124): side heads set in a narrow strip beside their text were read as a column of their own before it, so every head was an empty section and the text fell under the last of them."
+    "2026-11-24 (#124): side heads set in a narrow strip beside their text were read as a column of their own before it, so every head was an empty section and the text fell under the last of them.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -14,7 +15,7 @@
       "found": "2026-11-24",
       "issue": "The head strip's corner tag read first and was taken for the title; the 30pt title was a second h1.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "USG SHEETROCK® BRAND GYPSUM PANELS",
         "evidence": "title"
       }

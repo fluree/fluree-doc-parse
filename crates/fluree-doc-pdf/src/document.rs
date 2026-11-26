@@ -6123,6 +6123,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         if e.kind == "doco:SectionTitle" && e.text.contains('\n') {
             e.text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
         }
+        // The document's title is its own, not a section's: DoCO holds it
+        // as the document's header, apart from the sections, as a Word
+        // document's title and a deck's are held. Read as a heading until
+        // here, for the passes above that weigh headings by it.
+        if e.kind == "doco:SectionTitle" && e.evidence == "title" {
+            e.kind = "doco:Title".into();
+            e.level = None;
+        }
     }
     Analysis {
         elements,

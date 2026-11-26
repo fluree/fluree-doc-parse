@@ -6,7 +6,8 @@
     "about": "Lutron Maestro 369-116 specification. Page 1 sets a category strip (`Wallbox Wiring Devices`) at the top right, as large as the title at the left over the text."
   },
   "notes": [
-    "2026-11-24 (#204): the document title was the largest of the first blocks in reading order, so a sidebar's heading read first, or a category strip as large as the title and set above it, was taken for it."
+    "2026-11-24 (#204): the document title was the largest of the first blocks in reading order, so a sidebar's heading read first, or a category strip as large as the title and set above it, was taken for it.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -14,7 +15,7 @@
       "found": "2026-11-24",
       "issue": "The category strip was the document title.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "120 V~ Multi-Location 3-Wire Fluorescent Smart Dimmer",
         "evidence": "title"
       }

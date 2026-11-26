@@ -2582,7 +2582,7 @@ mod tests {
         assert!(a
             .elements
             .iter()
-            .any(|e| e.kind == "doco:SectionTitle" && e.text == "Account statement"));
+            .any(|e| e.kind == "doco:Title" && e.level.is_none() && e.text == "Account statement"));
         assert!(a
             .elements
             .iter()
@@ -2706,7 +2706,7 @@ mod tests {
             .iter()
             .map(|e| (e.kind.as_str(), e.text.as_str()))
             .collect();
-        assert_eq!(kinds[0], ("doco:SectionTitle", "Quarterly summary"));
+        assert_eq!(kinds[0], ("doco:Title", "Quarterly summary"));
         assert_eq!(kinds.len(), 2, "{kinds:?}");
         assert_eq!(kinds[1].0, "doco:Paragraph");
         assert!(kinds[1].1.ends_with("more or less necessary"));

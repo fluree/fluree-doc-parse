@@ -8,7 +8,8 @@
   "notes": [
     "2026-11-24 (#122): a line ending in a web address, a domain, an e-mail address or a phone number was a heading when set bold or large.",
     "2026-11-24 (#99): a cell holding only a number as wide as the page numbers was taken for the page number and emptied: every one-digit count, `CARTON COUNT | 1`, `PALLET COUNT | 9`. A cell is the page's number only as the page's own folio, where page numbers stand.",
-    "2026-11-24 (#125, #126): a display title set right-aligned over four lines came out as one heading per line, and the raised ® after its first word was lost."
+    "2026-11-24 (#125, #126): a display title set right-aligned over four lines came out as one heading per line, and the raised ® after its first word was lost.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -48,17 +49,14 @@
       "id": "stacked-title-whole",
       "found": "2026-11-24",
       "issue": "The four right-aligned lines of the cover title were four level-1 headings, one per line.",
-      "section": {
-        "title": "PROCAT® PROFESSIONAL INSULATION SYSTEM",
-        "level": 1
-      }
+      "element": {"type": "doco:Title", "text": "PROCAT® PROFESSIONAL INSULATION SYSTEM"}
     },
     {
       "id": "title-sign-kept",
       "found": "2026-11-24",
       "issue": "The 5.7pt raised ® after PROCAT, followed by a space glyph at 16pt on its own baseline, was read as a list marker and dropped.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "PROCAT® PROFESSIONAL INSULATION SYSTEM",
         "evidence": "title"
       }
