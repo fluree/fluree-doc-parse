@@ -265,6 +265,11 @@ adding signals:
   - **A legend's entry**, with a swatch standing alone directly before it on
     its line: a patch no larger than the entry's text is tall and no thinner
     than a third of it, its middle on the line, within an em.
+  - **A line series' entry**, with its sample directly before it: a short
+    level stroke, often dotted with the series' marker at its middle,
+    longer than the text is tall and at most five ems, its middle on the
+    line, ending within an em of the entry. None stands after the entry
+    too: a page number set between two short rules is decoration.
   - **An axis's label** at a tick mark: a stroke no longer than an em, over
     or under the label within its width, or beside it within its height,
     within an em.
@@ -275,7 +280,8 @@ adding signals:
   a stroke, not a patch. A logo drawn as letter shapes sets them abutting on
   their line, and the last of them is no swatch (a maker's name drawn so,
   before a submittal form's `SPECIFICATION SUBMITTAL`). A series' line drawn as its legend's sample,
-  wider than the text is tall, is not read as a swatch.
+  wider than the text is tall, is not read as a swatch but as a sample,
+  and a rule as long as a running line's text is no sample.
 - **A short form of a title that varies.** A spec sheet titles some pages
   `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS` and others `DISHWASHER`.
   Taken as a running line, the short form was cut out of the long ones and
