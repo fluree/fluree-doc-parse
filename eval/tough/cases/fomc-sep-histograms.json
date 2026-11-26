@@ -31,10 +31,10 @@
     {
       "id": "legend-is-the-charts",
       "found": "2026-11-25",
-      "issue": "#338: the legend over the histograms was a paragraph; it is taken where it stands within the chart's reach. Its lines, stacked one under the other, keep their break (#400).",
+      "issue": "#338: the legend over the histograms was a paragraph; it is taken where it stands within the chart's reach.",
       "element": {
         "type": "doco:Figure",
-        "text": "March projections\nDecember projections"
+        "text": "March projections December projections"
       }
     }
   ]

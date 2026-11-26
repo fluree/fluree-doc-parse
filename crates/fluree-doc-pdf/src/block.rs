@@ -1833,6 +1833,19 @@ fn split_fields(b: Block) -> Vec<Block> {
 /// a contact's number.
 const STACKED_WORDS: usize = 5;
 
+/// Does `text` open with a postcode and go on with its town: four to six
+/// figures, alone or with a short group of letters after them (`1025 RX
+/// Amsterdam`, `88045 Friedrichshafen`, `69100 VILLEURBANNE`)?
+fn postcode_line(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let first = words.next().unwrap_or("");
+    (4..=6).contains(&first.len())
+        && first.chars().all(|c| c.is_ascii_digit())
+        && words
+            .next()
+            .is_some_and(|w| w.chars().next().is_some_and(char::is_alphabetic))
+}
+
 /// Fewest digits in a telephone number.
 const PHONE_DIGITS: usize = 6;
 
@@ -1897,12 +1910,46 @@ fn split_stacked_lines(b: Block, edge: &Edge) -> Vec<Block> {
             .next_back()
             .is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()))
     };
+    // A bracket opened on a line and not closed there runs on into the
+    // next: `(EIC m/z` over `75.0553)`.
+    let open_bracket = |l: &Line| {
+        let opened = l.text.chars().filter(|c| matches!(c, '(' | '[')).count();
+        let closed = l.text.chars().filter(|c| matches!(c, ')' | ']')).count();
+        opened > closed
+    };
     let ended = b
         .lines
         .windows(2)
-        .all(|w| opens_entry(&w[1]) && !runs_on(&w[0]));
+        .all(|w| opens_entry(&w[1]) && !runs_on(&w[0]) && !open_bracket(&w[0]));
+    // A break is plainly made by hand where the next line's first word
+    // would have fitted on the line before it, within the block's widest
+    // line (`Weena 664` over `3012 CN Rotterdam`), or where the next line
+    // is an entry no wrap makes: a field, an e-mail or web address, a
+    // telephone number, a postcode and its town. Where neither shows, the
+    // phrase may have wrapped in a narrow box (`Lighting` over `Load`,
+    // `Private and State-Owned` over `Companies`). A block of two lines
+    // needs its break made by hand, a longer one at least half of them.
+    let widest = b.lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let by_hand = |prev: &Line, next: &Line| {
+        let first = next.text.split_whitespace().next().unwrap_or("");
+        let lower = first.to_ascii_lowercase();
+        widest - prev.bbox.x1 >= first_word_width(next)
+            || opens_field(&next.text)
+            || first.contains('@')
+            || lower.starts_with("www.")
+            || lower.starts_with("http")
+            || phone_line(&next.text)
+            || postcode_line(&next.text)
+    };
+    let breaks = b.lines.len() - 1;
+    let made = b.lines.windows(2).filter(|w| by_hand(&w[0], &w[1])).count();
+    let deliberate = if breaks == 1 {
+        made == 1
+    } else {
+        made * 2 >= breaks
+    };
     let mut b = b;
-    b.stacked = set && ended;
+    b.stacked = set && ended && deliberate;
     vec![b]
 }
 

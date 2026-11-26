@@ -566,7 +566,12 @@ pub fn to_xhtml_with(elements: &[Element], notes: &Notes) -> String {
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&html_turn(e, t)),
                 (None, Some(m)) => out.push_str(&html_message(e, m)),
-                (None, None) => out.push_str(&format!("<p>{}</p>\n", html_linked(e))),
+                // A paragraph whose lines were stacked by hand, an
+                // address, keeps their breaks.
+                (None, None) => out.push_str(&format!(
+                    "<p>{}</p>\n",
+                    html_linked(e).replace('\n', "<br/>\n")
+                )),
             },
         }
     }
@@ -718,7 +723,12 @@ pub fn to_markdown_with_options(
             _ => match (&e.turn, &e.message) {
                 (Some(t), _) => out.push_str(&format!("{}\n\n", md_turn(e, t))),
                 (None, Some(m)) => out.push_str(&format!("{}\n\n", md_message(e, m))),
-                (None, None) => out.push_str(&format!("{}\n\n", md_linked(e, opts))),
+                // A paragraph whose lines were stacked by hand keeps their
+                // breaks, as CommonMark hard breaks: a plain line end reads
+                // as a space.
+                (None, None) => {
+                    out.push_str(&format!("{}\n\n", md_linked(e, opts).replace('\n', "  \n")))
+                }
             },
         }
     }
@@ -758,6 +768,14 @@ mod tests {
             depth,
             ..Element::new("doc:ListItem", text, "rust", "layout")
         }
+    }
+
+    #[test]
+    fn a_paragraphs_kept_line_breaks_are_hard_breaks() {
+        let address = para("Pino Bluebird\nSessamestreet 32", vec![]);
+        assert!(to_markdown(std::slice::from_ref(&address))
+            .contains("Pino Bluebird  \nSessamestreet 32\n\n"));
+        assert!(to_xhtml(&[address]).contains("<p>Pino Bluebird<br/>\nSessamestreet 32</p>"));
     }
 
     #[test]

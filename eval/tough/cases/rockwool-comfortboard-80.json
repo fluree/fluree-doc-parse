@@ -97,10 +97,10 @@
     {
       "id": "margin-block-whole",
       "found": "2026-11-25",
-      "issue": "#264: the margin block's first line ran into the NOTE beside it. Its lines, stacked one under the other, keep their break (#400).",
+      "issue": "#264: the margin block's first line ran into the NOTE beside it.",
       "element": {
         "type": "doco:Paragraph",
-        "text": "Issued 07-2025\nSupersedes 05-2025"
+        "text": "Issued 07-2025 Supersedes 05-2025"
       }
     },
     {
