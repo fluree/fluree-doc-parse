@@ -2081,6 +2081,12 @@ const MIN_LETTER_GAPS: usize = 3;
 /// gap wider than the rest may be a kern in a word set alone.
 const MIN_WORD_GAPS: usize = 2;
 
+/// What an italic letter's overhang leaves room before, a word space's
+/// width or less: a bracket, a slash, a hyphen. A gap there keeps the
+/// column's threshold ([`adaptive_space_ratio`]), not a tight line's own
+/// ([`line_space_ratio`]).
+const OVERHANG_BEFORE: &str = "([{/-\u{2010}";
+
 /// Two glyphs of one size, within a tenth: a raised note mark or a
 /// subscript is set a step or more smaller.
 fn same_size(a: f32, b: f32) -> bool {
@@ -2367,6 +2373,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         line_space_ratio(glyphs, idxs, adv).map(|r| r.min(space_ratio))
     };
     let mut prev_size: Option<f32> = None;
+    let mut prev_italic = false;
     let mut bbox: Option<BBox> = None;
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
@@ -2421,8 +2428,22 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                             && next_c.is_some_and(|c| c.is_ascii_digit()));
                     // Punctuation closing a word or opening one stands
                     // against it: a kern before a full stop or inside a
-                    // bracket is no word space.
-                    let held = next_c.is_some_and(|c| ".,;:!?)]}”’".contains(c))
+                    // bracket is no word space. Nor is the room a lone
+                    // italic letter's overhang leaves before a bracket, a
+                    // slash or a hyphen (`P(h, v)`, `P/P0`, `T-gate`): a
+                    // maths symbol's. A word's gap before a bracket is a
+                    // word space, roman or italic (`solve (34)`, a title's
+                    // `Bethe (The Bethe wavefunction)`).
+                    let lone_letter = {
+                        let mut back = text.chars().rev();
+                        back.next().is_some_and(char::is_alphabetic)
+                            && !back.next().is_some_and(char::is_alphabetic)
+                    };
+                    let overhang = prev_italic
+                        && lone_letter
+                        && next_c.is_some_and(|c| OVERHANG_BEFORE.contains(c));
+                    let held = overhang
+                        || next_c.is_some_and(|c| ".,;:!?)]}”’".contains(c))
                         || prev_c.is_some_and(|c| "([{“‘".contains(c));
                     let one_size = !held && prev_size.is_some_and(|ps| same_size(ps, g.font_size));
                     let ratio = if both_digit {
@@ -2525,6 +2546,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     None => adv.end(&b),
                 });
                 prev_size = Some(g.font_size);
+                prev_italic = g.italic;
                 bbox = Some(match bbox {
                     Some(acc) => acc.union(&b),
                     None => b,
@@ -3574,6 +3596,45 @@ mod tests {
         let idxs: Vec<usize> = (0..gl.len()).collect();
         let line = build_line(&gl, &idxs, 0, 0.30).unwrap();
         assert_eq!(line.text, "Model fit and measurement");
+    }
+
+    #[test]
+    fn a_math_letters_overhang_before_a_bracket_a_slash_or_a_hyphen_is_no_space() {
+        // A tight line's words 0.28 em apart under a column threshold of
+        // 0.30, and a 0.2 em gap before a bracket, a slash or a hyphen:
+        // the line's own threshold (0.14) would part it there.
+        let line_with = |head: &str, italic: bool, tail: &str| {
+            let mut gl = spaced(&["the", "ratio"], 2.8);
+            let x = gl.last().and_then(|l| l.bbox).map_or(0.0, |b| b.x1) + 2.8;
+            let mut h = run(head, x, gl.len());
+            h.iter_mut().for_each(|l| l.italic = italic);
+            gl.extend(h);
+            let x = x + 5.0 * head.chars().count() as f64 + 2.0;
+            gl.extend(run(tail, x, gl.len()));
+            let mut x = x + 5.0 * tail.chars().count() as f64 + 2.8;
+            for w in ["of", "the", "model"] {
+                gl.extend(run(w, x, gl.len()));
+                x += 5.0 * w.chars().count() as f64 + 2.8;
+            }
+            let idxs: Vec<usize> = (0..gl.len()).collect();
+            build_line(&gl, &idxs, 0, 0.30).unwrap().text
+        };
+        // A math-italic letter's overhang: no word space.
+        for (head, tail) in [("P", "(h,"), ("P", "/P0"), ("T", "-gate")] {
+            assert_eq!(
+                line_with(head, true, tail),
+                format!("the ratio {head}{tail} of the model")
+            );
+        }
+        // A word's gap before its bracket is a word space, roman or italic.
+        assert_eq!(
+            line_with("solve", false, "(34)"),
+            "the ratio solve (34) of the model"
+        );
+        assert_eq!(
+            line_with("Bethe", true, "(The"),
+            "the ratio Bethe (The of the model"
+        );
     }
 
     #[test]

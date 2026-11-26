@@ -307,7 +307,11 @@ threshold. These keep the column's threshold:
 - **Glyphs of two sizes:** a raised note mark's gap, measured in its own
   smaller ems, reads wide.
 - **Punctuation against a word:** a kern before a full stop or inside a
-  bracket is no word space.
+  bracket is no word space. Nor is the room a lone italic letter's
+  overhang leaves before a bracket, a slash or a hyphen (`P(h, v)`, `P/P0`,
+  `T-gate`): a maths symbol's. A word's gap before a bracket, roman or
+  italic, is still read by the line's own gaps (`solve (34)`, a title's
+  `Bethe (The Bethe wavefunction)`).
 - **A line that writes its spaces:** it says where its words part, and a
   wider gap there is a kern (`CETIRIZ INE`'s `Z` and `I`).
 
