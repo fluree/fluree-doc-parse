@@ -36,7 +36,10 @@ fdoc convert reply.eml --attachments ./att    # an email, its attachments saved
 | `--layout-boxes <DIR>` | layout-detector sidecars. Env: `FDOC_TITLE_BOXES` |
 | `--tier-results <DIR>` | model-tier readings to splice. Env: `FDOC_TIER_RESULTS` |
 | `--structure-results <DIR>` | table-structure readings, for the [three-way veto](../concepts/escalation.md#the-three-way-veto) on a table reading from `--tier-results` or from a model called in the run; no table crop it vetoes is sent to the model. Env: `FDOC_STRUCTURE_RESULTS` |
-| `--ocr-words <DIR>` | OCR word readings, read as text on the pages and regions the router sends a reader. See [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words). Env: `FDOC_OCR_WORDS` |
+| `--ocr-words <DIR>` | OCR word readings, read as text on the pages and regions the router sends a reader. See [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words). Env: `FDOC_OCR_WORDS`, which an explicit `--ocr` overrides |
+| `--ocr <ENGINE>` | read those pages and regions with the built-in OCR engine, in this run: `oar-ocr`. Needs `--models`. Conflicts with `--ocr-words`. Env: `FDOC_OCR` |
+| `--models <DIR>` | the OCR assets directory: the models and ONNX Runtime. Env: `FDOC_OCR_MODELS` |
+| `--ocr-max-megapixels <MPX>` | most megapixels the OCR engine reads in one pass (default 12.5); a larger image is read in overlapping strips ([how an image is sized](ocr.md#how-an-image-is-sized)). Env: `FDOC_OCR_MAX_MEGAPIXELS`; config: `ocr.max_megapixels` |
 | `--emit-anchors` | emit `[[VLM:…]]` tokens where escalated crops belong. With a reader (`--tier-results`, or a model called in the run), keep the ones it did not answer (a crop with no sidecar file, one `--pages` or `escalation.max_crops` left out), in every format, Markdown and text included; without it they are dropped. See [Anchors](../integration/anchors.md#interaction-with---tier-results). Env: `FDOC_VLM_ANCHORS` |
 | `--escalate` | read escalated pages with the configured model in this run |
 | `--no-escalate` | never call a model, whatever the config says |
@@ -62,6 +65,45 @@ producing them again would be surprising.
 
 `--pages` narrows what is *read*, not only what is printed, so inspecting one
 page of a long document costs one crop rather than all of them.
+
+## OCR
+
+The pixels of a scanned page, or of a capture pasted into a text page, are
+read by an OCR engine before analysis, and their words go through the same
+layout pass as the text layer: paragraphs, tables and headings, each word with
+its box. There are two ways to give `convert` those words.
+
+**The built-in engine**, in one command:
+
+```bash
+fdoc convert scan.pdf --ocr oar-ocr --models ~/assets/ocr
+```
+
+The engine is PP-OCRv6 small through oar-ocr. Its models and ONNX Runtime are
+not compiled into `fdoc`: they are read from the assets directory, each checked
+against the hash `fdoc` was built with before it is loaded. Build that directory
+with `tools/ocr-assets/build.py`. The engine is loaded once per run and shared by
+every input and worker. Name it in the [config](config.md#ocr) and `--ocr` is
+no longer needed.
+
+**Any other engine**, through files: render the crops, read them with your
+engine (or with [`fdoc ocr`](ocr.md)), then convert with the words:
+
+```bash
+fdoc dev render-routed scan.pdf crops/ --ocr-regions
+your-ocr crops/ --out words/          # or: fdoc ocr crops/ --models ~/assets/ocr --out words/
+fdoc convert scan.pdf --ocr-words words/
+```
+
+What either reads is the same: the pages whose text is pixels (scanned,
+near-blank, broken text), whole, and on other pages the raster regions the
+text layer does not cover. A model is only asked for regions over a tenth of
+the page; an OCR engine reads the small ones too. Born-digital text is never
+replaced. With a model reader configured as well, it reads what OCR does not:
+pages in doubt about their structure, and tables.
+
+`fdoc` built without the `ocr` feature has no engine and still reads
+`--ocr-words`.
 
 ## Inputs
 

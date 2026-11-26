@@ -67,11 +67,38 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     // Once per invocation, not once per document.
     cfg.resolve_escalation(args.escalate, args.no_escalate, quiet);
     cfg.verbose = verbose;
+    // A flag beats the environment: `--ocr` given on the command line reads
+    // the pixels, whatever `FDOC_OCR_WORDS` holds (the two flags together are
+    // refused by the parser).
+    if args.ocr.is_some() && args.ocr_words.is_none() && cfg.ocr_words.take().is_some() && verbose {
+        eprintln!("note: --ocr given, FDOC_OCR_WORDS ignored");
+    }
     // A word directory that is not there is a mistake in the command, not
     // a batch with nothing read yet.
     if let Some(dir) = cfg.ocr_words.as_deref().filter(|d| !d.is_dir()) {
         eprintln!("error: --ocr-words: {} is not a directory", dir.display());
         return 2;
+    }
+    // Words already read win over reading them again with an engine the
+    // config names, as `--tier-results` wins over a configured model.
+    if cfg.ocr_words.is_none() {
+        match crate::commands::ocr::engine_for_convert(
+            args.ocr,
+            args.models.as_deref(),
+            args.ocr_max_megapixels,
+            &cfg.config.ocr,
+        ) {
+            Ok(engine) => cfg.ocr = engine.map(common::OcrHandle),
+            Err(e) => {
+                eprintln!("error: --ocr: {e}");
+                return 2;
+            }
+        }
+    }
+    if args.models.is_some() && cfg.ocr.is_none() && !quiet {
+        eprintln!(
+            "warning: --models names an OCR engine's assets, but no engine reads with them (--ocr)"
+        );
     }
     let cfg = &cfg;
 
@@ -230,6 +257,8 @@ fn convert_path(
     quiet: bool,
 ) -> Result<String, String> {
     use common::SourceKind;
+    // What the OCR engine says about an image it reads names this file.
+    let _doc = super::ocr::Reading::of(path);
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
     let src = Source::file(path, slot, &data, args);
     let kind = common::source_kind(path);
@@ -583,6 +612,40 @@ fn render(
     }
 }
 
+/// The note when a document has more OCR crops than `ocr.max_crops`.
+pub(crate) fn ocr_cap_note(stem: &str, max: usize, capped: usize) -> String {
+    format!(
+        "note: --ocr: {stem}: reading {max} crops and leaving {capped} unread (pages read whole first, then routed regions, then small ones) — raise `ocr.max_crops` (0 for no limit) to read them all"
+    )
+}
+
+/// One stderr line per OCR reading set aside, and with `--verbose` one per
+/// reading taken.
+fn report_ocr(
+    stem: &str,
+    flag: &str,
+    injected: &[fluree_doc_pdf::ocr::Injected],
+    verbose: bool,
+    quiet: bool,
+) {
+    for r in injected {
+        let name = format!("{stem}_p{}_{}", r.page, r.crop.tag());
+        match r.refused {
+            Some(why) if !quiet => eprintln!("warning: {flag}: {name}: {why}"),
+            None if verbose => eprintln!(
+                "ocr: {name}: {} words taken, {} dropped, skew {:.1}°{}",
+                r.taken,
+                r.dropped,
+                r.skew_deg,
+                r.mean_conf
+                    .map(|c| format!(", mean confidence {c:.3}"))
+                    .unwrap_or_default()
+            ),
+            _ => {}
+        }
+    }
+}
+
 fn convert_bytes(
     data: Vec<u8>,
     src: &Source,
@@ -598,39 +661,44 @@ fn convert_bytes(
     let opts = cfg.options_for(stem);
     // Images are probed for the router, which runs for escalation, for the
     // anchors and sidecars analysis routes for, and for OCR words, which go
-    // only where it sends a reader; a deterministic parse has no use for the
-    // decode.
+    // only where it sends a reader. The images too small to route are
+    // probed only for OCR, which reads the texty ones: without it nothing
+    // would, and they are most of the decode. A deterministic parse has no
+    // use for any.
+    let ocr = cfg.ocr_words.is_some() || cfg.ocr.is_some();
     let mut eopts = ExtractOptions::default();
-    eopts.probe_images = cfg.escalate
-        || cfg.ocr_words.is_some()
-        || fluree_doc_pdf::document::routing_is_consulted(&opts);
+    eopts.probe_images =
+        cfg.escalate || ocr || fluree_doc_pdf::document::routing_is_consulted(&opts);
+    eopts.probe_small_images = ocr;
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
     // OCR words become glyphs before anything measures the pages: the
     // analysis reads them like any text, and a region they fill no longer
     // asks a model for a reading.
-    let injected = match cfg.ocr_words.as_deref() {
-        Some(dir) => {
-            let readings = common::ocr_readings(dir, stem, &doc, quiet);
-            let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
-            for r in &injected {
-                let name = format!("{stem}_p{}_{}", r.page, r.crop.tag());
-                match r.refused {
-                    Some(why) if !quiet => eprintln!("warning: --ocr-words: {name}: {why}"),
-                    None if cfg.verbose => eprintln!(
-                        "ocr: {name}: {} words taken, {} dropped, skew {:.1}°{}",
-                        r.taken,
-                        r.dropped,
-                        r.skew_deg,
-                        r.mean_conf
-                            .map(|c| format!(", mean confidence {c:.3}"))
-                            .unwrap_or_default()
-                    ),
-                    _ => {}
-                }
+    let injected = if let Some(engine) = &cfg.ocr {
+        let max = cfg.config.ocr.max_crops();
+        let pass = fluree_doc_pdf::ocr::read_pages(&mut doc, &raw, engine.0.as_ref(), pages, max);
+        for (crop, e) in &pass.failed {
+            if !quiet {
+                eprintln!("warning: --ocr: {stem}_{crop}: {e}");
             }
-            injected
         }
-        None => Vec::new(),
+        if pass.capped > 0 && !quiet {
+            eprintln!("{}", ocr_cap_note(stem, max, pass.capped));
+        }
+        report_ocr(stem, "--ocr", &pass.injected, cfg.verbose, quiet);
+        pass.injected
+    } else if let Some(dir) = cfg.ocr_words.as_deref() {
+        // Only the pages asked for, as the engine reads only those: words
+        // already read for the others must not change how these read.
+        let mut readings = common::ocr_readings(dir, stem, &doc, quiet);
+        if let Some(keep) = pages {
+            readings.retain(|(page, _, _)| keep.contains(page));
+        }
+        let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+        report_ocr(stem, "--ocr-words", &injected, cfg.verbose, quiet);
+        injected
+    } else {
+        Vec::new()
     };
     // A configured reader reads the whole pages chosen from the document as
     // extracted, which the analysis below changes.

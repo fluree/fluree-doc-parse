@@ -13,6 +13,9 @@ tiers](../integration/escalation-tiers.md).
 | `FDOC_ESCALATE_COLUMNS` | `escalation.on_column_doubt` | also escalate pages whose columns the segmentation cannot represent, or with `0` do not — see below |
 | `FDOC_STRUCTURE_RESULTS` | `--structure-results` | table-structure readings (tier 3/5) |
 | `FDOC_VLM_ANCHORS` | `--emit-anchors` | emit `[[VLM:…]]` tokens; with a reader, keep the ones it did not answer — see [Anchors](../integration/anchors.md#interaction-with---tier-results) |
+| `FDOC_OCR_WORDS` | `--ocr-words` | OCR word readings, read as glyphs before analysis |
+| `FDOC_OCR` | `--ocr` | the built-in OCR engine to read pixels with (`oar-ocr`) |
+| `FDOC_OCR_MODELS` | `--models` | the OCR assets directory |
 | `FDOC_HOME` | — | where the per-user [config](../cli/config.md) lives, overriding the platform default |
 
 Presence is what counts for the boolean ones — any value, including an empty

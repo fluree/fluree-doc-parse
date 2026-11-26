@@ -89,6 +89,7 @@ pub(crate) fn hints(doc: &Document, stem: &str, tiers: &TierConfig) -> CropHints
             })
             .filter(|(_, boxes)| !boxes.is_empty())
             .collect(),
+        regions_apart: false,
     }
 }
 

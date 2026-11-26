@@ -38,7 +38,7 @@ a PDF engine.**
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
-| `fluree-doc-vision` | `WordReading`, `OcrWord`, `Coords`: the words an OCR engine read in one image, and the `--ocr-words` sidecar format (`from_json`, `to_json`) |
+| `fluree-doc-vision` | `WordReading`, `OcrWord`, `Coords`: the words an OCR engine read in one image, and the `--ocr-words` sidecar format (`from_json`, `to_json`); `OcrEngine` and `Pixels`, the engine interface. Feature `oar`: `oar::OarEngine` (PP-OCRv6 through oar-ocr, ONNX Runtime loaded at run time) and `assets`, the checked assets directory |
 | `fluree-doc-cli` | argument parsing and the commands |
 
 ## Inside fluree-doc-pdf

@@ -32,6 +32,53 @@ pub const HOME_ENV: &str = "FDOC_HOME";
 pub struct Config {
     #[serde(default)]
     pub escalation: Escalation,
+    #[serde(default)]
+    pub ocr: Ocr,
+}
+
+/// The built-in OCR engine. Unlike a model reader it reaches nothing outside
+/// the machine: it is configured here only so a deployment names its assets
+/// once. `--ocr` and `--models` override it per run.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct Ocr {
+    /// Which engine reads routed pixels. Only `oar-ocr` is built in.
+    pub engine: Option<String>,
+    /// The assets directory: the models and ONNX Runtime.
+    pub models: Option<PathBuf>,
+    /// ONNX Runtime threads per crop read (default 1).
+    pub threads: Option<usize>,
+    /// Most crops the engine reads in one document (default
+    /// [`DEFAULT_OCR_MAX_CROPS`], `0` for no limit). Past it, pages read
+    /// whole come first, then routed regions, then small ones, and a note
+    /// says how many were left.
+    ///
+    /// Its own limit rather than `escalation.max_crops`: a scanned page is
+    /// one crop, so a model's budget of 200 would leave page 201 of a long
+    /// scan unread, and a crop costs a fraction of a second of this
+    /// machine's time rather than a paid call.
+    pub max_crops: Option<usize>,
+    /// Most megapixels the engine's detector reads in one pass (default
+    /// 12.5: a page scanned at 300 dpi, or a 12 Mpx photo). A larger image
+    /// is read in overlapping strips, or, too wide for them, shrunk. What
+    /// bounds a reading's memory, about 230 bytes a pixel.
+    pub max_megapixels: Option<f64>,
+    /// The memory, in MiB, the passes the engine reads at once may take
+    /// (default 8192), each counted at about 230 bytes a pixel: a pass
+    /// that does not fit waits for others to finish.
+    pub max_memory: Option<u64>,
+}
+
+/// Default for `ocr.max_crops`: enough for a thousand-page scan read whole.
+/// A form's checkbox and rule masks, which once made a crop each, never
+/// count toward it: an image too small to hold a line of text is not read
+/// (`route::MIN_TEXT_LINE_PX`).
+pub const DEFAULT_OCR_MAX_CROPS: usize = 1000;
+
+impl Ocr {
+    /// `max_crops`, or its default.
+    pub fn max_crops(&self) -> usize {
+        self.max_crops.unwrap_or(DEFAULT_OCR_MAX_CROPS)
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -255,6 +302,7 @@ pub fn set(path: &Path, key: &str, value: Value) -> Result<(), String> {
         Value::Str(s) => toml_edit::value(s),
         Value::Bool(b) => toml_edit::value(b),
         Value::Int(i) => toml_edit::value(i),
+        Value::Float(f) => toml_edit::value(f),
     };
     write(path, &doc.to_string())
 }
@@ -264,21 +312,23 @@ pub enum Value {
     Str(String),
     Bool(bool),
     Int(i64),
+    Float(f64),
 }
 
 impl Value {
     /// Parse a command-line value, preferring the type the key implies.
     ///
-    /// `true`/`false` and bare integers become their own types; everything
-    /// else is a string. A path that happens to be `42` is not a real risk,
+    /// `true`/`false`, bare integers and decimals (`12.5`) become their own
+    /// types; everything else is a string. A path that happens to be `42` is not a real risk,
     /// and a boolean written as a string silently disables a setting.
     pub fn parse(raw: &str) -> Value {
         match raw {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
-            _ => match raw.parse::<i64>() {
-                Ok(i) => Value::Int(i),
-                Err(_) => Value::Str(raw.to_string()),
+            _ => match (raw.parse::<i64>(), raw.parse::<f64>()) {
+                (Ok(i), _) => Value::Int(i),
+                (_, Ok(f)) if f.is_finite() && raw.contains('.') => Value::Float(f),
+                _ => Value::Str(raw.to_string()),
             },
         }
     }

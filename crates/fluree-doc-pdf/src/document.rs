@@ -3750,14 +3750,25 @@ pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
 /// an OCR reading is matched to its region by that name before the analysis
 /// runs: routing the page as drawn there, and cleaned in the analysis, would
 /// give one region two names. The document is not changed: the cleaning is
-/// done on a copy.
+/// done on a copy ([`routing_pages`]).
 pub fn region_routes(doc: &RawDoc) -> Vec<crate::route::Route> {
+    routing_pages(doc)
+        .iter()
+        .map(|p| crate::route::decide(p).0)
+        .collect()
+}
+
+/// A copy of the document's pages as [`analyze_with`] routes them: faux
+/// bold counted once, a watermark laid over the text taken out. What an
+/// OCR engine's regions are found on ([`crate::route::ocr_regions`]), so
+/// they are numbered as the analysis's anchors are ([`region_routes`]).
+pub fn routing_pages(doc: &RawDoc) -> Vec<crate::extract::Page> {
     let mut pages = doc.pages.clone();
     for p in pages.iter_mut() {
         dedup::remove_faux_bold(&mut p.glyphs, 8);
     }
     crate::watermark::strip_overlaid(&mut pages);
-    pages.iter().map(|p| crate::route::decide(p).0).collect()
+    pages
 }
 
 pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOptions) -> Analysis {

@@ -116,6 +116,9 @@ pub enum CropReason {
     /// one, or in place of regions that exist only as extracted, where the
     /// analysis, once it cleaned the page, minted no anchor for them.
     Region,
+    /// A raster region too small to be worth a model's call, which an OCR
+    /// engine still reads (listed only when crops are made for one).
+    SmallRegion,
     /// A table the deterministic grid found but does not trust.
     Table,
     /// A table a layout detector found and no grid covered: text the grid
@@ -138,6 +141,7 @@ impl CropReason {
             CropReason::NearBlank => "near_blank",
             CropReason::BrokenText => "broken_text",
             CropReason::Region => "region",
+            CropReason::SmallRegion => "small_region",
             CropReason::Table => "table",
             CropReason::TableMissing => "table_missing",
             CropReason::HeadingDoubt => "heading_doubt",
@@ -242,6 +246,11 @@ pub struct CropHints {
     pub on_column_doubt: bool,
     /// Tables a layout detector boxed, by page, in PDF units.
     pub layout_tables: HashMap<usize, Vec<BBox>>,
+    /// The caller crops a page's routed regions apart even when a doubt
+    /// asks for the page whole (`render-routed --ocr-regions`), so the whole
+    /// page keeps its doubt's reason: the regions' pixels have crops of their
+    /// own, and a reader of characters reads those instead.
+    pub regions_apart: bool,
 }
 
 /// The crops a document asks for, chosen from the document as extracted.
@@ -503,7 +512,7 @@ fn select(
             Some((_, slot)) => {
                 // A slot here holds routed regions only: `VlmRegions` is never
                 // empty, and table crops are added after the doubts.
-                let had_regions = slot.is_some();
+                let had_regions = !hints.regions_apart && slot.is_some();
                 *slot = None;
                 if had_regions {
                     CropReason::Region
@@ -761,6 +770,44 @@ pub fn within_budget(jobs: CropJobs, reasons: &PageReasons, max_crops: usize) ->
 
 /// Render every job to PNG bytes, in page order.
 pub fn render_crops(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
+    let mut out = Vec::new();
+    for_each_crop(pdf, jobs, |c| {
+        // Rendered crops are RGBA (see `for_each_crop`).
+        if let Some(png) = encode(
+            &c.pixels.data,
+            c.pixels.width as usize,
+            0,
+            0,
+            c.pixels.width as usize,
+            c.pixels.height as usize,
+        ) {
+            out.push(Crop {
+                name: c.name,
+                page: c.page,
+                bbox: c.bbox,
+                png,
+            });
+        }
+    });
+    out
+}
+
+/// One rendered crop, as pixels: what an OCR engine reads.
+pub struct RawCrop {
+    /// `p{page}_{tag}`, as for [`Crop`].
+    pub name: String,
+    pub page: usize,
+    /// The region, in PDF units; `None` for the whole page.
+    pub bbox: Option<BBox>,
+    pub pixels: fluree_doc_vision::Pixels,
+}
+
+/// Render each job's crops and hand them over one at a time, so a long
+/// scan never holds more than one page's pixels. The same pixels
+/// [`render_crops`] encodes: same renderer, scale and margin, and RGBA, as
+/// the renderer gives them.
+pub fn for_each_crop(pdf: &Pdf, jobs: &CropJobs, mut f: impl FnMut(RawCrop)) {
+    use fluree_doc_vision::Layout;
     let pages = pdf.pages();
     let cache = RenderCache::new();
     let white: AlphaColor<Srgb> = AlphaColor::new([1.0, 1.0, 1.0, 1.0]);
@@ -770,7 +817,6 @@ pub fn render_crops(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
         bg_color: white,
         ..Default::default()
     };
-    let mut out = Vec::new();
     for (page_idx, regions) in jobs {
         let Some(page) = pages.get(*page_idx) else {
             continue;
@@ -789,12 +835,14 @@ pub fn render_crops(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
             .collect();
         match regions {
             None => {
-                if let Some(png) = encode(&rgba, w, 0, 0, w, h) {
-                    out.push(Crop {
+                if let Some(pixels) =
+                    fluree_doc_vision::Pixels::new(w as u32, h as u32, Layout::Rgba8, rgba)
+                {
+                    f(RawCrop {
                         name: format!("p{page_idx}_full"),
                         page: *page_idx,
                         bbox: None,
-                        png,
+                        pixels,
                     });
                 }
             }
@@ -808,19 +856,28 @@ pub fn render_crops(pdf: &Pdf, jobs: &CropJobs) -> Vec<Crop> {
                     if x1 <= x0 || y1 <= y0 {
                         continue;
                     }
-                    if let Some(png) = encode(&rgba, w, x0, y0, x1, y1) {
-                        out.push(Crop {
+                    let mut buf = Vec::with_capacity((x1 - x0) * (y1 - y0) * 4);
+                    for row in y0..y1 {
+                        let s = (row * w + x0) * 4;
+                        buf.extend_from_slice(&rgba[s..s + (x1 - x0) * 4]);
+                    }
+                    if let Some(pixels) = fluree_doc_vision::Pixels::new(
+                        (x1 - x0) as u32,
+                        (y1 - y0) as u32,
+                        Layout::Rgba8,
+                        buf,
+                    ) {
+                        f(RawCrop {
                             name: format!("p{page_idx}_{tag}"),
                             page: *page_idx,
                             bbox: Some(*b),
-                            png,
+                            pixels,
                         });
                     }
                 }
             }
         }
     }
-    out
 }
 
 /// Encode a sub-rectangle of an RGBA buffer as a PNG.
@@ -1080,7 +1137,11 @@ mod tests {
                 })
                 .collect(),
             images: if scanned {
-                vec![crate::extract::ImagePlacement { bbox, texty: true }]
+                vec![crate::extract::ImagePlacement {
+                    bbox,
+                    texty: true,
+                    grid: (1000, 1000),
+                }]
             } else {
                 Vec::new()
             },
@@ -1304,6 +1365,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         assert!(matches!(
             crate::route::decide(&p).0,
@@ -1328,6 +1390,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         let doc = Document { pages: vec![p] };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
@@ -1340,6 +1403,40 @@ mod tests {
         });
         let (jobs, _) = reasons_with_doubts(&read, &[]);
         assert!(jobs.is_empty(), "{jobs:?}");
+    }
+
+    #[test]
+    fn a_doubt_page_whose_regions_are_cropped_apart_keeps_its_doubt() {
+        let mut p = page(0, 1500, false);
+        p.images = vec![crate::extract::ImagePlacement {
+            bbox: BBox {
+                x0: 50.0,
+                y0: 50.0,
+                x1: 550.0,
+                y1: 300.0,
+            },
+            texty: true,
+            grid: (1000, 1000),
+        }];
+        let doc = Document { pages: vec![p] };
+        let mut copy = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let mut analysis = crate::document::analyze_with(&mut copy, &[], &opts);
+        analysis.suspect_figures = vec![crate::figure::Doubt {
+            page: 0,
+            share: 0.9,
+            chars: 500,
+        }];
+        let hints = CropHints {
+            regions_apart: true,
+            ..Default::default()
+        };
+        let (jobs, reasons) = select(&doc, &analysis, &hints, false);
+        assert_eq!(jobs, vec![(0, None)]);
+        assert_eq!(reasons.get(&0), Some(&CropReason::FigureDoubt));
     }
 
     #[test]
@@ -1356,6 +1453,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
@@ -1471,6 +1569,7 @@ mod tests {
                 y1: 500.0,
             },
             texty: true,
+            grid: (1000, 1000),
         });
         for line in 0..6 {
             for (i, c) in "LABELTEXTS".chars().enumerate() {
@@ -1574,6 +1673,7 @@ mod tests {
                 y1: 400.0,
             },
             texty: true,
+            grid: (1000, 1000),
         });
         for (i, c) in "LABELTEXTS".chars().enumerate() {
             for pass in 0..2 {
@@ -1650,6 +1750,7 @@ mod tests {
                 y1: 300.0,
             },
             texty: true,
+            grid: (1000, 1000),
         }];
         let mut cleaned = page_that_reads_as_a_scan_once_cleaned();
         cleaned.index = 2;
@@ -1687,6 +1788,7 @@ mod tests {
                 y1: y0 + 150.0,
             },
             texty: true,
+            grid: (1000, 1000),
         };
         p.images = vec![image(550.0), image(150.0)];
         let doc = Document { pages: vec![p] };

@@ -8,4 +8,4 @@ description = "The Office Open XML package layer shared by the DOCX, PPTX and XL
 [dependencies]
 fluree-doc-model.workspace = true
 quick-xml = "0.36"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }

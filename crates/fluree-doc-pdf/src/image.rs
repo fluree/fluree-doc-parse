@@ -194,7 +194,11 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
         pages: vec![Page {
             index: 0,
             glyphs: Vec::new(),
-            images: vec![ImagePlacement { bbox, texty: true }],
+            images: vec![ImagePlacement {
+                bbox,
+                texty: true,
+                grid: (w, h),
+            }],
             rules: Vec::new(),
             fills: Vec::new(),
             dots: Vec::new(),

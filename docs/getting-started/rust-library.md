@@ -109,6 +109,40 @@ ocr::mark_provenance(&mut analysis.elements, &injected);
 and reports what it took and refused per reading. The reading format and the
 rules are under [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words).
 
+## Read a scan with the built-in OCR engine
+
+With `fluree-doc-pdf`'s `render` feature and `fluree-doc-vision`'s `oar`
+feature, the engine renders and reads the pages itself, in memory:
+
+```rust
+use fluree_doc_vision::oar::{OarEngine, OarOptions};
+
+// Once per process: checks the assets, loads ONNX Runtime and the models.
+let engine = OarEngine::open(Path::new("/opt/assets/ocr"), &OarOptions::default())?;
+
+// Per document, before `analyze`.
+// At most 1,000 crops a document, as `ocr.max_crops` defaults to; 0 for no
+// limit.
+let pass = ocr::read_pages(&mut doc, &pdf, &engine, None, 1000);
+let mut analysis = document::analyze(&mut doc, &ol);
+ocr::mark_provenance(&mut analysis.elements, &pass.injected);
+```
+
+`read_pages` reads the same crops `--ocr-words` expects (`ocr::ocr_jobs`):
+pages whose text is pixels, whole, and the unread raster regions of the
+others, small ones included. It renders one crop at a time, so a long scan
+holds one page's pixels, and a crop the engine cannot read is reported in
+`pass.failed` while the rest is read. The engine is `Send + Sync`: share one
+across threads. Any other engine plugs in by implementing
+`fluree_doc_vision::OcrEngine`.
+
+`OarOptions` sets how images are sized (`sizing`: at most 12.5 Mpx a pass by
+default, `OcrSizing::megapixels` for another cap), the memory the passes read
+at once may take (`memory`, 8 GiB by default, counted at
+`oar::BYTES_PER_PIXEL`), and whom the engine tells of an image it shrank
+(`notices`; nobody by default). `OarEngine::memory_held` says what the passes
+being read hold now.
+
 ## Read a non-PDF source
 
 Each reader returns the same `Vec<Element>`:
@@ -157,6 +191,8 @@ Reachability is not an offer of stability.
 | `arbiter::TierBackend` / `arbiter::splice` | the model-tier contract |
 | `arbiter::scrub_furniture` | strip running headers from a model reading |
 | `ocr::inject` / `ocr::mark_provenance` / `ocr::WordReading` | OCR words as glyphs, before `analyze_with` |
+| `ocr::read_pages` / `ocr::ocr_jobs` | read a document's pixels with an `OcrEngine`, in memory (feature `render`) |
+| `fluree_doc_vision::OcrEngine` / `oar::OarEngine` | the engine interface, and PP-OCRv6 through oar-ocr (feature `oar`) |
 | `overlay::highlight` | a text-projection span → its page and rectangles |
 | `overlay::rects_for_glyph_range` | glyph span → rectangles |
 | `render::page` (feature `render`) | rasterising a page |

@@ -1179,7 +1179,7 @@ fn region_record(
 /// Render every routed page or region to `outdir` as PNG, with a JSONL
 /// manifest (`manifest.jsonl`) recording where each crop belongs so the
 /// hybrid adapter can splice VLM output back at the right position.
-pub(crate) fn render_routed(path: &Path, outdir: &Path) {
+pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
     use hayro::vello_cpu::color::{AlphaColor, Srgb};
     use hayro::{render, RenderCache, RenderSettings};
     use hayro_syntax::Pdf;
@@ -1197,15 +1197,27 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
     let (mut n_pages, mut n_crops) = (0usize, 0usize);
     let tiers = crate::commands::common::TierConfig::configured();
     let layout = tiers.layout_boxes.as_deref();
+    // The limit `convert --ocr` reads under, from the same config.
+    let max_ocr_crops = match ocr_regions.then(crate::config::load) {
+        None => 0,
+        Some(Ok(l)) => l.config.ocr.max_crops(),
+        Some(Err(e)) => {
+            eprintln!("warning: {e}");
+            crate::config::DEFAULT_OCR_MAX_CROPS
+        }
+    };
     let mut n_vetoed = 0usize;
     let mut n_columns = 0usize;
 
+    // The images too small to route are probed only for the OCR regions.
+    let mut eopts = fluree_doc_pdf::ExtractOptions::default();
+    eopts.probe_small_images = ocr_regions;
     for f in &files {
-        let doc = match extract_file(f) {
+        let Ok(data) = std::fs::read(f) else { continue };
+        let doc = match fluree_doc_pdf::extract_bytes_with(data.clone(), &eopts) {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let data = std::fs::read(f).expect("read pdf");
         let pdf = Pdf::new(Arc::new(data)).expect("parse pdf");
         // Route first; render only when something needs the VLM. A job is a
         // page with either full/region routing or table-confidence anchors
@@ -1216,7 +1228,10 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
         // structure readings veto is written all the same, for the
         // structure reader, and named apart for a deep reader.
         let stem = crate::commands::common::stem_of(f);
-        let hints = crate::escalate::jobs::hints(&doc, stem, &tiers);
+        let hints = fluree_doc_pdf::escalate::CropHints {
+            regions_apart: ocr_regions,
+            ..crate::escalate::jobs::hints(&doc, stem, &tiers)
+        };
         let analysis = fluree_doc_pdf::document::analyze_with(
             &mut doc.clone(),
             &fluree_doc_pdf::outline::extract(&pdf),
@@ -1225,7 +1240,7 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
                 ..tiers.options_for(stem)
             },
         );
-        let (jobs, reasons, vetoed) = crate::escalate::jobs::to_render(
+        let (mut jobs, reasons, vetoed) = crate::escalate::jobs::to_render(
             &doc,
             &analysis,
             stem,
@@ -1233,6 +1248,34 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
             tiers.structure_results.as_deref(),
         );
         n_columns += crate::escalate::jobs::whole_for_columns(&reasons);
+        // The crops `convert --ocr` reads, from the same `ocr::ocr_jobs`
+        // and under the same limit, so the three-step path reads what it
+        // reads: the regions a model call would not pay for are added, and a
+        // page read whole on a doubt about its structure, which an OCR
+        // engine skips, gets its regions as crops of their own too.
+        let small = if ocr_regions {
+            let (ocr, capped) = fluree_doc_pdf::ocr::ocr_jobs(&doc, None, max_ocr_crops);
+            if capped > 0 {
+                eprintln!(
+                    "{}",
+                    crate::commands::convert::ocr_cap_note(stem, max_ocr_crops, capped)
+                );
+            }
+            let routed: std::collections::HashMap<usize, usize> = doc
+                .pages
+                .iter()
+                .zip(fluree_doc_pdf::document::region_routes(&doc))
+                .map(|(p, route)| match route {
+                    fluree_doc_pdf::route::Route::VlmRegions(r) => (p.index, r.len()),
+                    _ => (p.index, 0),
+                })
+                .collect();
+            add_ocr_jobs(&mut jobs, ocr, |page| {
+                routed.get(&page).copied().unwrap_or(0)
+            })
+        } else {
+            Default::default()
+        };
         if jobs.is_empty() {
             continue;
         }
@@ -1370,6 +1413,11 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path) {
                         let ls = links_in(Some(b));
                         let mut rec = region_record(stem, page_idx, tag, b, &detected, &vetoed);
                         n_vetoed += usize::from(rec["vetoed"] == true);
+                        if small.contains(&(page_idx, tag.clone())) {
+                            rec["reason"] = fluree_doc_pdf::escalate::CropReason::SmallRegion
+                                .as_str()
+                                .into();
+                        }
                         if !ls.is_empty() {
                             rec["links"] = serde_json::Value::Array(ls);
                         }
@@ -1403,6 +1451,52 @@ fn vetoed_note(n: usize) -> Option<String> {
              `convert --escalate` does not send them, and a deep reader need not read them"
         )
     })
+}
+
+/// Add to a document's crop jobs the crops an OCR engine reads
+/// ([`fluree_doc_pdf::ocr::ocr_jobs`]), whose regions are numbered as the
+/// model's are, the first `routed(page)` of a page being the ones the router
+/// sends a model. A region crop the jobs do not hold yet is added to its
+/// page's; a page with no job gets one of its regions; a page read whole on
+/// a doubt gets all its regions as crops of their own, besides its whole
+/// page, since an OCR engine reads those and skips the page. A page the
+/// engine reads whole the model reads whole too. Returns the regions too
+/// small for a model, by `(page, tag)`.
+pub(crate) fn add_ocr_jobs(
+    jobs: &mut fluree_doc_pdf::escalate::CropJobs,
+    ocr: fluree_doc_pdf::ocr::OcrJobs,
+    routed: impl Fn(usize) -> usize,
+) -> std::collections::HashSet<(usize, String)> {
+    let mut small = std::collections::HashSet::new();
+    let mut doubted = Vec::new();
+    for (page, crops) in ocr {
+        // A page whose text is pixels: the router's verdict, which the
+        // model's plan reads whole too.
+        let Some(crops) = crops else { continue };
+        small.extend(
+            crops
+                .iter()
+                .filter(|(t, _)| {
+                    t.strip_prefix('r')
+                        .and_then(|i| i.parse::<usize>().ok())
+                        .is_some_and(|i| i >= routed(page))
+                })
+                .map(|(t, _)| (page, t.clone())),
+        );
+        match jobs.iter_mut().find(|(pi, _)| *pi == page) {
+            Some((_, None)) => doubted.push((page, Some(crops))),
+            Some((_, Some(list))) => {
+                for c in crops {
+                    if !list.iter().any(|(t, _)| *t == c.0) {
+                        list.push(c);
+                    }
+                }
+            }
+            None => jobs.push((page, Some(crops))),
+        }
+    }
+    jobs.extend(doubted);
+    small
 }
 
 /// Render the crops a region manifest asks for, through
@@ -1649,6 +1743,73 @@ pub(crate) fn timings(path: &Path, warmup: usize, runs: usize) {
 mod tests {
     use super::*;
     use fluree_doc_pdf::geom::BBox;
+
+    fn b(y: f64) -> BBox {
+        BBox {
+            x0: 10.0,
+            y0: y,
+            x1: 100.0,
+            y1: y + 20.0,
+        }
+    }
+
+    #[test]
+    fn ocr_regions_join_each_kind_of_page_job() {
+        // Page 0 routed with one region, plus a small one; page 1 read whole
+        // on a doubt, with a routed region and a small one; page 2 with a
+        // small region only; page 3 read whole for its pixels; page 4 routed
+        // with two regions, the engine's limit leaving it the first.
+        let tagged = |l: &[(&str, f64)]| -> Option<Vec<(String, BBox)>> {
+            Some(l.iter().map(|(t, y)| (t.to_string(), b(*y))).collect())
+        };
+        let mut jobs: fluree_doc_pdf::escalate::CropJobs = vec![
+            (0, tagged(&[("r0", 0.0)])),
+            (1, None),
+            (3, None),
+            (4, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+        ];
+        let ocr: fluree_doc_pdf::ocr::OcrJobs = vec![
+            (0, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+            (1, tagged(&[("r0", 0.0), ("r1", 50.0)])),
+            (2, tagged(&[("r0", 80.0)])),
+            (3, None),
+            (4, tagged(&[("r0", 0.0)])),
+        ];
+        let routed = |page: usize| [1, 1, 0, 0, 2][page];
+        let small = add_ocr_jobs(&mut jobs, ocr, routed);
+        let tags = |page: usize| -> Vec<Option<Vec<String>>> {
+            jobs.iter()
+                .filter(|(p, _)| *p == page)
+                .map(|(_, r)| {
+                    r.as_ref()
+                        .map(|l| l.iter().map(|(t, _)| t.clone()).collect())
+                })
+                .collect()
+        };
+        assert_eq!(tags(0), [Some(vec!["r0".to_string(), "r1".to_string()])]);
+        assert_eq!(
+            tags(1),
+            [None, Some(vec!["r0".to_string(), "r1".to_string()])],
+            "the doubted page keeps its whole crop and gets its regions"
+        );
+        assert_eq!(tags(2), [Some(vec!["r0".to_string()])]);
+        assert_eq!(tags(3), [None], "read whole once");
+        assert_eq!(
+            tags(4),
+            [Some(vec!["r0".to_string(), "r1".to_string()])],
+            "the model's crops stay whatever the engine's limit"
+        );
+        let mut small: Vec<(usize, String)> = small.into_iter().collect();
+        small.sort();
+        assert_eq!(
+            small,
+            [
+                (0, "r1".to_string()),
+                (1, "r1".to_string()),
+                (2, "r0".to_string())
+            ]
+        );
+    }
 
     #[test]
     fn a_region_the_structure_readings_veto_is_marked_so_in_the_manifest() {

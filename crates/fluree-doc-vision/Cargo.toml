@@ -11,3 +11,13 @@ serde.workspace = true
 # must be the same number, or the three-step path's boxes drift in their
 # last digits from the in-memory one's.
 serde_json = { workspace = true, features = ["float_roundtrip"] }
+# The built-in OCR engine. ONNX Runtime is not linked: it is loaded at run
+# time from the assets directory, next to the models (see `oar`).
+oar-ocr = { version = "=0.11.0", default-features = false, optional = true }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std", "ndarray"], optional = true }
+image = { version = "0.25", optional = true }
+sha2 = { workspace = true, optional = true }
+
+[features]
+# PP-OCRv6 through oar-ocr, on ONNX Runtime loaded from the assets directory.
+oar = ["dep:oar-ocr", "dep:ort", "dep:image", "dep:sha2"]

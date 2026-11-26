@@ -49,6 +49,19 @@ pub(crate) const MIN_REGION_FRACTION: f64 = 0.10;
 /// caption grazing the box.
 const MAX_GLYPHS_IN_UNREAD_REGION: usize = 15;
 
+/// Fewest pixels an image needs on its short side to hold a line of text:
+/// its own pixels, whatever size it is drawn at.
+///
+/// Measured with the built-in engine (PP-OCRv6 small) on a line of sans
+/// serif set to fill images 5 to 20 px tall, a pixel of paper above and
+/// below: from 10 px it reads the line exactly; at 9 it runs two words
+/// together, at 8 it misreads letters and digits, at 6 and 7 every word,
+/// and at 5 it reads nothing usable. An engine scales what it reads up
+/// (to 736 px for detection, 48 px a line for recognition), which adds no
+/// strokes. So a checkbox drawn from an 8 × 8 mask or a rule stretched from
+/// a 1 × 1 one, which a page may hold by the hundred, is never read.
+pub const MIN_TEXT_LINE_PX: u32 = 10;
+
 /// Grid resolution for image-coverage union. Coarse is fine: the signal is
 /// "half the page", not a measurement.
 const COVERAGE_BINS: usize = 32;
@@ -133,9 +146,79 @@ pub fn signals(page: &Page) -> Signals {
     }
 }
 
+/// The raster regions of a text page whose pixels look like text, hold
+/// enough of them for a line of it ([`MIN_TEXT_LINE_PX`]), and which the
+/// glyph layer does not cover, at least `min_fraction` of the page each, in
+/// the order the page places them. An image drawn twice in one place (a
+/// stamp repeated, an image and its mask) is one region, at its first
+/// placement: it is read once.
+fn unread_regions(page: &Page, min_fraction: f64) -> Vec<BBox> {
+    let page_area = (page.width * page.height).max(1.0);
+    let mut seen = std::collections::HashSet::new();
+    let mut regions: Vec<BBox> = Vec::new();
+    for b in page
+        .images
+        .iter()
+        .filter(|p| {
+            if !p.texty
+                || p.grid.0.min(p.grid.1) < MIN_TEXT_LINE_PX
+                || (p.bbox.x1 - p.bbox.x0) * (p.bbox.y1 - p.bbox.y0) < min_fraction * page_area
+            {
+                return false;
+            }
+            let inside = page
+                .glyphs
+                .iter()
+                .filter(|g| {
+                    let (x, y) = match g.bbox {
+                        Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
+                        None => g.origin,
+                    };
+                    // An OCR reading's glyphs fill the void they read, and
+                    // are not the text layer: counted, the region would drop
+                    // out of the list and every region after it renumber.
+                    !g.text.trim().is_empty() && p.bbox.contains(x, y) && !page.is_ocr(g)
+                })
+                .count();
+            inside < MAX_GLYPHS_IN_UNREAD_REGION
+        })
+        .map(|p| p.bbox)
+    {
+        if seen.insert([b.x0, b.y0, b.x1, b.y1].map(f64::to_bits)) {
+            regions.push(b);
+        }
+    }
+    regions
+}
+
+/// The regions an OCR engine reads on a page: the routed ones, numbered as
+/// [`decide`] numbers them, then those too small to be worth a model's call.
+///
+/// [`MIN_REGION_FRACTION`] is a price, not a property of the pixels: a model
+/// call costs the same for a logo as for a page, and below a tenth of the
+/// page it rarely pays. An OCR engine is cheap per pixel, and a pasted
+/// capture an inch high still holds a date or an account number. Numbered
+/// after the routed regions, so a model's crop names (`r0`, `r1`, …) mean
+/// the same regions whether or not an engine also reads the small ones.
+///
+/// Empty for a page read whole (scanned, near-blank, broken text).
+pub fn ocr_regions(page: &Page) -> Vec<BBox> {
+    let routed = match decide(page).0 {
+        Route::Vlm(_) => return Vec::new(),
+        Route::VlmRegions(r) => r,
+        Route::Deterministic => Vec::new(),
+    };
+    let mut all = routed.clone();
+    all.extend(
+        unread_regions(page, 0.0)
+            .into_iter()
+            .filter(|b| !routed.contains(b)),
+    );
+    all
+}
+
 pub fn decide(page: &Page) -> (Route, Signals) {
     let s = signals(page);
-    let page_area = (page.width * page.height).max(1.0);
 
     if s.glyphs < NEAR_BLANK_GLYPHS && !page.images.is_empty() {
         return (Route::Vlm(Reason::NearBlank), s);
@@ -163,34 +246,7 @@ pub fn decide(page: &Page) -> (Route, Signals) {
     // content sits. Pixel statistics cannot make this distinction (measured:
     // texty-row fractions of helped and unhelped documents overlap
     // completely); glyph coverage can.
-    let regions: Vec<BBox> = page
-        .images
-        .iter()
-        .filter(|p| {
-            if !p.texty
-                || (p.bbox.x1 - p.bbox.x0) * (p.bbox.y1 - p.bbox.y0)
-                    < MIN_REGION_FRACTION * page_area
-            {
-                return false;
-            }
-            let inside = page
-                .glyphs
-                .iter()
-                .filter(|g| {
-                    let (x, y) = match g.bbox {
-                        Some(b) => ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5),
-                        None => g.origin,
-                    };
-                    // An OCR reading's glyphs fill the void they read, and
-                    // are not the text layer: counted, the region would drop
-                    // out of the list and every region after it renumber.
-                    !g.text.trim().is_empty() && p.bbox.contains(x, y) && !page.is_ocr(g)
-                })
-                .count();
-            inside < MAX_GLYPHS_IN_UNREAD_REGION
-        })
-        .map(|p| p.bbox)
-        .collect();
+    let regions = unread_regions(page, MIN_REGION_FRACTION);
     if !regions.is_empty() {
         return (Route::VlmRegions(regions), s);
     }
@@ -235,7 +291,11 @@ mod tests {
             glyphs: v,
             images: images
                 .into_iter()
-                .map(|(bbox, texty)| ImagePlacement { bbox, texty })
+                .map(|(bbox, texty)| ImagePlacement {
+                    bbox,
+                    texty,
+                    grid: (1000, 1000),
+                })
                 .collect(),
             rules: Vec::new(),
             fills: Vec::new(),
@@ -247,6 +307,43 @@ mod tests {
             rotation: 0,
             ocr: None,
         }
+    }
+
+    fn b(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
+        BBox { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn small_regions_are_read_by_ocr_after_the_routed_ones() {
+        // A text page with a capture over a tenth of the page, and one a
+        // date's height high: the model reads the first, the engine both,
+        // numbered so `r0` is the same region for either.
+        let big = b(50.0, 300.0, 550.0, 500.0);
+        let small = b(50.0, 100.0, 250.0, 130.0);
+        let p = page_with(1500, 0, vec![(small, true), (big, true)]);
+        assert_eq!(decide(&p).0, Route::VlmRegions(vec![big]));
+        assert_eq!(ocr_regions(&p), vec![big, small]);
+
+        // Alone, the small one routes nothing, and the engine still reads it.
+        let p = page_with(1500, 0, vec![(small, true)]);
+        assert_eq!(decide(&p).0, Route::Deterministic);
+        assert_eq!(ocr_regions(&p), vec![small]);
+    }
+
+    #[test]
+    fn a_page_read_whole_has_no_ocr_regions() {
+        let p = page_with(5, 0, vec![(b(0.0, 0.0, 600.0, 800.0), true)]);
+        assert!(ocr_regions(&p).is_empty());
+    }
+
+    #[test]
+    fn a_small_image_without_text_or_under_glyphs_is_not_read() {
+        // A photograph (not texty), and a small region the text layer
+        // already covers (its glyphs sit at 10-15 × 10-20).
+        let photo = b(50.0, 100.0, 150.0, 130.0);
+        let covered = b(0.0, 0.0, 30.0, 30.0);
+        let p = page_with(1500, 0, vec![(photo, false), (covered, true)]);
+        assert!(ocr_regions(&p).is_empty());
     }
 
     #[test]
