@@ -2847,6 +2847,172 @@ fn glyphs_outside_grids(glyphs: &[Glyph], grids: &[Grid]) -> Vec<Glyph> {
         .collect()
 }
 
+/// Share of the page's width a reading spans, at the least, to reach across
+/// a gutter between two of its columns: a table in one column of two is
+/// under half the page wide, and one read across the gutter takes in most
+/// of both columns. Narrower readings are not tested.
+const ACROSS_COLUMNS: f64 = 0.4;
+
+/// The page's two sides of the gutter a reading is set across, where it
+/// crosses between two of the page's columns of text
+/// ([`table::crosses_gutter`]): two tables set side by side, a table and the
+/// prose beside it, a block of facts and a title. The gutter is one of the
+/// channels of white running down through the reading (`table::channels_in`);
+/// `runs` gives the page's runs of text, read once a channel parts a second
+/// stub from the first.
+fn crossed_gutter<'a>(
+    g: &Grid,
+    glyphs: &[Glyph],
+    width: f64,
+    runs: impl Fn() -> &'a [table::TextRun] + Copy,
+) -> Option<((f64, f64), (f64, f64))> {
+    if g.bbox.x1 - g.bbox.x0 < width * ACROSS_COLUMNS {
+        return None;
+    }
+    let rows = table::reading_rows(g, glyphs);
+    table::channels_in(&rows).into_iter().find_map(|span| {
+        let gutter = table::crosses_gutter(g, &rows, runs, span, width)?;
+        Some(((0.0, gutter), (gutter, width)))
+    })
+}
+
+/// Share of a cut's width a rule over or under it spans to rule it as a
+/// table: a table's top and bottom rules run its full width, give or take
+/// a cell's padding.
+const RULED_ACROSS: f64 = 0.9;
+
+/// A reading set across the page's gutter, cut at it: its columns between
+/// `x0` and `x1`, on its rows, where two of them or more hold text. A side
+/// read again on its own that yields no table is still the reading's table
+/// there (a ruled table of words, which only the reading across the gutter
+/// read in rows); a side left with one column, or ruled by nothing (a list
+/// of references beside their numbers), is the page's prose. A cut's rows
+/// are the reading's, less those the other side's text alone set.
+fn side_of(
+    g: &Grid,
+    glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
+    x0: f64,
+    x1: f64,
+) -> Option<Grid> {
+    let (lo, hi) = (g.bbox.x0.max(x0), g.bbox.x1.min(x1));
+    let mut xs = vec![lo];
+    xs.extend(
+        g.xs.iter()
+            .copied()
+            .filter(|&x| x > lo + 1.0 && x < hi - 1.0),
+    );
+    xs.push(hi);
+    let mut cut = Grid {
+        xs,
+        layout: None,
+        bbox: crate::geom::BBox {
+            x0: lo,
+            x1: hi,
+            ..g.bbox
+        },
+        ..g.clone()
+    };
+    // The rows the other side's text alone set are empty here: each goes
+    // to the next row of this side's, as a table's ends are not found at
+    // its first empty row (`trim_to_content`) inside the reading's.
+    let texts = cut.cell_texts(glyphs);
+    let cols = cut.cols();
+    let used: Vec<usize> = (0..cut.rows())
+        .filter(|&r| (0..cols).any(|c| !texts[r * cols + c].trim().is_empty()))
+        .collect();
+    let Some(&first) = used.first() else {
+        return None;
+    };
+    let mut ys = vec![cut.ys[first]];
+    ys.extend(used.iter().map(|&r| cut.ys[r + 1]));
+    cut.ys = ys;
+    cut.bbox.y0 = cut.ys[0];
+    cut.bbox.y1 = cut.ys[cut.ys.len() - 1];
+    cut.trim_to_content(glyphs);
+    let texts = cut.cell_texts(glyphs);
+    let cols = cut.cols();
+    let held = (0..cols)
+        .filter(|&c| (0..cut.rows()).any(|r| !texts[r * cols + c].trim().is_empty()))
+        .count();
+    // Ruled across its width over its rows or under them, as a table: a
+    // column of the page's text, a list of references beside their
+    // numbers, is not.
+    // A rule may be drawn a piece a cell: the pieces along one line count
+    // together.
+    let b = cut.bbox;
+    let reach = (b.y1 - b.y0) / cut.rows().max(1) as f64;
+    let across = |y: f64| {
+        let mut spans: Vec<(f64, f64)> = rules
+            .iter()
+            .filter(|r| {
+                r.orientation == crate::rule::Orientation::Horizontal
+                    && (r.axis_pos() - y).abs() <= 1.0
+            })
+            .map(|r| (r.bbox.x0.max(b.x0), r.bbox.x1.min(b.x1)))
+            .filter(|(a, c)| c > a)
+            .collect();
+        spans.sort_by(|a, c| a.0.total_cmp(&c.0));
+        let (mut covered, mut end) = (0.0, f64::MIN);
+        for (a, c) in spans {
+            let a = a.max(end);
+            if c > a {
+                covered += c - a;
+                end = c;
+            }
+        }
+        covered >= (b.x1 - b.x0) * RULED_ACROSS
+    };
+    let ruled = rules.iter().any(|r| {
+        r.orientation == crate::rule::Orientation::Horizontal
+            && ((r.axis_pos() - b.y0).abs() <= reach || (r.axis_pos() - b.y1).abs() <= reach)
+            && across(r.axis_pos())
+    });
+    (cut.rows() >= 2 && held >= 2 && ruled).then_some(cut)
+}
+
+/// Alignment's tables, each read across the page's gutter between two of
+/// its columns of text read again on each side of the gutter alone.
+fn aligned_by_columns<'a>(
+    found: Vec<Grid>,
+    glyphs: &[Glyph],
+    page: &crate::extract::Page,
+    lines: impl Fn() -> &'a [table::TextRun] + Copy,
+) -> Vec<Grid> {
+    if found.is_empty() {
+        return found;
+    }
+    let mut out = Vec::with_capacity(found.len());
+    for g in found {
+        let Some(sides) = crossed_gutter(&g, glyphs, page.width, lines) else {
+            out.push(g);
+            continue;
+        };
+        for (x0, x1) in [sides.0, sides.1] {
+            let side: Vec<Glyph> = glyphs
+                .iter()
+                .filter(|q| {
+                    q.bbox.is_some_and(|b| {
+                        let (cx, cy) = ((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+                        cx >= x0 && cx < x1 && cy >= g.bbox.y0 - 1.0 && cy <= g.bbox.y1 + 1.0
+                    })
+                })
+                .cloned()
+                .collect();
+            let found: Vec<Grid> =
+                table::detect_aligned(&side, &page.rules, &page.fills, page.index)
+                    .into_iter()
+                    .filter(|n| crossed_gutter(n, glyphs, page.width, lines).is_none())
+                    .collect();
+            if found.is_empty() {
+                out.extend(side_of(&g, glyphs, &page.rules, x0, x1));
+            }
+            out.extend(found);
+        }
+    }
+    out
+}
+
 pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
     analyze_with(raw, outline, &AnalyzeOptions::default())
 }
@@ -2989,6 +3155,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             grid_sources = vec![GridSource::FillBand; grids.len()];
         }
 
+        // The page's lines as the text reader reads them, read once for the
+        // readings below and for the runs of text `crossed_gutter` reads.
+        let page_text = std::cell::OnceCell::new();
+        let text_lines = || -> &[crate::textgrid::Line] {
+            page_text.get_or_init(|| crate::textgrid::lines(&p.glyphs))
+        };
         // A statement ruled by its figures' underlines rules off groups of
         // rows: each line of figures in a group is a row of its own.
         if grid_sources.contains(&GridSource::Ruled) {
@@ -2999,15 +3171,22 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 })
                 .collect();
             if !underlined.is_empty() {
-                let lines = crate::textgrid::lines(&p.glyphs);
+                let lines = text_lines();
                 for k in underlined {
-                    crate::textgrid::split_underlined_bands(&mut grids[k], &lines);
+                    crate::textgrid::split_underlined_bands(&mut grids[k], lines);
                 }
             }
         }
 
+        // The page's runs of text, for the tables read across a gutter
+        // between two columns of text (`crossed_gutter`).
+        let page_runs = std::cell::OnceCell::new();
+        let col_lines = || -> &[table::TextRun] {
+            page_runs.get_or_init(|| crate::textgrid::runs(text_lines()))
+        };
         let page_aligned = timed(&mut timings.tables, || {
-            table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index)
+            let found = table::detect_aligned(&p.glyphs, &p.rules, &p.fills, p.index);
+            aligned_by_columns(found, &p.glyphs, p, col_lines)
         });
         // Alignment is read again below from the glyphs outside the grids
         // (`glyphs_outside_grids`, which keeps them in order). Where no grid
@@ -3017,7 +3196,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             if glyphs.len() == p.glyphs.len() {
                 page_aligned.clone()
             } else {
-                table::detect_aligned(glyphs, &p.rules, &p.fills, p.index)
+                let found = table::detect_aligned(glyphs, &p.rules, &p.fills, p.index);
+                aligned_by_columns(found, glyphs, p, col_lines)
             }
         };
         let mut aligned_full = page_aligned.clone();
@@ -3032,8 +3212,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // one group, the header and the rest as text). Which reading stands
         // is settled below.
         let seeded_anyway = aligned_preferred && {
-            let lines = crate::textgrid::lines(&p.glyphs);
-            !crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, &lines).is_empty()
+            let lines = text_lines();
+            !crate::textgrid::unruled_grids(&grids, &p.rules, &p.fills, lines).is_empty()
         };
         // Tables ruled with horizontals only, or by nothing but the rules
         // under their figures, are read from their text: their bands are
@@ -3041,7 +3221,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut beside_prose: Vec<crate::geom::BBox> = Vec::new();
         if !aligned_preferred || seeded_anyway {
             timed(&mut timings.tables, || {
-                let lines = crate::textgrid::lines(&p.glyphs);
+                let lines = text_lines();
                 let mut read: Vec<Grid> = Vec::new();
                 let mut seeded: Vec<usize> = Vec::new();
                 let debug = std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some();
@@ -3245,6 +3425,40 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                 }
                             })
                     }));
+                }
+                // A reading set across the page's gutter, between two of its
+                // columns of text, is no table: each side is read again on
+                // its own, the next column's text beside it left out. Before
+                // the larger reading is kept, so a table's own reading in its
+                // column is not lost to one that runs on across the gutter.
+                {
+                    let mut again: Vec<Grid> = Vec::new();
+                    read.retain(|g| {
+                        let Some(sides) = crossed_gutter(g, &p.glyphs, p.width, col_lines) else {
+                            return true;
+                        };
+                        for (x0, x1) in [sides.0, sides.1] {
+                            let side = crate::textgrid::lines_within(&p.glyphs, x0, x1);
+                            let region = crate::geom::BBox {
+                                x0: g.bbox.x0.max(x0),
+                                x1: g.bbox.x1.min(x1),
+                                ..g.bbox
+                            };
+                            let found: Vec<Grid> =
+                                crate::textgrid::read(&side, &p.rules, region, p.index)
+                                    .into_iter()
+                                    .filter(|n| {
+                                        crossed_gutter(n, &p.glyphs, p.width, col_lines).is_none()
+                                    })
+                                    .collect();
+                            if found.is_empty() {
+                                again.extend(side_of(g, &p.glyphs, &p.rules, x0, x1));
+                            }
+                            again.extend(found);
+                        }
+                        false
+                    });
+                    read.extend(again);
                 }
                 // One table found from two seeds is kept once, the larger.
                 read.sort_by_key(|g| std::cmp::Reverse(g.rows() * g.cols()));

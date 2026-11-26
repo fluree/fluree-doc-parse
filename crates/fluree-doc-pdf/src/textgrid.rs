@@ -311,15 +311,51 @@ pub(crate) fn contents_entry(row: &[&Glyph]) -> bool {
         || (1..=6).contains(&n) && page.chars().all(|c| "ivxlc".contains(c))
 }
 
+/// The runs of text `lines` set, each as its box, its words and its line's
+/// size: what is set together on a line, apart from what stands a gap away
+/// (the gutter between a page's columns among them).
+pub(crate) fn runs(lines: &[Line]) -> Vec<crate::table::TextRun> {
+    lines
+        .iter()
+        .flat_map(|l| {
+            l.chunks.iter().map(move |c| crate::table::TextRun {
+                bbox: BBox {
+                    x0: c.x0,
+                    y0: c.y0,
+                    x1: c.x1,
+                    y1: c.y1,
+                },
+                text: c.text.clone(),
+                size: l.fs,
+            })
+        })
+        .collect()
+}
+
 /// The page's lines, each cut into chunks, with dot leaders dropped and a
 /// currency sign set apart from its figure taken back in to it.
 pub fn lines(glyphs: &[Glyph]) -> Vec<Line> {
+    lines_where(glyphs, |_| true)
+}
+
+/// [`lines`] of the text set between `x0` and `x1` alone: one of the page's
+/// columns, read as if the next column's text beside it were not there.
+/// Chunks still name glyphs by their index in the page's glyphs.
+pub fn lines_within(glyphs: &[Glyph], x0: f64, x1: f64) -> Vec<Line> {
+    lines_where(glyphs, |g| {
+        g.bbox
+            .is_some_and(|b| (b.x0 + b.x1) / 2.0 >= x0 && (b.x0 + b.x1) / 2.0 < x1)
+    })
+}
+
+fn lines_where(glyphs: &[Glyph], keep: impl Fn(&Glyph) -> bool) -> Vec<Line> {
     let index = |g: &Glyph| {
         (g as *const Glyph as usize - glyphs.as_ptr() as usize) / std::mem::size_of::<Glyph>()
     };
     let mut gs: Vec<&Glyph> = glyphs
         .iter()
         .filter(|g| g.bbox.is_some() && g.is_horizontal() && !g.text.trim().is_empty())
+        .filter(|g| keep(g))
         .collect();
     gs.sort_by(|a, b| {
         a.origin
