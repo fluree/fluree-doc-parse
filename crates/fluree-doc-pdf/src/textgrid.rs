@@ -1887,6 +1887,20 @@ fn is_sample_size(t: &str) -> bool {
             .all(|c| c.is_ascii_digit() || c == ',' || c == ' ')
 }
 
+/// Whether a column's head is a unit of what its cells count: a percentage,
+/// a count (`n`, `N`, `No.`), both (`n (%)`), or a confidence interval
+/// (`95% CI`).
+fn is_unit_head(t: &str) -> bool {
+    let t: String = t.split_whitespace().collect();
+    let t = t.trim_start_matches('(').trim_end_matches(')');
+    matches!(
+        t,
+        "%" | "n" | "N" | "No." | "no." | "n(%)" | "N(%)" | "No.(%)" | "CI"
+    ) || t
+        .strip_suffix("%CI")
+        .is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Rows, header and bands from the table's lines.
 fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Option<Grid> {
     let fs = lines.iter().map(|l| l.fs).fold(0.0, f64::max).max(1.0);
@@ -1898,12 +1912,30 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         // their heads, nothing in the stub, are the header's: a row of data
         // names itself in the stub, and a group's own size sits beside its
         // label (`Skin/Soft Tissue | n= 175`).
-        let sizes = |l: &Line| {
-            !l.chunks.iter().any(|c| column_of(&cols, c) == Some(0))
-                && l.chunks.iter().any(|c| is_sample_size(&c.text))
+        // So are lines of the columns' units (`% | N | % | N`, `No. | %`,
+        // `n | % | 95% CI`) under their groups: a row of data gives values,
+        // not what they count. The stub may hold its own head there (`BMI
+        // Class`), a label with no figure in it.
+        let units = |l: &Line| {
+            let past: Vec<&Chunk> = l
+                .chunks
+                .iter()
+                .filter(|c| column_of(&cols, c) != Some(0))
+                .collect();
+            past.len() >= 2
+                && past.iter().all(|c| is_unit_head(&c.text))
                 && l.chunks
                     .iter()
-                    .all(|c| is_sample_size(&c.text) || !is_figure(&c.text) || is_year(&c.text))
+                    .filter(|c| column_of(&cols, c) == Some(0))
+                    .all(|c| !c.text.chars().any(|ch| ch.is_ascii_digit()))
+        };
+        let sizes = |l: &Line| {
+            units(l)
+                || !l.chunks.iter().any(|c| column_of(&cols, c) == Some(0))
+                    && l.chunks.iter().any(|c| is_sample_size(&c.text))
+                    && l.chunks
+                        .iter()
+                        .all(|c| is_sample_size(&c.text) || !is_figure(&c.text) || is_year(&c.text))
         };
         let mut k = first;
         while k < lines.len() && sizes(lines[k]) {
@@ -2166,6 +2198,67 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
         }
         kinds.push(ks);
     }
+    // A label wrapped onto the next line is of a kind with that line: a
+    // banner's first line is the banner's (`Proportion of Hospital` over
+    // `Discharges with SDV`, over the column's unit `%`).
+    for i in (0..head.len()).rev() {
+        for (ci, c) in head[i].chunks.iter().enumerate() {
+            if kinds[i][ci] {
+                continue;
+            }
+            let k = column_of(&cols, c).unwrap_or(0);
+            let Some(j) = head
+                .iter()
+                .enumerate()
+                .skip(i + 1)
+                .find(|(_, n)| n.chunks.iter().any(|d| column_of(&cols, d) == Some(k)))
+                .map(|(j, _)| j)
+            else {
+                continue;
+            };
+            let n = head[j];
+            let wraps = n.base - head[i].base <= n.fs * WRAP_LEADING * 1.2;
+            // Set on the label's own axis, as a label's lines are: starting
+            // where it starts, or centred where it is (a unit centred
+            // between two years is no year's second line).
+            let aligned = |d: &Chunk| {
+                let tol = n.fs * 0.5;
+                (c.x0 - d.x0).abs() <= tol
+                    || ((c.x0 + c.x1) / 2.0 - (d.x0 + d.x1) / 2.0).abs() <= tol
+            };
+            // And the column's unit under that line, its own label: the
+            // label wraps over a group level (`%` under `Discharges with
+            // SDV`), as a line of units read into the header makes one. A
+            // label wrapped over its column's own words stays one label.
+            let labelled_below = head.iter().enumerate().skip(j + 1).any(|(m, l2)| {
+                l2.chunks.iter().zip(&kinds[m]).any(|(e, &banner)| {
+                    !banner && column_of(&cols, e) == Some(k) && is_unit_head(&e.text)
+                })
+            });
+            if k > 0
+                && wraps
+                && labelled_below
+                && n.chunks.iter().zip(&kinds[j]).any(|(d, &banner)| {
+                    banner
+                        && column_of(&cols, d) == Some(k)
+                        && covered(&cols, d).len() <= 1
+                        && aligned(d)
+                })
+            {
+                kinds[i][ci] = true;
+                leaf_bases.retain(|&(kk, b)| !(kk == k && b == head[i].base));
+            }
+        }
+    }
+    // A header ending on a line of the columns' units ([`is_unit_head`]).
+    let over_units = head.iter().any(|l| {
+        let past: Vec<&Chunk> = l
+            .chunks
+            .iter()
+            .filter(|c| column_of(&cols, c) != Some(0))
+            .collect();
+        past.len() >= 2 && past.iter().all(|c| is_unit_head(&c.text))
+    });
     for (i, l) in head.iter().enumerate() {
         let mut row: Vec<Chunk> = Vec::new();
         for (c, &banner) in l.chunks.iter().zip(&kinds[i]) {
@@ -2187,11 +2280,29 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                     }
                 })
                 .collect();
-            let under = leaf_bases
-                .iter()
-                .filter(|(k, _)| names.contains(k) || names.is_empty())
-                .map(|(_, b)| *b)
-                .fold(f64::MAX, f64::min);
+            // Naming no column outright (a label set in the gap over its
+            // pair, `Poor (1)` over `n | %`), over a line of units, it is
+            // measured against the columns' last line of labels: a label
+            // level with it (the stub's head, a wider group's own) is no
+            // measure.
+            let under = if names.is_empty() && over_units {
+                let last = leaf_bases
+                    .iter()
+                    .filter(|(k, _)| *k > 0)
+                    .map(|(_, b)| *b)
+                    .fold(f64::MIN, f64::max);
+                if last == f64::MIN {
+                    f64::MAX
+                } else {
+                    last
+                }
+            } else {
+                leaf_bases
+                    .iter()
+                    .filter(|(k, _)| names.contains(k) || names.is_empty())
+                    .map(|(_, b)| *b)
+                    .fold(f64::MAX, f64::min)
+            };
             let mut named = names.clone();
             for c in &row {
                 if let Some((a, b)) = rule_under(l, c) {
@@ -3714,6 +3825,49 @@ mod tests {
         let spans = &grids[0].layout.as_ref().unwrap().spans;
         assert!(spans.contains(&(0, 2, 4)), "{spans:?}");
         assert!(spans.contains(&(0, 4, 6)), "{spans:?}");
+    }
+
+    #[test]
+    fn a_line_of_units_under_the_groups_is_the_headers() {
+        // Two groups, each over a count and a percentage: the line of units
+        // under them, nothing in the stub, names the columns; the rows give
+        // their values under it.
+        let xs = [20.0, 140.0, 190.0, 250.0, 300.0];
+        let mut gl = Vec::new();
+        gl.extend(set("Overall", 150.0, 40.0));
+        gl.extend(set("Clinic", 262.0, 40.0));
+        for (k, u) in ["n", "%", "n", "%"].iter().enumerate() {
+            gl.extend(set(u, xs[k + 1], 56.0));
+        }
+        for (i, (label, vals)) in [
+            ("Urinary", ["128", "17.4", "6", "9.8"]),
+            ("Respiratory", ["195", "26.5", "7", "11.5"]),
+            ("Skin", ["98", "13.3", "4", "6.6"]),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 74.0 + 16.0 * i as f64;
+            gl.extend(set(label, xs[0], y));
+            for (k, v) in vals.iter().enumerate() {
+                gl.extend(set(v, xs[k + 1], y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 64.0,
+            x1: 340.0,
+            y1: 120.0,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().expect("read from its text");
+        assert_eq!(lay.header_rows, 2, "{lay:?}");
+        let texts = grids[0].cell_texts(&gl);
+        let cols = grids[0].cols();
+        assert_eq!(texts[2 * cols], "Urinary", "{texts:?}");
+        assert!(is_unit_head("95% CI") && is_unit_head("(%)") && is_unit_head("No."));
+        assert!(!is_unit_head("95") && !is_unit_head("Total") && !is_unit_head("n=12"));
     }
 
     #[test]
