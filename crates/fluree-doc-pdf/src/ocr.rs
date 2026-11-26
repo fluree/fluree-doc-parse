@@ -2374,6 +2374,7 @@ mod tests {
                     .collect(),
                 vec![shot(100.0, 288.0), shot(200.0, 150.0)],
             )],
+            title: None,
         };
         let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(pdf_with(
             b"/MediaBox [0 0 612 792]",
@@ -2508,6 +2509,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, Route::Deterministic);
         let r = inject(
@@ -2536,6 +2538,7 @@ mod tests {
     fn a_scanned_page_takes_its_words_in_page_units() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -2565,6 +2568,7 @@ mod tests {
         let before = glyphs.len();
         let mut doc = Document {
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -2583,6 +2587,7 @@ mod tests {
         // A scan with a stamped header the text layer already carries.
         let mut doc = Document {
             pages: vec![page(native("REF", 72.0, 60.0), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -2623,6 +2628,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         assert!(matches!(
             route::decide(&doc.pages[0]).0,
@@ -2655,6 +2661,7 @@ mod tests {
     fn a_crop_the_router_did_not_ask_for_is_refused() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -2678,6 +2685,7 @@ mod tests {
         }
         let mut doc = Document {
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         assert!(matches!(
             route::decide(&doc.pages[0]).0,
@@ -2708,6 +2716,7 @@ mod tests {
     fn a_line_reading_keeps_its_spaces_as_spaces() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         inject(
             &mut doc,
@@ -2726,6 +2735,7 @@ mod tests {
     fn a_turned_word_runs_along_its_angle() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("AB", [100.0, 100.0, 140.0, 120.0]);
         w.angle = Some(90.0);
@@ -2740,6 +2750,7 @@ mod tests {
     fn a_slightly_skewed_word_is_laid_level() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("Balances", [144.0, 200.0, 544.0, 226.0]);
         w.angle = Some(0.6);
@@ -2800,6 +2811,7 @@ mod tests {
     fn a_scanned_page_reads_as_paragraphs_and_a_table() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         assert_eq!(crate::unread_pages(&doc, &[]).len(), 1);
         let injected = inject(&mut doc, &[(0, Crop::Page, px(statement()))]);
@@ -2872,6 +2884,7 @@ mod tests {
             for deg in [0.6, 1.0, 2.0, 3.0, 5.0, -3.0] {
                 let mut doc = Document {
                     pages: vec![page(Vec::new(), vec![full_page_image()])],
+                    title: None,
                 };
                 let r = inject(
                     &mut doc,
@@ -2933,6 +2946,7 @@ mod tests {
         }
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let els = analysed(&mut doc, &r);
@@ -2977,6 +2991,7 @@ mod tests {
         });
         let mut doc = Document {
             pages: vec![page(glyphs, shots.to_vec())],
+            title: None,
         };
         let words: Vec<OcrWord> = (0..5)
             .map(|i| {
@@ -3019,6 +3034,7 @@ mod tests {
         });
         let mut doc = Document {
             pages: vec![page(glyphs, vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("CONFIDENTIAL", [100.0, 185.0, 300.0, 215.0]);
         w.angle = Some(45.0);
@@ -3034,6 +3050,7 @@ mod tests {
         }
         let mut doc = Document {
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         let sizeless = WordReading {
             width: None,
@@ -3050,6 +3067,7 @@ mod tests {
     fn words_off_the_page_or_without_a_box_are_dropped() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let words = vec![
             word("far", [1e9, 1e9, 1e9 + 50.0, 1e9 + 13.0]),
@@ -3149,7 +3167,7 @@ mod tests {
             p.index = m - 1;
             pages.push(p);
         }
-        let mut doc = Document { pages };
+        let mut doc = Document { pages, title: None };
         let readings: Vec<(usize, Crop, WordReading)> = (1..=4)
             .map(|m| {
                 let mut w = run_words(
@@ -3197,7 +3215,7 @@ mod tests {
             p.index = m;
             pages.push(p);
         }
-        let mut doc = Document { pages };
+        let mut doc = Document { pages, title: None };
         let readings: Vec<(usize, Crop, WordReading)> = (0..3)
             .map(|m| {
                 let mut w = Vec::new();
@@ -3356,7 +3374,7 @@ mod tests {
             p.index = i;
             pages.push(p);
         }
-        let mut doc = Document { pages };
+        let mut doc = Document { pages, title: None };
         let rows = [("Widget", "12"), ("Bolt", "7"), ("Nut", "45"), ("Pin", "3")];
         let readings: Vec<(usize, Crop, WordReading)> = (0..6)
             .map(|i| {
@@ -3491,6 +3509,7 @@ mod tests {
     fn decomposed_accents_are_composed_and_angles_wrap() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("Cafe\u{301}", [60.0, 100.0, 100.0, 113.0]);
         w.angle = Some(359.4);
@@ -3504,6 +3523,7 @@ mod tests {
     fn a_page_ocr_read_whole_asks_no_model_for_a_reading() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let short = vec![word("Page", [72.0, 72.0, 110.0, 85.0])];
         inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
@@ -3522,6 +3542,7 @@ mod tests {
     fn abutting_boxes_on_a_line_are_two_words() {
         let mut doc = Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let words = vec![
             word("of returned information", [86.0, 500.0, 184.0, 507.0]),
@@ -3560,6 +3581,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         let before = doc.pages[0].glyphs.len();
         let words = vec![
@@ -3580,6 +3602,7 @@ mod tests {
     fn blank_scan() -> Document {
         Document {
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         }
     }
 
@@ -3675,6 +3698,7 @@ mod tests {
         let header = native("FAX FROM ACME", 40.0, 20.0);
         let mut doc = Document {
             pages: vec![page(header.clone(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3921,6 +3945,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3962,6 +3987,7 @@ mod tests {
                     })
                     .collect(),
             )],
+            title: None,
         }
     }
 
@@ -4091,6 +4117,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         let mut only = vec![(0, Crop::Region(0), rows_read(weak, 0.78))];
         assert!(set_aside_unsure(&bare, &mut only).is_empty());
@@ -4237,6 +4264,7 @@ mod tests {
                     .collect(),
                 vec![at(430.0, 600.0), at(500.0, 700.0)],
             )],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -4551,6 +4579,7 @@ mod tests {
         }
         let mut doc = Document {
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         let far = page_units(vec![word("far", [5000.0, 5000.0, 5050.0, 5013.0])]);
         inject(&mut doc, &[(0, Crop::Page, far)]);
@@ -4581,6 +4610,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         let w = || {
             page_units(vec![word(
@@ -4657,6 +4687,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         assert!(matches!(
             route::decide(&doc.pages[0]).0,
@@ -4917,6 +4948,7 @@ mod tests {
         p2.index = 2;
         let doc = Document {
             pages: vec![p0, p1, p2],
+            title: None,
         };
         let tags = |jobs: &OcrJobs| -> Vec<(usize, Vec<String>)> {
             jobs.iter()

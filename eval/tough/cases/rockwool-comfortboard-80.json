@@ -12,7 +12,8 @@
     "2026-11-24 (#110): the acoustical rows `2`, `3`, `5` were a second table with no column names; the outer table's label, centred on its tall row, falls between `1.5` and `2` and broke the run of aligned rows.",
     "2026-11-24 (#194): the property table, ruled 3 × 11, was replaced by a reading from alignment because one cell is long and the acoustic row sets nine columns: data rows became its header and the rest loose paragraphs. The ruled table stands now, and the acoustic grid nested in its Performance cell is a table of its own after it, its cells carrying `Acoustical Performance` as their section.",
     "2026-11-25 (#264): the margin block `Issued 07-2025` / `Supersedes 05-2025` and the 6 pt NOTE beside it shared a baseline, near enough, and the space glyph after `Issued 07-2025` kept the gutter between them unmeasured. The gutter's cut spared it as a number set off from its text by a tab (`3.1 ⇥ Results`), so its first line read `Issued 07-2025 NOTE: …`. A label that heads a column of its own, set apart from the text past the gap in size or baseline, is cut away.",
-    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there.",
+    "2026-11-26 (#455): a title is a `doco:Title` only where it is sure, its evidence naming how (`metadata`, `outline`, `type`); the title's checks no longer name its evidence."
   ],
   "checks": [
     {
@@ -39,8 +40,7 @@
       "issue": "The cover title's raised ®, followed by a space glyph at its own size, stood alone and was read as a list marker and dropped.",
       "element": {
         "type": "doco:Title",
-        "text": "Comfortboard® 80",
-        "evidence": "title"
+        "text": "Comfortboard® 80"
       }
     },
     {

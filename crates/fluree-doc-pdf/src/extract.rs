@@ -230,6 +230,10 @@ impl Page {
 #[derive(Clone)]
 pub struct Document {
     pub pages: Vec<Page>,
+    /// The title the file's information dictionary states (`/Title`), as
+    /// written: what the document is called by whoever made the file, and
+    /// often stale or a file's name.
+    pub title: Option<String>,
 }
 
 impl Document {
@@ -2003,7 +2007,10 @@ pub fn extract_bytes_with(
         }
     }
 
-    Ok(Document { pages })
+    Ok(Document {
+        pages,
+        title: crate::info::read(&pdf).title,
+    })
 }
 
 /// Whether an image stream is coded by a filter that only codes one bit per

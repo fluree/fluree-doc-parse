@@ -696,7 +696,33 @@ begins and requiring prominence, vertical isolation or a contents label.
 
 The title is emitted as a `doco:Title`, as a Word document's and a deck's
 are: DoCO holds it as the document's header, and the sections start at level
-1 beside it. It is read as a level-1 heading until every pass that weighs
+1 beside it. It is the line consumers index the document by, so it is
+emitted only where it is sure, and its evidence says how:
+
+- `metadata`: the file's own `/Title` names it, its words nearly all among
+  the line's and covering half of the file's title or more. A title's date
+  covers too little (`September 20, 2023` of `Transcript of Chair Powell's
+  Press Conference -- September 20, 2023`), and so does a fragment
+  (`Minutes of the`). A file's name, a placeholder (`Untitled`, `Microsoft
+  Word - draft3.doc`) or a typesetter's job name (`pone.0005054 1..10`)
+  names nothing.
+- `outline`: a bookmark at the outline's first depth names it.
+- `type`: the first page sets it apart by its type, and nothing doubts it.
+
+Where the file's title names another line on the first page and not the one
+taken, that line is the title: a journal's mark (`materials`, `sensors`)
+over the article's title, a pharmacy's name over a drug's, the date over a
+transcript's title. A field's line (`Amazon.com order number: 114-…`) is
+never taken, though its value names the file.
+
+A line in doubt stays a level-1 heading, and the document has no title: no
+title is better than a wrong one. In doubt are a date, a section's number or
+name (`1. PURPOSE`, `Table of Contents`, `Introduction`), a division's label
+(`PART II`, `Item 8. …`), a section carried on (`(Continued)`), a lead-in on
+its colon, one word (a journal's or a company's mark), and a company's name
+closing on its form (`Co., Ltd.`, `Inc`, `PBC`), a letterhead's. A title set
+at the body's size is not in doubt for that alone: an agreement sets its
+title so (`INDEMNIFICATION AGREEMENT`). It is read as a level-1 heading until every pass that weighs
 headings has run, then retyped once, so a run of bold heads or a heading
 continued over pages is judged as before. Markdown and XHTML write it as
 they wrote the level-1 heading it was, `#` and `<h1>`.
