@@ -1981,6 +1981,7 @@ mod tests {
                         angle: None,
                         conf: Some(0.9),
                     }],
+                    rules: Vec::new(),
                 })
             }
         }
@@ -2419,6 +2420,7 @@ mod tests {
                         angle: None,
                         conf: Some(0.9),
                     }],
+                    rules: Vec::new(),
                 })
             }
         }

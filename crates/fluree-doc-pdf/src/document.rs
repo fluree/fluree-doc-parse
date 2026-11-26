@@ -3138,6 +3138,10 @@ struct PageLayout {
     /// The lettering an OCR engine read in the page's artwork, set apart
     /// from the page's text; see [`take_lettering`].
     lettering: Vec<Lettering>,
+    /// The pictures read as tables ruled by the rules in their pixels
+    /// ([`picture_table`]): the page's text, as a picture read as text is,
+    /// and no figure.
+    picture_tables: Vec<crate::geom::BBox>,
 }
 
 /// A picture's lettering, read by OCR inside it and assembled on its own:
@@ -3229,10 +3233,12 @@ fn text_picture(bbox: &crate::geom::BBox, lines: &[Line]) -> bool {
 /// ([`text_picture`]) is read apart too, as the page's own text where it
 /// stands. A page read whole, and a letter drawn as an image of its own
 /// ([`LETTER_IMAGE_COVER`]), keep their text as the page's.
-fn take_lettering(p: &mut Page) -> Vec<Lettering> {
+/// Returns too the pictures read as tables ([`picture_table`]), whose text
+/// stays the page's and whose rules join the page's.
+fn take_lettering(p: &mut Page) -> (Vec<Lettering>, Vec<crate::geom::BBox>) {
     let lettered = |g: &Glyph| g.ocr == Some(crate::glyph::OcrSource::Region);
     if !p.glyphs.iter().any(|g| lettered(g) && g.bbox.is_some()) {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     // What the readings were taken for: the routed regions, each one
     // picture whatever images draw it (a chromatogram set a letter to an
@@ -3327,17 +3333,34 @@ fn take_lettering(p: &mut Page) -> Vec<Lettering> {
     }
     let mut taken = vec![false; p.glyphs.len()];
     let mut out = Vec::new();
+    // The rules of the pictures read as tables, laid on the page once all
+    // pictures are judged.
+    let mut ruling: Vec<crate::rule::Rule> = Vec::new();
+    let mut tables: Vec<crate::geom::BBox> = Vec::new();
     for (bbox, mut idx) in pictures {
         if idx.is_empty() {
             continue;
         }
         idx.sort_unstable();
-        for &i in &idx {
-            taken[i] = true;
-        }
         let glyphs: Vec<Glyph> = idx.iter().map(|&i| p.glyphs[i].clone()).collect();
         let lines = crate::line::assemble(&glyphs);
         let text = text_picture(&bbox, &lines);
+        // A table set as an image: its text stays the page's, and the rules
+        // drawn in its pixels join the page's, so the page's table passes
+        // read it as a table drawn with rules. Only here, and only for a
+        // picture whose own rules grid its own text ([`picture_table`]),
+        // do a picture's rules become the page's. Any picture is asked, a
+        // text picture or not: a table's cells are short runs, neither
+        // lines across it nor much of its area, and the test is the grid.
+        let rules = picture_rules(p, &bbox);
+        if picture_table(&glyphs, &rules, p.index) {
+            ruling.extend(rules);
+            tables.push(bbox);
+            continue;
+        }
+        for &i in &idx {
+            taken[i] = true;
+        }
         out.push(Lettering {
             bbox,
             glyphs,
@@ -3349,7 +3372,255 @@ fn take_lettering(p: &mut Page) -> Vec<Lettering> {
         let mut k = taken.iter();
         p.glyphs.retain(|_| !*k.next().unwrap_or(&false));
     }
-    out
+    p.rules.extend(ruling);
+    (out, tables)
+}
+
+/// Least share of a picture's words a grid of its rules holds for the
+/// picture to be a table. A table set as an image is most of the image: a
+/// title or a source note may stand over or under its ruling, but its words
+/// are in its cells. A diagram's boxes each hold a label or two, and its
+/// arrows' labels, legend and title stand outside them.
+const PICTURE_TABLE_WORDS: f64 = 0.8;
+
+/// Least share of a grid's cells, a merged cell counted once, that hold
+/// text for the grid to be a table's. A table leaves some cells empty (one
+/// figure a row across three columns leaves two of them empty in each row);
+/// a lattice of a diagram's boxes, or of a form's or a screen's frames, is
+/// mostly empty space between its labels.
+const PICTURE_TABLE_FILLED: f64 = 0.5;
+
+/// Least share of the extent of a picture's text, across and down, that the
+/// grid spans: a table's ruling runs across all of it. A box drawn around
+/// one part of a picture, a panel of a screenshot or a key, does not.
+const PICTURE_TABLE_SPAN: f64 = 0.75;
+
+/// Most share of a grid's filled cells, a merged cell counted once, whose
+/// text breaks apart along a line ([`SCATTER_EMS`]) for the grid to be a
+/// table's. A table's cell holds one run of text a line, a figure or a
+/// label, however wide the cell; a chart's plot, banded by its gridlines,
+/// holds its values set apart across each band (`58,1 … 58,3 … 57,4`),
+/// and the bands are cells only of the gridlines' making.
+const PICTURE_TABLE_SCATTERED: f64 = 0.25;
+
+/// Widest gap between two words on one line of a cell, in the size of
+/// their text, that is still the space between words: a tab's width, more
+/// than any justified line opens, less than the distance between two
+/// values a chart sets apart.
+const SCATTER_EMS: f64 = 2.5;
+
+/// Least share of the edges between a grid's cells, inside it, that its
+/// rules draw for the grid to be a table's. A table drawn with rules draws
+/// the edges between its cells, all but the few a merged cell spans; the
+/// boxes of a diagram, the buttons of a screen and the panels of a drawing
+/// line up, but leave the edges between them undrawn, and a chart's
+/// gridlines run one way only.
+const PICTURE_TABLE_DRAWN: f64 = 0.75;
+
+/// Least share of a grid's rows that hold two filled cells or more, side
+/// by side, for the grid to be a table's. A table sets things beside each
+/// other in its rows, a label and its figures; a framed list or a screen's
+/// panel holds one block of text a row, whatever its frame draws beside it.
+const PICTURE_TABLE_SIDE_BY_SIDE: f64 = 0.5;
+
+/// The rules the routed regions' readings found drawn in this picture
+/// ([`crate::extract::OcrRead::rules`]), cut to it.
+fn picture_rules(p: &Page, bbox: &crate::geom::BBox) -> Vec<crate::rule::Rule> {
+    let Some(read) = p.ocr.as_ref() else {
+        return Vec::new();
+    };
+    read.rules
+        .iter()
+        .filter_map(|r| {
+            let (cx, cy) = ((r.bbox.x0 + r.bbox.x1) * 0.5, (r.bbox.y0 + r.bbox.y1) * 0.5);
+            if cx < bbox.x0 || cx > bbox.x1 || cy < bbox.y0 || cy > bbox.y1 {
+                return None;
+            }
+            let cut = crate::geom::BBox {
+                x0: r.bbox.x0.max(bbox.x0),
+                y0: r.bbox.y0.max(bbox.y0),
+                x1: r.bbox.x1.min(bbox.x1),
+                y1: r.bbox.y1.min(bbox.y1),
+            };
+            (cut.x1 > cut.x0 && cut.y1 > cut.y0).then_some(crate::rule::Rule { bbox: cut, ..*r })
+        })
+        .collect()
+}
+
+/// Is a picture's text a table ruled by the rules drawn in its pixels? Read
+/// as a drawn table is ([`table::detect_framed`]), on the picture's own
+/// glyphs and rules alone: a grid of two rows and two columns at least,
+/// header rows counted, that holds the picture's words
+/// ([`PICTURE_TABLE_WORDS`]), its cells mostly filled
+/// ([`PICTURE_TABLE_FILLED`]), each a run of text, not values set apart
+/// ([`PICTURE_TABLE_SCATTERED`]), most rows setting cells side by side
+/// ([`PICTURE_TABLE_SIDE_BY_SIDE`]), the edges between its cells drawn
+/// ([`PICTURE_TABLE_DRAWN`]), and its ruling across the picture's text
+/// ([`PICTURE_TABLE_SPAN`]).
+fn picture_table(glyphs: &[Glyph], rules: &[crate::rule::Rule], page: usize) -> bool {
+    use crate::rule::Orientation;
+    let axis = |o: Orientation| rules.iter().filter(|r| r.orientation == o).count();
+    if axis(Orientation::Horizontal) < 2 || axis(Orientation::Vertical) < 2 {
+        return false;
+    }
+    let words: Vec<crate::geom::BBox> = glyphs
+        .iter()
+        .filter(|g| !g.text.trim().is_empty())
+        .filter_map(|g| g.bbox)
+        .collect();
+    let Some(extent) = words.iter().copied().reduce(|a, b| a.union(&b)) else {
+        return false;
+    };
+    let mut sizes: Vec<f64> = glyphs
+        .iter()
+        .filter(|g| !g.text.trim().is_empty())
+        .map(|g| f64::from(g.font_size))
+        .collect();
+    sizes.sort_by(f64::total_cmp);
+    let size = sizes[sizes.len() / 2].max(1.0);
+    let mut grids = table::detect_framed(rules, &[], glyphs, page, &[]);
+    for g in grids.iter_mut() {
+        g.trim_to_content(glyphs);
+    }
+    grids.retain(|g| g.rows() >= 2 && g.cols() >= 2);
+    let judged = grids.iter().map(|g| {
+        let inside = |b: &crate::geom::BBox| {
+            let (x, y) = ((b.x0 + b.x1) * 0.5, (b.y0 + b.y1) * 0.5);
+            x >= g.bbox.x0 && x <= g.bbox.x1 && y >= g.bbox.y0 && y <= g.bbox.y1
+        };
+        let held = words.iter().filter(|b| inside(b)).count() as f64 / words.len() as f64;
+        let cells = g.cell_texts(glyphs);
+        let m = g.merges(rules, &[]);
+        let cols = g.cols();
+        let owner = |mut i: usize| {
+            while m.continues_left[i] || m.continues_above[i] {
+                i -= if m.continues_left[i] { 1 } else { cols };
+            }
+            i
+        };
+        let mut full = vec![false; cells.len()];
+        for (i, c) in cells.iter().enumerate() {
+            if !c.trim().is_empty() {
+                full[owner(i)] = true;
+            }
+        }
+        let slots = (0..cells.len()).filter(|&i| owner(i) == i).count().max(1);
+        let filled = (0..cells.len())
+            .filter(|&i| owner(i) == i && full[i])
+            .count() as f64
+            / slots as f64;
+        // Each filled cell's glyphs, line by line, left to right: a line
+        // broken by a gap wider than SCATTER_EMS is text set apart.
+        let mut held_by: Vec<Vec<&Glyph>> = vec![Vec::new(); cells.len()];
+        for (gl, home) in glyphs.iter().zip(g.glyph_cells(glyphs)) {
+            if let (Some(i), Some(_)) = (home, gl.bbox) {
+                if !gl.text.trim().is_empty() {
+                    held_by[owner(i)].push(gl);
+                }
+            }
+        }
+        let broken = |cell: &Vec<&Glyph>| {
+            let mut lines: Vec<Vec<&Glyph>> = Vec::new();
+            let mut sorted = cell.clone();
+            sorted.sort_by(|a, b| a.origin.1.total_cmp(&b.origin.1));
+            for gl in sorted {
+                let size = f64::from(gl.font_size).max(1.0);
+                match lines.last_mut() {
+                    Some(l) if (l[0].origin.1 - gl.origin.1).abs() <= 0.5 * size => l.push(gl),
+                    _ => lines.push(vec![gl]),
+                }
+            }
+            lines.iter_mut().any(|l| {
+                l.sort_by(|a, b| a.bbox.unwrap().x0.total_cmp(&b.bbox.unwrap().x0));
+                l.windows(2).any(|w| {
+                    let (a, b) = (w[0].bbox.unwrap(), w[1].bbox.unwrap());
+                    let size = f64::from(w[0].font_size.max(w[1].font_size)).max(1.0);
+                    b.x0 - a.x1 > SCATTER_EMS * size
+                })
+            })
+        };
+        let full_cells = (0..cells.len())
+            .filter(|&i| owner(i) == i && full[i])
+            .count()
+            .max(1);
+        let scattered = (0..cells.len())
+            .filter(|&i| owner(i) == i && full[i] && broken(&held_by[i]))
+            .count() as f64
+            / full_cells as f64;
+        // Rows with two filled cells or more.
+        let rows = g.rows();
+        let side_by_side = (0..rows)
+            .filter(|&r| {
+                (0..cols)
+                    .filter(|&c| owner(r * cols + c) == r * cols + c && full[r * cols + c])
+                    .count()
+                    >= 2
+            })
+            .count() as f64
+            / rows.max(1) as f64;
+        // The inner edges between cells a rule draws along half their
+        // length or more, a rule standing within a quarter of the text's
+        // size of the edge.
+        let near = 0.25 * size;
+        let drawn_along = |o: Orientation, at: f64, a: f64, b: f64| {
+            let mut spans: Vec<(f64, f64)> = rules
+                .iter()
+                .filter(|r| r.orientation == o && (r.axis_pos() - at).abs() <= near)
+                .map(|r| match o {
+                    Orientation::Horizontal => (r.bbox.x0.max(a), r.bbox.x1.min(b)),
+                    Orientation::Vertical => (r.bbox.y0.max(a), r.bbox.y1.min(b)),
+                })
+                .filter(|(x0, x1)| x1 > x0)
+                .collect();
+            spans.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let (mut got, mut reach) = (0.0, a);
+            for (x0, x1) in spans {
+                let x0 = x0.max(reach);
+                if x1 > x0 {
+                    got += x1 - x0;
+                    reach = x1;
+                }
+            }
+            got >= 0.5 * (b - a)
+        };
+        let mut edges = 0usize;
+        let mut drawn = 0usize;
+        for k in 1..g.xs.len().saturating_sub(1) {
+            for r in 0..rows {
+                edges += 1;
+                drawn += usize::from(drawn_along(
+                    Orientation::Vertical,
+                    g.xs[k],
+                    g.ys[r],
+                    g.ys[r + 1],
+                ));
+            }
+        }
+        for k in 1..g.ys.len().saturating_sub(1) {
+            for c in 0..cols {
+                edges += 1;
+                drawn += usize::from(drawn_along(
+                    Orientation::Horizontal,
+                    g.ys[k],
+                    g.xs[c],
+                    g.xs[c + 1],
+                ));
+            }
+        }
+        let drawn = drawn as f64 / edges.max(1) as f64;
+        let across =
+            (g.bbox.x1.min(extent.x1) - g.bbox.x0.max(extent.x0)) / extent.width().max(1e-9);
+        let down =
+            (g.bbox.y1.min(extent.y1) - g.bbox.y0.max(extent.y0)) / extent.height().max(1e-9);
+        held >= PICTURE_TABLE_WORDS
+            && filled >= PICTURE_TABLE_FILLED
+            && scattered <= PICTURE_TABLE_SCATTERED
+            && drawn >= PICTURE_TABLE_DRAWN
+            && side_by_side >= PICTURE_TABLE_SIDE_BY_SIDE
+            && across >= PICTURE_TABLE_SPAN
+            && down >= PICTURE_TABLE_SPAN
+    });
+    judged.fold(false, |a, b| a || b)
 }
 
 /// The blocks a picture's text reads into, assembled on their own: a
@@ -3503,7 +3774,8 @@ fn find_figures(
             .iter()
             .map(|&i| (blocks[i].bbox, blocks[i].font_size, block_texts[i].as_str()))
             .collect();
-        // A picture whose text was read as the page's own is no figure.
+        // A picture whose text was read as the page's own is no figure, nor
+        // one read as a table.
         let text_pictures: Vec<crate::geom::BBox> = layouts
             .get(pi)
             .map(|l| {
@@ -3511,6 +3783,7 @@ fn find_figures(
                     .iter()
                     .filter(|t| t.text)
                     .map(|t| t.bbox)
+                    .chain(l.picture_tables.iter().copied())
                     .collect()
             })
             .unwrap_or_default();
@@ -4280,7 +4553,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     for (p, route) in raw.pages.iter_mut().zip(routes) {
         // A picture's lettering is read apart from the page's text, before
         // any reader of the page's text sees it.
-        let lettering = take_lettering(p);
+        let (lettering, picture_tables) = take_lettering(p);
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
         // consumer of `rules` — grids, column rulers, row banding — would
@@ -5144,6 +5417,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             missing_tables: missing,
             demoted_tables: demoted,
             lettering,
+            picture_tables,
         });
     }
 
@@ -6874,6 +7148,215 @@ fn furniture_key(text: &str, digits_vary: bool) -> String {
 mod tests {
     use super::*;
     use crate::geom::BBox;
+
+    /// A word OCR read in a picture: one glyph at `(x0, y0)`, 5pt a
+    /// character, 10pt tall.
+    fn read_word(x0: f64, y0: f64, text: &str) -> Glyph {
+        let w = 5.0 * text.chars().count() as f64;
+        Glyph {
+            text: text.into(),
+            bbox: Some(BBox {
+                x0,
+                y0,
+                x1: x0 + w,
+                y1: y0 + 10.0,
+            }),
+            page: 0,
+            origin: (x0, y0 + 8.0),
+            rotation_deg: 0.0,
+            font_size: 10.0,
+            weight: None,
+            italic: false,
+            advance: Some(w),
+            draw_index: 0,
+            ocr: Some(crate::glyph::OcrSource::Region),
+        }
+    }
+
+    fn across(y: f64, x0: f64, x1: f64) -> crate::rule::Rule {
+        crate::rule::Rule {
+            bbox: BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        }
+    }
+
+    fn down(x: f64, y0: f64, y1: f64) -> crate::rule::Rule {
+        crate::rule::Rule {
+            bbox: BBox {
+                x0: x,
+                y0,
+                x1: x + 0.5,
+                y1,
+            },
+            orientation: crate::rule::Orientation::Vertical,
+            page: 0,
+        }
+    }
+
+    #[test]
+    fn a_picture_ruled_as_a_table_is_read_as_one() {
+        // Three columns, a header and three rows, every cell ruled; one row
+        // leaves a cell empty.
+        let mut glyphs = Vec::new();
+        for (r, row) in [
+            ["Tube", "Buffer", "DNA"],
+            ["S1", "3 uL", "10 uL"],
+            ["S2", "3 uL", ""],
+            ["EB", "3 uL", "10 uL"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            for (c, text) in row.iter().enumerate() {
+                if !text.is_empty() {
+                    glyphs.push(read_word(
+                        10.0 + 100.0 * c as f64,
+                        5.0 + 20.0 * r as f64,
+                        text,
+                    ));
+                }
+            }
+        }
+        let mut rules: Vec<_> = (0..5)
+            .map(|r| across(20.0 * r as f64, 0.0, 300.0))
+            .collect();
+        rules.extend((0..4).map(|c| down(100.0 * c as f64, 0.0, 80.0)));
+        assert!(picture_table(&glyphs, &rules, 0));
+        // Without its rules, or with a frame round it alone, it is no table
+        // here: alignment is not read from a picture.
+        assert!(!picture_table(&glyphs, &[], 0));
+        let frame = [
+            across(0.0, 0.0, 300.0),
+            across(80.0, 0.0, 300.0),
+            down(0.0, 0.0, 80.0),
+            down(300.0, 0.0, 80.0),
+        ];
+        assert!(!picture_table(&glyphs, &frame, 0));
+    }
+
+    #[test]
+    fn underlines_and_strike_through_in_a_framed_picture_make_no_table() {
+        // A framed panel of prose: a heading underlined, a word struck
+        // through, a link underlined, and the frame.
+        let glyphs = vec![
+            read_word(10.0, 5.0, "Before you scan"),
+            read_word(10.0, 25.0, "Load the document face down"),
+            read_word(10.0, 45.0, "Close the cover"),
+            read_word(10.0, 65.0, "See the online guide"),
+        ];
+        let rules = vec![
+            across(0.0, 0.0, 200.0),
+            across(100.0, 0.0, 200.0),
+            down(0.0, 0.0, 100.0),
+            down(200.0, 0.0, 100.0),
+            // The heading's underline, the struck word, the link's underline.
+            across(16.0, 10.0, 85.0),
+            across(50.0, 10.0, 85.0),
+            across(76.0, 10.0, 110.0),
+        ];
+        assert!(!picture_table(&glyphs, &rules, 0));
+    }
+
+    #[test]
+    fn a_diagram_s_boxes_are_no_table() {
+        // Three boxes in a row, each round a label, joined by arrows whose
+        // labels, and a legend and a title, stand outside them.
+        let mut glyphs = vec![
+            read_word(10.0, 0.0, "Collateral management system architecture"),
+            read_word(10.0, 40.0, "Interfaces"),
+            read_word(160.0, 40.0, "Reference data"),
+            read_word(330.0, 40.0, "Pool"),
+            read_word(100.0, 25.0, "updates"),
+            read_word(260.0, 25.0, "positions"),
+            read_word(100.0, 75.0, "settlement"),
+            read_word(260.0, 75.0, "instructions"),
+            read_word(10.0, 95.0, "Source: ECMS documentation and annual review"),
+        ];
+        glyphs.push(read_word(
+            10.0,
+            110.0,
+            "Legend: arrows show the flow of messages",
+        ));
+        let mut rules = Vec::new();
+        for x0 in [0.0, 150.0, 320.0] {
+            rules.push(across(35.0, x0, x0 + 90.0));
+            rules.push(across(55.0, x0, x0 + 90.0));
+            rules.push(down(x0, 35.0, 55.0));
+            rules.push(down(x0 + 90.0, 35.0, 55.0));
+        }
+        assert!(!picture_table(&glyphs, &rules, 0));
+    }
+
+    #[test]
+    fn a_screen_s_panel_or_list_of_buttons_is_no_table() {
+        // A language list framed with its scroll bar, over its OK button:
+        // every edge drawn, but one block of text a row.
+        let glyphs = vec![
+            read_word(10.0, 5.0, "English"),
+            read_word(10.0, 20.0, "Deutsch"),
+            read_word(10.0, 35.0, "Suomi"),
+            read_word(10.0, 50.0, "Svenska"),
+            read_word(170.0, 75.0, "OK"),
+        ];
+        let rules = vec![
+            across(0.0, 0.0, 200.0),
+            across(70.0, 0.0, 200.0),
+            across(90.0, 0.0, 200.0),
+            down(0.0, 0.0, 90.0),
+            down(180.0, 0.0, 70.0),
+            down(200.0, 0.0, 90.0),
+            down(160.0, 70.0, 90.0),
+        ];
+        assert!(!picture_table(&glyphs, &rules, 0));
+        // A menu of buttons, an icon's frame beside each label: the boxes
+        // line up, the space between them undrawn.
+        let mut glyphs = Vec::new();
+        let mut rules = Vec::new();
+        for (r, label) in [
+            "Home Page",
+            "Solutions Center",
+            "Supplies",
+            "Creative Center",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 30.0 * r as f64;
+            glyphs.push(read_word(40.0, y + 6.0, "@"));
+            glyphs.push(read_word(70.0, y + 6.0, label));
+            rules.push(across(y, 30.0, 200.0));
+            rules.push(across(y + 22.0, 30.0, 200.0));
+            rules.push(down(30.0, y, y + 22.0));
+            rules.push(down(60.0, y, y + 22.0));
+            rules.push(down(200.0, y, y + 22.0));
+        }
+        assert!(!picture_table(&glyphs, &rules, 0));
+    }
+
+    #[test]
+    fn a_box_round_part_of_a_picture_is_no_table() {
+        // A panel ruled as a table inside a larger picture whose text runs
+        // beyond it: the ruling does not run across the picture's text.
+        let mut glyphs = Vec::new();
+        for r in 0..3 {
+            glyphs.push(read_word(10.0, 5.0 + 20.0 * r as f64, "Size"));
+            glyphs.push(read_word(110.0, 5.0 + 20.0 * r as f64, "Large"));
+        }
+        for r in 0..8 {
+            glyphs.push(read_word(250.0, 5.0 + 20.0 * r as f64, "Settings"));
+        }
+        let mut rules: Vec<_> = (0..4)
+            .map(|r| across(20.0 * r as f64, 0.0, 200.0))
+            .collect();
+        rules.extend((0..3).map(|c| down(100.0 * c as f64, 0.0, 60.0)));
+        assert!(!picture_table(&glyphs, &rules, 0));
+    }
 
     fn line_at(
         kind: &str,

@@ -134,6 +134,17 @@ pub enum Crop {
     Region(usize),
 }
 
+/// Read into a region's reading the rules its picture draws
+/// ([`fluree_doc_vision::rules::drawn`]), from the pixels it was read in:
+/// what a table set as an image is ruled by, which the table path reads
+/// ([`crate::document`]'s picture tables). A whole page's reading is left
+/// without: a scan's ruling is not read from its pixels here.
+pub fn read_rules(crop: Crop, pixels: &fluree_doc_vision::Pixels, reading: &mut WordReading) {
+    if matches!(crop, Crop::Region(_)) {
+        reading.rules = fluree_doc_vision::rules::drawn(pixels, reading);
+    }
+}
+
 impl Crop {
     /// The crop a tag names (`full`, `r0`, …); `None` for any other tag,
     /// such as a table crop, which an OCR reading has no use for.
@@ -434,10 +445,17 @@ fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordRea
     if t.replaces {
         p.glyphs.retain(|g| g.draw_index >= first_glyph);
     }
+    // A region's picture's rules, kept with the reading for the table path
+    // and laid nowhere else.
+    let rules = match (crop, t.shown) {
+        (Crop::Region(_), Some(region)) => place_rules(p, region, reading),
+        _ => Vec::new(),
+    };
     let mark = p.ocr.get_or_insert_with(|| crate::extract::OcrRead {
         first_glyph,
         ..Default::default()
     });
+    mark.rules.extend(rules);
     mark.whole |= matches!(t.area, Area::Page);
     for i in regions_read {
         if !mark.regions.contains(&i) {
@@ -686,6 +704,55 @@ fn line_mates(w: &Placed, v: &Placed) -> bool {
     let ahead = dx * along.0 + dy * along.1;
     let across = -dx * along.1 + dy * along.0;
     across.abs() <= 0.5 * tall && ahead.abs() - (wl + vl) * 0.5 <= tall
+}
+
+/// The rules a region's reading found drawn in its pixels
+/// ([`read_rules`]), on the page: mapped as its words are ([`place`]), in
+/// the page's frame, each cut to the region read. A rule runs the way its
+/// placed box is longer, so a page turned to be read turns its rules too.
+fn place_rules(p: &Page, region: BBox, reading: &WordReading) -> Vec<crate::rule::Rule> {
+    let rect = crop_rect(p, Some(region));
+    let (Coords::Px, Some(w), Some(h)) = (reading.coords, reading.width, reading.height) else {
+        return Vec::new();
+    };
+    if !(w > 0.0 && h > 0.0) {
+        return Vec::new();
+    }
+    let (sx, sy) = (rect.width() / w, rect.height() / h);
+    let mut out = Vec::new();
+    for r in &reading.rules {
+        let [x0, y0, x1, y1] = r.bbox;
+        if !r.bbox.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let a = p.from_display_point((rect.x0 + x0 * sx, rect.y0 + y0 * sy));
+        let b = p.from_display_point((rect.x0 + x1 * sx, rect.y0 + y1 * sy));
+        let placed = BBox {
+            x0: a.0.min(b.0),
+            y0: a.1.min(b.1),
+            x1: a.0.max(b.0),
+            y1: a.1.max(b.1),
+        };
+        let orientation = if placed.width() >= placed.height() {
+            crate::rule::Orientation::Horizontal
+        } else {
+            crate::rule::Orientation::Vertical
+        };
+        let cut = BBox {
+            x0: placed.x0.max(region.x0),
+            y0: placed.y0.max(region.y0),
+            x1: placed.x1.min(region.x1),
+            y1: placed.y1.min(region.y1),
+        };
+        if cut.x1 > cut.x0 && cut.y1 > cut.y0 {
+            out.push(crate::rule::Rule {
+                bbox: cut,
+                orientation,
+                page: p.index,
+            });
+        }
+    }
+    out
 }
 
 /// Whether an image of aspect `read` (width over height) is the crop of
@@ -1848,7 +1915,10 @@ pub fn read_pages_leaving(
             return;
         };
         match engine.read(&crop.pixels) {
-            Ok(reading) => readings.push((at, (crop.page, which, reading))),
+            Ok(mut reading) => {
+                read_rules(which, &crop.pixels, &mut reading);
+                readings.push((at, (crop.page, which, reading)))
+            }
             Err(e) => failed.push((at, (crop.name, e))),
         }
     });
@@ -2178,6 +2248,7 @@ mod tests {
             height: Some(1584.0),
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 
@@ -2269,6 +2340,7 @@ mod tests {
                     angle: None,
                     conf: Some(0.9),
                 }],
+                rules: Vec::new(),
             })
         }
     }
@@ -2851,6 +2923,77 @@ mod tests {
     }
 
     #[test]
+    fn a_region_reading_s_rules_are_placed_cut_to_it_and_kept_apart() {
+        // The screenshot of the test below, its reading carrying the rules
+        // its pixels draw: one across the crop, margin to margin, and one
+        // down it.
+        let mut glyphs = Vec::new();
+        for row in 0..12 {
+            glyphs.extend(native("Body text line", 72.0, 80.0 + row as f64 * 14.0));
+        }
+        let shot = BBox {
+            x0: 100.0,
+            y0: 300.0,
+            x1: 500.0,
+            y1: 500.0,
+        };
+        let image = ImagePlacement {
+            bbox: shot,
+            texty: true,
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+        };
+        let mut doc = Document {
+            pages: vec![page(glyphs, vec![image])],
+            title: None,
+        };
+        let drawn = doc.pages[0].rules.len();
+        let reading = WordReading {
+            coords: Coords::Px,
+            width: Some(1648.0),
+            height: Some(848.0),
+            engine: None,
+            words: vec![word("Balance", [24.0, 100.0, 184.0, 140.0])],
+            rules: vec![
+                fluree_doc_vision::rules::DrawnRule {
+                    bbox: [0.0, 200.0, 1648.0, 204.0],
+                    axis: fluree_doc_vision::rules::Axis::Horizontal,
+                },
+                fluree_doc_vision::rules::DrawnRule {
+                    bbox: [424.0, 24.0, 428.0, 824.0],
+                    axis: fluree_doc_vision::rules::Axis::Vertical,
+                },
+            ],
+        };
+        inject(&mut doc, &[(0, Crop::Region(0), reading)]);
+        let p = &doc.pages[0];
+        // Not the page's ruling: only a table read from the picture makes
+        // them that.
+        assert_eq!(p.rules.len(), drawn);
+        let rules = &p.ocr.as_ref().unwrap().rules;
+        assert_eq!(rules.len(), 2);
+        // 200 px down the crop is 50 units, 344 on the page; the margins
+        // either side are cut off at the region's edges.
+        let a = rules[0];
+        assert_eq!(a.orientation, crate::rule::Orientation::Horizontal);
+        assert!(
+            (a.bbox.x0 - 100.0).abs() < 1e-9 && (a.bbox.x1 - 500.0).abs() < 1e-9,
+            "{a:?}"
+        );
+        assert!(
+            (a.bbox.y0 - 344.0).abs() < 1e-9 && (a.bbox.y1 - 345.0).abs() < 1e-9,
+            "{a:?}"
+        );
+        let d = rules[1];
+        assert_eq!(d.orientation, crate::rule::Orientation::Vertical);
+        assert!(
+            (d.bbox.x0 - 200.0).abs() < 1e-9 && (d.bbox.y0 - 300.0).abs() < 1e-9,
+            "{d:?}"
+        );
+    }
+
+    #[test]
     fn a_region_reading_maps_through_its_margin_and_keeps_to_the_region() {
         // A text page with a screenshot pasted in its middle.
         let mut glyphs = Vec::new();
@@ -2893,6 +3036,7 @@ mod tests {
                 // In the margin above the region: a neighbour's text.
                 word("cut", [400.0, 2.0, 460.0, 20.0]),
             ],
+            rules: Vec::new(),
         };
         let r = inject(&mut doc, &[(0, Crop::Region(0), reading)]);
         assert_eq!((r[0].taken, r[0].dropped), (1, 1));
@@ -3097,6 +3241,7 @@ mod tests {
             height: None,
             engine: None,
             words,
+            rules: Vec::new(),
         }
     }
 
@@ -3709,6 +3854,7 @@ mod tests {
             height: Some(792.0),
             engine: None,
             words: vec![word("Account Holder", [600.0, 200.0, 640.0, 290.0])],
+            rules: Vec::new(),
         };
         inject(&mut doc, &[(0, Crop::Page, reading)]);
         for g in doc.pages[0].glyphs.iter().filter_map(|g| g.bbox) {
@@ -4574,6 +4720,7 @@ mod tests {
             height: Some(w * 2.0),
             engine: None,
             words: vec![word("Total", [20.0, 20.0, 120.0, 46.0])],
+            rules: Vec::new(),
         };
         let r = inject(&mut doc, &[(0, Crop::Page, reading)]);
         assert_eq!(
@@ -4587,6 +4734,7 @@ mod tests {
             height: Some(h * 2.0),
             engine: None,
             words: vec![word("Total", [20.0, 20.0, 120.0, 46.0])],
+            rules: Vec::new(),
         };
         assert_eq!(
             inject(&mut blank_scan(), &[(0, Crop::Page, reading)])[0].taken,

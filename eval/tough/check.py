@@ -217,6 +217,16 @@ def run_check(check, reading):
                 found.append(sorted({c["doc:columnIndex"] for c in cells}))
         ok = any(idx == list(range(want["count"])) for idx in found)
         return ok, None if ok else f"column indexes {found}"
+    if "no_table" in check:
+        # No table on this page (its place in the file, from 1): a picture
+        # whose drawing is no table's ruling, a diagram's boxes or a
+        # screen's frames, reads as no table.
+        page = check["no_table"]["page"] - 1
+        found = [
+            n for n in reading.nodes.values()
+            if n.get("@type") == "doco:Table" and n.get("doc:pageIndex") == page
+        ]
+        return not found, None if not found else f"{len(found)} table(s) on the page"
     if "running" in check:
         # A line read as running text, exactly `count` times where one is
         # given: `0` for a body line that must not be taken.

@@ -1,0 +1,41 @@
+{
+  "document": {
+    "file": "infineon-irlz44n-datasheet.pdf",
+    "url": "https://www.infineon.com/assets/row/public/documents/24/49/infineon-irlz44npbf-datasheet-en.pdf",
+    "sha256": "d677569acae476c535a725e7e84346a21dab5112ea4dbb9ef78dc002b44df3a6",
+    "ocr_words": "../fixtures/ocr-words/infineon-irlz44n-datasheet",
+    "about": "Infineon IRLZ44NPbF datasheet. Page 8 sets the TO-220 package's dimension table as a picture beside the package's drawing: a dimension, its minimum and maximum in millimetres, a row each, under a header three rows deep, two rows spanning both columns."
+  },
+  "notes": [
+    "2026-11-26: the second source for the tables read from pictures' rules (see viscosity-table-set-as-picture), from another publisher. The picture's words read as one value a line. The stored reading is the built-in engine's (PP-OCRv6 small) of the page's pictures' crops, with the rules drawn in their pixels: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "three-columns",
+      "found": "2026-11-26",
+      "issue": "The dimension table set as a picture read as one value a line.",
+      "columns": {
+        "with": "14.22",
+        "count": 3
+      }
+    },
+    {
+      "id": "dimension-row",
+      "found": "2026-11-26",
+      "issue": "As above.",
+      "cell": {
+        "value": "16.51",
+        "row": "D"
+      }
+    },
+    {
+      "id": "drawing-no-table",
+      "found": "2026-11-26",
+      "issue": "A guard: the package's drawing beside it, its dimension lines straight rules, is no table.",
+      "no_row": {
+        "#0": "A1",
+        "#1": "A2"
+      }
+    }
+  ]
+}
