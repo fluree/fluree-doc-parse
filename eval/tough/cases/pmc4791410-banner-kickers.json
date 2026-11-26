@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc4791410.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4791410/",
+    "sha256": "5f1b20c75ce27490894d99df8c5003f1cd484fa29127b8b4c129f680daafd8ed",
+    "about": "The Journal of Headache and Pain (2016) article, PMC4791410, set in two columns. On p3 its Table 1 runs down the left column and Table 2 sits at the foot of the right one, the two tables' last rows side by side, under the right column's prose. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (#456): a kicker over the title was a paragraph like any other. It is a `doco:Paragraph` with evidence `kicker`, so a consumer can tell it from the body."
+  ],
+  "checks": [
+    {
+      "id": "article-kind",
+      "found": "2026-11-26",
+      "issue": "#456: the journal's banner over the title was a plain paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "RESEARCH ARTICLE",
+        "evidence": "kicker"
+      }
+    },
+    {
+      "id": "open-access",
+      "found": "2026-11-26",
+      "issue": "#456: the journal's banner over the title was a plain paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Open Access",
+        "evidence": "kicker"
+      }
+    }
+  ]
+}
