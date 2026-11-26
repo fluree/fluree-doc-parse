@@ -1802,6 +1802,9 @@ pub struct Drawing {
 ///   tall ([`SWATCH_SIZE`]) and no thinner than [`MIN_SWATCH`] of it, its
 ///   middle on the line, standing alone directly before the entry, within
 ///   [`SWATCH_GAP_EMS`]: not the last of a logo's letters drawn as shapes.
+/// - **A sample** is a line series' short level stroke, longer than the
+///   text is tall and at most [`SAMPLE_EMS`], its middle on the line,
+///   ending within [`SWATCH_GAP_EMS`] before the entry, and none after it.
 /// - **A tick** is a short stroke, no longer than an em, set at the
 ///   label's middle across the axis: under or over a label within its
 ///   width, or beside one within its height, and within [`TICK_GAP_EMS`].
@@ -1834,6 +1837,23 @@ pub fn in_drawing(line: &Line, shapes: &[crate::geom::BBox], ticks: &[crate::geo
                 && (o.y0 + o.y1) / 2.0 <= m.y1
         })
     });
+    // A line series' sample: a short level stroke, its middle on the line,
+    // ending directly before the entry, often dotted, with the series'
+    // marker at its middle. Longer than the text is tall and at most
+    // [`SAMPLE_EMS`] long: a rule beside or under a running line spans its
+    // text or the page. Not drawn after the entry as well: a page number
+    // set between two short rules is decoration, not a legend.
+    let stroke = |m: &crate::geom::BBox| {
+        let mid = (m.y0 + m.y1) / 2.0;
+        m.height() < MIN_SWATCH * tall
+            && m.width() > tall
+            && m.width() <= SAMPLE_EMS * fs
+            && mid >= b.y0
+            && mid <= b.y1
+    };
+    let near = |g: f64| (0.0..=SWATCH_GAP_EMS * fs).contains(&g);
+    let sample = shapes.iter().any(|m| stroke(m) && near(b.x0 - m.x1))
+        && !shapes.iter().any(|m| stroke(m) && near(m.x0 - b.x1));
     let at_tick = ticks.iter().any(|t| {
         if t.width().max(t.height()) > fs {
             return false;
@@ -1844,7 +1864,7 @@ pub fn in_drawing(line: &Line, shapes: &[crate::geom::BBox], ticks: &[crate::geo
         let beside = ty >= b.y0 && ty <= b.y1 && (near(t.x0 - b.x1) || near(b.x0 - t.x1));
         across || beside
     });
-    swatch || at_tick
+    swatch || sample || at_tick
 }
 
 /// A legend's swatch at most as large as its entry's text is tall, a
@@ -1854,8 +1874,12 @@ pub const SWATCH_SIZE: f64 = 1.0;
 /// And at least this share of it each way: a patch, not the stroke of a
 /// box's edge beside a page number.
 const MIN_SWATCH: f64 = 0.3;
-/// How far before its entry a swatch stands, in the entry's ems.
+/// How far before its entry a swatch or a sample stands, in the entry's
+/// ems.
 const SWATCH_GAP_EMS: f64 = 1.0;
+/// How long a line series' sample is at most, in its entry's ems: a few
+/// ems of line, enough to show its dashes and its marker.
+const SAMPLE_EMS: f64 = 5.0;
 /// How far an axis's label stands from its tick, in ems.
 const TICK_GAP_EMS: f64 = 1.0;
 
@@ -2055,9 +2079,14 @@ mod tests {
         // round a page number is larger than the text.
         assert!(!in_drawing(&entry, &[at(-40.0, 95.0, 6.0, 118.0)], &[]));
         assert!(!in_drawing(&entry, &[at(0.0, 96.0, 300.0, 116.0)], &[]));
-        // A series' line drawn as its sample, wider than the text is tall,
-        // is left to a cue of its own.
-        assert!(!in_drawing(&entry, &[at(-20.0, 106.0, 6.0, 106.0)], &[]));
+        // A series' line drawn as its sample: a level stroke longer than
+        // the text is tall, ending 4pt before it.
+        assert!(in_drawing(&entry, &[at(-20.0, 106.0, 6.0, 106.0)], &[]));
+        // Not one as long as a rule, nor one drawn after the entry too, as
+        // a page number set between two rules is.
+        assert!(!in_drawing(&entry, &[at(-200.0, 106.0, 6.0, 106.0)], &[]));
+        let ruled = [at(-20.0, 106.0, 6.0, 106.0), at(204.0, 106.0, 230.0, 106.0)];
+        assert!(!in_drawing(&entry, &ruled, &[]));
         // Text after the patch is not its entry: the patch must stand before.
         assert!(!in_drawing(&entry, &[at(204.0, 102.0, 211.0, 109.0)], &[]));
         // A box's edge before a page number is a stroke, not a patch.
