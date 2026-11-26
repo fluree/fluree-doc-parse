@@ -1,0 +1,35 @@
+{
+  "document": {
+    "file": "pmc6114051.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6114051/",
+    "sha256": "519994dd7369404f44d3901aa1332c2fc14c6dfd75468568f98e2f93dd200701",
+    "about": "Reproductive Health (2018) 15:146, 'Trends in adolescent first births in five countries in Latin America and the Caribbean: disaggregated data from demographic and health surveys', PMC6114051. Its Table 3 (p5) is set in five country blocks: each block's title (`Bolivia 1994 | Bolivia 2008 | % point change | …`, `Colombia 1990 | Colombia 2010 | …`) over the same line of column names (`<16 | 16/17 | 18/19 | <20` twice, then `<20`) and three rows. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (restated blocks, from #351's audit): each block was read as a table of its own, its title as the header and its column line as the first row of data. The blocks are now one table: each title a section over its block's rows and each column line a restated header for them. With the first title over the first column line, the table has no header rows, so no block is named by another's title."
+  ],
+  "checks": [
+    {
+      "id": "first-block-names-its-own",
+      "found": "2026-11-25",
+      "issue": "Restated blocks: the column line was a row of data, and `34.0` was named by nothing.",
+      "cell": {
+        "value": "34.0",
+        "column": "< 20",
+        "row": "Urban",
+        "section": "Bolivia 1994 Bolivia 2008 % point change Average annual % rate of change<20"
+      }
+    },
+    {
+      "id": "later-block-names-its-own",
+      "found": "2026-11-25",
+      "issue": "Restated blocks: Colombia's block was a table of its own, its column line a row of data.",
+      "cell": {
+        "value": "26.8",
+        "column": "< 20",
+        "row": "Urban",
+        "section": "Colombia 1990 Colombia 2010 Annual % rate of change"
+      }
+    }
+  ]
+}

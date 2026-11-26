@@ -1,0 +1,46 @@
+{
+  "document": {
+    "file": "pmc4429933.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4429933/",
+    "sha256": "bc3a7b87b9f79c6c2510cdd81ea9fb12407fca9509a33cdbda8c37a36c0b38cb",
+    "about": "Reproductive Health 2015, 12:13, 'Adolescent first births in East Africa: disaggregating characteristics, trends and determinants', PMC4429933. Its Table 8 (p7) is set in three country blocks ruled under every cell: each block's title (`Uganda | 1995 | 2011 | Average annual % rate of change`, then Kenya, then Tanzania) over the same line of column names (`<16 | 16/17 | 18/19 | <20` three times) and six rows by wealth quintile. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (restated blocks, from #351's audit): Uganda's and Kenya's blocks were one table, Kenya's title and column line read as rows of data, and Tanzania's block was a table of its own. All three are now one table: each title a section over its block's rows and each column line a restated header for them."
+  ],
+  "checks": [
+    {
+      "id": "kenya-names-its-own",
+      "found": "2026-11-25",
+      "issue": "Restated blocks: Kenya's rows were named by Uganda's header (`1995`).",
+      "cell": {
+        "value": "65.0",
+        "column": "<20",
+        "row": "Lowest",
+        "section": "Kenya 1993 2008/9 Average annual % rate of change"
+      }
+    },
+    {
+      "id": "tanzania-in-the-table",
+      "found": "2026-11-25",
+      "issue": "Restated blocks: Tanzania's block was a table of its own, its column line a row of data.",
+      "cell": {
+        "value": "62.5",
+        "column": "<20",
+        "row": "Lowest",
+        "section": "Tanzania 1996 2010 Average annual % rate of change"
+      }
+    },
+    {
+      "id": "uganda-names-its-own",
+      "found": "2026-11-25",
+      "issue": "Restated blocks: Uganda's block was named by its title as a header, and its first title would have been taken off as the table's title.",
+      "cell": {
+        "value": "74.4",
+        "column": "<20",
+        "row": "Lowest",
+        "section": "Uganda 1995 2011 Average annual % rate of change"
+      }
+    }
+  ]
+}

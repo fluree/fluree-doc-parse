@@ -150,6 +150,9 @@ pub struct TableLayout {
     pub downs: Vec<(usize, usize, usize)>,
     /// Body rows that label the rows beneath them.
     pub sub_headers: Vec<usize>,
+    /// Body rows that name the columns again for the rows beneath them, in
+    /// the header's lowest row's place: a block's own line of column names.
+    pub restated_headers: Vec<usize>,
     /// Per cell, row-major, the page glyphs read into it.
     pub cells: Vec<Vec<usize>>,
     /// The `draw_index` of every glyph the cells hold, sorted: the glyphs the
@@ -7490,6 +7493,7 @@ fn layout_grid(
             spans: Vec::new(),
             downs: Vec::new(),
             sub_headers: Vec::new(),
+            restated_headers: Vec::new(),
             cells,
             claimed,
         })),
@@ -7576,6 +7580,7 @@ fn field_grid(
             spans: Vec::new(),
             downs: Vec::new(),
             sub_headers: Vec::new(),
+            restated_headers: Vec::new(),
             cells,
             claimed,
         })),

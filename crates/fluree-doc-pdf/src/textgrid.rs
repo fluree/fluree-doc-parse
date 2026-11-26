@@ -1235,6 +1235,35 @@ fn read_beside(
         runs.push((start, end));
         k = band.iter().position(|&b| b == end).unwrap() + 1;
     }
+    // A table set in blocks, each under its own title and opening on the
+    // first block's line of column names again (`<16 | 16/17 | 18/19 | <20`
+    // under `Bolivia 1994 | Bolivia 2008`, and again under `Colombia 1990 |
+    // Colombia 2010`): one run, its blocks read in [`build`]. The title is a
+    // header's depth of lines at most, none of them a row
+    // ([`titles_a_block`]), set apart as rows are.
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in runs {
+        if let Some(prev) = blocks.last_mut() {
+            let titles = prev.1 + 1..start;
+            if (1..=MAX_HEADER_LINES).contains(&titles.len())
+                && titles.clone().all(|i| {
+                    titles_a_block(&cols0, &clipped[i])
+                        && clipped[i]
+                            .chunks
+                            .iter()
+                            .any(|c| c.text.chars().filter(|ch| ch.is_alphabetic()).count() >= 2)
+                })
+                && (prev.1 + 1..=start)
+                    .all(|i| row_gap(rules, x0, x1, clipped[i - 1].y1, clipped[i].y0, fs, false))
+                && same_cells(&cols0, &clipped[prev.0], &clipped[start])
+            {
+                prev.1 = end;
+                continue;
+            }
+        }
+        blocks.push((start, end));
+    }
+    let runs = blocks;
     let mut out = Vec::new();
     let mut floor = 0usize;
     if std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some() {
@@ -1629,6 +1658,46 @@ fn cell_in<'a>(cols: &[(f64, f64)], l: &'a Line, k: usize) -> Option<&'a Chunk> 
     l.chunks.iter().rfind(|a| column_of(cols, a) == Some(k))
 }
 
+/// Whether a line is a block's title, not a row: figures (years aside) in
+/// fewer than half the columns (`Kenya | 1993 | 2008/9 | Average annual %
+/// rate of change` over thirteen columns).
+fn titles_a_block(cols: &[(f64, f64)], l: &Line) -> bool {
+    let figures = l
+        .chunks
+        .iter()
+        .filter(|c| is_figure(&c.text) && !is_year(&c.text))
+        .count();
+    figures * 2 < cols.len()
+}
+
+/// Whether a line can name a table's columns: nothing in the stub (a row of
+/// data names itself there), names over half the columns or more, and no
+/// plain number among them. Bounds and ranges name columns (`<16 | 16/17 |
+/// <20`); a chart's ticks (`3 | 3`) and a formula's subscripts (`0 | 0 | 0`)
+/// do not.
+fn names_columns(cols: &[(f64, f64)], l: &Line) -> bool {
+    let plain = |t: &str| t.replace([',', ' '], "").parse::<f64>().is_ok();
+    !l.chunks.iter().any(|c| column_of(cols, c) == Some(0))
+        && l.chunks.len() * 2 >= cols.len()
+        && !l.chunks.iter().any(|c| plain(&c.text))
+}
+
+/// Whether two lines set the same words in the same columns, nothing in the
+/// stub: a line of column names restated (`< 20` and `<20` alike). A row of
+/// data names itself in the stub, however often it recurs (`Number of
+/// patients | 909 | 462` under each characteristic).
+fn same_cells(cols: &[(f64, f64)], a: &Line, b: &Line) -> bool {
+    let words = |c: &Chunk| c.text.split_whitespace().collect::<String>();
+    names_columns(cols, a)
+        && a.chunks.len() >= 2
+        && a.chunks.len() == b.chunks.len()
+        && a.chunks.iter().zip(&b.chunks).all(|(x, y)| {
+            column_of(cols, x).is_some()
+                && column_of(cols, x) == column_of(cols, y)
+                && words(x) == words(y)
+        })
+}
+
 /// The columns whose text runs on across the table's rows: on the lines
 /// that open a row, a label in the stub column, the column's text runs on
 /// from the line above in half of them, two at least. That is a page's prose
@@ -1818,7 +1887,60 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     // columns past the first.
     let mut head: Vec<&Line> = head.to_vec();
     let mut body: Vec<&Line> = body.to_vec();
-    let cols = columns(&body, x0, x1);
+    // A table set in blocks ([`read_beside`]): its first line of figures
+    // opens each block again, under the block's title. That line names the
+    // columns of its block's rows, each time it stands (a header restated);
+    // each block's title is a section over its rows, the first block's too
+    // (the header's lines set close over the first column line). The first
+    // title stands over the first column line, so neither is the table's
+    // header: no block is named by another's title.
+    let mut titles: Vec<&Line> = Vec::new();
+    let mut restated: Vec<&Line> = Vec::new();
+    if let Some(&names) = body.first() {
+        let all = columns(&lines, x0, x1);
+        let again: Vec<usize> = (1..body.len())
+            .filter(|&i| same_cells(&all, names, body[i]) && titles_a_block(&all, body[i - 1]))
+            .collect();
+        if !again.is_empty() {
+            let mut t = head.len();
+            while t > 0
+                && (t == head.len()
+                    || head[t].base - head[t - 1].base
+                        <= head[t].fs.max(head[t - 1].fs) * WRAP_LEADING)
+            {
+                t -= 1;
+            }
+            titles = head.split_off(t);
+            restated.push(names);
+            restated.extend(again.iter().map(|&r| body[r]));
+            for &r in &again {
+                let mut j = r;
+                while j > 1
+                    && r - j < MAX_HEADER_LINES
+                    && titles_a_block(&all, body[j - 1])
+                    && body[j - 1]
+                        .chunks
+                        .iter()
+                        .any(|c| column_of(&all, c).is_some_and(|k| k > 0))
+                {
+                    j -= 1;
+                    titles.push(body[j]);
+                }
+            }
+            let first: Vec<&Line> = titles
+                .iter()
+                .take_while(|l| l.base <= names.base)
+                .copied()
+                .collect();
+            body = first.into_iter().chain(body.iter().copied()).collect();
+        }
+    }
+    let is_title = |l: &Line| titles.iter().any(|t| std::ptr::eq(*t, l));
+    let is_restated = |l: &Line| restated.iter().any(|t| std::ptr::eq(*t, l));
+    let cols = {
+        let rows: Vec<&Line> = body.iter().filter(|l| !is_title(l)).copied().collect();
+        columns(&rows, x0, x1)
+    };
     if cols.len() < 2 {
         return None;
     }
@@ -2145,9 +2267,29 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     };
     let running = running_columns(&cols, &body);
     let mut body_rows: Vec<(Vec<&Line>, bool)> = Vec::new(); // (lines, section)
+    let mut restated_rows: Vec<usize> = Vec::new();
     let mut i = 0;
     while i < body.len() {
         let l = body[i];
+        // A block's line of column names: a row of its own, naming the
+        // columns of the rows under it.
+        if is_restated(l) {
+            restated_rows.push(body_rows.len());
+            body_rows.push((vec![l], false));
+            i += 1;
+            continue;
+        }
+        // A block's title, its lines together: a section.
+        if is_title(l) {
+            let mut ls = vec![l];
+            i += 1;
+            while i < body.len() && is_title(body[i]) {
+                ls.push(body[i]);
+                i += 1;
+            }
+            body_rows.push((ls, true));
+            continue;
+        }
         if label_only(l) {
             // Wrapped onto the next line, which carries the row's values.
             let next = body.get(i + 1).copied();
@@ -2748,6 +2890,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     for &r in &sub_headers {
         spans.push((r, 0, ncols));
     }
+    let restated_headers: Vec<usize> = restated_rows.iter().map(|&i| header_rows + i).collect();
     // Each chunk's glyphs into its cell: a header label across columns into
     // the first it names, a section label into the first column.
     let mut cells: Vec<Vec<usize>> = vec![Vec::new(); all_rows.len() * ncols];
@@ -2798,6 +2941,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             spans,
             downs,
             sub_headers,
+            restated_headers,
             cells,
             claimed: Vec::new(),
         })),
@@ -3330,6 +3474,124 @@ mod tests {
         ));
     }
     use crate::rule::Rule;
+
+    #[test]
+    fn blocks_restating_their_column_names_read_as_one_table() {
+        // Three blocks, each under its own title and opening on the same line
+        // of column names, then three rows, set as far apart as rows are.
+        let xs = [20.0, 120.0, 180.0, 240.0];
+        let mut gl = Vec::new();
+        let mut y = 40.0;
+        for (title, rows) in [
+            (
+                "Bolivia 1994",
+                [
+                    ("Urban", "4.3", "10.7", "1.2"),
+                    ("Rural", "7.1", "18.5", "-0.9"),
+                    ("Ratio", "1.7", "1.7", ""),
+                ],
+            ),
+            (
+                "Colombia 1990",
+                [
+                    ("Urban", "3.0", "8.5", "1.0"),
+                    ("Rural", "5.8", "14.3", "1.3"),
+                    ("Ratio", "1.9", "1.7", ""),
+                ],
+            ),
+            (
+                "Haiti 1994",
+                [
+                    ("Urban", "4.9", "10.2", "-1.0"),
+                    ("Rural", "4.4", "10.6", "-0.5"),
+                    ("Ratio", "0.9", "1.0", ""),
+                ],
+            ),
+        ] {
+            gl.extend(set(title, xs[1], y));
+            gl.extend(set("Change", xs[3], y));
+            y += 18.0;
+            for (k, name) in ["<16", "16/17", "<20"].iter().enumerate() {
+                gl.extend(set(name, xs[k + 1], y));
+            }
+            y += 18.0;
+            for row in rows {
+                for (k, t) in [row.0, row.1, row.2, row.3].iter().enumerate() {
+                    gl.extend(set(t, xs[k], y));
+                }
+                y += 18.0;
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 47.0,
+            x1: 300.0,
+            y1: y,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        // No header: each block's title is a section and each block's line of
+        // column names restates the columns for its own rows.
+        let lay = grids[0].layout.as_deref().expect("read from its text");
+        assert_eq!(lay.header_rows, 0, "{lay:?}");
+        assert_eq!(lay.sub_headers, [0, 5, 10], "{lay:?}");
+        assert_eq!(lay.restated_headers, [1, 6, 11], "{lay:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert_eq!(
+            texts.iter().filter(|t| *t == "16/17").count(),
+            3,
+            "{texts:?}"
+        );
+        // The second block's title, in its section's row.
+        let title: String = texts[5 * 4..6 * 4].join(" ");
+        assert!(
+            title.contains("Colombia") && title.contains("Change"),
+            "{texts:?}"
+        );
+        assert_eq!(
+            texts.iter().filter(|t| *t == "Urban").count(),
+            3,
+            "{texts:?}"
+        );
+    }
+
+    #[test]
+    fn a_data_row_repeated_under_each_section_restates_nothing() {
+        // `Number of patients` with its counts opens each section again: a
+        // row of data, named in the stub, not a line of column names.
+        let xs = [20.0, 160.0, 240.0];
+        let mut gl = Vec::new();
+        gl.extend(set("Characteristics", xs[0], 40.0));
+        gl.extend(set("Dose 23", xs[1], 40.0));
+        gl.extend(set("Dose 10", xs[2], 40.0));
+        let mut y = 58.0;
+        for (section, label, a, b) in [
+            ("Age", "Mean", "73.8", "73.9"),
+            ("Gender", "Males", "335", "175"),
+            ("Score", "Mean", "13.1", "13.2"),
+        ] {
+            gl.extend(set(section, xs[0], y));
+            y += 18.0;
+            for (t, u, v) in [("Number of patients", "909", "462"), (label, a, b)] {
+                gl.extend(set(t, xs[0], y));
+                gl.extend(set(u, xs[1], y));
+                gl.extend(set(v, xs[2], y));
+                y += 18.0;
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 47.0,
+            x1: 300.0,
+            y1: y,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        for g in &grids {
+            let lay = g.layout.as_deref().expect("read from its text");
+            assert!(lay.restated_headers.is_empty(), "{lay:?}");
+        }
+    }
 
     #[test]
     fn group_labels_centred_over_their_columns_span_them() {
