@@ -2171,6 +2171,38 @@ fn signs_off(page: &[Block], i: usize) -> bool {
     if !short(&page[i]) {
         return false;
     }
+    // Under a line to sign on, alone on its line, or a signature typed as
+    // `/s/`: the signer's name and office printed under it (`____` over
+    // `Joshua Gallin` over `Secretary`, `/s/ J. Duato` over `Joaquin
+    // Duato`).
+    for b in page[..i].iter().rev().take(SIGNATURE_REACH - 1) {
+        let t = b.text();
+        if bare_signing_rule(t.trim()) || t.trim_start().starts_with("/s/") {
+            return true;
+        }
+        if !short(b) {
+            break;
+        }
+    }
+    // Over an office: the signer's name directly over it, or a company's
+    // over the signer's name over it (`Arcadia Consulting Group` over
+    // `Chiara Fontaine` over `Commercial Counsel`). A section over a list
+    // of officers (`Board of Directors` over a name over `Chair`) is
+    // neither.
+    let next = |k: usize| page.get(i + k).map(|b| b.text());
+    let same = |a: &str, b: &str| a.split_whitespace().eq(b.split_whitespace());
+    if next(1).is_some_and(|t| office_line(&t))
+        // A signature set as text over the same name printed, over the
+        // office (`Kate E. Brandt` in a script over `Kate E. Brandt` over
+        // `Chief Sustainability Officer, Google`).
+        || (next(1).is_some_and(|t| same(&t, &page[i].text()))
+            && next(2).is_some_and(|t| office_line(&t)))
+        || (company_name(&page[i].text())
+            && next(1).is_some_and(|t| t.split_whitespace().count() <= 4)
+            && next(2).is_some_and(|t| office_line(&t)))
+    {
+        return true;
+    }
     let after: Vec<&Block> = page.iter().skip(i + 1).take(SIGNATURE_REACH).collect();
     for (k, b) in after.iter().enumerate() {
         let t = b.text();
@@ -2194,6 +2226,126 @@ fn signs_off(page: &[Block], i: usize) -> bool {
         }
     }
     false
+}
+
+/// A line to sign on and nothing else: underscores alone.
+fn bare_signing_rule(t: &str) -> bool {
+    t.chars().filter(|c| *c == '_').count() >= 4 && t.chars().all(|c| c == '_' || c.is_whitespace())
+}
+
+/// Words that name an office a signer holds.
+const OFFICE_WORDS: &[&str] = &[
+    "secretary",
+    "president",
+    "chairman",
+    "chairwoman",
+    "chairperson",
+    "director",
+    "officer",
+    "counsel",
+    "treasurer",
+    "manager",
+    "partner",
+    "trustee",
+    "governor",
+    "commissioner",
+    "ceo",
+    "cfo",
+    "coo",
+    "cto",
+    "founder",
+    "notary",
+    "attorney",
+    "signatory",
+];
+
+/// A signer's office on a line of its own: a few words naming it, no
+/// figures or colon (`Secretary`, `Chief Executive Officer`, `Commercial
+/// Counsel`, `Vice President, Finance`). Before a comma the office comes
+/// first: `Jerome H. Powell, Chair` is a name with the office after it, a
+/// list's entry under `Attendance`. Nor does an office make a sentence:
+/// `CHAIR POWELL. Good morning, everyone.` is a speaker's line, and
+/// `MANAGER NAME` a form's field. The office opens its line, `Secretary
+/// of State`: `CERTIFICATE OF SECRETARY` is a document's title.
+fn office_line(t: &str) -> bool {
+    let t = t.trim();
+    let words: Vec<&str> = t.split_whitespace().collect();
+    (1..=5).contains(&words.len())
+        && t.starts_with(|c: char| c.is_uppercase())
+        && !t.contains(':')
+        && !t.chars().any(|c| c.is_ascii_digit())
+        && !t.contains(". ")
+        && !t.ends_with(['.', '!', '?'])
+        && !words
+            .iter()
+            .any(|w| FIELD_WORDS.contains(&w.to_lowercase().as_str()))
+        && office_in(
+            t.to_lowercase()
+                .split(',')
+                .next()
+                .unwrap_or("")
+                .split(" of ")
+                .next()
+                .unwrap_or(""),
+        )
+}
+
+/// Words that make a line a form's field rather than an office:
+/// `MANAGER NAME`, `Officer Signature`.
+const FIELD_WORDS: &[&str] = &[
+    "name",
+    "signature",
+    "date",
+    "title",
+    "number",
+    "address",
+    "approval",
+];
+
+/// The words name an office: one of [`OFFICE_WORDS`] among them.
+fn office_in(t: &str) -> bool {
+    t.split_whitespace().any(|w| {
+        OFFICE_WORDS.contains(
+            &w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+                .as_str(),
+        )
+    })
+}
+
+/// What closes a company's name: `Group`, `Inc.`, `LLC`, `Ltd`, `LP`.
+const COMPANY_SUFFIXES: &[&str] = &[
+    "inc",
+    "llc",
+    "ltd",
+    "lp",
+    "llp",
+    "plc",
+    "corp",
+    "corporation",
+    "company",
+    "co",
+    "group",
+    "gmbh",
+    "ag",
+    "sa",
+    "bv",
+    "pbc",
+    "partners",
+    "bank",
+    "trust",
+    "foundation",
+];
+
+/// A company's name: its last word one of [`COMPANY_SUFFIXES`].
+fn company_name(t: &str) -> bool {
+    t.split_whitespace().next_back().is_some_and(|w| {
+        COMPANY_SUFFIXES.contains(
+            &w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+                .as_str(),
+        )
+    })
 }
 
 /// A rule to sign on, typed as underscores: most of the line is `_`.
@@ -3567,6 +3719,68 @@ mod tests {
         ));
         page.extend(pair("Why steel?", "• It does not warp in heat", 1, 125.0));
         assert!(!stacked_field(&page, 0) && !stacked_field(&page, 2));
+    }
+
+    #[test]
+    fn a_signers_name_and_office_are_no_headings() {
+        // Under a line to sign on: the name, and the office under it.
+        let page = vec![
+            at("____________________", 10.0, 500.0, false),
+            at("Ann Lee", 10.0, 512.0, false),
+            at("Secretary", 10.0, 524.0, false),
+        ];
+        assert!(signs_off(&page, 1) && signs_off(&page, 2));
+        // Under a conformed signature.
+        let page = vec![
+            at("/s/ A. Lee", 10.0, 500.0, false),
+            at("Ann Lee", 10.0, 512.0, false),
+            at("Chief Executive Officer", 10.0, 524.0, false),
+        ];
+        assert!(signs_off(&page, 1));
+        // A signature set as text over the name printed, over the office.
+        let page = vec![
+            at("Ann Lee", 16.0, 480.0, false),
+            at("Ann Lee", 10.0, 500.0, false),
+            at("Chief Data Officer, Example", 10.0, 512.0, false),
+        ];
+        assert!(signs_off(&page, 0));
+        // A company over its signer over the office.
+        let page = vec![
+            at("Example Consulting Group", 10.0, 500.0, true),
+            at("Bo Chen", 10.0, 512.0, false),
+            at("Commercial Counsel", 10.0, 524.0, false),
+        ];
+        assert!(signs_off(&page, 0));
+        // A section over a list of officers, and a list's entry with the
+        // office after the name, head their lists.
+        let page = vec![
+            at("Board of Directors", 12.0, 100.0, true),
+            at("Cy Wu", 10.0, 112.0, false),
+            at("Chairman", 10.0, 124.0, false),
+        ];
+        assert!(!signs_off(&page, 0));
+        let page = vec![
+            at("Attendance", 12.0, 100.0, true),
+            at("Dee Park, Chairman", 10.0, 112.0, false),
+        ];
+        assert!(!signs_off(&page, 0));
+        for t in [
+            "Secretary",
+            "Chief Executive Officer",
+            "Vice President, Finance",
+            "Secretary of State",
+        ] {
+            assert!(office_line(t), "{t}");
+        }
+        for t in [
+            "CHAIRMAN PARK. Good morning, everyone.",
+            "MANAGER NAME",
+            "CERTIFICATE OF SECRETARY",
+            "Work Chair",
+            "Dee Park, Chairman",
+        ] {
+            assert!(!office_line(t), "{t}");
+        }
     }
 
     #[test]

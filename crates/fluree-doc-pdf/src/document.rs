@@ -1835,6 +1835,156 @@ const MAX_TABLE_HEAD_WORDS: usize = 8;
 /// left edge or centred over it, and a section's heading over a table
 /// starts where the text does. Run on the final elements, where the
 /// tables are.
+/// Fewest entries in a run of headings, each over one short line, for the
+/// run to be a list.
+const MIN_LIST_ENTRIES: usize = 3;
+
+/// Most words in an entry's own heading, and in the short line under it.
+const MAX_ENTRY_WORDS: usize = 6;
+const MAX_ENTRY_NOTE_WORDS: usize = 3;
+
+/// A list set as headings: a run of three or more headings of one level on
+/// a page, each over one short line and nothing else (`Boston` over `First
+/// District`, `New York` over `Second District`, …). A list of links, each
+/// with its second label; a section heads more than a line of a few words.
+fn read_entry_lists(elements: &mut [Element]) {
+    let entry = |e: &Element| {
+        e.kind == "doco:SectionTitle"
+            && matches!(e.evidence, "bold" | "font-size")
+            && e.text.split_whitespace().count() <= MAX_ENTRY_WORDS
+    };
+    let note = |e: &Element| {
+        e.kind == "doco:Paragraph" && e.text.split_whitespace().count() <= MAX_ENTRY_NOTE_WORDS
+    };
+    let mut i = 0;
+    while i < elements.len() {
+        let mut heads = Vec::new();
+        let mut k = i;
+        while k + 1 < elements.len()
+            && entry(&elements[k])
+            && note(&elements[k + 1])
+            && elements[k].page == elements[i].page
+            && elements[k].level == elements[i].level
+        {
+            heads.push(k);
+            k += 2;
+        }
+        if heads.len() >= MIN_LIST_ENTRIES {
+            for h in heads {
+                let e = &mut elements[h];
+                e.kind = "doco:Paragraph".into();
+                e.level = None;
+                e.evidence = "layout";
+            }
+            i = k;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Most words in a contents entry's title set between its label and its
+/// page's number.
+const MAX_ENTRY_TITLE_WORDS: usize = 12;
+
+/// Fewest page numbers ending rows at one right edge for the rows to be a
+/// contents' entries.
+const MIN_CONTENTS_ROWS: usize = 3;
+
+/// A contents' entry set as a heading: its row ends on a page's number,
+/// one of three or more on the page with nothing after them on their rows,
+/// running in order down the page (`PART IX` and `Repeals, modifications
+/// and revocations` beside `80`).
+/// A page that lists its contents without leaders or a `Contents` heading
+/// of its own, as a contents' later pages do, sets each number after its
+/// entry's title or at one right edge.
+fn read_contents_rows(elements: &mut [Element]) {
+    let folio = |t: &str| {
+        let t = t.trim();
+        (1..=4).contains(&t.len()) && t.chars().all(|c| c.is_ascii_digit())
+    };
+    let pages: std::collections::BTreeSet<usize> = elements.iter().map(|e| e.page).collect();
+    for page in pages {
+        let on_page: Vec<usize> = (0..elements.len())
+            .filter(|&i| elements[i].page == page)
+            .collect();
+        let row = |a: &crate::geom::BBox, b: &crate::geom::BBox| {
+            a.y1.min(b.y1) - a.y0.max(b.y0) > a.height().min(b.height()) * 0.5
+        };
+        // Page numbers ending their rows.
+        let numbers: Vec<crate::geom::BBox> = on_page
+            .iter()
+            .filter_map(|&i| {
+                let e = &elements[i];
+                let b = e.bbox?;
+                (e.kind == "doco:Paragraph" && folio(&e.text)).then_some(b)
+            })
+            .filter(|b| {
+                !on_page.iter().any(|&o| {
+                    elements[o]
+                        .bbox
+                        .is_some_and(|ob| row(&ob, b) && ob.x0 >= b.x1)
+                })
+            })
+            .collect();
+        if numbers.len() < MIN_CONTENTS_ROWS {
+            continue;
+        }
+        // A contents' pages run in order down the page, most of them
+        // different. A catalogue's quantities (`7`, `7`, `1`, `2`, or `1`,
+        // `1`, `4`) or a chart's scale (`7000` over `3500`) do not.
+        let mut by_height: Vec<(f64, u32)> = on_page
+            .iter()
+            .filter_map(|&i| {
+                let e = &elements[i];
+                let b = e.bbox?;
+                let n: u32 = e.text.trim().parse().ok()?;
+                numbers.iter().any(|m| m == &b).then_some((b.y0, n))
+            })
+            .collect();
+        by_height.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let distinct: std::collections::BTreeSet<u32> = by_height.iter().map(|p| p.1).collect();
+        if by_height.windows(2).any(|w| w[1].1 < w[0].1)
+            || distinct.len() < MIN_CONTENTS_ROWS
+            || distinct.len() * 3 < by_height.len() * 2
+        {
+            continue;
+        }
+        let aligned = numbers;
+        for &i in &on_page {
+            let e = &elements[i];
+            let Some(b) = e.bbox else { continue };
+            // Only the entry's own short text between it and its number: a
+            // slide's title level with a chart's scale has the slide's
+            // bullets between.
+            let entry_row = |n: &crate::geom::BBox| {
+                row(&b, n)
+                    && n.x0 >= b.x1
+                    && !on_page.iter().any(|&o| {
+                        let other = &elements[o];
+                        other.bbox.is_some_and(|ob| {
+                            row(&ob, &b)
+                                && ob.x0 >= b.x1
+                                && ob.x1 <= n.x0
+                                && (other.kind == "doc:ListItem"
+                                    || other.text.split_whitespace().count()
+                                        > MAX_ENTRY_TITLE_WORDS)
+                        })
+                    })
+            };
+            if e.kind == "doco:SectionTitle"
+                && matches!(e.evidence, "bold" | "font-size" | "numbering")
+                && aligned.iter().any(entry_row)
+            {
+                let e = &mut elements[i];
+                e.kind = "doco:Paragraph".into();
+                e.level = None;
+                e.evidence = "layout";
+            }
+        }
+    }
+}
+
 fn read_table_heads(elements: &mut [Element]) {
     let heads: Vec<usize> = (0..elements.len())
         .filter(|&i| {
@@ -4930,6 +5080,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     read_form_text(&mut elements);
     read_blank_fields(&mut elements);
     read_table_heads(&mut elements);
+    read_entry_lists(&mut elements);
+    read_contents_rows(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -5263,6 +5415,57 @@ mod tests {
         ];
         nest_list_items(&mut elements, &text);
         assert_eq!(elements[1].depth, 0);
+    }
+
+    #[test]
+    fn a_list_or_contents_set_as_headings_is_text() {
+        let head =
+            |t: &str, y: f64, x: f64| line_at("doco:SectionTitle", t, "font-size", Some(4), y, x);
+        let para = |t: &str, y: f64, x: f64| line_at("doco:Paragraph", t, "layout", None, y, x);
+        // A list of links, each over its second label.
+        let mut els = vec![
+            head("North", 100.0, 40.0),
+            para("First Region", 112.0, 40.0),
+            head("South", 130.0, 40.0),
+            para("Second Region", 142.0, 40.0),
+            head("East", 160.0, 40.0),
+            para("Third Region", 172.0, 40.0),
+            head("Background", 200.0, 40.0),
+            para(
+                "A paragraph that heads its section, as text does over several words.",
+                212.0,
+                40.0,
+            ),
+        ];
+        read_entry_lists(&mut els);
+        let kinds: Vec<&str> = els.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(&kinds[..6], ["doco:Paragraph"; 6]);
+        assert_eq!(kinds[6], "doco:SectionTitle");
+        // A contents' later page: entries with their pages, in order.
+        let mut els = vec![
+            head("PART II", 100.0, 40.0),
+            para("Planning", 100.0, 120.0),
+            para("12", 100.0, 300.0),
+            head("PART III", 120.0, 40.0),
+            para("Design", 120.0, 120.0),
+            para("19", 120.0, 300.0),
+            head("PART IV", 140.0, 40.0),
+            para("Delivery", 140.0, 120.0),
+            para("27", 140.0, 300.0),
+        ];
+        read_contents_rows(&mut els);
+        assert!(els.iter().all(|e| e.kind != "doco:SectionTitle"));
+        // A catalogue's quantities end its rows too, but repeat and fall.
+        let mut els = vec![
+            head("Seal kit", 100.0, 40.0),
+            para("4", 100.0, 300.0),
+            head("Pump set", 120.0, 40.0),
+            para("1", 120.0, 300.0),
+            head("Gasket", 140.0, 40.0),
+            para("1", 140.0, 300.0),
+        ];
+        read_contents_rows(&mut els);
+        assert!(els.iter().filter(|e| e.kind == "doco:SectionTitle").count() == 3);
     }
 
     #[test]

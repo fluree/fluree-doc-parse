@@ -151,7 +151,40 @@ Weight and size never make a heading of these:
 - **A signature block's party:** a role or a name with a line to sign on
   just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
   `(Signature)`), and a signature page's label (`Signature Page to Voting
-  Agreement`). Agreements set their parties bold, a dozen to a page.
+  Agreement`). Agreements set their parties bold, a dozen to a page. So is
+  the signer's name and office printed under a line to sign on, alone on
+  its line, or under a conformed signature: `____` over `Joshua Gallin`
+  over `Secretary`, `/s/ J. Duato` over `Joaquin Duato`. Three more shapes
+  sign without a line:
+  - a name directly over its office (`Kenji Ota` over `Sales Manager`);
+  - a signature set as text over the same name printed, over the office;
+  - a company's name over its signer over the office (`… Consulting Group`
+    over a name over `Commercial Counsel`).
+
+  An office is a few words naming one, and opens its line: `Secretary`,
+  `Chief Executive Officer`, `Vice President, Finance`, `Secretary of
+  State`. These are no office lines:
+  - a name with the office after a comma, `Jerome H. Powell, Chair` under
+    `Attendance`;
+  - a speaker's line, `CHAIR POWELL. Good morning, everyone.`;
+  - a form's field, `MANAGER NAME`;
+  - a title naming an office, `CERTIFICATE OF SECRETARY`.
+
+  `Chair` alone is as often furniture, `Work Chair`. A section over a list
+  of officers, `Board of Directors` over a name over `Chairman`, stays a
+  heading.
+- **A list set as headings:** a run of three or more headings of one level
+  on a page, each over one short line and nothing else: `Boston` over
+  `First District`, `New York` over `Second District`, a list of links.
+- **A contents' entry:** its row ends on a page number, with only the
+  entry's own short text between them, on a page with three or more such
+  numbers. They run in order down the page and are mostly different, as a
+  contents' later pages set them without leaders: `PART IX` and `Repeals,
+  modifications and revocations` beside `80`. These are not page numbers:
+  - a catalogue's quantities (`7`, `7`, `1`), which repeat and fall;
+  - a chart's scale (`7000` over `3500`), which falls;
+  - a slide's title level with a chart's tick, which has the slide's
+    bullets between them.
 - **A letterhead:** the sender's name, at the head of the first page, set
   over its address and numbers, directly or over a line or two (`TRUE
   MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE DIVISION` over its
