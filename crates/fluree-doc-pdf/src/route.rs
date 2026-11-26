@@ -879,6 +879,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             });
         }
         Page {
@@ -1003,6 +1004,7 @@ mod tests {
                     italic: false,
                     advance: None,
                     draw_index: i,
+                    ocr: None,
                 })
                 .collect();
             let mut regions: Vec<BBox> = p.images.iter().map(|i| i.bbox).collect();

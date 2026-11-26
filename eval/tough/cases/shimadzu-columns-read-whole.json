@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "shimadzu-integrated-report-2024.pdf",
+    "url": "https://www.shimadzu.com/sites/shimadzu.com/files/ir/pdf/shimadzu_integrated_report_2024.pdf",
+    "sha256": "5b098d7331946021a5c85d08340df3373f7aa1df1321747b05cb137c8ee0c2a5",
+    "about": "Shimadzu Integrated Report 2024. Page 51 sets two columns of bulleted text under a title band, over a full-width box and a row of product photos."
+  },
+  "checks": [
+    {
+      "id": "bulleted-column-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: the two columns were read line by line across the gutter.",
+      "text": "In the healthcare domain, the sales of liquid chromatographs (LC) and mass spectrometer (MS) systems increased due to new drug development"
+    }
+  ]
+}

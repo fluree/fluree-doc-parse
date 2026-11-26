@@ -12,11 +12,11 @@
     {
       "id": "capacity-under-its-model",
       "found": "2026-11-24",
-      "issue": "#133: `Formatted capacity 1` was a paragraph apart from its values.",
+      "issue": "#133: `Formatted capacity 1` was a paragraph apart from its values. (#322: a note's number is now written raised, `Formatted capacity¹`.)",
       "cell": {
         "value": "26TB",
         "column": "WD261KRYZ",
-        "row": "Formatted capacity 1"
+        "row": "Formatted capacity¹"
       }
     },
     {
@@ -32,22 +32,22 @@
     {
       "id": "warranty-under-its-band",
       "found": "2026-11-24",
-      "issue": "#133: every `5 years` was a loose paragraph.",
+      "issue": "#133: every `5 years` was a loose paragraph. (#322: a note's number is now written raised, `Limited Warranty³`.)",
       "cell": {
         "value": "5 years",
         "column": "WD261KRYZ",
-        "row": "Limited Warranty 3",
+        "row": "Limited Warranty³",
         "section": "Reliability"
       }
     },
     {
       "id": "page-4-capacity",
       "found": "2026-11-24",
-      "issue": "#133: as above, on p4, where labels were fused with values (`Formatted capacity 1 8TB`).",
+      "issue": "#133: as above, on p4, where labels were fused with values (`Formatted capacity 1 8TB`). (#322: a note's number is now written raised, `Formatted capacity¹`.)",
       "cell": {
         "value": "8TB",
         "column": "WD8005FRYZ",
-        "row": "Formatted capacity 1"
+        "row": "Formatted capacity¹"
       }
     }
   ]

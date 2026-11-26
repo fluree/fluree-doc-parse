@@ -1,0 +1,84 @@
+{
+ "id": "invoice-2.noisy-300",
+ "base": "invoice-2",
+ "profile": "noisy-300",
+ "dpi": 300,
+ "text_layer": false,
+ "facts": [
+  {
+   "text": "INV-2026381",
+   "kind": "id",
+   "where": "page"
+  },
+  {
+   "text": "2026-07-03",
+   "kind": "date",
+   "where": "page"
+  },
+  {
+   "text": "Quinn Sample",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "747 Harbor Lane",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "Archive boxes, pack of 10",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "903.20",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "Desk lamp, LED",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "430.20",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "Laminating pouches",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "620.10",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "3,605.51",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "288.44",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "3,893.95",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "Payment is due within thirty days.",
+   "kind": "phrase",
+   "where": "page"
+  }
+ ],
+ "headings": [
+  "Harrow Office Supply",
+  "INVOICE",
+  "Bill to:"
+ ]
+}

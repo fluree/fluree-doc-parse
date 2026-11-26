@@ -105,7 +105,11 @@ Weight and size never make a heading of these:
   slide may title itself in a shorter sentence, and an agreement closes its
   title-case headings on a stop. A sentence is never the document's title,
   however short (`Dat betaal ik zelf wel.` under `FACTUUR.`), and neither is
-  a line of several fields (`BTW nr. NL: … IBAN: … BIC: …`).
+  a line of several fields (`BTW nr. NL: … IBAN: … BIC: …`). A stop with a
+  note's number raised on it ends a sentence wherever it stands, however
+  short the word it closes: no abbreviation carries a note, and the line
+  that goes on past it is prose (`low.³ Corporate earnings remained
+  strong…`).
 - **A value under its label:** a line in a lighter weight set at its bold
   label's size on the label's next line, alone or with more such lines
   (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
@@ -274,6 +278,47 @@ large, a long line must also be shaped as a title. These are not:
 - a formula holding `=`;
 - a line that opens with a bullet.
 
+## Levels
+
+Levels are set last, once every pass that reads a heading as text has run.
+Only the headings that stand are levelled, in reading order, and each one is
+set against the headings open above it:
+
+- **An outline entry** keeps its depth, the author's. The depth is counted
+  from the outline's shallowest one that a printed heading takes: an outline
+  that sets a paper's title over its sections has its sections at its second
+  depth, and the title is read as the title.
+- **A numbered heading** is a sibling of the nearest open heading numbered the
+  same way at its depth or deeper, and a child of one a part shorter: `2.1`
+  under `2`, and `3` beside `2.4`'s `2`. The same way means parts of the same
+  kinds, figures, numerals or letters. A bookmarked heading counts by its
+  number too.
+- **Any other heading**, and a numbered one with no heading numbered its way
+  open, is a child of the nearest open heading set stronger than it and a
+  sibling of the nearest set alike. Stronger is the order above: size, then
+  weight, case, slant and face.
+- **A bookmarked heading** is closed by no heading set stronger, only by
+  another bookmark, by its number or by a heading set alike. The outline's
+  span is the author's: an agreement sets its bookmarked sections in 8pt
+  small capitals over 10pt bold clauses.
+- **The document's title** is level 1 and heads no section: the sections
+  start at level 1 beside it. A Word document's title is held apart from its
+  sections, over its `Heading 1`s, and most outlines set a paper's sections
+  at their first depth.
+
+So a 10-K's notes, numbered afresh from `1.`, sit under its `Notes to
+consolidated financial statements`, and that under `Item 8`; a Beige Book
+district's topics sit one level under its `Summary of Economic Activity`.
+Before, the order of styles was itself the levels: the fifth style down was
+h5 wherever it stood, styles past the fifth all fell to h6, and a style a
+later pass read as text still held its level. A W-9's `Line 1` was h5
+directly under `Specific Instructions` at h1, and a 10-K's first note was h1
+above its Item at h2.
+
+Levels run as deep as the headings nest, to six, however many styles the
+document sets them in. A level the author's outline or numbering skips is
+kept: `8.` over `8.2.4`, where no `8.2` is printed as a heading.
+
 ## The body size
 
 "Larger than body" is measured against one body size per document: the size
@@ -289,11 +334,54 @@ Tables the table pass did not take are still counted. In a catalogue whose
 specification tables outnumber its prose, the body still comes out at the
 tables' size.
 
+Charts the figure pass did not find are counted too, and their labels,
+scales and notes can outnumber the prose as well. A financial stability
+report sets its prose at 10pt beside charts set at 8pt; counted by lines,
+the body came out at 8pt, and every line of the prose that a chart cut off
+on its own was a heading by its size. So running prose is measured first:
+blocks of three lines or more whose lines, all but the last, mostly fill the
+block's measure and hold four words or more. Where 50 lines or more of it
+share a size, several paragraphs, and that size is larger than the lines'
+count gives, it is the body. Prose smaller than that count is fine print
+under the larger type a form or a deck is mostly set in (a 1099's 6pt notes
+under its 8pt form), and the count stands. A deck's few lines of prose, or a
+quote set large on a slide, are too few to count.
+
+A heading set larger than the body is held to a title's length, twelve
+words and 90 characters, unless it is set clearly larger, 1.5 times the
+body, or is set in a style the document heads two sections or more with at
+that length. Then a line or two of a title's shape may run to 20 words and
+160 characters, where it stands apart over prose: the report heads each
+part of a section with its finding in 14pt bold, `Hedge funds' leverage was
+at or near its highest level in available data` among shorter findings,
+14pt being 1.4 times its 10pt body.
+
 A document whose prose runs to fewer than eight lines has too little to say
 its body by: a page that is a label, a title and a folio over a table. Its
 prose alone counts the title's two lines against one of each other size, so
 the title came out as the body and was no heading. There the tables' text
 counts too, each of their lines once at its size.
+
+## Text read from a picture
+
+An OCR engine reads two kinds of crop. A page read whole is a scan, or a page
+whose text is drawn as shapes: its words are the page's text, and are read
+as any page's are, their size the height of their boxes. A region routed out
+of a page that has text of its own is a picture set on that page: a logo, a
+photograph, a chart drawn as pixels. Its words are the picture's, as a
+drawing's labels are the drawing's:
+
+- **No heading, and no title.** A report's logo, `LAW LIBRARY` set larger than
+  the report's title over it, was read as the document's title, and its title
+  as a paragraph. A funder's logo, a callout in a photograph and a chart's
+  labels were headings by their size.
+- **No measure of the body.** A chart's labels by the dozen, read in its
+  picture, set the body at their size, and two of the page's own lines set
+  larger than them were headings: the last line of a paragraph the chart's
+  crop cut, and the page's folio.
+
+Each glyph an OCR reading adds says which crop it was read in, and a line and
+a block take the crop most of their letters were read in.
 
 ## Headings beside drawings
 
@@ -450,7 +538,11 @@ Three tests keep them out, none of which touches `5.3.1`:
 
 - **A numbered title occurs once.** An answer given more than once in a
   document is a code; so is every line labelled with a bare number that
-  names two *different* titles (`1 — Yes`, `1 — Supplier on file`).
+  names two *different* titles (`1 — Yes`, `1 — Supplier on file`). Only a
+  line that could be a title counts: a list's item or a note, its number
+  set as its marker, is none. A paper numbers its affiliations and its
+  notes from 1 too (`1 Faculty of …`), and its `1 Introduction` is a
+  section still.
 - **Sections are coarse.** A page holding more than ten bare-number
   candidates is a coding scheme, whatever each line looks like on its own.
 - **Sections count from one**, and a number set as a superscript is a
@@ -562,7 +654,9 @@ title, often bold or larger than the text. Neither is a heading.
 
 - **Authors.** A line of people's names, each of two to four words, with
   the marks that point to their affiliations: `Roberta Lattanzi 1, Silvia
-  Rief2, … and*`, `Hye Chong Hong and Ari Min *`. Two names or more need a
+  Rief2, … and*`, `Hye Chong Hong and Ari Min *`, the marks raised
+  (`Alizée Roobaert¹,²`) or not, the names set apart by commas, `and` or a
+  middle dot (`Michail Hadjipantelis¹ · Onur Son²`). Two names or more need a
   mark. One name needs an affiliation's number with a corresponding
   author's symbol (`Mariana Spetea 2*`) or a list of affiliations (`1,2`).
   `Study 2`, `Model Year 2020` and `Posted Transactions*` are headings
@@ -599,6 +693,39 @@ A title is often a one-off style, which means it cannot form a repeated
 font-size tier and the generic detectors miss it. It is recovered first, from
 a bounded look at the first few short blocks on page 1, stopping once prose
 begins and requiring prominence, vertical isolation or a contents label.
+
+The title is emitted as a `doco:Title`, as a Word document's and a deck's
+are: DoCO holds it as the document's header, and the sections start at level
+1 beside it. It is the line consumers index the document by, so it is
+emitted only where it is sure, and its evidence says how:
+
+- `metadata`: the file's own `/Title` names it, its words nearly all among
+  the line's and covering half of the file's title or more. A title's date
+  covers too little (`September 20, 2023` of `Transcript of Chair Powell's
+  Press Conference -- September 20, 2023`), and so does a fragment
+  (`Minutes of the`). A file's name, a placeholder (`Untitled`, `Microsoft
+  Word - draft3.doc`) or a typesetter's job name (`pone.0005054 1..10`)
+  names nothing.
+- `outline`: a bookmark at the outline's first depth names it.
+- `type`: the first page sets it apart by its type, and nothing doubts it.
+
+Where the file's title names another line on the first page and not the one
+taken, that line is the title: a journal's mark (`materials`, `sensors`)
+over the article's title, a pharmacy's name over a drug's, the date over a
+transcript's title. A field's line (`Amazon.com order number: 114-…`) is
+never taken, though its value names the file.
+
+A line in doubt stays a level-1 heading, and the document has no title: no
+title is better than a wrong one. In doubt are a date, a section's number or
+name (`1. PURPOSE`, `Table of Contents`, `Introduction`), a division's label
+(`PART II`, `Item 8. …`), a section carried on (`(Continued)`), a lead-in on
+its colon, one word (a journal's or a company's mark), and a company's name
+closing on its form (`Co., Ltd.`, `Inc`, `PBC`), a letterhead's. A title set
+at the body's size is not in doubt for that alone: an agreement sets its
+title so (`INDEMNIFICATION AGREEMENT`). It is read as a level-1 heading until every pass that weighs
+headings has run, then retyped once, so a run of bold heads or a heading
+continued over pages is judged as before. Markdown and XHTML write it as
+they wrote the level-1 heading it was, `#` and `<h1>`.
 
 Worth **+0.048 MHS**, recovering eight zero-or-low-scoring documents with no
 regressions.
