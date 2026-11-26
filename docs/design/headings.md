@@ -506,6 +506,25 @@ It is read as text, so the page's text runs on in the section it continues.
   Markets` in the Beige Book) has that section's heading between, and
   stays.
 
+## A numbered list's lead-in
+
+A numbered line closing on a colon, a clause of three words or more after
+its number set in sentence case, with a list's item set directly under it (a marker, a bullet, or a lettered
+label such as `a)`, `(a)`, `(iv)`), introduces that list. It is no section
+at its number's depth: `1) Use automated mechanisms to:` over `a) Document
+proposed changes…`, `72 A designer is an organisation or individual, who:`
+over `(a) prepares or modifies a design…`, `42. Inspectors may also:` over
+its bullets.
+
+- A numbered heading closing on a colon in a word or two stays one (`2.3
+  Requirements:`), and so does a step's title in title case (`9.4.3.
+  Evaluate the Calibration Curve for Each Compound:`).
+- So does a clause over anything other than a list (`75. Notifications
+  should be made to:` over an address).
+- Only the number is overruled. An unnumbered bold line closing on a colon
+  over bullets is a poster's heading as often as a lead-in (`As a boater:`),
+  and its weight is judged as any other's.
+
 ## Addresses are not titles
 
 A line that ends in a web address, a domain, an e-mail address or a phone
