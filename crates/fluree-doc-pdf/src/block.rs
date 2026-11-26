@@ -375,7 +375,18 @@ const BULLETS: &[char] = &[
     '\u{F0A7}', // Wingdings ▪ (Symbol ♣)
     '\u{F0D8}', // Wingdings ➢ (Symbol ¬)
     '\u{F0E8}', // Wingdings ➔ (Symbol ⎝)
+    '\u{30FB}', // ・ katakana middle dot
+    '\u{FF65}', // ･ halfwidth katakana middle dot
 ];
+
+/// The katakana middle dot, Japanese text's bullet, full width or half.
+/// Inside a line it parts the words of a name or a list (`研究・開発`), but
+/// Japanese typesetting never opens a line with it (it is one of the marks
+/// line breaking keeps from a line's start), so a line that opens with it
+/// opens an item. Its item follows it with or without a space.
+fn is_cjk_bullet(c: char) -> bool {
+    matches!(c, '\u{30FB}' | '\u{FF65}')
+}
 
 /// A character used as a bullet; see [`BULLETS`].
 pub(crate) fn is_bullet(c: char) -> bool {
@@ -400,6 +411,12 @@ pub fn strip_leading_bullet(text: &str) -> Option<&str> {
         return None;
     }
     let rest = chars.as_str();
+    // A Japanese bullet goes on into its item with no space, whether the
+    // item opens in kana or in Latin letters (`・PCB 上に…`).
+    if is_cjk_bullet(first) {
+        let item = rest.trim_start();
+        return (!item.is_empty()).then_some(item);
+    }
     // A bullet with nothing after it is a marker block, handled elsewhere; a
     // bullet run together with its word is more likely a glyph that happens
     // to look like one.
@@ -4305,6 +4322,44 @@ mod tests {
             l("• keep out of reach of children", 10.0, 24.0, 10.0),
         ];
         assert_eq!(assemble(&lines, 1.2).len(), 3);
+    }
+
+    #[test]
+    fn a_line_opening_with_a_katakana_middle_dot_is_an_item() {
+        // Japanese text's bullet, set with no space before its item, which
+        // may open in kana or in Latin letters, full width or half.
+        assert_eq!(
+            strip_leading_bullet("・安定的、継続的な配当"),
+            Some("安定的、継続的な配当")
+        );
+        assert_eq!(
+            strip_leading_bullet("・PCB 上に使用していないエリア"),
+            Some("PCB 上に使用していないエリア")
+        );
+        assert_eq!(
+            strip_leading_bullet("･自己株式の取得"),
+            Some("自己株式の取得")
+        );
+        assert_eq!(
+            strip_leading_bullet("・ Measure amyloid beta in blood"),
+            Some("Measure amyloid beta in blood")
+        );
+        // Inside a line it parts two words, and opens nothing.
+        assert_eq!(strip_leading_bullet("研究・開発の推進"), None);
+        assert_eq!(strip_leading_bullet("・"), None);
+        // Three items, each its own block; a line holding the dot as a
+        // separator stays one.
+        let lines = vec![
+            l("・将来の発展に向けての投資（設備、M&A等）", 10.0, 0.0, 10.0),
+            l("・安定的、継続的な配当", 10.0, 12.0, 10.0),
+            l("・自己株式の取得", 10.0, 24.0, 10.0),
+        ];
+        assert_eq!(assemble(&lines, 1.2).len(), 3);
+        let one = vec![
+            l("所得・消費関係の主な出来事をまとめた", 10.0, 0.0, 10.0),
+            l("大阪・関西万博が開幕し、来場者を集めた", 10.0, 12.0, 10.0),
+        ];
+        assert_eq!(assemble(&one, 1.2).len(), 1);
     }
 
     #[test]

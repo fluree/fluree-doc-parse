@@ -2869,6 +2869,39 @@ pub struct AnalyzeOptions {
 /// earned; see the table-confidence anchors in [`analyze_with`].
 const TRUSTED_RULING_TABLES: usize = 32;
 
+/// Whether a model's reading of `table` is worth asking for: its header is
+/// in doubt, or its structure disagrees with itself (`suspect`, from
+/// [`table::suspect_tables`]: fragments of one ruled region that disagree on
+/// their columns, or rows merged into one).
+///
+/// A header is in doubt where it is anything but one plain row: no header
+/// read at all, a header of two rows or more, a cell spanning rows or
+/// columns, a banner over a group of rows, or a row restating the header
+/// further down. That is where our reading of a table is weakest (which rows
+/// head it, what each label spans), and where a reading's spans say what a
+/// grid of cells cannot.
+///
+/// A table with one plain header row, drawn or inferred, gains nothing a
+/// reading can add, and the reading replaces it whenever their shapes
+/// differ ([`crate::arbiter::reading_wins`]), so a reading that merges two
+/// columns, drops a row or takes a caption in costs the table. Measured over
+/// the benchmark's 39 documents whose tables were read by a model, with two
+/// readers (a live gemini-3-flash run and the older cached readings): on the
+/// 30 with only plain headers, readings made 11 documents worse and 5 better
+/// (summed −0.16; cached −0.36). On the 9 with a header in doubt they made 7
+/// better and none worse (+0.55; cached +0.45). Drawn against inferred does
+/// not separate the two: drawn grids with spanned headers were among the
+/// largest gains, and inferred grids with plain headers among the largest
+/// losses.
+fn table_in_doubt(table: &Element, suspect: bool) -> bool {
+    suspect
+        || table.header_rows != Some(1)
+        || table.merged_down.is_some()
+        || table.merged_left.is_some()
+        || table.sub_headers.is_some()
+        || table.restated_headers.is_some()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GridSource {
     Ruled,
@@ -5309,6 +5342,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         let mut table_elements = Vec::new();
         let layout = &layouts[pi];
         debug_assert_eq!(layout.grid_sources.len(), layout.grids.len());
+        // Which grids, read as tables, are in doubt: those anchor for a
+        // reading below.
+        let mut in_doubt = vec![false; layout.grids.len()];
         for (gi, g) in layout.grids.iter().enumerate() {
             // A running string leaks into a table only where the table
             // reaches its row: a grid takes its glyphs before furniture is
@@ -5897,6 +5933,14 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     .then_some(merges.continues_left),
                 ..Element::new("doco:Table", text, "rust", "rules")
             });
+            in_doubt[gi] = table_elements.last().is_some_and(|t| {
+                table_in_doubt(
+                    t,
+                    suspect_tables
+                        .iter()
+                        .any(|s| s.page == pi && s.bbox.intersects(&g.bbox)),
+                )
+            });
             frames.push(TableFrame {
                 page: pi,
                 bbox: g.bbox,
@@ -5917,36 +5961,29 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 tables += 1;
             }
         }
-        // Table-confidence anchors: a grid whose structure was *inferred* from
-        // alignment rather than read from drawn rules has guessed column
-        // boundaries, and the calibration against the benchmark's TEDS
-        // component was unambiguous — every deterministic win came from a
-        // ruled grid, every large loss from an inferred one. The anchor sits
-        // immediately above its table so the hybrid adapter can replace the
-        // pipe rows with the VLM's reading of the same region; the pure
-        // engine's output is untouched.
+        // Table-confidence anchors: a table whose reading is in doubt
+        // ([`table_in_doubt`]) anchors for a model's reading of its crop. The
+        // anchor sits immediately above its table so the hybrid adapter can
+        // replace the pipe rows with the VLM's reading of the same region;
+        // the pure engine's output is untouched. A grid read as no table
+        // (demoted, or a drawing's labels) has none to replace and does not
+        // anchor.
         if opts.emit_anchors {
             for (ti, g) in layout.grids.iter().enumerate() {
-                if layout.demoted_tables[ti] {
+                if layout.demoted_tables[ti] || !in_doubt[ti] {
                     continue;
                 }
                 // A document with this many drawn grids is a chart or a
                 // ledger built from one template, and its ruling is the
                 // template's: a reading per table would cost a reading per
                 // page of an 800-page record to confirm what the rules
-                // already say. Escalation is earned per table by an
-                // inferred structure or a disagreeing one, not by count.
+                // already say. Escalation is earned per table by a header
+                // in doubt or a disagreeing structure, not by count.
                 if layout.grid_sources[ti] == GridSource::Ruled
                     && ruled_tables > TRUSTED_RULING_TABLES
                 {
                     continue;
                 }
-                // Ruled grids anchor too since the structure arbiter arrived:
-                // when the VLM's shape agrees (the common case for drawn
-                // grids) the anchor drops and nothing changes; when it
-                // disagrees, a drawn grid was still trimmed or banded wrongly
-                // and the pixels win. The arbiter is what makes this safe --
-                // naive replacement measured catastrophic (TEDS 0.850->0.761).
                 let mut bbox = g.bbox;
                 bbox.y0 -= 0.01; // order the anchor just before its table
                 bbox.y1 = bbox.y0;
@@ -7467,6 +7504,48 @@ mod tests {
             &["See below", "", ""],
         ]);
         assert!(!group_label(&dangling, 1));
+    }
+
+    #[test]
+    fn a_tables_reading_is_in_doubt_unless_one_plain_row_heads_it() {
+        let plain = Element {
+            cells: Some(grid(&[&["Name", "Count"], &["alpha", "12"]])),
+            header_rows: Some(1),
+            ..Element::new("doco:Table", "Name | Count\nalpha | 12", "rust", "rules")
+        };
+        assert!(!table_in_doubt(&plain, false));
+        // Its structure disagreeing with itself puts it in doubt whatever
+        // heads it.
+        assert!(table_in_doubt(&plain, true));
+        let flags = Some(vec![false, true, false, false]);
+        for doubted in [
+            Element {
+                header_rows: Some(0),
+                ..plain.clone()
+            },
+            Element {
+                header_rows: Some(2),
+                ..plain.clone()
+            },
+            Element {
+                merged_down: flags.clone(),
+                ..plain.clone()
+            },
+            Element {
+                merged_left: flags,
+                ..plain.clone()
+            },
+            Element {
+                sub_headers: Some(vec![1]),
+                ..plain.clone()
+            },
+            Element {
+                restated_headers: Some(vec![1]),
+                ..plain.clone()
+            },
+        ] {
+            assert!(table_in_doubt(&doubted, false), "{doubted:?}");
+        }
     }
 
     #[test]

@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "stat-go-jp-kakei-2025-summary.pdf",
+    "url": "https://www.stat.go.jp/data/kakei/2025np/pdf/summary.pdf",
+    "sha256": "cc823be978f1808a671003923fe4dda02c9b1b2465fe34b1717fba164cb46f34",
+    "about": "Statistics Bureau of Japan, Family Income and Expenditure Survey 2025, summary. Page 4 lists the year's events under headings as items opened by the katakana middle dot; the dot also parts words inside lines (`所得・消費関係`)."
+  },
+  "checks": [
+    {
+      "id": "middle-dot-items",
+      "found": "2026-11-26",
+      "issue": "The katakana middle dot was no bullet: consecutive items merged, up to nine to a paragraph.",
+      "list": {"holds": ["政府による備蓄米の放出を開始（３月）", "主要銀行が住宅ローンの変動金利を引き上げ、16年ぶりの水準に（４月）"]}
+    },
+    {
+      "id": "middle-dot-inside-a-line-opens-nothing",
+      "found": "2026-11-26",
+      "issue": "Inside a line the dot parts two words, and must not open an item.",
+      "text": "所得・消費関係"
+    }
+  ]
+}

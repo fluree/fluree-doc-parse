@@ -273,6 +273,60 @@ fn render_routed_crops_for_ocr_under_the_documents_limit() {
 }
 
 #[test]
+fn convert_opens_the_engine_only_for_a_page_it_reads() {
+    use fluree_doc_vision::assets::{platform, DET, DICT, REC};
+    // Assets that are there, but are not the files this build loads.
+    let dir = scratch("on-first-read");
+    let assets = dir.join("assets");
+    let (rid, lib) = platform().expect("a platform ONNX Runtime ships for");
+    let runtime = format!("onnxruntime/{rid}/{lib}");
+    for rel in [runtime.as_str(), DET, REC, DICT] {
+        let path = assets.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"placeholder").unwrap();
+    }
+    let convert = |input: &std::path::Path, models: Option<&std::path::Path>| {
+        let mut c = fdoc(&dir);
+        c.args(["convert", "-f", "text"]);
+        if let Some(m) = models {
+            c.args(["--ocr", "oar-ocr", "--models"]).arg(m);
+        }
+        c.arg(input).output().unwrap()
+    };
+    // A page with its own text asks the engine for nothing: it converts as
+    // it does without `--ocr`, and the assets are never checked.
+    let text = dir.join("text.pdf");
+    std::fs::write(
+        &text,
+        pdf(
+            "BT /F1 18 Tf 40 300 Td (Account number 4417) Tj ET",
+            "/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+            None,
+        ),
+    )
+    .unwrap();
+    let plain = convert(&text, None);
+    let read = convert(&text, Some(&assets));
+    let err = String::from_utf8_lossy(&read.stderr);
+    assert!(read.status.success(), "{err}");
+    assert_eq!(read.stdout, plain.stdout);
+    // A directory without the files is refused before anything is read.
+    let out = convert(&text, Some(&dir.join("no-assets")));
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no such file"));
+    // A scanned page asks for a reading: the engine fails to open, which
+    // is said once, and ends the run as a refused engine did.
+    let scan = dir.join("scan.pdf");
+    std::fs::write(&scan, scan_of(&["Account number 4417"])).unwrap();
+    let out = convert(&scan, Some(&assets));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{err}");
+    assert_eq!(err.matches("error: --ocr:").count(), 1, "{err}");
+    assert!(err.contains("could not be opened"), "{err}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn fdoc_ocr_refuses_before_it_writes() {
     let dir = scratch("refuses");
     let png = dir.join("a.png");
