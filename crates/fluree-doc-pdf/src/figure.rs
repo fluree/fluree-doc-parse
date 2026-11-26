@@ -2857,6 +2857,61 @@ fn runs_into_lower(b: &BBox, size: f32, blocks: &[(BBox, f32, &str)]) -> bool {
     })
 }
 
+/// Is `text` a figure's caption, `Figure 3.`, `Fig. 2`, `Chart 17`: a
+/// caption ([`crate::heading::is_caption`]) naming a drawing, not a table
+/// or a box of text?
+pub(crate) fn figure_caption(text: &str) -> bool {
+    crate::heading::is_caption(text) && {
+        let first = text
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(['.', ':'])
+            .to_ascii_lowercase();
+        matches!(
+            first.as_str(),
+            "figure" | "fig" | "chart" | "diagram" | "graph" | "exhibit" | "map" | "plate"
+        )
+    }
+}
+
+/// Which side of a figure a caption is set on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CaptionSide {
+    Above,
+    Below,
+}
+
+/// Farthest, in its lines, a caption stands above or below the figure it
+/// names: past an axis's values and its name the figure did not take.
+const CAPTION_REACH: f64 = 6.0;
+
+/// Where a caption at `caption`, set at `size`, stands to a figure whose
+/// drawing reaches `extent`: above or below it, across from it
+/// (sharing half the narrower of their widths), within [`CAPTION_REACH`]
+/// of its lines, and how far.
+pub(crate) fn caption_side(caption: &BBox, size: f32, extent: &BBox) -> Option<(CaptionSide, f64)> {
+    let line = (size as f64).max(1.0);
+    let across = caption.x1.min(extent.x1) - caption.x0.max(extent.x0);
+    if across < caption.width().min(extent.width()) * 0.5 {
+        return None;
+    }
+    let (side, gap) = if caption.y0 >= extent.y1 - line * 0.5 {
+        (CaptionSide::Below, (caption.y0 - extent.y1).max(0.0))
+    } else if caption.y1 <= extent.y0 + line * 0.5 {
+        (CaptionSide::Above, (extent.y0 - caption.y1).max(0.0))
+    } else {
+        return None;
+    };
+    (gap <= line * CAPTION_REACH).then_some((side, gap))
+}
+
+/// [`runs_on`], for the caption pass: is `b` a line of the caption `a`
+/// wrapped into a block of its own?
+pub(crate) fn caption_runs_on(a: &BBox, a_size: f32, b: &BBox, b_size: f32) -> bool {
+    runs_on(a, a_size, b, b_size)
+}
+
 /// Are two blocks one run of text: set at one size from one left edge, one
 /// under the other with no more than a paragraph's space between?
 fn runs_on(a: &BBox, a_size: f32, b: &BBox, b_size: f32) -> bool {
@@ -4399,6 +4454,27 @@ mod tests {
             rule(Orientation::Vertical, 299.8, 180.0, 300.2, 220.0),
         ];
         assert!(box_diagrams(&bands, &column, &rows, 0, page, &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn a_caption_stands_above_or_below_the_figure_across_from_it() {
+        assert!(figure_caption("Figure 3. Default rates on leveraged loans"));
+        assert!(figure_caption("Fig 2. Effect of the corpus size."));
+        assert!(!figure_caption("Table 1. Characteristics of the sample"));
+        assert!(!figure_caption("Figure out where the fault lies."));
+        let plot = bb(100.0, 100.0, 300.0, 300.0);
+        let side = |c: BBox| caption_side(&c, 8.0, &plot).map(|(s, _)| s);
+        // Under it, wider than it, past its axis's values.
+        assert_eq!(
+            side(bb(80.0, 330.0, 360.0, 345.0)),
+            Some(CaptionSide::Below)
+        );
+        // Over it.
+        assert_eq!(side(bb(100.0, 80.0, 300.0, 92.0)), Some(CaptionSide::Above));
+        // Beside it, over the chart next to it: across from no part of it.
+        assert_eq!(side(bb(320.0, 80.0, 500.0, 92.0)), None);
+        // Out of reach.
+        assert_eq!(side(bb(100.0, 400.0, 300.0, 412.0)), None);
     }
 
     #[test]

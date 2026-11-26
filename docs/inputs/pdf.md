@@ -801,8 +801,21 @@ is no caption is.
 
 This applies only to display titles: text set larger than the prose, in
 words, and no caption. A panel's axis name and ticks stay with the panel
-above, however close the next panel's labels stand, and a paper's figure
-caption stays with the figure over it.
+above, however close the next panel's labels stand.
+
+**Captions.** A figure's caption, `Figure 3.`, `Fig. 2` or `Chart 17` and
+its text, goes to the figure it names. A document sets its captions on one
+side of its figures, above or below; the captions that stand above or
+below one figure alone show which, and where three in four of them agree,
+each caption goes to the nearest figure on that side. A caption set over
+the figure it names, under the figure before it, is the lower figure's; one
+under a plot and wider than it, set past the plot's axis values, is the
+plot's all the same. Where the document shows no side, a caption goes to
+the nearest figure. A caption stands across from its figure, sharing half
+the narrower of their widths, within six of its lines, with no paragraph of
+the page's prose between them; the lines a caption runs on into go with
+it. A caption across from no figure (its chart was not found) stays where
+it was, and a table's caption stays its table's.
 
 **A list between a label and its drawing.** A list's items are never a
 drawing's labels, so a label's reach must not pass over them. A section

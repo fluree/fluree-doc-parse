@@ -2898,7 +2898,7 @@ fn find_figures(
     blocks_per_page: &[Vec<Block>],
     layouts: &[PageLayout],
 ) -> Vec<(Vec<figure::Figure>, Vec<Option<usize>>)> {
-    let mut page_figures = Vec::with_capacity(blocks_per_page.len());
+    let mut staged = Vec::with_capacity(blocks_per_page.len());
     for (pi, blocks) in blocks_per_page.iter().enumerate() {
         // Chart and diagram regions. Text inside one is real and its *order*
         // is not: a donut's labels and percentages interleave by position on
@@ -3031,6 +3031,13 @@ fn find_figures(
         let item_boxes: Vec<crate::geom::BBox> = items.iter().map(|(b, _)| *b).collect();
         figure::release_behind_items(&mut taken, &figures, &block_boxes, &item_boxes);
         figure::reassign_between(&mut taken, &figures, &block_boxes, prose_size(blocks));
+        staged.push((figures, taken, candidates));
+    }
+    assign_captions(blocks_per_page, &mut staged);
+    let mut page_figures = Vec::with_capacity(staged.len());
+    for (pi, (figures, taken, candidates)) in staged.into_iter().enumerate() {
+        let blocks = &blocks_per_page[pi];
+        let block_texts: Vec<String> = blocks.iter().map(|b| b.text()).collect();
         // Which figure each block belongs to, if any: the labels its figure
         // took, and whatever lies mostly inside the drawing itself. The
         // rectangle around a drawing and its labels is not membership: a
@@ -3106,6 +3113,149 @@ fn find_figures(
     }
     page_figures
 }
+
+/// Give each figure caption, `Figure 3.` or `Fig. 2`, to the figure it
+/// names: the nearest figure on the side the document sets its captions,
+/// above or below, as the captions that stand by one figure alone show it.
+/// A caption set over the figure it names was taken by the figure above
+/// it, standing under that one; a caption under its chart, wider than the
+/// chart, was taken by none. Where the document shows no side, the nearest
+/// figure takes it. A caption with no figure across from it within reach
+/// stays where it is: its chart was not found. The lines a caption runs on
+/// into go with it.
+fn assign_captions(
+    blocks_per_page: &[Vec<Block>],
+    staged: &mut [(Vec<figure::Figure>, Vec<Vec<usize>>, Vec<usize>)],
+) {
+    use figure::CaptionSide;
+    // Each page's captions, by index into its candidates, with where they
+    // stand to each figure.
+    let mut found: Vec<Vec<(usize, Vec<(usize, CaptionSide, f64)>)>> = Vec::new();
+    let (mut above, mut below) = (0usize, 0usize);
+    for (pi, (figures, taken, candidates)) in staged.iter().enumerate() {
+        let blocks = &blocks_per_page[pi];
+        let mut page = Vec::new();
+        for (k, &bi) in candidates.iter().enumerate() {
+            let b = &blocks[bi];
+            if !figure::figure_caption(&b.text()) {
+                continue;
+            }
+            // A figure's reach: its drawing and the labels it took, other
+            // than captions.
+            let held: Vec<usize> = taken.iter().flatten().copied().collect();
+            let rel: Vec<(usize, CaptionSide, f64)> = figures
+                .iter()
+                .enumerate()
+                .filter_map(|(fi, f)| {
+                    // Measured from the drawing: the labels a figure took
+                    // can reach past its caption (a heading under it).
+                    let extent = f.drawing;
+                    let (side, gap) = figure::caption_side(&b.bbox, b.font_size, &extent)?;
+                    // Nothing of the page's prose between them: a paragraph
+                    // set between a figure and a caption parts them.
+                    let (top, bottom) = match side {
+                        CaptionSide::Below => (extent.y1, b.bbox.y0),
+                        CaptionSide::Above => (b.bbox.y1, extent.y0),
+                    };
+                    let parted = candidates.iter().enumerate().any(|(j, &bj)| {
+                        let o = &blocks[bj];
+                        j != k
+                            && !held.contains(&j)
+                            && o.bbox.y0 >= top - 1.0
+                            && o.bbox.y1 <= bottom + 1.0
+                            && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+                            && {
+                                let text = o.text();
+                                let words: Vec<&str> = text.split_whitespace().collect();
+                                let lower = words
+                                    .iter()
+                                    .filter(|w| w.chars().next().is_some_and(char::is_lowercase))
+                                    .count();
+                                words.len() >= CAPTION_PARTED_WORDS && lower * 2 >= words.len()
+                            }
+                    });
+                    (!parted).then_some((fi, side, gap))
+                })
+                .collect();
+            if let [(_, side, _)] = rel.as_slice() {
+                match side {
+                    CaptionSide::Above => above += 1,
+                    CaptionSide::Below => below += 1,
+                }
+            }
+            page.push((k, rel));
+        }
+        found.push(page);
+    }
+    let votes = above + below;
+    let side = if votes >= CAPTION_VOTES && above * 4 >= votes * 3 {
+        Some(CaptionSide::Above)
+    } else if votes >= CAPTION_VOTES && below * 4 >= votes * 3 {
+        Some(CaptionSide::Below)
+    } else {
+        None
+    };
+    for (pi, page) in found.into_iter().enumerate() {
+        let blocks = &blocks_per_page[pi];
+        let (_, taken, candidates) = &mut staged[pi];
+        for (k, rel) in page {
+            let pick = rel
+                .iter()
+                .filter(|(_, s, _)| side.is_none_or(|want| *s == want))
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|&(fi, _, _)| fi);
+            // The caption and the lines it runs on into.
+            let mut unit = vec![k];
+            loop {
+                let last = &blocks[candidates[*unit.last().unwrap()]];
+                let next = (0..candidates.len()).find(|&j| {
+                    !unit.contains(&j) && {
+                        let b = &blocks[candidates[j]];
+                        !figure::figure_caption(&b.text())
+                            && figure::caption_runs_on(
+                                &last.bbox,
+                                last.font_size,
+                                &b.bbox,
+                                b.font_size,
+                            )
+                            && b.bbox.y0 >= last.bbox.y1 - 1.0
+                    }
+                });
+                match next {
+                    Some(j) => unit.push(j),
+                    None => break,
+                }
+            }
+            match pick {
+                Some(fi) => {
+                    for (gi, t) in taken.iter_mut().enumerate() {
+                        if gi != fi {
+                            t.retain(|x| !unit.contains(x));
+                        }
+                    }
+                    for &u in &unit {
+                        if !taken[fi].contains(&u) {
+                            taken[fi].push(u);
+                        }
+                    }
+                    taken[fi].sort_unstable();
+                }
+                // No figure across from it within reach: where it stands,
+                // a chart's title whose chart was not found, it stays.
+                None => {}
+            }
+        }
+    }
+}
+
+/// Fewest captions standing by one figure alone that settle the side a
+/// document sets its captions on; three in four of them must agree.
+const CAPTION_VOTES: usize = 2;
+
+/// Fewest words in a block of the page's prose, half of them opening in
+/// lower case, that parts a caption from a figure: an axis's values and its
+/// name (`XS S M L XL Corpus Size`) are no sentence.
+const CAPTION_PARTED_WORDS: usize = 6;
 
 /// The blocks a figure holds, by page: they do not count toward the body
 /// size. The body is the text set as running prose. A wiring diagram's
