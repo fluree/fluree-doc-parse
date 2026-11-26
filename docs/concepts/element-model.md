@@ -73,9 +73,12 @@ list level (`w:ilvl`), a slide paragraph's outline level, HTML lists nested in
 items and Markdown lists nested by indent all set it. A reader that can't
 tell leaves it at 0, a flat list.
 
-A `doco:Title` is a title the file declares, never one read off the page:
-Word's Title style, the title on a deck's title slide. The first is the
-document's; the emitter reads any later one as a top-level heading.
+A `doco:Title` is the document's own title: Word's Title style, the title
+on a deck's title slide, and a PDF's title read off its first page where it
+is sure (its evidence says how: `metadata`, `outline` or `type`). It heads
+the document, apart from its sections, which start
+at level 1. The first is the document's; the emitter reads any later one as a
+top-level heading.
 
 `doco:Caption` and `doco:FrontMatter` are **not** emitted — see the
 [vocabulary](../reference/vocabulary.md#types) for why.

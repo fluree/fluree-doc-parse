@@ -6,7 +6,8 @@
     "about": "Owens Corning ProCat manufacturer's fact sheet (2 pages). Page 1 ends on a Disclaimer box at the left and publication and trademark lines at the right."
   },
   "notes": [
-    "#130: the Disclaimer's lines ended in space glyphs, and each ran on into the publication and trademark lines across the page."
+    "#130: the Disclaimer's lines ended in space glyphs, and each ran on into the publication and trademark lines across the page.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -25,7 +26,7 @@
       "id": "two-line-title-whole",
       "found": "2026-11-24",
       "issue": "The right-aligned title's first line, wholly right of the gutter, read after its second, across it: an empty `LOOSEFILL INSULATION SYSTEM` heading, then `PROCAT® PROFESSIONAL` over the body.",
-      "element": {"type": "doco:SectionTitle", "text": "PROCAT® PROFESSIONAL LOOSEFILL INSULATION SYSTEM"}
+      "element": {"type": "doco:Title", "text": "PROCAT® PROFESSIONAL LOOSEFILL INSULATION SYSTEM"}
     }
   ]
 }

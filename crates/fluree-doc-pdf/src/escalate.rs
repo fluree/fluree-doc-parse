@@ -1461,6 +1461,7 @@ mod tests {
                     italic: false,
                     advance: Some(1.0),
                     draw_index: i,
+                    ocr: None,
                 })
                 .collect(),
             images: if scanned {
@@ -1487,6 +1488,135 @@ mod tests {
             ocr: None,
             warnings: Vec::new(),
         }
+    }
+
+    /// A page holding one table ruled round every cell, `cells` row by row
+    /// in columns 100 pt wide and rows 20 pt tall from (100, 100). Each cell
+    /// in `open`, by row and column, has no rule on its left: the label
+    /// before it spans it.
+    fn ruled_table_page(cells: &[&[&str]], open: &[(usize, usize)]) -> crate::extract::Page {
+        let mut p = page(0, 0, false);
+        let (x0, y0, w, h) = (100.0, 100.0, 100.0, 20.0);
+        let cols = cells[0].len();
+        let rule = |bbox: BBox, orientation| crate::rule::Rule {
+            bbox,
+            orientation,
+            page: 0,
+        };
+        for r in 0..=cells.len() {
+            let y = y0 + r as f64 * h;
+            p.rules.push(rule(
+                BBox {
+                    x0,
+                    y0: y - 0.25,
+                    x1: x0 + cols as f64 * w,
+                    y1: y + 0.25,
+                },
+                crate::rule::Orientation::Horizontal,
+            ));
+        }
+        for (r, row) in cells.iter().enumerate() {
+            for c in 0..=cols {
+                if open.contains(&(r, c)) {
+                    continue;
+                }
+                let x = x0 + c as f64 * w;
+                p.rules.push(rule(
+                    BBox {
+                        x0: x - 0.25,
+                        y0: y0 + r as f64 * h,
+                        x1: x + 0.25,
+                        y1: y0 + (r + 1) as f64 * h,
+                    },
+                    crate::rule::Orientation::Vertical,
+                ));
+            }
+            for (c, word) in row.iter().enumerate().filter(|(_, w)| !w.is_empty()) {
+                let (x, y) = (x0 + c as f64 * w + 5.0, y0 + r as f64 * h + 14.0);
+                p.glyphs.push(crate::glyph::Glyph {
+                    text: (*word).into(),
+                    bbox: Some(BBox {
+                        x0: x,
+                        y0: y - 8.0,
+                        x1: x + 6.0 * word.len() as f64,
+                        y1: y,
+                    }),
+                    page: 0,
+                    origin: (x, y),
+                    rotation_deg: 0.0,
+                    font_size: 10.0,
+                    weight: None,
+                    italic: false,
+                    advance: None,
+                    draw_index: p.glyphs.len(),
+                    ocr: None,
+                });
+            }
+        }
+        p
+    }
+
+    /// The table crops a page's analysis asks for, and its tables' header
+    /// rows.
+    fn table_crops(page: crate::extract::Page) -> (Vec<String>, Vec<Option<usize>>) {
+        let doc = Document {
+            pages: vec![page],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let mut copy = doc.clone();
+        let opts = AnalyzeOptions {
+            emit_anchors: true,
+            ..Default::default()
+        };
+        let analysis = crate::document::analyze_with(&mut copy, &[], &opts);
+        let heads = analysis
+            .elements
+            .iter()
+            .filter(|e| e.kind == "doco:Table")
+            .map(|e| e.header_rows)
+            .collect();
+        let crops = crops_at_anchors(&doc, &analysis, &CropHints::default())
+            .into_iter()
+            .flat_map(|(_, regions)| regions.unwrap_or_default())
+            .map(|(tag, _)| tag)
+            .collect();
+        (crops, heads)
+    }
+
+    /// A table's crop is asked for only where its reading is in doubt: a
+    /// table under one plain header row is not, one whose header label spans
+    /// two columns is.
+    #[test]
+    fn only_a_table_whose_header_is_in_doubt_is_cropped() {
+        let plain = ruled_table_page(
+            &[
+                &["Name", "Count", "Share"],
+                &["alpha", "12", "30"],
+                &["beta", "34", "70"],
+                &["gamma", "56", "90"],
+            ],
+            &[],
+        );
+        let (crops, heads) = table_crops(plain);
+        assert_eq!(heads, [Some(1)], "one table under one header row");
+        assert!(crops.is_empty(), "{crops:?}");
+
+        // `Measures` spans `Count` and `Share`: no rule between them in the
+        // header's first row.
+        let spanned = ruled_table_page(
+            &[
+                &["Name", "Measures", ""],
+                &["", "Count", "Share"],
+                &["alpha", "12", "30"],
+                &["beta", "34", "70"],
+                &["gamma", "56", "90"],
+            ],
+            &[(0, 2)],
+        );
+        let (crops, heads) = table_crops(spanned);
+        assert_eq!(heads.len(), 1, "one table");
+        assert_eq!(crops, ["t0"]);
     }
 
     fn region(tag: &str) -> (String, BBox) {
@@ -1526,6 +1656,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
+            title: None,
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[1]);
         assert_eq!(jobs.len(), 2, "the blank scan and the doubt page: {jobs:?}");
@@ -1584,6 +1715,7 @@ mod tests {
                 broken_page(2, 300),
                 logo,
             ],
+            title: None,
         };
         let (_, reasons) = reasons_with_doubts(&doc, &[]);
         assert_eq!(reasons.get(&0), Some(&CropReason::Scanned));
@@ -1600,6 +1732,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(0, 50, true), broken_page(1, 300)],
+            title: None,
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0, 1]);
         assert_eq!(jobs, vec![(0, None), (1, None)]);
@@ -1612,6 +1745,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(0, 500, false), page(1, 500, false)],
+            title: None,
         };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
@@ -1664,6 +1798,7 @@ mod tests {
                 italic: false,
                 advance: Some(6.0),
                 draw_index: i,
+                ocr: None,
             });
             i += 1;
         };
@@ -1685,6 +1820,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
@@ -1730,6 +1866,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(jobs, vec![(0, None)], "the doubt reads the page whole");
@@ -1938,6 +2075,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
         assert_eq!(jobs.len(), 1);
@@ -1970,6 +2108,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
@@ -2013,6 +2152,7 @@ mod tests {
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
             pages_past_limit: 0,
+            title: None,
         };
         let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
@@ -2152,6 +2292,7 @@ mod tests {
                         italic: false,
                         advance: Some(6.0),
                         draw_index,
+                        ocr: None,
                     });
                 }
             }
@@ -2167,6 +2308,7 @@ mod tests {
         let extracted = Document {
             pages_past_limit: 0,
             pages: vec![page_that_reads_as_a_scan_once_cleaned()],
+            title: None,
         };
         assert!(matches!(
             crate::route::decide(&extracted.pages[0]).0,
@@ -2209,6 +2351,7 @@ mod tests {
                 page(1, 500, false),
                 page(2, 50, true),
             ],
+            title: None,
         };
         let (planned, reasons) =
             plan_explained(&doc, &[], &AnalyzeOptions::default(), &CropHints::default());
@@ -2260,6 +2403,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index,
+                    ocr: None,
                 });
             }
         }
@@ -2275,6 +2419,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page_with_a_region_only_once_cleaned(), page(1, 500, false)],
+            title: None,
         };
         assert_eq!(
             crate::route::decide(&doc.pages[0]).0,
@@ -2328,6 +2473,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(0, 0, true), broken_page(1, 300), cleaned, regions],
+            title: None,
         };
         let (jobs, reasons) =
             plan_explained(&doc, &[], &AnalyzeOptions::default(), &CropHints::default());
@@ -2366,6 +2512,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         let mut cleaned = doc.clone();
         let opts = AnalyzeOptions {

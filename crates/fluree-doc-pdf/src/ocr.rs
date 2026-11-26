@@ -31,6 +31,17 @@
 //! Injection runs on the document as extracted, before analysis, so the
 //! glyphs are counted, deduplicated and assembled like any others — and a
 //! region they now fill no longer routes to a model.
+//!
+//! Where a model reads too, a reading that is not enough on its own is left
+//! to it instead ([`left_to_model`]): a page whose text is all pixels, a
+//! reading the engine is unsure of, pictures that carry the page, or a
+//! table in a picture. The engine reads words; a model reads them with
+//! their structure.
+//!
+//! A picture's reading the engine is unsure of, on a page with text of its
+//! own, is lettering drawn into artwork, not text the page holds
+//! ([`set_aside_unsure`]): it is not laid on the page, where no model
+//! takes it either.
 
 use crate::extract::{Document, Page};
 use crate::geom::BBox;
@@ -518,14 +529,19 @@ pub fn inject(doc: &mut Document, readings: &[(usize, Crop, WordReading)]) -> Ve
                 (Area::Page, _) => Vec::new(),
                 (Area::Regions(within), _) => within.iter().map(|(_, b)| *b).collect(),
             };
-            let pasted = (landing.iter().zip(route::pasted_set(p, &landing)))
+            let pasted: Vec<BBox> = (landing.iter().zip(route::pasted_set(p, &landing)))
                 .filter(|(_, pasted)| *pasted)
                 .map(|(b, _)| p.to_display(*b))
                 .collect();
-            out[i] = Some(Injected {
-                pasted,
-                ..inject_one(&mut doc.pages[t.pi], *crop, t, page_boxes(t.pi), reading)
-            });
+            let injected = inject_one(
+                &mut doc.pages[t.pi],
+                *crop,
+                t,
+                page_boxes(t.pi),
+                &pasted,
+                reading,
+            );
+            out[i] = Some(Injected { pasted, ..injected });
         }
     }
 
@@ -713,6 +729,7 @@ fn inject_one(
     crop: Crop,
     t: &Target,
     boxes: Boxes,
+    pasted: &[BBox],
     reading: &WordReading,
 ) -> Injected {
     let page = p.index;
@@ -764,6 +781,35 @@ fn inject_one(
     result.engine = reading.engine.clone();
     if let Area::Regions(within) = &t.area {
         result.regions = within.iter().map(|(_, r)| p.to_display(*r)).collect();
+    }
+    // Each glyph the reading added says where it was read, by where it
+    // lands rather than by the crop read: in a picture pasted into its page
+    // (`pasted`, display frame: under half the page, a screenshot or a
+    // logo) it is the picture's text; anywhere else, a page read whole or a
+    // scan stored as a region over half its page, the page's.
+    let in_picture = |p: &Page, g: &crate::glyph::Glyph| {
+        g.bbox.is_some_and(|b| {
+            let d = p.to_display(b);
+            let (x, y) = ((d.x0 + d.x1) * 0.5, (d.y0 + d.y1) * 0.5);
+            pasted.iter().any(|q| {
+                (q.x0 - CROP_MARGIN..=q.x1 + CROP_MARGIN).contains(&x)
+                    && (q.y0 - CROP_MARGIN..=q.y1 + CROP_MARGIN).contains(&y)
+            })
+        })
+    };
+    let sources: Vec<_> = (p.glyphs.iter())
+        .filter(|g| g.draw_index >= added_from)
+        .map(|g| {
+            if in_picture(p, g) {
+                crate::glyph::OcrSource::Region
+            } else {
+                crate::glyph::OcrSource::Page
+            }
+        })
+        .collect();
+    let added = p.glyphs.iter_mut().filter(|g| g.draw_index >= added_from);
+    for (g, source) in added.zip(sources) {
+        g.ocr = Some(source);
     }
     // A whole-page reading most of whose words land nowhere is not a
     // reading of this page: a stray word must not mark a scan as read, or
@@ -2060,6 +2106,7 @@ fn lay_run(p: &mut Page, words: &[Level], run: &Run, start: f64, next: &mut usiz
             weight: None,
             italic: false,
             draw_index: *next,
+            ocr: None,
         });
         *next += 1;
     }
@@ -2117,6 +2164,7 @@ fn lay_along(
             weight: None,
             italic: false,
             draw_index,
+            ocr: None,
         });
     }
     boxes
@@ -2168,7 +2216,30 @@ pub type OcrJobs = Vec<(usize, Option<Vec<(String, BBox)>>)>;
 /// left unread are kept first: a page read whole, whose text is all pixels;
 /// then a region the router sends a reader; then a region too small for a
 /// model's call. Within each kind, the earlier pages first.
+/// The small regions an engine reads on one page by default: every one
+/// (`0`). Correctness first: a drawing's notes and a problem set as an
+/// image sit in small regions too. A deployment that needs a page's time
+/// bounded sets a limit ([`ocr_jobs_within`]); routed regions and whole
+/// pages are always read.
+pub const DEFAULT_SMALL_REGIONS_PER_PAGE: usize = 0;
+
 pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (OcrJobs, usize) {
+    let (jobs, dropped, _) = ocr_jobs_within(doc, only, max_crops, DEFAULT_SMALL_REGIONS_PER_PAGE);
+    (jobs, dropped)
+}
+
+/// As [`ocr_jobs`], reading at most `small_per_page` small regions on a
+/// page (`0` for no limit), the largest by their area: a drawing's
+/// callouts and a paper's figure labels made a hundred crops of one page,
+/// each read on its own, and past the few largest they read a line or
+/// none. Also how many such crops were left, apart from those past
+/// `max_crops`.
+pub fn ocr_jobs_within(
+    doc: &Document,
+    only: Option<&[usize]>,
+    max_crops: usize,
+    small_per_page: usize,
+) -> (OcrJobs, usize, usize) {
     // A region showing what an earlier one shows is not read again
     // ([`copies`]): it takes the earlier one's reading, and counts against
     // the limit only through it.
@@ -2199,6 +2270,32 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
             crops.push((kind, p.index, Some((i, b))));
         }
     }
+    // A crowded page's small regions: the largest few, by their area.
+    let small_cap = small_per_page;
+    let before = crops.len();
+    if small_cap > 0 {
+        let mut by_page: std::collections::HashMap<usize, Vec<(f64, usize)>> = Default::default();
+        for (i, (kind, page, crop)) in crops.iter().enumerate() {
+            if let (2, Some((_, b))) = (kind, crop) {
+                by_page
+                    .entry(*page)
+                    .or_default()
+                    .push((b.width() * b.height(), i));
+            }
+        }
+        let mut cut = vec![false; crops.len()];
+        for small in by_page.values_mut() {
+            if small.len() > small_cap {
+                small.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+                for &(_, i) in &small[small_cap..] {
+                    cut[i] = true;
+                }
+            }
+        }
+        let mut k = cut.iter();
+        crops.retain(|_| !*k.next().unwrap_or(&false));
+    }
+    let crowded = before - crops.len();
     let mut dropped = 0;
     if max_crops > 0 && crops.len() > max_crops {
         let mut order: Vec<usize> = (0..crops.len()).collect();
@@ -2225,7 +2322,7 @@ pub fn ocr_jobs(doc: &Document, only: Option<&[usize]>, max_crops: usize) -> (Oc
             (Some(c), _) => jobs.push((page, Some(vec![c]))),
         }
     }
-    (jobs, dropped)
+    (jobs, dropped, crowded)
 }
 
 /// A region an OCR engine reads that shows what an earlier one shows, by
@@ -2337,6 +2434,14 @@ pub struct OcrPass {
     pub failed: Vec<(String, String)>,
     /// Crops left unread past the limit ([`ocr_jobs`]).
     pub capped: usize,
+    /// Small regions left unread on crowded pages ([`ocr_jobs_within`]).
+    pub crowded: usize,
+    /// Crops read but left to a model ([`left_to_model`]), by crop name
+    /// (`p{page}_{tag}`), with why.
+    pub left: Vec<(String, &'static str)>,
+    /// Crops read but set aside as artwork ([`set_aside_unsure`]), by crop
+    /// name.
+    pub set_aside: Vec<String>,
 }
 
 /// Read a document's pixels with an engine and lay the words on its pages:
@@ -2359,7 +2464,33 @@ pub fn read_pages(
     scale: crate::escalate::CropScale,
     max_crops: usize,
 ) -> OcrPass {
-    let (jobs, capped) = ocr_jobs(doc, only, max_crops);
+    read_pages_leaving(
+        doc,
+        pdf,
+        engine,
+        only,
+        scale,
+        (max_crops, DEFAULT_SMALL_REGIONS_PER_PAGE),
+        false,
+    )
+}
+
+/// As [`read_pages`], at most `max_crops` crops in all and
+/// `small_per_page` small regions on a page ([`ocr_jobs_within`]); with
+/// `leave_to_model`, where a model reads too, the
+/// readings [`left_to_model`] picks are not laid on their pages, so the
+/// crops they read route to the model as if no engine had read them.
+#[cfg(feature = "render")]
+pub fn read_pages_leaving(
+    doc: &mut Document,
+    pdf: &hayro_syntax::Pdf,
+    engine: &dyn fluree_doc_vision::OcrEngine,
+    only: Option<&[usize]>,
+    scale: crate::escalate::CropScale,
+    (max_crops, small_per_page): (usize, usize),
+    leave_to_model: bool,
+) -> OcrPass {
+    let (jobs, capped, crowded) = ocr_jobs_within(doc, only, max_crops, small_per_page);
     // Each crop is read as it is cut, its pixels dropped after; the
     // readings are put back in the jobs' order, which a page rendered at
     // several scales hands its crops over out of.
@@ -2392,11 +2523,22 @@ pub fn read_pages(
             failed.push((format!("p{page}_{}", Crop::Region(i).tag()), e));
         }
     }
-    let readings = with_copies(doc, only, readings);
+    // Copies first, then the readings left to a model or set aside: a copy
+    // is judged as the reading it copies is.
+    let mut readings = with_copies(doc, only, readings);
+    let left = if leave_to_model {
+        leave(doc, &mut readings)
+    } else {
+        Vec::new()
+    };
+    let set_aside = set_aside_unsure(doc, &mut readings);
     OcrPass {
         injected: inject(doc, &readings),
         failed,
         capped,
+        crowded,
+        left,
+        set_aside,
     }
 }
 
@@ -2482,6 +2624,186 @@ pub fn readings(
             min_confidence: r.min_conf.map(round),
         })
         .collect()
+}
+
+/// Take out of `readings` a picture's reading the engine is unsure of
+/// (under [`WEAK_CONFIDENCE`]) on a page with text of its own, and name
+/// them (`p{page}_{tag}`).
+///
+/// An engine reads the lettering drawn into artwork, a logo's or a seal's
+/// texture, a photo's grain as words, and is unsure of them: an engraving's
+/// captions read `The Thrte Pigeows, / sgoaoene`. Laid on the page, they
+/// are text it never printed. Clean print reads at 0.97 and over. Whatever
+/// its length, a reading under 0.90 is set aside, unless the page has no
+/// text but what is read from its pixels: a whole-page reading, or the
+/// regions of a page with no text layer, are all the text there is.
+pub fn set_aside_unsure(
+    doc: &Document,
+    readings: &mut Vec<(usize, Crop, WordReading)>,
+) -> Vec<String> {
+    let own = |page: usize| {
+        doc.pages.iter().find(|p| p.index == page).map_or(0, |p| {
+            p.glyphs
+                .iter()
+                .filter(|g| !g.text.trim().is_empty())
+                .count()
+        })
+    };
+    let mut aside = Vec::new();
+    readings.retain(|(page, crop, r)| {
+        let unsure = matches!(crop, Crop::Region(_))
+            && confidence(r).is_some_and(|c| c < WEAK_CONFIDENCE)
+            && own(*page) > 0;
+        if unsure {
+            aside.push(format!("p{page}_{}", crop.tag()));
+        }
+        !unsure
+    });
+    aside
+}
+
+/// Take out of `readings` those [`left_to_model`] picks, and name them
+/// (`p{page}_{tag}`) with why.
+pub fn leave(
+    doc: &Document,
+    readings: &mut Vec<(usize, Crop, WordReading)>,
+) -> Vec<(String, &'static str)> {
+    let picked = left_to_model(doc, readings);
+    let mut left = Vec::new();
+    let mut i = 0;
+    readings.retain(|(page, crop, _)| {
+        let why = picked.iter().find(|(k, _)| *k == i).map(|(_, w)| *w);
+        i += 1;
+        match why {
+            Some(w) => {
+                left.push((format!("p{page}_{}", crop.tag()), w));
+                false
+            }
+            None => true,
+        }
+    });
+    left
+}
+
+/// Below this confidence, averaged over a reading's characters, an engine
+/// is guessing at a fifth or more of what it read: lettering drawn into
+/// artwork, tick labels, a photo's texture. Clean print reads at 0.97 and
+/// over.
+const WEAK_CONFIDENCE: f64 = 0.90;
+
+/// Fewest characters a weak reading needs to be worth a model's call: a
+/// mark or two read in a photo is no text a model would find either.
+const MIN_WEAK_CHARS: usize = 20;
+
+/// Fewest rows of a table read in a picture: rows of three boxes or more,
+/// at least half the reading's rows.
+const MIN_TABLE_ROWS: usize = 3;
+
+/// The readings a model should read instead, by their place in `readings`,
+/// with the cue that sends each: what an engine's words alone leave out.
+///
+/// Only a crop a model would be sent ([`route::decide`]): a page routed to
+/// a reader whole, or one of its routed regions. The small regions only an
+/// engine reads ([`route::ocr_regions`]) stay the engine's. A crop goes to
+/// the model when
+/// - **its page is all pixels** (a scan, a near-blank page that is one
+///   image): the page's headings, lists and tables are all in the reading,
+///   and boxes the engine estimates are poor evidence of them;
+/// - **the reading is weak:** under [`WEAK_CONFIDENCE`] over
+///   [`MIN_WEAK_CHARS`] characters or more;
+/// - **its pictures carry the page:** the page's readings hold as much text
+///   as its own text layer, so its structure is in them;
+/// - **it holds a table** ([`MIN_TABLE_ROWS`]).
+///
+/// A chart's or a screenshot's own title is no cue: it is the figure's
+/// text, not a section's heading, and an engine reads its words as well.
+pub fn left_to_model(
+    doc: &Document,
+    readings: &[(usize, Crop, WordReading)],
+) -> Vec<(usize, &'static str)> {
+    let pages = crate::document::routing_pages(doc);
+    let routed = |page: usize, crop: Crop| -> Option<(bool, &Page)> {
+        let p = pages.iter().find(|p| p.index == page)?;
+        match (crop, route::decide(p).0) {
+            (Crop::Page, Route::Vlm(_)) => Some((true, p)),
+            (Crop::Region(i), Route::VlmRegions(r)) if i < r.len() => Some((false, p)),
+            _ => None,
+        }
+    };
+    // The text a page's model-sized readings hold, against its own.
+    let mut read_on: std::collections::HashMap<usize, usize> = Default::default();
+    for (page, crop, r) in readings {
+        if routed(*page, *crop).is_some() {
+            *read_on.entry(*page).or_default() += chars(r);
+        }
+    }
+    let mut out = Vec::new();
+    for (k, (page, crop, r)) in readings.iter().enumerate() {
+        let Some((whole, p)) = routed(*page, *crop) else {
+            continue;
+        };
+        let own = p
+            .glyphs
+            .iter()
+            .filter(|g| !g.text.trim().is_empty())
+            .count();
+        let why = if whole {
+            Some("its page is all pixels")
+        } else if chars(r) >= MIN_WEAK_CHARS && confidence(r).is_some_and(|c| c < WEAK_CONFIDENCE) {
+            Some("the engine is unsure of it")
+        } else if read_on.get(page).is_some_and(|&n| n > 0 && n >= own) {
+            Some("its pictures carry the page")
+        } else {
+            let rows = rows_of(r);
+            let ruled = rows.iter().filter(|row| row.len() >= 3).count();
+            (ruled >= MIN_TABLE_ROWS && ruled * 2 >= rows.len()).then_some("it holds a table")
+        };
+        if let Some(w) = why {
+            out.push((k, w));
+        }
+    }
+    out
+}
+
+/// The characters a reading holds, spaces aside.
+fn chars(r: &WordReading) -> usize {
+    r.words
+        .iter()
+        .map(|w| w.text.chars().filter(|c| !c.is_whitespace()).count())
+        .sum()
+}
+
+/// The engine's confidence in a reading, averaged over its characters;
+/// `None` where it gives none.
+fn confidence(r: &WordReading) -> Option<f64> {
+    let (mut sum, mut n) = (0.0, 0usize);
+    for w in &r.words {
+        let c = w.conf?;
+        let k = w.text.chars().filter(|c| !c.is_whitespace()).count();
+        sum += c * k as f64;
+        n += k;
+    }
+    (n > 0).then(|| sum / n as f64)
+}
+
+/// A reading's boxes in rows, top to bottom: a box joins the row before it
+/// where its middle lies within half the taller's height of the row's.
+fn rows_of(r: &WordReading) -> Vec<Vec<&fluree_doc_vision::OcrWord>> {
+    let mid = |w: &fluree_doc_vision::OcrWord| (w.bbox[1] + w.bbox[3]) / 2.0;
+    let tall = |w: &fluree_doc_vision::OcrWord| (w.bbox[3] - w.bbox[1]).abs();
+    let mut words: Vec<_> = r.words.iter().collect();
+    words.sort_by(|a, b| mid(a).total_cmp(&mid(b)));
+    let mut rows: Vec<(f64, f64, Vec<&fluree_doc_vision::OcrWord>)> = Vec::new();
+    for w in words {
+        match rows.last_mut() {
+            Some((y, h, row)) if (mid(w) - *y).abs() < 0.5 * h.max(tall(w)) => {
+                *h = h.max(tall(w));
+                row.push(w);
+            }
+            _ => rows.push((mid(w), tall(w), vec![w])),
+        }
+    }
+    rows.into_iter().map(|(_, _, row)| row).collect()
 }
 
 /// Mark the elements OCR words make up as `provenance: "ocr"`.
@@ -2619,6 +2941,7 @@ mod tests {
                 weight: None,
                 italic: false,
                 draw_index: i,
+                ocr: None,
             })
             .collect()
     }
@@ -3055,6 +3378,7 @@ mod tests {
                     .collect(),
                 vec![shot(100.0, 288.0), shot(200.0, 150.0)],
             )],
+            title: None,
         };
         let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(pdf_with(
             b"/MediaBox [0 0 612 792]",
@@ -3191,6 +3515,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, Route::Deterministic);
         let r = inject(
@@ -3220,6 +3545,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3248,6 +3574,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let conf = |w: OcrWord, c: Option<f64>| OcrWord { conf: c, ..w };
         let reading = WordReading {
@@ -3294,6 +3621,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let conf = |w: OcrWord, c: f64| OcrWord { conf: Some(c), ..w };
         let reading = px(vec![
@@ -3368,6 +3696,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3438,6 +3767,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3471,6 +3801,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3490,6 +3821,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(native("REF", 72.0, 60.0), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3514,6 +3846,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let off = vec![
             word("Account", [1000.0, 100.0, 1080.0, 116.0]),
@@ -3559,6 +3892,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(native("REF", 72.0, 60.0), vec![full_page_image()])],
+            title: None,
         };
         let over = px(vec![word("REF", [144.0, 100.0, 180.0, 124.0])]);
         let r = inject(&mut doc, &[(0, Crop::Page, over)]);
@@ -3568,6 +3902,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(&mut doc, &[(0, Crop::Page, page_units(Vec::new()))]);
         assert_eq!(r[0].refused, None);
@@ -3660,6 +3995,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         assert!(matches!(
             route::decide(&doc.pages[0]).0,
@@ -3695,6 +4031,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -3732,6 +4069,7 @@ mod tests {
                     image(Some(false), (56.0, 450.0, 556.0, 600.0)),
                 ],
             )],
+            title: None,
         }
     }
 
@@ -3866,6 +4204,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         assert!(matches!(
             route::decide(&doc.pages[0]).0,
@@ -3897,6 +4236,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         inject(
             &mut doc,
@@ -3916,6 +4256,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("AB", [100.0, 100.0, 140.0, 120.0]);
         w.angle = Some(90.0);
@@ -3941,6 +4282,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("Balances", [144.0, 200.0, 544.0, 226.0]);
         w.angle = Some(0.6);
@@ -4002,6 +4344,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         assert_eq!(crate::unread_pages(&doc, &[]).len(), 1);
         let injected = inject(&mut doc, &[(0, Crop::Page, px(statement()))]);
@@ -4018,7 +4361,7 @@ mod tests {
         assert!(a
             .elements
             .iter()
-            .any(|e| e.kind == "doco:SectionTitle" && e.text == "Account statement"));
+            .any(|e| e.kind == "doco:Title" && e.level.is_none() && e.text == "Account statement"));
         assert!(a
             .elements
             .iter()
@@ -4075,6 +4418,7 @@ mod tests {
                 let mut doc = Document {
                     pages_past_limit: 0,
                     pages: vec![page(Vec::new(), vec![full_page_image()])],
+                    title: None,
                 };
                 let r = inject(
                     &mut doc,
@@ -4137,6 +4481,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(&mut doc, &[(0, Crop::Page, page_units(words))]);
         let els = analysed(&mut doc, &r);
@@ -4144,7 +4489,7 @@ mod tests {
             .iter()
             .map(|e| (e.kind.as_str(), e.text.as_str()))
             .collect();
-        assert_eq!(kinds[0], ("doco:SectionTitle", "Quarterly summary"));
+        assert_eq!(kinds[0], ("doco:Title", "Quarterly summary"));
         assert_eq!(kinds.len(), 2, "{kinds:?}");
         assert_eq!(kinds[1].0, "doco:Paragraph");
         assert!(kinds[1].1.ends_with("more or less necessary"));
@@ -4186,6 +4531,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, vec![shot])],
+            title: None,
         };
         let mut words = vec![
             word("Balance", [80.0, 480.0, 200.0, 510.0]),
@@ -4285,6 +4631,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, vec![shot])],
+            title: None,
         };
         assert!(route::share(&doc.pages[0], &shot.bbox) < route::IMAGE_DOMINANT_COVERAGE);
         assert_eq!(
@@ -4425,6 +4772,7 @@ mod tests {
             let mut doc = Document {
                 pages_past_limit: 0,
                 pages: vec![stamped_page(scans.clone())],
+                title: None,
             };
             let injected = inject(&mut doc, &readings);
             assert!(
@@ -4475,6 +4823,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, vec![shot, scan])],
+            title: None,
         };
         assert!(route::share(&doc.pages[0], &scan.bbox) >= route::IMAGE_DOMINANT_COVERAGE);
         let route::Route::VlmRegions(regions) = route::decide(&doc.pages[0]).0 else {
@@ -4539,9 +4888,13 @@ mod tests {
                     .map(|e| (e.kind.as_str(), e.provenance))
             };
             assert_eq!(kind("9,876.54"), Some(("doco:Paragraph", "ocr")), "{els:?}");
-            assert_eq!(
-                kind("AGREEMENT"),
-                Some(("doco:SectionTitle", "ocr")),
+            // The scan's heading is the document's: a section's, or, set
+            // largest on the page, its title.
+            assert!(
+                matches!(
+                    kind("AGREEMENT"),
+                    Some(("doco:SectionTitle" | "doco:Title", "ocr"))
+                ),
                 "{els:?}"
             );
             assert_eq!(kind("Findings").unwrap().0, "doco:SectionTitle");
@@ -4581,6 +4934,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, shots.to_vec())],
+            title: None,
         };
         let words: Vec<OcrWord> = (0..5)
             .map(|i| {
@@ -4624,6 +4978,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("CONFIDENTIAL", [100.0, 185.0, 300.0, 215.0]);
         w.angle = Some(45.0);
@@ -4640,6 +4995,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         let sizeless = WordReading {
             width: None,
@@ -4657,6 +5013,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let words = vec![
             word("far", [1e9, 1e9, 1e9 + 50.0, 1e9 + 13.0]),
@@ -4759,6 +5116,7 @@ mod tests {
         let mut doc = Document {
             pages,
             pages_past_limit: 0,
+            title: None,
         };
         let readings: Vec<(usize, Crop, WordReading)> = (1..=4)
             .map(|m| {
@@ -4810,6 +5168,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages,
+            title: None,
         };
         let readings: Vec<(usize, Crop, WordReading)> = (0..3)
             .map(|m| {
@@ -4972,6 +5331,7 @@ mod tests {
         let mut doc = Document {
             pages,
             pages_past_limit: 0,
+            title: None,
         };
         let rows = [("Widget", "12"), ("Bolt", "7"), ("Nut", "45"), ("Pin", "3")];
         let readings: Vec<(usize, Crop, WordReading)> = (0..6)
@@ -5144,6 +5504,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, vec![a, b])],
+            title: None,
         };
         let drawn = route::Route::VlmRegions(vec![a.bbox, b.bbox]);
         assert_eq!(route::decide(&doc.pages[0]).0, drawn);
@@ -5178,6 +5539,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let mut w = word("Cafe\u{301}", [60.0, 100.0, 100.0, 113.0]);
         w.angle = Some(359.4);
@@ -5192,6 +5554,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let short = vec![word("Page", [72.0, 72.0, 110.0, 85.0])];
         inject(&mut doc, &[(0, Crop::Page, page_units(short))]);
@@ -5211,6 +5574,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         };
         let words = vec![
             word("of returned information", [86.0, 500.0, 184.0, 507.0]),
@@ -5251,6 +5615,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         let before = doc.pages[0].glyphs.len();
         let words = vec![
@@ -5272,6 +5637,7 @@ mod tests {
         Document {
             pages_past_limit: 0,
             pages: vec![page(Vec::new(), vec![full_page_image()])],
+            title: None,
         }
     }
 
@@ -5588,6 +5954,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(header.clone(), vec![full_page_image()])],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -5836,6 +6203,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -5879,6 +6247,7 @@ mod tests {
                     })
                     .collect(),
             )],
+            title: None,
         }
     }
 
@@ -5989,6 +6358,138 @@ mod tests {
             .map(|o| (o.crop.clone(), o.words))
             .collect();
         assert_eq!(listed, [("full".to_string(), 0)]);
+    }
+
+    /// A reading of `rows` on the page, a line of boxes 12pt tall each, the
+    /// engine `conf` sure of every box.
+    fn rows_read(rows: &[&[&str]], conf: f64) -> WordReading {
+        let words = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| {
+                row.iter().enumerate().map(move |(c, t)| {
+                    let (x, y) = (100.0 + c as f64 * 120.0, 120.0 + r as f64 * 20.0);
+                    OcrWord {
+                        text: t.to_string(),
+                        bbox: [x, y, x + 100.0, y + 12.0],
+                        angle: None,
+                        conf: Some(conf),
+                    }
+                })
+            })
+            .collect();
+        page_units(words)
+    }
+
+    #[test]
+    fn a_reading_its_words_alone_leave_short_goes_to_the_model() {
+        let doc = page_with_regions(&[UPPER, LOWER]);
+        let left = |crop: Crop, r: WordReading| left_to_model(&doc, &[(0, crop, r)]);
+        // Clean print in prose: the engine's reading stands.
+        let prose = &[
+            &["Revenue rose by four percent"][..],
+            &["in the second quarter"],
+        ];
+        assert!(left(Crop::Region(0), rows_read(prose, 0.98)).is_empty());
+        // One the engine is unsure of goes to the model; a mark or two it is
+        // unsure of is no text worth the call.
+        let weak = &[&["Hgh-Chnge in Bnd Strt"][..], &["la Politesse du Grande"]];
+        assert_eq!(
+            left(Crop::Region(0), rows_read(weak, 0.78)),
+            vec![(0, "the engine is unsure of it")]
+        );
+        assert!(left(Crop::Region(0), rows_read(&[&["1"]], 0.4)).is_empty());
+        // A table: rows of three boxes and more, most of its rows.
+        let table = &[
+            &["Year", "Sales", "Margin"][..],
+            &["2023", "4.1", "12%"],
+            &["2024", "4.4", "13%"],
+        ];
+        assert_eq!(
+            left(Crop::Region(1), rows_read(table, 0.98)),
+            vec![(0, "it holds a table")]
+        );
+        // A region no model is sent stays the engine's, whatever it holds.
+        assert!(left(Crop::Region(7), rows_read(weak, 0.78)).is_empty());
+        // Pictures holding as much text as the page's own 1500 characters
+        // carry the page.
+        let line = "x".repeat(50);
+        let one = [line.as_str()];
+        let long: Vec<&[&str]> = (0..30).map(|_| &one[..]).collect();
+        assert_eq!(
+            left(Crop::Region(0), rows_read(&long, 0.98)),
+            vec![(0, "its pictures carry the page")]
+        );
+    }
+
+    #[test]
+    fn a_reading_left_to_the_model_is_not_laid_on_its_page() {
+        let mut doc = page_with_regions(&[UPPER, LOWER]);
+        let weak = &[&["Hgh-Chnge in Bnd Strt"][..], &["la Politesse du Grande"]];
+        let prose = &[&["Revenue rose by four percent"][..]];
+        let mut readings = vec![
+            (0, Crop::Region(0), rows_read(weak, 0.78)),
+            (0, Crop::Region(1), rows_read(prose, 0.98)),
+        ];
+        let left = leave(&doc, &mut readings);
+        assert_eq!(
+            left,
+            vec![("p0_r0".to_string(), "the engine is unsure of it")]
+        );
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].1, Crop::Region(1));
+        inject(&mut doc, &readings);
+        // The region left unread still routes to a reader.
+        assert!(!doc.pages[0].ocr_read_region(0));
+    }
+
+    #[test]
+    fn a_pictures_lettering_the_engine_is_unsure_of_is_set_aside() {
+        let doc = page_with_regions(&[UPPER, LOWER]);
+        let weak = &[&["The Thrte Pigeows,"][..], &["sgoaoene"]];
+        let prose = &[&["Revenue rose by four percent"][..]];
+        let mut readings = vec![
+            (0, Crop::Region(0), rows_read(weak, 0.78)),
+            (0, Crop::Region(1), rows_read(prose, 0.98)),
+            // A stray mark it is unsure of, however short.
+            (0, Crop::Region(2), rows_read(&[&["1"]], 0.45)),
+        ];
+        let aside = set_aside_unsure(&doc, &mut readings);
+        assert_eq!(aside, ["p0_r0", "p0_r2"]);
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].1, Crop::Region(1));
+        // A whole page's reading is all the text it has, sure or not.
+        let mut whole = vec![(0, Crop::Page, rows_read(weak, 0.78))];
+        assert!(set_aside_unsure(&doc, &mut whole).is_empty());
+        // So is a region's on a page with no text of its own.
+        let bare = Document {
+            pages: vec![page(
+                Vec::new(),
+                vec![ImagePlacement {
+                    bbox: UPPER,
+                    texty: Some(true),
+                    ppi: None,
+                    bitonal: false,
+                    grid: (1000, 1000),
+                    key: None,
+                }],
+            )],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let mut only = vec![(0, Crop::Region(0), rows_read(weak, 0.78))];
+        assert!(set_aside_unsure(&bare, &mut only).is_empty());
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_page_all_pixels_goes_to_the_model() {
+        let doc = crate::extract::extract_bytes(image_only_pdf()).unwrap();
+        let r = rows_read(&[&["HELLO"]], 0.99);
+        assert_eq!(
+            left_to_model(&doc, &[(0, Crop::Page, r)]),
+            vec![(0, "its page is all pixels")]
+        );
     }
 
     #[test]
@@ -6123,6 +6624,7 @@ mod tests {
                     .collect(),
                 vec![at(430.0, 600.0), at(500.0, 700.0)],
             )],
+            title: None,
         };
         let r = inject(
             &mut doc,
@@ -6438,6 +6940,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![page(glyphs, Vec::new())],
+            title: None,
         };
         let far = page_units(vec![word("far", [5000.0, 5000.0, 5050.0, 5013.0])]);
         inject(&mut doc, &[(0, Crop::Page, far)]);
@@ -6470,6 +6973,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         let w = || {
             page_units(vec![word(
@@ -6548,6 +7052,7 @@ mod tests {
                     key: None,
                 }],
             )],
+            title: None,
         };
         assert!(matches!(
             route::decide(&doc.pages[0]).0,
@@ -7038,6 +7543,7 @@ mod tests {
         let mut doc = Document {
             pages_past_limit: 0,
             pages: vec![p0, p1],
+            title: None,
         };
         assert_eq!(copies(&doc, None), [((1, 0), (0, 0))]);
         doc.pages[1].rotation = 90;
@@ -7084,6 +7590,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p0, p1, p2],
+            title: None,
         };
         let tags = |jobs: &OcrJobs| -> Vec<(usize, Vec<String>)> {
             jobs.iter()
@@ -7167,6 +7674,7 @@ mod tests {
                     ..page(Vec::new(), vec![full_page_image()])
                 })
                 .collect(),
+            title: None,
         }
     }
 
@@ -7179,9 +7687,10 @@ mod tests {
         "Coverage amount 250,000 dollars",
     ];
 
+    /// The lines read as headings, the document's title among them.
     fn headings(els: &[fluree_doc_model::Element]) -> Vec<&str> {
         els.iter()
-            .filter(|e| e.kind == "doco:SectionTitle")
+            .filter(|e| matches!(e.kind.as_str(), "doco:SectionTitle" | "doco:Title"))
             .map(|e| e.text.as_str())
             .collect()
     }
@@ -7739,5 +8248,68 @@ mod tests {
         // No line is a heading, as on the born-digital page: the first is a
         // date, a value read as text.
         assert!(headings(&els).is_empty(), "{texts:?}");
+    }
+
+    #[test]
+    fn a_crowded_pages_small_regions_are_read_the_largest_first() {
+        // A drawing's callouts: twelve small captures on one page, of
+        // growing width, beside its own text, and a routed region.
+        let capture = |i: usize| ImagePlacement {
+            bbox: BBox {
+                x0: 40.0,
+                y0: 100.0 + i as f64 * 40.0,
+                x1: 80.0 + i as f64 * 8.0,
+                y1: 130.0 + i as f64 * 40.0,
+            },
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (200, 60),
+            key: None,
+        };
+        let routed = ImagePlacement {
+            bbox: BBox {
+                x0: 300.0,
+                y0: 400.0,
+                x1: 580.0,
+                y1: 700.0,
+            },
+            texty: Some(true),
+            ppi: None,
+            bitonal: false,
+            grid: (1000, 1000),
+            key: None,
+        };
+        let mut images: Vec<ImagePlacement> = (0..12).map(capture).collect();
+        images.push(routed);
+        let doc = Document {
+            pages: vec![page(
+                native("The assembly drawing lists every part.", 40.0, 40.0),
+                images,
+            )],
+            title: None,
+            pages_past_limit: 0,
+        };
+        let count = |jobs: &OcrJobs| {
+            jobs.iter()
+                .map(|(_, c)| c.as_ref().map_or(1, Vec::len))
+                .sum::<usize>()
+        };
+        let (all, _, crowded) = ocr_jobs_within(&doc, None, 0, 0);
+        assert_eq!((count(&all), crowded), (13, 0));
+        let (kept, dropped, crowded) = ocr_jobs_within(&doc, None, 0, 4);
+        assert_eq!((count(&kept), dropped, crowded), (5, 0, 8));
+        // The routed region, and the four widest captures.
+        let boxes: Vec<f64> = kept[0]
+            .1
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(_, b)| b.x1)
+            .collect();
+        assert!(boxes.contains(&580.0), "{boxes:?}");
+        let mut small: Vec<f64> = boxes.into_iter().filter(|&x| x < 300.0).collect();
+        small.sort_by(f64::total_cmp);
+        assert_eq!(small, [144.0, 152.0, 160.0, 168.0]);
     }
 }

@@ -1,0 +1,73 @@
+{
+ "id": "letter-2.clean-300",
+ "base": "letter-2",
+ "profile": "clean-300",
+ "dpi": 300,
+ "text_layer": false,
+ "facts": [
+  {
+   "text": "Example Data Inc.",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "+1 555 588 3203",
+   "kind": "id",
+   "where": "page"
+  },
+  {
+   "text": "November 2, 2026",
+   "kind": "date",
+   "where": "page"
+  },
+  {
+   "text": "Morgan Placeholder",
+   "kind": "name",
+   "where": "page"
+  },
+  {
+   "text": "975 Juniper Court",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "Brookfield, VT 05004",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "PX-3473-72813",
+   "kind": "id",
+   "where": "page"
+  },
+  {
+   "text": "7,538.21",
+   "kind": "amount",
+   "where": "page"
+  },
+  {
+   "text": "September 5, 2026",
+   "kind": "date",
+   "where": "page"
+  },
+  {
+   "text": "Please quote the reference above in any correspondence",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "can also set up a payment plan on request",
+   "kind": "phrase",
+   "where": "page"
+  },
+  {
+   "text": "Taylor Example",
+   "kind": "name",
+   "where": "page"
+  }
+ ],
+ "headings": [
+  "Example Data Inc.",
+  "Taylor Example"
+ ]
+}

@@ -392,6 +392,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             })
             .collect();
         Page {
@@ -448,6 +449,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER])],
+            title: None,
         };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 2, "{got:?}");
@@ -463,6 +465,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER])],
+            title: None,
         };
         for evidence in ["region-splice", "region-chart"] {
             let got = unread_regions(&doc, &[spliced(BIG, evidence)]);
@@ -489,6 +492,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER, BIG])],
+            title: None,
         };
         let got: Vec<BBox> = unread_regions(&doc, &[]).iter().map(|u| u.bbox).collect();
         assert_eq!(got, [BIG, OTHER]);
@@ -498,6 +502,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[BIG]), next],
+            title: None,
         };
         assert_eq!(unread_regions(&doc, &[]).len(), 2);
     }
@@ -507,6 +512,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[BIG, OTHER])],
+            title: None,
         };
         let whole = Element::new("doco:Paragraph", "the page", "vlm", "page-tier");
         assert!(unread_regions(&doc, &[whole]).is_empty());
@@ -523,6 +529,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p.clone()],
+            title: None,
         };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 1, "{got:?}");
@@ -532,6 +539,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         assert!(unread_regions(&doc, &[]).is_empty());
     }
@@ -552,6 +560,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[small, BIG])],
+            title: None,
         };
         assert_eq!(route::ocr_regions(&doc.pages[0]), vec![BIG, small]);
         assert_eq!(
@@ -568,6 +577,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         assert_eq!(reasons(&doc), [("Region".to_string(), BIG)]);
         // Alone on a page of prose, it is listed too: the page routes
@@ -575,6 +585,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[small])],
+            title: None,
         };
         assert_eq!(reasons(&doc), [("Small".to_string(), small)]);
     }
@@ -593,6 +604,7 @@ mod tests {
         let doc = Document {
             pages: vec![p],
             pages_past_limit: 0,
+            title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
         assert!(route::ocr_regions(&doc.pages[0]).is_empty());
@@ -613,6 +625,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p.clone()],
+            title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
@@ -628,6 +641,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![read],
+            title: None,
         };
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
         // Under text the page's own glyphs cover, it is not listed: the text
@@ -644,16 +658,19 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 1500 + i,
+            ocr: None,
         }));
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![covered],
+            title: None,
         };
         assert!(reasons(&doc).is_empty());
         // A model's reading of the whole page reads it too.
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[BIG])],
+            title: None,
         };
         let mut photo = doc.clone();
         photo.pages[0].images[0].texty = Some(false);
@@ -667,6 +684,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![page(&[small, BIG, small])],
+            title: None,
         };
         assert_eq!(
             reasons(&doc),
@@ -679,6 +697,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
     }
@@ -708,6 +727,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         assert!(unread_regions(&doc, &[]).is_empty());
         // Handed no element, the reading left the page under the floor: it
@@ -728,6 +748,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 1, "{got:?}");
@@ -750,6 +771,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![a, page(&[]), b],
+            title: None,
         };
         let got = parse_warnings(&doc);
         let got: Vec<(usize, &str, usize)> = got
@@ -774,6 +796,7 @@ mod tests {
         let doc = Document {
             pages_past_limit: 0,
             pages: vec![p],
+            title: None,
         };
         assert!(unread_regions(&doc, &[]).is_empty());
         assert_eq!(unread_pages(&doc, &[]).len(), 1);

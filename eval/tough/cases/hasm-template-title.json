@@ -6,7 +6,8 @@
     "about": "HASM dimensions of hexagon socket head cap screws (3 landscape pages). Each page titles a table whose header row is filled dark green cell by cell."
   },
   "notes": [
-    "2026-11-25 (#277): each of the three pages prints the table's title at the same place under its header band. It was an h1 on every page."
+    "2026-11-25 (#277): each of the three pages prints the table's title at the same place under its header band. It was an h1 on every page.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -14,10 +15,16 @@
       "found": "2026-11-25",
       "issue": "#277: the page template's title was an h1 on each of the three pages.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "Dimensions of Hexagon Socket Head Cap Screws"
       },
       "count": 1
+    },
+    {
+      "id": "title-once-no-section",
+      "found": "2026-11-26",
+      "issue": "The title heads no section of its own as well: once, as the document's title.",
+      "no_section": "Dimensions of Hexagon Socket Head Cap Screws"
     }
   ]
 }

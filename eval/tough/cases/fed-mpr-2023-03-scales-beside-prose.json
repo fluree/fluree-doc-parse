@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "fed-mpr-2023-03.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20230303_mprfullreport.pdf",
+    "sha256": "acdc905699454cae84ea609c89ba6a65283d967e247a42bdfd6c803a5b92b81a",
+    "about": "Federal Reserve Monetary Policy Report, March 2023. Page 26 sets the body column beside two charts set one under another, whose scales stand beside the column's lines and its heading."
+  },
+  "checks": [
+    {
+      "id": "heading-beside-scale-whole",
+      "found": "2026-11-26",
+      "issue": "#431: a tick of the chart's scale cut the heading in two, `Consumer financing conditions have` and `tightened somewhat`.",
+      "section": {"title": "Consumer financing conditions have tightened somewhat"}
+    },
+    {
+      "id": "scale-read-whole",
+      "found": "2026-11-26",
+      "issue": "#431: the scale's ticks were read as the list numbers of the lines beside them, and lost.",
+      "element": {"type": "doco:Figure", "text": "36 32 28 24 20 16 12 8 4 0"}
+    }
+  ]
+}

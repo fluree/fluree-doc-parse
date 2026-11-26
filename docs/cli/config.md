@@ -110,6 +110,7 @@ models = "/opt/fluree/assets/ocr"
 threads = 1
 max_megapixels = 12.5
 max_memory = 8192
+max_small_regions_per_page = 0
 ```
 
 | key | means |
@@ -120,6 +121,7 @@ max_memory = 8192
 | `max_megapixels` | most megapixels the engine reads in one pass (default 12.5, from 1 to 128): a page scanned at 300 dpi or a 12 Mpx photo is read whole, a larger image in overlapping strips, one too wide for them shrunk with a warning. A pass costs about 230 bytes a pixel while it is read ([how an image is sized](ocr.md#how-an-image-is-sized)) |
 | `max_memory` | the memory, in MiB, the passes the engine reads at once may take, each counted at about 230 bytes a pixel (default: a third of the memory free, at most 8192); a pass that does not fit waits for others to end, one larger than all of it is read alone ([memory and speed](ocr.md#memory-and-speed)). Env: `FDOC_OCR_MAX_MEMORY` |
 | `max_crops` | most crops the engine reads in one document; past it pages read whole come first, then routed regions, then small ones, and a note names how many were left (default 1000, `0` for no limit). Separate from `escalation.max_crops`: a scanned page is one crop, and a model's 200 would leave page 201 of a long scan unread |
+| `max_small_regions_per_page` | most small regions (pictures too small for a model's call) the engine reads on one page, the largest first, and a note names how many were left (default `0`: every one is read). Routed regions and pages read whole are always read. Set it where a page's time must be bounded: a drawing's callouts or a paper's figure labels can make a hundred crops of one page, each read on its own. At 8, such a page reads in about a tenth of the time, and a corpus loses about 2.6% of its OCR'd lines, mostly callouts and labels, but some of them a drawing's notes or problems set as images |
 
 `--ocr`, `--models` and `--ocr-max-megapixels` override these per run, and
 `FDOC_OCR`, `FDOC_OCR_MODELS` and `FDOC_OCR_MAX_MEGAPIXELS` override the file. Unlike the model reader, OCR runs on the
