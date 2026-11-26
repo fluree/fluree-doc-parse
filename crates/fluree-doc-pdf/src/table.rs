@@ -9076,6 +9076,7 @@ mod header_tests {
             italic: false,
             advance: Some(w),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -10910,6 +10911,7 @@ mod tests {
                     italic: false,
                     advance: Some(4.5),
                     draw_index: i,
+                    ocr: None,
                 });
                 cx += 4.5;
             }
@@ -10984,6 +10986,7 @@ mod tests {
                     italic: false,
                     advance: Some(4.5),
                     draw_index: j,
+                    ocr: None,
                 });
                 cx += 4.5;
             }
@@ -11023,6 +11026,7 @@ mod tests {
             italic: false,
             advance: Some(w),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -11274,6 +11278,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index: 0,
+                    ocr: None,
                 });
                 cx += 6.0;
             }
@@ -11390,6 +11395,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.0),
                     draw_index: 0,
+                    ocr: None,
                 });
                 cx += 5.0;
             }
@@ -11590,6 +11596,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: 0,
+                ocr: None,
             })
             .collect();
         g.trim_to_content(&glyphs);
@@ -11622,6 +11629,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         // Table content, then a footer well below the empty gap row.
         let mut glyphs: Vec<Glyph> = (0..5).map(|i| mk(100.0 + i as f64 * 80.0)).collect();
@@ -11667,6 +11675,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         // Five rows, four columns, gaps well above TABLE_CELL_GAP.
         let mut gl = Vec::new();
@@ -11711,6 +11720,7 @@ mod tests {
             italic: false,
             advance: Some(w),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -12178,6 +12188,7 @@ mod tests {
                     italic: false,
                     advance: None,
                     draw_index: 0,
+                    ocr: None,
                 });
             }
         }
@@ -12313,6 +12324,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
+                    ocr: None,
                 }
             })
             .collect()
@@ -12841,6 +12853,7 @@ mod cross_gutter_tests {
                 weight: None,
                 italic: false,
                 draw_index: 0,
+                ocr: None,
             });
         }
         out

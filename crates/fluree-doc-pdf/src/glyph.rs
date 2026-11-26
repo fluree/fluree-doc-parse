@@ -46,6 +46,21 @@ pub struct Glyph {
     /// Index in the draw order. Faux-bold overprint shows up as consecutive
     /// glyphs with identical text and near-identical boxes.
     pub draw_index: usize,
+    /// Read by an OCR engine, and where: `None` for a glyph the file draws.
+    pub ocr: Option<OcrSource>,
+}
+
+/// Where an OCR engine read a glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrSource {
+    /// The page's text: a page read whole (a scan, or a page whose text is
+    /// drawn as shapes), or a scan stored as a region that, with the images
+    /// it abuts, covers half its page or more.
+    Page,
+    /// A picture's text: read in a picture pasted into its page, one under
+    /// half of it (a screenshot, a logo), whether its region's crop or the
+    /// whole page was read ([`crate::route::pasted_set`]).
+    Region,
 }
 
 impl Glyph {

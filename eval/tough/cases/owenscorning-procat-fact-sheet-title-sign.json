@@ -7,7 +7,8 @@
   },
   "notes": [
     "2026-11-24 (#176): a raised sign in a display title broke the title's line at the sign: the `®` 19pt up on 32pt type, or a `™` whose following space was set at the title's size.",
-    "2026-11-24: the title's two lines now read as one title, so the whole line is checked inside it."
+    "2026-11-24: the title's two lines now read as one title, so the whole line is checked inside it.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -15,7 +16,7 @@
       "found": "2026-11-24",
       "issue": "`PROCAT®` and `PROFESSIONAL` were two paragraphs on one baseline.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "PROCAT® PROFESSIONAL LOOSEFILL INSULATION SYSTEM"
       }
     }

@@ -12,8 +12,8 @@
     {
       "id": "three-way-note",
       "found": "2026-11-24",
-      "issue": "#206: `3-way1`.",
-      "text": "3-way 1"
+      "issue": "#206: `3-way1`. (#322: a note's number is now written raised, `3-way¹`.)",
+      "text": "3-way¹"
     },
     {
       "id": "three-way-note-not-glued",
@@ -24,8 +24,8 @@
     {
       "id": "multi-location-note",
       "found": "2026-11-24",
-      "issue": "#206: as above.",
-      "text": "Multi-location 4"
+      "issue": "#206: as above. (#322: a note's number is now written raised, `Multi-location⁴`.)",
+      "text": "Multi-location⁴"
     },
     {
       "id": "multi-location-note-not-glued",
@@ -36,8 +36,8 @@
     {
       "id": "code-note",
       "found": "2026-11-24",
-      "issue": "#206: as above, after a model code.",
-      "text": "MACL-153M-XX 2,3"
+      "issue": "#206: as above, after a model code. (#322: a note's number is now written raised, `MACL-153M-XX²,³`.)",
+      "text": "MACL-153M-XX²,³"
     },
     {
       "id": "code-note-not-glued",

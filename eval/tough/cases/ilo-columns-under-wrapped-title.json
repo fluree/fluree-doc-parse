@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "ilo-weso-trends-2025.pdf",
+    "url": "https://www.ilo.org/sites/default/files/2025-01/WESO25_Trends_EN_WEB5.pdf",
+    "sha256": "4db4247dcc3077829096d71946a042e56be3a25d957995d1132e9efb03e5b717",
+    "about": "ILO World Employment and Social Outlook: Trends 2025. Page 14 sets bands of two columns, each under a title across both; the third band's title wraps to a second line that crosses the gutter."
+  },
+  "checks": [
+    {
+      "id": "column-under-wrapped-title-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: the title's second line crossed the gutter, so the band's two columns were read line by line.",
+      "text": "Labour force participation has declined slightly, and this has weighed on employment growth."
+    },
+    {
+      "id": "right-column-first-line-no-heading",
+      "found": "2026-11-26",
+      "issue": "#436: read apart from its sentence, the right column's first line was taken for a heading.",
+      "element": {"type": "doco:SectionTitle", "text": "that countries forgo a significant potential for"},
+      "count": 0
+    }
+  ]
+}

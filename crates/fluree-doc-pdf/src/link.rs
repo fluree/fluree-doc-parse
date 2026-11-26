@@ -376,13 +376,16 @@ fn anchor_of(inside: &[crate::glyph::Glyph]) -> String {
 /// advances around it — a subset can infer a different one. Matching on the
 /// visible characters and mapping back to the full string's offsets sidesteps
 /// the disagreement entirely.
+///
+/// A raised figure matches its figure: the anchor of a note's link, its
+/// number assembled alone, reads `5` where the line reads `analysis⁵`.
 fn locate(text: &str, anchor: &str, from: usize) -> Option<(usize, usize)> {
     let squeeze = |s: &str, skip: usize| -> (String, Vec<usize>) {
         let mut out = String::new();
         let mut map = Vec::new();
         for (i, c) in s.chars().enumerate().skip(skip) {
             if !c.is_whitespace() {
-                out.push(c);
+                out.push(fluree_doc_model::marks::raised_figure(c).unwrap_or(c));
                 map.push(i);
             }
         }
@@ -441,6 +444,13 @@ mod tests {
         let first = locate(text, "here", 0).unwrap();
         assert_eq!(first, (0, 4));
         assert_eq!(locate(text, "here", first.1), Some((9, 13)));
+    }
+
+    #[test]
+    fn a_notes_link_finds_its_raised_number() {
+        // Not the `5` of `54%` after it.
+        let text = "analysis⁵ of plans, around a 54% cut";
+        assert_eq!(locate(text, "5", 0), Some((8, 9)));
     }
 
     #[test]
@@ -520,6 +530,7 @@ mod tests {
                     italic: false,
                     advance: Some(5.0),
                     draw_index: i,
+                    ocr: None,
                 }
             })
             .collect()

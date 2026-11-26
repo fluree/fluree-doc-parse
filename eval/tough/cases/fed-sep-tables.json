@@ -12,8 +12,8 @@
     {
       "id": "header-row-whole",
       "found": "2026-11-17",
-      "issue": "The header's labels became separate headings when the tall body band was kept as a row.",
-      "text": "Variable Median 1 Central Tendency 2 Range 3"
+      "issue": "The header's labels became separate headings when the tall body band was kept as a row. (#322: a note's number is now written raised, `Variable Median¹ Central Tendency² Range³`.)",
+      "text": "Variable Median¹ Central Tendency² Range³"
     }
   ]
 }

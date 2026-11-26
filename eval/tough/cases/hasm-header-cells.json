@@ -8,7 +8,8 @@
   "notes": [
     "#114: the green header cells clustered into a drawing, and on pages 2 and 3 the page title over the table was typed as its label.",
     "2026-11-24 (#134): a page-number line on two of the three pages was never read as one, since a short document's running line had to be restated on the page left out, and a page number's words change from page to page. Page 3's number is fused into the note beside it, `NOTE: ALL DIMENSIONS ARE IN INCHES Page 3 of 3` (#130).",
-    "2026-11-25 (#277): the title printed at the same place on each page is the page template's: kept once, as the first page's heading, and running after."
+    "2026-11-25 (#277): the title printed at the same place on each page is the page template's: kept once, as the first page's heading, and running after.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -16,10 +17,16 @@
       "found": "2026-11-24",
       "issue": "The page title was typed as a label of the table's green header cells on pages 2 and 3. Since #277 the title is a page template's, kept once on page 1, and running on the pages after: no header cell takes it.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "Dimensions of Hexagon Socket Head Cap Screws"
       },
       "count": 1
+    },
+    {
+      "id": "title-over-the-header-cells-no-section",
+      "found": "2026-11-26",
+      "issue": "The title heads no section of its own as well: once, as the document's title.",
+      "no_section": "Dimensions of Hexagon Socket Head Cap Screws"
     },
     {
       "id": "folio-on-page-1",

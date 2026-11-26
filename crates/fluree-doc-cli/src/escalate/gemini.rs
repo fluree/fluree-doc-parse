@@ -21,6 +21,13 @@ const TOKEN_TTL_SECS: u64 = 3600;
 /// dies in flight.
 const REFRESH_MARGIN_SECS: u64 = 60;
 
+/// Longest one request may take, its response read whole, before it is
+/// given up and made again ([`with_retries`]). ureq sets no bound of its own,
+/// so a connection the network left hanging waited for ever. The slowest
+/// readings measured took about half a minute; four times that leaves a
+/// slow reading its time and still bounds a hang.
+const REQUEST_TIMEOUT_SECS: u64 = 120;
+
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -71,7 +78,10 @@ impl Reader {
             account,
             project,
             model: model.to_string(),
-            agent: ureq::Agent::new_with_defaults(),
+            agent: ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+                .build()
+                .into(),
             token: std::sync::Mutex::new(None),
         })
     }
@@ -183,57 +193,73 @@ impl Reader {
                 },
             },
         });
-        let mut last = String::new();
-        for attempt in 0..RETRIES {
-            let token = self.token()?;
-            let sent = self
-                .agent
-                .post(&url)
-                .header("Authorization", &format!("Bearer {token}"))
-                .content_type("application/json")
-                .send_json(&body);
-            match sent {
-                Ok(mut resp) => {
-                    let v: serde_json::Value = resp
-                        .body_mut()
-                        .read_json()
-                        .map_err(|e| format!("read response: {e}"))?;
-                    // A reading that stopped early is not a short reading, it
-                    // is half of one — and it looks exactly like a complete
-                    // reading of a shorter page. Nothing downstream can tell
-                    // the difference, and a page reading replaces a whole
-                    // page, so this has to fail rather than truncate.
-                    if let Some(reason) = incomplete(&v) {
-                        return Err(format!("reading stopped early: {reason}"));
-                    }
-                    return Ok(text_of(&v));
+        let v = with_retries(
+            || {
+                let token = self.token()?;
+                Ok(self
+                    .agent
+                    .post(&url)
+                    .header("Authorization", &format!("Bearer {token}"))
+                    .content_type("application/json")
+                    .send_json(&body)
+                    .and_then(|mut resp| resp.body_mut().read_json::<serde_json::Value>()))
+            },
+            std::thread::sleep,
+        )?;
+        // A reading that stopped early is not a short reading, it is half of
+        // one — and it looks exactly like a complete reading of a shorter
+        // page. Nothing downstream can tell the difference, and a page
+        // reading replaces a whole page, so this has to fail rather than
+        // truncate.
+        if let Some(reason) = incomplete(&v) {
+            return Err(format!("reading stopped early: {reason}"));
+        }
+        Ok(text_of(&v))
+    }
+}
+
+/// Make a request until it is answered: `attempt` makes it once, and is
+/// made again after a failure a retry can fix ([`retryable`]), `wait`ing
+/// longer each time, [`RETRIES`] times at most. A failure before the request
+/// is sent (`attempt`'s outer error, a token that cannot be minted) is
+/// returned at once.
+fn with_retries<T>(
+    mut attempt: impl FnMut() -> Result<Result<T, ureq::Error>, String>,
+    wait: impl Fn(std::time::Duration),
+) -> Result<T, String> {
+    let mut last = String::new();
+    for n in 0..RETRIES {
+        match attempt()? {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                last = e.to_string();
+                if !retryable(&e) || n + 1 == RETRIES {
+                    break;
                 }
-                Err(e) => {
-                    last = e.to_string();
-                    // Rate limits and the transient 5xx family are what a
-                    // batch actually meets; anything else is a request this
-                    // retry will not fix.
-                    let retryable = matches!(status_of(&e), Some(429 | 500 | 502 | 503 | 504));
-                    if !retryable || attempt + 1 == RETRIES {
-                        return Err(format!("read failed: {last}"));
-                    }
-                    std::thread::sleep(std::time::Duration::from_secs(5 * (attempt as u64 + 1)));
-                }
+                wait(std::time::Duration::from_secs(5 * (n as u64 + 1)));
             }
         }
-        Err(format!("read failed: {last}"))
+    }
+    Err(format!("read failed: {last}"))
+}
+
+/// Whether a failed request is worth making again. Rate limits and the
+/// transient 5xx family are what a batch meets from the service. So is a
+/// transport that fails under the request: a timeout or a dropped
+/// connection, which says nothing about the request. ureq reports a socket
+/// the network timed out as a timeout (`timeout: global`), as it does a
+/// request that outlasts [`REQUEST_TIMEOUT_SECS`].
+/// Anything else is a request a retry will not fix.
+fn retryable(e: &ureq::Error) -> bool {
+    match e {
+        ureq::Error::StatusCode(c) => matches!(c, 429 | 500 | 502 | 503 | 504),
+        ureq::Error::Timeout(_) | ureq::Error::Io(_) | ureq::Error::ConnectionFailed => true,
+        _ => false,
     }
 }
 
 /// Attempts per crop, including the first.
 const RETRIES: u32 = 4;
-
-fn status_of(e: &ureq::Error) -> Option<u16> {
-    match e {
-        ureq::Error::StatusCode(c) => Some(*c),
-        _ => None,
-    }
-}
 
 /// Why a response is not a complete reading, if it is not one.
 ///
@@ -294,6 +320,70 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `with_retries` over answers given in turn, the request counted and
+    /// no time spent waiting.
+    fn answering(
+        answers: Vec<Result<&'static str, ureq::Error>>,
+    ) -> (Result<&'static str, String>, usize, Vec<u64>) {
+        let answers = std::cell::RefCell::new(answers.into_iter());
+        let calls = std::cell::Cell::new(0);
+        let waits = std::cell::RefCell::new(Vec::new());
+        let got = with_retries(
+            || {
+                calls.set(calls.get() + 1);
+                Ok(answers.borrow_mut().next().expect("an answer per attempt"))
+            },
+            |d| waits.borrow_mut().push(d.as_secs()),
+        );
+        (got, calls.get(), waits.into_inner())
+    }
+
+    #[test]
+    fn a_request_the_network_dropped_is_made_again() {
+        // Timed out on the first attempt, answered on the second.
+        let (got, calls, waits) = answering(vec![
+            Err(ureq::Error::Timeout(ureq::Timeout::Global)),
+            Ok("read"),
+        ]);
+        assert_eq!(got, Ok("read"));
+        assert_eq!((calls, waits), (2, vec![5]));
+        // A connection reset under the request, and the service's own
+        // transient failures, likewise.
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        let (got, calls, _) = answering(vec![
+            Err(ureq::Error::Io(reset)),
+            Err(ureq::Error::StatusCode(503)),
+            Ok("read"),
+        ]);
+        assert_eq!((got, calls), (Ok("read"), 3));
+    }
+
+    #[test]
+    fn a_request_a_retry_cannot_fix_fails_at_once() {
+        let (got, calls, waits) = answering(vec![Err(ureq::Error::StatusCode(400))]);
+        assert!(got.unwrap_err().contains("400"));
+        assert_eq!((calls, waits.len()), (1, 0));
+        // Dropped every time, it fails after the last attempt, as before.
+        let (got, calls, waits) = answering(
+            (0..RETRIES)
+                .map(|_| Err(ureq::Error::Timeout(ureq::Timeout::Global)))
+                .collect(),
+        );
+        assert!(got.unwrap_err().contains("timeout"));
+        assert_eq!(calls, RETRIES as usize);
+        assert_eq!(waits, vec![5, 10, 15]);
+        // A failure before the request is sent is no request to retry.
+        let calls = std::cell::Cell::new(0);
+        let got: Result<&str, String> = with_retries(
+            || {
+                calls.set(calls.get() + 1);
+                Err("token exchange failed".to_string())
+            },
+            |_| {},
+        );
+        assert_eq!((got, calls.get()), (Err("token exchange failed".into()), 1));
+    }
 
     #[test]
     fn a_reading_is_taken_from_the_first_candidate() {

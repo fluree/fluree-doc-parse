@@ -2,7 +2,9 @@
 //!
 //! The engine is opened once per invocation (its models are read and
 //! optimized, which takes a while) and shared by every document and thread;
-//! it keeps a pipeline per image being read at once.
+//! it keeps a pipeline per image being read at once. `convert` opens it on
+//! the first image it is given to read ([`OpenedOnRead`]): most documents
+//! give it none.
 
 use crate::cli::{OcrArgs, OcrEngineName};
 use fluree_doc_vision::OcrEngine;
@@ -171,7 +173,102 @@ pub(crate) fn engine_for_convert(
     let dir = models_dir(models, config)
         .ok_or("an OCR engine needs its assets: --models DIR (or FDOC_OCR_MODELS, or ocr.models in the config)")?;
     let settings = EngineSettings::of(max_megapixels, config)?;
+    #[cfg(feature = "ocr")]
+    {
+        assets_present(&dir)?;
+        Ok(Some(Arc::new(OpenedOnRead {
+            name,
+            models: dir,
+            settings,
+            engine: std::sync::OnceLock::new(),
+        })))
+    }
+    #[cfg(not(feature = "ocr"))]
     open_engine(name, &dir, &settings).map(Some)
+}
+
+/// The engine `convert` reads with, opened on the first image it is given.
+///
+/// Opening checks the assets against the hashes this build pins, loads ONNX
+/// Runtime and builds a pipeline: about 0.2 s, which every process naming
+/// an engine paid before reading its first page, though most documents
+/// route nothing to OCR. The files are looked for at once
+/// ([`assets_present`]), so a directory without them is refused before
+/// anything is read. Whether they are the files this build pins is known
+/// at the first read. A failure to open is then said once, as an error, and
+/// is every read's error; the run ends on the status a refused engine gave
+/// ([`engine_failed`]).
+#[cfg(feature = "ocr")]
+struct OpenedOnRead {
+    name: OcrEngineName,
+    models: PathBuf,
+    settings: EngineSettings,
+    engine: std::sync::OnceLock<Result<Arc<dyn OcrEngine>, String>>,
+}
+
+#[cfg(feature = "ocr")]
+impl OcrEngine for OpenedOnRead {
+    fn name(&self) -> &str {
+        match self.name {
+            OcrEngineName::OarOcr => fluree_doc_vision::oar::ENGINE,
+        }
+    }
+
+    fn read(
+        &self,
+        image: &fluree_doc_vision::Pixels,
+    ) -> Result<fluree_doc_vision::WordReading, String> {
+        let engine = self.engine.get_or_init(|| {
+            open_engine(self.name, &self.models, &self.settings).map_err(|e| {
+                eprintln!("error: --ocr: {e}");
+                UNOPENED.store(true, std::sync::atomic::Ordering::Relaxed);
+                "the OCR engine could not be opened".to_string()
+            })
+        });
+        match engine {
+            Ok(e) => e.read(image),
+            Err(e) => Err(e.clone()),
+        }
+    }
+}
+
+/// Set when an [`OpenedOnRead`] engine failed to open.
+#[cfg(feature = "ocr")]
+static UNOPENED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the engine `convert` read with failed to open at its first read.
+pub(crate) fn engine_failed() -> bool {
+    #[cfg(feature = "ocr")]
+    {
+        UNOPENED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(feature = "ocr"))]
+    {
+        false
+    }
+}
+
+/// The files the running platform's engine reads, looked for in `dir`
+/// without reading them: the check [`OpenedOnRead`] leaves to the first
+/// read hashes them.
+#[cfg(feature = "ocr")]
+fn assets_present(dir: &Path) -> Result<(), String> {
+    use fluree_doc_vision::assets::{platform, DET, DICT, REC};
+    let (rid, lib) = platform().ok_or_else(|| {
+        format!(
+            "no ONNX Runtime is shipped for {}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    })?;
+    let runtime = format!("onnxruntime/{rid}/{lib}");
+    for rel in [runtime.as_str(), DET, REC, DICT] {
+        let path = dir.join(rel);
+        if !path.is_file() {
+            return Err(format!("{}: no such file", path.display()));
+        }
+    }
+    Ok(())
 }
 
 fn parse_engine(s: &str) -> Result<OcrEngineName, String> {

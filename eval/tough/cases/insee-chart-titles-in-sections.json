@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "insee-IR275_EFT_3T2026.pdf",
+    "url": "https://www.insee.fr/fr/statistiques/fichier/version-html/9134708/IR275_EFT_3T2026.pdf",
+    "sha256": "cb99563b6503e85b6458824879f3756584100aa084adf8806833aeacc60fd335",
+    "about": "INSEE Informations rapides no. 275 (Licence Ouverte). Its sections are titled in 12pt bold, and each chart's title is set in 10pt bold within its section."
+  },
+  "notes": [
+    "2026-11-26 (#393): the chart's title was h5 under its section's h3, two steps down: the release's dateline, bold at 11pt, took a level of its own between them."
+  ],
+  "checks": [
+    {
+      "id": "chart-title-one-level-down",
+      "found": "2026-11-26",
+      "issue": "#393: the chart's title was h5 under an h3.",
+      "section": {
+        "title": "Nuitées dans les hébergements collectifs touristiques - troisième trimestre 2026",
+        "level": 2,
+        "within": "La fréquentation hôtelière stimulée par la clientèle résidente"
+      }
+    },
+    {
+      "id": "section-at-the-top",
+      "found": "2026-11-26",
+      "issue": "#393: the release's sections were h3, with h2 held by its dateline.",
+      "section": {
+        "title": "La clientèle non résidente en légère hausse dans les hôtels",
+        "level": 1
+      }
+    }
+  ]
+}

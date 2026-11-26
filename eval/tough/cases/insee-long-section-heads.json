@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "insee-IR270_Chomage_3T2026.pdf",
+    "url": "https://www.insee.fr/fr/statistiques/fichier/version-html/9118603/IR270_Chomage_3T2026.pdf",
+    "sha256": "011891a84957bf6b0c395433034bbee56d4bb314248335e0d6dc458ba34ec131",
+    "about": "INSEE Informations rapides no. 270 (Licence Ouverte). Each section is titled by its finding in 12pt bold over its prose, most in a line, some running longer."
+  },
+  "notes": [
+    "2026-11-26 (#403): a section's title longer than twelve words was a paragraph, though the release sets its other sections' titles in its style."
+  ],
+  "checks": [
+    {
+      "id": "long-section-title",
+      "found": "2026-11-26",
+      "issue": "#403: the section's title was a paragraph.",
+      "section": {
+        "title": "Sur un an, le taux de chômage augmente pour toutes les tranches d’âge",
+        "level": 1
+      }
+    }
+  ]
+}

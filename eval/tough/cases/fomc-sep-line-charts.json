@@ -7,7 +7,8 @@
   },
   "notes": [
     "#338: the line charts were found as no drawing; each scale was a paragraph of the page's.",
-    "Open: each chart's year axis and its bold title (`Change in real GDP`, a heading) stay the page's text."
+    "Open: each chart's year axis stays the page's text.",
+    "2026-11-26 (#403): the body is measured from the release's running prose, 10pt, and each chart's 8pt bold title is no heading."
   ],
   "checks": [
     {
@@ -22,8 +23,7 @@
     {
       "id": "chart-title-no-heading",
       "found": "2026-11-25",
-      "status": "open",
-      "issue": "Each chart's bold title heads a section.",
+      "issue": "#403: each chart's bold title headed a section, its 8pt set larger than the body the charts' 6pt lines measured.",
       "no_section": "Change in real GDP"
     }
   ]
