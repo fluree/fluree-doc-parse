@@ -780,6 +780,31 @@ sample sizes, with nothing in the stub, are the header's, and the columns are
 named by both (`Overall / (n=735)`). A group's own size set beside its label
 (`Skin/Soft Tissue | n= 175`) names itself in the stub and stays a row.
 
+Nor are the columns' units: a leading line whose cells past the stub are all
+units of what the columns count is the header's. Those units are a
+percentage, a count (`n`, `N`, `No.`), both (`n (%)`), or a confidence
+interval (`95% CI`): `% | N | % | N` under the groups, `No. | %` under `New |
+Known | Total`. A row of data gives values, not what they count. The stub may
+hold its own head on that line (`BMI Class`), a label with no figure in it.
+The columns are named down to the unit: `Overall / (n=735) / n`.
+
+With a unit under it, a label wrapped over two lines heads a group level, and
+its first line is that level's too. `Proportion of Hospital` wraps over
+`Discharges with SDV`, over `%`, so the column is named `Proportion of
+Hospital / Discharges with SDV / %`; read as the column's own label, its
+first line came out under the level below it. A line takes its next line's
+kind only where it wraps onto that line on its own axis (starting where it
+starts, or centred where it is), and a column's own label stands under that
+line in the column. A unit centred under a year and the years beside it
+(`(In thousands)`) leaves the year a column's own label.
+
+Over a line of units, a group label set in the gap over its pair (`Poor (1)`
+over `n | %`) names no column outright. It is measured against the columns'
+last line of labels, the units, and stands above them: `Poor (1) / n`.
+Measured against every label instead, the stub's head level with it
+(`Ecological status`) put it under its units (`% / Poor (1)`). Headers with
+no line of units keep the measure they had.
+
 ### A header restated partway down
 
 A table can name its columns afresh partway down: a VOC table's `By wt |
