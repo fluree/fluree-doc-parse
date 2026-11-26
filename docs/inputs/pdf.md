@@ -578,6 +578,15 @@ run across their gutter:
   continues them, alone on its row. A band whose text does not run on as
   prose, such as a figure's labels or a chart's ticks, is left as it was. A
   region in which no band has a gutter is read as before.
+- **A caption of many lines across.** Lines across the gutter part a region
+  only where they are few: two, or one line in five. A caption's or title's
+  lines one after another count as one, so a caption wrapped to six lines
+  over a short stretch of two columns parts it once, as a one-line caption
+  would. This holds where the lines across are fewer than the region's other
+  lines: a column of paragraphs is mostly lines across, one run to each
+  paragraph, and is not read as columns under a caption. A label set
+  sideways, as a diagram's is, stands on no row, so a caption's short last
+  line beside it still goes on from the line over it.
 
 **Blocks side by side.** Two blocks of text set side by side within one
 column's stretch are each read whole, the left first, or the right where it
