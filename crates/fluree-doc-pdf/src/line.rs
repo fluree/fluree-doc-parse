@@ -1994,6 +1994,80 @@ const MARK_RAISE: f64 = 0.15;
 /// Word gaps in letter-spaced text sit this far above the letter gaps.
 const TRACKING_WORD_FACTOR: f64 = 1.5;
 
+/// A line's own word spaces ([`line_space_ratio`]), in ems: its letters
+/// stand no more than `LETTER_GAP` apart (kerning, a hair of tracking),
+/// its word spaces `WORD_GAP` or more (a tight justified line's are an
+/// eighth of an em and up), with a valley `GAP_VALLEY` wide or more between
+/// the two and nothing in it.
+const LETTER_GAP: f64 = 0.08;
+const WORD_GAP: f64 = 0.12;
+const GAP_VALLEY: f64 = 0.1;
+
+/// Fewest letter gaps on a line for its letter spacing to be read from it.
+const MIN_LETTER_GAPS: usize = 3;
+
+/// Fewest word gaps on a line for its word spacing to be read from it: one
+/// gap wider than the rest may be a kern in a word set alone.
+const MIN_WORD_GAPS: usize = 2;
+
+/// Two glyphs of one size, within a tenth: a raised note mark or a
+/// subscript is set a step or more smaller.
+fn same_size(a: f32, b: f32) -> bool {
+    (a - b).abs() <= a.max(b) * 0.1
+}
+
+/// The threshold a line's own gaps set for its word spaces, on a line that
+/// writes no space characters, where they part into two groups: letters
+/// set close and words set apart, the narrowest word space well clear of
+/// the widest letter gap. The column's threshold
+/// ([`adaptive_space_ratio`]) is drawn from all its lines, and a line set
+/// tighter than its column (a caption under body text, a heading in display
+/// type, a reference in a smaller face) can space its words narrower than
+/// the column's threshold: `TABLE2 | Modelfitandmeasurement…`,
+/// `Treasury andAgency`. The cut is the valley's middle. Pairs of figures
+/// keep their own threshold, and pairs of glyphs of two sizes (a raised
+/// mark beside its word) the column's, and both are left out; `None` where
+/// the line's gaps do not part so.
+fn line_space_ratio(glyphs: &[Glyph], idxs: &[usize], adv: Advance) -> Option<f64> {
+    // A line that writes its spaces says where its words part: a gap with
+    // no space there is a kern (`CETIRIZ INE`'s `Z` and `I`).
+    if idxs.iter().any(|&i| {
+        let t = &glyphs[i].text;
+        !t.is_empty() && t.trim().is_empty()
+    }) {
+        return None;
+    }
+    let mut gaps: Vec<f64> = Vec::new();
+    let mut prev: Option<(&Glyph, f64)> = None;
+    for &i in idxs {
+        let g = &glyphs[i];
+        let (Some(b), Some(a)) = (g.bbox, g.advance) else {
+            continue;
+        };
+        let start = adv.start(&b).min(adv.at(g.origin));
+        if let Some((p, end)) = prev {
+            let last = p.text.chars().last();
+            let next = g.text.chars().next();
+            let figures = last.is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+                && next.is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%'));
+            let spaceless =
+                last.is_some_and(is_spaceless_script) && next.is_some_and(is_spaceless_script);
+            if !figures && !spaceless && same_size(p.font_size, g.font_size) {
+                gaps.push((start - end) / g.font_size.max(1.0) as f64);
+            }
+        }
+        prev = Some((g, adv.at(g.origin) + a));
+    }
+    gaps.sort_by(f64::total_cmp);
+    let letters = gaps.partition_point(|&d| d <= LETTER_GAP);
+    if letters < MIN_LETTER_GAPS || gaps.len() - letters < MIN_WORD_GAPS {
+        return None;
+    }
+    let (widest_letter, narrowest_word) = (gaps[letters - 1], gaps[letters]);
+    (narrowest_word >= WORD_GAP && narrowest_word - widest_letter >= GAP_VALLEY)
+        .then_some((widest_letter + narrowest_word) / 2.0)
+}
+
 /// The explicit space at `idxs[k]` is a stray: drawn out of turn, and set
 /// on a mark's ink rather than between two marks.
 ///
@@ -2213,6 +2287,15 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
             (space_ratio, false)
         }
     };
+    // A line set tighter than its column spaces its words by its own gaps,
+    // between glyphs of one size: a note's raised mark keeps the column's
+    // threshold (its gap, in its own smaller ems, reads wide).
+    let line_ratio = if tracked {
+        None
+    } else {
+        line_space_ratio(glyphs, idxs, adv).map(|r| r.min(space_ratio))
+    };
+    let mut prev_size: Option<f32> = None;
     let mut bbox: Option<BBox> = None;
     let mut text = String::new();
     let mut prev_end: Option<f64> = None;
@@ -2265,10 +2348,19 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     let both_digit = numeric_pair
                         || (prev_c.is_some_and(|c| matches!(c, '.' | ','))
                             && next_c.is_some_and(|c| c.is_ascii_digit()));
+                    // Punctuation closing a word or opening one stands
+                    // against it: a kern before a full stop or inside a
+                    // bracket is no word space.
+                    let held = next_c.is_some_and(|c| ".,;:!?)]}”’".contains(c))
+                        || prev_c.is_some_and(|c| "([{“‘".contains(c));
+                    let one_size = !held && prev_size.is_some_and(|ps| same_size(ps, g.font_size));
                     let ratio = if both_digit {
                         DIGIT_SPACE_GAP_RATIO
                     } else {
-                        space_ratio
+                        match line_ratio {
+                            Some(r) if one_size => r,
+                            _ => space_ratio,
+                        }
                     };
                     let after_cap = cap_head && text.chars().count() == 1;
                     if !both_cjk
@@ -2361,6 +2453,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     Some(a) => adv.at(g.origin) + a,
                     None => adv.end(&b),
                 });
+                prev_size = Some(g.font_size);
                 bbox = Some(match bbox {
                     Some(acc) => acc.union(&b),
                     None => b,
@@ -3241,6 +3334,48 @@ mod tests {
                 l
             })
             .collect()
+    }
+
+    /// Words set on one row, letters abutting 5 apart, each word `gap`
+    /// after the last.
+    fn spaced(words: &[&str], gap: f64) -> Vec<Glyph> {
+        let mut out = Vec::new();
+        let mut x = 0.0;
+        for w in words {
+            out.extend(run(w, x, out.len()));
+            x += 5.0 * w.chars().count() as f64 + gap;
+        }
+        out
+    }
+
+    #[test]
+    fn a_line_set_tighter_than_its_column_spaces_its_words_by_its_own_gaps() {
+        // A caption's words stand 0.28 em apart, its letters together; the
+        // column's body text set the threshold at 0.30.
+        let gl = spaced(&["Model", "fit", "and", "measurement"], 2.8);
+        let idxs: Vec<usize> = (0..gl.len()).collect();
+        let line = build_line(&gl, &idxs, 0, 0.30).unwrap();
+        assert_eq!(line.text, "Model fit and measurement");
+    }
+
+    #[test]
+    fn letters_set_apart_unevenly_leave_the_columns_threshold() {
+        // Gaps spread from the letters' (0 to 0.05 em) up into a narrow
+        // word space (0.09 to 0.14 em), no valley between: nothing on the
+        // line says where its words part.
+        let mut gl = run("abcdefg", 0.0, 0);
+        let mut shift = 0.0;
+        for (k, d) in [0.0, 0.2, 0.5, 0.9, 1.0, 1.4].iter().enumerate() {
+            shift += d;
+            let l = &mut gl[k + 1];
+            l.origin.0 += shift;
+            if let Some(b) = l.bbox.as_mut() {
+                b.x0 += shift;
+                b.x1 += shift;
+            }
+        }
+        let idxs: Vec<usize> = (0..gl.len()).collect();
+        assert_eq!(line_space_ratio(&gl, &idxs, Advance::Right), None);
     }
 
     /// An explicit space at `x`, drawn `nth`.
