@@ -30,6 +30,29 @@ its note, ranks with the other 10pt bold heads, not below them. A sentence
 that opens on a bold name and runs on unbracketed keeps the weight of the
 rest of its line.
 
+Slant and face rank too. At one size, weight and case, an italic heading
+and an upright one are two levels, and so are two faces whose x-heights
+differ by 8% or more. PLOS sets its sections in Helvetica Bold, its
+subsections in Minion Bold and the level under those in Minion Bold
+Italic, all at 12pt; Helvetica's x-height is 0.55 of the size and Minion's
+0.465. The x-height is measured on upright lines only, since a turned
+glyph's box is its width, so one face embedded twice under two names
+measures the same.
+
+Which of two such variants is the level above comes from the page: a
+heading set directly over another, with nothing between, heads it. A 10-K
+sets `Item 1. Business` in bold italic directly over `General` in bold, so
+there italic is above. Without that evidence, upright heads italic and the
+taller face heads the shorter.
+
+A variant takes a level of its own only when it sets two headings or more,
+or one set directly over a heading it heads. One italic line among bold
+heads is as likely a word set in italic, such as a species' name ending a
+bold line. A variant also needs a level to spare. Past six, levels fold
+together, and a level for a variant would fold two sizes into one instead.
+A drug label's product-table titles would fold into the column labels a
+size below them.
+
 A title must be four characters or more to be read as one on its shape
 alone. Shorter lines are a word or two of a sentence, a page's letter, or
 `No`. An acronym of two or three capitals on a line of its own (`FCC` over a
@@ -57,6 +80,32 @@ Weight and size never make a heading of these:
   or is set larger (`Policy Rules: Limitations`, `Part II: Application of
   Section 67 Limitation to Specific Deductions`, `Current Situation:
   2001-2019` at 14 pt over 10).
+- **A field without its colon:**
+  - A label with its value beside it on its row is a field.
+    - The value can be a date or a code with letters and figures, within
+      8 ems (`Date de facture` … `13/11/2017`, `Réf. marché` … `MSPE2017`).
+    - It can be a sum anywhere along the row, as invoices set their totals
+      against the margin (`Totaal` … `€ 717,97`).
+    - The value stands alone, or among other sums. A margin's heading beside
+      a paragraph's number (`Rescue equipment` … `156` … its text) is a
+      heading.
+  - A label of three words or fewer is a field over a code or a sum on
+    the line under it, within two ems, whatever the code's weight (`GSTIN`
+    over `06AABCO6063D1ZQ`). A title over its date stays a title.
+  - A label sharing its row with such a field is a field when a short
+    line or three stands under it (`Contact commercial` over its contact,
+    beside `Date de facture`).
+  - A label glued to its figure (`Kundennummer:2`) is a field at any size,
+    and so is a label stating a sum (`Gesamtbetrag: 406,82 €`).
+- **A value:** a line beside a label closing on its colon, within 8 ems
+  (`Prélèvement à partir du :` … `05 Juillet 2015`). A date is never a
+  section's number: `05` in `05 Juillet 2015` is its day.
+- **A sentence:** a line closed by its stop, in sentence case, ten words or
+  more or stating a figure (`Bitte überweisen Sie bis zum 04.07.2015.`). A
+  slide may title itself in a shorter sentence, and an agreement closes its
+  title-case headings on a stop. A sentence is never the document's title,
+  however short (`Dat betaal ik zelf wel.` under `FACTUUR.`), and neither is
+  a line of several fields (`BTW nr. NL: … IBAN: … BIC: …`).
 - **A value under its label:** a line in a lighter weight set at its bold
   label's size on the label's next line, alone or with more such lines
   (`K25W951` under `PRODUCT NUMBER`, a company's name and address under
@@ -100,9 +149,28 @@ Weight and size never make a heading of these:
   nothing else (`(a) (b)`, `Yes No`), and a line's caption between its
   letter and its number (`b Refunded 37b`).
 - **A sentence that refers elsewhere:** `For Paperwork Reduction Act
-  Notice, see your tax return instructions.`, a form's footer. A title
-  that mentions the instructions keeps it in brackets, `Other Information
-  (see instructions)`, and stays.
+  Notice, see your tax return instructions.`, a form's footer. So is an
+  instruction opening on `See` and what it sends the reader to: `See the
+  separate instructions.`, `See page 2`. A title that mentions the
+  instructions keeps it in brackets, `Other Information (see
+  instructions)`, and stays. `See also` heads further reading and stays.
+- **A form's number or edition:** `OMB No. 1545-0074`, `Cat. No. 11358Z`,
+  `Schedule D (Form 1040) 2013`, `Form 8949 (2025)`. A part the form names,
+  `Schedule K`, has no edition beside it and stays.
+- **A label in a form's header band**, the grid not read as a table: bold
+  at the body's size or smaller, with short labels or figures beside it
+  within a line above or below. It needs labels on both sides, three or
+  more in all, or five or more on one side for the last column's head.
+  Columns' heads stack over their notes and start at different heights:
+  `Adjustment, if any, to gain or loss` over `If you enter an amount in
+  column (g),` beside `(e)` and `(h)`. A statement's row label before its
+  figures is one too. Not a label:
+  - a heading with a paragraph, a long line or a list's item directly under
+    it, as a heading in one of a page's columns has, beside the other
+    columns' heads (`PVC and phthalates`, a spec sheet's `Performance`
+    over its bullets);
+  - a slide's card titles, which are set larger than their text;
+  - another column's bullets, which don't count as labels.
 - **A chart's axis title:** a line set at an angle to the page's text, up a
   plot's side (`Concentration of PFHpS, in ng/L`), or set directly under a
   row of three or more bare values that reaches across it, its scale (`I -
@@ -116,10 +184,56 @@ Weight and size never make a heading of these:
   which one stands over such figures (`95%CI` beside `95% CI` and `%`). A
   slide's card titles stand side by side too, but over text, not figures.
   Where the table is found, these cells are its headers.
+- **A table's column head left out of the table:** a short line, eight words
+  or fewer, set on a found table's top edge, within a line of it with
+  nothing between, and inside its width. It must also sit over the table's
+  value columns (past its middle), or on a row with two or more of the
+  table's other heads. Examples are `Total SOMA` over two years' columns,
+  `Item` over a stub on the row of the period heads, and `2008 vs. 2007
+  2007 vs. 2006` over a change table's columns. These stay headings:
+  - a table's title, set from the table's left edge or centred over it;
+  - a section's heading over a table, which starts where the text does;
+  - a form's part title beside only its `Part I` label;
+  - a banner over its own paragraph, with the table after that.
+
+  This is judged on the final elements, where the tables are.
 - **A signature block's party:** a role or a name with a line to sign on
   just after it (`INVESTOR:` over `Acme Fund, LP` over `By:`, a name over
   `(Signature)`), and a signature page's label (`Signature Page to Voting
-  Agreement`). Agreements set their parties bold, a dozen to a page.
+  Agreement`). Agreements set their parties bold, a dozen to a page. So is
+  the signer's name and office printed under a line to sign on, alone on
+  its line, or under a conformed signature: `____` over `Joshua Gallin`
+  over `Secretary`, `/s/ J. Duato` over `Joaquin Duato`. Three more shapes
+  sign without a line:
+  - a name directly over its office (`Kenji Ota` over `Sales Manager`);
+  - a signature set as text over the same name printed, over the office;
+  - a company's name over its signer over the office (`… Consulting Group`
+    over a name over `Commercial Counsel`).
+
+  An office is a few words naming one, and opens its line: `Secretary`,
+  `Chief Executive Officer`, `Vice President, Finance`, `Secretary of
+  State`. These are no office lines:
+  - a name with the office after a comma, `Jerome H. Powell, Chair` under
+    `Attendance`;
+  - a speaker's line, `CHAIR POWELL. Good morning, everyone.`;
+  - a form's field, `MANAGER NAME`;
+  - a title naming an office, `CERTIFICATE OF SECRETARY`.
+
+  `Chair` alone is as often furniture, `Work Chair`. A section over a list
+  of officers, `Board of Directors` over a name over `Chairman`, stays a
+  heading.
+- **A list set as headings:** a run of three or more headings of one level
+  on a page, each over one short line and nothing else: `Boston` over
+  `First District`, `New York` over `Second District`, a list of links.
+- **A contents' entry:** its row ends on a page number, with only the
+  entry's own short text between them, on a page with three or more such
+  numbers. They run in order down the page and are mostly different, as a
+  contents' later pages set them without leaders: `PART IX` and `Repeals,
+  modifications and revocations` beside `80`. These are not page numbers:
+  - a catalogue's quantities (`7`, `7`, `1`), which repeat and fall;
+  - a chart's scale (`7000` over `3500`), which falls;
+  - a slide's title level with a chart's tick, which has the slide's
+    bullets between them.
 - **A letterhead:** the sender's name, at the head of the first page, set
   over its address and numbers, directly or over a line or two (`TRUE
   MANUFACTURING CO., INC.` over `U.S.A. FOODSERVICE DIVISION` over its
@@ -371,6 +485,46 @@ Two label shapes look like numbering and are words:
   another block in the document. Otherwise it is an initial (`J. Example`).
   `I.`, `V.` and `X.` keep their roman reading alone.
 
+## Continued sections
+
+A heading that continues a section begun on an earlier page opens no new one.
+It is read as text, so the page's text runs on in the section it continues.
+
+- **Marked:** it restates an earlier heading, or part of one, and closes on
+  a continuation mark: `(continued)`, `—continued`, `- Continued`, `(cont'd)`,
+  `(suite)`, `(Fortsetzung)`, `(continuación)`. Examples: `Box 1—continued`
+  after `Box 1. Employment and Earnings across Demographic Groups`,
+  `Developments Related to Financial Stability (continued)` after `Box 3.
+  Developments Related to Financial Stability`, `5.5 Electrical
+  Characteristics (continued)`. A continuation of nothing read before (an
+  excerpt's first page) stays a heading.
+- **Repeated:** it repeats word for word, on a later page, the nearest
+  heading at its level or above. This is a page's title set over each page
+  a section fills (`PACKAGE OPTION ADDENDUM`), a release line over each
+  page of a table set, or a sheet's title restated over its second page. A
+  section's name repeated under another section (each district's `Labor
+  Markets` in the Beige Book) has that section's heading between, and
+  stays.
+
+## A numbered list's lead-in
+
+A numbered line closing on a colon, a clause of three words or more after
+its number set in sentence case, with a list's item set directly under it (a marker, a bullet, or a lettered
+label such as `a)`, `(a)`, `(iv)`), introduces that list. It is no section
+at its number's depth: `1) Use automated mechanisms to:` over `a) Document
+proposed changes…`, `72 A designer is an organisation or individual, who:`
+over `(a) prepares or modifies a design…`, `42. Inspectors may also:` over
+its bullets.
+
+- A numbered heading closing on a colon in a word or two stays one (`2.3
+  Requirements:`), and so does a step's title in title case (`9.4.3.
+  Evaluate the Calibration Curve for Each Compound:`).
+- So does a clause over anything other than a list (`75. Notifications
+  should be made to:` over an address).
+- Only the number is overruled. An unnumbered bold line closing on a colon
+  over bullets is a poster's heading as often as a lead-in (`As a boater:`),
+  and its weight is judged as any other's.
+
 ## Addresses are not titles
 
 A line that ends in a web address, a domain, an e-mail address or a phone
@@ -386,11 +540,41 @@ over `1-800-GET-PINK® www.owenscorning.com`, the lines set flush under it,
 each within a line and a half of the last, reaching one that closes on a
 phone number or a web address within three lines.
 
+A postal address is no heading and no title either. That is a street's
+line (a house number and a name, either way round: `27 rue Henri Rolland`,
+`Bahnstr. 42`) set directly over a postcode's line (four or five figures
+and the town: `69001 Lyon`, `5555 NH TommyCity`, `88802Spielkreis`; or
+`Springfield, IL 62701`). The line or two over the street naming whom it
+reaches, in six words or fewer, belong to it, and so does a label set over
+it (`Adresse de livraison`). The lines are read down the blocks set flush
+under each other within 3.5 ems, as an envelope's window spaces them.
+
 A bare domain needs a lowercase host and a common top-level domain, so a
 name such as `ASP.NET` is not one. A phone number ends in a group of three
 digits and a group of four, or opens with `+`. A date, a standard's year
 (`2043-2013`) or a count (`COVID-19`) fails that test. An outline entry can
 still name such a line as a heading.
+
+## An article's front matter
+
+An article's first page sets its authors and its publication record by the
+title, often bold or larger than the text. Neither is a heading.
+
+- **Authors.** A line of people's names, each of two to four words, with
+  the marks that point to their affiliations: `Roberta Lattanzi 1, Silvia
+  Rief2, … and*`, `Hye Chong Hong and Ari Min *`. Two names or more need a
+  mark. One name needs an affiliation's number with a corresponding
+  author's symbol (`Mariana Spetea 2*`) or a list of affiliations (`1,2`).
+  `Study 2`, `Model Year 2020` and `Posted Transactions*` are headings
+  shaped the same way. A line that opens with the marks of the name
+  before it carries the list on (`3,4, Steve W. Lindsay5‡, …`).
+- **The publication record.** A line that opens with one of its labels,
+  `Received`, `Accepted`, `Published`, `Editor`, `Citation`, `Copyright`
+  and the like, then gives a value after a colon or a date:
+  `Received September 7, 2009; Accepted …`, `Editor: Dana Davis, …`,
+  `Copyright © 2023, …`. An editor's label set alone over the name
+  (`Academic editor`) is front matter too. The word alone, `Funding` or
+  `Copyright`, can title a section and stays a heading.
 
 ## The outline tree
 
@@ -436,7 +620,18 @@ the title:
   The page's largest title-shaped line in its upper half is the title when
   it is over a tenth larger than the first blocks' pick. Where the first
   blocks hold no title at all, a large line further down is a section's or
-  a statement's, and stays one.
+  a statement's, and stays one. The exception is a title set for display
+  across the page: at 1.5 times the body's size or more, the page's largest
+  type, and at least half the text's width. An article's title sits under a
+  banner set across a row, `RESEARCH ARTICLE` at the left and `Open Access`
+  at the right, and under its citation and DOI. A narrow line set large is
+  a badge or a callout, such as a model's number at the right of a sheet's
+  head.
+- **A long title.** A title set for display may run to six lines and thirty
+  words, as an article's states its finding (`An internal deletion in MTH1
+  enables growth on glucose of pyruvate-decarboxylase negative, …`).
+  Otherwise more than three lines is prose, unless a cover stacks a word or
+  two to a line.
 - **Two candidates of one size.** The one a column further left (by more
   than a quarter of the page's width) is the title. A category strip at the
   right of the header (`Wallbox Wiring Devices`) is as large as the title

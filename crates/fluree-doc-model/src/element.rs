@@ -116,6 +116,10 @@ pub struct Turn {
     pub end_ms: u64,
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 /// A DoCO-typed document element — the model every source format produces
 /// and every emitter consumes.
 ///
@@ -140,6 +144,15 @@ pub struct Element {
     /// Heading depth, 1-6. Only present on `doco:SectionTitle`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<usize>,
+    /// How deep a list item is nested: 0 for an item of a top-level list, 1
+    /// for an item of a list set inside one of those items, and so on. An
+    /// item one deeper than the item before it opens a list inside that
+    /// item; a shallower one closes the lists deeper than it.
+    ///
+    /// Only on `doc:ListItem`, and left out of the JSON at 0. A reader that
+    /// cannot tell an item's depth leaves it at 0, a flat list.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub depth: usize,
     /// Cells in row-major order. Only present on `doco:Table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cells: Option<Vec<Vec<String>>>,
@@ -336,6 +349,7 @@ impl Element {
             bbox: None,
             text: text.into(),
             level: None,
+            depth: 0,
             cells: None,
             header_rows: None,
             sub_headers: None,
