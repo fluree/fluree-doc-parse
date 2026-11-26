@@ -6,7 +6,8 @@
     "about": "Owens Corning ProCat accessory list. Each product sets its heading at the left, over its photo, and its table of codes to the right, the heading level with the table's top."
   },
   "notes": [
-    "2026-11-25 (#284): each accessory's heading is set in 10pt bold. `raft-R-mate® Attic Vents (Ventilation Baffles)` sets its bracketed note lighter, so the line is not bold throughout. It ranked a level below its siblings and nested inside the section before it."
+    "2026-11-25 (#284): each accessory's heading is set in 10pt bold. `raft-R-mate® Attic Vents (Ventilation Baffles)` sets its bracketed note lighter, so the line is not bold throughout. It ranked a level below its siblings and nested inside the section before it.",
+    "2026-11-26 (#393): levels are set against the headings open above each one, and the document's title heads no sections: they start at level 1 beside it, as a Word document's sections sit beside its title. The accessories' heads were level 4; they are level 2, inside `PROCAT® ACCESSORY LIST`, and the bracketed head is checked as one of them there."
   ],
   "checks": [
     {
@@ -15,7 +16,8 @@
       "issue": "#284: the heading was an h5 under `3\" Wood Plugs`.",
       "section": {
         "title": "raft-R-mate® Attic Vents (Ventilation Baffles)",
-        "level": 4
+        "level": 2,
+        "within": "PROCAT® ACCESSORY LIST"
       }
     }
   ]

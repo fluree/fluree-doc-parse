@@ -6,7 +6,8 @@
     "about": "MF Supply hex cap screws sheet (2 pages). Its dimension table opens with a title band, HEX CAP SCREWS / ASME B18.2.1-2012, over a four-row header."
   },
   "notes": [
-    "2026-11-25 (#277): the sheet's two pages face each other. Page 2 swaps its footer's sides (the folio and the sales address change places) and sets it about 7pt lower, and sets its banner mirrored. Page 1's footer was Figure text and page 2's Paragraphs; the folios 114 and 115 were lost; page 2's banner came out as headings."
+    "2026-11-25 (#277): the sheet's two pages face each other. Page 2 swaps its footer's sides (the folio and the sales address change places) and sets it about 7pt lower, and sets its banner mirrored. Page 1's footer was Figure text and page 2's Paragraphs; the folios 114 and 115 were lost; page 2's banner came out as headings.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -55,10 +56,16 @@
       "found": "2026-11-25",
       "issue": "#277: page 1's banner is the sheet's title, and stays.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "HEX CAP SCREWS"
       },
       "count": 1
+    },
+    {
+      "id": "title-kept-no-section",
+      "found": "2026-11-26",
+      "issue": "The title heads no section of its own as well: once, as the document's title.",
+      "no_section": "HEX CAP SCREWS"
     }
   ]
 }

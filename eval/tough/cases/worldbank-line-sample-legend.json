@@ -1,0 +1,28 @@
+{
+  "document": {
+    "file": "worldbank-mpo-sm25-sar.pdf",
+    "url": "https://thedocs.worldbank.org/en/doc/77351105a334213c64122e44c2efe523-0500072021/related/mpo-sm25-sar.pdf",
+    "sha256": "464a25971726ac0447d708cabb858270b2e51db928cc8e6be68d0687a3762ea2",
+    "about": "World Bank Macro Poverty Outlook, Spring 2025, South Asia. Each country page draws a poverty chart at its foot whose legend sets each series' sample, a dotted line with the series' marker at its middle, directly before its entry."
+  },
+  "notes": [
+    "2026-11-26 (#409): the legend repeats at one place on every country page, and its entries were removed as a running foot: International poverty rate kept 5 times of 13, Lower middle-income pov. rate 0 of 7.",
+    "2026-11-26 (#409): the chart's source note, Source: World Bank. Notes: See footnotes in table on the next page., is still removed (0 of 7). It is the only template source note scrubbed in the corpus, and is left as a one-layout case."
+  ],
+  "checks": [
+    {
+      "id": "legend-entries-kept",
+      "found": "2026-11-26",
+      "issue": "#409: a legend entry after its series' line sample was read as a running foot.",
+      "text": "International poverty rate",
+      "count": 13
+    },
+    {
+      "id": "line-sample-entry-kept",
+      "found": "2026-11-26",
+      "issue": "#409: a legend entry after its series' line sample was read as a running foot.",
+      "text": "Lower middle-income pov. rate",
+      "count": 7
+    }
+  ]
+}

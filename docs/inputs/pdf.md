@@ -23,7 +23,8 @@ inferred from position. See [the pipeline](../design/pipeline.md) for how.
   content stream, so a glyph pass sees the anchor's words and never what they
   point at. They are read, matched to the words they cover, and emitted in
   every format that has room for them — see
-  [Links](../formats/markdown.md#links).
+  [Links](../formats/markdown.md#links). A link over a note's raised number
+  covers that number (`analysis[⁵](#page=7)`), not the next `5` on the line.
 - **The document information dictionary** — `/Title`, `/Author`,
   `/CreationDate` and `/ModDate` — on the [DoCO](../formats/doco.md)
   document node as `dcterms:title`, `dcterms:creator`, `dcterms:created` and
@@ -176,7 +177,9 @@ does, and the letters alone cannot tell the two apart. So a cell's word
 broken that way reads whole only where the document prints it whole on a
 line somewhere else: `Fluo-` over `rescent` is `Fluorescent` in a sheet whose
 title says `Fluorescent`. A word the document prints hyphenated, or nowhere
-else, keeps its hyphen.
+else, keeps its hyphen. A note's number raised after the word is no part of
+it: `consoli-` over `dated²` is `consolidated²` where the document prints
+`consolidated`.
 
 **A face's weight.** Each glyph takes its weight from its font: from a
 weight its name states (`Arial-BoldMT`, `HelveticaNeueLTStd-Bd`, `Sohne-Halbfett`,
@@ -241,7 +244,11 @@ U+F0B7 in the text layer, is `•`, and a Wingdings box is `❑`. Where the
 font's name does not say which font it is, the private-use codes of those
 bullets are read as bullets all the same, but only codes that are no letter
 in Symbol or Wingdings, since the same code is `❑` in one and `θ` in the
-other. A block that
+other. Japanese text's bullet, the katakana middle dot (`・`, or `･` at half
+width), opens an item at the head of a line, with or without a space after
+it: `・安定的、継続的な配当`, `・PCB 上に…`. Inside a line it parts two words
+(`所得・消費関係`) and opens nothing; Japanese typesetting never starts a
+line with it otherwise. A block that
 opens with a bullet is a list item unless it is a heading, and one that opens
 with a plain bullet or a box to tick is never a heading, whatever its size
 or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
@@ -413,28 +420,34 @@ note of its own, even under a full line of the note before: `*** Zero waste
 
 **Note marks.** A note's mark is drawn as a smaller glyph raised above the
 baseline, right against the word it marks, and the text layer joins the two:
-`Acrylonitrilea`, `Flarec (50100410)`. A raised mark after a word is read
-apart from it, `Acrylonitrile a`, by the same rule as an HTML `<sup>`: a
-letter or symbol after a word, or a number after a word too long to be a
-unit, after a quantity (`26TB 1`, not `26TB1`), or after a bracket that
-holds words (`(49 N) 5`, not `(49 N)5`). So is one after a compound or a
-code joined by hyphens (`3-way 1`, `MACL-153M-XX 2,3`), and after a bracket
-whose slash parts names rather than terms (`(512e/4Kn) 1,2`, `(mm/in, max) 4`).
-So is a number after a word and the comma or stop closing it (`MTBF, 4`,
-`countries. 5`), since no power is raised past a word's punctuation, and a
-number closing on a bracket of its own, as notes are numbered in much of
-Europe (`dilution series 1)`).
+`Acrylonitrilea`, `Revenue1`, `Flarec (50100410)`. Read into the word, the
+mark changes it. A note's number keeps its place raised, written in Unicode
+superscript digits as a power is: `Revenue¹`, not `Revenue1`. A note's
+letter or symbol is read apart from the word instead, since Unicode has no
+full raised alphabet to write it in: `Acrylonitrile a`, `Total *`.
+
+A raised number is a note's after a word too long to be a unit, after a
+quantity (`26TB¹`, not `26TB1`), or after a bracket that holds words
+(`(49 N)⁵`, not `(49 N)5`). So is one after a compound or a code joined by
+hyphens (`3-way¹`, `MACL-153M-XX²,³`), and after a bracket whose slash parts
+names rather than terms (`(512e/4Kn)¹,²`, `(mm/in, max)⁴`). So is a number
+after a word and the comma or stop closing it (`MTBF,⁴`, `countries.⁵`),
+since no power is raised past a word's punctuation, and a number closing on
+a bracket of its own, as notes are numbered in much of Europe
+(`dilution series¹⁾`). A comma between two notes' numbers has no raised
+form and stays as it is.
 A raised number set before a word, after a space or at a line's head, is a
-note's number before its note or the name it is on, and is read apart from
-it the same way (`4 M17 series`, not `4M17 series`). Raised text that belongs
-to its word stays in it: a unit's power, kept raised (`cm³`, `m/s²`, and the
-Spanish square foot `PIES²`), an ordinal's ending (`1st`) and a formula's
-index or power (`ρwLv²`, `Vol(∂Ω)ⁿ`, `(a+b)²`).
+note's number before its note or the name it is on. It is read apart from
+the word and written plain, as a list's number is (`4 M17 series`, not
+`4M17 series`): at a note's head it is the note's own number. Raised text
+that belongs to its word stays in it: a unit's power, kept raised (`cm³`,
+`m/s²`, and the Spanish square foot `PIES²`), an ordinal's ending (`1st`)
+and a formula's index or power (`ρwLv²`, `Vol(∂Ω)ⁿ`, `(a+b)²`).
 
 A font may draw its own superior figures instead: set at the text's size and
 on its baseline, but drawn small and high. They are read as raised marks by
 their ink, which stands clear of the baseline and short of a figure's height,
-so `Lengths` and its superior `7` read `Lengths 7`, not `Lengths7`.
+so `Lengths` and its superior `7` read `Lengths⁷`, not `Lengths7`.
 
 After a number, the same marks matter more, because the text layer turns
 them into another number. A note's letters stand apart from the value:
@@ -547,6 +560,25 @@ full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
 
+The columns of running text in such a region read one after the other, up to
+three gutters across (three columns and a side tab), even where a few lines
+run across their gutter:
+- **A row or two at the region's top or foot.** A title over the columns,
+  wrapped to a second line, or the page's number centred under them, is read
+  apart: the title before the columns, the number after. Its lines must cross
+  the gutter the rest stand at. A title set bold or larger than the columns
+  takes the line under it when that line continues it. The line must be set
+  the same, start under the title (or hang under its text past a number) and
+  sit a line's leading down, as in `4. Taux de fécondité … conjoncturel` over
+  `moyen à l'accouchement depuis 2005`.
+- **Bands under or over a figure.** A figure set across the columns, with its
+  caption across both, leaves no gutter through the whole region. The
+  caption's lines part the region into bands, and each band reads at a gutter
+  of its own. The caption's lines stay together, with a short last line that
+  continues them, alone on its row. A band whose text does not run on as
+  prose, such as a figure's labels or a chart's ticks, is left as it was. A
+  region in which no band has a gutter is read as before.
+
 **Blocks side by side.** Two blocks of text set side by side within one
 column's stretch are each read whole, the left first, or the right where it
 starts a line or more higher: an invoice's seller beside its customer, an
@@ -604,7 +636,13 @@ glyph that puts no ink down. Where the next glyph on the line stands across a
 gutter, the gap is measured from the last glyph that put ink down, so a
 column's line and a callout, or the next column's line, are read apart. A
 justified line's stretched space stays a space: the lines of its paragraph
-run across it. A number or a label set off from its text by a tab, `3.1 ⇥
+run across it. A gap of more than five ems is no stretched space, though,
+where a column of text starts inside it and another starts where the text
+after it does. Three narrow columns that share their baselines run the
+first and third together on some rows, and the middle column's rows, set a
+little lower, put ink in the gap; those rows are read apart. A contents
+line's long gap to its page number is crossed by longer entries starting
+at the margin, not by a column, and stays one line. A number or a label set off from its text by a tab, `3.1 ⇥
 Results` or `Note 3. ⇥ Business Segment`, stays with its text. A label
 that heads a block of its own in the margin, in another size from the text
 beside it (`Issued 07-2025` over `Supersedes 05-2025` beside a note), is
@@ -922,6 +960,20 @@ legend). The prose is read back into its paragraphs, and the scale stays
 with the chart. A table's figures stand between its rules, never level with
 a stroke's end. A grid of a chart's own labels beside its scale, with no
 prose in it, is kept as it is.
+
+**A chart's scale taken into a column.** A scale set a few points from a
+column's edge is read with the column, its ticks falling between the prose's
+lines. Three numbers or more at one right edge, smaller than the text, that
+step evenly with the column's lines between them are a scale. A scale is
+read as one block after the paragraph it stood in, so its ticks neither cut
+the paragraph nor are read as the numbers of a list. Charts set one under
+another beside a column put their scales at one edge (`30 … −15`, then
+`8 … 1`), and together the numbers step unevenly. They are read as the runs
+that do step evenly, each with running prose between its ticks, counting up
+the page and set at one pitch. A list's numbers count down the page. Two
+runs that step evenly together are one axis whose labels end at two edges
+(`0.5` beside `0.45`), and are read as one scale. Two charts' scales side by
+side are read apart (`25 … 0`, then `1400 … 0`).
 No grid is read across the edge of a box drawn round a drawing, a box
 holding three shapes or more: a diagram's wire labels inside the box and a
 note in the column beside it stand on the same baselines, and read as rows

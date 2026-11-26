@@ -1,0 +1,16 @@
+{
+  "document": {
+    "file": "shimadzu-integrated-report-2024.pdf",
+    "url": "https://www.shimadzu.com/sites/shimadzu.com/files/ir/pdf/shimadzu_integrated_report_2024.pdf",
+    "sha256": "5b098d7331946021a5c85d08340df3373f7aa1df1321747b05cb137c8ee0c2a5",
+    "about": "Shimadzu Integrated Report 2024 (English). Its lists open items with the katakana middle dot, as Japanese text does."
+  },
+  "checks": [
+    {
+      "id": "middle-dot-items-in-english",
+      "found": "2026-11-26",
+      "issue": "The katakana middle dot was no bullet: the board's agenda items on page 134 ran together in one paragraph.",
+      "list": {"holds": ["Acquisition of Zef Scientific, Inc.", "Current status of Shimadzu Diagnostics and future outlook"]}
+    }
+  ]
+}

@@ -240,7 +240,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
         images.extend(imgs);
     }
     Ok(Xps {
-        doc: Document { pages },
+        doc: Document { pages, title: None },
         images,
         info: pkg.info(),
     })
@@ -763,6 +763,7 @@ fn lay_out(
             weight: run.bold.then_some(700),
             italic: false,
             draw_index: 0,
+            ocr: None,
         });
     }
     Ok(())
