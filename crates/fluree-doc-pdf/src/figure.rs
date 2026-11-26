@@ -1161,10 +1161,15 @@ pub fn attach_beside(
     //
     // The drawings fill a frame: a form's box with a logo in its corner, or
     // a panel with a chart beside its text, is no frame for them.
+    // A box diagram frames itself: its labels are set in its boxes, its
+    // drawing the boxes' extent ([`box_diagrams`]).
     let framed: Vec<Option<BBox>> = figures
         .iter()
         .map(|f| {
             f.frame.filter(|fr| {
+                if *fr == f.drawing {
+                    return true;
+                }
                 let held = figures
                     .iter()
                     .filter(|g| g.frame == Some(*fr))
@@ -1230,8 +1235,15 @@ pub fn attach_beside(
             loop {
                 let mut grew = false;
                 for (i, (b, size, text)) in blocks.iter().enumerate() {
+                    // A table's caption is its table's, set over it under
+                    // the figure.
+                    let table_caption = text
+                        .split_whitespace()
+                        .next()
+                        .is_some_and(|w| w.eq_ignore_ascii_case("table"));
                     if captions.contains(&i)
                         || !free(i, b)
+                        || table_caption
                         || !(crate::heading::is_caption(text) || note_label(text))
                     {
                         continue;
@@ -2373,6 +2385,255 @@ pub fn bar_plots(
             axes: true,
         })
         .collect()
+}
+
+/// Fewest boxes a diagram is read from.
+const DIAGRAM_BOXES: usize = 3;
+
+/// Fewest connectors joining a diagram's boxes.
+const DIAGRAM_LINKS: usize = 2;
+
+/// Most words a diagram's box holds: a label or a step, not a paragraph.
+const BOX_WORDS: usize = 40;
+
+/// Least gap, in the page's text size, a connector crosses between boxes.
+const LINK_GAP: f64 = 0.6;
+
+/// Least share of the gap between two boxes a connector covers.
+const LINK_COVER: f64 = 0.7;
+
+/// Farthest, in the page's text size, a diagram's banner or side tab
+/// stands from its boxes.
+const DIAGRAM_REACH: f64 = 2.0;
+
+/// Box diagrams: [`DIAGRAM_BOXES`] or more boxes, each holding a label,
+/// standing apart and joined by [`DIAGRAM_LINKS`] or more connectors, a line
+/// or an arrow crossing the gap between two boxes where they face each
+/// other. A flowchart's steps, a study's flow of participants, a system's
+/// blocks. Such a box holds words, and the drawings found from shapes set
+/// it aside as a panel behind its text: the diagram was never found, and its
+/// bold or larger labels read as the page's headings.
+///
+/// A table is kept out four ways. A box holds a label, not a row of
+/// figures: at most a third of its words are figures. A band as wide as the
+/// region is a table's shaded row, no box. A connector crosses between two
+/// boxes' facing sides, not along their edges, as a table's group underline
+/// runs along its header cells. And no box lies within a table the page's
+/// grids already hold (`tables`): its cells are no diagram's boxes.
+pub fn box_diagrams(
+    fills: &[crate::rule::Fill],
+    rules: &[Rule],
+    glyphs: &[Glyph],
+    page: usize,
+    (page_width, page_height): (f64, f64),
+    tables: &[BBox],
+    figures: &[Figure],
+) -> Vec<Figure> {
+    let em = {
+        let mut sizes: Vec<f32> = glyphs
+            .iter()
+            .filter(|g| g.bbox.is_some())
+            .map(|g| g.font_size)
+            .collect();
+        sizes.sort_by(f32::total_cmp);
+        sizes.get(sizes.len() / 2).copied().unwrap_or(10.0).max(1.0) as f64
+    };
+    // The words a box holds, by the glyphs set in it.
+    let words_in = |b: &BBox| -> Vec<String> {
+        let mut gs: Vec<&Glyph> = glyphs
+            .iter()
+            .filter(|g| {
+                g.bbox.is_some_and(|gb| {
+                    let (x, y) = ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0);
+                    x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1
+                })
+            })
+            .collect();
+        // By line, then along each: a line's glyphs share their baseline
+        // within jitter.
+        gs.sort_by(|a, b| a.origin.1.total_cmp(&b.origin.1));
+        let mut lines: Vec<Vec<&Glyph>> = Vec::new();
+        for g in gs {
+            match lines.last_mut() {
+                Some(l)
+                    if (g.origin.1 - l[0].origin.1).abs()
+                        <= l[0].font_size.max(1.0) as f64 * 0.3 =>
+                {
+                    l.push(g)
+                }
+                _ => lines.push(vec![g]),
+            }
+        }
+        for l in &mut lines {
+            l.sort_by(|a, b| a.origin.0.total_cmp(&b.origin.0));
+        }
+        let gs: Vec<&Glyph> = lines.into_iter().flatten().collect();
+        let mut text = String::new();
+        let mut last: Option<&Glyph> = None;
+        for g in gs {
+            if let Some(p) = last {
+                let pb = p.bbox.unwrap();
+                let gb = g.bbox.unwrap();
+                let fs = p.font_size.max(1.0) as f64;
+                if (g.origin.1 - p.origin.1).abs() > fs * 0.3 || gb.x0 - pb.x1 > fs * 0.25 {
+                    text.push(' ');
+                }
+            }
+            text.push_str(g.text.trim());
+            last = Some(g);
+        }
+        text.split_whitespace().map(str::to_string).collect()
+    };
+    let figure_word = |w: &str| {
+        w.chars().any(|c| c.is_ascii_digit())
+            && w.chars()
+                .all(|c| c.is_ascii_digit() || "$€£()−-.,%".contains(c))
+    };
+    // The boxes: shapes of a box's size, each holding a label.
+    let mut boxes: Vec<BBox> = Vec::new();
+    for f in fills {
+        let b = f.bbox;
+        let sized = b.width() >= em * 3.0
+            && b.width() <= page_width * 0.6
+            && b.height() >= em * 1.4
+            && b.height() <= page_height * 0.3;
+        // A band as wide as the region: a table's shaded row.
+        let band = b.width() >= page_width * 0.45 && b.width() >= b.height() * 5.0;
+        let tabled = tables
+            .iter()
+            .any(|t| t.x1.min(b.x1) > t.x0.max(b.x0) && t.y1.min(b.y1) > t.y0.max(b.y0));
+        if !sized || band || tabled {
+            continue;
+        }
+        if boxes.iter().any(|o| {
+            (o.x0 - b.x0).abs() < 1.0
+                && (o.y0 - b.y0).abs() < 1.0
+                && (o.x1 - b.x1).abs() < 1.0
+                && (o.y1 - b.y1).abs() < 1.0
+        }) {
+            continue;
+        }
+        let words = words_in(&b);
+        let figures_in = words.iter().filter(|w| figure_word(w)).count();
+        if words.is_empty() || words.len() > BOX_WORDS || figures_in * 3 > words.len() {
+            continue;
+        }
+        boxes.push(b);
+    }
+    if boxes.len() < DIAGRAM_BOXES {
+        return Vec::new();
+    }
+    // Most stand apart, as a diagram's boxes do; a table's cells abut.
+    let apart = |a: &BBox, b: &BBox| {
+        let dx = (b.x0 - a.x1).max(a.x0 - b.x1).max(0.0);
+        let dy = (b.y0 - a.y1).max(a.y0 - b.y1).max(0.0);
+        dx.max(dy)
+    };
+    let abutting = (0..boxes.len())
+        .flat_map(|i| (i + 1..boxes.len()).map(move |j| (i, j)))
+        .filter(|&(i, j)| apart(&boxes[i], &boxes[j]) < 2.0)
+        .count();
+    if abutting * 2 >= boxes.len() {
+        return Vec::new();
+    }
+    // The connectors: lines and arrows, a thin shape crossing the gap
+    // between two boxes where they face each other.
+    let thin: Vec<BBox> = rules
+        .iter()
+        .map(|r| r.bbox)
+        .chain(
+            fills
+                .iter()
+                .map(|f| f.bbox)
+                .filter(|b| b.width().min(b.height()) <= em * 0.8),
+        )
+        .filter(|b| b.width().max(b.height()) >= em * LINK_GAP)
+        .collect();
+    let mut links: Vec<(usize, usize, BBox)> = Vec::new();
+    for t in &thin {
+        let upright = t.height() > t.width();
+        for i in 0..boxes.len() {
+            for j in i + 1..boxes.len() {
+                let (a, b) = (boxes[i], boxes[j]);
+                let joins = if upright {
+                    let (top, bottom) = if a.y1 <= b.y0 { (a, b) } else { (b, a) };
+                    let gap = bottom.y0 - top.y1;
+                    let x = (t.x0 + t.x1) / 2.0;
+                    gap >= em * LINK_GAP
+                        && x >= top.x0.max(bottom.x0) + 2.0
+                        && x <= top.x1.min(bottom.x1) - 2.0
+                        && t.y0 <= top.y1 + 3.0
+                        && t.y1 >= bottom.y0 - 3.0
+                        && t.height() >= gap * LINK_COVER
+                } else {
+                    let (left, right) = if a.x1 <= b.x0 { (a, b) } else { (b, a) };
+                    let gap = right.x0 - left.x1;
+                    let y = (t.y0 + t.y1) / 2.0;
+                    gap >= em * LINK_GAP
+                        && y >= left.y0.max(right.y0) + 2.0
+                        && y <= left.y1.min(right.y1) - 2.0
+                        && t.x0 <= left.x1 + 3.0
+                        && t.x1 >= right.x0 - 3.0
+                        && t.width() >= gap * LINK_COVER
+                };
+                if joins && !links.iter().any(|&(p, q, _)| (p, q) == (i, j)) {
+                    links.push((i, j, *t));
+                }
+            }
+        }
+    }
+    if links.len() < DIAGRAM_LINKS {
+        return Vec::new();
+    }
+    // The drawing: the boxes the connectors join, and the connectors.
+    let joined: Vec<usize> = {
+        let mut v: Vec<usize> = links.iter().flat_map(|&(i, j, _)| [i, j]).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let mut region = links.iter().fold(boxes[joined[0]], |r, &(i, j, t)| {
+        r.union(&boxes[i]).union(&boxes[j]).union(&t)
+    });
+    // Its banner and side tabs stand against it: shapes within
+    // [`DIAGRAM_REACH`] of the page's text size of its boxes, no larger than
+    // they are, in no table, and holding a label at most. Reached from the
+    // boxes alone, not from one another: a panel of text set beside a
+    // diagram, its lines on shapes of their own, is the page's.
+    let boxed = region;
+    for f in fills {
+        let b = f.bbox;
+        let inside = b.x0 >= boxed.x0 - 0.5
+            && b.y0 >= boxed.y0 - 0.5
+            && b.x1 <= boxed.x1 + 0.5
+            && b.y1 <= boxed.y1 + 0.5;
+        let tabled = tables
+            .iter()
+            .any(|t| t.x1.min(b.x1) > t.x0.max(b.x0) && t.y1.min(b.y1) > t.y0.max(b.y0));
+        if inside
+            || tabled
+            || b.width() * b.height() > boxed.width() * boxed.height()
+            || apart(&b, &boxed) > em * DIAGRAM_REACH
+            || words_in(&b).len() > LABEL_MAX_WORDS
+        {
+            continue;
+        }
+        region = region.union(&b);
+    }
+    if figures
+        .iter()
+        .any(|f| share_inside(&f.drawing, &region) > 0.0 || share_inside(&region, &f.drawing) > 0.0)
+    {
+        return Vec::new();
+    }
+    vec![Figure {
+        bbox: region,
+        drawing: region,
+        page,
+        shapes: joined.len(),
+        frame: Some(region),
+        axes: false,
+    }]
 }
 
 /// Plots drawn as lines: a graticule of rules each spanning the plot, four
@@ -3995,6 +4256,78 @@ mod tests {
             })
             .collect();
         assert!(bar_plots(&cells, &[base], &[], &text, 0, &[]).is_empty());
+    }
+
+    #[test]
+    fn boxes_joined_by_connectors_are_a_diagram() {
+        use crate::rule::Fill;
+        let fill = |x0: f64, y0: f64, x1: f64, y1: f64| Fill::new(bb(x0, y0, x1, y1), 0);
+        let rule = |o: Orientation, x0: f64, y0: f64, x1: f64, y1: f64| Rule {
+            bbox: bb(x0, y0, x1, y1),
+            orientation: o,
+            page: 0,
+        };
+        // A label of `words` set at 8 pt from (x, y).
+        let label = |words: &str, x: f64, y: f64| -> Vec<Glyph> {
+            words
+                .chars()
+                .enumerate()
+                .filter(|(_, c)| *c != ' ')
+                .map(|(k, c)| glyph(&c.to_string(), x + 4.0 * k as f64, y, 8.0))
+                .collect()
+        };
+        let page = (612.0, 792.0);
+        // Three steps down the page, each a box with its label, joined by
+        // two arrows down the gaps between them.
+        let boxes = [
+            fill(200.0, 100.0, 360.0, 130.0),
+            fill(200.0, 170.0, 360.0, 200.0),
+            fill(200.0, 240.0, 360.0, 270.0),
+        ];
+        let mut text = label("Records screened", 210.0, 120.0);
+        text.extend(label("Reports assessed", 210.0, 190.0));
+        text.extend(label("Studies included", 210.0, 260.0));
+        let arrows = [
+            rule(Orientation::Vertical, 279.8, 130.0, 280.2, 170.0),
+            rule(Orientation::Vertical, 279.8, 200.0, 280.2, 240.0),
+        ];
+        let got = box_diagrams(&boxes, &arrows, &text, 0, page, &[], &[]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].frame, Some(got[0].drawing));
+        // A table the page's grids hold is no diagram's.
+        let table = bb(190.0, 90.0, 370.0, 280.0);
+        assert!(box_diagrams(&boxes, &arrows, &text, 0, page, &[table], &[]).is_empty());
+        // Nor are boxes holding rows of figures.
+        let mut figures = label("12.4 31.0 7.2", 210.0, 120.0);
+        figures.extend(label("8.1 9.0 1.2", 210.0, 190.0));
+        figures.extend(label("4.4 5.0 0.3", 210.0, 260.0));
+        assert!(box_diagrams(&boxes, &arrows, &figures, 0, page, &[], &[]).is_empty());
+        // A rule along the boxes' edges is no connector: a table's group
+        // underline under its header cells, set side by side.
+        let cells = [
+            fill(100.0, 100.0, 160.0, 125.0),
+            fill(170.0, 100.0, 230.0, 125.0),
+            fill(240.0, 100.0, 300.0, 125.0),
+        ];
+        let mut heads = label("Units", 105.0, 118.0);
+        heads.extend(label("Price", 175.0, 118.0));
+        heads.extend(label("Total", 245.0, 118.0));
+        let underline = [rule(Orientation::Horizontal, 100.0, 124.8, 300.0, 125.2)];
+        assert!(box_diagrams(&cells, &underline, &heads, 0, page, &[], &[]).is_empty());
+        // A band across the page is a table's shaded row, no box.
+        let bands = [
+            fill(40.0, 100.0, 570.0, 120.0),
+            fill(40.0, 160.0, 570.0, 180.0),
+            fill(40.0, 220.0, 570.0, 240.0),
+        ];
+        let mut rows = label("Mid Atlantic", 50.0, 115.0);
+        rows.extend(label("North East", 50.0, 175.0));
+        rows.extend(label("South East", 50.0, 235.0));
+        let column = [
+            rule(Orientation::Vertical, 299.8, 120.0, 300.2, 160.0),
+            rule(Orientation::Vertical, 299.8, 180.0, 300.2, 220.0),
+        ];
+        assert!(box_diagrams(&bands, &column, &rows, 0, page, &[], &[]).is_empty());
     }
 
     /// Lines drawn across a plot: a horizontal one at each `ys` from the
