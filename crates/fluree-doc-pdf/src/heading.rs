@@ -573,6 +573,11 @@ fn month_name(w: &str) -> bool {
 /// needs a day or a year beside it: `May` alone is a word.
 fn date_text(t: &str) -> bool {
     let t = t.trim();
+    // A date holds a day or a year and runs to four words: most lines are
+    // told apart before their words are looked up.
+    if !t.contains(|c: char| c.is_ascii_digit()) || t.split_whitespace().nth(4).is_some() {
+        return false;
+    }
     // Figures alone: day, month and year parted by one separator.
     if !t.contains(' ') {
         for sep in ['/', '.', '-'] {

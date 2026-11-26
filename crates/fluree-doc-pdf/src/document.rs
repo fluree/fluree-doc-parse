@@ -2028,6 +2028,112 @@ const MIN_CONTENTS_ROWS: usize = 3;
 /// A page that lists its contents without leaders or a `Contents` heading
 /// of its own, as a contents' later pages do, sets each number after its
 /// entry's title or at one right edge.
+/// Words a heading closes on to say it continues a section begun earlier,
+/// lowercase: `(continued)`, `—continued`, `- Continued`, `(cont'd)`,
+/// `(suite)`, `(Fortsetzung)`, `(continuación)`.
+const CONTINUED_WORDS: &[&str] = &[
+    "continued",
+    "cont",
+    "cont.",
+    "cont'd",
+    "cont’d",
+    "contd",
+    "contd.",
+    "suite",
+    "fortsetzung",
+    "forts.",
+    "continuación",
+    "continuacion",
+    "continua",
+    "continuação",
+];
+
+/// The heading without its closing continuation mark, where it has one:
+/// `Box 1—continued` is `Box 1`, `5.5 Electrical Characteristics
+/// (continued)` is `5.5 Electrical Characteristics`. The mark closes the
+/// line after a dash, a parenthesis or a comma, or stands alone after
+/// words.
+fn continued_from(text: &str) -> Option<&str> {
+    let t = text.trim_end();
+    let inner = t.strip_suffix(')').unwrap_or(t);
+    let cut =
+        inner.rfind(|c: char| matches!(c, '(' | '—' | '–' | '-' | ',') || c.is_whitespace())?;
+    let word = inner[cut..]
+        .trim_start_matches(|c: char| matches!(c, '(' | '—' | '–' | '-' | ',') || c.is_whitespace())
+        .to_lowercase();
+    if !CONTINUED_WORDS.contains(&word.as_str()) {
+        return None;
+    }
+    let base = inner[..cut]
+        .trim_end_matches(|c: char| matches!(c, '(' | '—' | '–' | '-' | ',') || c.is_whitespace());
+    (base.chars().any(char::is_alphanumeric)).then_some(base)
+}
+
+/// Fewest letters and figures in what a continued heading restates.
+const MIN_CONTINUED_KEY: usize = 4;
+
+/// Letters and figures, lowercase: two headings name one section where
+/// these agree.
+fn heading_key(t: &str) -> String {
+    t.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// A heading that continues a section begun on an earlier page is no new
+/// section: its text runs on in the section it continues.
+///
+/// - **Marked:** it restates an earlier heading, or a part of one, and
+///   closes on a continuation mark (`Box 1—continued` after `Box 1.
+///   Employment and Earnings across Demographic Groups`, `Developments
+///   Related to Financial Stability (continued)` after `Box 3. Developments
+///   Related to Financial Stability`, `Wiring Diagrams (continued)`).
+/// - **Repeated:** it repeats, on a later page and word for word, the
+///   nearest heading at its level or above, with no heading at that level
+///   between: a page's title set over each page a section fills (`PACKAGE
+///   OPTION ADDENDUM`), a release line over each page of a table set.
+fn read_continued_heads(elements: &mut [Element]) {
+    let title = |e: &Element| e.kind == "doco:SectionTitle";
+    let mut demote = Vec::new();
+    for i in 0..elements.len() {
+        if !title(&elements[i]) {
+            continue;
+        }
+        let e = &elements[i];
+        if let Some(base) = continued_from(&e.text) {
+            let key = heading_key(base);
+            if key.chars().count() >= MIN_CONTINUED_KEY
+                && elements[..i].iter().filter(|o| title(o)).any(|o| {
+                    continued_from(&o.text).is_none() && heading_key(&o.text).contains(&key)
+                })
+            {
+                demote.push(i);
+            }
+            continue;
+        }
+        // The nearest heading at its level or above, those already read as
+        // continuing aside.
+        let level = e.level.unwrap_or(6);
+        let nearest = (0..i)
+            .rev()
+            .filter(|k| title(&elements[*k]) && !demote.contains(k))
+            .map(|k| &elements[k])
+            .find(|o| o.level.unwrap_or(6) <= level);
+        if let Some(o) = nearest {
+            if o.page < e.page && heading_key(&o.text) == heading_key(&e.text) {
+                demote.push(i);
+            }
+        }
+    }
+    for i in demote {
+        let e = &mut elements[i];
+        e.kind = "doco:Paragraph".into();
+        e.level = None;
+        e.evidence = "layout";
+    }
+}
+
 fn read_contents_rows(elements: &mut [Element]) {
     let folio = |t: &str| {
         let t = t.trim();
@@ -5666,6 +5772,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     read_table_heads(&mut elements);
     read_entry_lists(&mut elements);
     read_contents_rows(&mut elements);
+    read_continued_heads(&mut elements);
     settle_cell_breaks(
         &mut elements,
         flat_lines
@@ -7274,6 +7381,67 @@ mod tests {
                 if table { "rules" } else { "layout" },
             )
         }
+    }
+
+    #[test]
+    fn a_heading_continuing_an_earlier_one_is_no_new_section() {
+        let at = |kind: &str, text: &str, page: usize, level: Option<usize>| {
+            let mut e = Element::new(kind, text, "rust", "layout");
+            e.page = page;
+            e.level = level;
+            e
+        };
+        let head = |text: &str, page: usize, level: usize| {
+            at("doco:SectionTitle", text, page, Some(level))
+        };
+        let text = |page: usize| at("doco:Paragraph", "Its text runs on.", page, None);
+        let mut els = vec![
+            head("Box 1. Employment across Groups", 0, 2),
+            text(0),
+            head("Box 1—continued", 1, 4),
+            text(1),
+            head("Wiring Diagrams", 1, 1),
+            head("Wiring Diagrams (continued)", 2, 1),
+            head("PACKAGE OPTION ADDENDUM", 3, 1),
+            head("Orderable parts", 3, 2),
+            head("PACKAGE OPTION ADDENDUM", 4, 1),
+            // A district's own `Labor Markets`, under another district.
+            head("Boston", 5, 1),
+            head("Labor Markets", 5, 3),
+            head("New York", 6, 1),
+            head("Labor Markets", 6, 3),
+            // A continuation of nothing read before: the excerpt's start.
+            head("Notes (continued)", 7, 2),
+        ];
+        read_continued_heads(&mut els);
+        let kinds: Vec<(&str, &str)> = els
+            .iter()
+            .filter(|e| e.text != "Its text runs on.")
+            .map(|e| (e.text.as_str(), e.kind.as_str()))
+            .collect();
+        let read_on = ["Box 1—continued", "Wiring Diagrams (continued)"];
+        for (t, kind) in &kinds {
+            let want = if read_on.contains(t) {
+                "doco:Paragraph"
+            } else {
+                "doco:SectionTitle"
+            };
+            if *t != "PACKAGE OPTION ADDENDUM" {
+                assert_eq!(*kind, want, "{t}");
+            }
+        }
+        let addenda: Vec<&str> = kinds
+            .iter()
+            .filter(|(t, _)| *t == "PACKAGE OPTION ADDENDUM")
+            .map(|(_, k)| *k)
+            .collect();
+        assert_eq!(addenda, ["doco:SectionTitle", "doco:Paragraph"]);
+        assert_eq!(continued_from("Box 4—continued"), Some("Box 4"));
+        assert_eq!(
+            continued_from("Note 11 - Stock Compensation - Continued"),
+            Some("Note 11 - Stock Compensation")
+        );
+        assert_eq!(continued_from("Continued Operations"), None);
     }
 
     #[test]

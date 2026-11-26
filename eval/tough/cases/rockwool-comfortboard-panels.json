@@ -6,7 +6,8 @@
     "about": "ROCKWOOL Comfortboard 80 technical data sheet. Page 1 sets a subtitle and paragraph beside a photo on a rectangle, an accent bar, and a red callout box holding a heading and a paragraph."
   },
   "notes": [
-    "#114: the rectangle behind the photo, the accent bar and the callout box made a three-shape drawing, and the subtitle, the paragraph and the callout's text were typed as its labels."
+    "#114: the rectangle behind the photo, the accent bar and the callout box made a three-shape drawing, and the subtitle, the paragraph and the callout's text were typed as its labels.",
+    "2026-11-26 (#395): page 2 repeats the sheet's title and subtitle at its head, a running page title; it continues the section page 1 opens, so the subtitle heads one section, not two. The check counted both pages' copies."
   ],
   "checks": [
     {
@@ -17,7 +18,7 @@
         "type": "doco:SectionTitle",
         "text": "Exterior Continuous Insulation"
       },
-      "count": 2
+      "count": 1
     },
     {
       "id": "paragraph-beside-the-panels",

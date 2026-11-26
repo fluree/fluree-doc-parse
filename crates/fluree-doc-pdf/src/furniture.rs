@@ -233,24 +233,45 @@ fn detect_all(
         }
     }
 
+    let needed = ((n_pages as f64 * MIN_PAGE_FRACTION).ceil() as usize).max(MIN_PAGES);
+
     // A number alone is grouped by where it stands as well. Every bare
     // number in the bands shares one signature, a table's figures near the
     // foot with the page number under them, and the group's middle place was
     // the table's: the page number, set lower, was not where the group
     // stands, and went unread.
+    //
+    // So is a line that runs at two places at its pages' edges: a marking
+    // set over the page and again at its foot (`TLP:CLEAR`). Read as one
+    // group, the middle place was the foot's, and the head's copies went
+    // unread.
     let groups: HashMap<String, Vec<(usize, usize, f64, String)>> = groups
         .into_iter()
         .flat_map(|(sig, mut occ)| {
-            if !bare_number(&sig) {
-                return vec![(sig, occ)];
-            }
             occ.sort_by(|a, b| a.2.total_cmp(&b.2));
             let mut places: Vec<Vec<(usize, usize, f64, String)>> = Vec::new();
-            for o in occ {
+            for o in occ.iter().cloned() {
                 match places.last_mut() {
                     Some(p) if o.2 - p[p.len() - 1].2 < POSITION_TOLERANCE => p.push(o),
                     _ => places.push(vec![o]),
                 }
+            }
+            let runs = |p: &Vec<(usize, usize, f64, String)>| {
+                let mut on: Vec<usize> = p.iter().map(|o| o.0).collect();
+                on.sort_unstable();
+                on.dedup();
+                on.len() >= needed
+            };
+            // Both at the page's edges: a form's answers (`Yes`, `No`) and a
+            // table's labels repeat at fixed places down the page too.
+            let edge = |p: &Vec<(usize, usize, f64, String)>| {
+                p.iter()
+                    .all(|o| !(EDGE_BAND..=1.0 - EDGE_BAND).contains(&o.2))
+            };
+            let running: Vec<&Vec<(usize, usize, f64, String)>> =
+                places.iter().filter(|p| runs(p)).collect();
+            if !bare_number(&sig) && (running.len() < 2 || !running.iter().all(|p| edge(p))) {
+                return vec![(sig, occ)];
             }
             places
                 .into_iter()
@@ -259,8 +280,6 @@ fn detect_all(
                 .collect()
         })
         .collect();
-
-    let needed = ((n_pages as f64 * MIN_PAGE_FRACTION).ceil() as usize).max(MIN_PAGES);
     let moves = template_moves(pages, widths);
     let body = crate::block::body_size(pages.iter().flat_map(|(lines, _)| lines));
 
@@ -1834,6 +1853,25 @@ mod tests {
         let mut l = line(text, y);
         l.font_size = 16.0;
         l
+    }
+
+    #[test]
+    fn a_marking_over_the_page_and_at_its_foot_runs_at_both() {
+        // A classification marking set at the head and again at the foot
+        // of every page: one text at two places, each running.
+        let pages = doc(10, |i| {
+            vec![
+                line("TLP:CLEAR", 20.0),
+                line(&format!("Text of page {i}, its own."), 400.0),
+                line("TLP:CLEAR", 960.0),
+            ]
+        });
+        let marks = detect(&pages);
+        for (i, m) in marks.iter().enumerate() {
+            assert!(m.contains_key(&0), "head, page {i}");
+            assert!(m.contains_key(&2), "foot, page {i}");
+            assert!(!m.contains_key(&1), "text, page {i}");
+        }
     }
 
     #[test]
