@@ -805,6 +805,49 @@ Measured against every label instead, the stub's head level with it
 (`Ecological status`) put it under its units (`% / Poor (1)`). Headers with
 no line of units keep the measure they had.
 
+### A header framed by rules
+
+Walking up from a text-read table's first row, the header stops at the
+second rule across the table (the first is the header's own), at a gap wider
+than a row's, or after five lines. A header framed by rules lifts those three
+stops. The frame needs two things:
+
+- **A rule over the first row.** Only short label lines may sit between them:
+  the titles of the body's first sections (`Operating activities`). A longer
+  title there (`Selected information for plans with liability for service`)
+  is a block's own, and the walk reads it and what is over it as before.
+- **Another rule over the header.** Between the two rules there are only
+  header lines. Each label is a few words, no more than a section's, and
+  none ends on a colon. No line is a row of figures (years, sample sizes and
+  units aside), and none is a caption.
+
+The frame climbs from rule to rule while each band between holds header
+lines only. It stops at a second band with words in the stub. The stub holds
+the header's own head once, so a second label there is a row ruled off like
+the rows below it (`Gender | Male | Female` over `Age at diagnosis | 22
+months`). A head wrapped across a rule goes on in lower case (`Registration`
+over `period`) and is still the one head.
+
+Inside the frame, the walk goes on across a rule: in PMC1919390 Table 1,
+`Pathology | Radiology` is ruled off under `Preparation (h)`. It goes on
+across a gap: in PMC1343572 Table 9, a drug's name and `Number of | Percent
+with` sit well above `Outcome | Trials | Patients`. And it goes past five
+lines, counting the header's levels rather than its lines: a label wrapped
+over several lines (`NNT/` over `NNTp/`, `NNH` and `(95% CI)`) is one level.
+What the walk takes, and where it stops for prose, a title or a caption,
+stays the walk's own.
+
+Read across such a rule, a label's second line can sit over it alone on its
+line: `Age` over `(Years)` in PMC3359190 Table 2, `Species name and` over
+`ID number` in PMC6166639 Table 10. A line set close under a label in its
+column, on the label's axis (starting where it starts, or centred where it
+is), goes on naming that column. A rule under it across the stub and every
+column is the table's own, not the line's underline, and the column beside
+it is not the line's to name. Before, either reading made the second line a
+banner over every column (`Locality / ID number`). A label alone on its line
+with nothing over it in its column, such as a band's title across a list
+(`ENGINE BEARINGS`), is a banner as before.
+
 ### A header restated partway down
 
 A table can name its columns afresh partway down: a VOC table's `By wt |

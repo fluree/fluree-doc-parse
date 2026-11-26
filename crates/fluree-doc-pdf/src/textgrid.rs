@@ -1374,14 +1374,122 @@ fn read_beside(
             ys.dedup_by(|a, b| (*a - *b).abs() <= 3.0);
             ys
         };
+        // A header framed by rules across the table: one over its first row
+        // (label lines aside), one over the header, and between them only
+        // header lines, no row of figures and no caption. Inside the frame
+        // the walk goes on across a rule (`Pathology | Radiology` ruled off
+        // under `Preparation (h)`), across a wide gap (a drug's name and
+        // `Number of` set well above `Trials | Patients`), and past its depth;
+        // what it takes and where else it stops is the walk's, as before.
+        let framed: Option<usize> = {
+            let headerish = |l: &Line| {
+                let text: String = l
+                    .chunks
+                    .iter()
+                    .map(|c| c.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                // Labels are a few words, as a section's are; a line ending
+                // on a colon introduces what follows, as prose does.
+                !is_caption(&text)
+                    && l.chunks.iter().all(|c| {
+                        c.text.split_whitespace().count() <= SECTION_WORDS
+                            && !c.text.trim_end().ends_with(':')
+                    })
+                    && (!value_row(l)
+                        || l.chunks.iter().all(|c| {
+                            !is_figure(&c.text)
+                                || is_year(&c.text)
+                                || is_unit_head(&c.text)
+                                || is_sample_size(&c.text)
+                        }))
+            };
+            let ruled =
+                |y0: f64, y1: f64| across.iter().copied().filter(move |&r| r > y0 && r < y1);
+            // Under the last header line's baseline: brackets descend past a
+            // rule drawn close under them (`(95% CI)`).
+            let under = |k: usize| ruled(clipped[k - 1].base, clipped[k].y0 + 1.0).next_back();
+            // The rule over the first row, label lines between them: the
+            // titles of the body's first sections (`Operating activities`), as
+            // short as a header's lines. A longer title there (`Selected
+            // information for plans with liability for service`) is a
+            // block's own, and the walk reads it and what is over it.
+            let mut lo = start;
+            while lo > floor && label_row(&clipped[lo - 1]) {
+                lo -= 1;
+            }
+            let h = (lo > floor && (lo..start).all(|k| headerish(&clipped[k])))
+                .then(|| under(lo))
+                .flatten();
+            h.and_then(|h| {
+                // Up from rule to rule while each band between holds header
+                // lines only. The stub holds the header's own head once: a
+                // second band with words in the stub is a row ruled off as
+                // the rows below it are (`Gender | Male | Female` over `Age
+                // at diagnosis | 22 months | 4 years`). A head wrapped across
+                // a rule goes on in lower case (`Registration` over `period`)
+                // and is still the one head.
+                let mut top = None;
+                let mut bottom = h;
+                let mut i = lo;
+                let mut stubbed = 0usize;
+                while let Some(r) = across.iter().copied().rfind(|&r| r < bottom - 1.0) {
+                    let mut j = i;
+                    while j > floor && clipped[j - 1].y0 > r - 1.0 {
+                        j -= 1;
+                    }
+                    if j == i || !(j..i).all(|k| headerish(&clipped[k])) {
+                        break;
+                    }
+                    if (j..i).any(|k| {
+                        clipped[k].chunks.iter().any(|c| {
+                            column_of(&cols0, c) == Some(0)
+                                && !c.text.trim_start().starts_with(char::is_lowercase)
+                        })
+                    }) {
+                        stubbed += 1;
+                        if stubbed > 1 {
+                            break;
+                        }
+                    }
+                    top = Some(j);
+                    bottom = r;
+                    i = j;
+                }
+                top
+            })
+        };
         let mut crossed = 0usize;
+        // Inside the frame, the line `k` is the header's whatever the
+        // walk's limits say: no rule across, gap or depth ends it there.
+        let framed_at = |k: usize| framed.is_some_and(|t| k >= t);
         let mut first = start;
         let mut header_seen = 0usize;
         let mut header_named = false;
-        while first > floor && header_seen < MAX_HEADER_LINES {
+        // Inside the frame the header's depth counts its levels, a label
+        // wrapped over several lines one level (`NNT/` over `NNTp/`, `NNH`
+        // and `(95% CI)`): rows of words with no figures stop it as before.
+        let mut levels = 0usize;
+        let wraps_onto = |above: &Line, cur: &Line| {
+            cur.base - above.base <= cur.fs.max(above.fs) * WRAP_LEADING * 1.2
+                && cur.chunks.iter().all(|c| {
+                    above
+                        .chunks
+                        .iter()
+                        .any(|a| column_of(&cols0, a) == column_of(&cols0, c))
+                })
+        };
+        while first > floor
+            && if framed_at(first - 1) {
+                levels < MAX_HEADER_LINES
+            } else {
+                header_seen < MAX_HEADER_LINES
+            }
+        {
             let above = &clipped[first - 1];
             let cur = &clipped[first];
-            if !row_gap(rules, x0, x1, above.y1, cur.y0, fs, section(cur)) {
+            if !row_gap(rules, x0, x1, above.y1, cur.y0, fs, section(cur)) && !framed_at(first - 1)
+            {
                 break;
             }
             if std::env::var_os("FDOC_TEXTGRID_DEBUG").is_some() {
@@ -1398,7 +1506,7 @@ fn read_beside(
                 .iter()
                 .filter(|&&y| y > above.base && y < cur.y0 + 1.0)
                 .count();
-            if crossed + between >= 2 {
+            if crossed + between >= 2 && !framed_at(first - 1) {
                 break;
             }
             // A stub's head beside the columns' own heads may run to a
@@ -1523,6 +1631,9 @@ fn read_beside(
                 header_named = false;
             } else if header {
                 header_seen += 1;
+                if !wraps_onto(above, cur) {
+                    levels += 1;
+                }
                 header_named |= names_columns(above);
             } else if stub {
                 if header_seen > 0 {
@@ -2155,23 +2266,48 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                     .map(|d| (n, d))
             });
             let runs_on = below.is_some_and(|(n, _)| n.base - l.base <= n.fs * WRAP_LEADING * 1.2);
+            // A column label's own second line, set close under its first
+            // on its axis (`Age` over `(Years)`), goes on naming the label's
+            // column. Under a banner's first line it is judged as any line.
+            let wraps_from_above = head[..i]
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(pi, p)| {
+                    p.chunks
+                        .iter()
+                        .enumerate()
+                        .find(|(_, d)| column_of(&cols, d) == Some(k))
+                        .map(|(di, d)| (pi, di, p, d))
+                })
+                .is_some_and(|(pi, di, p, d)| {
+                    let tol = l.fs * 0.5;
+                    !kinds[pi][di]
+                        && l.base - p.base <= l.fs * WRAP_LEADING * 1.2
+                        && ((d.x0 - c.x0).abs() <= tol
+                            || ((d.x0 + d.x1) / 2.0 - (c.x0 + c.x1) / 2.0).abs() <= tol)
+                });
             // A rule under a column's own label, as wide as its column,
             // underlines it; one reaching across columns makes a banner.
+            // Under a label's second line, one across the stub and every
+            // column is the table's own, ruling the header's levels apart
+            // (`Age` over `(Years)` over the rule, `n | Mean | SD` under).
             let ruled_across = rule_under(l, c).is_some_and(|(a, b)| {
-                covered(
-                    &cols,
-                    &Chunk {
-                        x0: a,
-                        x1: b,
-                        ..c.clone()
-                    },
-                )
-                .len()
-                    >= 2
+                !(wraps_from_above && a <= cols[0].1 && b >= cols[cols.len() - 1].0)
+                    && covered(
+                        &cols,
+                        &Chunk {
+                            x0: a,
+                            x1: b,
+                            ..c.clone()
+                        },
+                    )
+                    .len()
+                        >= 2
             });
             // A label over the column beside it too: that column is named
             // below this line and nowhere level with it or above (`EUR`
-            // over `Unit` and `Total`).
+            // over `Unit` and `Total`). A label's second line names its own.
             let tight_below = below.is_some_and(|(n, _)| n.base - l.base <= n.fs * WRAP_LEADING);
             let label_of = |n: &Line, k: usize| {
                 n.chunks.len() >= 2
@@ -2181,6 +2317,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
             };
             let over_next = k > 0
                 && !tight_below
+                && !wraps_from_above
                 && k + 1 < cols.len()
                 && head[i + 1..].iter().any(|n| label_of(n, k + 1))
                 && !head[..=i]
@@ -3825,6 +3962,176 @@ mod tests {
         let spans = &grids[0].layout.as_ref().unwrap().spans;
         assert!(spans.contains(&(0, 2, 4)), "{spans:?}");
         assert!(spans.contains(&(0, 4, 6)), "{spans:?}");
+    }
+
+    #[test]
+    fn a_header_framed_by_rules_is_read_across_a_rule_and_a_gap_inside_it() {
+        // Rules across the table over its header, inside it and under it.
+        // Over the inner rule: the columns' names, and a gap above them a
+        // group's name across two of them; under it, a group's two columns.
+        let across = |y: f64| Rule {
+            bbox: BBox {
+                x0: 10.0,
+                y0: y,
+                x1: 330.0,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        let rules = vec![across(20.0), across(66.0), across(90.0)];
+        let xs = [20.0, 120.0, 190.0, 260.0];
+        let mut gl = Vec::new();
+        gl.extend(set("Survey of all patients", 182.0, 32.0));
+        for (k, t) in ["Day", "Hours", "Cases", "Total"].iter().enumerate() {
+            gl.extend(set(t, xs[k], 58.0));
+        }
+        gl.extend(set("Mean", 190.0, 82.0));
+        gl.extend(set("Max", 260.0, 82.0));
+        for (i, row) in [
+            ["Mon", "800", "6", "22"],
+            ["Tues", "830", "3", "14"],
+            ["Wed", "900", "2", "15"],
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 104.0 + 14.0 * i as f64;
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, xs[k], y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 92.0,
+            x1: 330.0,
+            y1: 140.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let lay = grids[0].layout.as_deref().expect("read from its text");
+        assert!(lay.header_rows >= 3, "{lay:?}");
+        let texts = grids[0].cell_texts(&gl);
+        assert!(texts.iter().any(|t| t == "Day"), "{texts:?}");
+        // The group's words, over the inner rule and a gap, in the header.
+        let head = texts[..lay.header_rows * grids[0].cols()].join(" ");
+        assert!(head.contains("Survey of all"), "{texts:?}");
+    }
+
+    /// A rule across the table at `y`, from `x0` to `x1`.
+    fn rule_across(x0: f64, x1: f64, y: f64) -> Rule {
+        Rule {
+            bbox: BBox {
+                x0,
+                y0: y,
+                x1,
+                y1: y + 0.5,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        }
+    }
+
+    #[test]
+    fn rows_of_words_ruled_off_as_the_rows_below_are_no_framed_header() {
+        // Cases as columns, a rule under every row: the first rows hold
+        // words (`Gender | Male | Female`), each labelled in the stub, the
+        // later ones figures. The rules part rows; they frame no header.
+        let xs = [20.0, 170.0, 240.0, 310.0];
+        let mut gl = Vec::new();
+        let mut rules = vec![rule_across(10.0, 350.0, 20.0)];
+        for (k, t) in ["Case 1", "Case 2", "Case 3"].iter().enumerate() {
+            gl.extend(set(t, xs[k + 1], 32.0));
+        }
+        let rows: [[&str; 4]; 6] = [
+            ["Gender", "Male", "Female", "Male"],
+            ["Age at onset", "22 months", "4 years", "16 years"],
+            ["Blood group", "A pos", "B pos", "O neg"],
+            ["Criteria met", "4", "5", "4"],
+            ["Hemoglobin", "94", "117", "114"],
+            ["Platelets", "310", "254", "402"],
+        ];
+        for (i, row) in rows.iter().enumerate() {
+            let y = 50.0 + 16.0 * i as f64;
+            rules.push(rule_across(10.0, 350.0, y - 11.0));
+            for (k, t) in row.iter().enumerate() {
+                gl.extend(set(t, xs[k], y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 96.0,
+            x1: 350.0,
+            y1: 140.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert!(!grids.is_empty(), "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let texts = g.cell_texts(&gl);
+        let head = texts[..lay.header_rows * g.cols()].join(" ");
+        assert!(!head.contains("Gender"), "{texts:?}");
+        assert!(!head.contains("Age at onset"), "{texts:?}");
+    }
+
+    #[test]
+    fn a_labels_second_line_over_the_tables_rule_names_its_own_column() {
+        // A label wrapped in the first column past the stub (`Age` over
+        // `(Years)`) beside two groups, a rule across the whole table under
+        // its second line, and the groups' columns under that. The rule is
+        // the header's own: `(Years)` goes on naming `Age`'s column, not
+        // every column, nor the column beside it.
+        let xs = [20.0, 130.0, 180.0, 220.0, 260.0, 300.0];
+        let mut gl = Vec::new();
+        let rules = vec![
+            rule_across(10.0, 330.0, 20.0),
+            rule_across(10.0, 330.0, 50.0),
+            rule_across(10.0, 330.0, 66.0),
+        ];
+        gl.extend(set("Age", 130.0, 34.0));
+        gl.extend(set("Boys", 190.0, 34.0));
+        gl.extend(set("Girls", 270.0, 34.0));
+        gl.extend(set("(Years)", 124.0, 44.0));
+        for (k, t) in ["n", "SD", "n", "SD"].iter().enumerate() {
+            gl.extend(set(t, xs[k + 2], 60.0));
+        }
+        for (i, (label, age, vals)) in [
+            ("Height", "< 5", ["33", "5.02", "28", "5.11"]),
+            ("", "5 to 6", ["214", "4.70", "235", "4.80"]),
+            ("Weight", "< 5", ["33", "2.79", "28", "3.31"]),
+            ("", "5 to 6", ["214", "2.84", "235", "3.03"]),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let y = 80.0 + 12.0 * i as f64;
+            if !label.is_empty() {
+                gl.extend(set(label, xs[0], y));
+            }
+            gl.extend(set(age, xs[1], y));
+            for (k, v) in vals.iter().enumerate() {
+                gl.extend(set(v, xs[k + 2], y));
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 72.0,
+            x1: 330.0,
+            y1: 120.0,
+        };
+        let grids = read(&lines(&gl), &rules, region, 0);
+        assert_eq!(grids.len(), 1, "{grids:?}");
+        let g = &grids[0];
+        let lay = g.layout.as_deref().expect("read from its text");
+        let texts = g.cell_texts(&gl);
+        // `(Years)` is `Age`'s second line, its column's; no header row
+        // of its own runs across every column.
+        assert!(texts.iter().any(|t| t == "Age (Years)"), "{texts:?}");
+        assert_eq!(lay.header_rows, 2, "{texts:?} {lay:?}");
+        assert!(
+            !lay.spans.iter().any(|&(_, c0, c1)| c1 - c0 >= g.cols()),
+            "{lay:?}"
+        );
     }
 
     #[test]
