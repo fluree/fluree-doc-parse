@@ -12,8 +12,8 @@
     {
       "id": "lengths-note",
       "found": "2026-11-24",
-      "issue": "#206: the note's number was read into the word.",
-      "text": "Lengths 7"
+      "issue": "#206: the note's number was read into the word. (#322: a note's number is now written raised, `Lengths⁷`.)",
+      "text": "Lengths⁷"
     },
     {
       "id": "lengths-note-not-glued",
@@ -24,8 +24,8 @@
     {
       "id": "bracket-note",
       "found": "2026-11-24",
-      "issue": "#206: as above, after a bracket.",
-      "text": "(48 mm) 6"
+      "issue": "#206: as above, after a bracket. (#322: a note's number is now written raised, `(48 mm)⁶`.)",
+      "text": "(48 mm)⁶"
     },
     {
       "id": "bracket-note-not-glued",

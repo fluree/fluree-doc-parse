@@ -155,6 +155,9 @@ pub struct Line {
     pub opens_with_script: bool,
     /// Set in italic: most of its letters drawn in an italic face.
     pub italic: bool,
+    /// Read by an OCR engine, and where: the source most of its letters
+    /// were read from, `None` where most are the file's own.
+    pub ocr: Option<crate::glyph::OcrSource>,
     /// The height of its lowercase letters without ascenders or descenders
     /// (`a`, `e`, `o`, `x`), as a share of its size: the median over those
     /// letters, where it has two or more. Two faces at one size set it apart
@@ -1592,6 +1595,32 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
                     && o.x1 < far - *em
             })
     };
+    // Lines of words: two or more with letters, as a column of text's are,
+    // and a chart's ticks are not.
+    let worded: Vec<bool> = lines
+        .iter()
+        .map(|l| {
+            l.text
+                .split_whitespace()
+                .filter(|w| w.chars().any(char::is_alphabetic))
+                .count()
+                >= 2
+        })
+        .collect();
+    // Where three lines of words or more start, to a point: a column of
+    // text's left edge.
+    let column_starts_in = |x0: f64, x1: f64| {
+        let mut starts: Vec<f64> = boxes
+            .iter()
+            .zip(&worded)
+            .filter(|((b, _, horizontal), w)| **w && *horizontal && b.x0 > x0 && b.x0 < x1)
+            .map(|((b, _, _), _)| b.x0)
+            .collect();
+        starts.sort_by(f64::total_cmp);
+        starts
+            .windows(COLUMN_STARTS)
+            .any(|w| w[COLUMN_STARTS - 1] - w[0] <= 1.0)
+    };
     let mut out = Vec::with_capacity(lines.len());
     for (me, l) in lines.into_iter().enumerate() {
         if !l.is_horizontal() {
@@ -1617,10 +1646,21 @@ fn part_at_gutters(lines: Vec<Line>, glyphs: &[Glyph], ratio: f64) -> Vec<Line> 
                 continue;
             };
             let size = glyphs[*inked].font_size.max(next.font_size).max(1.0) as f64;
+            // A gap wider than any space a justified line stretches, with a
+            // column of text starting inside it and another where the text
+            // past it starts, is a gutter, whatever the lines beside it do: where three columns share a baseline, a row run
+            // together across both gutters puts ink in the middle of a gap
+            // between the first and third, and that ink is the middle
+            // column's, whose lines start at one place in the gap. A
+            // contents line's long gap to its page number is crossed by
+            // longer entries starting at the margin, not by a column.
+            let gutter = b.x0 - a.x1 > size * GUTTER_GAP_RATIO
+                && column_starts_in(a.x1 + size, b.x0 - size)
+                && column_starts_in(b.x0 - 1.0, b.x0 + 1.0);
             if b.x0 - a.x1 > size * BLOCK_GAP_RATIO
                 && (!lone_label(glyphs, &idxs[from..k])
                     || heads_a_column(me, &idxs[from..k], &glyphs[*inked], next, size))
-                && !crossed(me, a.x1, b.x0, size)
+                && (gutter || !crossed(me, a.x1, b.x0, size))
             {
                 cuts.push(k);
             }
@@ -1736,6 +1776,17 @@ const RESTYLED: f64 = 0.1;
 /// Rows above and below, in the line's size, whose lines show a gap is no
 /// gutter by running across it.
 const GUTTER_ROWS: f64 = 2.5;
+
+/// Widest a justified line stretches a space, in its size, past which a gap
+/// is a gutter whatever runs across it. Measured gaps (see
+/// [`BLOCK_GAP_RATIO`]): word spaces are exhausted by 1.0, and the gaps past
+/// 5.0 are gutters, cell boundaries and a header's groups.
+const GUTTER_GAP_RATIO: f64 = 5.0;
+
+/// Fewest lines of words starting at one place, to a point, that make a
+/// column of text's left edge: three, as a paragraph's lines do; a heading
+/// or a lone label starts one.
+const COLUMN_STARTS: usize = 3;
 
 /// Is the line so far a number or a marker alone, `3.1`, `12`, `IV.`,
 /// `(a)`, `•`, or one a word names, `Note 3.`, `Item 1A.`, `Section 2.1`,
@@ -2155,7 +2206,9 @@ const FRACTION_RAISE: f64 = 0.25;
 /// Signs a power may carry beside its digits.
 const POWER_SIGNS: &[char] = &['-', '+', '\u{2212}', '\u{2013}'];
 
-/// A power's character as Unicode sets it raised.
+/// A power's or a note number's character as Unicode sets it raised. A
+/// comma between two notes' numbers has no raised form and stays as it is
+/// (`²,³`).
 fn superscript(c: char) -> char {
     match c {
         '0' => '\u{2070}',
@@ -2165,6 +2218,8 @@ fn superscript(c: char) -> char {
         '4'..='9' => char::from_u32(0x2070 + (c as u32 - '0' as u32)).unwrap_or(c),
         '+' => '\u{207A}',
         '-' | '\u{2212}' | '\u{2013}' => '\u{207B}',
+        '(' => '\u{207D}',
+        ')' => '\u{207E}',
         _ => c,
     }
 }
@@ -2530,9 +2585,14 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     // Digit-adjacent covers more than digit pairs: tabular
                     // figures leave the same wide gap before a decimal point or
                     // a unit sign, giving "1 .22V" and "1 %".
-                    let numeric_pair = prev_c.is_some_and(|c| c.is_ascii_digit())
+                    // So does a raised figure's before the punctuation
+                    // after it: `(Aǫ)²,`, `reserves.³⁷,`.
+                    let raised_prev = prev_c.is_some_and(|c| marks::raised_figure(c).is_some());
+                    let numeric_pair = (prev_c.is_some_and(|c| c.is_ascii_digit())
                         && next_c
-                            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%'));
+                            .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '%')))
+                        || (raised_prev
+                            && next_c.is_some_and(|c| matches!(c, '.' | ',' | ';' | ':')));
                     let both_digit = numeric_pair
                         || (prev_c.is_some_and(|c| matches!(c, '.' | ','))
                             && next_c.is_some_and(|c| c.is_ascii_digit()));
@@ -2593,7 +2653,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                 {
                     leading = leading_mark(glyphs, idxs, k, adv);
                 }
-                // A note's mark raised after a word parts from it:
+                // A note's mark raised after a word is no part of it:
                 // `Acrylonitrile` and its `a`, not `Acrylonitrilea`. After a
                 // space, a raised mark is read only as a degree before its
                 // unit, the space kept as printed: `75 °F`.
@@ -2617,15 +2677,19 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                     degrees.push(i);
                 }
                 let raised = raised.filter(|_| !degree).map(|(m, _)| m);
-                if raised
-                    .as_deref()
-                    .is_some_and(|m| marks::note_mark(&text, m))
-                {
+                // A note's number keeps its place raised, as a power's does
+                // (`countries.⁵`, `26TB¹`, `MACL-153M-XX²,³`); a note's
+                // letter or sign, which Unicode has no full raised set for,
+                // parts from the word instead (`Acrylonitrile a`).
+                let note = raised.as_deref().filter(|m| marks::note_mark(&text, m));
+                let numbered = note.is_some_and(marks::note_number);
+                if note.is_some() && !numbered {
                     text.push(' ');
                 }
                 // A power raised after a number keeps its place: `10⁶` and
                 // `10⁻³` as superscripts, never flattened into the number as
-                // `106` and `10-3`. So does a unit's: `m²`, `PIES²`.
+                // `106` and `10-3`. So does a unit's, `m²`, `PIES²`, and a
+                // note's number.
                 let continues = exponent.is_some_and(|(size, y, superiors)| {
                     (g.font_size - size).abs() <= size * 0.1
                         && (g.origin.1 - y).abs() < size.max(1.0) as f64 * 0.2
@@ -2641,7 +2705,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
                                 && m.chars().any(|c| c.is_ascii_digit())
                                 && m.chars()
                                     .all(|c| c.is_ascii_digit() || POWER_SIGNS.contains(&c));
-                            power || marks::unit_power(&text, m)
+                            power || numbered || marks::unit_power(&text, m)
                         })
                         .map(|_| (g.font_size, g.origin.1, superior(g)));
                 }
@@ -2786,6 +2850,23 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         .filter(|g| g.bbox.is_some() && g.text.chars().any(char::is_alphabetic));
     let (letters, slanted) = lettered.fold((0, 0), |(n, k), g| (n + 1, k + usize::from(g.italic)));
     let italic = slanted * 2 > letters;
+    let ocr = {
+        let read = |source| {
+            idxs.iter()
+                .filter(|&&i| !glyphs[i].text.trim().is_empty() && glyphs[i].ocr == Some(source))
+                .count()
+        };
+        let shown = idxs
+            .iter()
+            .filter(|&&i| !glyphs[i].text.trim().is_empty())
+            .count();
+        [
+            crate::glyph::OcrSource::Region,
+            crate::glyph::OcrSource::Page,
+        ]
+        .into_iter()
+        .find(|&source| read(source) * 2 > shown)
+    };
     let mut heights: Vec<f32> = idxs
         .iter()
         .map(|&i| &glyphs[i])
@@ -2811,6 +2892,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         opens_bold,
         opens_with_script,
         italic,
+        ocr,
         x_height,
         compounds: Vec::new(),
     })
@@ -2915,6 +2997,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -2937,6 +3020,7 @@ mod tests {
             italic: false,
             advance: Some(0.55 * s * text.chars().count() as f64),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -3201,6 +3285,7 @@ mod tests {
             italic: false,
             advance: Some(size as f64 * 0.5),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -3609,6 +3694,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index: i,
+                    ocr: None,
                 }
             })
             .collect();
@@ -3645,6 +3731,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index: glyphs.len(),
+                    ocr: None,
                 });
                 y -= 6.0;
             }
@@ -4115,12 +4202,36 @@ mod tests {
 
     #[test]
     fn a_note_mark_raised_after_a_word_parts_from_it() {
+        // A note's letter parts from the word; its number keeps its place
+        // raised, as a power's does.
         let mut v = word("Acrylonitrile", 0.0, false);
         v.extend(word("a", 65.0, true));
         assert_eq!(assemble(&v)[0].text, "Acrylonitrile a");
         let mut v = word("Revenue", 0.0, false);
         v.extend(word("12", 35.0, true));
-        assert_eq!(assemble(&v)[0].text, "Revenue 12");
+        assert_eq!(assemble(&v)[0].text, "Revenue¹²");
+        // After the word's stop or comma, a list of notes, a number closing
+        // on its own bracket.
+        for (base, raised, want) in [
+            ("countries.", "5", "countries.⁵"),
+            ("MTBF,", "4", "MTBF,⁴"),
+            ("MACL-153M-XX", "2,3", "MACL-153M-XX²,³"),
+            ("dilution series", "1)", "dilution series¹⁾"),
+        ] {
+            let mut v = word(base, 0.0, false);
+            v.extend(word(raised, 5.0 * base.len() as f64, true));
+            assert_eq!(assemble(&v)[0].text, want);
+        }
+        // The text after the mark is not raised, and the punctuation after
+        // it stands against it, a figure's tabular room before it no space.
+        let mut v = word("Revenue", 0.0, false);
+        v.extend(word("1", 35.0, true));
+        v.extend(word("rose", 42.0, false));
+        assert_eq!(assemble(&v)[0].text, "Revenue¹ rose");
+        let mut v = word("reserves.", 0.0, false);
+        v.extend(word("1", 45.0, true));
+        v.extend(word(",", 50.6, false));
+        assert_eq!(assemble(&v)[0].text, "reserves.¹,");
     }
 
     #[test]
@@ -4183,8 +4294,8 @@ mod tests {
     }
 
     #[test]
-    fn a_note_number_after_a_bracket_or_a_quantity_parts_from_it() {
-        for (base, raised, want) in [("(49 N)", "5", "(49 N) 5"), ("26TB", "1", "26TB 1")] {
+    fn a_note_number_after_a_bracket_or_a_quantity_stays_raised() {
+        for (base, raised, want) in [("(49 N)", "5", "(49 N)⁵"), ("26TB", "1", "26TB¹")] {
             let mut v = word(base, 0.0, false);
             v.extend(word(raised, 5.0 * base.len() as f64, true));
             assert_eq!(assemble(&v)[0].text, want);
@@ -4246,9 +4357,9 @@ mod tests {
 
     #[test]
     fn a_superior_figure_is_a_raised_mark() {
-        // A note's number after a word or a bracket parts from it, as a
-        // smaller raised one does: `Lengths 7`, not `Lengths7`.
-        for (base, want) in [("Lengths", "Lengths 7"), ("(48 mm)", "(48 mm) 7")] {
+        // A note's number after a word or a bracket, raised as a smaller
+        // one is: `Lengths⁷`, not `Lengths7`.
+        for (base, want) in [("Lengths", "Lengths⁷"), ("(48 mm)", "(48 mm)⁷")] {
             let mut v = word(base, 0.0, false);
             v.push(superior_figure("7", 5.0 * base.len() as f64));
             assert_eq!(assemble(&v)[0].text, want);
@@ -4260,11 +4371,11 @@ mod tests {
         assert_eq!(assemble(&v)[0].text, "25⁵ max");
         // Two superiors are one mark, read as the run they are: no power of
         // the first over the second, no degree. After the word's stop, a
-        // note's number, set apart.
+        // note's number.
         let mut v = word("comfit.", 0.0, false);
         v.push(superior_figure("5", 35.0));
         v.push(superior_figure("0", 38.5));
-        assert_eq!(assemble(&v)[0].text, "comfit. 50");
+        assert_eq!(assemble(&v)[0].text, "comfit.⁵⁰");
         // A figure set on the line is no superior.
         let mut v = word("Model7", 0.0, false);
         v.extend(word("x", 30.0, false));
@@ -4423,6 +4534,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -4641,6 +4753,7 @@ mod tests {
             italic: false,
             advance: (w > 0.0).then_some(w),
             draw_index: 0,
+            ocr: None,
         };
         let glyphs = vec![
             glyph("t", 405.6, 5.4),

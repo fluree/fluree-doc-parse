@@ -270,6 +270,10 @@ pub struct Document {
     /// ([`Limits::pages`](fluree_doc_model::budget::Limits::pages)): not
     /// read, and listed unread, `PastPageLimit`, by [`crate::unread_pages`].
     pub pages_past_limit: usize,
+    /// The title the file's information dictionary states (`/Title`), as
+    /// written: what the document is called by whoever made the file, and
+    /// often stale or a file's name.
+    pub title: Option<String>,
 }
 
 impl Document {
@@ -1371,6 +1375,7 @@ impl<'a> Device<'a> for Collector<'_> {
             italic,
             advance,
             draw_index,
+            ocr: None,
         });
     }
 }
@@ -2439,6 +2444,7 @@ pub fn extract_pdf_with(
     Ok(Document {
         pages,
         pages_past_limit: all.len() - read,
+        title: crate::info::read(&pdf).title,
     })
 }
 
@@ -2803,6 +2809,7 @@ mod tests {
             italic: false,
             advance: boxed.then_some(6.67),
             draw_index: 0,
+            ocr: None,
         };
         let mut g = vec![
             glyph("o", 57.76, true),
@@ -2829,6 +2836,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             })
             .collect();
         Page {
@@ -3056,6 +3064,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         unkey_what_shows_more(&LETTER, &mut images, &[glyph], &[]);
         assert_eq!(images[0].key, None);
@@ -3113,6 +3122,7 @@ mod actual_text_tests {
             italic: false,
             advance: Some(5.0),
             draw_index: 0,
+            ocr: None,
         }
     }
 

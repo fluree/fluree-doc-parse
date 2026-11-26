@@ -280,6 +280,7 @@ pub fn parse(bytes: &[u8]) -> Result<Xps, XpsError> {
         doc: Document {
             pages,
             pages_past_limit: past_limit,
+            title: None,
         },
         images,
         info: pkg.info(),
@@ -811,6 +812,7 @@ fn lay_out(
             weight: run.bold.then_some(700),
             italic: false,
             draw_index: 0,
+            ocr: None,
         });
     }
     Ok(())

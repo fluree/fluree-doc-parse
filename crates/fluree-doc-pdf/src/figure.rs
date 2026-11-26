@@ -3685,6 +3685,7 @@ mod tests {
             weight: None,
             italic: false,
             draw_index: 0,
+            ocr: None,
         }
     }
 

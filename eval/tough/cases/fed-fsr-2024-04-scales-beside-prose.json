@@ -1,0 +1,31 @@
+{
+  "document": {
+    "file": "fed-fsr-2024-04.pdf",
+    "url": "https://www.federalreserve.gov/publications/files/financial-stability-report-20240419.pdf",
+    "sha256": "b3e96ba451939e901b7f6473f48697037cf5f6291fd94a48c0bf62f849c16d6c",
+    "about": "Federal Reserve Financial Stability Report, April 2024. Pages 26 and 27 set the body column beside charts set one under another, whose scales stand a few points from the column's edge, each stepping at its own pitch."
+  },
+  "checks": [
+    {
+      "id": "paragraph-beside-stacked-scales-whole",
+      "found": "2026-11-26",
+      "issue": "#431: a tick of each chart's scale cut the paragraph it stood beside; the column's scales together did not step evenly, so none was read as a scale.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "to emerge. For example, the 12-month trailing corporate bond default rate moved up further, on net, since the October report and stood near the median of its historical distribution. Expectations of year-ahead defaults remained"
+      }
+    },
+    {
+      "id": "first-scale-read-whole",
+      "found": "2026-11-26",
+      "issue": "#431: the scale's ticks were scattered through the paragraph.",
+      "element": {"type": "doco:Figure", "text": "55 50 45 40 35 30 25 20"}
+    },
+    {
+      "id": "second-scale-read-whole",
+      "found": "2026-11-26",
+      "issue": "#431: two of the scale's ticks were read as one line, the rest one by one.",
+      "element": {"type": "doco:Figure", "text": "140 120 100 80 60 40 20 0"}
+    }
+  ]
+}

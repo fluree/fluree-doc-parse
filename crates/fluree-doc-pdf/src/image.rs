@@ -235,6 +235,7 @@ pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
             ocr: None,
             warnings: Vec::new(),
         }],
+        title: None,
     }
 }
 

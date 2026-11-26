@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "telstra-annual-report-2025.pdf",
+    "url": "https://www.telstra.com.au/content/dam/tcom/about-us/investors/pdf-g/telstra-annual-report-2025-interactive.pdf",
+    "sha256": "f4786ae7f8a0a02d05a57fcfe836a8a71a4af7539567ab5226a900bce684c73f",
+    "about": "Telstra Annual Report 2025, a two-page spread per PDF page. Page 13 sets three narrow columns of text on its right page, gutters a little over an em, the first and third on shared baselines and the middle set a little lower."
+  },
+  "checks": [
+    {
+      "id": "first-column-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: rows of the first and third columns were read as one line across both gutters, and the three columns line by line.",
+      "text": "Mobile income increased by 2.7 per cent to $11,015 million including 3.5 per cent services revenue growth."
+    },
+    {
+      "id": "middle-column-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: the middle column's lines alternated with the rows run together across it.",
+      "text": "Fixed – C&SB income decreased by 1.3 per cent to $4,299 million."
+    }
+  ]
+}
