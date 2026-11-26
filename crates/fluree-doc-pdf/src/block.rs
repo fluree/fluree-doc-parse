@@ -406,6 +406,15 @@ fn says_something(c: char) -> bool {
         || (('\u{2200}'..='\u{22FF}').contains(&c) && c != '\u{2212}' && !is_bullet(c))
 }
 
+/// A currency sign: the unit a figure is counted in, never a list's bullet.
+fn is_currency(c: char) -> bool {
+    matches!(
+        c,
+        '$' | '\u{00A2}'..='\u{00A5}' | '\u{20A0}'..='\u{20CF}' | '\u{FE69}' | '\u{FF04}'
+            | '\u{FFE0}' | '\u{FFE1}' | '\u{FFE5}' | '\u{FFE6}'
+    )
+}
+
 /// True for a short line that is a bullet, list number or footnote reference
 /// rather than content.
 ///
@@ -429,6 +438,11 @@ fn is_marker(l: &Line, neighbour: Option<&Line>, left_edge: f64) -> bool {
     // A registered or trade mark sign standing alone is a word's, set
     // beside a display title it did not join: never a bullet.
     if l.text.split_whitespace().all(crate::line::is_sign) {
+        return false;
+    }
+    // Nor is a currency sign: it is the unit of the figure beside it,
+    // set apart in a column of its own (`Totaalbedrag  €  22,50`).
+    if l.text.chars().any(is_currency) {
         return false;
     }
     if !marker_shaped(&l.text) {
@@ -5026,6 +5040,25 @@ mod tests {
             Some(&title),
             150.0
         ));
+    }
+
+    #[test]
+    fn a_currency_sign_set_apart_is_its_figures_not_a_marker() {
+        // `Totaalbedrag  €  22,50`: the sign in a column of its own, a
+        // little left of its figure, at the figure's size.
+        let mut euro = l("€", 396.6, 437.0, 8.0);
+        euro.bbox.x1 = 402.3;
+        let figure = l("22,50", 438.7, 437.0, 8.0);
+        assert!(!is_marker(&euro, Some(&figure), 396.6));
+        for sign in ["$", "£", "¥", "₹", "€ "] {
+            let mut s = l(sign, 396.6, 437.0, 8.0);
+            s.bbox.x1 = 402.3;
+            assert!(!is_marker(&s, Some(&figure), 396.6), "{sign}");
+        }
+        // A bullet in the same place still marks its item.
+        let mut bullet = l("\u{2022}", 396.6, 437.0, 8.0);
+        bullet.bbox.x1 = 402.3;
+        assert!(is_marker(&bullet, Some(&figure), 396.6));
     }
 
     #[test]
