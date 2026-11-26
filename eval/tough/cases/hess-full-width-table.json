@@ -1,0 +1,23 @@
+{
+  "document": {
+    "file": "hess-28-781-2024.pdf",
+    "url": "https://hess.copernicus.org/articles/28/781/2024/hess-28-781-2024.pdf",
+    "sha256": "53bac97eeb151feed5a49057ef8d37018181e0e07a1089df331642190ddc2a1c",
+    "about": "Hydrology and Earth System Sciences 28, 781 (2024), set in two columns. On p5, Table 1 runs the page's full width over the two columns of prose, ruled between its rows; its columns part where the prose's gutter runs."
+  },
+  "notes": [
+    "2026-11-26 (#408): the reading across the gutter was cut there, so the table's last two columns became loose paragraphs. A reading ruled through the gutter is now one table."
+  ],
+  "checks": [
+    {
+      "id": "temporal-resolution-stays-in-the-table",
+      "found": "2026-11-26",
+      "issue": "#408: Table 1 was cut at the page's gutter, and its Temporal resolution cells came out as paragraphs.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Stations were selected with a"
+      },
+      "count": 0
+    }
+  ]
+}

@@ -629,6 +629,15 @@ these hold:
   halves side by side sets a row on both sides on four rows in five, on one
   baseline, and neither half's column runs on past the reading's top or
   bottom while the other's stops.
+- **No rule runs on through the gutter.** A table set the page's full width
+  over two columns of prose may part its columns where the prose's gutter
+  runs, and the prose under it sets a paragraph either side. Its own rules
+  join it. A rule among its rows, or within a row's height over or under
+  them, that runs on through the gutter and reaches halfway across the
+  reading on both sides, makes the reading one table. A rule drawn a cell at
+  a time counts as one where its pieces meet within a point. Two tables set
+  side by side, each ruled to its own edge, leave the gutter's white between
+  their rules.
 
 Such a reading is dropped before the larger of two readings of one table is
 kept, and each side is read again from that column's text alone:
