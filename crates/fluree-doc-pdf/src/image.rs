@@ -203,6 +203,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
             width,
             height,
             rotation: 0,
+            ocr: None,
         }],
     })
 }

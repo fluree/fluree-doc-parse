@@ -91,6 +91,24 @@ for page in &doc.pages {
 Call this *before* `analyze` if you want to skip structure work on pages you
 are going to escalate anyway.
 
+## Read a scan with your own OCR engine
+
+A scanned page has no text layer to analyse. Give it one: an engine's words,
+added as glyphs before `analyze`, go through the same assembly as any text.
+
+```rust
+use fluree_doc_pdf::ocr::{self, Crop, WordReading};
+
+let reading = WordReading::from_json(&std::fs::read_to_string("scan_p0_full.json")?)?;
+let injected = ocr::inject(&mut doc, &[(0, Crop::Page, reading)]);
+let mut analysis = document::analyze(&mut doc, &ol);
+ocr::mark_provenance(&mut analysis.elements, &injected);
+```
+
+`inject` takes a reading only for a page or region the router sends a reader,
+and reports what it took and refused per reading. The reading format and the
+rules are under [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words).
+
 ## Read a non-PDF source
 
 Each reader returns the same `Vec<Element>`:
@@ -138,6 +156,7 @@ Reachability is not an offer of stability.
 | `image::as_document` | a raster image as a one-page document |
 | `arbiter::TierBackend` / `arbiter::splice` | the model-tier contract |
 | `arbiter::scrub_furniture` | strip running headers from a model reading |
+| `ocr::inject` / `ocr::mark_provenance` / `ocr::WordReading` | OCR words as glyphs, before `analyze_with` |
 | `overlay::highlight` | a text-projection span → its page and rectangles |
 | `overlay::rects_for_glyph_range` | glyph span → rectangles |
 | `render::page` (feature `render`) | rasterising a page |

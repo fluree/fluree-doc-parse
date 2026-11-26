@@ -150,6 +150,11 @@ The first page keeps it as the document's title, and the copies after it
 are running. The table's column labels repeat too, but they stand under the
 title at the body's size, so they stay.
 
+A line OCR read is never a watermark, as it is never furniture: on a scan
+the same text repeats for its own reasons, such as a form copied per
+applicant with the same note down the margin of every copy. Its words still
+count as the text beneath a watermark the PDF draws over the scan.
+
 ## Matching inside table cells
 
 Removing furniture from prose is not enough — it also has to be scrubbed from

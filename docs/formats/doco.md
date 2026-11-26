@@ -184,7 +184,10 @@ supplied it. Without this an empty page and an unread page look identical;
 one document of engineering drawings produced 126 bytes of XHTML with nothing
 saying 99% of it was missing.
 
-`reason` is the router's verdict: `Scanned`, `NearBlank` or `BrokenText`.
+`reason` is the router's verdict: `Scanned`, `NearBlank` or `BrokenText`;
+or `OcrSparse`, a page an OCR reading (`--ocr-words`) read whole that still
+holds next to no text — an engine that gave a few words for a scan it could
+not read.
 Escalating the page clears the entry, because then something did read it.
 
 Deliberately not an element. A marker element would have to carry text to be

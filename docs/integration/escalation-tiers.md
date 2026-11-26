@@ -44,6 +44,7 @@ where the shapes agree, and with three readers the majority wins.
 | `--layout-boxes <DIR>` | `FDOC_TITLE_BOXES` | tier 2: layout-detector boxes |
 | `--tier-results <DIR>` | `FDOC_TIER_RESULTS` | tier 4: VLM readings of crops |
 | `--structure-results <DIR>` | `FDOC_STRUCTURE_RESULTS` | tier 3/5: table-structure readings |
+| `--ocr-words <DIR>` | `FDOC_OCR_WORDS` | OCR words, read as glyphs where the text is pixels |
 
 Supplying all three enables the [three-way
 veto](../concepts/escalation.md#the-three-way-veto) — tier 5, the

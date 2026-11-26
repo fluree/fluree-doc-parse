@@ -552,6 +552,7 @@ mod tests {
             width: 600.0,
             height: 800.0,
             rotation: 0,
+            ocr: None,
         }
     }
 

@@ -101,9 +101,44 @@ pub struct Page {
     /// The output's boxes are always in the display frame, which is the
     /// frame a page render has; [`Page::to_display`] maps back.
     pub rotation: i32,
+    /// What an OCR reading added to this page, when one did. See
+    /// [`crate::ocr`].
+    pub ocr: Option<OcrRead>,
+}
+
+/// The mark an OCR reading leaves on a page.
+///
+/// The glyphs it adds are told from the page's own by their draw index, so
+/// the router can keep judging the text layer the page came with: a region
+/// OCR filled keeps its place, and its number, among the page's routed
+/// regions, and a crop name read before the injection still names the same
+/// region after it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OcrRead {
+    /// Glyphs whose `draw_index` is at least this were added by OCR.
+    pub first_glyph: usize,
+    /// A whole-page reading was taken.
+    pub whole: bool,
+    /// The routed regions, by index, a reading was taken for.
+    pub regions: Vec<usize>,
 }
 
 impl Page {
+    /// Whether a glyph was added by an OCR reading rather than drawn by the
+    /// page.
+    pub fn is_ocr(&self, g: &Glyph) -> bool {
+        self.ocr
+            .as_ref()
+            .is_some_and(|o| g.draw_index >= o.first_glyph)
+    }
+
+    /// Whether OCR read routed region `i`, or the whole page.
+    pub fn ocr_read_region(&self, i: usize) -> bool {
+        self.ocr
+            .as_ref()
+            .is_some_and(|o| o.whole || o.regions.contains(&i))
+    }
+
     /// Page size as displayed — the frame the output's boxes are in.
     pub fn display_size(&self) -> (f64, f64) {
         if self.rotation % 180 == 0 {
@@ -1887,6 +1922,7 @@ pub fn extract_bytes_with(
             width: w as f64,
             height: h as f64,
             rotation: 0,
+            ocr: None,
         };
         read_upright(&mut page);
         synthesize_missing_boxes(&mut page.glyphs);
@@ -1976,6 +2012,13 @@ fn read_upright(page: &mut Page) {
         2 => 180,
         _ => 90,
     };
+    turn_page(page, turn);
+}
+
+/// Turn every coordinate a page carries by `turn` degrees (90, 180 or 270)
+/// counter-clockwise, and record the turn in [`Page::rotation`], on top of
+/// any it had, so the display frame stays where it was.
+pub(crate) fn turn_page(page: &mut Page, turn: i32) {
     let (w, h) = (page.width, page.height);
     let point = |(x, y): (f64, f64)| -> (f64, f64) {
         match turn {
@@ -2037,7 +2080,7 @@ fn read_upright(page: &mut Page) {
         page.width = h;
         page.height = w;
     }
-    page.rotation = turn;
+    page.rotation = (page.rotation + turn).rem_euclid(360);
 }
 
 /// Ascent above the baseline as a fraction of font size, for synthesized
@@ -2284,6 +2327,7 @@ mod tests {
             width: 600.0,
             height: 800.0,
             rotation: 0,
+            ocr: None,
         }
     }
 

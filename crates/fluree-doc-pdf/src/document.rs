@@ -1725,6 +1725,18 @@ fn line_art(g: &Grid, rules: &[crate::rule::Rule]) -> bool {
 /// a scatter's values allows (see `figure::axis`).
 const SCALE_REACH: f64 = 4.0;
 
+/// The number a scale's label says: a minus may be set as a true minus or
+/// an en dash, and thousands are grouped with commas (`\u{2212}0.5`,
+/// `2,000`).
+pub(crate) fn axis_value(token: &str) -> Option<f64> {
+    token
+        .replace(['\u{2212}', '\u{2013}'], "-")
+        .replace(',', "")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
 /// Do the cells, read in order, say nothing but numbers that step evenly:
 /// three or more, by one difference (`160 140 120 … 0`) or one ratio, as a
 /// logarithmic axis steps (`1 10 100 1,000`)? A plot's scale, its tick
@@ -1733,12 +1745,9 @@ const SCALE_REACH: f64 = 4.0;
 pub(crate) fn axis_scale(cells: &[String]) -> bool {
     let mut values: Vec<f64> = Vec::new();
     for token in cells.iter().flat_map(|c| c.split_whitespace()) {
-        let t = token
-            .replace(['\u{2212}', '\u{2013}'], "-")
-            .replace(',', "");
-        match t.parse::<f64>() {
-            Ok(v) => values.push(v),
-            Err(_) => return false,
+        match axis_value(token) {
+            Some(v) => values.push(v),
+            None => return false,
         }
     }
     if values.len() < 3 {
@@ -3731,6 +3740,26 @@ pub fn analyze(raw: &mut RawDoc, outline: &[OutlineItem]) -> Analysis {
     analyze_with(raw, outline, &AnalyzeOptions::default())
 }
 
+/// Each page's route as [`analyze_with`] decides it: once glyphs drawn twice
+/// at one spot (faux bold) are one, and a watermark laid over the text is
+/// taken out, and before any other cleaning. Those two take glyphs off an
+/// image: a label in faux bold or a watermark over a capture covers it as
+/// drawn, and not once cleaned.
+///
+/// A region is named by its place in its page's route (`r0`, `r1`, …), and
+/// an OCR reading is matched to its region by that name before the analysis
+/// runs: routing the page as drawn there, and cleaned in the analysis, would
+/// give one region two names. The document is not changed: the cleaning is
+/// done on a copy.
+pub fn region_routes(doc: &RawDoc) -> Vec<crate::route::Route> {
+    let mut pages = doc.pages.clone();
+    for p in pages.iter_mut() {
+        dedup::remove_faux_bold(&mut p.glyphs, 8);
+    }
+    crate::watermark::strip_overlaid(&mut pages);
+    pages.iter().map(|p| crate::route::decide(p).0).collect()
+}
+
 pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOptions) -> Analysis {
     let mut timings = StageTimings::default();
     let mut suspect_tables: Vec<table::SuspectTable> = Vec::new();
@@ -3752,7 +3781,26 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     timed(&mut timings.furniture, || {
         crate::watermark::strip_overlaid(&mut raw.pages)
     });
-    for p in raw.pages.iter_mut() {
+    // Routed here, after the two cleanings that take glyphs off an image and
+    // before any other: the page an OCR reading numbers its regions on
+    // ([`region_routes`]), so a region's anchor and its reading carry one
+    // name. `Deterministic` is the right stand-in when nobody asks: both
+    // consumers act only on `VlmRegions`, and both are unreachable in the
+    // configurations that skip the call.
+    let routes: Vec<crate::route::Route> = raw
+        .pages
+        .iter()
+        .map(|p| {
+            timed(&mut timings.routing, || {
+                if routing_is_consulted(opts) {
+                    crate::route::decide(p).0
+                } else {
+                    crate::route::Route::Deterministic
+                }
+            })
+        })
+        .collect();
+    for (p, route) in raw.pages.iter_mut().zip(routes) {
         // Before anything reads the geometry: a designer's baseline grid is
         // drawn with the same primitive a table's ruling is, and every
         // consumer of `rules` — grids, column rulers, row banding — would
@@ -3773,16 +3821,6 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         // The page's glyphs are final from here: each grid's cells are read
         // from them once.
         let _cells = crate::cells::pin(&p.glyphs);
-        // `Deterministic` is the right stand-in when nobody asks: both
-        // consumers act only on `VlmRegions`, and both are unreachable in the
-        // configurations that skip the call.
-        let route = timed(&mut timings.routing, || {
-            if routing_is_consulted(opts) {
-                crate::route::decide(p).0
-            } else {
-                crate::route::Route::Deterministic
-            }
-        });
 
         // Tables first: a grid's glyphs must not also become paragraphs.
         // Two readings of the page's ruling, judged after trimming: a
@@ -4643,6 +4681,35 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
     let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
         furniture::detect_with_heads(&flat_lines, &bookmarks, &widths, &drawings)
     });
+    // A line OCR read is never furniture. Repetition is furniture's only
+    // evidence, and on a scan the same content repeats for its own reasons: a
+    // fax that sends one ID card on every page, a form copied per applicant.
+    // Marked, its text would leave the body and its pattern be scrubbed from
+    // every table cell. A page number left in the body costs a line.
+    for (pi, page_marks) in marks.iter_mut().enumerate() {
+        let page = &raw.pages[pi];
+        if page.ocr.is_none() {
+            continue;
+        }
+        // By the ink inside the line's box: a line's glyph indices point into
+        // the glyphs it was assembled from (the page's outside its grids),
+        // not into the page's.
+        page_marks.retain(|li, _| {
+            let b = flat_lines[pi].0[*li].bbox;
+            let (mut ocr, mut all) = (0usize, 0usize);
+            for g in &page.glyphs {
+                let Some(gb) = g.bbox else { continue };
+                if g.text.trim().is_empty()
+                    || !b.contains((gb.x0 + gb.x1) * 0.5, (gb.y0 + gb.y1) * 0.5)
+                {
+                    continue;
+                }
+                all += 1;
+                ocr += usize::from(page.is_ocr(g));
+            }
+            all == 0 || ocr * 2 < all
+        });
+    }
     // The texts kept as a section's heading on their page, though the same
     // words run as furniture on the pages after: never scrubbed there.
     let kept_heads: Vec<std::collections::HashSet<String>> = kept_heads
@@ -4878,6 +4945,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
             &raw.pages[pi].dots,
         );
         let bands: Vec<crate::geom::BBox> = raw.pages[pi].fills.iter().map(|f| f.bbox).collect();
+        let ocr = block::ocr_centers(&raw.pages[pi]);
         let body = block::body_size(kept_columns.iter().flatten());
         let tables: Vec<crate::geom::BBox> = layout.grids.iter().map(|g| g.bbox).collect();
         let block_columns: Vec<Vec<Block>> = timed(&mut timings.blocks, || {
@@ -4891,6 +4959,7 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                     &dots,
                     &bands,
                     body,
+                    &ocr,
                 );
                 let c = sources.get(i).map_or(i, |s| s.0);
                 match runs.last_mut() {
@@ -5888,6 +5957,10 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         if opts.emit_anchors {
             if let crate::route::Route::VlmRegions(regions) = &layout.route {
                 for (ri, b) in regions.iter().enumerate() {
+                    // A region OCR read is text now; its number stays taken.
+                    if raw.pages[pi].ocr_read_region(ri) {
+                        continue;
+                    }
                     table_elements.push(Element {
                         page: pi,
                         bbox: Some(*b),
@@ -6806,6 +6879,7 @@ mod tests {
                 width: 600.0,
                 height: 800.0,
                 rotation: 0,
+                ocr: None,
             };
             (grid, page)
         };

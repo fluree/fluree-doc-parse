@@ -31,6 +31,7 @@
 //! - [`outline::extract`] — the PDF bookmark tree
 //! - [`link::extract`] / [`link::attach`] — link annotations and their anchors
 //! - [`arbiter::TierBackend`] and [`arbiter::splice`] — the model-tier contract
+//! - [`ocr::inject`] and [`ocr::mark_provenance`] — OCR words as glyphs
 //! - [`overlay::rects_for_glyph_range`] — glyph span → highlight rectangles
 //! - [`overlay::highlight`] — a text-projection span → its page and rectangles
 //! - `render::page` — rasterising a page, behind the `render` feature
@@ -70,9 +71,14 @@ pub(crate) mod ligature;
 pub mod line;
 pub mod link;
 pub(crate) mod marked;
+pub mod ocr;
 pub mod outline;
 pub mod overlay;
 pub(crate) mod region;
+
+/// The [`unread_pages`] reason of a page an OCR reading read whole that
+/// still holds next to no text.
+pub const OCR_SPARSE: &str = "OcrSparse";
 
 /// Pages the router says carry content, which the final element stream does
 /// not hold.
@@ -103,6 +109,17 @@ pub fn unread_pages(
             .map(|e| e.text.trim().chars().count())
             .sum();
         if text >= NEARLY_EMPTY {
+            continue;
+        }
+        // A page an OCR reading read whole was read, and asks no model for
+        // more; but an engine that gave a few words for a dense scan it could
+        // not read leaves the page as unread as before. Said, so it is not
+        // taken for a page with nothing on it.
+        if p.ocr.as_ref().is_some_and(|o| o.whole) {
+            out.push(fluree_doc_model::UnreadPage {
+                index: p.index,
+                reason: OCR_SPARSE.into(),
+            });
             continue;
         }
         if let route::Route::Vlm(reason) = route::decide(p).0 {

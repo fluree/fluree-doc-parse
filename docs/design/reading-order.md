@@ -382,3 +382,8 @@ full-width lines above or below its columns:
   than a space (`Toll F` | `ree`, `FP7 s` | `eries`), and two columns are
   always held apart by more than that. Over the guard, those halves are still
   rejoined; halves cut at a space stay apart.
+- **A space the text layer draws at the cut is kept.** A monospaced face
+  draws the space with no gap of its own, so the gap between the halves is
+  zero and only the space glyph shows there was one (`Screenshot|of what`).
+  A fragment is joined back to the line it abuts, the nearest across the
+  cut and then on the baseline.

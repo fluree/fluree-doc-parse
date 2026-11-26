@@ -61,11 +61,18 @@ pub fn run(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         args.layout_boxes.as_deref(),
         args.tier_results.as_deref(),
         args.structure_results.as_deref(),
+        args.ocr_words.as_deref(),
         args.emit_anchors,
     );
     // Once per invocation, not once per document.
     cfg.resolve_escalation(args.escalate, args.no_escalate, quiet);
     cfg.verbose = verbose;
+    // A word directory that is not there is a mistake in the command, not
+    // a batch with nothing read yet.
+    if let Some(dir) = cfg.ocr_words.as_deref().filter(|d| !d.is_dir()) {
+        eprintln!("error: --ocr-words: {} is not a directory", dir.display());
+        return 2;
+    }
     let cfg = &cfg;
 
     // Expand directories; `-` means stdin and must be the sole input.
@@ -589,12 +596,42 @@ fn convert_bytes(
         .map_err(|e| format!("parse: {e:?}"))?;
     let ol = outline::extract(&raw);
     let opts = cfg.options_for(stem);
-    // Images are probed for the router, which runs for escalation and for
-    // the anchors and sidecars analysis routes for; a deterministic parse
-    // has no use for the decode.
+    // Images are probed for the router, which runs for escalation, for the
+    // anchors and sidecars analysis routes for, and for OCR words, which go
+    // only where it sends a reader; a deterministic parse has no use for the
+    // decode.
     let mut eopts = ExtractOptions::default();
-    eopts.probe_images = cfg.escalate || fluree_doc_pdf::document::routing_is_consulted(&opts);
+    eopts.probe_images = cfg.escalate
+        || cfg.ocr_words.is_some()
+        || fluree_doc_pdf::document::routing_is_consulted(&opts);
     let mut doc = extract_bytes_with(data, &eopts).map_err(|e| format!("extract: {e}"))?;
+    // OCR words become glyphs before anything measures the pages: the
+    // analysis reads them like any text, and a region they fill no longer
+    // asks a model for a reading.
+    let injected = match cfg.ocr_words.as_deref() {
+        Some(dir) => {
+            let readings = common::ocr_readings(dir, stem, &doc, quiet);
+            let injected = fluree_doc_pdf::ocr::inject(&mut doc, &readings);
+            for r in &injected {
+                let name = format!("{stem}_p{}_{}", r.page, r.crop.tag());
+                match r.refused {
+                    Some(why) if !quiet => eprintln!("warning: --ocr-words: {name}: {why}"),
+                    None if cfg.verbose => eprintln!(
+                        "ocr: {name}: {} words taken, {} dropped, skew {:.1}°{}",
+                        r.taken,
+                        r.dropped,
+                        r.skew_deg,
+                        r.mean_conf
+                            .map(|c| format!(", mean confidence {c:.3}"))
+                            .unwrap_or_default()
+                    ),
+                    _ => {}
+                }
+            }
+            injected
+        }
+        None => Vec::new(),
+    };
     // A configured reader reads the whole pages chosen from the document as
     // extracted, which the analysis below changes.
     let read_here = cfg.escalate && cfg.tier_results.is_none();
@@ -651,6 +688,9 @@ fn convert_bytes(
         None => (0, doc.pages.len().saturating_sub(1)),
     };
     fluree_doc_pdf::furniture::keep_running(&mut a.elements, &a.running, first, last);
+    // After the tiers, whose splices keep their own provenance, and after the
+    // running lines kept once, which may be OCR's too.
+    fluree_doc_pdf::ocr::mark_provenance(&mut a.elements, &injected);
     // After the tiers: an escalated reading replaces the text an anchor has to
     // be found in.
     fluree_doc_pdf::link::attach(
@@ -1056,6 +1096,55 @@ mod tests {
     /// region the analysis counts the router out of as extracted is still
     /// asked for, and every reading is filed under the anchor of its own
     /// crop, not under a neighbour's that took its index.
+    /// An OCR reading names its region as the analysis's anchors do: a
+    /// label in faux bold over a capture covers it as drawn and not once
+    /// cleaned, and both count it.
+    #[test]
+    fn an_ocr_reading_and_an_anchor_name_a_region_alike() {
+        let doc = page_with_faux_bold_over_a_region();
+        let regions = match &fluree_doc_pdf::document::region_routes(&doc)[0] {
+            fluree_doc_pdf::route::Route::VlmRegions(r) => r.clone(),
+            other => panic!("{other:?}"),
+        };
+        let mut analysed = doc.clone();
+        let a = fluree_doc_pdf::document::analyze_with(
+            &mut analysed,
+            &[],
+            &fluree_doc_pdf::document::AnalyzeOptions {
+                emit_anchors: true,
+                ..Default::default()
+            },
+        );
+        let anchors: Vec<(String, f64)> = a
+            .elements
+            .iter()
+            .filter(|e| e.evidence == "route")
+            .map(|e| (e.text.clone(), e.rect().y0))
+            .collect();
+        assert_eq!(
+            anchors,
+            regions
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (format!("[[VLM:p0:r{i}]]"), b.y0))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(anchors.len(), 2, "{anchors:?}");
+        // A reading of the second region is looked up under its name.
+        let dir = std::env::temp_dir().join(format!(
+            "fdoc-ocr-names-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let words = r#"{"coords":"px","width":100,"height":100,"words":[{"text":"B","box":[10,10,20,20]}]}"#;
+        std::fs::write(dir.join("doc_p0_r1.json"), words).unwrap();
+        let read = common::ocr_readings(&dir, "doc", &doc, true);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].1, fluree_doc_pdf::ocr::Crop::Region(1));
+    }
+
     #[test]
     fn a_live_region_reading_lands_at_its_own_crop() {
         let cfg = TierConfig {

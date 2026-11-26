@@ -15,10 +15,13 @@ configure it — not in the sense that you cannot audit it.
 |---|---|
 | `rust` | the deterministic PDF engine |
 | `vlm` | spliced in from a model tier |
+| `ocr` | assembled by the deterministic engine from [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words) |
 | `markdown` / `html` / `docx` / `pptx` / `xlsx` / `vtt` / `srt` / `eml` / `msg` | the corresponding reader |
 
 So `provenance` answers "which reader", and for PDF specifically it
-distinguishes deterministic output from escalated output.
+distinguishes deterministic output from escalated output. An `ocr` element
+was laid out like any other — its `evidence` is the geometric signal that
+classified it — but its text was read from pixels.
 
 **Where it appears:** `-f json` only. The [DoCO graph](../formats/doco.md)
 carries `doc:evidence` but not the engine, so a ledger query can ask *which
@@ -103,6 +106,16 @@ document's own bookmark tree rather than from a guess about font size. The
 near-ground-truth, and why no other engine tested uses it.
 
 ## Asymmetry to plan for
+
+Elements with `provenance: "ocr"` have text derived from pixels too, but
+each character keeps a position, spread evenly over the box the engine
+drew: on a square sheet, within a character for an engine that boxes words,
+within a few for one that boxes whole lines. On a skewed sheet lines are set
+level, so highlights drift with the distance from the middle of the page.
+An element is `ocr` as soon as one of its characters was read from pixels:
+a line OCR read never joins a paragraph of the page's own text, so that
+paragraph stays `rust`, and an element that still holds both (a table whose
+rows mix them) is `ocr` whole.
 
 Elements with `provenance: "vlm"` have text derived from pixels. Where a model
 supplies element-level boxes rather than character-level ones, an
