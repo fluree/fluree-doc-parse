@@ -294,6 +294,8 @@ mod tests {
                 .map(|(bbox, texty)| ImagePlacement {
                     bbox,
                     texty,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 })
                 .collect(),

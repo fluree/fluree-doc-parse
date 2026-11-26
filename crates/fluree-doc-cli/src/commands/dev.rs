@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_lines)]
 
-use crate::commands::common::{opts_for, sources_in, CROP_MARGIN, VLM_RENDER_SCALE};
+use crate::commands::common::{opts_for, sources_in, VLM_RENDER_SCALE};
 use fluree_doc_pdf::{
     block, dedup, extract_file, furniture, heading, line, outline, overlay, rule, PageText,
 };
@@ -1179,9 +1179,12 @@ fn region_record(
 /// Render every routed page or region to `outdir` as PNG, with a JSONL
 /// manifest (`manifest.jsonl`) recording where each crop belongs so the
 /// hybrid adapter can splice VLM output back at the right position.
-pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
-    use hayro::vello_cpu::color::{AlphaColor, Srgb};
-    use hayro::{render, RenderCache, RenderSettings};
+pub(crate) fn render_routed(
+    path: &Path,
+    outdir: &Path,
+    ocr_regions: bool,
+    stored_resolution: bool,
+) {
     use hayro_syntax::Pdf;
     use std::io::Write;
     use std::sync::Arc;
@@ -1270,6 +1273,19 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
                     _ => (p.index, 0),
                 })
                 .collect();
+            // The engine's regions are in the page's reading frame; the
+            // model's crops, and so the manifest, in the display frame.
+            let ocr = ocr
+                .into_iter()
+                .map(|(pi, crops)| {
+                    let page = doc.pages.iter().find(|p| p.index == pi);
+                    let shown = |b: fluree_doc_pdf::geom::BBox| page.map_or(b, |p| p.to_display(b));
+                    (
+                        pi,
+                        crops.map(|l| l.into_iter().map(|(t, b)| (t, shown(b))).collect()),
+                    )
+                })
+                .collect();
             add_ocr_jobs(&mut jobs, ocr, |page| {
                 routed.get(&page).copied().unwrap_or(0)
             })
@@ -1281,43 +1297,34 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
         }
 
         let links = fluree_doc_pdf::link::extract(&pdf);
-        let pages = pdf.pages();
-        let cache = RenderCache::new();
-        let white: AlphaColor<Srgb> = AlphaColor::new([1.0, 1.0, 1.0, 1.0]);
-        let settings = RenderSettings {
-            x_scale: VLM_RENDER_SCALE,
-            y_scale: VLM_RENDER_SCALE,
-            bg_color: white,
-            ..Default::default()
+        // The model scale unless asked for the stored resolution (#11),
+        // which an OCR engine reads better and a model bills more for.
+        let mode = if stored_resolution {
+            fluree_doc_pdf::escalate::CropScale::Stored
+        } else {
+            fluree_doc_pdf::escalate::CropScale::Model
         };
-
-        for (page_idx, regions) in jobs {
-            let pix = render(
-                &pages[page_idx],
-                &cache,
-                &hayro::hayro_interpret::InterpreterSettings::default(),
-                &settings,
+        // Each crop is written as it is cut; its manifest line waits so the
+        // document's lines come in the jobs' order, which a page rendered at
+        // several scales hands its crops over out of.
+        let order = fluree_doc_pdf::escalate::crop_order(&jobs);
+        let mut lines: Vec<(usize, serde_json::Value)> = Vec::new();
+        fluree_doc_pdf::escalate::for_each_displayed_crop_of(&pdf, &doc, &jobs, mode, |crop| {
+            let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
+            let page_idx = crop.page;
+            let name = format!("{stem}_{}.png", crop.name);
+            let file = std::fs::File::create(outdir.join(&name)).expect("create png");
+            let mut enc = png::Encoder::new(
+                std::io::BufWriter::new(file),
+                crop.pixels.width,
+                crop.pixels.height,
             );
-            let (w, h) = (pix.width() as usize, pix.height() as usize);
-            let rgba: Vec<u8> = pix
-                .take_unpremultiplied()
-                .iter()
-                .flat_map(|p| [p.r, p.g, p.b, p.a])
-                .collect();
-            let write_png = |name: &str, x0: usize, y0: usize, x1: usize, y1: usize| {
-                let (cw, ch) = (x1 - x0, y1 - y0);
-                let mut buf = Vec::with_capacity(cw * ch * 4);
-                for row in y0..y1 {
-                    let s = (row * w + x0) * 4;
-                    buf.extend_from_slice(&rgba[s..s + cw * 4]);
-                }
-                let file = std::fs::File::create(outdir.join(name)).expect("create png");
-                let mut enc =
-                    png::Encoder::new(std::io::BufWriter::new(file), cw as u32, ch as u32);
-                enc.set_color(png::ColorType::Rgba);
-                enc.set_depth(png::BitDepth::Eight);
-                enc.write_header().unwrap().write_image_data(&buf).unwrap();
-            };
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header()
+                .unwrap()
+                .write_image_data(&crop.pixels.data)
+                .unwrap();
             // A link is drawn as nothing: colour and an underline at most. A
             // reader looking at pixels sees an anchor and no address, and
             // will supply one — so the crop carries the addresses the file
@@ -1375,56 +1382,44 @@ pub(crate) fn render_routed(path: &Path, outdir: &Path, ocr_regions: bool) {
                     })
                     .collect()
             };
-            match regions {
+            let mut rec = match crop.bbox {
                 None => {
-                    let name = format!("{stem}_p{page_idx}_full.png");
-                    write_png(&name, 0, 0, w, h);
                     n_pages += 1;
-                    let ls = links_in(None);
                     // Why the page is read whole: a reader that cannot see
                     // structure (OCR) has nothing to add to a doubt page.
                     let reason = reasons
                         .get(&page_idx)
                         .expect("every whole page in a job list has a reason")
                         .as_str();
-                    let mut rec = serde_json::json!({
+                    serde_json::json!({
                         "doc": stem, "page": page_idx, "kind": "page", "png": name,
-                        "reason": reason,
-                    });
-                    if !ls.is_empty() {
-                        rec["links"] = serde_json::Value::Array(ls);
-                    }
-                    writeln!(manifest, "{rec}").unwrap();
+                        "reason": reason, "scale": crop.scale,
+                    })
                 }
-                Some(regions) => {
+                Some(b) => {
+                    n_crops += 1;
+                    let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
                     let detected = layout_tables(layout, stem, page_idx);
-                    for (tag, b) in regions.iter() {
-                        let sc = VLM_RENDER_SCALE as f64;
-                        let x0 = (((b.x0 - CROP_MARGIN) * sc).floor().max(0.0)) as usize;
-                        let y0 = (((b.y0 - CROP_MARGIN) * sc).floor().max(0.0)) as usize;
-                        let x1 = ((((b.x1 + CROP_MARGIN) * sc).ceil()) as usize).min(w);
-                        let y1 = ((((b.y1 + CROP_MARGIN) * sc).ceil()) as usize).min(h);
-                        if x1 <= x0 || y1 <= y0 {
-                            continue;
-                        }
-                        let name = format!("{stem}_p{page_idx}_{tag}.png");
-                        write_png(&name, x0, y0, x1, y1);
-                        n_crops += 1;
-                        let ls = links_in(Some(b));
-                        let mut rec = region_record(stem, page_idx, tag, b, &detected, &vetoed);
-                        n_vetoed += usize::from(rec["vetoed"] == true);
-                        if small.contains(&(page_idx, tag.clone())) {
-                            rec["reason"] = fluree_doc_pdf::escalate::CropReason::SmallRegion
-                                .as_str()
-                                .into();
-                        }
-                        if !ls.is_empty() {
-                            rec["links"] = serde_json::Value::Array(ls);
-                        }
-                        writeln!(manifest, "{rec}").unwrap();
+                    let mut rec = region_record(stem, page_idx, tag, &b, &detected, &vetoed);
+                    n_vetoed += usize::from(rec["vetoed"] == true);
+                    if small.contains(&(page_idx, tag.to_string())) {
+                        rec["reason"] = fluree_doc_pdf::escalate::CropReason::SmallRegion
+                            .as_str()
+                            .into();
                     }
+                    rec["scale"] = crop.scale.into();
+                    rec
                 }
+            };
+            let ls = links_in(crop.bbox.as_ref());
+            if !ls.is_empty() {
+                rec["links"] = serde_json::Value::Array(ls);
             }
+            lines.push((at, rec));
+        });
+        lines.sort_by_key(|(at, _)| *at);
+        for (_, rec) in lines {
+            writeln!(manifest, "{rec}").unwrap();
         }
     }
     println!(
@@ -1564,6 +1559,8 @@ pub(crate) fn render_crops(manifest: &Path, corpus: &Path, outdir: &Path) {
             .iter()
             .map(|(page, list)| (*page, Some(list.clone())))
             .collect();
+        // The manifest's boxes are elements' `doc:bbox`, in the display
+        // frame already.
         for crop in escalate::render_crops(&pdf, &jobs) {
             std::fs::write(outdir.join(format!("{doc}_{}.png", crop.name)), &crop.png)
                 .expect("write crop");

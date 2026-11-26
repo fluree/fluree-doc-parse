@@ -96,7 +96,8 @@ fn run_dev(cmd: DevCommands) {
             path,
             out,
             ocr_regions,
-        } => dev::render_routed(&path, &out, ocr_regions),
+            stored_resolution,
+        } => dev::render_routed(&path, &out, ocr_regions, stored_resolution),
         DevCommands::RenderCrops {
             manifest,
             corpus,

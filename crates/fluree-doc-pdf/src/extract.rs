@@ -42,6 +42,15 @@ pub struct ImagePlacement {
     /// so does every image when extraction was told nothing will read it
     /// ([`ExtractOptions::probe_images`]).
     pub texty: bool,
+    /// The image's own resolution where it is drawn: its pixels per inch on
+    /// the page, along whichever of its axes is drawn coarser. `None` when
+    /// unknown.
+    pub ppi: Option<f64>,
+    /// One bit per pixel (an image mask, a fax, a bitonal scan), by its bit
+    /// depth or by a filter that only codes one bit (CCITT, JBIG2). Rendered
+    /// smoothed at the model scale, such an image reads better than at its
+    /// own resolution.
+    pub bitonal: bool,
     /// The image's own pixel grid, `(width, height)`: what it can show,
     /// however large it is drawn. A checkbox drawn from an 8 × 8 mask holds
     /// no more than 8 × 8 pixels at any size, and a rule stretched from a
@@ -850,6 +859,25 @@ impl<'a> Device<'a> for Collector {
         if !self.page_box.intersects(&b) {
             return;
         }
+        // Pixels per inch along each axis: its pixels over the length that
+        // axis is drawn at, in inches. An image squeezed one way is only as
+        // fine as its coarser axis.
+        let origin = t * kurbo::Point::new(0.0, 0.0);
+        let across = (t * kurbo::Point::new(w, 0.0) - origin).hypot();
+        let down = (t * kurbo::Point::new(0.0, h) - origin).hypot();
+        let ppi =
+            (across > 0.0 && down > 0.0).then(|| (w / (across / 72.0)).min(h / (down / 72.0)));
+        let bitonal = match &i {
+            hayro_interpret::Image::Stencil(_) => true,
+            hayro_interpret::Image::Raster(ri) => {
+                let dict = ri.stream().dict();
+                // An inline image abbreviates its keys (`/BPC`, `/F`).
+                [b"BitsPerComponent".as_slice(), b"BPC".as_slice()]
+                    .iter()
+                    .any(|k| dict.get::<i32>(*k) == Some(1))
+                    || one_bit_filter(dict)
+            }
+        };
         let bbox = BBox {
             x0: b.x0.max(self.page_box.x0),
             y0: b.y0.max(self.page_box.y0),
@@ -881,7 +909,13 @@ impl<'a> Device<'a> for Collector {
             // arrive in. Treat as text-bearing.
             hayro_interpret::Image::Stencil(_) => true,
         };
-        self.images.push(ImagePlacement { bbox, texty, grid });
+        self.images.push(ImagePlacement {
+            bbox,
+            texty,
+            ppi,
+            bitonal,
+            grid,
+        });
     }
     fn pop_clip_path(&mut self) {
         self.clips.pop();
@@ -1969,6 +2003,21 @@ pub fn extract_bytes_with(
     }
 
     Ok(Document { pages })
+}
+
+/// Whether an image stream is coded by a filter that only codes one bit per
+/// pixel: CCITT fax or JBIG2. Such a stream may leave out its bit depth.
+fn one_bit_filter(dict: &hayro_syntax::object::Dict) -> bool {
+    use hayro_syntax::object::{Array, Name};
+    let one_bit = |n: &Name| matches!(&**n, b"CCITTFaxDecode" | b"CCF" | b"JBIG2Decode");
+    [b"Filter".as_slice(), b"F".as_slice()]
+        .iter()
+        .any(|filter| {
+            dict.get::<Name>(*filter).is_some_and(|n| one_bit(&n))
+                || dict
+                    .get::<Array>(*filter)
+                    .is_some_and(|a| a.iter::<Name>().any(|n| one_bit(&n)))
+        })
 }
 
 /// Share of a page's text glyphs that must sit in one non-horizontal

@@ -1609,30 +1609,43 @@ pub struct OcrPass {
 /// at a time, read, then [`inject`]ed.
 ///
 /// Runs on the document as extracted, before analysis, as [`inject`] does;
-/// no file is written. The crops are rendered as the model tier renders
-/// them (`escalate::for_each_crop`), so a reading of the same crop gives the
-/// same words through this call or through `--ocr-words`.
+/// no file is written. The crops are rendered as `render-routed` renders
+/// them at the same `scale` (`escalate::for_each_crop_of`), so a reading
+/// of the same crop gives the same words through this call or through
+/// `--ocr-words`. [`CropScale::Stored`](crate::escalate::CropScale::Stored)
+/// is the one for an engine: each crop at the resolution of the image under
+/// it.
 #[cfg(feature = "render")]
 pub fn read_pages(
     doc: &mut Document,
     pdf: &hayro_syntax::Pdf,
     engine: &dyn fluree_doc_vision::OcrEngine,
     only: Option<&[usize]>,
+    scale: crate::escalate::CropScale,
     max_crops: usize,
 ) -> OcrPass {
     let (jobs, capped) = ocr_jobs(doc, only, max_crops);
+    // Each crop is read as it is cut, its pixels dropped after; the
+    // readings are put back in the jobs' order, which a page rendered at
+    // several scales hands its crops over out of.
+    let order = crate::escalate::crop_order(&jobs);
     let mut readings = Vec::new();
     let mut failed = Vec::new();
-    crate::escalate::for_each_crop(pdf, &jobs, |crop| {
+    crate::escalate::for_each_crop_of(pdf, doc, &jobs, scale, |crop| {
+        let at = order.get(&crop.name).copied().unwrap_or(usize::MAX);
         let tag = crop.name.split_once('_').map_or("", |(_, t)| t);
         let Some(which) = Crop::from_tag(tag) else {
             return;
         };
         match engine.read(&crop.pixels) {
-            Ok(reading) => readings.push((crop.page, which, reading)),
-            Err(e) => failed.push((crop.name, e)),
+            Ok(reading) => readings.push((at, (crop.page, which, reading))),
+            Err(e) => failed.push((at, (crop.name, e))),
         }
     });
+    readings.sort_by_key(|(at, _)| *at);
+    failed.sort_by_key(|(at, _)| *at);
+    let readings: Vec<_> = readings.into_iter().map(|(_, r)| r).collect();
+    let failed = failed.into_iter().map(|(_, f)| f).collect();
     OcrPass {
         injected: inject(doc, &readings),
         failed,
@@ -1719,6 +1732,8 @@ mod tests {
                 y1: 792.0,
             },
             texty: true,
+            ppi: None,
+            bitonal: false,
             grid: (1000, 1000),
         }
     }
@@ -1773,6 +1788,14 @@ mod tests {
     /// A one-page PDF, 200 × 100 pt, that is one grey image and no text.
     #[cfg(feature = "render")]
     fn image_only_pdf() -> Vec<u8> {
+        image_pdf(
+            b"/Width 2 /Height 2 /BitsPerComponent 8",
+            &[0x20, 0xe0, 0xe0, 0x20],
+        )
+    }
+
+    /// As [`image_only_pdf`], with the image's size and depth given.
+    fn image_pdf(shape: &[u8], data: &[u8]) -> Vec<u8> {
         let content = b"q 200 0 0 100 0 0 cm /Im0 Do Q";
         let objects: Vec<Vec<u8>> = vec![
             b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
@@ -1787,10 +1810,14 @@ mod tests {
             ]
             .concat(),
             [
-                b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray \
-                   /BitsPerComponent 8 /Length 4 >>\nstream\n"
-                    .to_vec(),
-                vec![0x20, 0xe0, 0xe0, 0x20],
+                b"<< /Type /XObject /Subtype /Image ".to_vec(),
+                shape.to_vec(),
+                format!(
+                    " /ColorSpace /DeviceGray /Length {} >>\nstream\n",
+                    data.len()
+                )
+                .into_bytes(),
+                data.to_vec(),
                 b"\nendstream".to_vec(),
             ]
             .concat(),
@@ -1853,8 +1880,27 @@ mod tests {
         let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
         let mut doc = crate::extract::extract_bytes(bytes).unwrap();
         assert!(matches!(route::decide(&doc.pages[0]).0, Route::Vlm(_)));
+        // Two pixels across 200 points: 0.72 pixels per inch, eight bits.
+        let image = doc.pages[0].images[0];
+        assert!((image.ppi.unwrap() - 0.72).abs() < 1e-9, "{image:?}");
+        assert!(!image.bitonal);
+        // A one-bit image, as a fax is: noted, so it is read at the model's
+        // scale rather than its own.
+        let fax = crate::extract::extract_bytes(image_pdf(
+            b"/Width 16 /Height 2 /BitsPerComponent 1",
+            &[0x0f, 0xf0, 0xf0, 0x0f],
+        ))
+        .unwrap();
+        assert!(fax.pages[0].images[0].bitonal);
         let engine = OneWord(Default::default());
-        let pass = read_pages(&mut doc, &pdf, &engine, None, 0);
+        let pass = read_pages(
+            &mut doc,
+            &pdf,
+            &engine,
+            None,
+            crate::escalate::CropScale::Model,
+            0,
+        );
         // The page whole, at the model tier's scale: 2 × 200 by 2 × 100.
         assert_eq!(*engine.0.lock().unwrap(), vec![(400, 200)]);
         assert!(pass.failed.is_empty());
@@ -1863,9 +1909,345 @@ mod tests {
         assert!(text_of(&doc.pages[0]).contains("HELLO"));
         // Asked only for another page, it reads nothing.
         let mut again = crate::extract::extract_bytes(image_only_pdf()).unwrap();
-        let pass = read_pages(&mut again, &pdf, &engine, Some(&[3]), 0);
+        let pass = read_pages(
+            &mut again,
+            &pdf,
+            &engine,
+            Some(&[3]),
+            crate::escalate::CropScale::Model,
+            0,
+        );
         assert!(pass.injected.is_empty());
         assert_eq!(engine.0.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_image_is_as_fine_as_its_coarser_axis() {
+        // 600 × 100 pixels over 200 × 100 points: 216 ppi across, 72 down.
+        let doc = crate::extract::extract_bytes(image_pdf(
+            b"/Width 600 /Height 100 /BitsPerComponent 8",
+            &vec![0x80; 600 * 100],
+        ))
+        .unwrap();
+        let ppi = doc.pages[0].images[0].ppi.unwrap();
+        assert!((ppi - 72.0).abs() < 1e-6, "{ppi}");
+    }
+
+    #[test]
+    fn one_bit_images_are_known_by_depth_mask_or_filter() {
+        let bitonal = |shape: &[u8], data: &[u8]| {
+            let doc = crate::extract::extract_bytes(image_pdf(shape, data)).unwrap();
+            doc.pages[0].images.first().map(|i| i.bitonal)
+        };
+        assert_eq!(
+            bitonal(b"/Width 8 /Height 8 /BitsPerComponent 8", &[0x80; 64]),
+            Some(false)
+        );
+        assert_eq!(
+            bitonal(b"/Width 8 /Height 8 /BitsPerComponent 1", &[0x0f; 8]),
+            Some(true)
+        );
+        // A mask is drawn in the fill colour: one bit, whatever it says.
+        assert_eq!(
+            bitonal(b"/Width 8 /Height 8 /ImageMask true", &[0x0f; 8]),
+            Some(true)
+        );
+        // A filter array, one of which codes one bit.
+        assert_eq!(
+            bitonal(
+                b"/Width 8 /Height 8 /Filter [/CCITTFaxDecode] /DecodeParms [<< /K -1 /Columns 8 >>]",
+                &[0x00; 4]
+            ),
+            Some(true)
+        );
+        // A fax stream that leaves out its depth.
+        assert_eq!(
+            bitonal(
+                b"/Width 8 /Height 8 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 >>",
+                &[0x00; 4]
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn an_inline_image_of_one_bit_is_known_by_its_abbreviated_keys() {
+        // `BI … ID … EI` writes `/BPC` and `/F` for the image's depth and
+        // filter.
+        for dict in [
+            "/W 16 /H 2 /BPC 1 /CS /G",
+            "/W 16 /H 2 /F /CCF /DP << /K -1 /Columns 16 >>",
+        ] {
+            let content = format!("q 160 0 0 20 20 20 cm BI {dict} ID \x0f\x0f\x0f\x0f EI Q");
+            let bytes = pdf_with(
+                b"/MediaBox [0 0 200 100]",
+                b"",
+                content.as_bytes(),
+                b"/Width 1 /Height 1 /BitsPerComponent 8",
+                &[0],
+            );
+            let doc = crate::extract::extract_bytes(bytes).unwrap();
+            let inline: Vec<bool> = doc.pages[0].images.iter().map(|i| i.bitonal).collect();
+            assert_eq!(inline, [true], "{dict}");
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_region_of_a_turned_page_is_cut_where_it_shows() {
+        // A /Rotate 90 page whose text runs along the sheet, so it is read in
+        // the frame turned back upright, with a black image in one corner:
+        // the crop of the region the image is routed as shows the image, not
+        // white paper.
+        let mut content = b"q 60 0 0 40 20 240 cm /Im0 Do Q\n".to_vec();
+        for k in 0..6 {
+            content.extend(
+                format!(
+                    "BT /F1 10 Tf 30 {} Td (Line of upright text {k}) Tj ET\n",
+                    40 + 20 * k
+                )
+                .into_bytes(),
+            );
+        }
+        let bytes = pdf_with(
+            b"/MediaBox [0 0 200 300] /Rotate 90",
+            b"/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+            &content,
+            b"/Width 6 /Height 4 /BitsPerComponent 8",
+            &[0x00; 24],
+        );
+        let doc = crate::extract::extract_bytes(bytes.clone()).unwrap();
+        let p = &doc.pages[0];
+        assert_ne!(p.rotation, 0, "read in a turned frame");
+        let region = p.images[0].bbox;
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let mut dark = None;
+        crate::escalate::for_each_crop_of(
+            &pdf,
+            &doc,
+            &vec![(0, Some(vec![("r0".to_string(), region)]))],
+            crate::escalate::CropScale::Model,
+            |c| {
+                let px = c.pixels.data.chunks_exact(4);
+                let n = px.len();
+                dark = Some(px.filter(|q| q[0] < 64).count() as f64 / n as f64);
+            },
+        );
+        let dark = dark.expect("the region is cut");
+        assert!(dark > 0.3, "the crop shows the image: {dark}");
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_box_in_the_display_frame_is_cut_as_given() {
+        // The same turned page, its image's box given as an element's
+        // `doc:bbox` gives it: in the display frame already.
+        let mut content = b"q 60 0 0 40 20 240 cm /Im0 Do Q\n".to_vec();
+        for k in 0..6 {
+            content.extend(
+                format!(
+                    "BT /F1 10 Tf 30 {} Td (Line of upright text {k}) Tj ET\n",
+                    40 + 20 * k
+                )
+                .into_bytes(),
+            );
+        }
+        let bytes = pdf_with(
+            b"/MediaBox [0 0 200 300] /Rotate 90",
+            b"/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>",
+            &content,
+            b"/Width 6 /Height 4 /BitsPerComponent 8",
+            &[0x00; 24],
+        );
+        let doc = crate::extract::extract_bytes(bytes.clone()).unwrap();
+        let p = &doc.pages[0];
+        let shown = p.to_display(p.images[0].bbox);
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let crops =
+            crate::escalate::render_crops(&pdf, &vec![(0, Some(vec![("r0".to_string(), shown)]))]);
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&crops[0].png))
+            .read_info()
+            .unwrap();
+        let mut buf = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        let px = buf[..info.buffer_size()].chunks_exact(info.color_type.samples());
+        let n = px.len();
+        let dark = px.filter(|q| q[0] < 64).count() as f64 / n as f64;
+        assert!(dark > 0.3, "the crop shows the image: {dark}");
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn crops_rendered_at_several_scales_are_handed_over_as_cut() {
+        let bytes = image_pdf(
+            b"/Width 600 /Height 300 /BitsPerComponent 8",
+            &vec![0x80; 600 * 300],
+        );
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes)).unwrap();
+        let b = |x0: f64| BBox {
+            x0,
+            y0: 10.0,
+            x1: x0 + 20.0,
+            y1: 30.0,
+        };
+        let regions: Vec<(String, BBox)> = (0..5)
+            .map(|i| (format!("r{i}"), b(10.0 + 30.0 * i as f64)))
+            .collect();
+        let scales = [3.0f32, 2.0, 4.0, 2.0, 3.5];
+        let jobs = vec![(0, Some(regions))];
+        let mut names = Vec::new();
+        crate::escalate::for_each_crop_scaled(
+            &pdf,
+            &jobs,
+            |_, r| scales[((r.unwrap().x0 - 10.0) / 30.0) as usize],
+            |c| names.push((c.name, c.scale)),
+        );
+        // Each render's crops as it is cut, coarsest first, in the jobs'
+        // order within one.
+        let named = |i: &[usize]| -> Vec<(String, f32)> {
+            i.iter().map(|&i| (format!("p0_r{i}"), scales[i])).collect()
+        };
+        assert_eq!(names, named(&[1, 3, 0, 4, 2]));
+        // The jobs' order, given back.
+        let order = crate::escalate::crop_order(&jobs);
+        names.sort_by_key(|(n, _)| order[n]);
+        assert_eq!(names, named(&[0, 1, 2, 3, 4]));
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_page_read_at_several_scales_is_injected_in_the_jobs_order() {
+        // A text page with two small captures, the first at 288 ppi and the
+        // second at 150: the second is rendered, cut and read first.
+        let shot = |y0: f64, ppi: f64| ImagePlacement {
+            bbox: BBox {
+                x0: 100.0,
+                y0,
+                x1: 300.0,
+                y1: y0 + 30.0,
+            },
+            texty: true,
+            ppi: Some(ppi),
+            bitonal: false,
+            grid: (1000, 1000),
+        };
+        let mut doc = Document {
+            pages: vec![page(
+                (0..1500)
+                    .flat_map(|i| {
+                        native("a", 20.0 + (i % 50) as f64 * 10.0, 600.0 + (i / 50) as f64)
+                    })
+                    .collect(),
+                vec![shot(100.0, 288.0), shot(200.0, 150.0)],
+            )],
+        };
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(pdf_with(
+            b"/MediaBox [0 0 612 792]",
+            b"",
+            b"q 200 0 0 30 100 100 cm /Im0 Do Q",
+            b"/Width 2 /Height 2 /BitsPerComponent 8",
+            &[0x20, 0xe0, 0xe0, 0x20],
+        )))
+        .unwrap();
+        let (jobs, _) = ocr_jobs(&doc, None, 0);
+        assert_eq!(jobs.len(), 1, "{jobs:?}");
+        let engine = OneWord(Default::default());
+        let pass = read_pages(
+            &mut doc,
+            &pdf,
+            &engine,
+            None,
+            crate::escalate::CropScale::Stored,
+            0,
+        );
+        let heights: Vec<u32> = engine.0.lock().unwrap().iter().map(|r| r.1).collect();
+        assert!(heights[0] < heights[1], "read coarsest first: {heights:?}");
+        let crops: Vec<Crop> = pass.injected.iter().map(|r| r.crop).collect();
+        assert_eq!(crops, [Crop::Region(0), Crop::Region(1)]);
+    }
+
+    /// A one-page PDF of `page` entries, resources beside its image, one
+    /// content stream and one image.
+    fn pdf_with(
+        page: &[u8],
+        resources: &[u8],
+        content: &[u8],
+        shape: &[u8],
+        data: &[u8],
+    ) -> Vec<u8> {
+        let objects: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            [
+                b"<< /Type /Page /Parent 2 0 R ".to_vec(),
+                page.to_vec(),
+                b" /Resources << ".to_vec(),
+                resources.to_vec(),
+                b" /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+            ]
+            .concat(),
+            [
+                format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(),
+                content.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+            [
+                b"<< /Type /XObject /Subtype /Image ".to_vec(),
+                shape.to_vec(),
+                format!(
+                    " /ColorSpace /DeviceGray /Length {} >>\nstream\n",
+                    data.len()
+                )
+                .into_bytes(),
+                data.to_vec(),
+                b"\nendstream".to_vec(),
+            ]
+            .concat(),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).into_bytes());
+            out.extend(body);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).into_bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").into_bytes());
+        }
+        out.extend(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_stored_resolution_read_gets_the_images_own_pixels() {
+        // 600 × 300 pixels over 200 × 100 points: 216 ppi, so 3 px per point
+        // stored, against 2 for the model.
+        let bytes = image_pdf(
+            b"/Width 600 /Height 300 /BitsPerComponent 8",
+            &vec![0x80; 600 * 300],
+        );
+        let pdf = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
+        for (mode, want) in [
+            (crate::escalate::CropScale::Model, (400, 200)),
+            (crate::escalate::CropScale::Stored, (600, 300)),
+        ] {
+            let mut doc = crate::extract::extract_bytes(bytes.clone()).unwrap();
+            let engine = OneWord(Default::default());
+            let pass = read_pages(&mut doc, &pdf, &engine, None, mode, 0);
+            assert_eq!(*engine.0.lock().unwrap(), vec![want], "{mode:?}");
+            assert_eq!(pass.injected[0].taken, 1);
+        }
     }
 
     #[test]
@@ -1887,6 +2269,8 @@ mod tests {
                         y1: 130.0,
                     },
                     texty: true,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 }],
             )],
@@ -2000,6 +2384,8 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: shot,
                     texty: true,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 }],
             )],
@@ -2351,6 +2737,8 @@ mod tests {
         let shots = [r0, r1].map(|bbox| ImagePlacement {
             bbox,
             texty: true,
+            ppi: None,
+            bitonal: false,
             grid: (1000, 1000),
         });
         let mut doc = Document {
@@ -2933,6 +3321,8 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: note,
                     texty: true,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 }],
             )],
@@ -3292,6 +3682,8 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: region,
                     texty: true,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 }],
             )],
@@ -3330,6 +3722,8 @@ mod tests {
                     .map(|&bbox| ImagePlacement {
                         bbox,
                         texty: true,
+                        ppi: None,
+                        bitonal: false,
                         grid: (1000, 1000),
                     })
                     .collect(),
@@ -3463,6 +3857,8 @@ mod tests {
                 y1,
             },
             texty: true,
+            ppi: None,
+            bitonal: false,
             grid: (1000, 1000),
         };
         let mut doc = Document {
@@ -3817,6 +4213,8 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: note,
                     texty: true,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 }],
             )],
@@ -3891,6 +4289,8 @@ mod tests {
                 vec![ImagePlacement {
                     bbox: shot,
                     texty: true,
+                    ppi: None,
+                    bitonal: false,
                     grid: (1000, 1000),
                 }],
             )],
@@ -4129,6 +4529,8 @@ mod tests {
                 y1: y + 30.0,
             },
             texty: true,
+            ppi: None,
+            bitonal: false,
             grid: (200, 60),
         };
         let text = || native("The quarterly statement lists every account.", 40.0, 40.0);
@@ -4144,6 +4546,8 @@ mod tests {
                 y1: 600.0,
             },
             texty: true,
+            ppi: None,
+            bitonal: false,
             grid: (1000, 400),
         };
         let mut p2 = page(text(), vec![small(200.0), routed]);

@@ -122,13 +122,56 @@ Renders every routed page and region to PNG at **2×** (≈144 dpi) with a small
 margin, and writes `manifest.jsonl` alongside:
 
 ```jsonl
-{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","table":true,"vetoed":false}
-{"bbox":[72.0,118.4,540.0,402.7],"doc":"datasheet-b","kind":"region","page":34,"png":"datasheet-b_p34_t0.png","reason":"table","table":true,"vetoed":true}
-{"doc":"form","kind":"page","page":0,"png":"form_p0_full.png","reason":"heading_doubt"}
+{"bbox":[75.6,255.6,536.4,489.6],"doc":"datasheet-b","kind":"region","page":33,"png":"datasheet-b_p33_r0.png","reason":"region","scale":2.0,"table":true,"vetoed":false}
+{"bbox":[72.0,118.4,540.0,402.7],"doc":"datasheet-b","kind":"region","page":34,"png":"datasheet-b_p34_t0.png","reason":"table","scale":2.0,"table":true,"vetoed":true}
+{"doc":"form","kind":"page","page":0,"png":"form_p0_full.png","reason":"heading_doubt","scale":2.0}
 ```
 
+`scale` is the crop's pixels per PDF unit. 2× is what a model reads best and
+what it bills for, measured. An OCR engine wants more where the file has it:
+a 3,840-px screen capture pasted 6.5 inches wide comes out 960 px wide at 2×,
+its 22-px text at 5.5 px. `--stored-resolution` renders each crop at the
+resolution of the image it shows (the one mostly inside it, the largest of
+those; failing any, the one covering most of it), measured along the
+image's coarser axis, between 2× and 300 dpi. A one-bit image (a fax, an
+image mask, a CCITT or JBIG2 stream) stays at 2×: smoothed, it reads better
+than its raw pixels.
+
+What is bounded, for an engine:
+
+- A crop is not held to a size of its own: the OCR engine reads one larger
+  than a pass holds (12.5 Mpx by default) in overlapping strips (see
+  [How an image is sized](../cli/ocr.md#how-an-image-is-sized)). A cap of
+  4,000 px on the long edge once read a tall capture with a tenth of its lines
+  lost.
+- A crop is cut from a render of its whole page, and that render is bounded
+  outright: at most 64 million pixels (256 MB of RGBA) and 65,535 on a side,
+  for every crop of the page, the 2× ones included. A page past what 2× draws
+  within those (about 4,000 points square) is drawn below 2×, as large as
+  they allow.
+- A page is rendered at most four times for its crops: past four scales, a
+  crop shares the next one up, never a coarser one.
+
+A model's crops are drawn at 2× whatever the page's size.
+
+On a synthetic corpus of 500 attachments this lifted the facts an OCR engine
+found only in pixels, counted as whole words, from 0.861 to 0.871;
+screenshots pasted into PDFs gained most. The finer crops cost time and
+memory in proportion to their pixels: on a page carrying a 288-ppi capture
+drawn 20 times, `convert --ocr` took 28.75 s, against 12.27 s at 2×, and a
+corpus of screenshots costs about that much more to read. One limit comes from the built-in
+engine's recogniser, not from the rendering: it decides a line brought to
+48 px high in steps of about 8 px, and the word space of a narrow UI font,
+between groups of digits, spans about a step and a half. There the space and
+"no character" can come out nearly even, and the space is dropped
+(`25409834791723/02/2017`); any small change to the crop tips it one way or
+the other, at either scale.
+
 The manifest maps every PNG back to its document, page and PDF-unit box, which
-is what lets a reading be spliced into the right place.
+is what lets a reading be spliced into the right place. The box is in the
+page's display frame, the frame the PNG is cut from, also on a page read in
+a turned frame (`/Rotate`, or text drawn sideways): `bbox × scale`, less the
+margin, gives the pixels.
 
 `reason` says why the crop exists:
 

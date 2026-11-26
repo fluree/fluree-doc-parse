@@ -431,6 +431,11 @@ pub enum DevCommands {
         /// which an OCR engine still reads (reason `small_region`)
         #[arg(long)]
         ocr_regions: bool,
+        /// Render each crop at the resolution of the image under it (up to
+        /// 300 dpi) rather than the model's 2×, for an OCR engine. The
+        /// manifest records each crop's `scale` either way
+        #[arg(long)]
+        stored_resolution: bool,
     },
     /// Render a region manifest's crops via the pipeline's own crop path
     RenderCrops {

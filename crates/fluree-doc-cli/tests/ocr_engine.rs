@@ -15,6 +15,12 @@ use std::path::PathBuf;
 /// A one-page PDF whose only content is an image of `lines`, drawn by
 /// rendering a text PDF first: the text layer is gone, the pixels remain.
 fn scan_of(lines: &[&str]) -> Vec<u8> {
+    scan_at(lines, 2.0)
+}
+
+/// As [`scan_of`], the image `scale` pixels per point of the page (2 is
+/// 144 ppi).
+fn scan_at(lines: &[&str], scale: f32) -> Vec<u8> {
     let text = pdf(
         &lines
             .iter()
@@ -30,12 +36,17 @@ fn scan_of(lines: &[&str]) -> Vec<u8> {
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(text)).unwrap();
     let mut gray = Vec::new();
     let (mut w, mut h) = (0, 0);
-    fluree_doc_pdf::escalate::for_each_crop(&raw, &vec![(0, None)], |c| {
-        w = c.pixels.width;
-        h = c.pixels.height;
-        assert_eq!(c.pixels.layout, fluree_doc_vision::Layout::Rgba8);
-        gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
-    });
+    fluree_doc_pdf::escalate::for_each_crop_scaled(
+        &raw,
+        &vec![(0, None)],
+        |_, _| scale,
+        |c| {
+            w = c.pixels.width;
+            h = c.pixels.height;
+            assert_eq!(c.pixels.layout, fluree_doc_vision::Layout::Rgba8);
+            gray = c.pixels.data.chunks_exact(4).map(|p| p[0]).collect();
+        },
+    );
     let image = [
         format!(
             "<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceGray \
@@ -115,7 +126,14 @@ fn a_scanned_page_reads_as_text() {
     let raw = hayro_syntax::Pdf::new(std::sync::Arc::new(bytes.clone())).unwrap();
     let mut doc = fluree_doc_pdf::extract_bytes(bytes).unwrap();
     assert!(doc.pages[0].glyphs.is_empty(), "the scan has no text layer");
-    let pass = fluree_doc_pdf::ocr::read_pages(&mut doc, &raw, &engine, None, 0);
+    let pass = fluree_doc_pdf::ocr::read_pages(
+        &mut doc,
+        &raw,
+        &engine,
+        None,
+        fluree_doc_pdf::escalate::CropScale::Stored,
+        0,
+    );
     assert!(pass.failed.is_empty(), "{:?}", pass.failed);
     let analysis = fluree_doc_pdf::document::analyze(&mut doc, &[]);
     let text: String = analysis
@@ -299,9 +317,14 @@ fn the_three_steps_read_what_convert_ocr_reads() {
     let models = PathBuf::from(std::env::var_os("FDOC_OCR_MODELS").expect("FDOC_OCR_MODELS"));
     let dir = scratch("three-steps");
     let input = dir.join("scan.pdf");
+    // At 288 ppi, so the stored resolution is not the model's 2x: the paths
+    // agree only if both read at the resolution the docs prescribe.
     std::fs::write(
         &input,
-        scan_of(&["Account number 4417-0093-21", "Date of birth 15-OCT-1997"]),
+        scan_at(
+            &["Account number 4417-0093-21", "Date of birth 15-OCT-1997"],
+            4.0,
+        ),
     )
     .unwrap();
     let text = |out: std::process::Output| {
@@ -314,7 +337,7 @@ fn the_three_steps_read_what_convert_ocr_reads() {
     };
     let direct = text(
         fdoc(&dir)
-            .args(["convert", "-f", "text", "--ocr", "oar-ocr", "--models"])
+            .args(["convert", "-f", "json", "--ocr", "oar-ocr", "--models"])
             .arg(&models)
             .arg(&input)
             .output()
@@ -324,12 +347,19 @@ fn the_three_steps_read_what_convert_ocr_reads() {
     let crops = dir.join("crops");
     let words = dir.join("words");
     let status = fdoc(&dir)
-        .args(["dev", "render-routed", "--ocr-regions"])
+        .args([
+            "dev",
+            "render-routed",
+            "--ocr-regions",
+            "--stored-resolution",
+        ])
         .arg(&input)
         .arg(&crops)
         .status()
         .unwrap();
     assert!(status.success());
+    let manifest = std::fs::read_to_string(crops.join("manifest.jsonl")).unwrap();
+    assert!(manifest.contains("\"scale\":4.0"), "{manifest}");
     let out = fdoc(&dir)
         .arg("ocr")
         .arg(&crops)
@@ -347,7 +377,7 @@ fn the_three_steps_read_what_convert_ocr_reads() {
     );
     let three = text(
         fdoc(&dir)
-            .args(["convert", "-f", "text", "--ocr-words"])
+            .args(["convert", "-f", "json", "--ocr-words"])
             .arg(&words)
             .arg(&input)
             .output()
