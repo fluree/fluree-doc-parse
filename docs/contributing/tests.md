@@ -87,6 +87,16 @@ list or one it lists that the set does not hold, or a list it lacks.
 [`eval/scanned/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/scanned/README.md)
 has the details, and [Scanned PDFs](../benchmarks/scanned.md) the numbers.
 
+`eval/twins/` holds OCR to the born-digital page: `uv run
+eval/twins/make_twins.py` writes born-digital pages whose headings differ
+from the body by size alone, and their images, plain, recoloured and
+degraded; `eval/twins/check.py --models DIR` reads the PDFs by their text
+layer and the images by OCR and counts the headings each reads, and
+`--baseline eval/twins/baseline.json` fails on a set whose images read fewer
+headings, or more short lines as headings, than they did.
+[`eval/twins/README.md`](https://github.com/fluree/fluree-doc-parse/blob/main/eval/twins/README.md)
+has the details, and [Twins](../benchmarks/twins.md) the numbers.
+
 ## Fuzzing
 
 Every reader that takes a file's bytes, but the transcript reader, has a
