@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "wes-9-385-2024.pdf",
+    "url": "https://wes.copernicus.org/articles/9/385/2024/wes-9-385-2024.pdf",
+    "sha256": "19f9d759a53bfc8d361b90c8dec91ed3b62042f32bd2438bb3349b9c983a2626",
+    "about": "Wind Energy Science 9, 385 (2024). On p17 a line of prose sets the ratio P/P0 inline, its P in math italic, on a line that writes no space characters."
+  },
+  "notes": [
+    "2026-11-26 (#412): the italic P's overhang before the slash was read as a word space (#388): ratio P /P0."
+  ],
+  "checks": [
+    {
+      "id": "ratio-whole",
+      "found": "2026-11-26",
+      "issue": "#412: the ratio P/P0 read P /P0.",
+      "text": "the ratio P/P0 behaves like"
+    }
+  ]
+}
