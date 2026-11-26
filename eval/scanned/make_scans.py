@@ -17,11 +17,12 @@ degraded the way a scanner, a fax or a re-saved JPEG degrades a page, and
 written back as an image-only PDF with no text layer. The gold is the list of
 facts drawn on it: names, identifiers, amounts, dates and phrases, each said
 exactly once on its page; and its headings, the lines set apart in bold
-outside a table (a letterhead, a `Re:` line, a signature, an invoice's
-`INVOICE` and `Bill to:`, a statement's closing balance), which are what
-fdoc makes headings of on the born-digital page. Bold inside a table (its
-header cells, an invoice's total), a statement's subtitle in plain type and
-a screenshot's title are not headings.
+outside a table (a letterhead, a signature, an invoice's `INVOICE` and
+`Bill to:`, a statement's closing balance), which are what fdoc makes
+headings of on the born-digital page. Bold inside a table (its header cells,
+an invoice's total), a letter's `Re:` line, a field that labels its
+reference, a statement's subtitle in plain type and a screenshot's title
+are not headings.
 
 Six base documents (a letter, a statement with a ruled table and an invoice
 with an unruled one, two variants each, in Helvetica, Times or Courier) go
@@ -241,7 +242,7 @@ def letter(r, family, page=None):
     p.fact(person, "name")
     p.fact(street, "phrase")
     p.fact(city, "phrase")
-    p.text(72, 596, f"Re: Policy reference {ref}", 10, bold=True, heading=True)
+    p.text(72, 596, f"Re: Policy reference {ref}", 10, bold=True)
     p.fact(ref, "id")
     p.text(72, 572, "Dear Policyholder,", 10)
     first = (f"Thank you for your letter about the renewal of your policy. We have reviewed the account "
