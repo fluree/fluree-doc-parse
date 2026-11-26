@@ -502,6 +502,58 @@ list, a banner spanning it — is read whole into its first cell and marked
 `merged_left` across the row, rather than having its words dealt out by which
 side of the cut they fell.
 
+## Items over a block of totals
+
+A table read from its text takes its columns from the stripes its rows of
+figures leave empty. An invoice's item lines end in a block of totals: a
+label or two and an amount on each line (`Totaal exclusief BTW | € 156,20`).
+The labels run across the items' gutters, and a single item over six totals
+is outvoted. So `Aantal | Prijs/st | Korting` closed into one column, and a
+6-column item table read as 3 (or 7 as 2).
+
+Lines under the rows with the most cells form a block of totals when each
+line:
+
+- sets at most half as many cells as those rows;
+- has labels of a few words (no more than a section's label);
+- ends in an amount under one of the items' columns.
+
+At least one label in the block must also run across a gutter of the fullest
+rows. Such a block casts no vote on the columns, here or when the grid is
+built, and its lines stay the table's last rows. A statement's `Total` row is
+never a block: it sets as many cells as the rows above it, and its label
+stays in the stub. Lines of prose ending in a year or a page (a list of
+references, a crystal's data) aren't either: their words are too many, or
+their figure falls under no item column.
+
+Two header rules follow from reading the items' own columns.
+
+- **A column only the header names.** On a line of column labels (two others
+  or more, each over one column), a label that stands an em clear between
+  two columns, both named by other labels on the line, heads a column no row
+  fills (`Korting` between `Prijs/st` and `Bedrag`, no item having a
+  discount). A label beside a column that no other label names is that
+  column's, set off to one side (`Service Areas` beside the service areas),
+  and gets no column of its own.
+- **Two labels a word space apart.** A run of words over two neighbouring
+  columns on such a line is cut where its words part over the gutter between
+  them (`BTW Hoeveelheid` over `21 % | 1 PCS`; `BTW Prijs incl. BTW` set a
+  little above `Artikel | Aantal`, which made a header row of its own). All of
+  these must hold:
+  - each piece sits on its column's axis;
+  - the second piece starts as a label does, not in lower case;
+  - the first piece closes its brackets;
+  - the parted line names every column once (the stub's head aside);
+  - no label below names either column.
+
+  So a phrase over two columns stays whole: `Lower lip`, `An. gambiae`,
+  `OR (95% CI)`, `Don't Know`, and a group's label over its columns' own
+  (`Preparation (h)` over `Pathology | Radiology`).
+
+Both rules read only lines of labels of a few words each. A line of prose
+beside a chart's ticks (`the influence of idiosyncratic or temporary`) is no
+line of labels, and adds no column.
+
 ## A shaded header band over a table read from its text
 
 A table can set its header as a band of shaded cells at its top, under a rule
