@@ -199,7 +199,11 @@ holdings: three columns for eight of figures).
 The gutters between the pieces say it instead. A gap narrower than a cell
 (12pt, one and a half of the narrowest cell) between two pieces each at
 least a cell wide is a gutter, and a line with three or more of them (four
-columns of figures) states its columns'. A gutter on two such lines or more
+columns of figures) states its columns'. They are counted along one chain of
+pieces parted only at gutters: a wider gap parts two tables' rules (two
+tables side by side across the page's gutter, each row ruled a cell at a
+time, two gutters in each), and their gutters are not one row's. A gutter on
+two such lines or more
 is a column's edge, and so are where their run of pieces starts and ends,
 the first figure column's left edge and the last one's right. A gutter is
 added only where no edge stands already. Narrower pieces are no
