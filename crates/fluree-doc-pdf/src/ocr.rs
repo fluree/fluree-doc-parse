@@ -898,6 +898,9 @@ struct Placed {
     /// The word's type size from its ink, in page units, once its reading
     /// is calibrated ([`size_by_ink`]): [`box_font`] takes it over the box.
     ink_font: Option<f64>,
+    /// The word's weight from its ink ([`weigh_by_ink`]): bold, or not
+    /// known.
+    weight: Option<u32>,
 }
 
 /// Map a reading's words onto the page, or say why the reading cannot be:
@@ -993,10 +996,12 @@ fn place(
                 px_per_unit,
                 ink: w.ink,
                 ink_font: None,
+                weight: None,
             })
         })
         .collect();
     size_by_ink(&mut placed);
+    weigh_by_ink(&mut placed);
     Ok(placed)
 }
 
@@ -1103,6 +1108,71 @@ fn size_by_ink(placed: &mut [Option<Placed>]) {
 /// How far a word's size from its ink may stand from its box's before the
 /// box is taken: past it, the measure missed.
 const INK_BOX_SPREAD: f64 = 1.4;
+
+/// How much wider than its page's stems a bold word's are, and how much
+/// more ink its band holds, both over its size.
+const BOLD_STEM: f64 = 1.25;
+const BOLD_DENSITY: f64 = 1.3;
+
+/// Fewest pixels the band a word's weight is measured in must span: under
+/// it, a stem is a pixel or two, and half a pixel a third of it. At 11 px,
+/// Courier's one-pixel stems read short lines at 150 dpi as bold.
+const WEIGHT_MIN_BAND_PX: f64 = 12.0;
+
+/// The weight OCR gives a word it reads as bold (an OpenType weight class).
+const BOLD_WEIGHT: u32 = 700;
+
+/// Weigh the words of one reading by their ink: a word is bold when its
+/// stems, over its capitals' height, and the ink of its band both stand well
+/// over the median of the reading's lines of three words or more. OCR sees
+/// no font, so without this a heading set in bold at body size, the most
+/// common cue after size, is plain text on a scan.
+///
+/// A word too small to tell (a band under [`WEIGHT_MIN_BAND_PX`]), or of
+/// fewer than three letters and figures, has no weight; nor has any word of
+/// a reading with fewer than three lines to compare with. Measured on the
+/// scanned set's pages at 200 and 300 dpi, clean, turned or noisy, 137 of
+/// 152 bold lines read as bold and none of 695 others; at 100 and 150 dpi
+/// and on faxes, most lines have no weight, and 1 of 852 others reads bold.
+fn weigh_by_ink(placed: &mut [Option<Placed>]) {
+    // A word's stems over its size, its band's density, the band's pixels.
+    let feature = |w: &Placed| -> Option<(f64, f64, f64)> {
+        let ink = w.ink?;
+        let size = ink
+            .first_cap
+            .or(ink.top)
+            .or(ink.x_height.map(|x| x * 1.4))?;
+        let band = ink.x_height.or(ink.first_cap).or(ink.top)?;
+        Some((ink.stem? / size, ink.density?, band))
+    };
+    let reference: Vec<(f64, f64)> = placed
+        .iter()
+        .flatten()
+        .filter(|w| w.text.split_whitespace().count() >= 3)
+        .filter_map(|w| feature(w).map(|(s, d, _)| (s, d)))
+        .collect();
+    if reference.len() < INK_MIN_RATIO_WORDS {
+        return;
+    }
+    let stems = median(reference.iter().map(|r| r.0).collect());
+    let density = median(reference.iter().map(|r| r.1).collect());
+    if !(stems > 0.0 && density > 0.0) {
+        return;
+    }
+    for w in placed.iter_mut().flatten() {
+        let Some((s, d, band)) = feature(w) else {
+            continue;
+        };
+        let letters = w.text.chars().filter(|c| c.is_alphanumeric()).count();
+        if band >= WEIGHT_MIN_BAND_PX
+            && letters >= 3
+            && s / stems > BOLD_STEM
+            && d / density > BOLD_DENSITY
+        {
+            w.weight = Some(BOLD_WEIGHT);
+        }
+    }
+}
 
 /// Whether an image of aspect `read` (width over height) is the crop of
 /// aspect `crop` turned a quarter rather than the crop itself: an engine
@@ -1289,7 +1359,7 @@ fn add_words(
         } else {
             (level_quad(&w.quad), 0.0)
         };
-        let chars = lay_along(p, &w.text, &quad, rotation, font, &mut next);
+        let chars = lay_along(p, &w.text, &quad, rotation, font, w.weight, &mut next);
         result.chars.extend(chars);
     }
     result.skew_deg = skew(&level);
@@ -2199,7 +2269,15 @@ fn lay_run(p: &mut Page, words: &[Level], run: &Run, start: f64, next: &mut usiz
         let w = &words[i];
         let (x0, x1) = (at(w.x0), at(w.x1));
         let quad = [(x0, top), (x1, top), (x1, bottom), (x0, bottom)];
-        boxes.extend(lay_along(p, &w.word.text, &quad, 0.0, font as f32, next));
+        boxes.extend(lay_along(
+            p,
+            &w.word.text,
+            &quad,
+            0.0,
+            font as f32,
+            w.word.weight,
+            next,
+        ));
         let Some(&j) = run.words.get(k + 1) else {
             continue;
         };
@@ -2245,6 +2323,7 @@ fn lay_along(
     quad: &[(f64, f64); 4],
     rotation_deg: f32,
     font_size: f32,
+    weight: Option<u32>,
     next: &mut usize,
 ) -> Vec<BBox> {
     let chars: Vec<char> = text.chars().collect();
@@ -2283,7 +2362,7 @@ fn lay_along(
             rotation_deg,
             font_size,
             advance: Some(advance),
-            weight: None,
+            weight,
             italic: false,
             draw_index,
         });
@@ -7874,8 +7953,11 @@ mod tests {
                 top: Some(top),
                 top_line: Some(TopLine::Ascender),
                 x_height: Some(top * 0.7),
+                stem: None,
+                density: None,
             }),
             ink_font: None,
+            weight: None,
         })
     }
 
@@ -7958,6 +8040,8 @@ mod tests {
                         top: Some(31.5),
                         top_line: Some(TopLine::Ascender),
                         x_height: Some(21.0),
+                        stem: None,
+                        density: None,
                     }),
                     ..word(
                         &format!("Line {i} of the prose read here"),
@@ -7972,6 +8056,8 @@ mod tests {
                 top: Some(37.8),
                 top_line: Some(TopLine::Ascender),
                 x_height: Some(25.2),
+                stem: None,
+                density: None,
             }),
             ..word("Payments received this year", [300.0, 300.0, 1800.0, 350.0])
         });
@@ -7986,6 +8072,99 @@ mod tests {
         };
         let ratio = size("P") / size("L");
         assert!((ratio - 1.2).abs() < 0.02, "heading over prose: {ratio}");
+    }
+
+    /// A line placed with its ink's weight: capitals `cap` px tall, stems
+    /// `stem` px wide, its band `density` ink.
+    fn weighted(text: &str, cap: f64, stem: f64, density: f64) -> Option<Placed> {
+        let mut w = inked(text, cap);
+        if let Some(Ink {
+            stem: s,
+            density: d,
+            ..
+        }) = w.as_mut().and_then(|w| w.ink.as_mut())
+        {
+            *s = Some(stem);
+            *d = Some(density);
+        }
+        w
+    }
+
+    #[test]
+    fn a_word_with_heavier_stems_and_ink_than_its_page_reads_bold() {
+        // Five lines of prose, stems 3 px under 30 px capitals; a heading
+        // at the same size, stems 4.5 and its band half as inked again.
+        let mut placed: Vec<Option<Placed>> = (0..5)
+            .map(|i| {
+                weighted(
+                    &format!("Line {i} of prose"),
+                    30.0,
+                    3.0 + 0.1 * i as f64,
+                    0.30,
+                )
+            })
+            .collect();
+        placed.push(weighted("Payments received", 30.0, 4.5, 0.45));
+        // As heavy, but too small to tell: capitals 12 px, an x-height of 8.
+        placed.push(weighted("Small print", 12.0, 1.8, 0.45));
+        // As heavy, but two letters.
+        placed.push(weighted("No", 30.0, 4.5, 0.45));
+        // Wider stems alone are not bold: its band holds the page's ink.
+        placed.push(weighted("Wide stems", 30.0, 4.5, 0.31));
+        weigh_by_ink(&mut placed);
+        let weights: Vec<Option<u32>> = placed.iter().map(|w| w.as_ref().unwrap().weight).collect();
+        assert_eq!(
+            weights,
+            [
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(BOLD_WEIGHT),
+                None,
+                None,
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bold_word_lays_bold_glyphs() {
+        let mut doc = blank_scan();
+        let line = |text: &str, y: f64, stem: f64, density: f64| OcrWord {
+            ink: Some(Ink {
+                first_cap: Some(30.0),
+                top: Some(31.5),
+                top_line: Some(TopLine::Ascender),
+                x_height: Some(21.0),
+                stem: Some(stem),
+                density: Some(density),
+            }),
+            ..word(text, [300.0, y, 1800.0, y + 50.0])
+        };
+        let mut words: Vec<OcrWord> = (0..5)
+            .map(|i| {
+                line(
+                    &format!("Line {i} of the prose read here"),
+                    600.0 + 120.0 * i as f64,
+                    3.0,
+                    0.3,
+                )
+            })
+            .collect();
+        words.push(line("Payments received this year", 300.0, 4.5, 0.45));
+        inject(&mut doc, &[(0, Crop::Page, px300(words))]);
+        let weight = |c: &str| {
+            doc.pages[0]
+                .glyphs
+                .iter()
+                .find(|g| g.text == c)
+                .unwrap()
+                .weight
+        };
+        assert_eq!(weight("P"), Some(BOLD_WEIGHT));
+        assert_eq!(weight("L"), None);
     }
 
     #[test]
@@ -8020,6 +8199,7 @@ mod tests {
             px_per_unit,
             ink: None,
             ink_font: None,
+            weight: None,
         };
         // `Total` at 11 pt alone on its line, boxed as the engine boxes it:
         // its letters, and 12 px more for its shortness, at 150 and at 300

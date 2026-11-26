@@ -55,6 +55,16 @@ pub struct Ink {
     /// The x-height: where the letters without ascenders stop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_height: Option<f64>,
+    /// The width of the word's stems: the median of the ink runs the rows
+    /// across the middle of its x-height band cross, or of its capitals'
+    /// band for a word of capitals and figures. Over the word's size, it
+    /// says its weight: a bold face's stems are about half as wide again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stem: Option<f64>,
+    /// How much of that band under the word is ink, 0-1: a second measure
+    /// of its weight, over hundreds of pixels where a stem is one or two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub density: Option<f64>,
 }
 
 /// Which line a word's highest letters reach.
@@ -167,7 +177,7 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     }
     let crop = sample(image, bbox, angle)?;
     let scale = crop.scale;
-    let crop = without_rules(crop, letters.len() >= 2);
+    let (crop, ruled) = without_rules(crop, letters.len() >= 2);
     let has_dot = text.chars().any(dotted);
     // Each column's ink: its top and its bottom, a fraction of a pixel.
     let mut xs = Vec::new();
@@ -214,6 +224,8 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
         top: None,
         top_line: None,
         x_height: None,
+        stem: None,
+        density: None,
     };
     if has_rise {
         // The highest level holding a stem's worth of columns.
@@ -296,12 +308,77 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     if ink.top.is_none() {
         ink.top_line = None;
     }
+    // The weight: in the middle half of the x-height band, or of the
+    // capitals' band (0.3 to 0.7 of it) for a word with no x-height.
+    let band = match (ink.x_height, ink.first_cap.or(ink.top)) {
+        (Some(x), _) if x >= 3.0 => Some((x, 0.25, 0.75)),
+        (None, Some(c)) if c >= 3.0 => Some((c, 0.3, 0.7)),
+        _ => None,
+    };
+    // A rule taken out of the word (an underline, a strike, a box's edge)
+    // takes rows of its letters with it, or leaves its edges in them: its
+    // weight is not measured.
+    if let Some((h, lo, hi)) = band.filter(|_| !ruled) {
+        if let Some((stem, density)) = weight(&crop, base, h, lo, hi) {
+            ink.stem = Some(stem);
+            ink.density = Some(density);
+        }
+    }
     // Back in the image's pixels.
     let back = |v: Option<f64>| v.map(|h| h / scale);
+    ink.stem = back(ink.stem);
     ink.first_cap = back(ink.first_cap);
     ink.top = back(ink.top);
     ink.x_height = back(ink.x_height);
     (ink.first_cap.is_some() || ink.top.is_some() || ink.x_height.is_some()).then_some(ink)
+}
+
+/// The stems' width and the ink's density of the band from `lo` to `hi` of
+/// `h` over the baseline `base`, in the crop's pixels: the median width of
+/// the ink runs its rows cross, each to a fraction of a pixel (its edge
+/// pixels' levels), runs wider than half the band (a bar, letters
+/// touching) left out; and the mean ink level under the word's inked
+/// columns.
+fn weight(c: &Crop, base: f64, h: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
+    let (top, bottom) = ((base - hi * h).round(), (base - lo * h).round());
+    if !(top >= 0.0 && bottom < c.h as f64 && top <= bottom) {
+        return None;
+    }
+    let rows = top as usize..=bottom as usize;
+    let mut widths = Vec::new();
+    let (mut first, mut last) = (usize::MAX, 0usize);
+    for y in rows.clone() {
+        let mut x = 0;
+        while x < c.w {
+            if c.at(x, y) > ON {
+                let start = x;
+                while x < c.w && c.at(x, y) > ON {
+                    x += 1;
+                }
+                first = first.min(start);
+                last = last.max(x - 1);
+                let before = if start > 0 { c.at(start - 1, y) } else { 0.0 };
+                let after = if x < c.w { c.at(x, y) } else { 0.0 };
+                let w = (x - start) as f64 + before + after;
+                if w < 0.5 * h {
+                    widths.push(w);
+                }
+            } else {
+                x += 1;
+            }
+        }
+    }
+    if widths.len() < 4 || first > last || last - first < 3 {
+        return None;
+    }
+    let (mut sum, mut n) = (0.0, 0usize);
+    for y in rows {
+        for x in first..=last {
+            sum += c.at(x, y);
+            n += 1;
+        }
+    }
+    Some((quantile(&widths, 0.5), sum / n as f64))
 }
 
 /// Most rows a word's crop is sampled at: text taller is sampled down, as
@@ -471,14 +548,15 @@ fn despeckled(mut c: Crop) -> Crop {
 /// rows either side a rule drawn between rows spreads over, and a column
 /// inked in one stretch over nearly the crop's height (a box's side). No
 /// letter runs that far either way, in a word of `several` letters: a lone
-/// `T`, `7` or `L` spans its own width with its bar, and keeps it.
-fn without_rules(mut c: Crop, several: bool) -> Crop {
+/// `T`, `7` or `L` spans its own width with its bar, and keeps it. Also
+/// whether it took any out.
+fn without_rules(mut c: Crop, several: bool) -> (Crop, bool) {
     let on: Vec<bool> = c.ink.iter().map(|&v| v > ON).collect();
     let inked_cols: Vec<usize> = (0..c.w)
         .filter(|&x| (0..c.h).any(|y| on[y * c.w + x]))
         .collect();
     let (Some(&first), Some(&last)) = (inked_cols.first(), inked_cols.last()) else {
-        return c;
+        return (c, false);
     };
     let width = (last - first + 1) as f64;
     let h = c.h as f64;
@@ -497,6 +575,7 @@ fn without_rules(mut c: Crop, several: bool) -> Crop {
             run >= 0.8 * width || run >= (0.6 * width).max(1.5 * h)
         })
         .collect();
+    let mut any = !ruled.is_empty();
     for y in ruled {
         for yy in y.saturating_sub(2)..(y + 3).min(c.h) {
             for x in 0..c.w {
@@ -506,12 +585,13 @@ fn without_rules(mut c: Crop, several: bool) -> Crop {
     }
     for x in 0..c.w {
         if longest(&mut (0..c.h).map(|y| on[y * c.w + x])) >= 0.85 * h {
+            any = true;
             for y in 0..c.h {
                 c.ink[y * c.w + x] = 0.0;
             }
         }
     }
-    c
+    (c, any)
 }
 
 /// A column's ink, its top and bottom to a fraction of a pixel (the edge
@@ -697,7 +777,10 @@ mod tests {
         let mut strokes = hon();
         strokes.push((-1.0, -4.0, 44.0, -2.5));
         let (bbox, angle) = hon_box(0.0);
-        assert_hon(measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "Hon"));
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "Hon");
+        assert_hon(ink);
+        // Its weight is not: the rule took rows of its letters with it.
+        assert_eq!(ink.and_then(|i| i.stem), None);
     }
 
     #[test]
@@ -919,5 +1002,50 @@ mod tests {
         assert!(note_mark("PX-4417").is_empty());
         assert!(note_mark("Page 12").is_empty());
         assert!(note_mark("A1234").is_empty());
+    }
+
+    /// `Hon` as [`hon_sized`], its stems `stem` px wide.
+    fn hon_weighted(stem: f64) -> Strokes {
+        let (c, x) = (20.0, 14.0);
+        vec![
+            (0.0, 0.0, stem, c),
+            (13.0 - stem, 0.0, 13.0, c),
+            (0.0, 9.0, 13.0, 12.0),
+            (17.0, 0.0, 17.0 + stem, x),
+            (28.0 - stem, 0.0, 28.0, x),
+            (17.0, 0.0, 28.0, 3.0),
+            (17.0, x - 3.0, 28.0, x),
+            (32.0, 0.0, 32.0 + stem, x),
+            (43.0 - stem, 0.0, 43.0, x),
+            (32.0, x - 3.0, 43.0, x),
+        ]
+    }
+
+    #[test]
+    fn a_bold_word_has_wider_stems_and_more_ink() {
+        let (bbox, angle) = hon_box(0.0);
+        let regular = measure(&draw(&hon_weighted(3.0), 0, 255, 0.0), bbox, angle, "Hon").unwrap();
+        let bold = measure(&draw(&hon_weighted(5.0), 0, 255, 0.0), bbox, angle, "Hon").unwrap();
+        assert!(
+            regular.stem.is_some_and(|s| (s - 3.0).abs() < 0.3),
+            "{regular:?}"
+        );
+        assert!(bold.stem.is_some_and(|s| (s - 5.0).abs() < 0.3), "{bold:?}");
+        assert!(
+            bold.density.unwrap() > 1.3 * regular.density.unwrap(),
+            "{regular:?} {bold:?}"
+        );
+        // A letter crossing the band wide (a diagonal, a bowl's side cut
+        // aslant) does not widen the stems: they are the runs' median.
+        let mut wide = hon_weighted(3.0);
+        wide.push((47.0, 3.0, 53.0, 10.0));
+        let ink = measure(
+            &draw(&wide, 0, 255, 0.0),
+            [56.0, 26.0, 116.0, 54.0],
+            0.0,
+            "Hona",
+        )
+        .unwrap();
+        assert!(ink.stem.is_some_and(|s| (s - 3.0).abs() < 0.3), "{ink:?}");
     }
 }

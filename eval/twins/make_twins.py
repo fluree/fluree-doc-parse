@@ -13,7 +13,7 @@
 Each page is a born-digital PDF written here in the standard 14 fonts
 (Helvetica, Times, Courier), with paragraphs set 1.3 em apart, short lines at
 body size alone on their line (`Total`, `Bill to:`), and headings set larger
-than the body and not bold: one word, or a line. fdoc reads the PDF's text
+than the body and not bold, or at its size in bold: one word, or a line. fdoc reads the PDF's text
 layer at its exact sizes; its twin is the same page rasterised by pdfium,
 which only OCR reads. What the check holds OCR to is the twin: a heading the
 born-digital page reads is a heading the image should read, and a line it
@@ -22,6 +22,7 @@ does not is not.
 Sets, each written to corpus/<set>/ as <page>.pdf and <page>-<dpi>.png:
 
   plain-1.2, plain-1.3   headings a fifth and a third larger, at 150, 200 and 300 dpi
+  bold                   headings at body size in the bold face, at 150, 200 and 300 dpi
   underline, boxed, strike, superscript, italic
                          headings a fifth larger with rules, note marks or
                          italic faces drawn on the page, at 200 dpi
@@ -54,6 +55,7 @@ WORDS = ("the account statement shows every payment made during the period "
          "at the rate set out in your agreement please keep this notice with "
          "your records and write to the billing desk with any question").split()
 UPRIGHT = {"helv": "Helvetica", "times": "Times-Roman", "cour": "Courier"}
+BOLD = {"Helvetica": "Helvetica-Bold", "Times-Roman": "Times-Bold", "Courier": "Courier-Bold"}
 ITALIC = {"helv": "Helvetica-Oblique", "times": "Times-Italic", "cour": "Courier-Oblique"}
 
 
@@ -62,14 +64,16 @@ def width(text, size, font):
     return len(text) * size * (0.6 if font.startswith("Courier") else 0.5)
 
 
-def pdf(path, font, lines, mode):
+def pdf(path, font, lines, mode, heads=()):
     """One Letter page of `lines` (x, y, size, text) in `font`, with what
     `mode` draws on them: an underline under each line, a box round each
-    short one, a strike through each line of prose, a raised `1` after each."""
+    short one, a strike through each line of prose, a raised `1` after each,
+    or the headings (`heads`) in the bold face."""
     ops = []
     for x, y, size, text in lines:
         t = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        ops.append(f"BT /F1 {size:.2f} Tf {x:.2f} {y:.2f} Td ({t}) Tj ET")
+        f = "F2" if mode == "bold" and text in heads else "F1"
+        ops.append(f"BT /{f} {size:.2f} Tf {x:.2f} {y:.2f} Td ({t}) Tj ET")
         w = width(text, size, font)
         if mode == "underline":
             ops.append(f"0.6 w {x:.2f} {y - 0.15 * size:.2f} m {x + w:.2f} {y - 0.15 * size:.2f} l S")
@@ -84,9 +88,10 @@ def pdf(path, font, lines, mode):
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
-        b"/Resources << /Font << /F1 5 0 R >> >> >>",
+        b"/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>",
         b"<< /Length %d /Filter /FlateDecode >>\nstream\n" % len(content) + content + b"\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /%s /Encoding /WinAnsiEncoding >>" % font.encode(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /%s /Encoding /WinAnsiEncoding >>" % BOLD.get(font, font).encode(),
     ]
     out, offsets = bytearray(b"%PDF-1.7\n"), []
     for i, o in enumerate(objs, 1):
@@ -178,7 +183,7 @@ def write_set(out, name, scale, mode, dpis):
     meta = []
     for page, font, lines, heads, shorts in pages(scale, mode):
         path = d / f"{page}.pdf"
-        pdf(path, font, lines, mode)
+        pdf(path, font, lines, mode, set(heads))
         for dpi in dpis:
             render(path, dpi).save(d / f"{page}-{dpi}.png")
         meta.append({"page": page, "font": font, "dpis": list(dpis), "headings": heads, "short": shorts})
@@ -192,6 +197,7 @@ def main():
     out = ap.parse_args().out
     plain = write_set(out, "plain-1.2", 1.2, "plain", (150, 200, 300))
     write_set(out, "plain-1.3", 1.3, "plain", (150, 200, 300))
+    write_set(out, "bold", 1.0, "bold", (150, 200, 300))
     for mode in ("underline", "boxed", "strike", "superscript", "italic"):
         write_set(out, mode, 1.2, mode, (200,))
     rng = np.random.default_rng(5)
@@ -207,7 +213,7 @@ def main():
         # The born-digital twin is plain-1.2's PDF.
         (out / name / "meta.json").write_text(json.dumps(
             {"set": name, "scale": 1.2, "twin": "plain-1.2", "pages": meta}, indent=1))
-    print(f"{2 + 5 + len(made)} sets in {out}")
+    print(f"{3 + 5 + len(made)} sets in {out}")
 
 
 if __name__ == "__main__":

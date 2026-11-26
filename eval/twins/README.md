@@ -22,13 +22,15 @@ eval/twins/check.py --models DIR --baseline eval/twins/baseline.json
 Each page is Letter size in one of the standard 14 fonts (Helvetica, Times,
 Courier), at 10, 11 or 12 pt, three draws each: paragraphs set 1.3 em
 apart, short lines at body size alone on their line (`Total`, `Bill to:`),
-and headings set larger than the body and not bold, one word or a line.
-Nothing tells a heading from the body but its size, which is what a scan
-gives OCR to go by.
+and headings set larger than the body and not bold, one word or a line;
+or, in `bold`, set at the body's size in the bold face. Nothing tells a
+heading from the body but its size or its weight, which a scan gives OCR to
+go by only in its pixels.
 
 | set | what it is |
 |---|---|
 | `plain-1.2`, `plain-1.3` | headings a fifth and a third larger than the body, at 150, 200 and 300 dpi |
+| `bold` | headings at the body's size in Helvetica-Bold, Times-Bold or Courier-Bold, at 150, 200 and 300 dpi |
 | `underline`, `strike`, `boxed` | every line underlined; the prose struck through; a box drawn round each short line (200 dpi) |
 | `superscript` | a raised `1` after every line, which OCR reads into it (200 dpi) |
 | `italic` | the oblique and italic faces (200 dpi) |
