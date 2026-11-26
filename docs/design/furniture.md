@@ -223,6 +223,26 @@ adding signals:
   set off to its right is no column the label sits in, nor is a header
   block's own line over the next (`INSTALLATION INSTRUCTIONS` over
   `INSTRUCTIONS D’INSTALLATION`), each a label standing alone.
+- **A chart's own text.** A report that gives each country a page of its own
+  draws the same chart on each, and the chart's legend stands at one place
+  page after page, as a running head does: `Power Industry`, `Buildings`,
+  `Transport` beside their colour patches, near the head of two hundred
+  pages. A line set in a drawing on most of its pages is the drawing's, and
+  repetition takes none of it:
+  - **A legend's entry**, with a swatch standing alone directly before it on
+    its line: a patch no larger than the entry's text is tall and no thinner
+    than a third of it, its middle on the line, within an em.
+  - **An axis's label** at a tick mark: a stroke no longer than an em, over
+    or under the label within its width, or beside it within its height,
+    within an em.
+
+  Running lines sit on drawn shapes too, and the cues leave them alone. A
+  band behind a running head, a logo beside a running title, and a box round
+  a page number are larger than the text. A box's edge before the number is
+  a stroke, not a patch. A logo drawn as letter shapes sets them abutting on
+  their line, and the last of them is no swatch (a maker's name drawn so,
+  before a submittal form's `SPECIFICATION SUBMITTAL`). A series' line drawn as its legend's sample,
+  wider than the text is tall, is not read as a swatch.
 - **A short form of a title that varies.** A spec sheet titles some pages
   `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS` and others `DISHWASHER`.
   Taken as a running line, the short form was cut out of the long ones and
