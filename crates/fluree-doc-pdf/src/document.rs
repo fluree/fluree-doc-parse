@@ -7653,6 +7653,7 @@ mod tests {
                     italic: false,
                     advance: None,
                     draw_index: glyphs.len(),
+                    ocr: None,
                 });
             }
         }
