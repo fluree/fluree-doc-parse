@@ -241,7 +241,11 @@ U+F0B7 in the text layer, is `•`, and a Wingdings box is `❑`. Where the
 font's name does not say which font it is, the private-use codes of those
 bullets are read as bullets all the same, but only codes that are no letter
 in Symbol or Wingdings, since the same code is `❑` in one and `θ` in the
-other. A block that
+other. Japanese text's bullet, the katakana middle dot (`・`, or `･` at half
+width), opens an item at the head of a line, with or without a space after
+it: `・安定的、継続的な配当`, `・PCB 上に…`. Inside a line it parts two words
+(`所得・消費関係`) and opens nothing; Japanese typesetting never starts a
+line with it otherwise. A block that
 opens with a bullet is a list item unless it is a heading, and one that opens
 with a plain bullet or a box to tick is never a heading, whatever its size
 or weight: an option list's bold items (`❑ Peg rack`) stay items. An arrow
