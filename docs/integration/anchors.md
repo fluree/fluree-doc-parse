@@ -27,7 +27,7 @@ anchor and a crop file name the same thing, and the `CROPS` count of
 they route each page as extracted, and can see one region fewer or more
 than the anchors (below).
 
-`triage`, `dev render-routed` and `convert --escalate` all take their
+`triage`, `dev render-routed` and `convert --mode vlm` all take their
 region crops from the anchors of an analysis made with the same options,
 rather than routing each page again as extracted: the analysis routes a
 page after cleaning it (doubled glyphs dropped, layout rules stripped), and
@@ -79,8 +79,8 @@ no position tracking, no re-parse.
 
 ## Interaction with --tier-results
 
-`--tier-results` mints anchors, and so does escalating with a configured
-reader (`--escalate`, or a provider set up in the config): anchors are minted
+`--tier-results` mints anchors, and so does mode `vlm` with a configured
+reader: anchors are minted
 and then filled in the same run, and an anchor no reading answers is dropped
 rather than printed. Neither keeps the unanswered ones the way
 `--emit-anchors` does, below. Passing `--emit-anchors` alone gives you the

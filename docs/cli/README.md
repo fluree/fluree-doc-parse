@@ -40,5 +40,5 @@ it exposes intermediate layout state and its output may change in any release.
 
 ## Environment
 
-Several environment variables configure the model tiers and some diagnostics;
+Several environment variables choose the mode, configure OCR and the model reader, and some diagnostics;
 see [Environment variables](../reference/env-vars.md).

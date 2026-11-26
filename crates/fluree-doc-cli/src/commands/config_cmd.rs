@@ -47,8 +47,14 @@ fn show() -> i32 {
         l.path.display(),
         if l.exists { "" } else { "  (not written yet)" }
     );
+    // The mode a `convert` with no flags would read in, decided as it
+    // decides it, and where from.
+    let mut tiers = crate::commands::common::TierConfig::from_env();
+    match tiers.resolve_mode(&Default::default(), false, true) {
+        Ok(r) => println!("mode     {}   (from {})", r.mode, r.source),
+        Err(e) => println!("mode     not usable: {e}"),
+    }
     let e = &l.config.escalation;
-    println!("enabled  {}", e.enabled);
     println!("provider {}", e.provider.as_deref().unwrap_or("(unset)"));
     println!("model    {}", l.config.model());
     println!("workers  {}", e.concurrency);
@@ -71,8 +77,8 @@ fn show() -> i32 {
     }
     println!();
     match l.config.missing() {
-        None => println!("escalation is ready — `fdoc convert <pdf>` will use it"),
-        Some(why) => println!("escalation is off: {why}"),
+        None => println!("the model reader is ready: mode vlm uses it"),
+        Some(why) => println!("no model reader: {why}"),
     }
     0
 }
@@ -190,6 +196,7 @@ fn gemini(credentials: PathBuf, project: Option<String>, model: Option<String>) 
     };
     let write = |k: &str, v: Value| -> Result<(), String> { config::set(&path, k, v) };
     let result = (|| -> Result<(), String> {
+        write("mode", Value::Str("vlm".into()))?;
         write("escalation.provider", Value::Str("gemini".into()))?;
         write(
             "escalation.gemini.credentials",
@@ -218,7 +225,15 @@ fn gemini(credentials: PathBuf, project: Option<String>, model: Option<String>) 
         model.as_deref().unwrap_or(config::DEFAULT_MODEL),
         project.as_deref().unwrap_or("(from the key)")
     );
-    println!("\n`fdoc convert <pdf>` now escalates the pages that ask for it.");
-    println!("`--no-escalate` turns it off for one run; `fdoc triage <pdf>` shows what would go.");
+    println!("  mode = \"vlm\": `fdoc convert <pdf>` sends a model what OCR cannot read");
+    let assets = crate::config::load()
+        .ok()
+        .is_some_and(|l| crate::commands::ocr::models_dir(None, &l.config.ocr).is_some());
+    if !assets {
+        println!(
+            "\nvlm builds on ocr, which needs the OCR assets: set ocr.models (or FDOC_OCR_MODELS)"
+        );
+    }
+    println!("`--no-escalate` or `--mode ocr` turns the model off for one run; `fdoc triage <pdf>` shows what would go.");
     0
 }

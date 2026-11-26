@@ -1,32 +1,24 @@
 # fluree-doc-parse
 
-Adaptive document parsing: a deterministic Rust engine first, with
-model-arbitrated upgrade tiers a document walks through only as far as it
-needs. PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, a raster image, a
-meeting transcript or an email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD
-graph out.
+Adaptive document parsing: a deterministic Rust engine first, with OCR and a
+model reader a document uses only as far as it needs. PDF, Markdown, plain
+text, HTML, DOCX, PPTX, XLSX, a raster image, a meeting transcript or an
+email in; Markdown, XHTML, JSON, plain text or a DoCO JSON-LD graph out.
 
-| tier | adds | overall¹ | typical cost/document |
+A run reads in one of three [modes](docs/getting-started/modes.md), each
+building on the one before:
+
+| mode | adds | needs | nothing leaves the machine |
 |---|---|---|---|
-| 1 | deterministic extraction + layout | 0.901319 | **8 ms** (CPU) |
-| 2 | layout-detector arbitration (headings, table regions) | 0.908607 | ~0.2 s³ |
-| 3 | deep reading of pixels-only content and doubted structure | **0.940703** | ~1.5 s² |
+| `deterministic` (default) | the document's own text, layout, tables and headings, in milliseconds | nothing | yes |
+| `ocr` | the built-in OCR engine, on pages and regions whose text is pixels | the OCR assets | yes |
+| `vlm` | a model reader, for what OCR cannot do | the OCR assets and a model reader | no |
 
-¹ 200-document public evaluation corpus, measured 2026-11-23 — the standings
-[below](#where-it-stands). Every rung reproduces from the committed
-model-output caches with no GPU and no API key.
+How each mode scores on a public 200-document corpus, against the other
+engines, is on [the benchmarks page](docs/benchmarks/README.md). Every score
+reproduces from committed model-output caches with no GPU and no API key.
 
-² Averaged across the corpus: 87 of the 200 documents escalate (median
-1.7 s), the other 113 never leave tier 1 at 8 ms. Tiers 1 and 2 are CPU-only,
-so the deep reader is the sole reason to think about a GPU or an API key. The
-full timing accounting is on [the benchmarks page](docs/benchmarks/README.md).
-
-³ A page through the layout detector on a GPU host. It runs on CPU too, at
-about 0.8 s a page on an Apple M4 Max, whose GPU it cannot use. `fdoc` reads
-the detector's boxes rather than running it: see
-[Producing layout boxes](docs/integration/escalation-tiers.md#producing-layout-boxes).
-
-Two principles produced those numbers:
+Two principles shape every mode:
 
 - **Models arbitrate structure; the page tier owns its page.** Where the
   deterministic pass produced a reading, a model's replaces it only when their
@@ -34,9 +26,10 @@ Two principles produced those numbers:
   model win. Where the deterministic pass is what failed — no usable glyph
   layer, or a hierarchy resting on nothing — the reading owns the page
   outright, because there is no good text to prefer to it.
-- **Escalation is earned, not configured.** Each tier's outputs are the
-  sensors that decide whether the next tier runs, per document, per region,
-  per table.
+- **What is read is earned, not configured.** The mode says what a run may
+  use. Within it, each page's own output decides what is used: a page with
+  no glyphs earns OCR, a reading OCR is unsure of earns the model, per
+  document, per region, per table.
 
 ## Quick start
 
@@ -63,17 +56,19 @@ fdoc convert document.pdf -f text            # plain-text projection (the string
                                              #   doco char offsets index into)
 fdoc convert ./docs/ --out-dir out -j 8      # parallel batch
 fdoc forms   document.pdf                    # AcroForm fields + filled values
-fdoc triage  document.pdf                    # what would escalate, and why
+fdoc triage  document.pdf                    # what OCR or a model would read, and why
 
-fdoc config gemini --credentials key.json    # set a deep reader up, once
-fdoc convert document.pdf -f doco            # …and any format escalates
-fdoc convert document.pdf --no-escalate      # deterministic for this run
+fdoc convert scan.pdf --mode ocr --models ~/assets/ocr   # OCR, on the machine
+fdoc config gemini --credentials key.json    # set a model reader up (mode = "vlm")
+fdoc convert scan.pdf -f doco                # …and OCR and the model read what they must
+fdoc convert scan.pdf --no-escalate          # no model call for this run
 ```
 
-Escalation is off until a provider is configured, and with none configured the
-binary opens no network connection. Readings can also be supplied as
-[JSON sidecars](docs/integration/escalation-tiers.md) from any model you run
-yourself — see [`fdoc config`](docs/cli/config.md).
+The default mode is `deterministic`, and in it the binary opens no network
+connection. Readings can also be supplied as [JSON
+sidecars](docs/integration/escalation-tiers.md) from any model you run
+yourself; see [modes](docs/getting-started/modes.md) and [`fdoc
+config`](docs/cli/config.md).
 
 ## Where it stands
 
@@ -124,8 +119,8 @@ measured and rejected are in [the scoreboard](docs/contributing/scoreboard.md).
 
 PDF, Markdown, plain text, HTML, DOCX, PPTX, XLSX, transcripts, email and raster images all converge on one element
 model, so every source produces the same DoCO graph. PDF is the geometric
-path — structure inferred from glyph and rule positions, with escalation to
-model tiers where the inference is weak. The others declare their structure,
+path: structure inferred from glyph and rule positions, with OCR and a model
+reader where the page's text is pixels or the inference is weak. The others declare their structure,
 so those readers map rather than measure, and carry no geometry: their
 elements have no `bbox` rather than a zeroed one.
 
@@ -142,7 +137,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 
 - [Output formats](docs/formats/README.md) — what each of the five guarantees
 - [CLI reference](docs/cli/README.md) — every command, flag by flag
-- [Integration](docs/integration/README.md) — wiring the model tiers, ledger
+- [Integration](docs/integration/README.md) — model readings from files, ledger
   ingest, entity overlay
 - [Rust library](docs/getting-started/rust-library.md) — the supported API
 - [Design](docs/design/README.md) — how the deterministic engine works

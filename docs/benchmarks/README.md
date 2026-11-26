@@ -50,7 +50,7 @@ The deterministic engine — no model, no GPU, no API key — places third. The
 layout detector, still CPU only, would lift it to second, and the cascade
 places first by 0.034.
 
-By [tier](../getting-started/tiers.md):
+By [mode](../getting-started/modes.md):
 
 | tier | adds | overall | typical cost/document |
 |---|---|---|---|
@@ -70,10 +70,8 @@ process, `fdoc convert <dir> -j 1` reads the same 200 documents at 7.7 ms
 each: the 8 ms in the tier table. A single timing is not a measurement.
 
 ³ PP-DocLayoutV3 on a GPU host, 178 ms a page. It runs on CPU too, at
-0.82 s a page on an Apple M4 Max, whose GPU it cannot use. The committed
-layout cache is what
-[Producing layout boxes](../integration/escalation-tiers.md#producing-layout-boxes)
-writes: boxes made afresh that way for all 200 pages score tier 2 the same,
+0.82 s a page on an Apple M4 Max, whose GPU it cannot use. Boxes made afresh
+for all 200 pages score tier 2 the same as the committed layout cache,
 0.908607.
 
 ## Reproducing it
@@ -118,10 +116,12 @@ FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
 FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
   uv run python src/run.py --engine fluree-doc-parse-cascade --force
 
-# tier 3 — the full cascade, from the committed caches
+# tier 3 — the full cascade, from the committed caches: model readings are
+# mode vlm, which builds on ocr and so needs the OCR assets
 FLUREE_DOC_BINARY=<repo>/target/release/fdoc \
 FDOC_TITLE_BOXES=<repo>/eval/layout-cache \
 FDOC_TIER_RESULTS=<repo>/eval/cascade-cache \
+FDOC_OCR_MODELS=<assets>/ocr \
   uv run python src/run.py --engine fluree-doc-parse-cascade --force
 ```
 

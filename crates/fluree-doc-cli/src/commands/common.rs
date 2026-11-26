@@ -95,6 +95,8 @@ pub(crate) struct TierConfig {
     pub emit_anchors: bool,
     /// Call the configured reader during this run.
     pub escalate: bool,
+    /// The mode this run reads in ([`Self::resolve_mode`]).
+    pub mode: crate::mode::Mode,
     /// What the config file says, loaded once per invocation rather than per
     /// document — a batch of a thousand files must not read it a thousand
     /// times.
@@ -125,6 +127,7 @@ impl TierConfig {
             ocr: None,
             emit_anchors: std::env::var_os("FDOC_VLM_ANCHORS").is_some(),
             escalate: false,
+            mode: crate::mode::Mode::Deterministic,
             config: crate::config::Config::default(),
             config_path: None,
             columns: crate::escalate::jobs::columns_override(
@@ -134,24 +137,6 @@ impl TierConfig {
             table_conf_debug: std::env::var_os("FDOC_TABLE_CONF").is_some(),
             insert_missing_tables: std::env::var_os("FDOC_INSERT_TABLES").is_some(),
         }
-    }
-
-    /// Environment config and the config file, for a command that calls no
-    /// reader but chooses the crops one would be handed: what the file says
-    /// about escalation (`escalation.on_column_doubt`) changes that set, so
-    /// a command that left it out would count a set `convert --escalate`
-    /// does not send. A file that cannot be read is warned about and left
-    /// out, as `convert` leaves it out.
-    pub fn configured() -> Self {
-        let mut tiers = Self::from_env();
-        match crate::config::load() {
-            Ok(l) => {
-                tiers.config_path = l.exists.then_some(l.path);
-                tiers.config = l.config;
-            }
-            Err(e) => eprintln!("warning: {e}"),
-        }
-        tiers
     }
 
     /// Environment config with per-flag overrides on top.
@@ -194,39 +179,75 @@ impl TierConfig {
         }
     }
 
-    /// Decide whether this run calls a reader, and say so when the answer is
-    /// a surprise.
-    ///
-    /// A configured provider escalates by default, because configuring one is
-    /// itself the decision to use it. Asking for escalation without a
-    /// provider is not an error — the deterministic parse is still the right
-    /// output — but it must not be silent, or a batch run under a wrong
-    /// assumption looks like a working one.
-    pub fn resolve_escalation(&mut self, on: bool, off: bool, quiet: bool) {
-        let loaded = match crate::config::load() {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("warning: {e}");
-                eprintln!("         parsing deterministically");
-                return;
+    /// Decide the run's mode ([`crate::mode::resolve`]) from its flags, the
+    /// environment and the config, once per invocation, and set what follows
+    /// from it: whether a model is called, and which readings from files are
+    /// used. Says its notes once, and with `verbose` the mode; an unmet need
+    /// is the error returned.
+    pub fn resolve_mode(
+        &mut self,
+        flags: &ModeFlags<'_>,
+        verbose: bool,
+        quiet: bool,
+    ) -> Result<crate::mode::Resolved, String> {
+        use crate::mode::{Given, Inputs, Mode};
+        match crate::config::load() {
+            Ok(l) => {
+                self.config_path = l.exists.then_some(l.path);
+                self.config = l.config;
             }
+            Err(e) => eprintln!("warning: {e}"),
+        }
+        let given = |flag: bool, env: bool| match (flag, env) {
+            (true, _) => Given::Flag,
+            (false, true) => Given::Env,
+            _ => Given::No,
         };
-        self.config = loaded.config;
-        let ready = self.config.reader_is_configured();
-        self.escalate = !off && (on || (ready && self.config.escalation.enabled));
-        if self.escalate && !ready {
-            let why = self
-                .config
-                .missing()
-                .unwrap_or_else(|| "no reader is configured".into());
-            eprintln!("warning: --escalate was asked for but {why}");
-            eprintln!("         run `fdoc config gemini --credentials <key.json>` to set one up");
-            eprintln!("         parsing deterministically");
-            self.escalate = false;
+        let set = |var: &str| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+        let inputs = Inputs {
+            flag: flags.mode,
+            env: std::env::var("FDOC_MODE").ok(),
+            config: self.config.mode,
+            escalate: flags.escalate,
+            no_escalate: flags.no_escalate,
+            ocr: given(flags.ocr, set("FDOC_OCR")),
+            ocr_words: given(flags.ocr_words, self.ocr_words.is_some()),
+            tier_results: given(flags.tier_results, self.tier_results.is_some()),
+            emit_anchors: given(flags.emit_anchors, self.emit_anchors),
+            assets: flags.plans_only
+                || crate::commands::ocr::models_dir(flags.models, &self.config.ocr).is_some(),
+            provider: flags.plans_only || self.config.reader_is_configured(),
+            legacy_ocr: self.config.ocr.engine.is_some(),
+            legacy_vlm: self.config.escalation.enabled,
+        };
+        let r = crate::mode::resolve(&inputs)?;
+        // Readings from files a variable named, under a flag's lower mode,
+        // are not used: [`crate::mode::resolve`] has said so.
+        if r.mode < Mode::Vlm {
+            if !flags.tier_results {
+                self.tier_results = None;
+            }
+            if !flags.emit_anchors {
+                self.emit_anchors = false;
+            }
         }
-        if self.escalate && self.tier_results.is_some() && !quiet {
-            eprintln!("note: --tier-results supplies the readings; not calling the model");
+        if r.mode < Mode::Ocr && !flags.ocr_words {
+            self.ocr_words = None;
         }
+        self.mode = r.mode;
+        self.escalate = r.call_model;
+        if !quiet {
+            for note in &r.notes {
+                eprintln!("{note}");
+            }
+            if r.mode == Mode::Vlm && self.tier_results.is_some() && inputs.provider {
+                eprintln!("note: --tier-results supplies the readings; not calling the model");
+            }
+        }
+        if verbose {
+            eprintln!("mode: {} (from {})", r.mode, r.source);
+        }
+        Ok(r)
     }
 
     pub fn options_for(&self, stem: &str) -> fluree_doc_pdf::document::AnalyzeOptions {
@@ -243,6 +264,29 @@ impl TierConfig {
             insert_missing_tables: self.insert_missing_tables,
         }
     }
+}
+
+/// The flags a command was given that bear on its mode
+/// ([`TierConfig::resolve_mode`]); readings from files given by their
+/// variables are read from the environment.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ModeFlags<'a> {
+    pub mode: Option<crate::mode::Mode>,
+    pub escalate: bool,
+    pub no_escalate: bool,
+    /// `--ocr` was given.
+    pub ocr: bool,
+    pub models: Option<&'a Path>,
+    /// `--ocr-words` was given.
+    pub ocr_words: bool,
+    /// `--tier-results` was given.
+    pub tier_results: bool,
+    /// `--emit-anchors` was given.
+    pub emit_anchors: bool,
+    /// The command plans or renders crops for a reader, reading none itself
+    /// (`triage`, `dev render-routed`): the mode is decided as `convert`
+    /// decides it, but what reading needs is not asked of it.
+    pub plans_only: bool,
 }
 
 /// Build core options from the CLI's environment variables.

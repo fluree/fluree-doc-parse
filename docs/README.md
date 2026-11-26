@@ -16,9 +16,10 @@ declare their structure, so those readers map rather than measure.
   8 ms per document and outscores every non-ML engine on
   [opendataloader-bench](benchmarks/README.md) by itself. No model, no
   GPU, no network.
-- **Escalation that is earned, not configured.** Each tier's own output is the
-  sensor that decides whether the next tier runs — per document, per region,
-  per table. See [the tier model](getting-started/tiers.md).
+- **What is read is earned, not configured.** The mode says what a run may
+  use: the document alone, OCR, or a model. Within it, each page's own output
+  decides what is used, per document, per region, per table. See
+  [modes](getting-started/modes.md).
 - **Models arbitrate structure; the page tier owns its page.** Where the
   deterministic pass produced a reading, a model's replaces it only when their
   *shapes* disagree. Where the deterministic pass is what failed, the reading
@@ -39,7 +40,7 @@ declare their structure, so those readers map rather than measure.
 - **Install it** → [Install](getting-started/install.md)
 - **Convert your first document** → [Quickstart](getting-started/quickstart.md)
 - **Call it from Python or Node** → [Examples](examples/README.md)
-- **Understand the tiers** → [The tier model](getting-started/tiers.md)
+- **Understand the modes** → [Modes](getting-started/modes.md)
 - **Pick an output format** → [Output formats](formats/README.md)
 - **Embed the crates** → [Using fluree-doc-parse as a Rust library](getting-started/rust-library.md)
 
@@ -54,7 +55,7 @@ declare their structure, so those readers map rather than measure.
 - [Examples](examples/README.md) — chunking for retrieval, locating text on
   the page, tables, batch runs, sizing a deployment, form fields
 - [CLI reference](cli/README.md) — every `fdoc` command, flag by flag
-- [Integration](integration/README.md) — wiring the model tiers, the sidecar
+- [Integration](integration/README.md) — model readings from files, the sidecar
   contract, ledger ingest, entity overlay
 - [Design](design/README.md) — internals: the pipeline, reading order,
   headings, tables, furniture, the router

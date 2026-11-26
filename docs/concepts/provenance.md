@@ -15,7 +15,7 @@ configure it — not in the sense that you cannot audit it.
 |---|---|
 | `rust` | the deterministic PDF engine |
 | `vlm` | spliced in from a model tier |
-| `ocr` | assembled by the deterministic engine from [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words) |
+| `ocr` | assembled by the deterministic engine from [OCR words](../integration/sidecar-formats.md#3-ocr-words----ocr-words) |
 | `markdown` / `html` / `docx` / `pptx` / `xlsx` / `vtt` / `srt` / `eml` / `msg` | the corresponding reader |
 
 So `provenance` answers "which reader", and for PDF specifically it

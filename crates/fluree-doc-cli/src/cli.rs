@@ -86,6 +86,10 @@ pub enum Commands {
     Triage {
         /// PDF file or directory of PDFs
         path: PathBuf,
+        /// The mode whose crops to count, as `convert --mode` decides it
+        /// [env: FDOC_MODE]
+        #[arg(long, value_enum, value_name = "MODE")]
+        mode: Option<crate::mode::Mode>,
     },
 
     /// Show or set configuration: the deep reader's provider and credentials
@@ -216,6 +220,17 @@ pub struct ConvertArgs {
     #[arg(long, short = 'j', default_value_t = 0, value_name = "N")]
     pub jobs: usize,
 
+    /// What the run may use beyond the document [env: FDOC_MODE]
+    ///
+    /// `deterministic` (the default): the document alone, nothing leaves the
+    /// machine. `ocr`: and the built-in OCR engine on pages and regions
+    /// whose text is pixels; needs the OCR assets (`--models`). `vlm`: and
+    /// the configured model reader, for what OCR cannot do; needs the assets
+    /// and a reader (`fdoc config gemini`). Overrides `mode` in the config.
+    /// A mode whose needs are not met is an error.
+    #[arg(long, value_enum, value_name = "MODE")]
+    pub mode: Option<crate::mode::Mode>,
+
     /// Directory of layout-detector sidecars (`<stem>_p<N>_page.json`) used
     /// to promote missed section titles [env: FDOC_TITLE_BOXES]
     #[arg(long, value_name = "DIR")]
@@ -238,11 +253,11 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "DIR", conflicts_with = "ocr")]
     pub ocr_words: Option<PathBuf>,
 
-    /// Read routed pages and regions with this OCR engine, in this one
-    /// command, before analysis [env: FDOC_OCR]
+    /// Read routed pages and regions with this OCR engine [env: FDOC_OCR]
     ///
-    /// Needs the assets directory (`--models`). Overrides `ocr.engine` in
-    /// the config.
+    /// Superseded by `--mode ocr`; still names the engine, and asks for
+    /// `ocr` at least. Needs the assets directory (`--models`). Overrides
+    /// `ocr.engine` in the config.
     #[arg(long, value_enum, value_name = "ENGINE")]
     pub ocr: Option<OcrEngineName>,
 
@@ -284,15 +299,12 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "NAME")]
     pub source_name: Option<String>,
 
-    /// Read escalated pages with the configured model, in this one command
-    ///
-    /// On by default once `fdoc config gemini` has been run. This flag is for
-    /// forcing it where the config disables it — with nothing configured it
-    /// warns and parses deterministically.
+    /// Superseded by `--mode vlm`, which it asks for
     #[arg(long, conflicts_with = "no_escalate")]
     pub escalate: bool,
 
-    /// Never call a model, whatever the config says
+    /// Never call a model, whatever `--mode`'s variable or the config says:
+    /// `vlm` reads as `ocr`
     #[arg(long)]
     pub no_escalate: bool,
 
@@ -437,6 +449,10 @@ pub enum DevCommands {
         /// manifest records each crop's `scale` either way
         #[arg(long)]
         stored_resolution: bool,
+        /// The mode whose crops to render, as `convert --mode` decides it;
+        /// `ocr` and over crop the small regions too [env: FDOC_MODE]
+        #[arg(long, value_enum, value_name = "MODE")]
+        mode: Option<crate::mode::Mode>,
     },
     /// Render a region manifest's crops via the pipeline's own crop path
     RenderCrops {

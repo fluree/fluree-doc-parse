@@ -47,14 +47,22 @@ fn scratch(test: &str) -> PathBuf {
 }
 
 /// `fdoc convert <input> -f doco <args>`, with no reader configured: its
-/// JSON-LD output.
+/// JSON-LD output. Model readings from files (`--tier-results`) read in
+/// `vlm`, which builds on `ocr`: an empty words directory stands in for
+/// the engine where the test names none.
 fn convert(input: &Path, args: &[&str]) -> serde_json::Value {
     let home = input.parent().unwrap().join("home");
-    let out = Command::new(env!("CARGO_BIN_EXE_fdoc"))
-        .arg("convert")
+    let no_words = input.parent().unwrap().join("no-words");
+    std::fs::create_dir_all(&no_words).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_fdoc"));
+    cmd.arg("convert")
         .arg(input)
         .args(["-f", "doco", "-q"])
-        .args(args)
+        .args(args);
+    if args.contains(&"--tier-results") && !args.contains(&"--ocr-words") {
+        cmd.arg("--ocr-words").arg(&no_words);
+    }
+    let out = cmd
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", &home)
         .env_remove("FDOC_OCR_WORDS")
@@ -339,7 +347,7 @@ fn an_image_ocr_left_unread_goes_to_the_configured_model() {
     std::fs::write(
         home.join("config.toml"),
         format!(
-            "[escalation]\nprovider = \"gemini\"\n[escalation.gemini]\ncredentials = {:?}\n",
+            "mode = \"vlm\"\n[escalation]\nprovider = \"gemini\"\n[escalation.gemini]\ncredentials = {:?}\n",
             key.to_str().unwrap()
         ),
     )

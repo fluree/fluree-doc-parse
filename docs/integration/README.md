@@ -2,12 +2,12 @@
 
 Everything about putting `fdoc` inside something larger.
 
-- [`fdoc config`](../cli/config.md) — configure a reader once, and escalation
-  happens inside `fdoc convert`
-- [Wiring the escalation tiers](escalation-tiers.md) — running the tiers
-  yourself instead, through files
-- [Sidecar formats](sidecar-formats.md) — the exact file contract the tiers
-  read
+- [`fdoc config`](../cli/config.md) — configure a reader once, and mode `vlm`
+  reads with it inside `fdoc convert`
+- [Model readings](escalation-tiers.md) — running the models yourself
+  instead, through files
+- [Sidecar formats](sidecar-formats.md) — the exact file contract those
+  readings follow
 - [Anchors](anchors.md) — the `[[VLM:…]]` protocol for filling escalated
   regions out-of-band
 - [Loading into a Fluree ledger](ledger-ingest.md) — DoCO JSON-LD in, graph

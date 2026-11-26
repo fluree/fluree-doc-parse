@@ -6,7 +6,7 @@ Read crops or images with the built-in OCR engine, into word files.
 fdoc ocr <DIR|IMAGE>... --models <DIR> --out <DIR> [options]
 ```
 
-Writes one [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words)
+Writes one [OCR words](../integration/sidecar-formats.md#3-ocr-words----ocr-words)
 file per image, `<image stem>.json`, which `fdoc convert --ocr-words` reads. It
 is the middle step of the three-step path, for when the crops, the reading and
 the conversion run in different places or at different times:
@@ -17,11 +17,11 @@ fdoc ocr crops/ --models ~/assets/ocr --out words/
 fdoc convert report.pdf --ocr-words words/
 ```
 
-`fdoc convert --ocr oar-ocr --models DIR` does the same in one command, in
+`fdoc convert --mode ocr --models DIR` does the same in one command, in
 memory, and gives the same output. On a page asked for whole on a doubt
 about its structure, `render-routed --ocr-regions` gives the page its doubt's
 reason and crops its raster regions apart, so `fdoc ocr` reads the regions,
-as `convert --ocr` does, and not the page.
+as `convert` does in mode `ocr`, and not the page.
 
 An image is read only if its own pixels can hold a line of text: 10 px on its
 short side, whatever size it is drawn at (measured: the engine reads a line
@@ -30,8 +30,8 @@ from 8 × 8 masks and rules stretched from a 1 × 1 mask are not read, and an
 image drawn twice in one place is read once. A document's crops are capped
 by [`ocr.max_crops`](config.md#ocr) (default 1000): past it, pages read whole
 come first, then routed regions, then small ones, and a note on stderr says
-how many were left. `render-routed --ocr-regions` adds the crops `convert
---ocr` reads, from the same selection and under the same cap; the model's own
+how many were left. `render-routed --ocr-regions` adds the crops `convert`
+reads in mode `ocr`, from the same selection and under the same cap; the model's own
 crops (pages, routed regions) are written whatever the cap, so past it the
 three-step path also reads those.
 
@@ -165,7 +165,7 @@ rebuilds its assets directory with that release's `build.py`.
 ### Building
 
 The engine is built into the `fdoc` binary by default (the `ocr` feature of
-`fluree-doc-cli`); it runs only when asked for, with `--ocr` and an assets
+`fluree-doc-cli`); it runs only in mode `ocr` or `vlm`, with an assets
 directory. The libraries (`fluree-doc-pdf`, `fluree-doc-vision`, …) build no
 engine unless their own feature asks for it (`fluree-doc-vision/oar`), so a
 crate that only parses pulls in no OCR dependency.
@@ -180,7 +180,7 @@ needs a C compiler: oar-ocr depends on a tokenizer library that compiles C
 The engine runs where ONNX Runtime 1.28.0 is published: Linux x64 and arm64
 (glibc), macOS on Apple silicon, Windows x64 and arm64. There is none for
 Intel macOS (`osx-x64`, which the package no longer ships), and a fully static
-build (musl) cannot load a library at all: there, `--ocr oar-ocr` stops with
+build (musl) cannot load a library at all: there, mode `ocr` stops with
 an error (no ONNX Runtime for the platform, or the library failing to load),
 and `--ocr-words` still reads words an outside engine wrote.
 

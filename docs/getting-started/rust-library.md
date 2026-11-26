@@ -107,7 +107,7 @@ ocr::mark_provenance(&mut analysis.elements, &injected);
 
 `inject` takes a reading only for a page or region the router sends a reader,
 and reports what it took and refused per reading. The reading format and the
-rules are under [OCR words](../integration/sidecar-formats.md#4-ocr-words----ocr-words).
+rules are under [OCR words](../integration/sidecar-formats.md#3-ocr-words----ocr-words).
 
 ## Read a scan with the built-in OCR engine
 

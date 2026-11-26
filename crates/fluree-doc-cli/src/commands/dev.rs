@@ -1184,6 +1184,7 @@ pub(crate) fn render_routed(
     outdir: &Path,
     ocr_regions: bool,
     stored_resolution: bool,
+    mode: Option<crate::mode::Mode>,
 ) {
     use hayro_syntax::Pdf;
     use std::io::Write;
@@ -1198,7 +1199,19 @@ pub(crate) fn render_routed(
     let mut manifest =
         std::fs::File::create(outdir.join("manifest.jsonl")).expect("create manifest");
     let (mut n_pages, mut n_crops, mut n_media) = (0usize, 0usize, 0usize);
-    let tiers = crate::commands::common::TierConfig::configured();
+    // The mode `convert` would read in: `ocr` and over read the small
+    // regions too, so their crops are rendered.
+    let mut tiers = crate::commands::common::TierConfig::from_env();
+    let flags = crate::commands::common::ModeFlags {
+        mode,
+        plans_only: true,
+        ..Default::default()
+    };
+    if let Err(e) = tiers.resolve_mode(&flags, false, false) {
+        eprintln!("error: {e}");
+        std::process::exit(2);
+    }
+    let ocr_regions = ocr_regions || tiers.mode >= crate::mode::Mode::Ocr;
     let layout = tiers.layout_boxes.as_deref();
     // Crops are named by stem: a second input of a stem already cropped
     // (`report.pdf` and `report.png`) would overwrite the first's crops and

@@ -73,17 +73,17 @@ GPU pages   = corpus_pages × routed_rate
 GPU tables  = corpus_tables × uncertain_rate
 ```
 
-The [tier model](../getting-started/tiers.md) gives the per-page costs to
-multiply through: roughly 0.2 s for layout detection, 0.7 s per table for the
-structure pipeline, and 2–8 s per table for a VLM.
+[Modes](../getting-started/modes.md) gives the per-page costs to multiply
+through: a fraction of a second to a few seconds for a page OCR reads, and
+2–8 s for a page or table a model reads.
 
 ## What the rate does not tell you
 
 A 0% escalation rate does not mean the output is perfect — it means nothing
 was *unreadable*. What the deterministic tier still gets wrong is structure
 decisions: heading levels, table boundaries. Escalation buys structural
-arbitration, not characters. See [the tier
-model](../getting-started/tiers.md) for what each tier adds.
+arbitration, not characters. See [modes](../getting-started/modes.md) for
+what each mode adds.
 
 The reverse also holds. A high rate on mechanical drawings is a signal to
 route *less*, not more: the VLM returns a CAD drawing as one opaque image with

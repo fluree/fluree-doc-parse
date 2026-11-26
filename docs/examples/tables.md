@@ -220,7 +220,7 @@ three empty columns is not a measurement.
 
 Not every detected table is equally certain. `fdoc triage` reports the ones
 whose structure disagrees with itself, which are the candidates for a
-[model tier](../integration/escalation-tiers.md):
+[model reading](../integration/escalation-tiers.md):
 
 ```bash
 fdoc triage ./corpus/ | grep TABLE
@@ -233,4 +233,4 @@ report-b   TABLE   p0 Fragmented cols=[3, 9]; p2 MergedRows cols=[5]; p15 Merged
 
 One line per document, listing the pages whose grids disagree with themselves.
 Feed those pages to a table-structure model and leave the rest alone — see
-[Wiring the escalation tiers](../integration/escalation-tiers.md).
+[Model readings](../integration/escalation-tiers.md).

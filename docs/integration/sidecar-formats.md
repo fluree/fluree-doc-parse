@@ -1,6 +1,6 @@
 # Sidecar formats
 
-The exact file contract the [escalation tiers](escalation-tiers.md) read.
+The exact file contract [model readings](escalation-tiers.md) follow.
 Four directories, four shapes.
 
 ## Crop names
@@ -11,53 +11,17 @@ Model readings are keyed by a **crop name**: `p{page}_{tag}`, where the tag is
 |---|---|
 | `r{i}` | routed region *i* on that page |
 | `t{i}` | table *i* on that page |
-| `n{i}` | layout-found insert *i* (a table the grid pass missed) |
 | `full` | the whole page |
 
 `page` is 0-based. `fdoc dev render-routed` emits PNGs named
 `{stem}_{crop}.png` and a manifest tying each back to its source, with the
 `reason` each crop was asked for
-([escalation tiers](escalation-tiers.md#producing-the-crops)). A `full`
+([model readings](escalation-tiers.md#producing-the-crops)). A `full`
 reading replaces its page whatever the reason, so a reader that does not see
 structure should skip the crops asked for on a heading, figure or column
 doubt.
 
-## 1. Layout boxes — `--layout-boxes`
-
-**Filename:** `{stem}_p{page}_page.json`
-
-One file per page. An array of detector boxes over the **2× page render**, so
-coordinates are in pixels at twice PDF units (`fdoc` halves them on read).
-[Producing layout boxes](escalation-tiers.md#producing-layout-boxes) renders
-the pages and runs a detector over them.
-
-```json
-[
-  { "label": "paragraph_title", "score": 0.94, "box": [136, 370, 890, 402] },
-  { "label": "table",           "score": 0.99, "box": [120, 500, 1050, 1400] }
-]
-```
-
-| field | meaning |
-|---|---|
-| `label` | detector class (see below) |
-| `score` | confidence; **boxes below 0.6 are ignored** |
-| `box` | `[x0, y0, x1, y1]` in 2×-render pixels |
-
-Labels that do something:
-
-- **title family** — `paragraph_title`, `doc_title`, `title`. A title box
-  covering one of our short prose blocks promotes it to a
-  `doco:SectionTitle`.
-- **caption family** — `figure_title`, `chart_title`, `table_title`,
-  `figure_caption`, `chart`, `image`, `figure`. A heading of ours sitting
-  inside one of these is demoted to a `doco:Paragraph`.
-
-Everything else is ignored. Promotion is one-way except for that corroborated
-demotion — see [Escalation and
-arbitration](../concepts/escalation.md#promotion-only-for-headings).
-
-## 2. Model readings — `--tier-results`
+## 1. Model readings — `--tier-results`
 
 **Filename:** `{stem}_{crop}.json`
 
@@ -93,7 +57,7 @@ trimming.
 against the deterministic grid's shape — row and column counts — to decide
 whether the model's reading replaces ours.
 
-## 3. Table-structure readings — `--structure-results`
+## 2. Table-structure readings — `--structure-results`
 
 **Filename and shape:** identical to `--tier-results`.
 
@@ -104,13 +68,13 @@ veto](../concepts/escalation.md#the-three-way-veto). Two agreeing readers
 overrule the deepest model.
 
 The VLM reading need not come from `--tier-results`: the veto applies the
-same way to a model `fdoc convert --escalate` calls in the run. There it
+same way to a model `fdoc convert --mode vlm` calls in the run. There it
 rests on the structure reading and the grid alone, both known before the
 model is called, so no table crop it vetoes is sent to the model. A page
 read whole still shows the model its tables, and its reading replaces the
 page, grids and all.
 
-## 4. OCR words — `--ocr-words`
+## 3. OCR words — `--ocr-words`
 
 **Filename:** `{stem}_p{page}_full.json` for a whole page, `{stem}_p{page}_r{i}.json`
 for routed region *i* — the names of the crops `fdoc dev render-routed`
@@ -209,18 +173,13 @@ twice.
 Only those names are looked up — `full` on every page, `r{i}` for each unread region — so a batch can share one directory. The elements these words make up are marked `provenance: "ocr"`.
 
 **What to read.** The `render-routed` manifest says why each crop exists
-([escalation tiers](escalation-tiers.md#producing-the-crops)). An OCR engine
+([model readings](escalation-tiers.md#producing-the-crops)). An OCR engine
 needs to read only the crops whose `reason` is `scanned`, `near_blank`,
 `broken_text`, `region`, `small_region` or `embedded_image` (a DOCX's
-picture): those are the ones whose readings the document takes. A
-`table_missing` crop it reads only where the page's text does not cover it
-(see [escalation tiers](escalation-tiers.md#producing-the-crops)). [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
+picture): those are the ones whose readings the document takes. [`fdoc ocr`](../cli/ocr.md) reads a crops directory that way.
 A `heading_doubt`, `figure_doubt` or `column_doubt` page has all its text,
-and a `table` or `table_missing` crop asks about structure; read, they would
-only be refused or ignored. Skipping `table_missing` has the one known gap
-the escalation tiers name: a raster table too small for the router to send a
-reader is boxed by the layout detector alone, and its text stays unread until
-a reader that sees structure takes the crop.
+and a `table` crop asks about structure; read, they would only be refused or
+ignored.
 
 **How words become text.** Each box is chained to its nearest neighbour on
 the right — same line, comparable height, no wider apart than a word space —
@@ -258,11 +217,17 @@ Each character takes an equal share of its box, so a highlight is as close
 on a square sheet, as the engine's boxes are fine: within a character for word boxes, within a
 few for line boxes.
 
-**What OCR read is not escalated again.** A region a reading filled keeps
-its number among the page's regions, so a model reading of another region
-still lands where it belongs, and is not sent to a model. A page read whole
-asks a model for nothing — neither its whole page nor its tables: escalating
-past OCR is a decision of its own. Such a page is not reported unread unless
+**What OCR read well is not sent to a model.** A region a reading filled
+keeps its number among the page's regions, so a model reading of another
+region still lands where it belongs, and is not sent to a model. A page read
+whole asks a model for nothing more, neither its whole page nor its tables.
+In mode `vlm`, a reading OCR cannot give whole is left to the model instead,
+and not laid on the page: a page whose text is all pixels, a reading the
+engine is unsure of (under 0.90 confidence over 20 characters or more),
+pictures that hold as much text as the page's own layer, and a table in a
+picture. A picture's reading the engine is unsure of, on a page with text of
+its own, is set aside in every mode: it is lettering drawn into artwork, not
+text the page holds. A page read whole is not reported unread unless
 its text stays under the floor every page is held to (40 characters): then it
 is listed in `doc:unreadPages` as `OcrSparse`, with a warning on stderr, since
 an engine that gave two words for a dense scan has not read it. A reading
@@ -304,24 +269,24 @@ stem=report
 fdoc dev render-routed $stem.pdf ./crops
 
 # your service writes:
-#   ./layout/report_p12_page.json     (detector boxes for page 12)
 #   ./vlm/report_p12_t0.json          (VLM reading of table 0 on page 12)
 #   ./structure/report_p12_t0.json    (structure model, same crop)
 
+# model readings ask for vlm, which builds on ocr: give the OCR assets too
 fdoc convert $stem.pdf -f doco \
-  --layout-boxes ./layout \
   --tier-results ./vlm \
-  --structure-results ./structure
+  --structure-results ./structure \
+  --models ~/assets/ocr
 ```
 
-For the model-tier directories (1-3), any file that is missing, unreadable
-or not valid JSON is skipped silently — that tier simply does not fire for
-that crop. This is deliberate: a partial
-GPU batch degrades to a lower tier rather than failing the document.
+For these directories, any file that is missing, unreadable or not valid
+JSON is skipped silently: that reader simply adds nothing for that crop. This
+is deliberate: a partial GPU batch leaves a crop with the reading it had
+rather than failing the document.
 
 ## Reference caches
 
-`eval/vlm-cache/`, `eval/layout-cache/`, `eval/structure-cache/` and
+`eval/vlm-cache/`, `eval/structure-cache/` and
 `eval/cascade-cache/` hold real files in exactly these formats, committed so
 every published score reproduces without a GPU. They are the best available
 specification — when in doubt, look at one.

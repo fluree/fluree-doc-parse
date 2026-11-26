@@ -76,7 +76,24 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
         args.emit_anchors,
     );
     // Once per invocation, not once per document.
-    cfg.resolve_escalation(args.escalate, args.no_escalate, quiet);
+    let flags = common::ModeFlags {
+        mode: args.mode,
+        escalate: args.escalate,
+        no_escalate: args.no_escalate,
+        ocr: args.ocr.is_some(),
+        models: args.models.as_deref(),
+        ocr_words: args.ocr_words.is_some(),
+        tier_results: args.tier_results.is_some(),
+        emit_anchors: args.emit_anchors,
+        plans_only: false,
+    };
+    let mode = match cfg.resolve_mode(&flags, verbose, quiet) {
+        Ok(r) => r.mode,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 2;
+        }
+    };
     cfg.verbose = verbose;
     // A flag beats the environment: `--ocr` given on the command line reads
     // the pixels, whatever `FDOC_OCR_WORDS` holds (the two flags together are
@@ -94,6 +111,7 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     // config names, as `--tier-results` wins over a configured model.
     if cfg.ocr_words.is_none() {
         match crate::commands::ocr::engine_for_convert(
+            mode >= crate::mode::Mode::Ocr,
             args.ocr,
             args.models.as_deref(),
             args.ocr_max_megapixels,
@@ -108,7 +126,7 @@ fn convert(args: &ConvertArgs, verbose: bool, quiet: bool) -> i32 {
     }
     if args.models.is_some() && cfg.ocr.is_none() && !quiet {
         eprintln!(
-            "warning: --models names an OCR engine's assets, but no engine reads with them (--ocr)"
+            "warning: --models names the OCR engine's assets, but the mode is {mode}: give --mode ocr to read with them"
         );
     }
     let cfg = &cfg;
@@ -604,7 +622,7 @@ fn convert_image(
     }
     if elements.is_empty() && !quiet {
         eprintln!(
-            "note: {} carries no text layer, so only a model can read it",
+            "note: {} carries no text layer, so only OCR or a model can read it",
             format.mime()
         );
         eprintln!(
@@ -614,7 +632,7 @@ fn convert_image(
             } else if cfg.escalate {
                 "the reader returned nothing for it"
             } else {
-                "run `fdoc config gemini --credentials <key.json>` to enable one"
+                "give --mode ocr --models DIR to read it on this machine, or --mode vlm with a model reader (`fdoc config gemini`)"
             }
         );
     }
@@ -854,7 +872,16 @@ fn ocr_image(
             folio: None,
         })
         .collect();
-    let unread = fluree_doc_pdf::unread_pages(&doc, &a.elements);
+    // A model's reading of the whole image read it, however short, as where
+    // no OCR ran (`convert_image`).
+    let unread: Vec<_> = fluree_doc_pdf::unread_pages(&doc, &a.elements)
+        .into_iter()
+        .filter(|u| {
+            !a.elements.iter().any(|e| {
+                e.page == u.index && e.evidence == "page-tier" && !e.text.trim().is_empty()
+            })
+        })
+        .collect();
     let read_something = unread.is_empty();
     let mut notes = fluree_doc_model::Notes {
         unread,
