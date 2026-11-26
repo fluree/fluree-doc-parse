@@ -558,6 +558,23 @@ Both rules read only lines of labels of a few words each. A line of prose
 beside a chart's ticks (`the influence of idiosyncratic or temporary`) is no
 line of labels, and adds no column.
 
+The totals' labels can also cost the items their own. A run of figures read
+from its text takes in its label column on the left only where most of its
+lines start with figures, a region of figures alone. An invoice that labels
+its items at the margin and its totals within the figures' columns (`Total
+HT : | 46,68 €` under `P.U. HT`) gives three lines starting with a figure
+and three starting with a label, and no majority. The block of totals casts
+no vote here either: the lines that end the region under its last line with
+the most cells, each with half as many cells or fewer, ending in an amount,
+its labels set over the items' figures, with nothing to the region's left.
+A figure run can be read across two tables set side by side, and the
+second's rows running on under the first's end look like totals but for
+their labels, which stand over the first's labels, not its figures; taken
+for totals, they handed the vote to the first table's figures, and the
+first table's labels were taken in as the run's, merging the two. Leaving
+every line with nothing to its left out of the vote did the same, with a
+page's prose for labels.
+
 ## An item several lines tall
 
 An invoice sets an item's figures on its first line, and its codes, notes and
@@ -1649,13 +1666,23 @@ one a box's spacing below, are linked in two ways:
 
 ## Escalation signals
 
-A table earns a model tier when its detected structure **disagrees with
-itself**:
+A table earns a model tier when its reading is in doubt: its detected
+structure **disagrees with itself**, or its **header is anything but one
+plain row**.
 
 | signal | meaning |
 |---|---|
 | `Fragmented` | column boundaries are inconsistent between rows |
 | `MergedRows` | rows do not segment cleanly |
+| header in doubt | no header row found, a header of two rows or more, a cell spanning rows or columns, a banner over a group of rows, a header restated further down |
+
+A table under one plain header row is not sent, drawn or inferred. A
+reading replaces our table wherever their shapes differ, and on such a
+table it had little to add and something to cost: a merged column, a
+dropped row, a caption taken in. Measured with two readers over the
+benchmark's tables, readings of plain-header tables made more documents
+worse than better, and readings of tables whose header was in doubt made
+none worse.
 
 ```bash
 fdoc triage ./corpus/
