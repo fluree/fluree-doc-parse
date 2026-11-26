@@ -1447,6 +1447,7 @@ mod tests {
                     weight: None,
                     italic: false,
                     draw_index,
+                    ocr: None,
                 });
             }
         }
@@ -1547,6 +1548,7 @@ mod tests {
                     weight: None,
                     italic: false,
                     draw_index,
+                    ocr: None,
                 });
             }
         }
@@ -1769,6 +1771,7 @@ mod tests {
                         weight: None,
                         italic: false,
                         draw_index,
+                        ocr: None,
                     });
                 }
             }
@@ -1860,6 +1863,7 @@ mod tests {
                 weight: None,
                 italic: false,
                 draw_index,
+                ocr: None,
             });
         };
         for row in 0..7 {

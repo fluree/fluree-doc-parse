@@ -1277,7 +1277,9 @@ pub fn body_font_size(pages: &[Vec<Block>]) -> f32 {
 /// nothing left once drawings are set aside, every block counts.
 pub fn body_font_size_outside(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
     let by_lines = body_font_size_by_lines(pages, drawn);
-    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    let is_drawn = |p: usize, i: usize| {
+        drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true) || from_picture(&pages[p][i])
+    };
     // Running prose set larger than the size most lines are set in is the
     // body, and the many short lines under it are a chart's or a table's:
     // its labels, its axis's values, its cells, whether or not the chart
@@ -1343,7 +1345,11 @@ fn prose_body_size(pages: &[Vec<Block>], is_drawn: &dyn Fn(usize, usize) -> bool
 /// [`body_font_size_outside`] by lines alone: the size most of the
 /// blocks' lines are set in.
 fn body_font_size_by_lines(pages: &[Vec<Block>], drawn: &[Vec<bool>]) -> f32 {
-    let is_drawn = |p: usize, i: usize| drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true);
+    // A drawing's text, and a picture's an OCR engine read, are no measure
+    // of the body: a chart's labels by the dozen, a logo.
+    let is_drawn = |p: usize, i: usize| {
+        drawn.get(p).and_then(|d| d.get(i)).copied() == Some(true) || from_picture(&pages[p][i])
+    };
     let mut hist: HashMap<i32, usize> = HashMap::new();
     for (p, blocks) in pages.iter().enumerate() {
         for (i, b) in blocks.iter().enumerate() {
@@ -1641,7 +1647,11 @@ pub fn detect_with_body(
     };
 
     let document_title = pages.first().and_then(|blocks| {
-        let largest = blocks.iter().map(|b| b.font_size).fold(0.0_f32, f32::max);
+        let largest = blocks
+            .iter()
+            .filter(|b| !from_picture(b))
+            .map(|b| b.font_size)
+            .fold(0.0_f32, f32::max);
         // The page's largest type, set for display: an article's title, which
         // may run over four or five lines (`An internal deletion in MTH1
         // enables growth on glucose of pyruvate-decarboxylase negative, …`).
@@ -1658,6 +1668,9 @@ pub fn detect_with_body(
             }
         };
         let candidate = |i: usize, b: &Block| -> bool {
+            if from_picture(b) {
+                return false;
+            }
             let text = b.text();
             // At most three lines, or a few words to a line, as a cover
             // stacks its title: `PROCAT / SISTEMA DE / AISLAMIENTO
@@ -1881,7 +1894,7 @@ pub fn detect_with_body(
             }
             // A field parted from a list of fields is a label and its
             // value, no section's title.
-            if b.field {
+            if b.field || from_picture(b) {
                 continue;
             }
             let text = b.text();
@@ -2140,6 +2153,15 @@ pub fn detect_with_body(
     drop_kickers(&mut out, pages, document_title);
     normalize_levels(&mut out, pages);
     out
+}
+
+/// Text an OCR engine read in a picture set on a page that has text of its
+/// own: the picture's, as a drawing's labels are, and never the page's
+/// heading or its title, however large it is set. A logo's `LAW LIBRARY`
+/// over a report's title, a funder's `Co-funded by the European Union`, a
+/// callout in a photograph. A page read whole is the page's text.
+fn from_picture(b: &Block) -> bool {
+    b.ocr() == Some(crate::glyph::OcrSource::Region)
 }
 
 /// Block `i` heads prose as a heading does: set apart from the text above
@@ -4220,6 +4242,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -6234,6 +6257,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let run = |n: usize, size: f32, weight: u32| (0..n).map(move |_| glyph("a", size, weight));
         // A form: its lines and figures in regular type, read as tables,
@@ -6359,6 +6383,50 @@ mod tests {
         assert!(found(true));
         // Alone in its style, it is held to a title's length.
         assert!(!found(false));
+    }
+
+    #[test]
+    fn a_pictures_ocr_text_is_no_heading_and_no_measure_of_the_body() {
+        use crate::glyph::OcrSource;
+        let read = |mut b: Block, source: OcrSource| {
+            for l in &mut b.lines {
+                l.ocr = Some(source);
+            }
+            b
+        };
+        let body = || {
+            let mut b = blk(
+                "the report's prose runs on across its measure here",
+                10.0,
+                3,
+            );
+            b.bbox.y0 = 200.0;
+            b.bbox.y1 = 236.0;
+            b
+        };
+        let title = at("Restrictions on Land Ownership", 18.0, 120.0, false);
+        // A logo read in its picture, set larger than the title.
+        let logo = read(at("LAW LIBRARY", 30.0, 40.0, false), OcrSource::Region);
+        let page = vec![logo.clone(), title.clone(), body()];
+        let hs = detect_with_body(&[page], &[], 10.0, None);
+        assert!(hs.iter().all(|h| h.text != "LAW LIBRARY"), "{hs:?}");
+        assert!(
+            hs.iter().any(
+                |h| h.text == "Restrictions on Land Ownership" && h.evidence == Evidence::Title
+            ),
+            "{hs:?}"
+        );
+        // Read on a page read whole, the same line is the page's.
+        let scanned = read(at("LAW LIBRARY", 30.0, 40.0, false), OcrSource::Page);
+        let hs = detect_with_body(&[vec![scanned, title, body()]], &[], 10.0, None);
+        assert!(hs.iter().any(|h| h.text == "LAW LIBRARY"), "{hs:?}");
+        // A chart's labels read in its picture, many and small, do not set
+        // the body.
+        let mut blocks: Vec<Block> = (0..40)
+            .map(|_| read(blk("Convenience", 6.0, 1), OcrSource::Region))
+            .collect();
+        blocks.push(blk("the page's own two lines of text", 10.0, 2));
+        assert_eq!(body_font_size(&[blocks]), 10.0);
     }
 
     #[test]

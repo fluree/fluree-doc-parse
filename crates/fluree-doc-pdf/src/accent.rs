@@ -172,6 +172,7 @@ mod tests {
             weight: None,
             italic: false,
             draw_index: n,
+            ocr: None,
         }
     }
 
