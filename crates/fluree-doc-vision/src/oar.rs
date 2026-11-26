@@ -521,11 +521,15 @@ impl OcrEngine for OarEngine {
         // `lines_from` keeps only the lines that hold text.
         for l in lines {
             let (bbox, angle) = quad_box(l.quad);
+            // Measured on the image as given, at its own resolution, by the
+            // angle before it is rounded for the reading.
+            let ink = crate::ink::measure(image, bbox, angle, &l.text);
             words.push(OcrWord {
                 text: l.text,
                 bbox,
                 angle: Some((angle * 100.0).round() / 100.0),
                 conf: l.conf,
+                ink,
             });
         }
         Ok(WordReading {
@@ -1292,6 +1296,7 @@ mod tests {
             bbox,
             angle: Some(angle),
             conf: None,
+            ink: None,
         };
         (word, place(&quad))
     }
@@ -1305,6 +1310,7 @@ mod tests {
             bbox,
             angle: Some(angle),
             conf: None,
+            ink: None,
         };
         (word, place(&quad))
     }
@@ -1440,6 +1446,7 @@ mod tests {
             bbox,
             angle: Some(angle),
             conf: None,
+            ink: None,
         };
         (word, place(&quad))
     }
