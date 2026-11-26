@@ -275,7 +275,7 @@ impl Page<'_> {
                     // where two stand side by side.
                     let parts: Vec<(Vec<Line>, bool)> = match boxed(&group, self.frames) {
                         Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
-                        None => split_local(group, self.h, 2)
+                        None => split_local(group, self.h, 3)
                             .into_iter()
                             .flat_map(|(lines, own)| {
                                 side_blocks(lines, own, self.h, self.frames, 2)

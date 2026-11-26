@@ -560,8 +560,9 @@ full-width text is read one column after the other, even where the page as a
 whole has no gutter there. A field list keeps each value with its label, and
 a side tab's turned labels at the page's edge are not weighed.
 
-The columns of running text in such a region read one after the other, even
-where a few lines run across their gutter:
+The columns of running text in such a region read one after the other, up to
+three gutters across (three columns and a side tab), even where a few lines
+run across their gutter:
 - **A row or two at the region's top or foot.** A title over the columns,
   wrapped to a second line, or the page's number centred under them, is read
   apart: the title before the columns, the number after. Its lines must cross
@@ -635,7 +636,13 @@ glyph that puts no ink down. Where the next glyph on the line stands across a
 gutter, the gap is measured from the last glyph that put ink down, so a
 column's line and a callout, or the next column's line, are read apart. A
 justified line's stretched space stays a space: the lines of its paragraph
-run across it. A number or a label set off from its text by a tab, `3.1 ⇥
+run across it. A gap of more than five ems is no stretched space, though,
+where a column of text starts inside it and another starts where the text
+after it does. Three narrow columns that share their baselines run the
+first and third together on some rows, and the middle column's rows, set a
+little lower, put ink in the gap; those rows are read apart. A contents
+line's long gap to its page number is crossed by longer entries starting
+at the margin, not by a column, and stays one line. A number or a label set off from its text by a tab, `3.1 ⇥
 Results` or `Note 3. ⇥ Business Segment`, stays with its text. A label
 that heads a block of its own in the margin, in another size from the text
 beside it (`Issued 07-2025` over `Supersedes 05-2025` beside a note), is
