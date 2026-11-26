@@ -197,6 +197,8 @@ pub fn resolve(i: &Inputs) -> Result<Resolved, String> {
         (None, false, None, Some(m)) => (m, Source::Config),
         (None, false, None, None) => (Mode::Deterministic, Source::Default),
     };
+    // Nothing chose a mode: a config written before modes may expect one.
+    let unchosen = source == Source::Default;
     let mut notes = Vec::new();
     // What an input needs raises the mode to it. A variable's need yields
     // to a flag's mode, and says so.
@@ -255,18 +257,19 @@ pub fn resolve(i: &Inputs) -> Result<Resolved, String> {
     }
     let call_model = mode == Mode::Vlm && i.provider && !i.tier_results.any() && !i.no_escalate;
     // A config that once turned OCR or a model on by itself, with no mode:
-    // say what it no longer does.
-    if source == Source::Default {
-        let lost = if i.legacy_vlm && i.provider && !i.no_escalate {
-            Some(("a model reader", "vlm"))
-        } else if i.legacy_ocr {
-            Some(("OCR", "ocr"))
+    // say what it no longer does, also where an input raised the mode short
+    // of it (`--ocr` with a provider set up once read with the model too).
+    if unchosen {
+        let lost = if i.legacy_vlm && i.provider && !i.no_escalate && mode < Mode::Vlm {
+            Some(("a model reader", Mode::Vlm))
+        } else if i.legacy_ocr && mode < Mode::Ocr {
+            Some(("OCR", Mode::Ocr))
         } else {
             None
         };
         if let Some((what, to)) = lost {
             notes.push(format!(
-                "note: the config sets up {what} but no mode; reading deterministic. Set mode = \"{to}\" in the config, or give --mode {to}"
+                "note: the config sets up {what} but no mode; reading {mode}. Set mode = \"{to}\" in the config, or give --mode {to}"
             ));
         }
     }
@@ -619,6 +622,31 @@ mod tests {
         assert!(r.notes[0].contains("OCR") && r.notes[0].contains("mode = \"ocr\""));
         // A mode set says nothing.
         i.config = Some(Mode::Deterministic);
+        assert!(resolve(&i).unwrap().notes.is_empty());
+
+        // `--ocr` with a provider set up once read with the model too: the
+        // raise to ocr stops short of it, and says so.
+        let mut i = base();
+        i.legacy_vlm = true;
+        i.ocr = Given::Flag;
+        let r = resolve(&i).unwrap();
+        assert_eq!(r.mode, Mode::Ocr);
+        assert!(!r.call_model);
+        assert_eq!(r.notes.len(), 1);
+        assert!(
+            r.notes[0].contains("reading ocr") && r.notes[0].contains("mode = \"vlm\""),
+            "{}",
+            r.notes[0]
+        );
+        // OCR an input asked for is OCR the config would have run.
+        let mut i = base();
+        i.legacy_ocr = true;
+        i.ocr = Given::Flag;
+        assert!(resolve(&i).unwrap().notes.is_empty());
+        // Readings from files are the model's part, read without a call.
+        let mut i = base();
+        i.legacy_vlm = true;
+        i.tier_results = Given::Flag;
         assert!(resolve(&i).unwrap().notes.is_empty());
     }
 }

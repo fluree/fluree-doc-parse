@@ -188,8 +188,9 @@ otherwise looks like a working one:
 error: mode vlm (from the config's `mode`) builds on ocr, which needs the OCR assets: set --models DIR (or FDOC_OCR_MODELS, or ocr.models in the config), or read words from files with --ocr-words
 ```
 
-A config that sets up a provider or an OCR engine but no `mode` reads
-`deterministic`, and says so once:
+A config that sets up a provider or an OCR engine but no `mode` no longer
+turns them on by itself. It reads `deterministic`, or the mode an input such
+as `--ocr` asks for, and says once what it leaves out:
 
 ```
 note: the config sets up a model reader but no mode; reading deterministic. Set mode = "vlm" in the config, or give --mode vlm
