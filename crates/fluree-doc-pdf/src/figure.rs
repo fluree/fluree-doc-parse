@@ -2402,6 +2402,11 @@ const LINK_GAP: f64 = 0.6;
 /// Least share of the gap between two boxes a connector covers.
 const LINK_COVER: f64 = 0.7;
 
+/// Farthest, in the page's text size, a connector drawn otherwise than as
+/// a straight line ends from the box it joins: an arrowhead drawn apart
+/// stops its shaft short of the box.
+const LINK_TOUCH: f64 = 1.0;
+
 /// Farthest, in the page's text size, a diagram's banner or side tab
 /// stands from its boxes.
 const DIAGRAM_REACH: f64 = 2.0;
@@ -2580,6 +2585,71 @@ pub fn box_diagrams(
                     links.push((i, j, *t));
                 }
             }
+        }
+    }
+    // Connectors drawn otherwise: curved, stopped short by an arrowhead,
+    // outlined as a fill, or running across between boxes set apart both
+    // ways. Such a shape comes within `LINK_TOUCH` of the page's text size
+    // of exactly two boxes, lies in neither and holds no text, and spans
+    // the gap between them. Between boxes side by side (or stacked) it is
+    // thin across that gap, at most half the facing sides, and runs
+    // through their middle: a table's cell divider or shaded stripe fills
+    // its gap at the cells' full height, and a row's underline runs along
+    // their edge. Between boxes set apart both ways it stays within the
+    // pair's hull: a chart's shape reaching between two labels runs on
+    // past them.
+    let touch = em * LINK_TOUCH;
+    let shapes = rules
+        .iter()
+        .map(|r| r.bbox)
+        .chain(fills.iter().map(|f| f.bbox));
+    for s in shapes {
+        if s.width().max(s.height()) < em * LINK_GAP {
+            continue;
+        }
+        let mut near = boxes.iter().enumerate().filter(|(_, b)| {
+            apart(&s, b) <= touch && share_inside(&s, b) < 0.5 && share_inside(b, &s) < 0.2
+        });
+        let (Some((i, a)), Some((j, b)), None) = (near.next(), near.next(), near.next()) else {
+            continue;
+        };
+        if links.iter().any(|&(p, q, _)| (p, q) == (i, j)) {
+            continue;
+        }
+        let gx = (b.x0 - a.x1).max(a.x0 - b.x1).max(0.0);
+        let gy = (b.y0 - a.y1).max(a.y0 - b.y1).max(0.0);
+        if gx.max(gy) < em * LINK_GAP
+            || (gx > 0.0 && s.width() < gx * LINK_COVER)
+            || (gy > 0.0 && s.height() < gy * LINK_COVER)
+        {
+            continue;
+        }
+        let spans = if gy == 0.0 {
+            let y = (s.y0 + s.y1) / 2.0;
+            s.height() <= a.height().min(b.height()) / 2.0
+                && y >= a.y0.max(b.y0) + 2.0
+                && y <= a.y1.min(b.y1) - 2.0
+        } else if gx == 0.0 {
+            let x = (s.x0 + s.x1) / 2.0;
+            s.width() <= a.width().min(b.width()) / 2.0
+                && x >= a.x0.max(b.x0) + 2.0
+                && x <= a.x1.min(b.x1) - 2.0
+        } else {
+            s.x0 >= a.x0.min(b.x0) - touch
+                && s.y0 >= a.y0.min(b.y0) - touch
+                && s.x1 <= a.x1.max(b.x1) + touch
+                && s.y1 <= a.y1.max(b.y1) + touch
+        };
+        let worded = || {
+            glyphs.iter().any(|g| {
+                g.bbox.is_some_and(|gb| {
+                    let (x, y) = ((gb.x0 + gb.x1) / 2.0, (gb.y0 + gb.y1) / 2.0);
+                    x > s.x0 && x < s.x1 && y > s.y0 && y < s.y1
+                })
+            })
+        };
+        if spans && !worded() {
+            links.push((i, j, s));
         }
     }
     if links.len() < DIAGRAM_LINKS {
@@ -4328,6 +4398,62 @@ mod tests {
             rule(Orientation::Vertical, 299.8, 180.0, 300.2, 220.0),
         ];
         assert!(box_diagrams(&bands, &column, &rows, 0, page, &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn connectors_drawn_otherwise_join_a_diagram() {
+        use crate::rule::Fill;
+        let fill = |x0: f64, y0: f64, x1: f64, y1: f64| Fill::new(bb(x0, y0, x1, y1), 0);
+        let label = |words: &str, x: f64, y: f64| -> Vec<Glyph> {
+            words
+                .chars()
+                .enumerate()
+                .filter(|(_, c)| *c != ' ')
+                .map(|(k, c)| glyph(&c.to_string(), x + 4.0 * k as f64, y, 8.0))
+                .collect()
+        };
+        let page = (612.0, 792.0);
+        // Three steps set down and across, each joined to the next by a
+        // curve outlined as a fill, running between their corners.
+        let mut shapes = vec![
+            fill(100.0, 100.0, 200.0, 130.0),
+            fill(240.0, 170.0, 340.0, 200.0),
+            fill(380.0, 240.0, 480.0, 270.0),
+        ];
+        let mut text = label("Samples taken", 110.0, 120.0);
+        text.extend(label("Reads trimmed", 250.0, 190.0));
+        text.extend(label("Reads merged", 390.0, 260.0));
+        shapes.push(fill(200.0, 130.0, 240.0, 170.0));
+        shapes.push(fill(340.0, 200.0, 380.0, 240.0));
+        let got = box_diagrams(&shapes, &[], &text, 0, page, &[], &[]);
+        assert_eq!(got.len(), 1);
+        assert!(got[0].drawing.x0 <= 100.0 && got[0].drawing.x1 >= 480.0);
+        // A chart's shapes reaching between two labels and on past them,
+        // down to the chart's foot, join nothing.
+        let mut peaks = vec![
+            fill(100.0, 100.0, 160.0, 130.0),
+            fill(200.0, 200.0, 260.0, 230.0),
+            fill(300.0, 300.0, 360.0, 330.0),
+        ];
+        let mut values = label("Tier one", 105.0, 120.0);
+        values.extend(label("Tier two", 205.0, 220.0));
+        values.extend(label("Tier three", 305.0, 320.0));
+        peaks.push(fill(150.0, 128.0, 205.0, 500.0));
+        peaks.push(fill(250.0, 228.0, 305.0, 500.0));
+        assert!(box_diagrams(&peaks, &[], &values, 0, page, &[], &[]).is_empty());
+        // A fill filling the gap between two cells at their full height is
+        // a table's divider, no connector.
+        let mut cells = vec![
+            fill(100.0, 100.0, 160.0, 125.0),
+            fill(170.0, 100.0, 230.0, 125.0),
+            fill(240.0, 100.0, 300.0, 125.0),
+        ];
+        let mut heads = label("Units", 105.0, 118.0);
+        heads.extend(label("Price", 175.0, 118.0));
+        heads.extend(label("Total", 245.0, 118.0));
+        cells.push(fill(160.0, 100.0, 170.0, 125.0));
+        cells.push(fill(230.0, 100.0, 240.0, 125.0));
+        assert!(box_diagrams(&cells, &[], &heads, 0, page, &[], &[]).is_empty());
     }
 
     /// Lines drawn across a plot: a horizontal one at each `ys` from the
