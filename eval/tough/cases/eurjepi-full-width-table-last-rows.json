@@ -1,0 +1,32 @@
+{
+  "document": {
+    "file": "s10654-024-01188-4.pdf",
+    "url": "https://link.springer.com/content/pdf/10.1007/s10654-024-01188-4.pdf",
+    "sha256": "9f2f2c872404a251ca97054961222c58c11eeb9daba3c08b226ba8622cb45a12",
+    "about": "European Journal of Epidemiology (2024), s10654-024-01188-4, set in two columns. On p10, Table 1 (continued) runs the page's full width over two columns of prose, its last group (Disease progression, Stage III, Stage IV) over the table's bottom rule."
+  },
+  "notes": [
+    "2026-11-26 (#408): the last group's reading was cut at the page's gutter: its right half a table with no row labels, its left half paragraphs. A reading ruled through the gutter is now one table."
+  ],
+  "checks": [
+    {
+      "id": "stage-iii-row-whole",
+      "found": "2026-11-26",
+      "issue": "#408: Stage III's figures right of the gutter lost their row label.",
+      "cell": {
+        "value": "5 (3)",
+        "row": "Stage III"
+      }
+    },
+    {
+      "id": "stage-labels-not-a-paragraph",
+      "found": "2026-11-26",
+      "issue": "#408: the left half of the cut came out as a paragraph.",
+      "element": {
+        "type": "doco:Paragraph",
+        "text": "Stage III Stage IV"
+      },
+      "count": 0
+    }
+  ]
+}

@@ -3468,9 +3468,16 @@ const ACROSS_COLUMNS: f64 = 0.4;
 /// channels of white running down through the reading (`table::channels_in`);
 /// `runs` gives the page's runs of text, read once a channel parts a second
 /// stub from the first.
+///
+/// A reading ruled through the gutter at its foot is one table
+/// ([`ruled_across_gutter`]): a table set the page's full width over two
+/// columns of prose parts its columns where the prose's gutter runs, and
+/// the prose under it sets a paragraph either side; the rule under its
+/// last row joins it.
 fn crossed_gutter<'a>(
     g: &Grid,
     glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
     width: f64,
     runs: impl Fn() -> &'a [table::TextRun] + Copy,
 ) -> Option<((f64, f64), (f64, f64))> {
@@ -3480,9 +3487,108 @@ fn crossed_gutter<'a>(
     let rows = table::reading_rows(g, glyphs);
     table::channels_in(&rows).into_iter().find_map(|span| {
         let gutter = table::crosses_gutter(g, &rows, runs, span, width)?;
-        Some(((0.0, gutter), (gutter, width)))
+        (!ruled_across_gutter(g, glyphs, rules, gutter)).then_some(((0.0, gutter), (gutter, width)))
     })
 }
+
+/// Share of each side of the gutter, within a reading, that a rule run on
+/// through the gutter reaches over: a table's rules run its width; a rule
+/// under a heading in one column ends short of the gutter.
+const ACROSS_GUTTER_REACH: f64 = 0.5;
+
+/// Gap, in points, that parts one rule's pieces along a line: a rule drawn
+/// a cell at a time meets itself end to end, and two tables side by side
+/// leave the gutter's white between their rules.
+const RULE_PIECE_GAP: f64 = 1.0;
+
+/// Whether the reading is ruled through `gutter` as one table: a
+/// horizontal rule runs on through the gutter, reaching
+/// [`ACROSS_GUTTER_REACH`] of the way across the reading on both sides,
+/// - **at both its ends**, within [`RULED_ROWS`] of its lines of its first
+///   line and of its last, over, under or between them: a table ruled
+///   between its rows, read a group of rows at a time; or
+/// - **at its foot**, under its last line, within a line of it and nearer
+///   it than the next text under it: a table's bottom rule under its last
+///   group.
+///
+/// A rule drawn in pieces along one line counts as one where its pieces
+/// meet within [`RULE_PIECE_GAP`]. A ruled table over a reading's first
+/// rows only, the reading run on into the prose below it, is ruled at
+/// neither its foot nor its end, and its last rows still cross between two
+/// columns of text. Nor is a heading's rule over the reading, or the rule
+/// over a page's foot set against the foot's own line.
+fn ruled_across_gutter(
+    g: &Grid,
+    glyphs: &[Glyph],
+    rules: &[crate::rule::Rule],
+    gutter: f64,
+) -> bool {
+    let b = g.bbox;
+    let line = (b.y1 - b.y0) / g.rows().max(1) as f64;
+    let (left, right) = (
+        gutter - (gutter - b.x0) * ACROSS_GUTTER_REACH,
+        gutter + (b.x1 - gutter) * ACROSS_GUTTER_REACH,
+    );
+    // The lines on which a rule runs on through the gutter, near the reading.
+    let mut lines: Vec<(f64, f64, f64)> = rules
+        .iter()
+        .filter(|r| {
+            r.orientation == crate::rule::Orientation::Horizontal
+                && r.axis_pos() >= b.y0 - RULED_ROWS * line
+                && r.axis_pos() <= b.y1 + RULED_ROWS * line
+        })
+        .map(|r| (r.axis_pos(), r.bbox.x0, r.bbox.x1))
+        .collect();
+    lines.sort_by(|p, q| p.0.total_cmp(&q.0).then(p.1.total_cmp(&q.1)));
+    let mut through: Vec<f64> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        // The pieces on one line, left to right.
+        let mut on: Vec<(f64, f64)> = Vec::new();
+        let axis = lines[i].0;
+        while i < lines.len() && lines[i].0 - axis <= 1.0 {
+            on.push((lines[i].1, lines[i].2));
+            i += 1;
+        }
+        on.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let mut runs: Vec<(f64, f64)> = Vec::new();
+        for (x0, x1) in on {
+            match runs.last_mut() {
+                Some(r) if x0 <= r.1 + RULE_PIECE_GAP => r.1 = r.1.max(x1),
+                _ => runs.push((x0, x1)),
+            }
+        }
+        if runs.iter().any(|&(a, c)| a <= left && c >= right) {
+            through.push(axis);
+        }
+    }
+    let near = |end: f64| {
+        through
+            .iter()
+            .any(|&y| (y - end).abs() <= RULED_ROWS * line)
+    };
+    if near(b.y0) && near(b.y1) {
+        return true;
+    }
+    // The next text under the reading's foot, within its width.
+    let next_under = |y: f64| {
+        glyphs
+            .iter()
+            .filter(|q| !q.text.trim().is_empty())
+            .filter_map(|q| q.bbox)
+            .filter(|q| q.y0 >= y && q.x1 > b.x0 && q.x0 < b.x1)
+            .map(|q| q.y0)
+            .fold(f64::INFINITY, f64::min)
+    };
+    through
+        .iter()
+        .any(|&y| y >= b.y1 - line * 0.5 && y - b.y1 <= line && y - b.y1 <= next_under(y) - y)
+}
+
+/// How far from a reading's first and last lines, in its lines, a rule at
+/// each end stands: a cell's padding over its first line, and under its
+/// last the room a cell's last lines leave beside a taller neighbour.
+const RULED_ROWS: f64 = 2.5;
 
 /// Share of a cut's width a rule over or under it spans to rule it as a
 /// table: a table's top and bottom rules run its full width, give or take
@@ -3592,7 +3698,7 @@ fn aligned_by_columns<'a>(
     }
     let mut out = Vec::with_capacity(found.len());
     for g in found {
-        let Some(sides) = crossed_gutter(&g, glyphs, page.width, lines) else {
+        let Some(sides) = crossed_gutter(&g, glyphs, &page.rules, page.width, lines) else {
             out.push(g);
             continue;
         };
@@ -3610,7 +3716,7 @@ fn aligned_by_columns<'a>(
             let found: Vec<Grid> =
                 table::detect_aligned(&side, &page.rules, &page.fills, page.index)
                     .into_iter()
-                    .filter(|n| crossed_gutter(n, glyphs, page.width, lines).is_none())
+                    .filter(|n| crossed_gutter(n, glyphs, &page.rules, page.width, lines).is_none())
                     .collect();
             if found.is_empty() {
                 out.extend(side_of(&g, glyphs, &page.rules, x0, x1));
@@ -4042,7 +4148,9 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                 {
                     let mut again: Vec<Grid> = Vec::new();
                     read.retain(|g| {
-                        let Some(sides) = crossed_gutter(g, &p.glyphs, p.width, col_lines) else {
+                        let Some(sides) =
+                            crossed_gutter(g, &p.glyphs, &p.rules, p.width, col_lines)
+                        else {
                             return true;
                         };
                         for (x0, x1) in [sides.0, sides.1] {
@@ -4056,7 +4164,8 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
                                 crate::textgrid::read(&side, &p.rules, region, p.index)
                                     .into_iter()
                                     .filter(|n| {
-                                        crossed_gutter(n, &p.glyphs, p.width, col_lines).is_none()
+                                        crossed_gutter(n, &p.glyphs, &p.rules, p.width, col_lines)
+                                            .is_none()
                                     })
                                     .collect();
                             if found.is_empty() {
@@ -6460,6 +6569,94 @@ mod tests {
         assert!(!axis_scale(&cells(&["20", "40"])));
         assert!(!axis_scale(&cells(&["Total", "10", "20", "30"])));
         assert!(!axis_scale(&cells(&["5", "5", "5"])));
+    }
+
+    #[test]
+    fn a_reading_ruled_through_the_gutter_is_one_table() {
+        // A reading x 50-550 over four rows from y 100 to 180; the gutter
+        // found in it at x 300.
+        let g = Grid {
+            layout: None,
+            page: 0,
+            xs: vec![50.0, 175.0, 300.0, 425.0, 550.0],
+            ys: vec![100.0, 120.0, 140.0, 160.0, 180.0],
+            bbox: BBox {
+                x0: 50.0,
+                y0: 100.0,
+                x1: 550.0,
+                y1: 180.0,
+            },
+        };
+        let h = |x0: f64, x1: f64, y: f64| crate::rule::Rule {
+            bbox: BBox {
+                x0,
+                y0: y - 0.25,
+                x1,
+                y1: y + 0.25,
+            },
+            orientation: crate::rule::Orientation::Horizontal,
+            page: 0,
+        };
+        // Prose under the reading from y 200, the page's foot at y 192.
+        let text = |x: f64, y: f64| Glyph {
+            text: "a".into(),
+            bbox: Some(BBox {
+                x0: x,
+                y0: y,
+                x1: x + 5.0,
+                y1: y + 8.0,
+            }),
+            page: 0,
+            origin: (x, y + 8.0),
+            rotation_deg: 0.0,
+            font_size: 8.0,
+            weight: None,
+            italic: false,
+            advance: None,
+            draw_index: 0,
+        };
+        let prose = [text(60.0, 200.0), text(320.0, 200.0)];
+        // A full-width table's rule under its last row.
+        assert!(ruled_across_gutter(
+            &g,
+            &prose,
+            &[h(40.0, 560.0, 183.0)],
+            300.0
+        ));
+        // A group of a table's rows read on its own, ruled over its first
+        // line and, past a taller cell's last lines, under its last.
+        let round = [h(40.0, 560.0, 96.0), h(40.0, 560.0, 205.0)];
+        assert!(ruled_across_gutter(&g, &[], &round, 300.0));
+        // The same rule drawn a cell at a time, its pieces meeting.
+        let pieces = [h(40.0, 300.0, 183.0), h(300.5, 560.0, 183.0)];
+        assert!(ruled_across_gutter(&g, &prose, &pieces, 300.0));
+        // Two tables side by side, each ruled to its own edge: the gutter's
+        // white parts their rules, however wide each is.
+        let apart = [h(40.0, 290.0, 183.0), h(310.0, 560.0, 183.0)];
+        assert!(!ruled_across_gutter(&g, &prose, &apart, 300.0));
+        // A rule under one column's heading, run a little past the gutter.
+        assert!(!ruled_across_gutter(
+            &g,
+            &prose,
+            &[h(60.0, 320.0, 183.0)],
+            300.0
+        ));
+        // A ruled table over the reading's first rows only, the reading run
+        // on into prose: no rule at its foot.
+        assert!(!ruled_across_gutter(
+            &g,
+            &prose,
+            &[h(40.0, 560.0, 120.0)],
+            300.0
+        ));
+        // The rule over a page's foot, set against the foot's line.
+        let foot = [text(60.0, 192.0)];
+        assert!(!ruled_across_gutter(
+            &g,
+            &foot,
+            &[h(40.0, 560.0, 190.0)],
+            300.0
+        ));
     }
 
     #[test]
