@@ -1508,11 +1508,14 @@ fn read_beside(
             let titles = prev.1 + 1..start;
             if (1..=MAX_HEADER_LINES).contains(&titles.len())
                 && titles.clone().all(|i| {
-                    titles_a_block(&cols0, &clipped[i])
-                        && clipped[i]
-                            .chunks
-                            .iter()
-                            .any(|c| c.text.chars().filter(|ch| ch.is_alphabetic()).count() >= 2)
+                    titles_a_block(
+                        &cols0,
+                        &clipped[i],
+                        clipped[prev.0].fs.max(clipped[start].fs),
+                    ) && clipped[i]
+                        .chunks
+                        .iter()
+                        .any(|c| c.text.chars().filter(|ch| ch.is_alphabetic()).count() >= 2)
                 })
                 && (prev.1 + 1..=start)
                     .all(|i| row_gap(rules, x0, x1, clipped[i - 1].y1, clipped[i].y0, fs, false))
@@ -2032,14 +2035,17 @@ fn cell_in<'a>(cols: &[(f64, f64)], l: &'a Line, k: usize) -> Option<&'a Chunk> 
 
 /// Whether a line is a block's title, not a row: figures (years aside) in
 /// fewer than half the columns (`Kenya | 1993 | 2008/9 | Average annual %
-/// rate of change` over thirteen columns).
-fn titles_a_block(cols: &[(f64, f64)], l: &Line) -> bool {
+/// rate of change` over thirteen columns). And set in the table's type,
+/// `fs`: a line set larger, as a heading is, opens the document's next
+/// section and a table of its own (`23 DESPESAS OPERACIONAIS` between two
+/// notes' tables, each opening on `31/12/24 | 31/12/23`).
+fn titles_a_block(cols: &[(f64, f64)], l: &Line, fs: f64) -> bool {
     let figures = l
         .chunks
         .iter()
         .filter(|c| is_figure(&c.text) && !is_year(&c.text))
         .count();
-    figures * 2 < cols.len()
+    figures * 2 < cols.len() && l.fs <= fs * (1.0 + crate::heading::HEADING_SIZE_MARGIN)
 }
 
 /// Whether a line can name a table's columns: nothing in the stub (a row of
@@ -2303,7 +2309,9 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
     if let Some(&names) = body.first() {
         let all = columns(&lines, x0, x1);
         let again: Vec<usize> = (1..body.len())
-            .filter(|&i| same_cells(&all, names, body[i]) && titles_a_block(&all, body[i - 1]))
+            .filter(|&i| {
+                same_cells(&all, names, body[i]) && titles_a_block(&all, body[i - 1], names.fs)
+            })
             .collect();
         if !again.is_empty() {
             let mut t = head.len();
@@ -2321,7 +2329,7 @@ fn build(lines: Vec<&Line>, rules: &[Rule], x0: f64, x1: f64, page: usize) -> Op
                 let mut j = r;
                 while j > 1
                     && r - j < MAX_HEADER_LINES
-                    && titles_a_block(&all, body[j - 1])
+                    && titles_a_block(&all, body[j - 1], names.fs)
                     && body[j - 1]
                         .chunks
                         .iter()
@@ -3995,6 +4003,67 @@ mod tests {
         ));
     }
     use crate::rule::Rule;
+
+    #[test]
+    fn a_heading_between_two_tables_joins_no_blocks() {
+        // Two tables opening on the same line of column names, a heading set
+        // larger between them: the document's next section, not a block's
+        // title.
+        let xs = [20.0, 180.0, 240.0];
+        let mut gl = Vec::new();
+        let mut y = 40.0;
+        for (heading, rows) in [
+            (
+                None,
+                [
+                    ("Revenue recognised", "5,593", "4,682"),
+                    ("Costs incurred", "(4,412)", "(3,724)"),
+                ],
+            ),
+            (
+                Some("23 OPERATING EXPENSES"),
+                [
+                    ("Depreciation", "(812)", "(628)"),
+                    ("Staff costs", "(6,469)", "(5,258)"),
+                ],
+            ),
+        ] {
+            if let Some(h) = heading {
+                // A heading's type, a third larger than the table's.
+                gl.extend(set(h, xs[0], y).into_iter().map(|mut g| {
+                    g.font_size = 13.5;
+                    g.bbox = g.bbox.map(|b| BBox {
+                        y0: b.y1 - 13.5,
+                        ..b
+                    });
+                    g
+                }));
+                y += 18.0;
+            }
+            gl.extend(set("31/12/24", xs[1], y));
+            gl.extend(set("31/12/23", xs[2], y));
+            y += 18.0;
+            for (label, a, b) in rows {
+                gl.extend(set(label, xs[0], y));
+                gl.extend(set(a, xs[1], y));
+                gl.extend(set(b, xs[2], y));
+                y += 18.0;
+            }
+        }
+        let region = BBox {
+            x0: 10.0,
+            y0: 47.0,
+            x1: 300.0,
+            y1: y,
+        };
+        let grids = read(&lines(&gl), &[], region, 0);
+        // The heading titles no block: the second table's line of column
+        // names restates none of the first's.
+        for g in &grids {
+            let lay = g.layout.as_deref().expect("read from its text");
+            assert!(lay.restated_headers.is_empty(), "{lay:?}");
+        }
+    }
 
     #[test]
     fn blocks_restating_their_column_names_read_as_one_table() {

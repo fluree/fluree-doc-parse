@@ -953,6 +953,11 @@ one table per block. Blocks join where all of these hold:
   words;
 - each title line holds figures, years aside, in fewer than half the
   columns (`Kenya | 1993 | 2008/9`);
+- each title line is set in the table's type. A line set larger than the
+  column lines by the heading margin is a heading: it opens the document's
+  next section and a table of its own (`23 DESPESAS OPERACIONAIS POR
+  NATUREZA E FUNÇÃO` between two notes' tables, each opening on
+  `31/12/24 | 31/12/23`);
 - the lines are set apart as the rows are.
 
 Where the column lines differ (a block adds a column), the block is a table
