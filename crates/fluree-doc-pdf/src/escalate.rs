@@ -1442,6 +1442,7 @@ mod tests {
                     italic: false,
                     advance: Some(1.0),
                     draw_index: i,
+                    ocr: None,
                 })
                 .collect(),
             images: if scanned {
@@ -1624,6 +1625,7 @@ mod tests {
                 italic: false,
                 advance: Some(6.0),
                 draw_index: i,
+                ocr: None,
             });
             i += 1;
         };
@@ -2092,6 +2094,7 @@ mod tests {
                         italic: false,
                         advance: Some(6.0),
                         draw_index,
+                        ocr: None,
                     });
                 }
             }
@@ -2197,6 +2200,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index,
+                    ocr: None,
                 });
             }
         }

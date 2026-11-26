@@ -388,6 +388,16 @@ fn inject_one(p: &mut Page, crop: Crop, t: &Target, ink: bool, reading: &WordRea
     let offered = placed.len();
     let added_from = p.glyphs.iter().map(|g| g.draw_index + 1).max().unwrap_or(0);
     let (result, regions_read) = add_words(p, crop, &t.area, first_glyph, t.replaces, ink, placed);
+    // Each glyph the reading added says where it was read: a page read
+    // whole is the page's text, a region routed out of a page with text of
+    // its own is a picture's.
+    let source = match t.area {
+        Area::Page => crate::glyph::OcrSource::Page,
+        Area::Regions(_) => crate::glyph::OcrSource::Region,
+    };
+    for g in p.glyphs.iter_mut().filter(|g| g.draw_index >= added_from) {
+        g.ocr = Some(source);
+    }
     // A whole-page reading most of whose words land nowhere is not a
     // reading of this page: a stray word must not mark a scan as read, or
     // take the place of a text layer.
@@ -1438,6 +1448,7 @@ fn lay_run(p: &mut Page, words: &[Level], run: &Run, start: f64, next: &mut usiz
             weight: None,
             italic: false,
             draw_index: *next,
+            ocr: None,
         });
         *next += 1;
     }
@@ -1495,6 +1506,7 @@ fn lay_along(
             weight: None,
             italic: false,
             draw_index,
+            ocr: None,
         });
     }
     boxes
@@ -1757,6 +1769,7 @@ mod tests {
                 weight: None,
                 italic: false,
                 draw_index: i,
+                ocr: None,
             })
             .collect()
     }

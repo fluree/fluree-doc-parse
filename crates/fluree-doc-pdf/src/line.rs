@@ -155,6 +155,9 @@ pub struct Line {
     pub opens_with_script: bool,
     /// Set in italic: most of its letters drawn in an italic face.
     pub italic: bool,
+    /// Read by an OCR engine, and where: the source most of its letters
+    /// were read from, `None` where most are the file's own.
+    pub ocr: Option<crate::glyph::OcrSource>,
     /// The height of its lowercase letters without ascenders or descenders
     /// (`a`, `e`, `o`, `x`), as a share of its size: the median over those
     /// letters, where it has two or more. Two faces at one size set it apart
@@ -2799,6 +2802,23 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         .filter(|g| g.bbox.is_some() && g.text.chars().any(char::is_alphabetic));
     let (letters, slanted) = lettered.fold((0, 0), |(n, k), g| (n + 1, k + usize::from(g.italic)));
     let italic = slanted * 2 > letters;
+    let ocr = {
+        let read = |source| {
+            idxs.iter()
+                .filter(|&&i| !glyphs[i].text.trim().is_empty() && glyphs[i].ocr == Some(source))
+                .count()
+        };
+        let shown = idxs
+            .iter()
+            .filter(|&&i| !glyphs[i].text.trim().is_empty())
+            .count();
+        [
+            crate::glyph::OcrSource::Region,
+            crate::glyph::OcrSource::Page,
+        ]
+        .into_iter()
+        .find(|&source| read(source) * 2 > shown)
+    };
     let mut heights: Vec<f32> = idxs
         .iter()
         .map(|&i| &glyphs[i])
@@ -2824,6 +2844,7 @@ fn build_line(glyphs: &[Glyph], idxs: &[usize], bucket: i32, space_ratio: f64) -
         opens_bold,
         opens_with_script,
         italic,
+        ocr,
         x_height,
         compounds: Vec::new(),
     })
@@ -2928,6 +2949,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -2950,6 +2972,7 @@ mod tests {
             italic: false,
             advance: Some(0.55 * s * text.chars().count() as f64),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -3214,6 +3237,7 @@ mod tests {
             italic: false,
             advance: Some(size as f64 * 0.5),
             draw_index: 0,
+            ocr: None,
         }
     }
 
@@ -3622,6 +3646,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index: i,
+                    ocr: None,
                 }
             })
             .collect();
@@ -3658,6 +3683,7 @@ mod tests {
                     italic: false,
                     advance: Some(6.0),
                     draw_index: glyphs.len(),
+                    ocr: None,
                 });
                 y -= 6.0;
             }
@@ -4460,6 +4486,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -4678,6 +4705,7 @@ mod tests {
             italic: false,
             advance: (w > 0.0).then_some(w),
             draw_index: 0,
+            ocr: None,
         };
         let glyphs = vec![
             glyph("t", 405.6, 5.4),

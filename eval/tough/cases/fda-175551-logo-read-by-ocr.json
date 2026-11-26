@@ -1,0 +1,30 @@
+{
+  "document": {
+    "file": "fda-175551.pdf",
+    "url": "https://www.fda.gov/media/175551/download",
+    "sha256": "f828c13ef087862f41aa35ffea0542f857a7606fd1213a8203bc92e606b8343c",
+    "ocr_words": "../fixtures/ocr-words/fda-175551",
+    "about": "FDA laboratory method (Contains Nonbinding Recommendations). Its first page sets the agency's logo as a picture over the text; an OCR engine reads `FDA U.S. FOOD & DRUG` / `ADMINISTRATION` in it, set larger than any line of the page's own text."
+  },
+  "notes": [
+    "2026-11-26: the logo's words, read by OCR in its picture, were the document's title. The stored reading is the built-in engine's (PP-OCRv6 small) of the logo's crop: `fdoc dev render-routed --ocr-regions --stored-resolution`, then `fdoc ocr --models`."
+  ],
+  "checks": [
+    {
+      "id": "logo-no-title",
+      "found": "2026-11-26",
+      "issue": "The logo's words read by OCR were the document's title.",
+      "element": {
+        "text": "FDA U.S. FOOD & DRUG",
+        "evidence": "title"
+      },
+      "count": 0
+    },
+    {
+      "id": "logo-text-kept",
+      "found": "2026-11-26",
+      "issue": "A guard: the logo's words stay in the text, as the picture's.",
+      "text": "FDA U.S. FOOD & DRUG"
+    }
+  ]
+}

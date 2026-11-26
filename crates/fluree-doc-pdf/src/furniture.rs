@@ -2046,6 +2046,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,

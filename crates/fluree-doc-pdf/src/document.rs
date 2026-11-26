@@ -6763,6 +6763,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let prose = [text(60.0, 200.0), text(320.0, 200.0)];
         // A full-width table's rule under its last row.
@@ -6849,6 +6850,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         let spread = |x0: f64, x1: f64| spread_runs(&g, &[ink(x0, x1)], &rows, &left)[4];
         // Narrow and centred, as before.
@@ -6882,6 +6884,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: i,
+            ocr: None,
         };
         // A grid whose first column is `first` wide; the band over the rest
         // of it, the rule at the first column's edge running up through it.
@@ -7748,6 +7751,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -7929,6 +7933,7 @@ mod tests {
                     italic: false,
                     advance: None,
                     draw_index: glyphs.len(),
+                    ocr: None,
                 });
                 at += width + 3.0;
             }
@@ -8014,6 +8019,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: i,
+            ocr: None,
         };
         let grid = |xs: Vec<f64>, ys: Vec<f64>| Grid {
             layout: None,
@@ -8338,6 +8344,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index,
+            ocr: None,
         };
         let prose = glyphs_outside_grids(&[glyph(10.0, 1), glyph(110.0, 2)], &[grid]);
         assert_eq!(prose.len(), 1);
@@ -8419,6 +8426,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 0,
+            ocr: None,
         };
         assert!(prefer_aligned_over_ruled(&[ruled], &[aligned], &[glyph]));
     }
