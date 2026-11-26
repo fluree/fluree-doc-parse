@@ -4104,6 +4104,7 @@ mod tests {
                     grid: (1000, 1000),
                 }],
             )],
+            title: None,
         };
         let mut only = vec![(0, Crop::Region(0), rows_read(weak, 0.78))];
         assert!(set_aside_unsure(&bare, &mut only).is_empty());
