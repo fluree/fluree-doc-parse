@@ -173,6 +173,10 @@ fn numbering_depth(text: &str) -> Option<usize> {
         Some((head, rest.to_string()))
     };
 
+    // A date opens on its day, not a section's number: `05 Juillet 2015`.
+    if date_text(text) {
+        return None;
+    }
     let (head, rest) = split_label(text)?;
     if rest.is_empty() || !rest.chars().next().is_some_and(|c| c.is_alphabetic()) {
         return None;
@@ -490,6 +494,227 @@ const MONTHS: &[&str] = &[
     "nov",
     "dec",
 ];
+
+/// Month names, lowercase, in the other languages documents date in:
+/// French, German, Dutch, Spanish, Italian and Portuguese.
+const OTHER_MONTHS: &[&str] = &[
+    "janvier",
+    "février",
+    "fevrier",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "aout",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
+    "decembre",
+    "januar",
+    "februar",
+    "märz",
+    "maerz",
+    "juni",
+    "juli",
+    "oktober",
+    "dezember",
+    "januari",
+    "februari",
+    "maart",
+    "mei",
+    "augustus",
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "setiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+    "gennaio",
+    "febbraio",
+    "aprile",
+    "maggio",
+    "giugno",
+    "luglio",
+    "settembre",
+    "ottobre",
+    "dicembre",
+    "janeiro",
+    "fevereiro",
+    "março",
+    "marco",
+    "maio",
+    "junho",
+    "julho",
+    "setembro",
+    "outubro",
+    "novembro",
+    "dezembro",
+];
+
+/// A month's name in any of the languages above, its case and a closing
+/// stop aside (`Juillet`, `Sept.`).
+fn month_name(w: &str) -> bool {
+    let w = w.trim_end_matches(['.', ',']).to_lowercase();
+    MONTHS.contains(&w.as_str()) || OTHER_MONTHS.contains(&w.as_str())
+}
+
+/// The line is a date and nothing else: `05 Juillet 2015`, `July 1, 2014`,
+/// `April 2024`, `13.06.2015`, `13/11/2017`, `2015-06-13`. A month's name
+/// needs a day or a year beside it: `May` alone is a word.
+fn date_text(t: &str) -> bool {
+    let t = t.trim();
+    // Figures alone: day, month and year parted by one separator.
+    if !t.contains(' ') {
+        for sep in ['/', '.', '-'] {
+            let parts: Vec<&str> = t.trim_end_matches('.').split(sep).collect();
+            if parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.len() <= 4 && p.chars().all(|c| c.is_ascii_digit()))
+                && parts.iter().any(|p| p.len() >= 2)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    let words: Vec<&str> = t.split([' ', ',']).filter(|w| !w.is_empty()).collect();
+    let day = |w: &str| {
+        let w = w.trim_end_matches('.');
+        let digits: String = w.chars().take_while(char::is_ascii_digit).collect();
+        let suffix = &w[digits.len()..];
+        !digits.is_empty()
+            && digits.parse::<u32>().is_ok_and(|d| (1..=31).contains(&d))
+            && matches!(suffix, "" | "st" | "nd" | "rd" | "th" | "er")
+    };
+    let year = |w: &str| {
+        w.len() == 4
+            && w.chars().all(|c| c.is_ascii_digit())
+            && w.parse::<u32>().is_ok_and(|y| (1800..=2199).contains(&y))
+    };
+    let months = words.iter().filter(|w| month_name(w)).count();
+    months == 1
+        && words.len() >= 2
+        && words.len() <= 4
+        && words
+            .iter()
+            .all(|w| month_name(w) || day(w) || year(w) || *w == "de")
+}
+
+/// Currency signs and the codes for them that a sum may stand beside.
+const CURRENCY_SIGNS: &[char] = &['€', '$', '£', '¥', '₹', '₩', '₽', '₺', '₪'];
+
+/// A figure with two decimals, its thousands parted or not:
+/// `1.589,80`, `4.11`, `406,82`, `1,234.56`, `-9,32`.
+fn two_decimals(w: &str) -> bool {
+    let w = w.trim_start_matches(['-', '+', '(']).trim_end_matches(')');
+    let w = w.trim_matches(|c: char| CURRENCY_SIGNS.contains(&c));
+    let Some(sep) = w.len().checked_sub(3).filter(|&k| w.is_char_boundary(k)) else {
+        return false;
+    };
+    let (whole, cents) = w.split_at(sep);
+    cents.starts_with(['.', ','])
+        && cents[1..].chars().all(|c| c.is_ascii_digit())
+        && !whole.is_empty()
+        && whole.starts_with(|c: char| c.is_ascii_digit())
+        && whole
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '\'' | '\u{2009}'))
+}
+
+/// The line is a sum and nothing else: a figure with two decimals, with
+/// at most a currency's sign or code and a tax's (`€ 717,97`, `$4.11`,
+/// `1.589,80`, `29.99 € TTC`).
+fn amount_text(t: &str) -> bool {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    words.iter().filter(|w| two_decimals(w)).count() == 1
+        && words.iter().all(|w| {
+            two_decimals(w)
+                || w.chars().all(|c| CURRENCY_SIGNS.contains(&c))
+                || (w.len() == 3 && w.chars().all(|c| c.is_ascii_uppercase()))
+        })
+}
+
+/// The line states a sum: a figure with two decimals beside a currency's
+/// sign (`Gesamtbetrag: 406,82 €`, `Nettobetrag: 358,00 € zuzüglich
+/// Umsatzsteuer`).
+fn states_amount(t: &str) -> bool {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    words.iter().enumerate().any(|(k, w)| {
+        two_decimals(w)
+            && (w.contains(|c: char| CURRENCY_SIGNS.contains(&c))
+                || [k.checked_sub(1), Some(k + 1)]
+                    .into_iter()
+                    .flatten()
+                    .any(|j| {
+                        words
+                            .get(j)
+                            .is_some_and(|o| o.chars().all(|c| CURRENCY_SIGNS.contains(&c)))
+                    }))
+    })
+}
+
+/// Least lowercase words in a heading that is a sentence.
+const SENTENCE_LOWERCASE_WORDS: usize = 2;
+
+/// Fewest words in a sentence closed by a stop that is no heading.
+const MIN_SENTENCE_WORDS: usize = 4;
+
+/// The line is a sentence closed by its stop, with words in lowercase
+/// running between: a payment's note (`Volgens onze administratie heeft u
+/// de factuur vooruitbetaald met Credit Card.`), a tagline (`Alles voor
+/// een glimlach.`). A title closes on no stop, a one-word mark may (`FACTUUR.`),
+/// and a numbered heading is judged by its numbering.
+fn closed_sentence(t: &str) -> bool {
+    let t = t.trim();
+    // A numbered line is judged by its numbering: an agreement's `4.4
+    // Adjustments to Applicable Conversion Price for Diluting Issues.`
+    if !t.ends_with('.') || t.ends_with("..") || t.starts_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    words.len() >= MIN_SENTENCE_WORDS
+        && words
+            .iter()
+            .skip(1)
+            .filter(|w| w.starts_with(|c: char| c.is_lowercase()))
+            .count()
+            >= SENTENCE_LOWERCASE_WORDS
+}
+
+/// A closed sentence that is prose, not a heading: one stating a date or a
+/// sum, set in sentence case, half its words after the first in lowercase
+/// (`Bitte überweisen Sie bis zum 04.07.2015.`). Length tells nothing: a
+/// slide titles itself in a sentence (`Model the domain, not the org
+/// chart.`), a 10-K captions each risk in one (`We are not profitable and
+/// expect to continue to incur losses.`), and an agreement closes its
+/// title-case headings on a stop (`Adjustments to Applicable Conversion
+/// Price for Diluting Issues.`).
+fn prose_sentence(t: &str) -> bool {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let lower = words
+        .iter()
+        .skip(1)
+        .filter(|w| w.starts_with(|c: char| c.is_lowercase()))
+        .count();
+    // A date or a sum, not a number: an exercise's `Activity 4.
+    // Determining CEC by replacing adsorbed cations.` is its heading.
+    let dated = words.iter().any(|w| {
+        let w = w.trim_end_matches(['.', ',']);
+        date_text(w) || two_decimals(w)
+    });
+    closed_sentence(t) && lower * 2 >= words.len().saturating_sub(1) && dated
+}
 
 /// A line of an article's publication record: one of [`RECORD_LABELS`] and
 /// its value, after a colon (`Editor: Dana Davis, …`) or as a date
@@ -1237,6 +1462,9 @@ pub fn detect_with_body(
                 });
             if b.marker.is_some()
                 || shares_row
+                || closed_sentence(&text)
+                || fields_run(&text)
+                || in_postal_address(blocks, i)
                 || (b.lines.len() > 3 && !stacked && !(display(b) && lettered))
                 || !title_like_within(&text, limit(&text, b))
                 || (numbering_depth(&text).is_some() && repeated_numbered.contains(&norm(&text)))
@@ -1804,7 +2032,19 @@ fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) ->
     let b = &page[i];
     let t = text.trim();
     let larger = b.font_size as f64 > body as f64 * (1.0 + HEADING_SIZE_MARGIN);
-    if is_caption(t) || (field_on_its_line(t) && !larger) || signature_page_label(t) {
+    if is_caption(t)
+        || (field_on_its_line(t) && (!larger || states_amount(t) || glued_field(t).is_some()))
+        || signature_page_label(t)
+        || prose_sentence(t)
+        || named_value(t) && beside_a_label(page, i)
+    {
+        return true;
+    }
+    if labels_a_value(page, i)
+        || labels_a_value_under(page, i)
+        || in_field_row(page, i)
+        || in_postal_address(page, i)
+    {
         return true;
     }
     if !b.bold && form_label(t) {
@@ -1824,6 +2064,210 @@ fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) ->
                 && o.bbox.x0 >= b.bbox.x1
                 && o.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP
         })
+}
+
+/// A line of fields, each label closing on a colon before its value: `BTW
+/// nr. NL: NL8204.71.616.B.02 Nederland IBAN: NL27INGB0000026501 BIC:
+/// INGBNL2A`. A title states one label at most (`Policy Rules:
+/// Limitations`).
+fn fields_run(t: &str) -> bool {
+    t.split_whitespace()
+        .filter(|w| w.len() > 1 && w.ends_with(':'))
+        .count()
+        >= 2
+}
+
+/// The line is a value that names itself one: a date, a sum, or a code
+/// with letters and figures (`13/11/2017`, `€ 717,97`, `MSPE2017`). A bare
+/// figure is as often a paragraph's or a page's number, and a step's label
+/// (`STEP 4:`) is no value.
+fn named_value(t: &str) -> bool {
+    date_text(t)
+        || amount_text(t)
+        || (code_text(t) && t.chars().any(char::is_alphabetic) && !t.trim_end().ends_with(':'))
+}
+
+/// Most words in a label set beside a sum it heads (`TOTAL AMOUNT DUE ON
+/// August 3 , 2014` beside `$4.11`).
+const MAX_SUM_LABEL_WORDS: usize = 8;
+
+/// The block nearest beside block `i` on its row, to its right or left,
+/// with nothing between: one line overlapping it by half the shorter's
+/// height.
+fn beside(page: &[Block], i: usize, right: bool) -> Option<usize> {
+    let b = &page[i];
+    page.iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i && {
+                let overlap = o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0);
+                overlap >= o.bbox.height().min(b.bbox.height()) * 0.5
+                    && if right {
+                        o.bbox.x0 >= b.bbox.x1
+                    } else {
+                        o.bbox.x1 <= b.bbox.x0
+                    }
+            }
+        })
+        .min_by(|p, q| {
+            let d = |o: &Block| {
+                if right {
+                    o.bbox.x0 - b.bbox.x1
+                } else {
+                    b.bbox.x0 - o.bbox.x1
+                }
+            };
+            d(p.1).total_cmp(&d(q.1))
+        })
+        .map(|(k, _)| k)
+}
+
+/// Block `i` is a field's label with its value set beside it on its row,
+/// no colon between: a sum anywhere along the row, as an invoice sets its
+/// totals against the right margin (`Totaal` … `€ 717,97`), or a date, a
+/// figure or a code within [`MAX_LABEL_GAP`] (`Date de facture`
+/// `13/11/2017`, `Réf. marché` `MSPE2017`). A heading beside a column of
+/// text reaches no value: the text runs on past a few words.
+fn labels_a_value(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let words = b.text().split_whitespace().count();
+    let Some(k) = beside(page, i, true) else {
+        return false;
+    };
+    let v = &page[k];
+    if v.lines.len() != 1 || b.lines.len() != 1 {
+        return false;
+    }
+    let text = v.text();
+    let fs = (b.font_size as f64).max(1.0);
+    // The value stands alone on its row: a paragraph's number beside a
+    // margin's heading has its paragraph after it (`Rescue equipment` …
+    // `156` … `Suitable rescue equipment…`). A row of sums is a totals row
+    // across a statement's columns (`Subtotals` … `$1,200.00` … `$35.10`).
+    let alone = beside(page, k, true).is_none_or(|n| {
+        page[n].bbox.x0 - v.bbox.x1 > fs * MAX_LABEL_GAP || amount_text(&page[n].text())
+    });
+    alone
+        && ((amount_text(&text) && words <= MAX_SUM_LABEL_WORDS)
+            || (named_value(&text)
+                && words <= MAX_FIELD_LABEL_WORDS
+                && v.bbox.x0 - b.bbox.x1 <= fs * MAX_LABEL_GAP))
+}
+
+/// Fewest letters and figures in a code that is a field's value. A
+/// contents' page reference is shorter (`E-1`, `A-12`).
+const MIN_CODE_CHARS: usize = 5;
+
+/// The line is one code: a single token holding a figure (`MSPE2017`,
+/// `06AABCO6063D1ZQ`, `FR19787878784`).
+fn code_text(t: &str) -> bool {
+    let t = t.trim();
+    !t.contains(char::is_whitespace)
+        && t.chars().filter(|c| c.is_alphanumeric()).count() >= MIN_CODE_CHARS
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '/' | '-' | '_' | '#'))
+}
+
+/// Widest gap, in the label's ems, between a label and the code, date or
+/// sum set under it.
+const UNDER_VALUE_GAP: f64 = 2.0;
+
+/// Block `i` is a field's label with its value set under it: a code of
+/// letters and figures, or a sum, on one line, no larger than the label,
+/// within two ems (`GSTIN` over `06AABCO6063D1ZQ`). The value may be set
+/// bold as the label is. A heading over its section's first line stands
+/// over words, and a title over its date (`Statement of Work` over the
+/// day it was signed) is a title.
+fn labels_a_value_under(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    // In a row of such labels: one heading over a model's code
+    // (`Dimensions`) is a heading.
+    over_code(page, i)
+        && page.iter().enumerate().any(|(j, o)| {
+            let overlap = o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0);
+            j != i
+                && o.bold == b.bold
+                && (o.font_size - b.font_size).abs() <= 0.5
+                && overlap >= o.bbox.height().min(b.bbox.height()) * 0.5
+                && over_code(page, j)
+        })
+}
+
+/// Block `i` is a short label over a code of letters and figures, or a
+/// sum, on one line no larger than it, within two ems.
+fn over_code(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let t = b.text();
+    if b.lines.len() != 1
+        || t.split_whitespace().count() > MAX_FORM_LABEL_WORDS
+        || t.chars().any(|c| c.is_ascii_digit())
+    {
+        return false;
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let under = page
+        .iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i
+                && o.bbox.y0 >= b.bbox.y1 - fs * 0.2
+                && o.bbox.y0 - b.bbox.y1 <= fs * UNDER_VALUE_GAP
+                && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+        })
+        .min_by(|(_, a), (_, c)| a.bbox.y0.total_cmp(&c.bbox.y0));
+    let Some((_, v)) = under else {
+        return false;
+    };
+    let text = v.text();
+    v.lines.len() == 1
+        && v.font_size <= b.font_size + 0.25
+        && ((code_text(&text) && text.chars().any(char::is_alphabetic)) || amount_text(&text))
+}
+
+/// Block `i` is a label in a row of a form's fields: it shares its row with
+/// a label set alike whose value stands beside or under it, and a short
+/// line stands under it (`Contact commercial` over `Tony Dubois`, beside
+/// `Date de facture` and its `13/11/2017`).
+fn in_field_row(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let t = b.text();
+    if b.lines.len() != 1 || t.split_whitespace().count() > MAX_FIELD_LABEL_WORDS {
+        return false;
+    }
+    let under_short = directly_below(page, i).is_some_and(|k| {
+        let v = &page[k];
+        v.lines.len() <= MAX_FIELD_VALUE_LINES
+            && !v.bold
+            && v.lines.iter().all(|l| {
+                l.text.split_whitespace().count() <= MAX_FIELD_VALUE_WORDS
+                    && !l.text.trim_end().ends_with('.')
+            })
+    });
+    under_short
+        && page.iter().enumerate().any(|(j, o)| {
+            let overlap = o.bbox.y1.min(b.bbox.y1) - o.bbox.y0.max(b.bbox.y0);
+            j != i
+                && o.bold == b.bold
+                && (o.font_size - b.font_size).abs() <= 0.5
+                && overlap >= o.bbox.height().min(b.bbox.height()) * 0.5
+                && (labels_a_value(page, j) || labels_a_value_under(page, j))
+        })
+}
+
+/// Block `i` is the value set beside a label that closes on a colon, within
+/// [`MAX_LABEL_GAP`]: `Prélèvement à partir du :` … `05 Juillet 2015`.
+fn beside_a_label(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let Some(k) = beside(page, i, false) else {
+        return false;
+    };
+    let label = &page[k];
+    let fs = (label.font_size as f64).max(1.0);
+    label.text().trim_end().ends_with(':')
+        && b.lines.len() == 1
+        && b.text().split_whitespace().count() <= MAX_FIELD_VALUE_WORDS
+        && b.bbox.x0 - label.bbox.x1 <= fs * MAX_LABEL_GAP
 }
 
 /// A form's or a chart's text set like a heading: a grid's keys and answer
@@ -2139,7 +2583,7 @@ const MAX_FIELD_VALUE_WORDS: usize = 6;
 /// Section 67 Limitation to Specific Deductions`, states no figure, or
 /// runs on past a value's length.
 fn field_on_its_line(t: &str) -> bool {
-    let Some((label, value)) = t.split_once(": ") else {
+    let Some((label, value)) = t.split_once(": ").or_else(|| glued_field(t)) else {
         return false;
     };
     let lw = label.split_whitespace().count();
@@ -2148,6 +2592,19 @@ fn field_on_its_line(t: &str) -> bool {
     (1..=MAX_FIELD_LABEL_WORDS).contains(&lw)
         && (figure || (1..=MAX_FIELD_VALUE_WORDS).contains(&vw))
         && value.chars().any(|c| c.is_ascii_digit())
+}
+
+/// A label and its figure joined by a colon with no space, as a form
+/// prints a field (`Kundennummer:2`). A title sets a space after its colon.
+fn glued_field(t: &str) -> Option<(&str, &str)> {
+    let (label, value) = t.split_once(':')?;
+    (!label.is_empty()
+        && !label.ends_with(' ')
+        && label
+            .chars()
+            .all(|c| c.is_alphabetic() || c == ' ' || c == '.')
+        && value.starts_with(|c: char| c.is_ascii_digit()))
+    .then_some((label, value))
 }
 
 /// Most words in a form's label.
@@ -2633,6 +3090,173 @@ fn opens_an_address(b: &Block, page: &[Block]) -> bool {
         last = next;
     }
     false
+}
+
+/// A house's number: a figure of one to five digits, a letter after it at
+/// most (`42`, `93B`).
+fn house_number(w: &str) -> bool {
+    let w = w.trim_end_matches(',');
+    let digits = w.chars().take_while(char::is_ascii_digit).count();
+    (1..=5).contains(&digits)
+        && w.len() - digits <= 1
+        && w[digits..].chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Most words in a street's line (`35 rue de la République`, `150 Royal
+/// Street, Suite 101`).
+const STREET_WORDS: usize = 6;
+
+/// Words a line wrapped mid-phrase ends on, as no street's name does.
+const JOINING_WORDS: &[&str] = &[
+    "and", "or", "of", "the", "to", "for", "in", "on", "with", "a",
+];
+
+/// A street's line of an address: its name and the house's number, either
+/// way round (`27 rue Henri Rolland`, `Bahnstr. 42`, `Sessamestreet 46`).
+/// Every other word has a letter. A title wrapped after a year is none
+/// (`2024 Annual Report on Form 10-K and` over `2025 Proxy Statement`): it
+/// runs longer, or ends on a word that joins it to the next line.
+fn street_line(t: &str) -> bool {
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if words.len() > STREET_WORDS
+        || words
+            .last()
+            .is_some_and(|w| JOINING_WORDS.contains(&w.to_lowercase().as_str()))
+    {
+        return false;
+    }
+    let named = |ws: &[&str]| {
+        !ws.is_empty()
+            && ws
+                .iter()
+                .all(|w| w.chars().any(char::is_alphabetic) && !w.ends_with(':'))
+    };
+    (2..=ADDRESS_WORDS).contains(&words.len())
+        && ((house_number(words[0]) && named(&words[1..]))
+            || (house_number(words[words.len() - 1]) && named(&words[..words.len() - 1])))
+}
+
+/// Most words in a town's name after its postcode (`Saint Denis de la
+/// réunion`).
+const TOWN_WORDS: usize = 6;
+
+/// A postcode's line of an address: four or five figures, a country's
+/// letter before them or the Dutch letters after, then the town (`69001
+/// Lyon`, `5555 NH TommyCity`, `D-12345 Berlin`, `88802Spielkreis`); or an
+/// American town, state and ZIP code (`Springfield, IL 62701`).
+fn postcode_line(t: &str) -> bool {
+    let t = t.trim();
+    let rest = match t.split_once('-') {
+        Some((country, rest))
+            if (1..=2).contains(&country.len())
+                && country.chars().all(|c| c.is_ascii_uppercase()) =>
+        {
+            rest
+        }
+        _ => t,
+    };
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if (4..=5).contains(&digits) {
+        let mut town = rest[digits..].trim_start();
+        let letters: String = town.chars().take(2).collect();
+        if letters.len() == 2
+            && letters.chars().all(|c| c.is_ascii_uppercase())
+            && town[2..].starts_with(' ')
+        {
+            town = town[2..].trim_start();
+        }
+        let words: Vec<&str> = town.split_whitespace().collect();
+        return (1..=TOWN_WORDS).contains(&words.len())
+            && town.starts_with(|c: char| c.is_uppercase())
+            && words.iter().all(|w| {
+                w.chars()
+                    .all(|c| c.is_alphabetic() || matches!(c, '-' | '.' | '\'' | '’' | '(' | ')'))
+            });
+    }
+    let Some((town, state_zip)) = t.rsplit_once(',') else {
+        return false;
+    };
+    let sz: Vec<&str> = state_zip.split_whitespace().collect();
+    sz.len() == 2
+        && sz[0].len() == 2
+        && sz[0].chars().all(|c| c.is_ascii_uppercase())
+        && sz[1].len() >= 5
+        && sz[1][..5].chars().all(|c| c.is_ascii_digit())
+        && town.chars().any(char::is_alphabetic)
+}
+
+/// Widest gap, in the lines' ems, between two lines of one address: an
+/// envelope's window sets its lines apart.
+const ADDRESS_LINE_GAP: f64 = 3.5;
+
+/// Lines an address sets over its street: a person's or a company's name,
+/// or the label that heads it (`Adresse de livraison`).
+const ADDRESS_NAME_LINES: usize = 2;
+
+/// Most words in a name over an address's street.
+const ADDRESS_NAME_WORDS: usize = 6;
+
+/// Block `i` is part of a postal address: a street's line set directly over
+/// a postcode's, and the line or two over the street that name whom it
+/// reaches (`Theodor Est` over `Bahnstr. 42` over `88802Spielkreis`; `27 rue
+/// Henri Rolland` over `69100 Villeurbanne`). The address's lines are read
+/// down the blocks set flush under each other, as one block or several.
+fn in_postal_address(page: &[Block], i: usize) -> bool {
+    let b = &page[i];
+    let fs = (b.font_size as f64).max(1.0);
+    let flush = |a: &Block, o: &Block| {
+        (a.bbox.x0 - o.bbox.x0).abs() <= fs
+            && (-0.5..=fs * ADDRESS_LINE_GAP).contains(&(o.bbox.y0 - a.bbox.y1))
+    };
+    // The run of blocks set flush with this one, upward and downward.
+    let below = |a: &Block| {
+        page.iter()
+            .enumerate()
+            .filter(|(_, o)| !std::ptr::eq(*o, a) && flush(a, o))
+            .min_by(|p, q| p.1.bbox.y0.total_cmp(&q.1.bbox.y0))
+            .map(|(k, _)| k)
+    };
+    let mut run = vec![i];
+    let mut top = i;
+    for _ in 0..ADDRESS_NAME_LINES + 1 {
+        let up = page
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| !std::ptr::eq(*o, &page[top]) && flush(o, &page[top]))
+            .max_by(|p, q| p.1.bbox.y1.total_cmp(&q.1.bbox.y1))
+            .map(|(k, _)| k);
+        let Some(k) = up else { break };
+        if below(&page[k]) != Some(top) {
+            break;
+        }
+        run.insert(0, k);
+        top = k;
+    }
+    let mut last = i;
+    for _ in 0..ADDRESS_NAME_LINES + 2 {
+        let Some(k) = below(&page[last]) else { break };
+        run.push(k);
+        last = k;
+    }
+    // Its lines, each with the block it is in.
+    let lines: Vec<(usize, String)> = run
+        .iter()
+        .flat_map(|&k| page[k].lines.iter().map(move |l| (k, l.text.clone())))
+        .collect();
+    lines.windows(2).enumerate().any(|(s, w)| {
+        if !(street_line(&w[0].1) && postcode_line(&w[1].1)) {
+            return false;
+        }
+        // The lines over the street name whom it reaches, in a few words.
+        let mut first = s;
+        while first > 0
+            && s - first < ADDRESS_NAME_LINES
+            && lines[first - 1].1.split_whitespace().count() <= ADDRESS_NAME_WORDS
+        {
+            first -= 1;
+        }
+        lines[first..=s + 1].iter().any(|(k, _)| *k == i)
+    })
 }
 
 /// Any line of the block states a web address, an e-mail address or a
@@ -3170,6 +3794,173 @@ mod tests {
             stacked: false,
             field: false,
         }
+    }
+
+    /// A one-line block at `x0..x1`, `y0` down, bold or not.
+    fn placed(text: &str, fs: f32, x0: f64, y0: f64, x1: f64, bold: bool) -> Block {
+        let mut b = blk(text, fs, 1);
+        b.bold = bold;
+        b.bbox = BBox {
+            x0,
+            y0,
+            x1,
+            y1: y0 + fs as f64,
+        };
+        for l in &mut b.lines {
+            l.bold = bold;
+            l.bbox = b.bbox;
+        }
+        b
+    }
+
+    #[test]
+    fn dates_sums_and_codes_are_values() {
+        for d in [
+            "05 Juillet 2015",
+            "July 1, 2014",
+            "April 2024",
+            "13/11/2017",
+            "13.06.2015",
+            "2015-06-13",
+            "1er mars 2024",
+        ] {
+            assert!(date_text(d), "{d}");
+        }
+        for d in [
+            "May",
+            "5 Results",
+            "Study 2",
+            "2024 Highlights",
+            "5 May Street",
+        ] {
+            assert!(!date_text(d), "{d}");
+        }
+        // A date opens on its day, not a section's number.
+        assert_eq!(numbering_depth("05 Juillet 2015"), None);
+        assert_eq!(numbering_depth("5 Results"), Some(1));
+        for a in ["€ 717,97", "1.589,80", "$4.11", "29.99 € TTC", "-9,32"] {
+            assert!(amount_text(a), "{a}");
+        }
+        for a in ["2024", "12.5 million", "3.2", "Total 4.11"] {
+            assert!(!amount_text(a), "{a}");
+        }
+        assert!(states_amount("Gesamtbetrag: 406,82 €"));
+        assert!(!states_amount("Results for 2024"));
+        assert!(code_text("MSPE2017") && code_text("FR19787878784"));
+        // A contents' page reference is no field's value.
+        assert!(!code_text("E-1") && !code_text("Results"));
+        // A label glued to its figure is a field; a title sets a space.
+        assert!(field_on_its_line("Kundennummer:2"));
+        assert!(!field_on_its_line("Policy Rules: Limitations"));
+    }
+
+    #[test]
+    fn a_postal_address_is_no_heading() {
+        assert!(street_line("27 rue Henri Rolland") && street_line("Bahnstr. 42"));
+        assert!(postcode_line("69100 Villeurbanne") && postcode_line("5555 NH TommyCity"));
+        assert!(postcode_line("88802Spielkreis") && postcode_line("Springfield, IL 62701"));
+        assert!(!postcode_line("Results") && !street_line("Results and discussion"));
+        // An envelope's window: a name over a street over a postcode, set
+        // larger than the text and lines apart.
+        let page = vec![
+            placed("Theodor Est", 12.0, 70.0, 170.0, 150.0, false),
+            placed("Bahnstr. 42", 12.0, 70.0, 200.0, 130.0, false),
+            placed("88802 Spielkreis", 12.0, 70.0, 240.0, 160.0, false),
+            placed("ordinary body prose here", 10.0, 70.0, 300.0, 500.0, false),
+        ];
+        for i in 0..3 {
+            assert!(in_postal_address(&page, i), "{}", page[i].text());
+        }
+        assert!(!in_postal_address(&page, 3));
+        // A section's heading over its text is none.
+        let page = vec![
+            placed("Methods", 12.0, 70.0, 100.0, 130.0, true),
+            placed(
+                "Study 2 enrolled forty patients.",
+                10.0,
+                70.0,
+                116.0,
+                300.0,
+                false,
+            ),
+            placed("2024 Highlights", 12.0, 70.0, 132.0, 160.0, true),
+        ];
+        assert!(!in_postal_address(&page, 0) && !in_postal_address(&page, 2));
+    }
+
+    #[test]
+    fn a_label_with_its_value_beside_or_under_it_is_a_field() {
+        let page = vec![
+            // A field's label and its date, no colon between.
+            placed("Date de facture", 8.0, 35.0, 224.0, 106.0, true),
+            placed("13/11/2017", 8.0, 156.0, 224.0, 203.0, false),
+            // A total and its sum against the right margin.
+            placed("Totaal", 8.0, 437.0, 300.0, 461.0, true),
+            placed("€ 717,97", 8.0, 518.0, 300.0, 549.0, false),
+            // A margin's heading beside its paragraph's number and text.
+            placed("Rescue equipment", 8.0, 35.0, 400.0, 110.0, true),
+            placed("156", 8.0, 130.0, 400.0, 142.0, false),
+            placed(
+                "Suitable rescue equipment must be",
+                8.0,
+                150.0,
+                400.0,
+                400.0,
+                false,
+            ),
+            // Labels side by side, each over its code.
+            placed("GSTIN", 9.0, 57.0, 583.0, 84.0, true),
+            placed("06AABCO6063D1ZQ", 8.3, 57.0, 600.0, 135.0, true),
+            placed("CIN", 9.0, 302.0, 583.0, 316.0, true),
+            placed("U63090DL2012PTC231770", 8.3, 302.0, 600.0, 402.0, true),
+            // A heading over a model's code, alone on its row.
+            placed("Dimensions", 9.0, 57.0, 700.0, 110.0, true),
+            placed("AFPE224300", 8.0, 57.0, 712.0, 110.0, false),
+        ];
+        assert!(labels_a_value(&page, 0));
+        assert!(labels_a_value(&page, 2));
+        assert!(!labels_a_value(&page, 4));
+        assert!(labels_a_value_under(&page, 7));
+        assert!(!labels_a_value_under(&page, 11));
+        // The label sharing a row with a field, over a short line, is one
+        // too: `Contact commercial` over `Tony Dubois`.
+        let mut row = page[..2].to_vec();
+        row.push(placed("Contact commercial", 8.0, 327.0, 224.0, 421.0, true));
+        row.push(placed("Tony Dubois", 8.0, 327.0, 241.0, 381.0, false));
+        assert!(in_field_row(&row, 2));
+        // A value beside a label closing on its colon.
+        let page = vec![
+            placed("Prélèvement à partir du :", 8.0, 380.0, 576.0, 479.0, false),
+            placed("05 Juillet 2015", 8.0, 497.0, 576.0, 554.0, true),
+        ];
+        assert!(beside_a_label(&page, 1) && named_value(&page[1].text()));
+        // A step's label beside the step before it is no value.
+        assert!(!named_value("STEP 4:"));
+    }
+
+    #[test]
+    fn a_closed_sentence_is_no_heading() {
+        assert!(prose_sentence("Bitte überweisen Sie bis zum 04.07.2015."));
+        assert!(prose_sentence(
+            "Betaald op 21-04-2015 met € 717,97 via iDEAL."
+        ));
+        // Length tells nothing: a slide's or a 10-K's risk's caption is a
+        // sentence too.
+        for t in [
+            "We are not profitable and expect to continue to incur losses.",
+            "Activity 4. Determining CEC by replacing adsorbed cations.",
+            "Model the domain, not the org chart.",
+            "Adjustments to Applicable Conversion Price for Diluting Issues.",
+            "4.4 Adjustments to Applicable Conversion Price for Diluting Issues.",
+            "FACTUUR.",
+        ] {
+            assert!(!prose_sentence(t), "{t}");
+        }
+        // A sentence is no document's title, even a short one.
+        assert!(closed_sentence("Dat betaal ik zelf wel."));
+        // Labels each closing on a colon make a line of fields.
+        assert!(fields_run("BTW nr. NL: NL82 IBAN: NL27 BIC: INGB"));
+        assert!(!fields_run("Policy Rules: Limitations"));
     }
 
     #[test]
