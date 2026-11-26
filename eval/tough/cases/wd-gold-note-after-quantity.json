@@ -14,15 +14,15 @@
     {
       "id": "capacity-note-apart",
       "found": "2026-11-23",
-      "issue": "Note 1 was read into the capacity: up to 26TB1.",
-      "text": "up to 26TB 1",
+      "issue": "Note 1 was read into the capacity: up to 26TB1. (#322: a note's number is now written raised, `up to 26TB¹`.)",
+      "text": "up to 26TB¹",
       "count": 2
     },
     {
       "id": "workload-note-apart",
       "found": "2026-11-23",
-      "issue": "As above, for note 2 on the workload: 550TB2 per year.",
-      "text": "550TB 2 per year"
+      "issue": "As above, for note 2 on the workload: 550TB2 per year. (#322: a note's number is now written raised, `550TB² per year`.)",
+      "text": "550TB² per year"
     },
     {
       "id": "no-glued-capacity",

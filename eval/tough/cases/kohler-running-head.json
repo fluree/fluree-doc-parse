@@ -7,17 +7,15 @@
   },
   "notes": [
     "A running head on two pages of three was never furniture, and its copies came out as sections in the middle of the sheet's content. Read from its exact copies, it is; the first page's title block, set larger in another place, stays the title.",
-    "2026-11-24 (#191): page 2's two columns open with titles side by side under the running head; a gap inside the left column's section, level with the right column's next title, cut the page, and the standards lines went under the next title."
+    "2026-11-24 (#191): page 2's two columns open with titles side by side under the running head; a gap inside the left column's section, level with the right column's next title, cut the page, and the standards lines went under the next title.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
       "id": "title-kept",
       "found": "2026-11-23",
       "issue": "A guard: the title block says what the running head says, and must stay the document's title.",
-      "section": {
-        "title": "Guild® | K-R33912",
-        "level": 1
-      }
+      "element": {"type": "doco:Title", "text": "Guild® | K-R33912"}
     },
     {
       "id": "running-head-once",

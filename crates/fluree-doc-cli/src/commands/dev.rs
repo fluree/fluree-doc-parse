@@ -1209,12 +1209,18 @@ pub(crate) fn render_routed(
     // take their readings.
     let mut stems = std::collections::HashSet::new();
     // The limit `convert --ocr` reads under, from the same config.
-    let max_ocr_crops = match ocr_regions.then(crate::config::load) {
-        None => 0,
-        Some(Ok(l)) => l.config.ocr.max_crops(),
+    let (max_ocr_crops, small_per_page) = match ocr_regions.then(crate::config::load) {
+        None => (0, 0),
+        Some(Ok(l)) => (
+            l.config.ocr.max_crops(),
+            l.config.ocr.max_small_regions_per_page(),
+        ),
         Some(Err(e)) => {
             eprintln!("warning: {e}");
-            crate::config::DEFAULT_OCR_MAX_CROPS
+            (
+                crate::config::DEFAULT_OCR_MAX_CROPS,
+                fluree_doc_pdf::ocr::DEFAULT_SMALL_REGIONS_PER_PAGE,
+            )
         }
     };
     let mut n_vetoed = 0usize;
@@ -1335,11 +1341,18 @@ pub(crate) fn render_routed(
         // page read whole on a doubt about its structure, which an OCR
         // engine skips, gets its regions as crops of their own too.
         let small = if ocr_regions {
-            let (ocr, capped) = fluree_doc_pdf::ocr::ocr_jobs(&doc, None, max_ocr_crops);
+            let (ocr, capped, crowded) =
+                fluree_doc_pdf::ocr::ocr_jobs_within(&doc, None, max_ocr_crops, small_per_page);
             if capped > 0 {
                 eprintln!(
                     "{}",
                     crate::commands::convert::ocr_cap_note(stem, max_ocr_crops, capped)
+                );
+            }
+            if crowded > 0 {
+                eprintln!(
+                    "{}",
+                    crate::commands::convert::ocr_crowded_note(stem, small_per_page, crowded)
                 );
             }
             let routed: std::collections::HashMap<usize, usize> = doc

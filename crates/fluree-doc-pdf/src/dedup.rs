@@ -262,6 +262,7 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: idx,
+            ocr: None,
         }
     }
 
@@ -327,6 +328,7 @@ mod tests {
             italic: false,
             advance: Some(1.824),
             draw_index: idx,
+            ocr: None,
         }
     }
 
@@ -429,6 +431,7 @@ mod tests {
             italic: false,
             advance: Some(7.2),
             draw_index: idx,
+            ocr: None,
         }
     }
 

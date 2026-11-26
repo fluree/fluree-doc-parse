@@ -120,7 +120,7 @@ fn the_layout_pipeline_reads_it_as_it_reads_a_pdf_page() {
         .map(|e| (e.kind.as_str(), e.text.as_str()))
         .collect();
     assert!(
-        texts.contains(&("doco:SectionTitle", "Quarterly report")),
+        texts.contains(&("doco:Title", "Quarterly report")),
         "{texts:?}"
     );
     assert!(

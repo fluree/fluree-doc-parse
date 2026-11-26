@@ -1,0 +1,22 @@
+{
+  "document": {
+    "file": "acl-2020-main-703.pdf",
+    "url": "https://aclanthology.org/2020.acl-main.703.pdf",
+    "sha256": "3562c723fe7bebb8b362533122b3ca5c065037c8e8d67460654cf3740652bb59",
+    "about": "ACL 2020, BART. Page 2 sets two columns of text under a full-width figure, with the page's number centred under the gutter."
+  },
+  "checks": [
+    {
+      "id": "columns-over-page-number-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: the page's number, set under the gutter, was the one line across it, and the columns were read line by line.",
+      "text": "to essentially translate the foreign language to noised English, by propagation through BART, thereby using BART as a pre-trained target-side language model."
+    },
+    {
+      "id": "right-column-read-whole",
+      "found": "2026-11-26",
+      "issue": "#436: the right column's lines alternated with the left column's.",
+      "text": "base model, we use 6 layers in the encoder and decoder, and for our large model we use 12 layers in each."
+    }
+  ]
+}

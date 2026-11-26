@@ -24,9 +24,15 @@ Below the page level, regions escalate on the same logic: a raster region that
 reads as text or table structure under a pixel probe, gated on a **glyph
 void** — a region the text layer already covers never routes.
 
-Tables escalate on a third signal: a grid whose detected structure disagrees
-with itself (fragmented columns, merged rows). `fdoc triage` reports these as
-`TABLE` verdicts.
+Tables escalate on a third signal: a table whose reading is in doubt. Either
+its detected structure disagrees with itself (fragmented columns, merged
+rows), which `fdoc triage` reports as `TABLE` verdicts, or its header is
+anything but one plain row: no header found, a header of several rows, a
+label spanning rows or columns, a banner over a group of rows. A table under
+one plain header row is not sent, whether its grid was drawn or inferred. A
+reading has little to add to such a table, and because a reading that differs
+in shape replaces it, a reading that merges two columns or drops a row costs
+the table more often than it helps.
 
 ## Arbitration: what a reading is allowed to replace
 
@@ -115,15 +121,15 @@ from 290 to none. `fdoc triage` reports the count discounted as `template`.
 
 ## Tables in a templated document
 
-A table anchors for a reading — a ruled grid's reading drops out when its
-shape agrees with ours, and wins when it does not. Measured on reports with a
-few tables each, that is cheap insurance. On a chart of fifteen hundred small
+A table in doubt anchors for a reading — a ruled grid's reading drops out when
+its shape agrees with ours, and wins when it does not. Measured on reports with
+a few tables each, that is cheap insurance. On a chart of fifteen hundred small
 templated tables it is fifteen hundred crops to confirm what the rules already
 say, and a reading per table stops being earned.
 
-So past thirty-two drawn grids in one document, ruled grids no longer anchor.
-What still does: a grid whose structure was inferred rather than drawn, a
-table a layout detector saw that no grid covers, and a page the router sent.
+So past thirty-two drawn grids in one document, ruled grids no longer anchor,
+in doubt or not. What still does: an inferred grid in doubt, a table a layout
+detector saw that no grid covers, and a page the router sent.
 On the 819-page chart this takes the crop count from 1,351 to 21. The
 evaluation corpus has no document with more than three tables, so it cannot
 measure this either way.

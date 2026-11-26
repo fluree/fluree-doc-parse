@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "fed-fsr-2025-04.pdf",
+    "url": "https://www.federalreserve.gov/publications/files/financial-stability-report-20250425.pdf",
+    "sha256": "81080ea1ebc4d6a1f3027c94f05eb40daec56c4006da6f1e7e85f9044111fb0b",
+    "about": "Federal Reserve Financial Stability Report, April 2025. Its prose is set at 10pt, beside and between charts whose labels, scales and notes are set at 8pt and outnumber the prose's lines."
+  },
+  "notes": [
+    "2026-11-26 (#403): the body was measured from every block's lines, and the charts' many 8pt lines set it at 8pt. A one-line block of the 10pt prose, cut off beside a chart, was then a heading by its size."
+  ],
+  "checks": [
+    {
+      "id": "prose-line-no-heading",
+      "found": "2026-11-26",
+      "issue": "#403: a line of the 10pt prose was an h3.",
+      "no_section": "Valuations in the residential real estate"
+    },
+    {
+      "id": "second-prose-line-no-heading",
+      "found": "2026-11-26",
+      "issue": "#403: as above.",
+      "no_section": "Mortgage debt accounted for roughly three-"
+    },
+    {
+      "id": "finding-head-kept",
+      "found": "2026-11-26",
+      "issue": "A guard: a finding set in 14pt bold over its prose stays a heading once the body is 10pt.",
+      "section": {
+        "title": "Residential real estate prices remained high relative to fundamentals"
+      }
+    }
+  ]
+}

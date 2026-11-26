@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "FOMCpresconf20240131.pdf",
+    "url": "https://www.federalreserve.gov/mediacenter/files/FOMCpresconf20240131.pdf",
+    "sha256": "a87b8b75d7f2d64679d91a0f31aa5ff5f117e49a26b1f90d4589293ec40fc91c",
+    "about": "Transcript of the FOMC Chair's press conference, January 31, 2024. Its first page sets `Transcript of Chair Powell's Press Conference` in bold at the text's size, then the date larger, which the file's own title states as `Transcript of Chair Powell's Press Conference -- January 31, 2024`."
+  },
+  "notes": [
+    "2026-11-26 (#455): the date, the largest line on the first page, was the document's title. A date is no title, and the heading the file's own title names is."
+  ],
+  "checks": [
+    {
+      "id": "date-no-title",
+      "found": "2026-11-26",
+      "issue": "#455: the conference's date was the document's title.",
+      "element": {
+        "type": "doco:Title",
+        "text": "January 31, 2024"
+      },
+      "count": 0
+    },
+    {
+      "id": "transcript-title",
+      "found": "2026-11-26",
+      "issue": "#455: the transcript's own title was a bold heading under the date's title.",
+      "element": {
+        "type": "doco:Title",
+        "text": "Transcript of Chair Powell’s Press Conference",
+        "evidence": "metadata"
+      }
+    }
+  ]
+}

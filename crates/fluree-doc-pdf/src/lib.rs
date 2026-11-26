@@ -327,6 +327,7 @@ mod tests {
                 italic: false,
                 advance: None,
                 draw_index: i,
+                ocr: None,
             })
             .collect();
         Page {
@@ -382,6 +383,7 @@ mod tests {
     fn a_routed_region_nothing_read_is_unread_with_its_box() {
         let doc = Document {
             pages: vec![page(&[BIG, OTHER])],
+            title: None,
         };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 2, "{got:?}");
@@ -396,6 +398,7 @@ mod tests {
     fn a_region_a_model_read_is_not_unread() {
         let doc = Document {
             pages: vec![page(&[BIG, OTHER])],
+            title: None,
         };
         for evidence in ["region-splice", "region-chart"] {
             let got = unread_regions(&doc, &[spliced(BIG, evidence)]);
@@ -421,6 +424,7 @@ mod tests {
     fn an_image_drawn_twice_in_one_place_is_one_unread_region() {
         let doc = Document {
             pages: vec![page(&[BIG, OTHER, BIG])],
+            title: None,
         };
         let got: Vec<BBox> = unread_regions(&doc, &[]).iter().map(|u| u.bbox).collect();
         assert_eq!(got, [BIG, OTHER]);
@@ -429,6 +433,7 @@ mod tests {
         next.index = 1;
         let doc = Document {
             pages: vec![page(&[BIG]), next],
+            title: None,
         };
         assert_eq!(unread_regions(&doc, &[]).len(), 2);
     }
@@ -437,6 +442,7 @@ mod tests {
     fn a_whole_page_reading_reads_every_region() {
         let doc = Document {
             pages: vec![page(&[BIG, OTHER])],
+            title: None,
         };
         let whole = Element::new("doco:Paragraph", "the page", "vlm", "page-tier");
         assert!(unread_regions(&doc, &[whole]).is_empty());
@@ -452,13 +458,17 @@ mod tests {
         });
         let doc = Document {
             pages: vec![p.clone()],
+            title: None,
         };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].bbox, BIG);
         // A whole-page OCR reading read them all.
         p.ocr.as_mut().unwrap().whole = true;
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         assert!(unread_regions(&doc, &[]).is_empty());
     }
 
@@ -477,6 +487,7 @@ mod tests {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
             pages: vec![page(&[small, BIG])],
+            title: None,
         };
         assert_eq!(route::ocr_regions(&doc.pages[0]), vec![BIG, small]);
         assert_eq!(
@@ -490,12 +501,16 @@ mod tests {
             whole: false,
             regions: vec![1],
         });
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         assert_eq!(reasons(&doc), [("Region".to_string(), BIG)]);
         // Alone on a page of prose, it is listed too: the page routes
         // nothing, and the region is still the router's to decline.
         let doc = Document {
             pages: vec![page(&[small])],
+            title: None,
         };
         assert_eq!(reasons(&doc), [("Small".to_string(), small)]);
     }
@@ -511,7 +526,10 @@ mod tests {
         for i in &mut p.images {
             i.texty = None;
         }
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
         assert!(route::ocr_regions(&doc.pages[0]).is_empty());
         assert_eq!(
@@ -530,6 +548,7 @@ mod tests {
         }
         let doc = Document {
             pages: vec![p.clone()],
+            title: None,
         };
         assert_eq!(route::decide(&doc.pages[0]).0, route::Route::Deterministic);
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
@@ -542,7 +561,10 @@ mod tests {
             whole: false,
             regions: vec![0],
         });
-        let doc = Document { pages: vec![read] };
+        let doc = Document {
+            pages: vec![read],
+            title: None,
+        };
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
         // Under text the page's own glyphs cover, it is not listed: the text
         // layer reads it (a background behind real text).
@@ -558,14 +580,17 @@ mod tests {
             italic: false,
             advance: None,
             draw_index: 1500 + i,
+            ocr: None,
         }));
         let doc = Document {
             pages: vec![covered],
+            title: None,
         };
         assert!(reasons(&doc).is_empty());
         // A model's reading of the whole page reads it too.
         let doc = Document {
             pages: vec![page(&[BIG])],
+            title: None,
         };
         let mut photo = doc.clone();
         photo.pages[0].images[0].texty = Some(false);
@@ -578,6 +603,7 @@ mod tests {
         let small = b(50.0, 100.0, 250.0, 130.0);
         let doc = Document {
             pages: vec![page(&[small, BIG, small])],
+            title: None,
         };
         assert_eq!(
             reasons(&doc),
@@ -587,7 +613,10 @@ mod tests {
         for i in &mut p.images {
             i.texty = Some(false);
         }
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         assert_eq!(reasons(&doc), [("NotTexty".to_string(), BIG)]);
     }
 
@@ -613,7 +642,10 @@ mod tests {
             regions: Vec::new(),
         });
         assert_eq!(route::decide(&p).0, route::Route::Deterministic);
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         assert!(unread_regions(&doc, &[]).is_empty());
         // Handed no element, the reading left the page under the floor: it
         // is listed as one OCR read sparsely, not as an unread scan.
@@ -630,7 +662,10 @@ mod tests {
         p.rotation = 90;
         let shown = p.to_display(BIG);
         assert_ne!(shown, BIG);
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         let got = unread_regions(&doc, &[]);
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].bbox, shown);
@@ -651,6 +686,7 @@ mod tests {
         b.warnings = vec!["ImageDecodeFailure"];
         let doc = Document {
             pages: vec![a, page(&[]), b],
+            title: None,
         };
         let got = parse_warnings(&doc);
         let got: Vec<(usize, &str, usize)> = got
@@ -672,7 +708,10 @@ mod tests {
         // A scan is an unread page, not a page of unread regions.
         let mut p = page(&[b(0.0, 0.0, 600.0, 800.0)]);
         p.glyphs.clear();
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         assert!(unread_regions(&doc, &[]).is_empty());
         assert_eq!(unread_pages(&doc, &[]).len(), 1);
         // A model's reading of the page read it, however short.

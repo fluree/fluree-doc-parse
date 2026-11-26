@@ -12,8 +12,8 @@
     {
       "id": "format-note",
       "found": "2026-11-24",
-      "issue": "#206: the note's numbers were read into the bracket.",
-      "text": "FastFormat (512e/4Kn) 1,2"
+      "issue": "#206: the note's numbers were read into the bracket. (#322: a note's number is now written raised, `FastFormat (512e/4Kn)¹,²`.)",
+      "text": "FastFormat (512e/4Kn)¹,²"
     },
     {
       "id": "format-note-not-glued",
@@ -24,8 +24,8 @@
     {
       "id": "dimension-note",
       "found": "2026-11-24",
-      "issue": "#206: as above.",
-      "text": "Depth (mm/in, max) 4"
+      "issue": "#206: as above. (#322: a note's number is now written raised, `Depth (mm/in, max)⁴`.)",
+      "text": "Depth (mm/in, max)⁴"
     },
     {
       "id": "dimension-note-not-glued",

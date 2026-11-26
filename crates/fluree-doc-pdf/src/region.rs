@@ -275,7 +275,7 @@ impl Page<'_> {
                     // where two stand side by side.
                     let parts: Vec<(Vec<Line>, bool)> = match boxed(&group, self.frames) {
                         Some(boxes) => boxes.into_iter().map(|b| (b, true)).collect(),
-                        None => split_local(group, self.h, 2)
+                        None => split_local(group, self.h, 3)
                             .into_iter()
                             .flat_map(|(lines, own)| {
                                 side_blocks(lines, own, self.h, self.frames, 2)
@@ -710,6 +710,12 @@ fn split_at_gutters(group: Vec<Line>, h: f64, depth: usize, own: bool) -> Vec<(V
         out.extend(split_at_gutters(r, h, depth - 1, true));
         return out;
     }
+    // A row or two across the gutter at the region's top or foot: a title
+    // over the columns wrapped to a second line, or the page's number set
+    // under them. They are read apart, and the columns at the gutter.
+    if let Some(out) = split_past_edges(&group, h, depth, own) {
+        return out;
+    }
     // A line or two across the gutter, where a callout's line joined the
     // column's beside it: they part the region, and each part is read at
     // the gutter.
@@ -723,9 +729,35 @@ fn split_at_gutters(group: Vec<Line>, h: f64, depth: usize, own: bool) -> Vec<(V
     if spanners == 0 || spanners > MAX_SPANNERS.max(group.len() / SPANNER_SHARE) {
         return vec![(group, own)];
     }
-    let rest: Vec<Line> = group.iter().filter(|l| !wide(l)).cloned().collect();
+    // The lines across, and the line alone on its row that ends one of
+    // them: set as the line over it and under its start, the end of a
+    // caption or title (`moyen à l'accouchement depuis 2005` under `4. Taux
+    // de fécondité … conjoncturel`). A column's first line has the next
+    // column's beside it.
+    let alone = |i: usize| {
+        let b = &group[i].bbox;
+        !group
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != i && o.bbox.y1.min(b.y1) - o.bbox.y0.max(b.y0) > 0.0)
+    };
+    let mut across = vec![false; group.len()];
+    for i in 0..group.len() {
+        across[i] = wide(&group[i])
+            || (i > 0 && across[i - 1] && goes_on(&group[i - 1], &group[i]) && alone(i));
+    }
+    let rest: Vec<Line> = group
+        .iter()
+        .zip(&across)
+        .filter(|(_, a)| !**a)
+        .map(|(l, _)| l.clone())
+        .collect();
     let Some(x) = local_gutter(&rest, h) else {
-        return vec![(group, own)];
+        // No gutter through the whole region: its columns may stand only
+        // under, or over, a figure whose caption runs across. Each band
+        // between the lines across is read at a gutter of its own, where
+        // one has one.
+        return split_bands(group, &across, h, depth, own);
     };
     if !group
         .iter()
@@ -734,27 +766,203 @@ fn split_at_gutters(group: Vec<Line>, h: f64, depth: usize, own: bool) -> Vec<(V
     {
         return vec![(group, own)];
     }
+    parts_at(
+        group,
+        &across,
+        |part| split_at_gutters(part, h, depth - 1, own),
+        own,
+    )
+}
+
+/// `group` parted at its lines across: each run of them read together, and
+/// each stretch between read by `read`.
+fn parts_at(
+    group: Vec<Line>,
+    across: &[bool],
+    mut read: impl FnMut(Vec<Line>) -> Vec<(Vec<Line>, bool)>,
+    own: bool,
+) -> Vec<(Vec<Line>, bool)> {
     let mut out = Vec::new();
     let mut part: Vec<Line> = Vec::new();
-    for l in group {
-        if wide(&l) {
+    let mut run: Vec<Line> = Vec::new();
+    for (l, a) in group.into_iter().zip(across) {
+        if *a {
             if !part.is_empty() {
-                out.extend(split_at_gutters(
-                    std::mem::take(&mut part),
-                    h,
-                    depth - 1,
-                    own,
-                ));
+                out.extend(read(std::mem::take(&mut part)));
             }
-            out.push((vec![l], own));
+            run.push(l);
         } else {
+            if !run.is_empty() {
+                out.push((std::mem::take(&mut run), own));
+            }
             part.push(l);
         }
     }
     if !part.is_empty() {
-        out.extend(split_at_gutters(part, h, depth - 1, own));
+        out.extend(read(part));
+    }
+    if !run.is_empty() {
+        out.push((run, own));
     }
     out
+}
+
+/// Most rows at a region's top, and at its foot, that may cross its gutter
+/// and be read apart from its columns: a title over them and the line it
+/// wraps to, or the page's number under them.
+const EDGE_ROWS: usize = 2;
+
+/// Least size, as a share of the columns' text, a title over them is set at
+/// where it is not bold: larger by as much as a heading is.
+const TITLE_OVER_BODY: f64 = 1.0 + crate::heading::HEADING_SIZE_MARGIN;
+
+/// Most space, in the title's size, between a title's line and the line it
+/// goes on in: a line's leading, not a paragraph's gap.
+const TITLE_LEADING: f64 = 0.6;
+
+/// Most a title's next line may hang in from its first, in the title's
+/// size: under its text past a number (`4. Taux …`), two ems at most.
+const TITLE_HANG: f64 = 2.0;
+
+/// Does `next` go on from `last`, the line of a title or caption over it:
+/// set in its size and weight, under its start or hanging under its text,
+/// a line's leading down?
+fn goes_on(last: &Line, next: &Line) -> bool {
+    let fs = (last.font_size as f64).max(1.0);
+    next.bold == last.bold
+        && (next.font_size - last.font_size).abs() as f64 <= fs * 0.05
+        && next.bbox.x0 >= last.bbox.x0 - fs
+        && next.bbox.x0 <= last.bbox.x0 + fs * TITLE_HANG
+        && next.bbox.y0 > last.bbox.y0
+        && next.bbox.y0 - last.bbox.y1 <= fs * TITLE_LEADING
+}
+
+/// [`split_at_gutters`] past a region's edge rows: the fewest rows at its
+/// top and foot, each crossing the gutter the rest stand at, set apart.
+/// `None` where no such rows leave a gutter.
+fn split_past_edges(
+    group: &[Line],
+    h: f64,
+    depth: usize,
+    own: bool,
+) -> Option<Vec<(Vec<Line>, bool)>> {
+    // Rows, top to bottom: lines that share a height.
+    let mut order: Vec<usize> = (0..group.len()).collect();
+    order.sort_by(|&a, &b| group[a].bbox.y0.total_cmp(&group[b].bbox.y0));
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for i in order {
+        let b = &group[i].bbox;
+        match rows.last_mut() {
+            Some(row)
+                if row
+                    .iter()
+                    .any(|&j| group[j].bbox.y1.min(b.y1) - group[j].bbox.y0.max(b.y0) > 0.0) =>
+            {
+                row.push(i)
+            }
+            _ => rows.push(vec![i]),
+        }
+    }
+    for edges in 1..=EDGE_ROWS * 2 {
+        for top in 0..=edges.min(EDGE_ROWS) {
+            let foot = edges - top;
+            if foot > EDGE_ROWS || edges + SIDE_LINES * 2 > rows.len() {
+                continue;
+            }
+            let apart = |k: usize| k < top || k >= rows.len() - foot;
+            let rest: Vec<Line> = (0..rows.len())
+                .filter(|&k| !apart(k))
+                .flat_map(|k| rows[k].iter().map(|&i| group[i].clone()))
+                .collect();
+            let Some(x) = local_gutter(&rest, h) else {
+                continue;
+            };
+            let crosses = (0..rows.len())
+                .filter(|&k| apart(k))
+                .flat_map(|k| &rows[k])
+                .all(|&i| group[i].bbox.x0 < x && group[i].bbox.x1 > x);
+            if !crosses {
+                continue;
+            }
+            // A title over the columns goes on in the line under it, however
+            // short: set as the title is, under its start, a line's space
+            // down. The columns' text is no title's, so the title stands out
+            // from it, bold or larger.
+            let mut top = top;
+            let mut rest = rest;
+            if top > 0 {
+                let body = median(
+                    (top..rows.len() - foot)
+                        .flat_map(|k| &rows[k])
+                        .map(|&i| group[i].font_size as f64),
+                )
+                .unwrap_or(h);
+                let mut more = top;
+                while more + foot < rows.len() && rows[more].len() == 1 {
+                    let last = &group[*rows[more - 1].last().unwrap()];
+                    let next = &group[rows[more][0]];
+                    let titled = last.bold || last.font_size as f64 > body * TITLE_OVER_BODY;
+                    if !(titled && goes_on(last, next)) {
+                        break;
+                    }
+                    more += 1;
+                }
+                // Taken only where the columns still stand at their gutter
+                // without them.
+                if more > top {
+                    let shorter: Vec<Line> = (more..rows.len() - foot)
+                        .flat_map(|k| rows[k].iter().map(|&i| group[i].clone()))
+                        .collect();
+                    if local_gutter(&shorter, h).is_some() {
+                        top = more;
+                        rest = shorter;
+                    }
+                }
+            }
+            let lines = |ks: std::ops::Range<usize>| -> Vec<Line> {
+                ks.flat_map(|k| rows[k].iter().map(|&i| group[i].clone()))
+                    .collect()
+            };
+            let mut out = Vec::new();
+            if top > 0 {
+                out.push((lines(0..top), own));
+            }
+            out.extend(split_at_gutters(rest, h, depth, own));
+            if foot > 0 {
+                out.push((lines(rows.len() - foot..rows.len()), own));
+            }
+            return Some(out);
+        }
+    }
+    None
+}
+
+/// [`split_at_gutters`] band by band: `group` parted at its lines across,
+/// each band read at a gutter of its own. The region stays whole unless
+/// some band has one.
+fn split_bands(
+    group: Vec<Line>,
+    across: &[bool],
+    h: f64,
+    depth: usize,
+    own: bool,
+) -> Vec<(Vec<Line>, bool)> {
+    let mut parted = false;
+    let out = parts_at(
+        group.clone(),
+        across,
+        |band| {
+            let parts = split_at_gutters(band, h, depth, own);
+            parted |= parts.len() > 1;
+            parts
+        },
+        own,
+    );
+    if parted {
+        out
+    } else {
+        vec![(group, own)]
+    }
 }
 
 /// Most lines that may cross a region's gutter and part it, rather than
@@ -1275,6 +1483,7 @@ mod tests {
             bold: false,
             opens_with_script: false,
             italic: false,
+            ocr: None,
             x_height: None,
             compounds: Vec::new(),
             opens_bold: false,
@@ -1511,6 +1720,124 @@ mod tests {
                 "the smallest, for use where",
                 "space is limited on the rail",
             ]
+        );
+    }
+
+    /// Two columns of running text, `n` lines each, from `y`: lines that
+    /// go on in the next, at 72–290 and 307–525.
+    fn two_columns(y: f64, n: usize) -> Vec<Line> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            let y = y + 12.0 * i as f64;
+            out.push(line(
+                &format!("left column goes on here {i}"),
+                72.0,
+                y,
+                290.0,
+            ));
+            out.push(line(
+                &format!("right column goes on here {i}"),
+                307.0,
+                y,
+                525.0,
+            ));
+        }
+        out
+    }
+
+    fn reads_columns_whole(out: &[String], n: usize) {
+        let left: Vec<usize> = (0..n)
+            .map(|i| {
+                out.iter()
+                    .position(|t| *t == format!("left column goes on here {i}"))
+                    .unwrap()
+            })
+            .collect();
+        let right: Vec<usize> = (0..n)
+            .map(|i| {
+                out.iter()
+                    .position(|t| *t == format!("right column goes on here {i}"))
+                    .unwrap()
+            })
+            .collect();
+        assert!(left.windows(2).all(|w| w[1] == w[0] + 1), "{out:?}");
+        assert!(right.windows(2).all(|w| w[1] == w[0] + 1), "{out:?}");
+        assert!(left[n - 1] < right[0], "{out:?}");
+    }
+
+    #[test]
+    fn a_page_number_under_two_columns_parts_nothing() {
+        // The page's number, set under the gutter, is the one line across
+        // it: the columns read each whole, the number after them.
+        // One line's space under the columns, as a page's foot is set.
+        let mut lines = two_columns(100.0, 6);
+        lines.push(line("7872", 288.0, 172.0, 309.0));
+        let groups = read_order(vec![lines], &[], &[], &[], &[]);
+        let out = texts(&groups);
+        reads_columns_whole(&out, 6);
+        assert_eq!(out.last().map(String::as_str), Some("7872"));
+    }
+
+    #[test]
+    fn a_title_wrapped_over_two_columns_reads_whole_before_them() {
+        // Bold, over both columns, its second line crossing the gutter
+        // (`adversely affecting young people.`) or hanging short of it
+        // under its text past a number (`moyen à l'accouchement …`).
+        for (second, x0, x1) in [
+            ("adversely affecting the young", 86.0, 307.0),
+            ("moyen depuis 2005", 82.0, 200.0),
+        ] {
+            let mut first = line(
+                "4. Labour force participation continues to fall,",
+                72.0,
+                76.0,
+                370.0,
+            );
+            first.bold = true;
+            let mut next = line(second, x0, 86.0, x1);
+            next.bold = true;
+            let mut lines = vec![first, next];
+            lines.extend(two_columns(100.0, 6));
+            let groups = read_order(vec![lines], &[], &[], &[], &[]);
+            let out = texts(&groups);
+            assert_eq!(out[1], second, "{out:?}");
+            reads_columns_whole(&out, 6);
+            // The title's two lines are read together.
+            assert!(groups
+                .iter()
+                .any(|g| g.lines.len() == 2 && g.lines[1].text == second));
+        }
+    }
+
+    #[test]
+    fn columns_under_a_caption_across_read_each_whole() {
+        // A figure's labels across the gutter, its caption across both
+        // columns, and two columns of text under it, all at one leading: the
+        // columns read each whole, though no gutter runs through the figure.
+        let mut lines = vec![
+            line("Dataset Examples", 200.0, 40.0, 330.0),
+            line("ImageNet 76.2 76.2 0%", 230.0, 52.0, 520.0),
+            line("ImageNetV2 64.3 70.1 +5.8%", 230.0, 64.0, 520.0),
+            line(
+                "Figure 7. Zero-shot models are much more robust to distribution",
+                72.0,
+                76.0,
+                525.0,
+            ),
+            line(
+                "shift than the standard models trained on the one dataset.",
+                72.0,
+                88.0,
+                525.0,
+            ),
+        ];
+        lines.extend(two_columns(100.0, 10));
+        let groups = read_order(vec![lines], &[], &[], &[], &[]);
+        let out = texts(&groups);
+        reads_columns_whole(&out, 10);
+        assert_eq!(
+            out[4],
+            "shift than the standard models trained on the one dataset."
         );
     }
 

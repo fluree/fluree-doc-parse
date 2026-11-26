@@ -498,9 +498,11 @@ fn an_xps_document_reads_as_a_pdf_does_and_its_pictured_page_as_a_scan() {
     let input = dir.join("report.xps");
     std::fs::write(&input, xps()).unwrap();
     let out = every_format(&dir, &input);
+    // Its heading is the document's title, as a PDF's set apart by its type
+    // is.
     assert_parity(
         &out,
-        "doco:SectionTitle",
+        "doco:Title",
         &[
             "Quarterly report",
             "Alex Sample signed the orders on Monday.",
