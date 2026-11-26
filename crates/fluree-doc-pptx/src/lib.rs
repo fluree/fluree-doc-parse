@@ -469,7 +469,7 @@ pub fn parse_slide_with_charts(
                             &mut text,
                             page,
                             shape,
-                            para_bullet || para_level > 0,
+                            (para_bullet || para_level > 0).then_some(para_level),
                         );
                         para_bullet = false;
                         para_level = 0;
@@ -488,7 +488,7 @@ pub fn parse_slide_with_charts(
                 }
                 "sp" => {
                     // A shape's title-ness does not leak into the next shape.
-                    flush(&mut out, &mut text, page, shape, false);
+                    flush(&mut out, &mut text, page, shape, None);
                     shape = Shape::Body;
                 }
                 _ => {}
@@ -497,7 +497,7 @@ pub fn parse_slide_with_charts(
         }
         buf.clear();
     }
-    flush(&mut out, &mut text, page, Shape::Body, false);
+    flush(&mut out, &mut text, page, Shape::Body, None);
     Ok(out)
 }
 
@@ -527,7 +527,9 @@ enum Shape {
     DeckTitle,
 }
 
-fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, listy: bool) {
+/// `item` is a list item's depth, its paragraph's outline level `lvl`, for
+/// a paragraph read as one.
+fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, item: Option<usize>) {
     let t = std::mem::take(buf)
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -539,8 +541,11 @@ fn flush(out: &mut Vec<Element>, buf: &mut String, page: usize, shape: Shape, li
         out.push(element("doco:Title", t, None, page));
     } else if shape == Shape::SlideTitle {
         out.push(element("doco:SectionTitle", t, Some(1), page));
-    } else if listy {
-        out.push(element("doc:ListItem", t, None, page));
+    } else if let Some(depth) = item {
+        out.push(Element {
+            depth,
+            ..element("doc:ListItem", t, None, page)
+        });
     } else {
         out.push(element("doco:Paragraph", t, None, page));
     }
@@ -668,6 +673,8 @@ mod tests {
         let els = parse_slide_xml(&x, 0).unwrap();
         assert_eq!(els[0].kind, "doc:ListItem");
         assert_eq!(els[1].kind, "doc:ListItem");
+        // An outline level is a list item's depth.
+        assert_eq!((els[0].depth, els[1].depth), (0, 1));
     }
 
     #[test]

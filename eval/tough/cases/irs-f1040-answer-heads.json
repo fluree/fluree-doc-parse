@@ -37,6 +37,28 @@
         "type": "doco:SectionTitle",
         "text": "Filing Status"
       }
+    },
+    {
+      "id": "sign-here-one-label",
+      "found": "2026-11-25",
+      "issue": "#380: the side label `Sign` / `Here` was split, `Sign` read into the declaration beside it and `Here` an h1 alone.",
+      "section": {
+        "title": "Sign Here"
+      }
+    },
+    {
+      "id": "here-not-alone",
+      "found": "2026-11-25",
+      "issue": "#380: as above.",
+      "no_section": "Here"
+    },
+    {
+      "id": "third-party-designee-one-label",
+      "found": "2026-11-25",
+      "issue": "#380: `Third Party` / `Designee`, the same split.",
+      "section": {
+        "title": "Third Party Designee"
+      }
     }
   ]
 }

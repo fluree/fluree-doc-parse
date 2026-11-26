@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc1919390.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC1919390/",
+    "sha256": "b4670c0e248f6c645f8ffdfc5070394db53e41f9aa13a25420c50b6d0c36beac",
+    "about": "BMC Medicine 2007, 5:15, 'Multidisciplinary team meetings and their impact on workflow in radiology and pathology departments', PMC1919390. Its Table 1 (p4) is ruled across over its header, between the header's two levels and under the header: `Period | Description | Time | Duration | Preparation (h) | Mean no. cases` over a rule, `Pathology | Radiology` under `Preparation (h)` beneath it. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (#383): the header walk stopped at the rule between the header's levels, taking it for the table's own, so the columns' names over it were lost and only `Pathology | Radiology` named any column. A header framed by rules across the table is now read whole, across the rule inside it."
+  ],
+  "checks": [
+    {
+      "id": "upper-level-names-its-columns",
+      "found": "2026-11-26",
+      "issue": "#383: `Time (mean h, Nov)` over the inner rule named no column.",
+      "cell": {
+        "value": "800",
+        "column": "Time (mean h, Nov)",
+        "row": "Mon"
+      }
+    },
+    {
+      "id": "group-over-its-ruled-off-columns",
+      "found": "2026-11-26",
+      "issue": "#383: `Pathology` was named without `Preparation (h)` over it.",
+      "cell": {
+        "value": "6",
+        "column": "Preparation (h) / Pathology",
+        "row": "Mon"
+      }
+    }
+  ]
+}

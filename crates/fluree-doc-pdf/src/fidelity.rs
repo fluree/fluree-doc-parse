@@ -246,6 +246,7 @@ mod tests {
             font_size: 8.0,
             advance: None,
             weight: None,
+            italic: false,
             draw_index: 0,
         }
     }

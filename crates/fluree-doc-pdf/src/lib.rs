@@ -51,6 +51,7 @@
 //! reading, not because it is stable, and it may change in any release. This
 //! is the same promise `fdoc dev` makes about its output.
 
+pub(crate) mod accent;
 pub mod annot;
 pub mod arbiter;
 pub mod block;
@@ -323,6 +324,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 10.0,
                 weight: None,
+                italic: false,
                 advance: None,
                 draw_index: i,
             })
@@ -553,6 +555,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 1500 + i,
         }));

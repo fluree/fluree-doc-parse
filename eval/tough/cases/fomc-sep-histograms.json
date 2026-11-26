@@ -1,0 +1,41 @@
+{
+  "document": {
+    "file": "fomcprojtabl20250319.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/fomcprojtabl20250319.pdf",
+    "sha256": "5adb4ec6619920f1d71b2ad8391b91b365d5183206acca0692e508bcbc8fa668",
+    "about": "FOMC Summary of Economic Projections, March 19, 2025. Page 5 sets histograms of participants' projections, each a row of filled bars on a base over ranges of values (`1.6−` over `1.7`), beside a scale of participants with ticks."
+  },
+  "notes": [
+    "#338: bar charts drawn as fills were found as no drawing; each histogram's range labels were the page's paragraphs.",
+    "Open: page 5's legend (`March projections December projections`) and year over its plots stay the page's text; the same legend over other pages' histograms is taken."
+  ],
+  "checks": [
+    {
+      "id": "ranges-are-the-charts",
+      "found": "2026-11-25",
+      "issue": "#338: each histogram's range labels were paragraphs of the page's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "1.6−"
+      }
+    },
+    {
+      "id": "range-ends-are-the-charts",
+      "found": "2026-11-25",
+      "issue": "#338: as above, for a range's upper end.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "1.7"
+      }
+    },
+    {
+      "id": "legend-is-the-charts",
+      "found": "2026-11-25",
+      "issue": "#338: the legend over the histograms was a paragraph; it is taken where it stands within the chart's reach.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "March projections December projections"
+      }
+    }
+  ]
+}

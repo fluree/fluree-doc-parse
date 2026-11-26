@@ -754,6 +754,7 @@ fn lay_out(
             font_size: (run.em * scale) as f32,
             advance: Some(step * scale),
             weight: run.bold.then_some(700),
+            italic: false,
             draw_index: 0,
         });
     }

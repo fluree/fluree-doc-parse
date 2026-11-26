@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "pmc5847320.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5847320/",
+    "sha256": "0d54aec52f7030b44129311848838bce59fb546717554985a6e5bcf54b5c9e9d",
+    "about": "PMC5847320, PLOS ONE 2018, word embeddings learnt with a knowledge base. Its line plots stand each over its caption (`Fig 1. Effect of the corpus size. …`), the caption wider than the plot and set under the axis's values and name. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26: figure captions went to the wrong figure, or to none: a caption under a plot wider than the plot, or one over its figure taken by the figure above."
+  ],
+  "checks": [
+    {
+      "id": "fig1-caption-is-the-plots",
+      "found": "2026-11-26",
+      "issue": "#390: the caption under the plot was a paragraph of the page: wider than the plot, and past the axis's values.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Fig 1. Effect of the corpus size. The effect of varying the size of the corpus under SKB, NNE, HNE on the MEN dataset. The full WordNet is used as the KB."
+      }
+    },
+    {
+      "id": "fig2-caption-is-the-plots",
+      "found": "2026-11-26",
+      "issue": "#390: as above; on this page the plot had taken the section heading under its caption, which hid the caption from it.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Fig 2. Effect of the corpus size. The effect of varying the size of the corpus under SKB, NNE, HNE on the SCWS dataset. The full WordNet is used as the KB."
+      }
+    },
+    {
+      "id": "fig9-caption-is-the-plots",
+      "found": "2026-11-26",
+      "issue": "#390: as above.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Fig 9. Effect of dimensionality. The impact of the dimensionality of the word embeddings learnt evaluated on the RG, MC, RW, SCWS and MEN datasets."
+      }
+    }
+  ]
+}

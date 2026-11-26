@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "fed-mpr-20240705.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20240705_mprfullreport.pdf",
+    "sha256": "6cfad88dd4ee058a01db2012bf009c18da45e5306301edf3ff5d3b486644d09d",
+    "about": "Monetary Policy Report, July 2024. A box's later page restates its title with `(continued)`."
+  },
+  "notes": [
+    "#395: `Developments Related to Financial Stability (continued)` opened a section, though `Box 3. Developments Related to Financial Stability` heads it."
+  ],
+  "checks": [
+    {
+      "id": "box-title-continues",
+      "found": "2026-11-26",
+      "issue": "#395: the restated title opened a section.",
+      "no_section": "Developments Related to Financial Stability (continued)"
+    }
+  ]
+}
