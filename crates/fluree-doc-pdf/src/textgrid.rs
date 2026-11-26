@@ -3976,6 +3976,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
                 }

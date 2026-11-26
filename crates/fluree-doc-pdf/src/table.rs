@@ -8867,6 +8867,7 @@ mod header_tests {
             rotation_deg: 0.0,
             font_size: 9.0,
             weight: None,
+            italic: false,
             advance: Some(w),
             draw_index: 0,
         }
@@ -10700,6 +10701,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 8.4,
                     weight: None,
+                    italic: false,
                     advance: Some(4.5),
                     draw_index: i,
                 });
@@ -10773,6 +10775,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 8.4,
                     weight: None,
+                    italic: false,
                     advance: Some(4.5),
                     draw_index: j,
                 });
@@ -10811,6 +10814,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: Some(w),
             draw_index: 0,
         }
@@ -11029,6 +11033,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 12.0,
                     weight: None,
+                    italic: false,
                     advance: Some(6.0),
                     draw_index: 0,
                 });
@@ -11252,6 +11257,7 @@ mod tests {
                 rotation_deg: 0.0,
                 font_size: 10.0,
                 weight: None,
+                italic: false,
                 advance: None,
                 draw_index: 0,
             })
@@ -11283,6 +11289,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -11327,6 +11334,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight: None,
+            italic: false,
             advance: None,
             draw_index: 0,
         };
@@ -11370,6 +11378,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: 10.0,
             weight,
+            italic: false,
             advance: Some(w),
             draw_index: 0,
         }
@@ -11836,6 +11845,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: None,
                     draw_index: 0,
                 });
@@ -11970,6 +11980,7 @@ mod tests {
                     rotation_deg: 0.0,
                     font_size: 10.0,
                     weight: None,
+                    italic: false,
                     advance: Some(5.5),
                     draw_index: 0,
                 }
@@ -12498,6 +12509,7 @@ mod cross_gutter_tests {
                 font_size: 9.0,
                 advance: Some(4.5),
                 weight: None,
+                italic: false,
                 draw_index: 0,
             });
         }

@@ -170,6 +170,7 @@ mod tests {
             font_size: 10.0,
             advance: Some(w),
             weight: None,
+            italic: false,
             draw_index: n,
         }
     }

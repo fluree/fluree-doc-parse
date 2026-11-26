@@ -18,7 +18,7 @@
 
 use crate::block::{self, Block};
 use crate::outline::OutlineItem;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A block must exceed the body font size by this fraction to be a heading on
 /// typography alone.
@@ -877,7 +877,16 @@ fn style_of(b: &Block) -> Style {
         neg_size: -((b.font_size * 4.0).round() as i32),
         not_bold: !(b.bold || leads_bold),
         not_caps: !caps,
+        italic: b.lines.iter().filter(|l| l.italic).count() * 2 > b.lines.len(),
     }
+}
+
+/// A block's x-height as a share of its size: the median of its lines'
+/// (see [`crate::line::Line::x_height`]).
+fn x_height_of(b: &Block) -> Option<f32> {
+    let mut hs: Vec<f32> = b.lines.iter().filter_map(|l| l.x_height).collect();
+    hs.sort_by(f32::total_cmp);
+    (!hs.is_empty()).then(|| hs[hs.len() / 2])
 }
 
 /// Modal font size across blocks, weighted by line count — the body size.
@@ -1661,7 +1670,7 @@ pub fn detect_with_body(
     }
     open_merged_parts(&mut out, pages, outline);
     drop_kickers(&mut out, pages, document_title);
-    normalize_levels(&mut out);
+    normalize_levels(&mut out, pages);
     out
 }
 
@@ -2734,6 +2743,10 @@ struct Style {
     not_bold: bool,
     /// All-caps before mixed case at the same size and weight.
     not_caps: bool,
+    /// Upright before italic at the same size, weight and case: a journal's
+    /// subsections in bold italic under its sections in bold
+    /// (`Sense of Humour Scale` under `Materials`).
+    italic: bool,
 }
 
 /// Assign levels from the document's own heading styles.
@@ -2748,31 +2761,205 @@ struct Style {
 /// document and assign 1..n. Numbering is authoritative where present, since it
 /// states the depth explicitly; the outline likewise. Everything else is
 /// levelled by style rank.
-fn normalize_levels(hs: &mut [Heading]) {
-    let mut styles: Vec<Style> = hs
-        .iter()
-        .filter(|h| {
-            !matches!(
-                h.evidence,
-                Evidence::Outline | Evidence::Numbering | Evidence::Sequence
-            )
-        })
-        .map(|h| h.style)
-        .collect();
-    styles.sort();
-    styles.dedup();
-
-    for h in hs.iter_mut() {
-        if matches!(
+fn normalize_levels(hs: &mut [Heading], pages: &[Vec<Block>]) {
+    let ranked = |h: &Heading| {
+        !matches!(
             h.evidence,
-            Evidence::Outline | Evidence::Title | Evidence::Numbering | Evidence::Sequence
-        ) {
+            Evidence::Outline | Evidence::Numbering | Evidence::Sequence
+        )
+    };
+    // Italic is a level of its own where it sets two headings or more, as a
+    // face must, or where it heads an upright heading set directly under it:
+    // one italic line among bold heads is as likely a word set in italic (a
+    // species' name ending a bold line) as a level.
+    let alike = |x: &Style, y: &Style| {
+        (x.neg_size, x.not_bold, x.not_caps) == (y.neg_size, y.not_bold, y.not_caps)
+    };
+    let mut italic_count: BTreeMap<Style, usize> = BTreeMap::new();
+    for h in hs.iter().filter(|h| ranked(h) && h.style.italic) {
+        *italic_count.entry(h.style).or_default() += 1;
+    }
+    for (a, b) in hs.iter().zip(hs.iter().skip(1)) {
+        if a.page == b.page
+            && b.block_index == a.block_index + 1
+            && ranked(a)
+            && ranked(b)
+            && a.style.italic
+            && !b.style.italic
+            && alike(&a.style, &b.style)
+        {
+            *italic_count.entry(a.style).or_default() += MIN_FACE_HEADINGS;
+        }
+    }
+    for h in hs.iter_mut() {
+        if h.style.italic && italic_count.get(&h.style).copied().unwrap_or(0) < MIN_FACE_HEADINGS {
+            h.style.italic = false;
+        }
+    }
+    let x_height = |h: &Heading| {
+        pages
+            .get(h.page)
+            .and_then(|p| p.get(h.block_index))
+            .and_then(x_height_of)
+    };
+    // The faces each style is set in, told apart by their x-heights.
+    let mut heights: BTreeMap<Style, Vec<f32>> = BTreeMap::new();
+    for h in hs.iter().filter(|h| ranked(h)) {
+        if let Some(x) = x_height(h) {
+            heights.entry(h.style).or_default().push(x);
+        }
+    }
+    let faces: BTreeMap<Style, Vec<f32>> = heights
+        .into_iter()
+        .map(|(style, xs)| (style, faces_by_height(xs)))
+        .collect();
+    let face = |h: &Heading| {
+        let floors = faces.get(&h.style)?;
+        let x = x_height(h)?;
+        floors.iter().position(|f| x >= *f)
+    };
+    // Which way round a style's variants nest: upright over italic and the
+    // taller face over the shorter, unless the document sets them the other
+    // way. A heading set directly over another, nothing between, heads it
+    // (a section opening on its first subsection): a 10-K's `Item 1.
+    // Business` in bold italic directly over `General` in bold.
+    let (mut italic_heads, mut upright_heads, mut shorter_heads, mut taller_heads) = (0, 0, 0, 0);
+    for (a, b) in hs.iter().zip(hs.iter().skip(1)) {
+        let stacked = a.page == b.page && b.block_index == a.block_index + 1;
+        if !stacked || !ranked(a) || !ranked(b) || !alike(&a.style, &b.style) {
             continue;
         }
-        if let Some(rank) = styles.iter().position(|s| *s == h.style) {
+        match (a.style.italic, b.style.italic) {
+            (true, false) => italic_heads += 1,
+            (false, true) => upright_heads += 1,
+            _ => {}
+        }
+        if a.style == b.style {
+            match (face(a), face(b)) {
+                (Some(x), Some(y)) if x > y => shorter_heads += 1,
+                (Some(x), Some(y)) if x < y => taller_heads += 1,
+                _ => {}
+            }
+        }
+    }
+    let italic_over = italic_heads > upright_heads;
+    let shorter_over = shorter_heads > taller_heads;
+    let order = |(style, f): (Style, usize)| {
+        (
+            style.neg_size,
+            style.not_bold,
+            style.not_caps,
+            style.italic != italic_over,
+            if shorter_over { usize::MAX - f } else { f },
+        )
+    };
+    let mut styles: Vec<(Style, usize)> = hs
+        .iter()
+        .filter(|h| ranked(h))
+        .map(|h| (h.style, face(h).unwrap_or(0)))
+        .collect();
+    styles.sort_by_key(|k| order(*k));
+    styles.dedup();
+    // A variant takes a level of its own only where the document has one to
+    // spare. Past the deepest level, ranks fold together, and a level for
+    // an italic or a second face would fold two sizes into one: a drug
+    // label's table titles set bold at one size into its column labels a
+    // size smaller.
+    // Counted over the styles that head something: a form's or a chart's
+    // text set like a heading is read as text once its run is judged.
+    let mut kept: Vec<(Style, usize)> = hs
+        .iter()
+        .filter(|h| ranked(h) && !h.form_text)
+        .map(|h| (h.style, face(h).unwrap_or(0)))
+        .collect();
+    kept.sort_by_key(|k| order(*k));
+    kept.dedup();
+    let plain = |(style, _): &(Style, usize)| (style.neg_size, style.not_bold, style.not_caps);
+    let mut sizes: Vec<_> = kept.iter().map(plain).collect();
+    sizes.dedup();
+    let variants = kept.len() <= MAX_LEVEL || kept.len() == sizes.len();
+    if !variants {
+        for h in hs.iter_mut() {
+            h.style.italic = false;
+        }
+        styles = hs
+            .iter()
+            .filter(|h| ranked(h))
+            .map(|h| (h.style, 0))
+            .collect();
+        styles.sort();
+        styles.dedup();
+    }
+    let face = |h: &Heading| if variants { face(h) } else { None };
+
+    for h in hs.iter_mut() {
+        if !ranked(h) || h.evidence == Evidence::Title {
+            continue;
+        }
+        let key = (h.style, face(h).unwrap_or(0));
+        if let Some(rank) = styles.iter().position(|s| *s == key) {
             h.level = (rank + 1).min(MAX_LEVEL);
         }
     }
+}
+
+/// Share by which one face's x-height must fall short of another's, at one
+/// size, weight, case and slant, to set a level below it. Two faces a
+/// journal sets its sections and subsections in differ by a sixth
+/// (Helvetica's 0.55 of the size against Minion's 0.465); one face measured
+/// over different words varies by a hundredth or two, and one face embedded
+/// twice under two names (`ArialNarrow-Bold` and `F1`) not at all.
+const FACE_STEP: f32 = 0.08;
+
+/// Headings a face must set to be a level of its own: one heading set in
+/// another face at the same size is as likely an odd font as a level.
+const MIN_FACE_HEADINGS: usize = 2;
+
+/// The faces a style's headings are set in, from their x-heights: the
+/// lowest x-height of each face, tallest face first. A face sets a level
+/// below the one before it; a face of fewer than [`MIN_FACE_HEADINGS`]
+/// joins the face next to it.
+fn faces_by_height(mut xs: Vec<f32>) -> Vec<f32> {
+    xs.sort_by(|a, b| b.total_cmp(a));
+    // Each face as (tallest, lowest, headings).
+    let mut faces: Vec<(f32, f32, usize)> = Vec::new();
+    for x in xs {
+        match faces.last_mut() {
+            Some(f) if x >= f.1 * (1.0 - FACE_STEP) => {
+                f.1 = x;
+                f.2 += 1;
+            }
+            _ => faces.push((x, x, 1)),
+        }
+    }
+    while faces.len() > 1 {
+        let Some(i) = faces.iter().position(|f| f.2 < MIN_FACE_HEADINGS) else {
+            break;
+        };
+        // Join the neighbour nearer in height.
+        let j = match (i.checked_sub(1), faces.get(i + 1)) {
+            (Some(a), Some(b)) => {
+                if faces[a].1 - faces[i].0 <= faces[i].1 - b.0 {
+                    a
+                } else {
+                    i + 1
+                }
+            }
+            (Some(a), None) => a,
+            (None, _) => i + 1,
+        };
+        let (lo, hi) = (i.min(j), i.max(j));
+        let merged = (faces[lo].0, faces[hi].1, faces[lo].2 + faces[hi].2);
+        faces[lo] = merged;
+        faces.remove(hi);
+    }
+    // The floor of the last face takes every lower height in.
+    let n = faces.len();
+    faces
+        .iter()
+        .enumerate()
+        .map(|(k, f)| if k + 1 == n { f32::MIN } else { f.1 })
+        .collect()
 }
 
 /// Headings per element above which a document's hierarchy is doubtful.
@@ -2957,6 +3144,8 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
             opens_bold: false,
         };
         Block {
@@ -4412,6 +4601,108 @@ mod tests {
     }
 
     #[test]
+    fn a_face_set_shorter_or_italic_at_one_size_is_a_level_below() {
+        // A journal sets its sections in a sans, its subsections in a serif
+        // with a shorter x-height, and the level under those in the serif's
+        // italic, all bold at one size (`Materials and methods` /
+        // `Participants` / `Mystic Isle`).
+        let head = |text: &str, x_height: f32, italic: bool| {
+            let mut b = blk(text, 12.0, 1);
+            b.bold = true;
+            for l in &mut b.lines {
+                l.bold = true;
+                l.italic = italic;
+                l.x_height = Some(x_height);
+            }
+            b
+        };
+        let heads = [
+            head("Materials and methods", 0.55, false),
+            head("Participants", 0.465, false),
+            head("Mystic Isle", 0.465, true),
+            head("Vicon", 0.465, false),
+            head("Results", 0.559, false),
+            head("Outcomes", 0.467, false),
+            head("Spatial accuracy", 0.465, true),
+        ];
+        let mut page = Vec::new();
+        for (i, h) in heads.into_iter().enumerate() {
+            let y = i as f64 * 120.0;
+            let mut h = h;
+            h.bbox.y0 = y;
+            h.bbox.y1 = y + 12.0;
+            let mut text = blk("ordinary body prose here", 10.0, 8);
+            text.bbox.y0 = y + 20.0;
+            text.bbox.y1 = y + 100.0;
+            page.push(h);
+            page.push(text);
+        }
+        let h = detect(&[page], &[]);
+        let level = |t: &str| h.iter().find(|x| x.text == t).map(|x| x.level);
+        let section = level("Materials and methods").expect("a heading");
+        assert_eq!(level("Results"), Some(section), "{h:?}");
+        assert_eq!(level("Participants"), Some(section + 1), "{h:?}");
+        assert_eq!(level("Vicon"), Some(section + 1), "{h:?}");
+        assert_eq!(level("Outcomes"), Some(section + 1), "{h:?}");
+        assert_eq!(level("Mystic Isle"), Some(section + 2), "{h:?}");
+        assert_eq!(level("Spatial accuracy"), Some(section + 2), "{h:?}");
+    }
+
+    #[test]
+    fn a_variant_set_directly_over_another_heads_it() {
+        // A 10-K sets its items in bold italic, each directly over its first
+        // subsection in bold at the same size: there italic is the level
+        // above.
+        let head = |text: &str, italic: bool| {
+            let mut b = blk(text, 12.0, 1);
+            b.bold = true;
+            for l in &mut b.lines {
+                l.bold = true;
+                l.italic = italic;
+            }
+            b
+        };
+        let mut page = Vec::new();
+        let mut y = 0.0;
+        let mut put = |mut b: Block, h: f64| {
+            b.bbox.y0 = y;
+            b.bbox.y1 = y + h;
+            y += h + 10.0;
+            page.push(b);
+        };
+        for (item, subs) in [
+            ("Item 1. Business", ["General", "Products"]),
+            ("Item 2. Properties", ["Locations", "Leases"]),
+        ] {
+            put(head(item, true), 12.0);
+            for sub in subs {
+                put(head(sub, false), 12.0);
+                put(blk("ordinary body prose here", 10.0, 8), 80.0);
+            }
+        }
+        let h = detect(&[page], &[]);
+        let level = |t: &str| h.iter().find(|x| x.text == t).map(|x| x.level);
+        let item = level("Item 1. Business").expect("a heading");
+        assert_eq!(level("Item 2. Properties"), Some(item), "{h:?}");
+        assert_eq!(level("General"), Some(item + 1), "{h:?}");
+        assert_eq!(level("Leases"), Some(item + 1), "{h:?}");
+    }
+
+    #[test]
+    fn a_face_is_told_apart_by_a_step_in_its_x_height() {
+        // One face measured over different words, or embedded twice under
+        // two names, is one face.
+        assert_eq!(faces_by_height(vec![0.53, 0.531, 0.528, 0.53]).len(), 1);
+        // Two faces a sixth apart are two, the taller first.
+        let faces = faces_by_height(vec![0.465, 0.55, 0.465, 0.559, 0.465]);
+        assert_eq!(faces.len(), 2);
+        assert!(0.55 >= faces[0] && 0.465 < faces[0]);
+        // One heading in an odd face is no level of its own.
+        assert_eq!(faces_by_height(vec![0.55, 0.559, 0.546, 0.40]).len(), 1);
+        assert_eq!(faces_by_height(vec![0.70, 0.55, 0.559, 0.546]).len(), 1);
+    }
+
+    #[test]
     fn numbering_keeps_its_own_depth_through_normalization() {
         let pages = vec![vec![
             blk("6.3.1 Oscillator Frequency", 10.0, 1),
@@ -4496,6 +4787,7 @@ mod tests {
             rotation_deg: 0.0,
             font_size: size,
             weight: Some(weight),
+            italic: false,
             advance: None,
             draw_index: 0,
         };
