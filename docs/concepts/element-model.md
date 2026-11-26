@@ -74,8 +74,9 @@ items and Markdown lists nested by indent all set it. A reader that can't
 tell leaves it at 0, a flat list.
 
 A `doco:Title` is the document's own title: Word's Title style, the title
-on a deck's title slide, and a PDF's title read off its first page, with
-evidence `title`. It heads the document, apart from its sections, which start
+on a deck's title slide, and a PDF's title read off its first page where it
+is sure (its evidence says how: `metadata`, `outline` or `type`). It heads
+the document, apart from its sections, which start
 at level 1. The first is the document's; the emitter reads any later one as a
 top-level heading.
 

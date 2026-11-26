@@ -236,9 +236,14 @@ header in the same way:
 
 It opens no section: what follows it up to the first heading is the body's,
 and the sections start at level 1. A document has one title, so a second
-reads as a top-level heading. A PDF's title is read off its first page, the
-prominent line its first blocks set apart, and carries the evidence `title`;
-its `dcterms:title` stays what the file's information dictionary says.
+reads as a top-level heading. A PDF's title is read off its first page, and
+is a `doco:Title` only where it is sure. Its `doc:evidence` says how: the
+file's own title names it (`metadata`), a bookmark does (`outline`), or its
+type sets it apart and nothing doubts it (`type`). A line in doubt (a date, a
+section's name or number, a company's name, a journal's mark) stays a
+level-1 `doco:SectionTitle`, and the document has no `doco:Title`: no title is
+better than a wrong one. Its `dcterms:title` stays what the file's
+information dictionary says.
 
 `po:contains` is a set, as JSON-LD arrays are. Reading order is
 `nif:beginIndex`, which every node holding text carries; DoCO's own

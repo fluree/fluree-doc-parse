@@ -473,6 +473,132 @@ struct TableFrame {
 /// is given.
 const HEADING_BLOCK: &str = "\0h";
 
+/// Most characters a line taken for the document's title in place of the
+/// one first read may hold.
+const MAX_TITLE_CHARS: usize = 200;
+
+/// A field's line: a short label, its colon, and a code after it, figures
+/// and no word (`Amazon.com order number: 114-0619372-9653019`). Its code
+/// can name a file as its title does, and it is no title. A title with a
+/// colon of its own goes on in words (`Dehydrobrachylaenolide: an
+/// eudesmane-type sesquiterpene lactone`).
+fn field_line(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(label, value)| {
+        let coded = value.chars().any(|c| c.is_ascii_digit())
+            && !value
+                .split(|c: char| !c.is_alphabetic())
+                .any(|w| w.chars().count() > MAX_CODE_LETTERS);
+        coded && label.split_whitespace().count() <= MAX_FIELD_LABEL_WORDS
+    })
+}
+
+/// Most letters a run of a code holds (`KP`, `USD`): a longer run is a word.
+const MAX_CODE_LETTERS: usize = 3;
+
+/// Most words a field's label runs to.
+const MAX_FIELD_LABEL_WORDS: usize = 4;
+
+/// The document's title, emitted as a `doco:Title` only where it is sure:
+/// a wrong title becomes what consumers index the document by, and no
+/// title is better than a wrong one. DoCO holds a title as the document's
+/// header, apart from the sections, as a Word document's title and a deck's
+/// are held. The title is read as a heading until here, for the passes
+/// above that weigh headings by it.
+///
+/// Sure, by its evidence:
+/// - `metadata`: the file's own title (`/Title`) names it.
+/// - `outline`: a bookmark at the outline's first depth names it.
+/// - `type`: set apart as the page's title by its type, and nothing doubts
+///   it ([`heading::title_doubt`]).
+///
+/// Where the file's title names another heading on the first page and not
+/// the line taken, that heading is the title: a journal's mark (`materials`)
+/// set larger than the article's title, a pharmacy's name over a drug's
+/// label. A line in doubt stays a level-1 heading.
+fn settle_title(
+    elements: &mut [Element],
+    meta: Option<&str>,
+    outline: &[OutlineItem],
+    size: impl Fn(&Element) -> Option<f32>,
+) {
+    let meta = meta.filter(|m| heading::meaningful_title(m));
+    let bookmarked = |text: &str| {
+        let top = outline.iter().map(|o| o.level).min().unwrap_or(1);
+        outline
+            .iter()
+            .filter(|o| o.level == top)
+            .any(|o| heading::names_title(&o.title, text) && heading::names_title(text, &o.title))
+    };
+    let debug = std::env::var_os("FDOC_TITLE_DEBUG").is_some();
+    for i in 0..elements.len() {
+        if elements[i].kind != "doco:SectionTitle" || elements[i].evidence != "title" {
+            continue;
+        }
+        let text = elements[i].text.clone();
+        let doubt = heading::title_doubt(&text);
+        // A date is no title, whatever names it: a meeting's transcript
+        // states its days in its title too.
+        let dated = doubt == Some("date");
+        let mut decision: (&str, &'static str) = ("keep", "type");
+        if !dated && meta.is_some_and(|m| heading::names_title(m, &text)) {
+            decision = ("keep", "metadata");
+        } else if !dated && bookmarked(&text) {
+            decision = ("keep", "outline");
+        } else if !dated && meta.is_some_and(|m| heading::part_of_title(m, &text)) {
+            decision = ("keep", "metadata");
+        } else {
+            // A line of the first page the file's title names instead: a
+            // heading, or a short paragraph set as the title is.
+            let named = meta.and_then(|m| {
+                (0..elements.len()).find(|&k| {
+                    k != i
+                        && elements[k].page == elements[i].page
+                        && matches!(
+                            elements[k].kind.as_str(),
+                            "doco:SectionTitle" | "doco:Paragraph"
+                        )
+                        && elements[k].text.chars().count() <= MAX_TITLE_CHARS
+                        && !field_line(&elements[k].text)
+                        && heading::names_title(m, &elements[k].text)
+                })
+            });
+            match named {
+                Some(k) => {
+                    decision = ("swap", "metadata");
+                    let e = &mut elements[k];
+                    e.kind = "doco:Title".into();
+                    e.level = None;
+                    e.evidence = "metadata";
+                }
+                None => {
+                    if let Some(why) = doubt {
+                        decision = ("doubt", why);
+                    }
+                }
+            }
+        }
+        if debug {
+            eprintln!(
+                "TITLE\t{}\t{}\t{:.2}\t{}\t{}",
+                decision.0,
+                decision.1,
+                size(&elements[i]).unwrap_or(0.0),
+                text,
+                meta.unwrap_or("")
+            );
+        }
+        let e = &mut elements[i];
+        if decision.0 == "keep" {
+            e.kind = "doco:Title".into();
+            e.level = None;
+            e.evidence = decision.1;
+        } else {
+            e.evidence = "font-size";
+            e.level = Some(1);
+        }
+    }
+}
+
 /// How far apart, in points, two parts' column edges may be drawn and still
 /// be one table's columns. A table the page break splits is drawn by one
 /// layout on both pages, so its edges agree to within a rule's stroke.
@@ -6160,15 +6286,12 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         if e.kind == "doco:SectionTitle" && e.text.contains('\n') {
             e.text = e.text.split_whitespace().collect::<Vec<_>>().join(" ");
         }
-        // The document's title is its own, not a section's: DoCO holds it
-        // as the document's header, apart from the sections, as a Word
-        // document's title and a deck's are held. Read as a heading until
-        // here, for the passes above that weigh headings by it.
-        if e.kind == "doco:SectionTitle" && e.evidence == "title" {
-            e.kind = "doco:Title".into();
-            e.level = None;
-        }
     }
+    settle_title(&mut elements, raw.title.as_deref(), outline, |e| {
+        heading_block
+            .get(&e.id)
+            .map(|&(p, b)| blocks_per_page[p][b].font_size / body_font.max(1.0))
+    });
     Analysis {
         elements,
         suspect_headings,
@@ -7848,6 +7971,92 @@ mod tests {
                 if table { "rules" } else { "layout" },
             )
         }
+    }
+
+    #[test]
+    fn the_title_is_the_documents_only_where_it_is_sure() {
+        let at = |kind: &str, text: &str, evidence: &'static str| Element {
+            page: 0,
+            level: (kind == "doco:SectionTitle").then_some(1),
+            ..Element::new(kind, text, "rust", evidence)
+        };
+        let settle = |mut els: Vec<Element>, meta: Option<&str>| {
+            settle_title(&mut els, meta, &[], |_| None);
+            els.into_iter()
+                .map(|e| (e.kind, e.text, e.evidence))
+                .collect::<Vec<_>>()
+        };
+        // The file's own title names it.
+        let els = settle(
+            vec![at("doco:SectionTitle", "Monetary Policy Report", "title")],
+            Some("Monetary Policy Report, July 2026"),
+        );
+        assert_eq!(
+            els[0],
+            (
+                "doco:Title".into(),
+                "Monetary Policy Report".into(),
+                "metadata"
+            )
+        );
+        // Set apart by its type, nothing doubting it.
+        let els = settle(
+            vec![at(
+                "doco:SectionTitle",
+                "Pipette Performance Data Sheet",
+                "title",
+            )],
+            None,
+        );
+        assert_eq!(els[0].2, "type");
+        // A date is no title: a heading the file's title names is.
+        let els = settle(
+            vec![
+                at(
+                    "doco:SectionTitle",
+                    "Transcript of Chair Powell's Press Conference",
+                    "bold",
+                ),
+                at("doco:SectionTitle", "September 20, 2023", "title"),
+            ],
+            Some("Transcript of Chair Powell's Press Conference -- September 20, 2023"),
+        );
+        assert_eq!(els[0].0, "doco:Title");
+        assert_eq!(
+            (els[1].0.as_str(), els[1].2),
+            ("doco:SectionTitle", "font-size")
+        );
+        // A field's line is no title, though the file's title names its value.
+        let els = settle(
+            vec![
+                at(
+                    "doco:SectionTitle",
+                    "Final Details for Order #114-0619372-9653019",
+                    "title",
+                ),
+                at(
+                    "doco:Paragraph",
+                    "Amazon.com order number: 114-0619372-9653019",
+                    "layout",
+                ),
+            ],
+            Some("Amazon.com - Order 114-0619372-9653019"),
+        );
+        assert_eq!(els[0].0, "doco:Title");
+        assert_eq!(els[1].0, "doco:Paragraph");
+        // A company's name in doubt stays a heading, and no title is read.
+        let els = settle(
+            vec![at(
+                "doco:SectionTitle",
+                "Hanvaro Semiconductor Co., Ltd.",
+                "title",
+            )],
+            None,
+        );
+        assert_eq!(
+            (els[0].0.as_str(), els[0].2),
+            ("doco:SectionTitle", "font-size")
+        );
     }
 
     #[test]

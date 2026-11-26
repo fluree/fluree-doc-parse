@@ -1535,7 +1535,10 @@ mod tests {
     /// The table crops a page's analysis asks for, and its tables' header
     /// rows.
     fn table_crops(page: crate::extract::Page) -> (Vec<String>, Vec<Option<usize>>) {
-        let doc = Document { pages: vec![page] };
+        let doc = Document {
+            pages: vec![page],
+            title: None,
+        };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
             emit_anchors: true,
@@ -1627,6 +1630,7 @@ mod tests {
     fn a_page_read_whole_says_why() {
         let doc = Document {
             pages: vec![page(0, 0, true), page(1, 500, false), page(2, 500, false)],
+            title: None,
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[1]);
         assert_eq!(jobs.len(), 2, "the blank scan and the doubt page: {jobs:?}");
@@ -1671,6 +1675,7 @@ mod tests {
     fn each_router_verdict_names_its_reason() {
         let doc = Document {
             pages: vec![page(0, 0, true), page(1, 50, true), broken_page(2, 300)],
+            title: None,
         };
         let (_, reasons) = reasons_with_doubts(&doc, &[]);
         assert_eq!(reasons.get(&0), Some(&CropReason::NearBlank));
@@ -1685,6 +1690,7 @@ mod tests {
         // engine may skip.
         let doc = Document {
             pages: vec![page(0, 50, true), broken_page(1, 300)],
+            title: None,
         };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0, 1]);
         assert_eq!(jobs, vec![(0, None), (1, None)]);
@@ -1696,6 +1702,7 @@ mod tests {
     fn a_heading_doubt_comes_before_a_figure_doubt() {
         let doc = Document {
             pages: vec![page(0, 500, false), page(1, 500, false)],
+            title: None,
         };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
@@ -1766,7 +1773,10 @@ mod tests {
                 }
             }
         }
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
             emit_anchors: true,
@@ -1807,7 +1817,10 @@ mod tests {
             crate::route::decide(&p).0,
             crate::route::Route::VlmRegions(_)
         ));
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         let (jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(jobs, vec![(0, None)], "the doubt reads the page whole");
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
@@ -2009,7 +2022,10 @@ mod tests {
             bitonal: false,
             grid: (1000, 1000),
         }];
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         let (jobs, _) = reasons_with_doubts(&doc, &[]);
         assert_eq!(jobs.len(), 1);
         let mut read = doc.clone();
@@ -2037,7 +2053,10 @@ mod tests {
             bitonal: false,
             grid: (1000, 1000),
         }];
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         let mut copy = doc.clone();
         let opts = AnalyzeOptions {
             emit_anchors: true,
@@ -2078,6 +2097,7 @@ mod tests {
         }];
         let doc = Document {
             pages: vec![p, page(1, 500, false)],
+            title: None,
         };
         let (mut jobs, reasons) = reasons_with_doubts(&doc, &[0]);
         assert_eq!(reasons.get(&0), Some(&CropReason::Region));
@@ -2230,6 +2250,7 @@ mod tests {
     fn a_page_that_routes_whole_once_cleaned_is_read_whole() {
         let extracted = Document {
             pages: vec![page_that_reads_as_a_scan_once_cleaned()],
+            title: None,
         };
         assert!(matches!(
             crate::route::decide(&extracted.pages[0]).0,
@@ -2271,6 +2292,7 @@ mod tests {
                 page(1, 500, false),
                 page(2, 50, true),
             ],
+            title: None,
         };
         let (planned, reasons) =
             plan_explained(&doc, &[], &AnalyzeOptions::default(), &CropHints::default());
@@ -2335,6 +2357,7 @@ mod tests {
     fn a_doubt_page_over_a_region_found_once_cleaned_ranks_with_regions() {
         let doc = Document {
             pages: vec![page_with_a_region_only_once_cleaned(), page(1, 500, false)],
+            title: None,
         };
         assert_eq!(
             crate::route::decide(&doc.pages[0]).0,
@@ -2386,6 +2409,7 @@ mod tests {
         }
         let doc = Document {
             pages: vec![page(0, 0, true), broken_page(1, 300), cleaned, regions],
+            title: None,
         };
         let (jobs, reasons) =
             plan_explained(&doc, &[], &AnalyzeOptions::default(), &CropHints::default());
@@ -2420,7 +2444,10 @@ mod tests {
             bitonal: false,
         };
         p.images = vec![image(550.0), image(150.0)];
-        let doc = Document { pages: vec![p] };
+        let doc = Document {
+            pages: vec![p],
+            title: None,
+        };
         let mut cleaned = doc.clone();
         let opts = AnalyzeOptions {
             emit_anchors: true,
