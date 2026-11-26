@@ -1,0 +1,33 @@
+{
+  "document": {
+    "file": "pmc3039689.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC3039689/",
+    "sha256": "7db1869e35180e381250f59367b184a9802746b8801e7a93668b09eb71f065fc",
+    "about": "PLoS Negl Trop Dis 5(2): e962 (2011), 'Identification of Small Molecule Lead Compounds for Visceral Leishmaniasis Using a Novel Ex Vivo Splenic Explant Model System', PMC3039689. Its table on p9 groups its columns under `New`, `Known` and `Total`, each over a count and a percentage: `No. | % | No. | % | No. | %`. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (audit cluster D): the units line `No. | %` was the first row of data, so each group named its columns without their unit. It is now the header's."
+  ],
+  "checks": [
+    {
+      "id": "count-under-its-group",
+      "found": "2026-11-26",
+      "issue": "Audit cluster D: the units line was a row of data, and the column was named `New` alone.",
+      "cell": {
+        "value": "3",
+        "column": "New / No.",
+        "section": "1-ring"
+      }
+    },
+    {
+      "id": "percentage-under-its-group",
+      "found": "2026-11-26",
+      "issue": "Audit cluster D: as above, for `Known / %`.",
+      "cell": {
+        "value": "7",
+        "column": "Known / %",
+        "section": "1-ring"
+      }
+    }
+  ]
+}

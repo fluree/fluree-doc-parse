@@ -1,0 +1,37 @@
+{
+  "document": {
+    "file": "ilcor-prisma-2020.pdf",
+    "url": "https://costr.ilcor.org/assets/images/photos/Figure-1-PRISMA-diagram.pdf",
+    "sha256": "9441a9d9b97d7d3ebf41337ac892e9bfd12c7dd3a38726f6587aec8fef19f029",
+    "about": "ILCOR, a PRISMA 2020 flow diagram for a systematic review (one page, after Page et al., BMJ 2021). Boxes drawn as stroked rectangles, each a step and its count, joined by arrows drawn as filled shapes, under a banner box and beside side tabs."
+  },
+  "notes": [
+    "2026-11-25: the diagram was found as no drawing (its boxes hold words, and were set aside as panels behind text). The banner `Identification of studies via databases and registers` was an h1, and every box a paragraph of the page's."
+  ],
+  "checks": [
+    {
+      "id": "banner-no-heading",
+      "found": "2026-11-25",
+      "issue": "The diagram's banner box was the page's h1.",
+      "no_section": "Identification of studies via databases and registers"
+    },
+    {
+      "id": "step-is-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "Each box was a paragraph of the page's.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Records screened (n = 4524)"
+      }
+    },
+    {
+      "id": "exclusions-are-the-diagrams",
+      "found": "2026-11-25",
+      "issue": "As above, for the exclusions beside the steps.",
+      "element": {
+        "type": "doco:Figure",
+        "text": "Records excluded (n = 4472)"
+      }
+    }
+  ]
+}

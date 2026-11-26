@@ -518,6 +518,9 @@ struct Para {
     level: Option<usize>,
     /// The list it is counted in.
     list: Option<String>,
+    /// The list level it sits at, from 0, numbered or bulleted: its
+    /// `w:ilvl`, or its style's. `None` off a list.
+    depth: Option<usize>,
 }
 
 /// What the file declares about itself in its core properties: title,
@@ -726,6 +729,7 @@ fn parse_body(
                         para.label = None;
                         para.level = None;
                         para.list = None;
+                        para.depth = None;
                         if in_cell {
                             cell_para_start = cell.text.len();
                         }
@@ -896,6 +900,7 @@ fn parse_body(
                         if let Some((id, level)) =
                             numbering.resolve(para.num_id.as_deref(), para.ilvl, style)
                         {
+                            para.depth = Some(level);
                             para.label = numbering.next(&id, level);
                             para.level = para.label.is_some().then_some(level);
                             para.list = numbering.list_of(&id).map(str::to_string);
@@ -1164,7 +1169,21 @@ fn flush_para(out: &mut Vec<Element>, para: &mut Para, title_styles: &HashSet<St
     } else if let Some(level) = heading_level(&p.style) {
         out.push(element("doco:SectionTitle", title, Some(level)));
     } else if numbered || is_list_style(&p.style) {
-        out.push(element("doc:ListItem", lines, None));
+        // A list style with no list of its own, its letters typed in
+        // (`a.`, `b.` set under a numbered step), has no level: it sits at
+        // the level of the item before it.
+        let depth = p
+            .depth
+            .or_else(|| {
+                out.last()
+                    .filter(|e| e.kind == "doc:ListItem")
+                    .map(|e| e.depth)
+            })
+            .unwrap_or(0);
+        out.push(Element {
+            depth,
+            ..element("doc:ListItem", lines, None)
+        });
     } else {
         out.push(element("doco:Paragraph", lines, None));
     }
@@ -1544,6 +1563,59 @@ mod tests {
 
     fn read(body: &str) -> Vec<Element> {
         parse_document_xml(&doc(body)).unwrap()
+    }
+
+    #[test]
+    fn a_list_items_depth_is_its_level() {
+        // A bulleted list with a numbered list under its first item, and a
+        // level a style sets.
+        let numbering = numbering_xml(
+            &[
+                (
+                    "1",
+                    &[
+                        ("bullet", "\u{F0B7}", ""),
+                        ("bullet", "o", ""),
+                        ("bullet", "-", ""),
+                    ],
+                ),
+                ("2", &[("decimal", "%1.", ""), ("lowerLetter", "%2)", "")]),
+            ],
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"1\"/></w:num>\
+             <w:num w:numId=\"2\"><w:abstractNumId w:val=\"2\"/></w:num>",
+        );
+        let styles = format!(
+            "<w:styles {NS}><w:style w:type=\"paragraph\" w:styleId=\"ListNumber2\">\
+             <w:pPr><w:numPr><w:ilvl w:val=\"1\"/><w:numId w:val=\"2\"/></w:numPr></w:pPr></w:style></w:styles>"
+        );
+        let body = format!(
+            "{}{}{}{}{}<w:p><w:pPr><w:pStyle w:val=\"ListNumber2\"/></w:pPr><w:r><w:t>By style</w:t></w:r></w:p>{}",
+            item("1", 0, "Fruit"),
+            item("1", 1, "Apples"),
+            "<w:p><w:pPr><w:pStyle w:val=\"ListParagraph\"/></w:pPr><w:r><w:t>a. Typed in</w:t></w:r></w:p>",
+            item("1", 2, "Seedless"),
+            item("2", 0, "Weigh the sample."),
+            item("1", 0, "Vegetables"),
+        );
+        let n = Numbering::new(Some(&numbering), Some(&styles));
+        let els = parse_with_styles(&doc(&body), &HashSet::new(), &HashSet::new(), n).unwrap();
+        let got: Vec<(&str, usize)> = els.iter().map(|e| (e.text.as_str(), e.depth)).collect();
+        assert_eq!(
+            got,
+            [
+                ("Fruit", 0),
+                ("Apples", 1),
+                // A list style with no list of its own sits at the level of
+                // the item before it.
+                ("a. Typed in", 1),
+                ("Seedless", 2),
+                ("1. Weigh the sample.", 0),
+                ("a) By style", 1),
+                ("Vegetables", 0)
+            ]
+        );
+        let kinds: Vec<&str> = els.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(kinds, ["doc:ListItem"; 7]);
     }
 
     #[test]

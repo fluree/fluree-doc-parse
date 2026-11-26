@@ -1,0 +1,40 @@
+{
+  "document": {
+    "file": "pmc6000953.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6000953/",
+    "sha256": "4be381a3914ab7c7387371980c2a527bee3ad6b474d32ce82ae64609605eb387",
+    "about": "Antimicrobial Resistance and Infection Control (2018) article, 'Comparing appropriateness of antibiotics for nursing home residents by setting of prescription initiation: a cross-sectional study', PMC6000953. Its Table 1 sets each setting's sample size under its name (`Overall` over `(n=735)`), and its Table 3 sets each infection group's size beside the group's label (`Skin/Soft Tissue | n= 175`)."
+  },
+  "notes": [
+    "2026-11-25 (#351): the line of sample sizes under the column heads counted as figures, so the table's body began there and the sizes were a row of data, the heads naming the columns alone. Leading lines whose figures are all sample sizes, nothing in the stub, are the header's. A group's own size beside its label is a row, as before.",
+    "2026-11-26 (audit cluster D): the units line under the sample sizes (`n | % | n | %`) is now the header's too, so the columns are named by all three levels: `Overall / (n=735) / n`, and Table 3's group-size cell `Overall / n`."
+  ],
+  "checks": [
+    {
+      "id": "sample-size-in-the-header",
+      "found": "2026-11-25",
+      "issue": "#351: `(n=735)` was a row of data, and the column was named `Overall` alone.",
+      "cell": {
+        "value": "84.8±9.9",
+        "column": "Overall / (n=735) / n",
+        "row": "Mean Age, (SD)"
+      }
+    },
+    {
+      "id": "group-size-stays-a-row",
+      "found": "2026-11-25",
+      "issue": "#351: a group's own size, beside its label, must stay a row: an earlier version took it out of the rows and broke Table 3 apart.",
+      "cell": {
+        "value": "n= 175",
+        "column": "Overall / n",
+        "row": "Skin/Soft Tissue"
+      }
+    },
+    {
+      "id": "banner-no-heading",
+      "found": "2026-11-25",
+      "issue": "#367: the journal's `Open Access` banner label was a heading.",
+      "no_section": "Open Access"
+    }
+  ]
+}

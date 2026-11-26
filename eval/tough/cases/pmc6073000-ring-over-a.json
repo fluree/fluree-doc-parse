@@ -1,0 +1,25 @@
+{
+  "document": {
+    "file": "pmc6073000.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6073000/",
+    "sha256": "dacb9d4b5cbe86b38333db6049624c89085a03351de699c50297a6131a612245",
+    "about": "Acta Crystallographica Section E (2018) research communication, '(2R,3R)-1,4-Dioxaspiro[4.4]nonane-2,3-dicarboxylic and (2R,3R)-1,4-dioxaspiro[4.5]decane-2,3-dicarboxylic acids', PMC6073000. Its tables give lengths in ångströms, the `Å` drawn as an `A` and a spacing ring set over it on a pen line of its own, raised above the text's baseline; a cited author's name is drawn the same way, letters and spacing carons and acutes. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#345): the unit read `A˚`, apart from its letter, and in the table captions `(A˚ )`."
+  ],
+  "checks": [
+    {
+      "id": "ring-composed-over-its-a",
+      "found": "2026-11-25",
+      "issue": "#345: Table 1's caption read `Selected bond lengths (A˚ ) for (I).`",
+      "text": "Selected bond lengths (Å) for (I)."
+    },
+    {
+      "id": "caron-and-acute-composed",
+      "found": "2026-11-25",
+      "issue": "#345: the reference read `Cˇ erny´, M. (1977)`: the caron over the `C` a character after it, with a space, and the acute after its `y`.",
+      "text": "Černý, M. (1977)"
+    }
+  ]
+}

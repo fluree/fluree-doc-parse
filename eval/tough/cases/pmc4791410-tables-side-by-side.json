@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "pmc4791410.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC4791410/",
+    "sha256": "5f1b20c75ce27490894d99df8c5003f1cd484fa29127b8b4c129f680daafd8ed",
+    "about": "The Journal of Headache and Pain (2016) article, PMC4791410, set in two columns. On p3 its Table 1 runs down the left column and Table 2 sits at the foot of the right one, the two tables' last rows side by side, under the right column's prose. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-25 (#358): a reading of the figures across both columns (Table 1's last rows with Table 2's) beat Table 2's own reading, and the right column's prose was read as a column of Table 1. A reading across the page's gutter, between two columns of text, is now read again in each column."
+  ],
+  "checks": [
+    {
+      "id": "table-2-under-its-own-header",
+      "found": "2026-11-25",
+      "issue": "#358: Table 2's figures were read in a table with Table 1's last rows, its `Female` and `p` heads loose text.",
+      "cell": {
+        "value": "0.589",
+        "column": "p",
+        "row": "Headache frequency (days/month)"
+      }
+    },
+    {
+      "id": "right-column-prose-read-whole",
+      "found": "2026-11-25",
+      "issue": "#358: the right column's paragraph was cut into the rows of Table 1, a line to a row.",
+      "text": "we found that osmophobia was associated with more frequent incidences of nausea"
+    }
+  ]
+}

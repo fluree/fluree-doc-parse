@@ -33,6 +33,7 @@ A flat array of [elements](../concepts/element-model.md) in reading order.
 | `evidence` | yes | which signal classified it |
 | `bbox` | **PDF only** | omitted entirely otherwise |
 | `level` | headings | 1–6 |
+| `depth` | nested list items | how deep the item's list is nested: `1` for a list in a top-level item, `2` for one in that list's item; left out at `0` |
 | `figure` | figures | shared id for fragments of one drawing |
 | `cells` | tables | row-major, **as detected** |
 | `header_rows` | tables | `None` → treat as 1 |

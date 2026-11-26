@@ -56,6 +56,12 @@ impl Reader {
     fn element(&self, kind: &str, text: String, level: Option<usize>) -> Element {
         Element {
             level,
+            // An item in an item is one deeper: a list nested by its indent.
+            depth: if kind == "doc:ListItem" {
+                self.items.saturating_sub(1)
+            } else {
+                0
+            },
             ..Element::new(kind, text, "markdown", "markdown")
         }
     }
@@ -303,17 +309,38 @@ mod tests {
     #[test]
     fn a_nested_item_leaves_its_parent_an_item() {
         let els = parse("- Parent\n  - Child\n  - Sibling\n- Next\n");
-        let read: Vec<(&str, &str)> = els
+        let read: Vec<(&str, &str, usize)> = els
             .iter()
-            .map(|e| (e.kind.as_str(), e.text.as_str()))
+            .map(|e| (e.kind.as_str(), e.text.as_str(), e.depth))
             .collect();
         assert_eq!(
             read,
             [
-                ("doc:ListItem", "Parent"),
-                ("doc:ListItem", "Child"),
-                ("doc:ListItem", "Sibling"),
-                ("doc:ListItem", "Next"),
+                ("doc:ListItem", "Parent", 0),
+                ("doc:ListItem", "Child", 1),
+                ("doc:ListItem", "Sibling", 1),
+                ("doc:ListItem", "Next", 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_nested_list_reads_back_as_written() {
+        // Under a numbered item too, indented past its number.
+        let src = "1. Weigh\n   - Tare the scale\n     - Twice\n2. Record\n";
+        let els = parse(src);
+        let depths: Vec<usize> = els.iter().map(|e| e.depth).collect();
+        assert_eq!(depths, [0, 1, 2, 0]);
+        // What the writer makes of them reads back the same.
+        let again = parse(&fluree_doc_model::emit::to_markdown(&els));
+        let back: Vec<(&str, usize)> = again.iter().map(|e| (e.text.as_str(), e.depth)).collect();
+        assert_eq!(
+            back,
+            [
+                ("Weigh", 0),
+                ("Tare the scale", 1),
+                ("Twice", 2),
+                ("Record", 0)
             ]
         );
     }

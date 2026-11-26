@@ -2058,6 +2058,7 @@ fn lay_run(p: &mut Page, words: &[Level], run: &Run, start: f64, next: &mut usiz
             font_size: font as f32,
             advance: Some((at(words[j].x0) - x1).max(0.0)),
             weight: None,
+            italic: false,
             draw_index: *next,
         });
         *next += 1;
@@ -2114,6 +2115,7 @@ fn lay_along(
             font_size,
             advance: Some(advance),
             weight: None,
+            italic: false,
             draw_index,
         });
     }
@@ -2615,6 +2617,7 @@ mod tests {
                 font_size: 10.0,
                 advance: Some(6.0),
                 weight: None,
+                italic: false,
                 draw_index: i,
             })
             .collect()
@@ -7666,9 +7669,10 @@ mod tests {
         let els = analysed(&mut doc, &r);
         let texts: Vec<&str> = els.iter().map(|e| e.text.as_str()).collect();
         // The address is one block, as on the born-digital page: its lines,
-        // judged one by one, made `7 Orchard Road` a numbered heading.
+        // judged one by one, made `7 Orchard Road` a numbered heading. Its
+        // lines are stacked by hand, so the block keeps their breaks.
         assert!(
-            texts.contains(&"Quinn Testwell 7 Orchard Road Lakeside, WA 98002"),
+            texts.contains(&"Quinn Testwell\n7 Orchard Road\nLakeside, WA 98002"),
             "{texts:?}"
         );
         assert!(
@@ -7677,7 +7681,8 @@ mod tests {
                 .any(|t| t.starts_with("Thank you") && t.ends_with("the reference.")),
             "{texts:?}"
         );
-        // The page's first line is its title, as on the born-digital page.
-        assert_eq!(headings(&els), ["January 10, 2026"], "{texts:?}");
+        // No line is a heading, as on the born-digital page: the first is a
+        // date, a value read as text.
+        assert!(headings(&els).is_empty(), "{texts:?}");
     }
 }
