@@ -150,6 +150,12 @@ pub struct OcrRead {
     /// Those regions' boxes, in the same order: where each reading's words
     /// lie, read as one picture's whatever images draw it.
     pub region_boxes: Vec<crate::geom::BBox>,
+    /// The rules the regions' pictures draw, read from their pixels and
+    /// placed as their words are, each cut to its region
+    /// ([`crate::ocr::read_rules`]). Not the page's ruling: a picture's
+    /// rules join the page's only once its text is read as a table by them
+    /// (`document`'s `picture_table`).
+    pub rules: Vec<crate::rule::Rule>,
 }
 
 impl Page {
