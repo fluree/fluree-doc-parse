@@ -63,7 +63,8 @@ use fluree_doc_vision::ink::{Ink, TopLine};
 /// paragraph's lines, and sized as they are read a fifth larger, as a
 /// heading set larger does. A box under `SHORT_BOX_ASPECT` times as long as
 /// it is thick is taken as `BOX_SHORT_EM` times the difference of their
-/// inverses taller, 0.15 em at an aspect of 2; a longer one, a heading
+/// inverses taller, 0.15 em at an aspect of 2 (in a reading in page units;
+/// one in pixels takes `SHORT_BOX_PX`, below); a longer one, a heading
 /// of two words or a line, is sized as before. Measured on paragraphs set as
 /// a letter sets them (the five fonts, 10 to 12 pt, 150 to 300 dpi, lines
 /// 1.3 em apart, with short lines and headings set a fifth larger among
@@ -99,7 +100,8 @@ use fluree_doc_vision::ink::{Ink, TopLine};
 /// read, against 61. Taken as 12 px, 55 are, with no short line at body
 /// size read as a heading (of 281), and the short lines' median goes from
 /// 0.990 of their prose to 1.002 (five fonts, 10 to 12 pt, 150 to 300 dpi).
-/// The term is held to `SHORT_BOX_MAX_EM`, which text under 14 px reaches.
+/// The term is held to `SHORT_BOX_MAX_EM`, which it reaches for text under
+/// about 13 px (12 px over 0.9).
 /// A reading in page units has no pixels and keeps `BOX_SHORT_EM`, the
 /// term at the sizes it was fitted at.
 const BOX_BASE_EM: f64 = 0.62;
@@ -1023,11 +1025,12 @@ const INK_MIN_RATIO_WORDS: usize = 3;
 /// fifth larger than its body has 4% to spare over the ratio a heading
 /// needs. Measured on born-digital pages rasterised and read by the built-in
 /// engine at 150 to 300 dpi (Helvetica, Times and Courier; headings a fifth
-/// larger, none bold), converted end to end, 60% of the headings read as
-/// headings by their boxes and 96% by their ink, with no line of body size
+/// larger, none bold), converted end to end, 351 of 582 headings read as
+/// headings by their boxes and 581 by their ink, with no line of body size
 /// read as one; in colour, light on dark, over a photo or a gradient,
 /// noisy, blurred, as a JPEG or a fax, turned, underlined, struck through
-/// or in italic, 94% or more, against 17% to 89% by their boxes.
+/// or in italic, 92% or more, against 17% to 89% by their boxes (the
+/// twins set, `eval/twins`).
 fn size_by_ink(placed: &mut [Option<Placed>]) {
     let words: Vec<&Placed> = placed
         .iter()
@@ -1891,6 +1894,8 @@ impl Run {
             let h = w.height();
             match (ink, ink_extent(&w.word.text)) {
                 (true, Some((up, down))) => {
+                    // An ink box is the ink already: a word's measured ink
+                    // ([`size_by_ink`]) sizes detector boxes only.
                     let font = h / (up + down);
                     fonts.push(font);
                     baselines.push(w.bottom - down * font);
@@ -7849,8 +7854,15 @@ mod tests {
     }
 
     /// A line of prose placed with its ink: a box 13 units thick and 120
-    /// long, read at 2 px a unit, its opening capital `cap` px tall.
+    /// long, read at 2 px a unit, its opening capital `cap` px tall and its
+    /// ascenders 5% over it.
     fn inked(text: &str, cap: f64) -> Option<Placed> {
+        inked_lines(text, Some(cap), cap * 1.05)
+    }
+
+    /// [`inked`] with its lines given: an opening capital or none, and the
+    /// ascenders' line.
+    fn inked_lines(text: &str, cap: Option<f64>, top: f64) -> Option<Placed> {
         Some(Placed {
             text: text.into(),
             quad: [(0.0, 0.0), (120.0, 0.0), (120.0, 13.0), (0.0, 13.0)],
@@ -7858,10 +7870,10 @@ mod tests {
             conf: None,
             px_per_unit: Some(2.0),
             ink: Some(Ink {
-                first_cap: Some(cap),
-                top: Some(cap),
+                first_cap: cap,
+                top: Some(top),
                 top_line: Some(TopLine::Ascender),
-                x_height: Some(cap * 0.7),
+                x_height: Some(top * 0.7),
             }),
             ink_font: None,
         })
@@ -7869,26 +7881,111 @@ mod tests {
 
     #[test]
     fn a_reading_with_its_ink_is_sized_by_it_at_its_boxes_scale() {
-        // Five lines of prose and a heading whose capital stands a fifth
-        // taller, all boxed alike: by their boxes they read one size.
-        let mut placed: Vec<Option<Placed>> = (0..5)
-            .map(|i| inked(&format!("Line {i} of prose"), 20.0))
+        // Lines of prose whose capitals vary a pixel either way, and a
+        // heading whose capital stands a fifth over the middle one, all
+        // boxed alike: by their boxes they read one size. The heading's
+        // ascenders stand 10% over its capital, not the page's 5%: its
+        // capital is taken first.
+        let mut placed: Vec<Option<Placed>> = [28.5, 30.0, 31.5, 30.0, 30.0]
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| inked(&format!("Line {i} of prose"), c))
             .collect();
-        placed.push(inked("Payments received", 24.0));
+        placed.push(inked_lines("Payments received", Some(36.0), 39.6));
+        // A line opening on no capital is sized by its ascenders over the
+        // page's ratio.
+        placed.push(inked_lines("and the rest of it", None, 31.5));
         let boxed = box_font(placed[0].as_ref().unwrap(), 13.0, 120.0 / 13.0);
         size_by_ink(&mut placed);
         let fonts: Vec<f64> = placed
             .iter()
             .map(|w| w.as_ref().unwrap().ink_font.unwrap())
             .collect();
-        // The prose keeps the size its boxes give; the heading stands a fifth
-        // over it, as its ink does.
-        assert!((fonts[0] - boxed).abs() < 1e-9, "{fonts:?} {boxed}");
-        assert!((fonts[5] / fonts[0] - 1.2).abs() < 1e-9, "{fonts:?}");
+        // The middle line keeps the size its box gives; the others stand to
+        // it as their capitals do.
+        assert!((fonts[1] - boxed).abs() < 1e-9, "{fonts:?} {boxed}");
+        assert!((fonts[0] / fonts[1] - 0.95).abs() < 1e-9, "{fonts:?}");
+        assert!((fonts[5] / fonts[1] - 1.2).abs() < 1e-9, "{fonts:?}");
+        assert!((fonts[6] / fonts[1] - 1.0).abs() < 1e-9, "{fonts:?}");
         assert_eq!(
             box_font(placed[5].as_ref().unwrap(), 13.0, 120.0 / 13.0),
             fonts[5]
         );
+    }
+
+    /// A 300 dpi scan of the page: 2550 × 3300 pixels.
+    fn px300(words: Vec<OcrWord>) -> WordReading {
+        WordReading {
+            coords: Coords::Px,
+            width: Some(2550.0),
+            height: Some(3300.0),
+            engine: None,
+            words,
+        }
+    }
+
+    #[test]
+    fn a_pixel_reading_places_its_words_with_its_pixels_per_unit() {
+        let p = page(Vec::new(), vec![full_page_image()]);
+        let reading = px300(vec![word("Total", [300.0, 300.0, 420.0, 350.0])]);
+        let placed = place(&p, None, &reading).unwrap();
+        let w = placed[0].as_ref().unwrap();
+        assert!(
+            (w.px_per_unit.unwrap() - 300.0 / 72.0).abs() < 1e-9,
+            "{:?}",
+            w.px_per_unit
+        );
+        // The short box's term is 12 of its pixels: a box 50 px thick sizes
+        // as (50 - 12 × short) px of type, over its pixels per unit.
+        let (thick, aspect) = (dist(w.quad[0], w.quad[3]), aspect(&w.quad));
+        let letters = box_letters_em("Total", aspect);
+        let want = (50.0 - SHORT_BOX_PX * short_share(aspect)) / letters / (300.0 / 72.0);
+        assert!((box_font(w, thick, aspect) - want).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_scan_read_with_its_ink_sizes_its_heading_by_it() {
+        // Six lines of a 300 dpi scan boxed alike, 50 px thick; the last
+        // one's capitals a fifth taller in its ink. By their boxes, one
+        // size; by their ink, a heading over five lines of prose.
+        let mut doc = blank_scan();
+        let mut words: Vec<OcrWord> = (0..5)
+            .map(|i| {
+                let y = 600.0 + 120.0 * i as f64;
+                OcrWord {
+                    ink: Some(Ink {
+                        first_cap: Some(30.0),
+                        top: Some(31.5),
+                        top_line: Some(TopLine::Ascender),
+                        x_height: Some(21.0),
+                    }),
+                    ..word(
+                        &format!("Line {i} of the prose read here"),
+                        [300.0, y, 1800.0, y + 50.0],
+                    )
+                }
+            })
+            .collect();
+        words.push(OcrWord {
+            ink: Some(Ink {
+                first_cap: Some(36.0),
+                top: Some(37.8),
+                top_line: Some(TopLine::Ascender),
+                x_height: Some(25.2),
+            }),
+            ..word("Payments received this year", [300.0, 300.0, 1800.0, 350.0])
+        });
+        inject(&mut doc, &[(0, Crop::Page, px300(words))]);
+        let size = |c: &str| {
+            doc.pages[0]
+                .glyphs
+                .iter()
+                .find(|g| g.text == c)
+                .map(|g| f64::from(g.font_size))
+                .unwrap()
+        };
+        let ratio = size("P") / size("L");
+        assert!((ratio - 1.2).abs() < 0.02, "heading over prose: {ratio}");
     }
 
     #[test]

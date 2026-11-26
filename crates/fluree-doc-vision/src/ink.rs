@@ -68,20 +68,21 @@ pub enum TopLine {
     Ascender,
 }
 
-/// Letters that rise to about a capital's height (`t` a little less).
+/// Letters that rise to about a capital's height (`t` a little less):
+/// capitals, accented ones included, figures and the ascenders.
 fn rises(c: char) -> bool {
-    c.is_ascii_uppercase() || c.is_ascii_digit() || "bdfhklt".contains(c)
+    c.is_uppercase() || c.is_ascii_digit() || "bdfhklt".contains(c)
 }
 
-/// Letters with a descender.
+/// Letters with a descender, a cedilla's included.
 fn drops(c: char) -> bool {
-    "gjpqy".contains(c)
+    "gjpqyç".contains(c)
 }
 
-/// Letters that stop at the x-height, the dotted ones counted by their
-/// stems.
+/// Letters that stop at the x-height, the dotted and accented ones
+/// counted by their bodies (`é` is an `e`; its accent is [`dotted`]'s).
 fn small(c: char) -> bool {
-    "acemnorsuvwxzij".contains(c) || drops(c)
+    "acemnorsuvwxzij".contains(c) || drops(c) || (!c.is_ascii() && c.is_lowercase())
 }
 
 /// The ascenders, whose line is a little over the capitals'.
@@ -94,19 +95,39 @@ fn dotted(c: char) -> bool {
     matches!(c, 'i' | 'j') || (!c.is_ascii() && c.is_alphabetic())
 }
 
+/// The figures of a note mark ending `text`: one to three digits, or
+/// superscript figures, set right after a letter with no space.
+fn note_mark(text: &str) -> Vec<char> {
+    let mark = |c: char| c.is_ascii_digit() || "¹²³⁰⁴⁵⁶⁷⁸⁹".contains(c);
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.iter().rev().take_while(|&&c| mark(c)).count();
+    let raised = chars.iter().rev().take(n).any(|&c| !c.is_ascii_digit());
+    match chars.len().checked_sub(n + 1).map(|i| chars[i]) {
+        // A superscript figure is a mark wherever it stands; a plain one
+        // only after a letter, as figures after figures are a number.
+        Some(c) if (1..=3).contains(&n) && (raised || c.is_alphabetic()) => {
+            chars[chars.len() - n..].to_vec()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Which line the highest of `text`'s letters reach, if any.
 pub fn top_line(text: &str) -> Option<TopLine> {
     if text.chars().any(ascends) {
         Some(TopLine::Ascender)
-    } else if text
-        .chars()
-        .any(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-    {
+    } else if text.chars().any(|c| c.is_uppercase() || c.is_ascii_digit()) {
         Some(TopLine::Cap)
     } else {
         None
     }
 }
+
+/// What a round capital reads over a flat one's height: its overshoot
+/// above and below, and its edges' partial pixels. Measured on rasterised
+/// lines opening on `O C G S` against lines opening on flat capitals, 1.023
+/// in Times to 1.065 in Courier, 1.056 in Helvetica.
+const ROUND_OVERSHOOT: f64 = 1.04;
 
 /// Ink fully on, as a share of the word's contrast.
 const ON: f64 = 0.5;
@@ -120,6 +141,9 @@ struct Crop {
     w: usize,
     h: usize,
     ink: Vec<f64>,
+    /// Crop pixels per image pixel: under 1 for a box sampled down to
+    /// [`MAX_ROWS`].
+    scale: f64,
 }
 
 impl Crop {
@@ -132,12 +156,18 @@ impl Crop {
 /// of `image`, the box set upright about its center) turned `angle` degrees
 /// counter-clockwise.
 pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option<Ink> {
+    // A note mark the engine read into the word (`Signed1`, `Amount¹`):
+    // figures set right after a letter, raised over its capitals. They are
+    // not the word's type, and their columns, the word's last, are left out.
+    let marks = note_mark(text);
+    let text = &text[..text.len() - marks.iter().map(|c| c.len_utf8()).sum::<usize>()];
     let letters: Vec<char> = text.chars().filter(|c| c.is_alphanumeric()).collect();
     if letters.is_empty() || !bbox.iter().all(|v| v.is_finite()) {
         return None;
     }
     let crop = sample(image, bbox, angle)?;
-    let crop = without_rules(crop);
+    let scale = crop.scale;
+    let crop = without_rules(crop, letters.len() >= 2);
     let has_dot = text.chars().any(dotted);
     // Each column's ink: its top and its bottom, a fraction of a pixel.
     let mut xs = Vec::new();
@@ -150,6 +180,16 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
             bots.push(b);
         }
     }
+    // A note mark's figures are the last runs of columns, one each.
+    for _ in &marks {
+        let mut start = xs.len().saturating_sub(1);
+        while start > 0 && xs[start - 1] + 1 == xs[start] {
+            start -= 1;
+        }
+        xs.truncate(start);
+        tops.truncate(start);
+        bots.truncate(start);
+    }
     if xs.len() < 4 {
         return None;
     }
@@ -157,8 +197,16 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     let has_small = letters.iter().any(|&c| small(c));
     let drop_share = letters.iter().filter(|&&c| drops(c)).count() as f64 / letters.len() as f64;
     // The baseline: the bottoms of the columns that do not drop, the larger
-    // share of them.
-    let base = quantile(&bots, ((1.0 - drop_share) * 0.5).max(0.05));
+    // share of them. A letter alone may have more columns under its bar
+    // than over its foot (`T`, `7`): its baseline is the lowest level a
+    // stem's worth of columns reaches.
+    let base = if letters.len() == 1 && drop_share == 0.0 {
+        let mut low = bots.clone();
+        low.sort_by(|a, b| b.total_cmp(a));
+        low.get(STEM_COLUMNS - 1).copied().unwrap_or(low[0])
+    } else {
+        quantile(&bots, ((1.0 - drop_share) * 0.5).max(0.05))
+    };
     let mid = quantile(&tops, 0.5);
     let h0 = (base - mid).max(1.0);
     let mut ink = Ink {
@@ -200,6 +248,8 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
     // A capital opening the word: its first run of inked columns, a letter
     // standing apart from the next, from its own foot to its top.
     let first = text.chars().next()?;
+    // `J` and `Q` drop below the baseline, and an accented capital (`É`)
+    // stands over its line: such a word is sized by its top line.
     if first.is_ascii_uppercase() && !matches!(first, 'J' | 'Q') {
         let mut end = 1;
         while end < xs.len() && xs[end] == xs[end - 1] + 1 {
@@ -211,7 +261,18 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
                 .iter()
                 .copied()
                 .fold(f64::NEG_INFINITY, f64::max);
-            ink.first_cap = Some(foot - top);
+            // A round capital overshoots the capitals' line and the
+            // baseline, and with its edges' partial pixels reads 2 to 6%
+            // large (Times to Courier): its overshoot is taken out. Left
+            // out instead, the words that open on one were sized by their
+            // top line, a noisier measure, and a heading a fifth larger
+            // read as one 57 times in 88 on a noisy page, against 87.
+            let round = if matches!(first, 'O' | 'C' | 'G' | 'S') {
+                ROUND_OVERSHOOT
+            } else {
+                1.0
+            };
+            ink.first_cap = Some((foot - top) / round);
         }
     }
     let usable = |v: Option<f64>| v.filter(|h| h.is_finite() && *h > 0.0);
@@ -227,11 +288,30 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
         });
     ink.top = usable(ink.top);
     ink.x_height = usable(ink.x_height);
+    // A top line the text does not name (a lone `t`'s, under the capitals')
+    // is neither: it served the x-height's floor above, and goes.
+    if ink.top_line.is_none() {
+        ink.top = None;
+    }
     if ink.top.is_none() {
         ink.top_line = None;
     }
+    // Back in the image's pixels.
+    let back = |v: Option<f64>| v.map(|h| h / scale);
+    ink.first_cap = back(ink.first_cap);
+    ink.top = back(ink.top);
+    ink.x_height = back(ink.x_height);
     (ink.first_cap.is_some() || ink.top.is_some() || ink.x_height.is_some()).then_some(ink)
 }
+
+/// Most rows a word's crop is sampled at: text taller is sampled down, as
+/// the measure is a matter of proportions. A line of body text at 300 dpi is
+/// about 60 rows.
+const MAX_ROWS: f64 = 160.0;
+
+/// Most cells a crop holds, about 24 MB of colours: a box longer than that
+/// at [`MAX_ROWS`] is not measured.
+const MAX_CELLS: f64 = 2.0e6;
 
 /// The box's region set level, a sixth of its height more above and below,
 /// sampled bilinearly, as ink levels: the background is the commonest colour
@@ -240,11 +320,16 @@ pub fn measure(image: &Pixels, bbox: [f64; 4], angle: f64, text: &str) -> Option
 fn sample(image: &Pixels, bbox: [f64; 4], angle: f64) -> Option<Crop> {
     let [x0, y0, x1, y1] = bbox;
     let (bw, bh) = (x1 - x0, y1 - y0);
-    if !(bw >= 2.0 && bh >= 2.0) || bw * bh > 4.0e7 {
+    if !(bw >= 2.0 && bh >= 2.0) {
         return None;
     }
     let pad = (bh / 6.0).floor().max(1.0);
-    let (w, h) = (bw.round() as usize, (bh + 2.0 * pad).round() as usize);
+    let scale = (MAX_ROWS / (bh + 2.0 * pad)).min(1.0);
+    let (wf, hf) = ((bw * scale).round(), ((bh + 2.0 * pad) * scale).round());
+    if !(wf >= 2.0 && hf >= 2.0) || wf * hf > MAX_CELLS {
+        return None;
+    }
+    let (w, h) = (wf as usize, hf as usize);
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let (sin, cos) = angle.to_radians().sin_cos();
     let (iw, ih) = (image.width as usize, image.height as usize);
@@ -252,13 +337,13 @@ fn sample(image: &Pixels, bbox: [f64; 4], angle: f64) -> Option<Crop> {
         return None;
     }
     let px = |x: usize, y: usize| rgb_at(image, y * iw + x);
-    let mut colour = vec![[255.0f64; 3]; w * h];
+    let mut colour = vec![[255.0f32; 3]; w * h];
     for v in 0..h {
         for u in 0..w {
             // The crop's pixel center, from the box's center, turned onto
             // the image.
-            let dx = u as f64 + 0.5 - bw / 2.0;
-            let dy = v as f64 + 0.5 - (bh / 2.0 + pad);
+            let dx = (u as f64 + 0.5) / scale - bw / 2.0;
+            let dy = (v as f64 + 0.5) / scale - (bh / 2.0 + pad);
             let x = cx + dx * cos + dy * sin - 0.5;
             let y = cy - dx * sin + dy * cos - 0.5;
             if !(x >= 0.0 && y >= 0.0 && x < (iw - 1) as f64 && y < (ih - 1) as f64) {
@@ -272,17 +357,19 @@ fn sample(image: &Pixels, bbox: [f64; 4], angle: f64) -> Option<Crop> {
                 px(xi, yi + 1),
                 px(xi + 1, yi + 1),
             );
-            let mut o = [0.0; 3];
+            let mut o = [0.0f32; 3];
             for k in 0..3 {
-                o[k] = a[k] * (1.0 - fx) * (1.0 - fy)
+                o[k] = (a[k] * (1.0 - fx) * (1.0 - fy)
                     + b[k] * fx * (1.0 - fy)
                     + c[k] * (1.0 - fx) * fy
-                    + d[k] * fx * fy;
+                    + d[k] * fx * fy) as f32;
             }
             colour[v * w + u] = o;
         }
     }
-    Some(despeckled(levels(&colour, w, h)))
+    let mut crop = despeckled(levels(&colour, w, h));
+    crop.scale = scale;
+    Some(crop)
 }
 
 /// Pixel `i` of `image` as RGB, composited over white as
@@ -306,8 +393,8 @@ fn rgb_at(image: &Pixels, i: usize) -> [f64; 3] {
 
 /// Ink levels of a crop's colours: distance from the border's commonest
 /// colour, over the far end of that distance.
-fn levels(colour: &[[f64; 3]], w: usize, h: usize) -> Crop {
-    let mut border: Vec<[f64; 3]> = Vec::with_capacity(2 * (w + h));
+fn levels(colour: &[[f32; 3]], w: usize, h: usize) -> Crop {
+    let mut border: Vec<[f32; 3]> = Vec::with_capacity(2 * (w + h));
     for u in 0..w {
         border.push(colour[u]);
         border.push(colour[(h - 1) * w + u]);
@@ -317,11 +404,19 @@ fn levels(colour: &[[f64; 3]], w: usize, h: usize) -> Crop {
         border.push(colour[v * w + w - 1]);
     }
     let bg: Vec<f64> = (0..3)
-        .map(|k| quantile(&border.iter().map(|c| c[k]).collect::<Vec<_>>(), 0.5))
+        .map(|k| {
+            quantile(
+                &border.iter().map(|c| f64::from(c[k])).collect::<Vec<_>>(),
+                0.5,
+            )
+        })
         .collect();
     let dist: Vec<f64> = colour
         .iter()
-        .map(|c| ((c[0] - bg[0]).powi(2) + (c[1] - bg[1]).powi(2) + (c[2] - bg[2]).powi(2)).sqrt())
+        .map(|c| {
+            let d = |k: usize| f64::from(c[k]) - bg[k];
+            (d(0).powi(2) + d(1).powi(2) + d(2).powi(2)).sqrt()
+        })
         .collect();
     let far = quantile(&dist, 0.99);
     let ink = if far < 1e-6 {
@@ -329,7 +424,12 @@ fn levels(colour: &[[f64; 3]], w: usize, h: usize) -> Crop {
     } else {
         dist.iter().map(|d| (d / far).clamp(0.0, 1.0)).collect()
     };
-    Crop { w, h, ink }
+    Crop {
+        w,
+        h,
+        ink,
+        scale: 1.0,
+    }
 }
 
 /// The crop with its specks of noise taken out: inked pixels with at most
@@ -370,8 +470,9 @@ fn despeckled(mut c: Crop) -> Crop {
 /// of the word's width (an underline, a strike, a box's edge), with the two
 /// rows either side a rule drawn between rows spreads over, and a column
 /// inked in one stretch over nearly the crop's height (a box's side). No
-/// letter runs that far either way.
-fn without_rules(mut c: Crop) -> Crop {
+/// letter runs that far either way, in a word of `several` letters: a lone
+/// `T`, `7` or `L` spans its own width with its bar, and keeps it.
+fn without_rules(mut c: Crop, several: bool) -> Crop {
     let on: Vec<bool> = c.ink.iter().map(|&v| v > ON).collect();
     let inked_cols: Vec<usize> = (0..c.w)
         .filter(|&x| (0..c.h).any(|y| on[y * c.w + x]))
@@ -390,6 +491,7 @@ fn without_rules(mut c: Crop) -> Crop {
         best as f64
     };
     let ruled: Vec<usize> = (0..c.h)
+        .filter(|_| several)
         .filter(|&y| {
             let run = longest(&mut (0..c.w).map(|x| on[y * c.w + x]));
             run >= 0.8 * width || run >= (0.6 * width).max(1.5 * h)
@@ -482,20 +584,25 @@ mod tests {
     /// `Hon` with its baseline at 0: capitals 20 px tall, the x-height 14,
     /// stems 3 px wide, letters 4 px apart.
     fn hon() -> Strokes {
+        hon_sized(20.0, 14.0)
+    }
+
+    /// `Hon` with capitals `cap` tall and the x-height `x`.
+    fn hon_sized(cap: f64, x: f64) -> Strokes {
         vec![
             // H
-            (0.0, 0.0, 3.0, 20.0),
-            (10.0, 0.0, 13.0, 20.0),
+            (0.0, 0.0, 3.0, cap),
+            (10.0, 0.0, 13.0, cap),
             (0.0, 9.0, 13.0, 12.0),
             // o
-            (17.0, 0.0, 20.0, 14.0),
-            (25.0, 0.0, 28.0, 14.0),
+            (17.0, 0.0, 20.0, x),
+            (25.0, 0.0, 28.0, x),
             (17.0, 0.0, 28.0, 3.0),
-            (17.0, 11.0, 28.0, 14.0),
+            (17.0, x - 3.0, 28.0, x),
             // n
-            (32.0, 0.0, 35.0, 14.0),
-            (40.0, 0.0, 43.0, 14.0),
-            (32.0, 11.0, 43.0, 14.0),
+            (32.0, 0.0, 35.0, x),
+            (40.0, 0.0, 43.0, x),
+            (32.0, x - 3.0, 43.0, x),
         ]
     }
 
@@ -503,7 +610,19 @@ mod tests {
     /// baseline at (`ox`, `oy`) and turned `angle` degrees
     /// counter-clockwise about it, each pixel covered by 4 × 4 samples.
     fn draw(strokes: &Strokes, ink: u8, paper: u8, angle: f64) -> Pixels {
-        let (w, h, ox, oy) = (200u32, 80u32, 60.0, 50.0);
+        draw_at(strokes, ink, paper, angle, (200, 80), (60.0, 50.0))
+    }
+
+    /// [`draw`] on an image `size` with the baseline's start at `origin`.
+    fn draw_at(
+        strokes: &Strokes,
+        ink: u8,
+        paper: u8,
+        angle: f64,
+        size: (u32, u32),
+        origin: (f64, f64),
+    ) -> Pixels {
+        let ((w, h), (ox, oy)) = (size, origin);
         let (sin, cos) = angle.to_radians().sin_cos();
         let mut data = vec![paper; (w * h) as usize];
         for y in 0..h {
@@ -648,5 +767,157 @@ mod tests {
         let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "Ton").unwrap();
         assert_eq!(ink.first_cap, None, "{ink:?}");
         assert!(close(ink.top, 20.0), "{ink:?}");
+    }
+
+    #[test]
+    fn a_dot_over_an_i_does_not_raise_a_capitals_line() {
+        // `Hi`: the dot reaches 2 px over the `H`, as in some faces.
+        let strokes = vec![
+            (0.0, 0.0, 3.0, 20.0),
+            (10.0, 0.0, 13.0, 20.0),
+            (0.0, 9.0, 13.0, 12.0),
+            (17.0, 0.0, 20.0, 14.0),
+            (17.0, 18.5, 20.0, 22.0),
+        ];
+        let (bbox, angle) = hon_box(0.0);
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "Hi").unwrap();
+        // (Its x-height is the `H`'s bar's as much as the `i`'s: one small
+        // letter in two makes no x-height line.)
+        assert!(close(ink.top, 20.0), "{ink:?}");
+        assert_eq!(ink.top_line, Some(TopLine::Cap));
+    }
+
+    #[test]
+    fn the_line_above_reaching_into_the_box_is_not_the_word() {
+        // A descender of the line above, from well over the box down into
+        // its top margin: it touches the crop's edge.
+        let mut strokes = hon();
+        strokes.push((20.0, 25.0, 23.0, 45.0));
+        let (bbox, angle) = hon_box(0.0);
+        assert_hon(measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "Hon"));
+    }
+
+    #[test]
+    fn a_line_is_measured_to_a_fraction_of_a_pixel() {
+        let (bbox, angle) = hon_box(0.0);
+        let ink = measure(
+            &draw(&hon_sized(20.4, 14.4), 0, 255, 0.0),
+            bbox,
+            angle,
+            "Hon",
+        )
+        .unwrap();
+        for (got, want) in [(ink.top, 20.4), (ink.x_height, 14.4)] {
+            assert!(got.is_some_and(|g| (g - want).abs() < 0.25), "{ink:?}");
+        }
+    }
+
+    #[test]
+    fn a_lone_letter_keeps_its_bar() {
+        // A `T` alone: its bar spans all its width, as an underline would a
+        // word's.
+        let strokes = vec![(0.0, 17.0, 15.0, 20.0), (6.0, 0.0, 9.0, 20.0)];
+        let (bbox, angle) = hon_box(0.0);
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "T").unwrap();
+        assert!(close(ink.top, 20.0), "{ink:?}");
+        assert!(close(ink.first_cap, 20.0), "{ink:?}");
+    }
+
+    #[test]
+    fn large_text_is_sampled_down_and_measured_in_the_images_pixels() {
+        // `Hon` ten times over, capitals 200 px tall, at the left of a box
+        // 6000 px long and 280 thick: over 2 million cells were it read
+        // whole, which a crop does not hold.
+        let big: Strokes = hon()
+            .iter()
+            .map(|&(a, b, c, d)| (a * 10.0, b * 10.0, c * 10.0, d * 10.0))
+            .collect();
+        let img = draw_at(&big, 0, 255, 0.0, (700, 420), (60.0, 320.0));
+        let cy = 320.0 - 100.0;
+        let ink = measure(&img, [40.0, cy - 140.0, 6040.0, cy + 140.0], 0.0, "Hon").unwrap();
+        for (got, want) in [
+            (ink.first_cap, 200.0),
+            (ink.top, 200.0),
+            (ink.x_height, 140.0),
+        ] {
+            assert!(got.is_some_and(|g| (g - want).abs() < 4.0), "{ink:?}");
+        }
+    }
+
+    #[test]
+    fn a_top_line_the_text_does_not_name_is_left_out() {
+        // `ot`: a `t` rises over the x-height to no named line.
+        let strokes = vec![
+            (0.0, 0.0, 3.0, 14.0),
+            (8.0, 0.0, 11.0, 14.0),
+            (0.0, 0.0, 11.0, 3.0),
+            (0.0, 11.0, 11.0, 14.0),
+            (15.0, 0.0, 18.0, 18.0),
+            (13.0, 11.0, 21.0, 14.0),
+        ];
+        let (bbox, angle) = hon_box(0.0);
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "ot").unwrap();
+        assert_eq!((ink.top, ink.top_line), (None, None), "{ink:?}");
+        assert!(close(ink.x_height, 14.0), "{ink:?}");
+    }
+
+    #[test]
+    fn a_round_capital_is_measured_less_its_overshoot() {
+        // `Oon`: an `O` overshooting the capitals' line and the baseline by
+        // 2% of them each way, as round letters do.
+        let mut strokes = hon();
+        strokes.drain(0..3);
+        strokes.extend([
+            (0.0, -0.4, 3.0, 20.4),
+            (10.0, -0.4, 13.0, 20.4),
+            (0.0, -0.4, 13.0, 2.6),
+            (0.0, 17.4, 13.0, 20.4),
+        ]);
+        let (bbox, angle) = hon_box(0.0);
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "Oon").unwrap();
+        assert!(close(ink.first_cap, 20.0), "{ink:?}");
+    }
+
+    #[test]
+    fn accents_over_most_of_a_word_leave_its_x_height() {
+        // `éé`: two x-height letters whose accents cover most of their
+        // columns. Taken as the columns' tops, the accents would be the
+        // x-height line.
+        let mut strokes = Strokes::new();
+        for x in [0.0, 15.0] {
+            strokes.extend([
+                (x, 0.0, x + 3.0, 14.0),
+                (x + 8.0, 0.0, x + 11.0, 14.0),
+                (x, 0.0, x + 11.0, 3.0),
+                (x, 11.0, x + 11.0, 14.0),
+                (x + 2.0, 17.0, x + 9.0, 19.5),
+            ]);
+        }
+        let (bbox, angle) = hon_box(0.0);
+        let ink = measure(&draw(&strokes, 0, 255, 0.0), bbox, angle, "éé").unwrap();
+        assert!(close(ink.x_height, 14.0), "{ink:?}");
+    }
+
+    #[test]
+    fn a_note_mark_after_a_word_is_not_its_type() {
+        // `Hon1`: a figure set after the word, a stem's width, raised 6 px
+        // over its capitals, which the engine reads as part of it.
+        let mut strokes = hon();
+        strokes.extend([(47.0, 12.0, 50.0, 26.0), (45.0, 23.0, 48.0, 26.0)]);
+        // The engine's box holds the mark: past it, and over it.
+        let bbox = [56.0, 20.0, 114.0, 54.0];
+        let img = draw(&strokes, 0, 255, 0.0);
+        assert_hon(measure(&img, bbox, 0.0, "Hon1"));
+        assert_hon(measure(&img, bbox, 0.0, "Hon¹"));
+    }
+
+    #[test]
+    fn a_number_is_not_a_note_mark() {
+        assert_eq!(note_mark("Signed1"), vec!['1']);
+        assert_eq!(note_mark("Notes¹"), vec!['¹']);
+        assert!(note_mark("2024").is_empty());
+        assert!(note_mark("PX-4417").is_empty());
+        assert!(note_mark("Page 12").is_empty());
+        assert!(note_mark("A1234").is_empty());
     }
 }
