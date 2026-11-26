@@ -2539,30 +2539,8 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
         .is_some_and(|r| r.orientation == Orientation::Horizontal);
     let t = EDGE_TOLERANCE;
     for (g, parts) in out.iter_mut().zip(&pieces).filter(|_| horizontal) {
-        let mut middles = Vec::new();
-        for (i, &(a, b)) in parts.iter().enumerate() {
-            for &(c, d) in &parts[i + 1..] {
-                let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
-                let (lo, hi) = (a.max(c), b.min(d));
-                if hi - lo > t && !nested {
-                    middles.push((lo + hi) / 2.0);
-                }
-            }
-        }
-        g.ends.retain(|&e| {
-            let own: Vec<&(f64, f64)> = parts
-                .iter()
-                .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01)
-                .collect();
-            !own.iter().any(|&&(a, b)| {
-                parts.iter().any(|&(c, d)| {
-                    let contains = c <= a + t && d >= b - t;
-                    let overlaps = c < b - t && d > a + t;
-                    overlaps && !contains && c < e - t && d > e + t
-                })
-            })
-        });
-        g.ends.extend(middles);
+        g.ends.retain(end_kept(parts, t));
+        g.ends.extend(overlap_middles(parts, t));
         // The rule's runs: its pieces joined where they meet or overlap.
         let mut sorted = parts.clone();
         sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -2598,6 +2576,83 @@ fn cluster(rules: &[&Rule]) -> Vec<GridLine> {
     }
     out
 }
+
+/// The middles of the overlaps between a row rule's pieces, in the order of
+/// the pairs (first piece, second piece) as the pieces were drawn: one for
+/// each pair overlapping by more than `t` where neither piece holds the
+/// other.
+///
+/// A chart drawn in strokes can lay thousands of pieces along one line, most
+/// of them stacked over each other. So the pairs are found by a sweep over
+/// the pieces sorted by start, testing only the pieces that start inside
+/// another's span. A pair overlaps by more than `t` only if the later piece
+/// starts more than `t` before the earlier one ends, and that bound only
+/// falls as the start moves right.
+fn overlap_middles(parts: &[(f64, f64)], t: f64) -> Vec<f64> {
+    let mut order: Vec<usize> = (0..parts.len()).collect();
+    order.sort_by(|&i, &j| parts[i].0.total_cmp(&parts[j].0).then(i.cmp(&j)));
+    let mut found: Vec<(usize, usize, f64)> = Vec::new();
+    for (p, &i) in order.iter().enumerate() {
+        let end = parts[i].1;
+        for &j in &order[p + 1..] {
+            if end - parts[j].0 <= t {
+                break;
+            }
+            let (first, second) = (i.min(j), i.max(j));
+            let ((a, b), (c, d)) = (parts[first], parts[second]);
+            let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
+            let (lo, hi) = (a.max(c), b.min(d));
+            if hi - lo > t && !nested {
+                found.push((first, second, (lo + hi) / 2.0));
+            }
+        }
+    }
+    found.sort_by_key(|&(i, j, _)| (i, j));
+    found.into_iter().map(|(_, _, m)| m).collect()
+}
+
+/// Whether a row rule keeps an end of one of its pieces: not when the end
+/// falls inside another piece that overlaps the end's own piece without
+/// holding it (two cells' pieces run on past each other's edge).
+///
+/// Many pieces of a chart drawn in strokes repeat one another and share
+/// their ends, so past [`FEW_PIECES`] the test reads the distinct pieces,
+/// sorted by start, and is worked out once for each distinct end.
+fn end_kept(parts: &[(f64, f64)], t: f64) -> impl FnMut(&f64) -> bool + '_ {
+    let few = parts.len() <= FEW_PIECES;
+    let mut distinct = if few { Vec::new() } else { parts.to_vec() };
+    distinct.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    distinct.dedup_by(|x, y| x.0.to_bits() == y.0.to_bits() && x.1.to_bits() == y.1.to_bits());
+    let mut kept: rustc_hash::FxHashMap<u64, bool> = Default::default();
+    let ends_inside = move |pieces: &[(f64, f64)], e: f64, sorted: bool| {
+        let mut own = pieces
+            .iter()
+            .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01);
+        !own.any(|&(a, b)| {
+            pieces
+                .iter()
+                .take_while(|&&(c, _)| !sorted || c < e - t)
+                .any(|&(c, d)| {
+                    let contains = c <= a + t && d >= b - t;
+                    let overlaps = c < b - t && d > a + t;
+                    overlaps && !contains && c < e - t && d > e + t
+                })
+        })
+    };
+    move |&e| {
+        if few {
+            return ends_inside(parts, e, false);
+        }
+        *kept
+            .entry(e.to_bits())
+            .or_insert_with(|| ends_inside(&distinct, e, true))
+    }
+}
+
+/// How many pieces a rule, or rules a component, holds before the readings
+/// of their overlaps file them first: below it, testing each against each
+/// costs less than the filing.
+const FEW_PIECES: usize = 32;
 
 /// Drop a rule's gutters when text runs across one of them: a caption or a
 /// line of prose over a rule whose pieces happen to part under it, or a
@@ -4913,26 +4968,135 @@ fn split_stacked_boxes<T: Copy>(comp: Vec<T>, rule: impl Fn(T) -> Rule) -> Vec<V
     out
 }
 
+/// The rules of one component, filed by the cells of a coarse grid their
+/// reach covers (each rule's box widened by [`EDGE_TOLERANCE`] and a cell),
+/// so that whether any of them touches a rule is asked of the few filed
+/// near it, not of all of them. A chart drawn in strokes can put thousands
+/// of rules in one component. A component of [`FEW_PIECES`] boxes or fewer
+/// is asked box by box, unfiled.
+struct TouchGrid {
+    /// The component's distinct boxes: whether a rule touches the component
+    /// turns on its rules' boxes alone, and a chart's strokes repeat theirs.
+    boxes: Vec<BBox>,
+    filed: rustc_hash::FxHashSet<[u64; 4]>,
+    cells: rustc_hash::FxHashMap<(i64, i64), Vec<BBox>>,
+    /// Rules too long to file cell by cell, asked every time.
+    wide: Vec<BBox>,
+}
+
+fn box_bits(b: &BBox) -> [u64; 4] {
+    [
+        b.x0.to_bits(),
+        b.y0.to_bits(),
+        b.x1.to_bits(),
+        b.y1.to_bits(),
+    ]
+}
+
+impl TouchGrid {
+    const CELL: f64 = 16.0;
+    const MAX_CELLS: i64 = 4096;
+
+    fn span(lo: f64, hi: f64) -> (i64, i64) {
+        (
+            ((lo - EDGE_TOLERANCE) / Self::CELL).floor() as i64 - 1,
+            ((hi + EDGE_TOLERANCE) / Self::CELL).floor() as i64 + 1,
+        )
+    }
+
+    fn new() -> Self {
+        TouchGrid {
+            boxes: Vec::new(),
+            filed: Default::default(),
+            cells: Default::default(),
+            wide: Vec::new(),
+        }
+    }
+
+    fn filing(&self) -> bool {
+        self.boxes.len() > FEW_PIECES
+    }
+
+    fn insert(&mut self, b: &BBox) {
+        if self.filing() {
+            if self.filed.insert(box_bits(b)) {
+                self.boxes.push(*b);
+                self.file(b);
+            }
+            return;
+        }
+        if self.boxes.iter().any(|o| box_bits(o) == box_bits(b)) {
+            return;
+        }
+        self.boxes.push(*b);
+        if self.filing() {
+            for o in self.boxes.clone() {
+                self.filed.insert(box_bits(&o));
+                self.file(&o);
+            }
+        }
+    }
+
+    fn file(&mut self, b: &BBox) {
+        let ((x0, x1), (y0, y1)) = (Self::span(b.x0, b.x1), Self::span(b.y0, b.y1));
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > Self::MAX_CELLS {
+            self.wide.push(*b);
+            return;
+        }
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                self.cells.entry((x, y)).or_default().push(*b);
+            }
+        }
+    }
+
+    /// Whether any of the component's rules touches `c`: the test of
+    /// [`component_indices`]. Filed, it is asked of the rules filed in the
+    /// cells `c` covers: a rule touching `c` reaches a point of `c`'s box,
+    /// so it is filed in a cell `c` covers.
+    fn touches(&self, c: &BBox) -> bool {
+        let touch = |r: &BBox| {
+            r.x1 + EDGE_TOLERANCE >= c.x0
+                && c.x1 + EDGE_TOLERANCE >= r.x0
+                && r.y1 + EDGE_TOLERANCE >= c.y0
+                && c.y1 + EDGE_TOLERANCE >= r.y0
+        };
+        if !self.filing() {
+            return self.boxes.iter().any(touch);
+        }
+        if self.wide.iter().any(touch) {
+            return true;
+        }
+        let ((x0, x1), (y0, y1)) = (Self::span(c.x0, c.x1), Self::span(c.y0, c.y1));
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > Self::MAX_CELLS {
+            return self.boxes.iter().any(touch);
+        }
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                self.cells
+                    .get(&(x, y))
+                    .is_some_and(|ks| ks.iter().any(touch))
+            })
+        })
+    }
+}
+
 /// The page's rules in touching sets, as indices.
 fn component_indices(rules: &[Rule]) -> Vec<Vec<usize>> {
     let mut remaining: Vec<usize> = (0..rules.len()).collect();
     let mut components: Vec<Vec<usize>> = Vec::new();
     while let Some(seed) = remaining.pop() {
         let mut component = vec![seed];
+        let mut grid = TouchGrid::new();
+        grid.insert(&rules[seed].bbox);
         let mut changed = true;
         while changed {
             changed = false;
             let mut i = 0;
             while i < remaining.len() {
                 let candidate = rules[remaining[i]];
-                let connected = component.iter().any(|&k| {
-                    let r = rules[k];
-                    r.bbox.x1 + EDGE_TOLERANCE >= candidate.bbox.x0
-                        && candidate.bbox.x1 + EDGE_TOLERANCE >= r.bbox.x0
-                        && r.bbox.y1 + EDGE_TOLERANCE >= candidate.bbox.y0
-                        && candidate.bbox.y1 + EDGE_TOLERANCE >= r.bbox.y0
-                });
-                if connected {
+                if grid.touches(&candidate.bbox) {
+                    grid.insert(&candidate.bbox);
                     component.push(remaining[i]);
                     remaining.swap_remove(i);
                     changed = true;
@@ -12613,5 +12777,177 @@ mod cross_gutter_tests {
         }
         let g = grid(&[40.0, 300.0, 560.0], &[170.0, 183.0, 197.0]);
         assert!(!crosses(&gl, &g));
+    }
+}
+
+#[cfg(test)]
+mod piece_tests {
+    use super::*;
+
+    /// A small deterministic generator: positions on a coarse lattice, so
+    /// pieces repeat each other and share ends, as a chart's strokes do.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0 >> 33
+        }
+        fn at(&mut self, steps: u64, step: f64) -> f64 {
+            (self.next() % steps) as f64 * step
+        }
+    }
+
+    /// The pairwise readings the sweeps replace, kept as they were.
+    fn middles_pairwise(parts: &[(f64, f64)], t: f64) -> Vec<f64> {
+        let mut middles = Vec::new();
+        for (i, &(a, b)) in parts.iter().enumerate() {
+            for &(c, d) in &parts[i + 1..] {
+                let nested = (c <= a + t && d >= b - t) || (a <= c + t && b >= d - t);
+                let (lo, hi) = (a.max(c), b.min(d));
+                if hi - lo > t && !nested {
+                    middles.push((lo + hi) / 2.0);
+                }
+            }
+        }
+        middles
+    }
+
+    fn ends_pairwise(parts: &[(f64, f64)], t: f64) -> Vec<f64> {
+        let mut ends: Vec<f64> = parts.iter().flat_map(|&(a, b)| [a, b]).collect();
+        ends.retain(|&e| {
+            let own: Vec<&(f64, f64)> = parts
+                .iter()
+                .filter(|(a, b)| (a - e).abs() <= 0.01 || (b - e).abs() <= 0.01)
+                .collect();
+            !own.iter().any(|&&(a, b)| {
+                parts.iter().any(|&(c, d)| {
+                    let contains = c <= a + t && d >= b - t;
+                    let overlaps = c < b - t && d > a + t;
+                    overlaps && !contains && c < e - t && d > e + t
+                })
+            })
+        });
+        ends
+    }
+
+    fn components_pairwise(rules: &[Rule]) -> Vec<Vec<usize>> {
+        let mut remaining: Vec<usize> = (0..rules.len()).collect();
+        let mut components: Vec<Vec<usize>> = Vec::new();
+        while let Some(seed) = remaining.pop() {
+            let mut component = vec![seed];
+            let mut changed = true;
+            while changed {
+                changed = false;
+                let mut i = 0;
+                while i < remaining.len() {
+                    let candidate = rules[remaining[i]];
+                    let connected = component.iter().any(|&k| {
+                        let r = rules[k];
+                        r.bbox.x1 + EDGE_TOLERANCE >= candidate.bbox.x0
+                            && candidate.bbox.x1 + EDGE_TOLERANCE >= r.bbox.x0
+                            && r.bbox.y1 + EDGE_TOLERANCE >= candidate.bbox.y0
+                            && candidate.bbox.y1 + EDGE_TOLERANCE >= r.bbox.y0
+                    });
+                    if connected {
+                        component.push(remaining[i]);
+                        remaining.swap_remove(i);
+                        changed = true;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            component.sort_unstable();
+            components.extend(split_stacked_boxes(component, |i| rules[i]));
+        }
+        components
+    }
+
+    fn bits(v: &[f64]) -> Vec<u64> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    #[test]
+    fn a_rules_pieces_read_by_sweep_as_they_were_pair_by_pair() {
+        let t = EDGE_TOLERANCE;
+        let (mut middles, mut dropped) = (0, 0);
+        for seed in 0..200u64 {
+            let mut rng = Lcg(seed);
+            let n = 1 + (rng.next() % 60) as usize;
+            // Some runs on a fine lattice (overlaps of every size), some on
+            // a coarse one (stacked repeats sharing their ends).
+            let step = if seed.is_multiple_of(2) { 0.5 } else { 7.5 };
+            let parts: Vec<(f64, f64)> = (0..n)
+                .map(|_| {
+                    let a = rng.at(80, step);
+                    (a, a + rng.at(40, step))
+                })
+                .collect();
+            assert_eq!(
+                bits(&overlap_middles(&parts, t)),
+                bits(&middles_pairwise(&parts, t)),
+                "middles, seed {seed}"
+            );
+            let mut ends: Vec<f64> = parts.iter().flat_map(|&(a, b)| [a, b]).collect();
+            ends.retain(end_kept(&parts, t));
+            assert_eq!(
+                bits(&ends),
+                bits(&ends_pairwise(&parts, t)),
+                "ends, seed {seed}"
+            );
+            middles += middles_pairwise(&parts, t).len();
+            dropped += 2 * parts.len() - ends.len();
+        }
+        // The runs hold both kinds of overlap the readings act on.
+        assert!(
+            middles > 0 && dropped > 0,
+            "{middles} middles, {dropped} ends dropped"
+        );
+    }
+
+    #[test]
+    fn touching_rules_are_grouped_as_they_were_rule_by_rule() {
+        let mut joined = 0;
+        for seed in 0..200u64 {
+            let mut rng = Lcg(seed ^ 0x9e37);
+            let n = 1 + (rng.next() % 80) as usize;
+            let rules: Vec<Rule> = (0..n)
+                .map(|_| {
+                    let (x, y) = (rng.at(60, 5.0), rng.at(60, 5.0));
+                    let len = rng.at(30, 5.0);
+                    let orientation = if rng.next().is_multiple_of(2) {
+                        Orientation::Horizontal
+                    } else {
+                        Orientation::Vertical
+                    };
+                    let bbox = match orientation {
+                        Orientation::Horizontal => BBox {
+                            x0: x,
+                            y0: y,
+                            x1: x + len,
+                            y1: y + 0.6,
+                        },
+                        Orientation::Vertical => BBox {
+                            x0: x,
+                            y0: y,
+                            x1: x + 0.6,
+                            y1: y + len,
+                        },
+                    };
+                    Rule {
+                        bbox,
+                        orientation,
+                        page: 0,
+                    }
+                })
+                .collect();
+            let comps = component_indices(&rules);
+            assert_eq!(comps, components_pairwise(&rules), "seed {seed}");
+            joined += comps.iter().filter(|c| c.len() > 1).count();
+        }
+        assert!(joined > 0);
     }
 }
