@@ -9,7 +9,8 @@
     "The title's size set the baseline and gutter tolerances for the description beside it, so the description's middle line was read into the title's line: PROCAT suelto que no es adherible… SISTEMA DE, the description cut in three. The title's ® was then read as a list marker, and the small ® in the text was lost (ProCat .).",
     "2026-11-24 (#122, #123): a contact line no longer counts as a bold heading candidate, so the five bold heads on page 1 no longer push the document past its bold cap.",
     "2026-11-24 (#115): page 2's fine print walked from the drawing in the page's corner through the footnote and the table beside it, and the disclaimer by a logo was taken as its label.",
-    "2026-11-26 (#393): levels are set against the headings open above each one, and the document's title heads no sections: they start at level 1 beside it, as a Word document's sections sit beside its title. The bold heads were checked inside the title's section; `Funciones` is now a level-1 section of its own."
+    "2026-11-26 (#393): levels are set against the headings open above each one, and the document's title heads no sections: they start at level 1 beside it, as a Word document's sections sit beside its title. The bold heads were checked inside the title's section; `Funciones` is now a level-1 section of its own.",
+    "2026-11-26: the document's title is a `doco:Title`, the document's header, apart from its sections, as a Word document's and a deck's are. The title's checks look for it there."
   ],
   "checks": [
     {
@@ -17,7 +18,7 @@
       "found": "2026-11-23",
       "issue": "#88: the title was split around a line of the description, two of its lines headings and the first a paragraph with the description in it.",
       "element": {
-        "type": "doco:SectionTitle",
+        "type": "doco:Title",
         "text": "PROCAT® SISTEMA DE AISLAMIENTO SUELTO PROFESIONAL"
       }
     },

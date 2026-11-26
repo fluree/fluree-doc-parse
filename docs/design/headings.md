@@ -667,6 +667,13 @@ font-size tier and the generic detectors miss it. It is recovered first, from
 a bounded look at the first few short blocks on page 1, stopping once prose
 begins and requiring prominence, vertical isolation or a contents label.
 
+The title is emitted as a `doco:Title`, as a Word document's and a deck's
+are: DoCO holds it as the document's header, and the sections start at level
+1 beside it. It is read as a level-1 heading until every pass that weighs
+headings has run, then retyped once, so a run of bold heads or a heading
+continued over pages is judged as before. Markdown and XHTML write it as
+they wrote the level-1 heading it was, `#` and `<h1>`.
+
 Worth **+0.048 MHS**, recovering eight zero-or-low-scoring documents with no
 regressions.
 
