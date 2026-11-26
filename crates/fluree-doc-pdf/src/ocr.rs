@@ -31,6 +31,17 @@
 //! Injection runs on the document as extracted, before analysis, so the
 //! glyphs are counted, deduplicated and assembled like any others — and a
 //! region they now fill no longer routes to a model.
+//!
+//! Where a model reads too, a reading that is not enough on its own is left
+//! to it instead ([`left_to_model`]): a page whose text is all pixels, a
+//! reading the engine is unsure of, pictures that carry the page, or a
+//! table in a picture. The engine reads words; a model reads them with
+//! their structure.
+//!
+//! A picture's reading the engine is unsure of, on a page with text of its
+//! own, is lettering drawn into artwork, not text the page holds
+//! ([`set_aside_unsure`]): it is not laid on the page, where no model
+//! takes it either.
 
 use crate::extract::{Document, Page};
 use crate::geom::BBox;
@@ -1602,6 +1613,12 @@ pub struct OcrPass {
     pub failed: Vec<(String, String)>,
     /// Crops left unread past the limit ([`ocr_jobs`]).
     pub capped: usize,
+    /// Crops read but left to a model ([`left_to_model`]), by crop name
+    /// (`p{page}_{tag}`), with why.
+    pub left: Vec<(String, &'static str)>,
+    /// Crops read but set aside as artwork ([`set_aside_unsure`]), by crop
+    /// name.
+    pub set_aside: Vec<String>,
 }
 
 /// Read a document's pixels with an engine and lay the words on its pages:
@@ -1624,6 +1641,22 @@ pub fn read_pages(
     scale: crate::escalate::CropScale,
     max_crops: usize,
 ) -> OcrPass {
+    read_pages_leaving(doc, pdf, engine, only, scale, max_crops, false)
+}
+
+/// As [`read_pages`]; with `leave_to_model`, where a model reads too, the
+/// readings [`left_to_model`] picks are not laid on their pages, so the
+/// crops they read route to the model as if no engine had read them.
+#[cfg(feature = "render")]
+pub fn read_pages_leaving(
+    doc: &mut Document,
+    pdf: &hayro_syntax::Pdf,
+    engine: &dyn fluree_doc_vision::OcrEngine,
+    only: Option<&[usize]>,
+    scale: crate::escalate::CropScale,
+    max_crops: usize,
+    leave_to_model: bool,
+) -> OcrPass {
     let (jobs, capped) = ocr_jobs(doc, only, max_crops);
     // Each crop is read as it is cut, its pixels dropped after; the
     // readings are put back in the jobs' order, which a page rendered at
@@ -1644,13 +1677,201 @@ pub fn read_pages(
     });
     readings.sort_by_key(|(at, _)| *at);
     failed.sort_by_key(|(at, _)| *at);
-    let readings: Vec<_> = readings.into_iter().map(|(_, r)| r).collect();
+    let mut readings: Vec<_> = readings.into_iter().map(|(_, r)| r).collect();
     let failed = failed.into_iter().map(|(_, f)| f).collect();
+    let left = if leave_to_model {
+        leave(doc, &mut readings)
+    } else {
+        Vec::new()
+    };
+    let set_aside = set_aside_unsure(doc, &mut readings);
     OcrPass {
         injected: inject(doc, &readings),
         failed,
         capped,
+        left,
+        set_aside,
     }
+}
+
+/// Take out of `readings` a picture's reading the engine is unsure of
+/// (under [`WEAK_CONFIDENCE`]) on a page with text of its own, and name
+/// them (`p{page}_{tag}`).
+///
+/// An engine reads the lettering drawn into artwork, a logo's or a seal's
+/// texture, a photo's grain as words, and is unsure of them: an engraving's
+/// captions read `The Thrte Pigeows, / sgoaoene`. Laid on the page, they
+/// are text it never printed. Clean print reads at 0.97 and over. Whatever
+/// its length, a reading under 0.90 is set aside, unless the page has no
+/// text but what is read from its pixels: a whole-page reading, or the
+/// regions of a page with no text layer, are all the text there is.
+pub fn set_aside_unsure(
+    doc: &Document,
+    readings: &mut Vec<(usize, Crop, WordReading)>,
+) -> Vec<String> {
+    let own = |page: usize| {
+        doc.pages.iter().find(|p| p.index == page).map_or(0, |p| {
+            p.glyphs
+                .iter()
+                .filter(|g| !g.text.trim().is_empty())
+                .count()
+        })
+    };
+    let mut aside = Vec::new();
+    readings.retain(|(page, crop, r)| {
+        let unsure = matches!(crop, Crop::Region(_))
+            && confidence(r).is_some_and(|c| c < WEAK_CONFIDENCE)
+            && own(*page) > 0;
+        if unsure {
+            aside.push(format!("p{page}_{}", crop.tag()));
+        }
+        !unsure
+    });
+    aside
+}
+
+/// Take out of `readings` those [`left_to_model`] picks, and name them
+/// (`p{page}_{tag}`) with why.
+pub fn leave(
+    doc: &Document,
+    readings: &mut Vec<(usize, Crop, WordReading)>,
+) -> Vec<(String, &'static str)> {
+    let picked = left_to_model(doc, readings);
+    let mut left = Vec::new();
+    let mut i = 0;
+    readings.retain(|(page, crop, _)| {
+        let why = picked.iter().find(|(k, _)| *k == i).map(|(_, w)| *w);
+        i += 1;
+        match why {
+            Some(w) => {
+                left.push((format!("p{page}_{}", crop.tag()), w));
+                false
+            }
+            None => true,
+        }
+    });
+    left
+}
+
+/// Below this confidence, averaged over a reading's characters, an engine
+/// is guessing at a fifth or more of what it read: lettering drawn into
+/// artwork, tick labels, a photo's texture. Clean print reads at 0.97 and
+/// over.
+const WEAK_CONFIDENCE: f64 = 0.90;
+
+/// Fewest characters a weak reading needs to be worth a model's call: a
+/// mark or two read in a photo is no text a model would find either.
+const MIN_WEAK_CHARS: usize = 20;
+
+/// Fewest rows of a table read in a picture: rows of three boxes or more,
+/// at least half the reading's rows.
+const MIN_TABLE_ROWS: usize = 3;
+
+/// The readings a model should read instead, by their place in `readings`,
+/// with the cue that sends each: what an engine's words alone leave out.
+///
+/// Only a crop a model would be sent ([`route::decide`]): a page routed to
+/// a reader whole, or one of its routed regions. The small regions only an
+/// engine reads ([`route::ocr_regions`]) stay the engine's. A crop goes to
+/// the model when
+/// - **its page is all pixels** (a scan, a near-blank page that is one
+///   image): the page's headings, lists and tables are all in the reading,
+///   and boxes the engine estimates are poor evidence of them;
+/// - **the reading is weak:** under [`WEAK_CONFIDENCE`] over
+///   [`MIN_WEAK_CHARS`] characters or more;
+/// - **its pictures carry the page:** the page's readings hold as much text
+///   as its own text layer, so its structure is in them;
+/// - **it holds a table** ([`MIN_TABLE_ROWS`]).
+///
+/// A chart's or a screenshot's own title is no cue: it is the figure's
+/// text, not a section's heading, and an engine reads its words as well.
+pub fn left_to_model(
+    doc: &Document,
+    readings: &[(usize, Crop, WordReading)],
+) -> Vec<(usize, &'static str)> {
+    let pages = crate::document::routing_pages(doc);
+    let routed = |page: usize, crop: Crop| -> Option<(bool, &Page)> {
+        let p = pages.iter().find(|p| p.index == page)?;
+        match (crop, route::decide(p).0) {
+            (Crop::Page, Route::Vlm(_)) => Some((true, p)),
+            (Crop::Region(i), Route::VlmRegions(r)) if i < r.len() => Some((false, p)),
+            _ => None,
+        }
+    };
+    // The text a page's model-sized readings hold, against its own.
+    let mut read_on: std::collections::HashMap<usize, usize> = Default::default();
+    for (page, crop, r) in readings {
+        if routed(*page, *crop).is_some() {
+            *read_on.entry(*page).or_default() += chars(r);
+        }
+    }
+    let mut out = Vec::new();
+    for (k, (page, crop, r)) in readings.iter().enumerate() {
+        let Some((whole, p)) = routed(*page, *crop) else {
+            continue;
+        };
+        let own = p
+            .glyphs
+            .iter()
+            .filter(|g| !g.text.trim().is_empty())
+            .count();
+        let why = if whole {
+            Some("its page is all pixels")
+        } else if chars(r) >= MIN_WEAK_CHARS && confidence(r).is_some_and(|c| c < WEAK_CONFIDENCE) {
+            Some("the engine is unsure of it")
+        } else if read_on.get(page).is_some_and(|&n| n > 0 && n >= own) {
+            Some("its pictures carry the page")
+        } else {
+            let rows = rows_of(r);
+            let ruled = rows.iter().filter(|row| row.len() >= 3).count();
+            (ruled >= MIN_TABLE_ROWS && ruled * 2 >= rows.len()).then_some("it holds a table")
+        };
+        if let Some(w) = why {
+            out.push((k, w));
+        }
+    }
+    out
+}
+
+/// The characters a reading holds, spaces aside.
+fn chars(r: &WordReading) -> usize {
+    r.words
+        .iter()
+        .map(|w| w.text.chars().filter(|c| !c.is_whitespace()).count())
+        .sum()
+}
+
+/// The engine's confidence in a reading, averaged over its characters;
+/// `None` where it gives none.
+fn confidence(r: &WordReading) -> Option<f64> {
+    let (mut sum, mut n) = (0.0, 0usize);
+    for w in &r.words {
+        let c = w.conf?;
+        let k = w.text.chars().filter(|c| !c.is_whitespace()).count();
+        sum += c * k as f64;
+        n += k;
+    }
+    (n > 0).then(|| sum / n as f64)
+}
+
+/// A reading's boxes in rows, top to bottom: a box joins the row before it
+/// where its middle lies within half the taller's height of the row's.
+fn rows_of(r: &WordReading) -> Vec<Vec<&fluree_doc_vision::OcrWord>> {
+    let mid = |w: &fluree_doc_vision::OcrWord| (w.bbox[1] + w.bbox[3]) / 2.0;
+    let tall = |w: &fluree_doc_vision::OcrWord| (w.bbox[3] - w.bbox[1]).abs();
+    let mut words: Vec<_> = r.words.iter().collect();
+    words.sort_by(|a, b| mid(a).total_cmp(&mid(b)));
+    let mut rows: Vec<(f64, f64, Vec<&fluree_doc_vision::OcrWord>)> = Vec::new();
+    for w in words {
+        match rows.last_mut() {
+            Some((y, h, row)) if (mid(w) - *y).abs() < 0.5 * h.max(tall(w)) => {
+                *h = h.max(tall(w));
+                row.push(w);
+            }
+            _ => rows.push((mid(w), tall(w), vec![w])),
+        }
+    }
+    rows.into_iter().map(|(_, _, row)| row).collect()
 }
 
 /// Mark the elements OCR words make up as `provenance: "ocr"`.
@@ -3769,6 +3990,135 @@ mod tests {
         x1: 550.0,
         y1: 600.0,
     };
+
+    /// A reading of `rows` on the page, a line of boxes 12pt tall each, the
+    /// engine `conf` sure of every box.
+    fn rows_read(rows: &[&[&str]], conf: f64) -> WordReading {
+        let words = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| {
+                row.iter().enumerate().map(move |(c, t)| {
+                    let (x, y) = (100.0 + c as f64 * 120.0, 120.0 + r as f64 * 20.0);
+                    OcrWord {
+                        text: t.to_string(),
+                        bbox: [x, y, x + 100.0, y + 12.0],
+                        angle: None,
+                        conf: Some(conf),
+                    }
+                })
+            })
+            .collect();
+        page_units(words)
+    }
+
+    #[test]
+    fn a_reading_its_words_alone_leave_short_goes_to_the_model() {
+        let doc = page_with_regions(&[UPPER, LOWER]);
+        let left = |crop: Crop, r: WordReading| left_to_model(&doc, &[(0, crop, r)]);
+        // Clean print in prose: the engine's reading stands.
+        let prose = &[
+            &["Revenue rose by four percent"][..],
+            &["in the second quarter"],
+        ];
+        assert!(left(Crop::Region(0), rows_read(prose, 0.98)).is_empty());
+        // One the engine is unsure of goes to the model; a mark or two it is
+        // unsure of is no text worth the call.
+        let weak = &[&["Hgh-Chnge in Bnd Strt"][..], &["la Politesse du Grande"]];
+        assert_eq!(
+            left(Crop::Region(0), rows_read(weak, 0.78)),
+            vec![(0, "the engine is unsure of it")]
+        );
+        assert!(left(Crop::Region(0), rows_read(&[&["1"]], 0.4)).is_empty());
+        // A table: rows of three boxes and more, most of its rows.
+        let table = &[
+            &["Year", "Sales", "Margin"][..],
+            &["2023", "4.1", "12%"],
+            &["2024", "4.4", "13%"],
+        ];
+        assert_eq!(
+            left(Crop::Region(1), rows_read(table, 0.98)),
+            vec![(0, "it holds a table")]
+        );
+        // A region no model is sent stays the engine's, whatever it holds.
+        assert!(left(Crop::Region(7), rows_read(weak, 0.78)).is_empty());
+        // Pictures holding as much text as the page's own 1500 characters
+        // carry the page.
+        let line = "x".repeat(50);
+        let one = [line.as_str()];
+        let long: Vec<&[&str]> = (0..30).map(|_| &one[..]).collect();
+        assert_eq!(
+            left(Crop::Region(0), rows_read(&long, 0.98)),
+            vec![(0, "its pictures carry the page")]
+        );
+    }
+
+    #[test]
+    fn a_reading_left_to_the_model_is_not_laid_on_its_page() {
+        let mut doc = page_with_regions(&[UPPER, LOWER]);
+        let weak = &[&["Hgh-Chnge in Bnd Strt"][..], &["la Politesse du Grande"]];
+        let prose = &[&["Revenue rose by four percent"][..]];
+        let mut readings = vec![
+            (0, Crop::Region(0), rows_read(weak, 0.78)),
+            (0, Crop::Region(1), rows_read(prose, 0.98)),
+        ];
+        let left = leave(&doc, &mut readings);
+        assert_eq!(
+            left,
+            vec![("p0_r0".to_string(), "the engine is unsure of it")]
+        );
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].1, Crop::Region(1));
+        inject(&mut doc, &readings);
+        // The region left unread still routes to a reader.
+        assert!(!doc.pages[0].ocr_read_region(0));
+    }
+
+    #[test]
+    fn a_pictures_lettering_the_engine_is_unsure_of_is_set_aside() {
+        let doc = page_with_regions(&[UPPER, LOWER]);
+        let weak = &[&["The Thrte Pigeows,"][..], &["sgoaoene"]];
+        let prose = &[&["Revenue rose by four percent"][..]];
+        let mut readings = vec![
+            (0, Crop::Region(0), rows_read(weak, 0.78)),
+            (0, Crop::Region(1), rows_read(prose, 0.98)),
+            // A stray mark it is unsure of, however short.
+            (0, Crop::Region(2), rows_read(&[&["1"]], 0.45)),
+        ];
+        let aside = set_aside_unsure(&doc, &mut readings);
+        assert_eq!(aside, ["p0_r0", "p0_r2"]);
+        assert_eq!(readings.len(), 1);
+        assert_eq!(readings[0].1, Crop::Region(1));
+        // A whole page's reading is all the text it has, sure or not.
+        let mut whole = vec![(0, Crop::Page, rows_read(weak, 0.78))];
+        assert!(set_aside_unsure(&doc, &mut whole).is_empty());
+        // So is a region's on a page with no text of its own.
+        let bare = Document {
+            pages: vec![page(
+                Vec::new(),
+                vec![ImagePlacement {
+                    bbox: UPPER,
+                    texty: true,
+                    ppi: None,
+                    bitonal: false,
+                    grid: (1000, 1000),
+                }],
+            )],
+        };
+        let mut only = vec![(0, Crop::Region(0), rows_read(weak, 0.78))];
+        assert!(set_aside_unsure(&bare, &mut only).is_empty());
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_page_all_pixels_goes_to_the_model() {
+        let doc = crate::extract::extract_bytes(image_only_pdf()).unwrap();
+        let r = rows_read(&[&["HELLO"]], 0.99);
+        assert_eq!(
+            left_to_model(&doc, &[(0, Crop::Page, r)]),
+            vec![(0, "its page is all pixels")]
+        );
+    }
 
     #[test]
     fn a_region_the_whole_reading_did_not_read_keeps_its_own_reading() {
