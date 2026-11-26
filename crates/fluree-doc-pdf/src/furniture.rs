@@ -77,7 +77,7 @@ fn signature(text: &str) -> String {
 ///
 /// `pages` is one Vec<Line> per page, each paired with that page's height.
 pub fn detect(pages: &[(Vec<Line>, f64)]) -> Vec<BTreeMap<usize, Furniture>> {
-    detect_all(pages, &[]).0
+    detect_all(pages, &[], &[]).0
 }
 
 /// As [`detect`], also returning, per page, the lines read as a short
@@ -96,7 +96,7 @@ pub fn detect_with_exact(
     Vec<BTreeMap<usize, Furniture>>,
     Vec<std::collections::HashSet<usize>>,
 ) {
-    let (marks, _, exact) = detect_all(pages, &[]);
+    let (marks, _, exact) = detect_all(pages, &[], &[]);
     (marks, exact)
 }
 
@@ -113,12 +113,13 @@ pub fn detect_with_heads(
     pages: &[(Vec<Line>, f64)],
     bookmarks: &[(usize, String)],
     widths: &[f64],
+    drawings: &[Drawing],
 ) -> (
     Vec<BTreeMap<usize, Furniture>>,
     Vec<std::collections::HashSet<usize>>,
     Vec<std::collections::HashSet<usize>>,
 ) {
-    let (mut marks, _, mut exact) = detect_all(pages, widths);
+    let (mut marks, _, mut exact) = detect_all(pages, widths, drawings);
     let heads = section_running_heads(pages, &mut marks, &mut exact, bookmarks);
     (marks, exact, heads)
 }
@@ -145,7 +146,7 @@ const FOLIO_DISTINCT_SHARE: f64 = 0.25;
 pub fn detect_with_folios(
     pages: &[(Vec<Line>, f64)],
 ) -> (Vec<BTreeMap<usize, Furniture>>, Vec<Option<String>>) {
-    let (marks, folios, _) = detect_all(pages, &[]);
+    let (marks, folios, _) = detect_all(pages, &[], &[]);
     (marks, folios)
 }
 
@@ -157,7 +158,7 @@ pub fn detect_folio_places(
     pages: &[(Vec<Line>, f64)],
     widths: &[f64],
 ) -> Vec<(Option<String>, Option<f64>)> {
-    let (marks, folios, _) = detect_all(pages, widths);
+    let (marks, folios, _) = detect_all(pages, widths, &[]);
     folios
         .into_iter()
         .enumerate()
@@ -190,6 +191,7 @@ pub fn is_folio_line(text: &str, folio: &str, rel_y: f64, place: f64) -> bool {
 fn detect_all(
     pages: &[(Vec<Line>, f64)],
     widths: &[f64],
+    drawings: &[Drawing],
 ) -> (
     Vec<BTreeMap<usize, Furniture>>,
     Vec<Option<String>>,
@@ -354,6 +356,23 @@ fn detect_all(
                     offer_folios(&mut folio_sources, stable.len(), &stable);
                 }
             }
+            continue;
+        }
+
+        // A chart's own text, a legend's entries beside their swatches or an
+        // axis's labels at its ticks, repeats at one place on every page a
+        // template draws the chart on, as a running line does. Set in the
+        // drawing on most of its pages, it is the drawing's.
+        let in_drawing = occ
+            .iter()
+            .filter(|o| (o.2 - median).abs() < POSITION_TOLERANCE)
+            .filter(|o| {
+                drawings
+                    .get(o.0)
+                    .is_some_and(|d| in_drawing(&pages[o.0].0[o.1], &d.shapes, &d.ticks))
+            })
+            .count();
+        if in_drawing * 2 > stable {
             continue;
         }
 
@@ -1657,6 +1676,82 @@ fn watermark_shown(lines: &[Line], li: usize) -> bool {
     beside
 }
 
+/// A page's drawn shapes, its fills, strokes and traces, and its tick
+/// marks: what [`in_drawing`] reads a line against.
+#[derive(Debug, Clone, Default)]
+pub struct Drawing {
+    pub shapes: Vec<crate::geom::BBox>,
+    pub ticks: Vec<crate::geom::BBox>,
+}
+
+/// Whether a line is set in a chart's drawing: a legend's entry, with its
+/// swatch standing just before it on its line, or an axis's label, at a
+/// tick mark aligned with it.
+///
+/// Running heads and feet sit on drawn shapes too (a band behind the head,
+/// a page number in a box, a logo beside the title), so the cues are
+/// narrow:
+/// - **A swatch** is a small patch, no larger than the line's text is
+///   tall ([`SWATCH_SIZE`]) and no thinner than [`MIN_SWATCH`] of it, its
+///   middle on the line, standing alone directly before the entry, within
+///   [`SWATCH_GAP_EMS`]: not the last of a logo's letters drawn as shapes.
+/// - **A tick** is a short stroke, no longer than an em, set at the
+///   label's middle across the axis: under or over a label within its
+///   width, or beside one within its height, and within [`TICK_GAP_EMS`].
+///
+/// `shapes` are the page's fills, strokes and traces; `ticks` its tick
+/// marks.
+pub fn in_drawing(line: &Line, shapes: &[crate::geom::BBox], ticks: &[crate::geom::BBox]) -> bool {
+    let fs = f64::from(line.font_size.max(1.0));
+    let b = &line.bbox;
+    let tall = b.height().max(fs);
+    let patch = |m: &crate::geom::BBox| {
+        m.width().min(m.height()) >= MIN_SWATCH * tall
+            && m.width() <= SWATCH_SIZE * tall
+            && m.height() <= SWATCH_SIZE * tall
+    };
+    let swatch = shapes.iter().any(|m| {
+        let mid = (m.y0 + m.y1) / 2.0;
+        let gap = b.x0 - m.x1;
+        if !(patch(m) && mid >= b.y0 && mid <= b.y1 && gap >= 0.0 && gap <= SWATCH_GAP_EMS * fs) {
+            return false;
+        }
+        // A logo's letters drawn as shapes abut one another on their line:
+        // the last of them is no swatch.
+        !shapes.iter().any(|o| {
+            (o.height() - m.height()).abs() <= m.height() * 0.3
+                && o.width() >= MIN_SWATCH * tall
+                && o.x1 <= m.x0 + 0.5
+                && m.x0 - o.x1 <= m.height() * 0.5
+                && (o.y0 + o.y1) / 2.0 >= m.y0
+                && (o.y0 + o.y1) / 2.0 <= m.y1
+        })
+    });
+    let at_tick = ticks.iter().any(|t| {
+        if t.width().max(t.height()) > fs {
+            return false;
+        }
+        let (tx, ty) = ((t.x0 + t.x1) / 2.0, (t.y0 + t.y1) / 2.0);
+        let near = |g: f64| (0.0..=TICK_GAP_EMS * fs).contains(&g);
+        let across = tx >= b.x0 && tx <= b.x1 && (near(b.y0 - t.y1) || near(t.y0 - b.y1));
+        let beside = ty >= b.y0 && ty <= b.y1 && (near(t.x0 - b.x1) || near(b.x0 - t.x1));
+        across || beside
+    });
+    swatch || at_tick
+}
+
+/// A legend's swatch at most as large as its entry's text is tall, a
+/// colour patch or a series' marker; a bullet is as small, but no running
+/// line repeats a bullet's item at one place page after page.
+pub const SWATCH_SIZE: f64 = 1.0;
+/// And at least this share of it each way: a patch, not the stroke of a
+/// box's edge beside a page number.
+const MIN_SWATCH: f64 = 0.3;
+/// How far before its entry a swatch stands, in the entry's ems.
+const SWATCH_GAP_EMS: f64 = 1.0;
+/// How far an axis's label stands from its tick, in ems.
+const TICK_GAP_EMS: f64 = 1.0;
+
 fn classify(rel_y: f64, digits_vary: bool) -> Furniture {
     if digits_vary {
         return Furniture::PageNumber;
@@ -1836,6 +1931,80 @@ mod tests {
         l
     }
 
+    fn at(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
+        BBox { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn a_legends_entry_stands_beside_its_swatch() {
+        // `Buildings`, 10pt, from x 10: a 7pt colour patch 4pt before it,
+        // its middle on the line.
+        let entry = line("Buildings", 100.0);
+        assert!(in_drawing(&entry, &[at(-1.0, 102.0, 6.0, 109.0)], &[]));
+        // A patch beside the line but above it is another entry's.
+        assert!(!in_drawing(&entry, &[at(-1.0, 85.0, 6.0, 92.0)], &[]));
+        // A band behind a running head, a logo beside the title, or a box
+        // round a page number is larger than the text.
+        assert!(!in_drawing(&entry, &[at(-40.0, 95.0, 6.0, 118.0)], &[]));
+        assert!(!in_drawing(&entry, &[at(0.0, 96.0, 300.0, 116.0)], &[]));
+        // A series' line drawn as its sample, wider than the text is tall,
+        // is left to a cue of its own.
+        assert!(!in_drawing(&entry, &[at(-20.0, 106.0, 6.0, 106.0)], &[]));
+        // Text after the patch is not its entry: the patch must stand before.
+        assert!(!in_drawing(&entry, &[at(204.0, 102.0, 211.0, 109.0)], &[]));
+        // A box's edge before a page number is a stroke, not a patch.
+        assert!(!in_drawing(&entry, &[at(7.0, 100.0, 7.0, 112.0)], &[]));
+        // A logo's letters drawn as shapes, abutting, before a running line.
+        let logo = [
+            at(-22.0, 101.0, -12.0, 110.0),
+            at(-11.5, 101.0, -1.5, 110.0),
+            at(-1.0, 101.0, 6.0, 110.0),
+        ];
+        assert!(!in_drawing(&entry, &logo, &[]));
+    }
+
+    #[test]
+    fn an_axis_label_stands_at_its_tick() {
+        let mut label = line("2010", 300.0);
+        label.bbox = at(100.0, 300.0, 120.0, 310.0);
+        // A 4pt tick over the label's middle, 2pt above it.
+        assert!(in_drawing(&label, &[], &[at(110.0, 294.0, 110.0, 298.0)]));
+        // A tick beside the next label is not this one's.
+        assert!(!in_drawing(&label, &[], &[at(130.0, 294.0, 130.0, 298.0)]));
+        // A long stroke is an axis or a rule, not a tick.
+        assert!(!in_drawing(&label, &[], &[at(110.0, 280.0, 110.0, 298.0)]));
+    }
+
+    #[test]
+    fn a_charts_legend_repeated_on_every_page_is_not_running() {
+        // Twelve country pages, each drawing one chart whose legend
+        // entries stand at one place, under a running head on every page.
+        let pages = doc(12, |i| {
+            vec![
+                line("Annual report on emissions", 20.0),
+                line(&format!("Country {i}"), 60.0),
+                line("Power Industry", 105.0),
+                line("Transport", 141.0),
+                line(&format!("Body text of page {i}."), 500.0),
+            ]
+        });
+        // Each entry's 9pt swatch stands 3pt before it.
+        let drawings: Vec<Drawing> = (0..12)
+            .map(|_| Drawing {
+                shapes: vec![at(-2.0, 107.0, 7.0, 116.0), at(-2.0, 143.0, 7.0, 152.0)],
+                ticks: vec![],
+            })
+            .collect();
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &drawings);
+        for m in &marks {
+            assert!(m.contains_key(&0), "the running head runs");
+            assert!(!m.contains_key(&2) && !m.contains_key(&3), "{m:?}");
+        }
+        // Read without the drawing, the entries are taken for running heads.
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
+        assert!(marks.iter().all(|m| m.contains_key(&2)));
+    }
+
     #[test]
     fn a_running_head_naming_its_section_keeps_its_first_copy() {
         // Twelve pages; the head slot names the section the page is in:
@@ -1863,7 +2032,7 @@ mod tests {
             (9, true),
             (11, false),
         ];
-        let (marks, _, heads) = detect_with_heads(&sheet(head), &[], &[]);
+        let (marks, _, heads) = detect_with_heads(&sheet(head), &[], &[], &[]);
         for (i, first) in firsts {
             assert_eq!(heads[i].contains(&1), first, "page {i}");
             assert_eq!(marks[i].contains_key(&1), !first, "page {i}");
@@ -1871,7 +2040,7 @@ mod tests {
         // Set at the body's size, the names are told from the page by
         // their repetition alone, and left to it.
         let pages = sheet(line);
-        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()));
         assert_eq!(marks, detect(&pages));
         // Unless the outline names each where it starts.
@@ -1879,7 +2048,7 @@ mod tests {
             .into_iter()
             .map(|i| (i, name(i).to_string()))
             .collect();
-        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks, &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks, &[], &[]);
         for (i, first) in firsts {
             assert_eq!(heads[i].contains(&1), first, "page {i}");
             assert_eq!(marks[i].contains_key(&1), !first, "page {i}");
@@ -1894,7 +2063,7 @@ mod tests {
             ls.push(line(&format!("Text on page {i}."), 400.0));
             ls
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(!heads[4].contains(&1));
         assert!(heads[0].contains(&1));
         // A chapter's title over the page before has it too; an agenda's
@@ -1910,7 +2079,7 @@ mod tests {
                 ls.push(line(&format!("Text on page {i}."), 400.0));
                 ls
             });
-            let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
+            let (_, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
             assert_eq!(heads[4].contains(&1), kept, "{size}pt");
         }
         // A slot whose names each appear once is each page's own title.
@@ -1926,7 +2095,7 @@ mod tests {
                 line("Text.", 400.0),
             ]
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()));
         // A title page's title, then one running title over the rest.
         let pages = doc(9, |i| {
@@ -1942,7 +2111,7 @@ mod tests {
                 line(&format!("Text on page {i}."), 400.0),
             ]
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()));
     }
 
@@ -1982,7 +2151,7 @@ mod tests {
             };
             vec![head, line(&format!("Text on page {i}."), 400.0)]
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         for i in 0..9 {
             let first = [0, 3, 6].contains(&i);
             assert_eq!(heads[i].contains(&0), first, "page {i}");
@@ -2008,7 +2177,7 @@ mod tests {
             ls.push(line(&format!("Text on page {i}."), 400.0));
             ls
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         for i in [1, 3, 5] {
             assert_eq!(marks[i].get(&0), Some(&Furniture::Header), "page {i}");
@@ -2023,7 +2192,7 @@ mod tests {
             ls.push(line(&format!("Text on page {i}."), 400.0));
             ls
         });
-        let (marks, _, _) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(marks.iter().all(|m| m.is_empty()));
     }
 
@@ -2057,7 +2226,7 @@ mod tests {
             ls
         });
         let bookmarks = vec![(0, name(0).to_string()), (6, name(6).to_string())];
-        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks, &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &bookmarks, &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         for i in [2, 4, 8, 10] {
             assert!(marks[i].contains_key(&0), "page {i}");
@@ -2078,7 +2247,7 @@ mod tests {
                 line(&format!("Text on page {i}."), 400.0),
             ]
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         assert_eq!(marks, detect(&pages));
         // A display title of two lines, the first shared by a product's
@@ -2092,7 +2261,7 @@ mod tests {
                 line(&format!("Text on page {i}."), 400.0),
             ]
         });
-        let (marks, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
         assert_eq!(marks, detect(&pages));
     }
@@ -2136,7 +2305,7 @@ mod tests {
         let mut p2 = page(false);
         p2.extend(footer("41", false, 7.0));
         let pages = vec![(p1, 1000.0), (p2, 1000.0)];
-        let (marks, _, _) = detect_with_heads(&pages, &[], &[600.0, 600.0]);
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[600.0, 600.0], &[]);
         let n = pages[0].0.len();
         for (pi, li) in [
             (0, n - 3),
@@ -2157,7 +2326,7 @@ mod tests {
             .collect();
         assert_eq!(folios, [Some("40".into()), Some("41".into())]);
         // Without the pages' widths, no mirror is seen.
-        let (marks, _, _) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(!marks[1].contains_key(&0));
     }
 
@@ -2180,7 +2349,7 @@ mod tests {
             }
             ls
         });
-        let (marks, _, _) = detect_with_heads(&pages, &[], &[]);
+        let (marks, _, _) = detect_with_heads(&pages, &[], &[], &[]);
         assert_eq!(marks[0].get(&1), None, "the first page keeps its title");
         assert_eq!(marks[1].get(&1), Some(&Furniture::Header));
         assert_eq!(marks[2].get(&1), Some(&Furniture::Header));
@@ -2210,7 +2379,7 @@ mod tests {
             ls.push(line(&format!("Text on page {i}."), 400.0));
             ls
         });
-        let (_, _, heads) = detect_with_heads(&pages, &[], &[]);
+        let (_, _, heads) = detect_with_heads(&pages, &[], &[], &[]);
         assert!(heads.iter().all(|h| h.is_empty()), "{heads:?}");
     }
 
@@ -2337,7 +2506,7 @@ mod tests {
                 line(&format!("Body text of page {i}"), 400.0),
             ]
         });
-        let (marks, exact, heads) = detect_with_heads(&pages, &[], &[]);
+        let (marks, exact, heads) = detect_with_heads(&pages, &[], &[], &[]);
         for (i, kept) in [true, true, false, true, false, false, false, false]
             .into_iter()
             .enumerate()

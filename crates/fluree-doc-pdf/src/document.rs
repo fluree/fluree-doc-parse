@@ -4397,8 +4397,24 @@ pub fn analyze_with(raw: &mut RawDoc, outline: &[OutlineItem], opts: &AnalyzeOpt
         .filter_map(|it| it.page.map(|pi| (pi, it.title.clone())))
         .collect();
     let widths: Vec<f64> = raw.pages.iter().map(|p| p.width).collect();
+    // Each page's drawn shapes, by which a chart's legend and axis labels
+    // are told from running lines (see [`furniture::in_drawing`]).
+    let drawings: Vec<furniture::Drawing> = raw
+        .pages
+        .iter()
+        .map(|p| furniture::Drawing {
+            shapes: p
+                .fills
+                .iter()
+                .map(|f| f.bbox)
+                .chain(p.rules.iter().map(|r| r.bbox))
+                .chain(p.traces.iter().map(|t| t.bbox))
+                .collect(),
+            ticks: p.ticks.iter().map(|t| t.bbox).collect(),
+        })
+        .collect();
     let (mut marks, exact, kept_heads) = timed(&mut timings.furniture, || {
-        furniture::detect_with_heads(&flat_lines, &bookmarks, &widths)
+        furniture::detect_with_heads(&flat_lines, &bookmarks, &widths, &drawings)
     });
     // The texts kept as a section's heading on their page, though the same
     // words run as furniture on the pages after: never scrubbed there.
