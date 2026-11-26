@@ -1,0 +1,29 @@
+{
+  "document": {
+    "file": "ti-lm358.pdf",
+    "url": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+    "sha256": "8277dff7b89138c63b3582d37f378065a1dea3cae5ed1e2926ddc2779eb7e3a2",
+    "about": "TI LM358 data sheet. A table of electrical characteristics runs over pages, its section's title restated with `(continued)`; the package option addendum sets its title over each of its pages."
+  },
+  "notes": [
+    "#395: the restated titles opened sections of their own."
+  ],
+  "checks": [
+    {
+      "id": "characteristics-continue",
+      "found": "2026-11-26",
+      "issue": "#395: the restated title opened a section.",
+      "no_section": "5.5 Electrical Characteristics: LM358B and LM358BA (continued)"
+    },
+    {
+      "id": "addendum-once",
+      "found": "2026-11-26",
+      "issue": "#395: `PACKAGE OPTION ADDENDUM`, set over each of its pages, opened a section on each.",
+      "element": {
+        "type": "doco:SectionTitle",
+        "text": "PACKAGE OPTION ADDENDUM"
+      },
+      "count": 1
+    }
+  ]
+}

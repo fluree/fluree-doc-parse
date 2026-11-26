@@ -1,0 +1,26 @@
+{
+  "document": {
+    "file": "fed-mpr-20240705.pdf",
+    "url": "https://www.federalreserve.gov/monetarypolicy/files/20240705_mprfullreport.pdf",
+    "sha256": "6cfad88dd4ee058a01db2012bf009c18da45e5306301edf3ff5d3b486644d09d",
+    "about": "Federal Reserve Monetary Policy Report, July 2024. Page 29 sets a paragraph in the left column beside Figure 18, whose title, axis years and source note stand level with the paragraph's lines in the right column."
+  },
+  "notes": [
+    "2026-11-26 (#398): the paragraph was read in three pieces, cut by the chart's axis years and source note set level with its lines.",
+    "2026-11-26: a compound broken at its own hyphen at a line's end (`longer-` over `run`) was closed up, though the report sets `longer-run` whole elsewhere."
+  ],
+  "checks": [
+    {
+      "id": "paragraph-beside-chart-whole",
+      "found": "2026-11-26",
+      "issue": "#398: the paragraph's last lines came after the chart's axis and its source.",
+      "text": "drawing down their liquid assets, such as checking accounts, and relying more on credit."
+    },
+    {
+      "id": "compound-hyphen-kept-at-break",
+      "found": "2026-11-26",
+      "issue": "`longer-run` read `longerrun` where a line ended on its hyphen.",
+      "text": "corresponding to a 2 percent longer-run inflation rate"
+    }
+  ]
+}

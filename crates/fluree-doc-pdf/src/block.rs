@@ -91,6 +91,19 @@ pub struct Block {
     /// paragraph into three. List detection consumes this later to build
     /// label/body pairs.
     pub marker: Option<String>,
+    /// Where the marker stands, when it stands apart from the block's text:
+    /// a drawn bullet or box, or a glyph set beside the first line. Its box
+    /// then starts at the text. `None` where the marker is part of the text
+    /// (a dash or bullet in the run, a count joined to it), and the box
+    /// starts at the marker, or where there is none.
+    pub marker_x: Option<f64>,
+    /// Its lines were stacked one per line by hand, an address or a contact
+    /// block (see [`split_stacked_lines`]): its text keeps their breaks.
+    pub stacked: bool,
+    /// A field set on a line of its own, `Klantnummer: 6669263`, parted
+    /// from the fields around it (see [`split_fields`]): a label and its
+    /// value, no section's title.
+    pub field: bool,
 }
 
 impl Block {
@@ -98,6 +111,14 @@ impl Block {
     /// paragraph wrapped across lines is one sentence flow, and NER must not
     /// see a spurious boundary mid-sentence.
     pub fn text(&self) -> String {
+        if self.stacked {
+            return self
+                .lines
+                .iter()
+                .map(|l| l.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         let mut out = String::new();
         let mut prev: Option<&Line> = None;
         for l in &self.lines {
@@ -122,10 +143,17 @@ impl Block {
                         .next()
                         .is_some_and(crate::line::wraps_anywhere);
                 if let Some(stem) = out.strip_suffix('-') {
+                    // A compound the document sets whole elsewhere keeps
+                    // its hyphen (`treatment-` over `emergent`).
+                    let compound = prev.is_some_and(|p| {
+                        !p.compounds.is_empty()
+                            && p.compounds.contains(&crate::line::opening_letters(&l.text))
+                    });
                     match HyphenJoin::of(stem, &l.text) {
-                        HyphenJoin::Word => {
+                        HyphenJoin::Word if !compound => {
                             out.pop();
                         }
+                        HyphenJoin::Word => {}
                         HyphenJoin::Hyphen => {}
                         HyphenJoin::Dash => out.push(' '),
                     }
@@ -390,6 +418,15 @@ fn says_something(c: char) -> bool {
         || (('\u{2200}'..='\u{22FF}').contains(&c) && c != '\u{2212}' && !is_bullet(c))
 }
 
+/// A currency sign: the unit a figure is counted in, never a list's bullet.
+fn is_currency(c: char) -> bool {
+    matches!(
+        c,
+        '$' | '\u{00A2}'..='\u{00A5}' | '\u{20A0}'..='\u{20CF}' | '\u{FE69}' | '\u{FF04}'
+            | '\u{FFE0}' | '\u{FFE1}' | '\u{FFE5}' | '\u{FFE6}'
+    )
+}
+
 /// True for a short line that is a bullet, list number or footnote reference
 /// rather than content.
 ///
@@ -415,6 +452,11 @@ fn is_marker(l: &Line, before: Option<&Line>, after: Option<&Line>, left_edge: f
     // A registered or trade mark sign standing alone is a word's, set
     // beside a display title it did not join: never a bullet.
     if l.text.split_whitespace().all(crate::line::is_sign) {
+        return false;
+    }
+    // Nor is a currency sign: it is the unit of the figure beside it,
+    // set apart in a column of its own (`Totaalbedrag  €  22,50`).
+    if l.text.chars().any(is_currency) {
         return false;
     }
     if !marker_shaped(&l.text) {
@@ -504,14 +546,17 @@ fn band_of(l: &Line, bands: &[BBox]) -> Option<usize> {
 const CHECKBOX_REACH: f64 = 3.0;
 
 /// The checkbox introducing this line, if one sits immediately to its left on
-/// the same visual row.
-fn checkbox_for(l: &Line, boxes: &[BBox]) -> bool {
+/// the same visual row: where it starts.
+fn checkbox_for(l: &Line, boxes: &[BBox]) -> Option<f64> {
     let fs = (l.font_size as f64).max(1.0);
-    boxes.iter().any(|b| {
-        let vertical = b.y1 > l.bbox.y0 && b.y0 < l.bbox.y1;
-        let gap = l.bbox.x0 - b.x1;
-        vertical && gap > -fs && gap < fs * CHECKBOX_REACH
-    })
+    boxes
+        .iter()
+        .find(|b| {
+            let vertical = b.y1 > l.bbox.y0 && b.y0 < l.bbox.y1;
+            let gap = l.bbox.x0 - b.x1;
+            vertical && gap > -fs && gap < fs * CHECKBOX_REACH
+        })
+        .map(|b| b.x0)
 }
 
 /// The centers of the inked characters an OCR reading added to a page,
@@ -541,15 +586,17 @@ fn read_by_ocr(l: &Line, ocr: &[(f64, f64)]) -> bool {
         .any(|c| l.bbox.contains(c.0, c.1))
 }
 
-/// Is a drawn bullet set beside this line: level with it, and just left of
-/// where its text starts?
-fn dot_for(l: &Line, dots: &[BBox]) -> bool {
+/// Where a drawn bullet set beside this line starts: level with it, and just
+/// left of where its text starts.
+fn dot_for(l: &Line, dots: &[BBox]) -> Option<f64> {
     let fs = (l.font_size as f64).max(1.0);
-    dots.iter().any(|d| {
-        let middle = (d.y0 + d.y1) * 0.5;
-        let gap = l.bbox.x0 - d.x1;
-        middle > l.bbox.y0 && middle < l.bbox.y1 && gap > 0.0 && gap < fs * DOT_REACH
-    })
+    dots.iter()
+        .find(|d| {
+            let middle = (d.y0 + d.y1) * 0.5;
+            let gap = l.bbox.x0 - d.x1;
+            middle > l.bbox.y0 && middle < l.bbox.y1 && gap > 0.0 && gap < fs * DOT_REACH
+        })
+        .map(|d| d.x0)
 }
 
 /// How far apart, in points, the marks of one dash-led list may start.
@@ -581,7 +628,7 @@ pub fn marking_dots(lines: &[Line], dots: &[BBox]) -> Vec<BBox> {
         .filter_map(|d| {
             lines
                 .iter()
-                .position(|l| dot_for(l, std::slice::from_ref(d)))
+                .position(|l| dot_for(l, std::slice::from_ref(d)).is_some())
                 .map(|i| (*d, i))
         })
         .filter(|(d, i)| !crowded(d, (lines[*i].font_size as f64).max(1.0)))
@@ -792,6 +839,9 @@ pub fn assemble_in_measure(
         bold: false,
         gap_above: None,
         marker: None,
+        marker_x: None,
+        stacked: false,
+        field: false,
         bbox,
         lines: ticks,
     };
@@ -901,11 +951,11 @@ fn assemble_lines(
     // bullet does. A producer that draws its bullets leaves no bullet in the
     // text, and its items split only where their spacing happened to read
     // as a paragraph's.
-    let ticked: Vec<bool> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
-    let dotted: Vec<bool> = lines
+    let ticked: Vec<Option<f64>> = lines.iter().map(|l| checkbox_for(l, checkboxes)).collect();
+    let dotted: Vec<Option<f64>> = lines
         .iter()
         .zip(&ticked)
-        .map(|(l, &t)| !t && dot_for(l, dots))
+        .map(|(l, t)| t.is_none().then(|| dot_for(l, dots)).flatten())
         .collect();
     // Lines that open a dash- or arrow-led item: another line near it opens
     // with the same mark at the same place. A lone line so opening is a
@@ -962,21 +1012,22 @@ fn assemble_lines(
         .collect();
     let band: Vec<Option<usize>> = lines.iter().map(|l| band_of(l, bands)).collect();
     let read: Vec<bool> = lines.iter().map(|l| read_by_ocr(l, ocr)).collect();
-    let mut marked: Vec<(usize, String)> = Vec::new();
+    // Each block's marker, and where a drawn one stands.
+    let mut marked: Vec<(usize, String, Option<f64>)> = Vec::new();
     let mut start = 0;
     let mark = |i: usize| {
-        if ticked[i] {
-            Some(CHECKBOX_MARKER.to_string())
-        } else if dotted[i] {
-            Some(BULLET_MARKER.to_string())
+        if let Some(x) = ticked[i] {
+            Some((CHECKBOX_MARKER.to_string(), Some(x)))
+        } else if let Some(x) = dotted[i] {
+            Some((BULLET_MARKER.to_string(), Some(x)))
         } else {
-            runs[i].map(String::from)
+            runs[i].map(|c| (String::from(c), None))
         }
     };
     for (i, l) in lines.iter().enumerate() {
         if cur.is_empty() {
-            if let Some(m) = mark(i) {
-                marked.push((blocks.len(), m));
+            if let Some((m, x)) = mark(i) {
+                marked.push((blocks.len(), m, x));
             }
             start = i;
             cur.push(l.clone());
@@ -997,8 +1048,8 @@ fn assemble_lines(
         } else {
             let b = with_mark(build(std::mem::take(&mut cur)), &marked, blocks.len());
             blocks.extend(finish(b, &edge));
-            if let Some(m) = mark(i) {
-                marked.push((blocks.len(), m));
+            if let Some((m, x)) = mark(i) {
+                marked.push((blocks.len(), m, x));
             }
             start = i;
             cur.push(l.clone());
@@ -1008,9 +1059,10 @@ fn assemble_lines(
         let b = with_mark(build(cur), &marked, blocks.len());
         blocks.extend(finish(b, &edge));
     }
-    for (i, m) in marked {
+    for (i, m, x) in marked {
         if let Some(b) = blocks.get_mut(i) {
             b.marker = Some(m);
+            b.marker_x = x;
         }
     }
 
@@ -1153,6 +1205,7 @@ fn assemble_lines(
             });
             let b = &mut blocks[i];
             b.marker = Some(m.text.clone());
+            b.marker_x = Some(m.bbox.x0);
             if counts_on && level && !raised_mark {
                 // Set on the item's first line, as printed, and in its size:
                 // a line of its own would count as text of the marker's size
@@ -1186,7 +1239,7 @@ const MARKER_LEVEL: f64 = 0.3;
 /// or a roman numeral (`iv.`, `(III)`); `i`, `v` and `x` alone may be
 /// either a letter or a roman numeral. None for anything else: a year, a
 /// fraction, a dimension, a bullet.
-fn count_values(text: &str) -> Vec<(u8, u32)> {
+pub(crate) fn count_values(text: &str) -> Vec<(u8, u32)> {
     let t = text.trim().trim_matches(['(', ')', '[', ']', '.', ':']);
     let roman = match t.to_ascii_lowercase().as_str() {
         "i" => Some((2, 1)),
@@ -1265,6 +1318,10 @@ fn marker_beside(m: &Line, l: &Line) -> bool {
 /// above it, which a line with a marker of its own may not.
 /// Size ratio from which text is display type beside the text next to it.
 const DISPLAY_RATIO: f64 = 2.0;
+
+/// Size ratio from which a side label is set a step over the text beside
+/// it: a form's `Third Party` at 10pt over `Designee`, 8pt text beside.
+const STACK_SIZE_RATIO: f64 = 1.2;
 
 /// Most blocks of another column that may stand between two stacked lines
 /// of a display title in reading order.
@@ -1662,11 +1719,12 @@ fn rejoin_broken_items(blocks: Vec<Block>, markers: &[Line]) -> Vec<Block> {
         });
         if joins {
             let p = out.pop().expect("an item to join");
-            let (marker, gap_above) = (p.marker.clone(), p.gap_above);
+            let (marker, marker_x, gap_above) = (p.marker.clone(), p.marker_x, p.gap_above);
             let mut lines = p.lines;
             lines.extend(b.lines);
             let mut joined = build(lines);
             joined.marker = marker;
+            joined.marker_x = marker_x;
             joined.gap_above = gap_above;
             out.push(joined);
         } else {
@@ -1895,9 +1953,10 @@ fn count_prefix(text: &str) -> Option<(u32, &str)> {
 /// typed bullet leads. Its wrapped lines are its own: `Distributed file
 /// systems, including` over `Hadoop and Ceph`, beside a drawn dot, was cut
 /// in two as a list of entries set one per line.
-fn with_mark(mut b: Block, marked: &[(usize, String)], at: usize) -> Block {
-    if let Some((_, m)) = marked.last().filter(|(i, _)| *i == at) {
+fn with_mark(mut b: Block, marked: &[(usize, String, Option<f64>)], at: usize) -> Block {
+    if let Some((_, m, x)) = marked.last().filter(|(i, _, _)| *i == at) {
         b.marker = Some(m.clone());
+        b.marker_x = *x;
     }
     b
 }
@@ -1911,8 +1970,205 @@ fn finish(b: Block, edge: &Edge) -> Vec<Block> {
         .flat_map(split_counted)
         .flat_map(|b| split_ended(b, edge))
         .flat_map(|b| split_entries(b, edge))
+        .flat_map(split_fields)
+        .flat_map(|b| split_stacked_lines(b, edge))
         .flat_map(|b| split_stacked_heads(b, edge))
         .collect()
+}
+
+/// Most words in a field's label, before its colon.
+const FIELD_LABEL_WORDS: usize = 4;
+
+/// Does `text` open with a field's label, `Klantnummer:` or `Ust-IdNr.:`:
+/// a few words from a capital, ending on a colon set after a letter or a
+/// full stop, with its value after it? A time (`10:30`) sets its colon
+/// after a digit, a web address (`https://…`) its colon before two
+/// slashes; a sentence carried onto the line (`subgrouped by age:`) opens
+/// in lower case, and a reference's volume (`35(December):`) or an entry of
+/// a list of abbreviations run on from the line above (`rate; IL:`) holds
+/// brackets or a semicolon.
+fn opens_field(text: &str) -> bool {
+    let t = text.trim_start();
+    let Some(at) = t.find(':') else {
+        return false;
+    };
+    let (label, rest) = (&t[..at], &t[at + 1..]);
+    label.split_whitespace().count() <= FIELD_LABEL_WORDS
+        && label.chars().next().is_some_and(char::is_uppercase)
+        && !label.contains([';', ',', '(', ')'])
+        && label
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphabetic() || c == '.')
+        && !rest.starts_with("//")
+        && !rest.trim().is_empty()
+}
+
+/// Part a block of fields set one per line, `Factuurnummer: 993548900`
+/// over `Klantnummer: 6669263`, before each line that opens with a field's
+/// label: one block per field. The block's first line opens with a label
+/// too, and two lines or more do. A value that wraps onto the next line,
+/// which opens with no label, stays with its field.
+fn split_fields(b: Block) -> Vec<Block> {
+    if b.lines.len() < 2 || b.marker.is_some() || !opens_field(&b.lines[0].text) {
+        return vec![b];
+    }
+    // The line before a field ends one: not on a comma, a semicolon, a
+    // hyphen or a word its phrase runs on from.
+    let ends_open = |l: &Line| {
+        let t = l.text.trim_end();
+        t.ends_with([',', ';', '-', '\u{AD}'])
+            || t.split_whitespace()
+                .next_back()
+                .is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()))
+    };
+    let starts: Vec<usize> = (1..b.lines.len())
+        .filter(|&i| opens_field(&b.lines[i].text) && !ends_open(&b.lines[i - 1]))
+        .collect();
+    if starts.is_empty() {
+        return vec![b];
+    }
+    let Block {
+        lines, gap_above, ..
+    } = b;
+    let mut out: Vec<Block> = Vec::new();
+    let mut cur: Vec<Line> = Vec::new();
+    for (i, l) in lines.into_iter().enumerate() {
+        if starts.contains(&i) {
+            out.push(build(std::mem::take(&mut cur)));
+        }
+        cur.push(l);
+    }
+    out.push(build(cur));
+    out[0].gap_above = gap_above;
+    for b in &mut out {
+        b.field = true;
+    }
+    out
+}
+
+/// Most words in a line of a block of stacked lines: an address's street,
+/// a contact's number.
+const STACKED_WORDS: usize = 5;
+
+/// Does `text` open with a postcode and go on with its town: four to six
+/// figures, alone or with a short group of letters after them (`1025 RX
+/// Amsterdam`, `88045 Friedrichshafen`, `69100 VILLEURBANNE`)?
+fn postcode_line(text: &str) -> bool {
+    let mut words = text.split_whitespace();
+    let first = words.next().unwrap_or("");
+    (4..=6).contains(&first.len())
+        && first.chars().all(|c| c.is_ascii_digit())
+        && words
+            .next()
+            .is_some_and(|w| w.chars().next().is_some_and(char::is_alphabetic))
+}
+
+/// Fewest digits in a telephone number.
+const PHONE_DIGITS: usize = 6;
+
+/// Is `text` a telephone or fax line, whatever word leads it (`fon (555)
+/// 23 78 -0`)? Six digits or more, and half its characters other than
+/// spaces: a wrapped line of prose holding a figure (`of 1,234,567 units`)
+/// is mostly words.
+fn phone_line(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let digits = chars.iter().filter(|c| c.is_ascii_digit()).count();
+    digits >= PHONE_DIGITS && digits * 2 >= chars.len()
+}
+
+/// Mark a block of short lines stacked one per line, an address or a
+/// contact block (`Pino Bluebird` over `Sessamestreet 32` over `1025 RX
+/// Amsterdam`), to keep its line breaks: one paragraph, its lines not
+/// reflowed into one. Every line says a few words, all
+/// set at one left edge and at the body's size, not all bold (a title
+/// broken over lines), and each line after the first opens a new entry: a
+/// capital, a figure, or an address of its own (`www.…`, an e-mail, a
+/// telephone number). Nothing runs on across a break: no line ends on a
+/// hyphen, a comma, a dash set closed, a web address broken at a slash
+/// (`http://dx.doi.org/10.1016/`), or a word its phrase goes on from
+/// (`… of`). Prose set
+/// in a narrow measure runs on in lower case from line to line, and stays
+/// whole.
+fn split_stacked_lines(b: Block, edge: &Edge) -> Vec<Block> {
+    if b.lines.len() < 2 || b.marker.is_some() {
+        return vec![b];
+    }
+    let fs = (b.font_size as f64).max(1.0);
+    let left = b.lines.iter().map(|l| l.bbox.x0).fold(f64::MAX, f64::min);
+    let last = b.lines.len() - 1;
+    let set = b.lines.iter().enumerate().all(|(i, l)| {
+        l.bbox.x0 - left <= fs
+            && (l.font_size as f64) < edge.body * DISPLAY_LINE_RATIO
+            && l.text.split_whitespace().count() <= STACKED_WORDS
+            && (i == last
+                || !l
+                    .text
+                    .trim_end()
+                    .ends_with(['-', '\u{AD}', ',', '/', '—', '–']))
+    }) && !b.lines.iter().all(|l| l.bold);
+    let opens_entry = |l: &Line| {
+        let first = l.text.split_whitespace().next().unwrap_or("");
+        let lower = first.to_ascii_lowercase();
+        opens_capital(l)
+            || first.chars().next().is_some_and(|c| c.is_ascii_digit())
+            || first.contains('@')
+            || lower.starts_with("www.")
+            || lower.starts_with("http")
+            || (first.starts_with(['+', '('])
+                && first[1..]
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_digit()))
+            || phone_line(&l.text)
+    };
+    let runs_on = |l: &Line| {
+        l.text
+            .split_whitespace()
+            .next_back()
+            .is_some_and(|w| RUNS_ON.contains(&w.to_lowercase().as_str()))
+    };
+    // A bracket opened on a line and not closed there runs on into the
+    // next: `(EIC m/z` over `75.0553)`.
+    let open_bracket = |l: &Line| {
+        let opened = l.text.chars().filter(|c| matches!(c, '(' | '[')).count();
+        let closed = l.text.chars().filter(|c| matches!(c, ')' | ']')).count();
+        opened > closed
+    };
+    let ended = b
+        .lines
+        .windows(2)
+        .all(|w| opens_entry(&w[1]) && !runs_on(&w[0]) && !open_bracket(&w[0]));
+    // A break is plainly made by hand where the next line's first word
+    // would have fitted on the line before it, within the block's widest
+    // line (`Weena 664` over `3012 CN Rotterdam`), or where the next line
+    // is an entry no wrap makes: a field, an e-mail or web address, a
+    // telephone number, a postcode and its town. Where neither shows, the
+    // phrase may have wrapped in a narrow box (`Lighting` over `Load`,
+    // `Private and State-Owned` over `Companies`). A block of two lines
+    // needs its break made by hand, a longer one at least half of them.
+    let widest = b.lines.iter().map(|l| l.bbox.x1).fold(f64::MIN, f64::max);
+    let by_hand = |prev: &Line, next: &Line| {
+        let first = next.text.split_whitespace().next().unwrap_or("");
+        let lower = first.to_ascii_lowercase();
+        widest - prev.bbox.x1 >= first_word_width(next)
+            || opens_field(&next.text)
+            || first.contains('@')
+            || lower.starts_with("www.")
+            || lower.starts_with("http")
+            || phone_line(&next.text)
+            || postcode_line(&next.text)
+    };
+    let breaks = b.lines.len() - 1;
+    let made = b.lines.windows(2).filter(|w| by_hand(&w[0], &w[1])).count();
+    let deliberate = if breaks == 1 {
+        made == 1
+    } else {
+        made * 2 >= breaks
+    };
+    let mut b = b;
+    b.stacked = set && ended && deliberate;
+    vec![b]
 }
 
 /// Part a block before each line its paragraph was ended by hand ahead of;
@@ -1940,6 +2196,7 @@ fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
     let Block {
         lines,
         marker,
+        marker_x,
         gap_above,
         ..
     } = b;
@@ -1953,6 +2210,7 @@ fn split_ended(b: Block, edge: &Edge) -> Vec<Block> {
     }
     out.push(build(cur));
     out[0].marker = marker;
+    out[0].marker_x = marker_x;
     out[0].gap_above = gap_above;
     out
 }
@@ -2311,6 +2569,7 @@ fn split_counted(b: Block) -> Vec<Block> {
     let Block {
         lines,
         marker,
+        marker_x,
         gap_above,
         ..
     } = b;
@@ -2339,6 +2598,7 @@ fn split_counted(b: Block) -> Vec<Block> {
     out.push(piece);
     if out[0].marker.is_none() {
         out[0].marker = marker;
+        out[0].marker_x = marker_x;
     }
     out[0].gap_above = gap_above;
     out
@@ -2419,6 +2679,7 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     let Block {
         lines,
         marker,
+        marker_x,
         gap_above,
         ..
     } = b;
@@ -2438,6 +2699,7 @@ pub fn split_hard_breaks(b: Block) -> Vec<Block> {
     }
     if out[0].marker.is_none() {
         out[0].marker = marker;
+        out[0].marker_x = marker_x;
     }
     out[0].gap_above = gap_above;
     out
@@ -2788,6 +3050,110 @@ const MIN_SIDE_HEAD_SHARE: f64 = 0.6;
 ///
 /// `tables` are the page's tables, which leave the prose before blocks
 /// form: a head beside a table is level with the table's top.
+/// Most words on each line of a side label stacked over two.
+const MAX_SIDE_LABEL_WORDS: usize = 3;
+
+/// Join a side label's two lines read apart: `Sign` over `Here` at 12pt in
+/// a form's margin, beside its 6.9pt declaration. Reading the page in
+/// cells, the label's lines can fall in two, each a block, and each came
+/// out a heading of its own. One-line blocks of a few words of letters, at
+/// one size and one left edge, one under the other at their leading, set a
+/// step over the text beside them ([`STACK_SIZE_RATIO`]), are one label, in
+/// the first's place: `Acceptable` over `Means of` over `Compliance` in a
+/// regulation's margin. An article's number under it (`1410(1)`) is no
+/// line of the label. A form's stacked labels (`Name` over
+/// `Address`) are set at their values' size; a division's label over its
+/// title (`Part 2` over `Planning`) stays its own.
+pub fn join_side_labels(mut columns: Vec<Vec<Block>>) -> Vec<Vec<Block>> {
+    let at: Vec<(usize, usize)> = columns
+        .iter()
+        .enumerate()
+        .flat_map(|(c, col)| (0..col.len()).map(move |k| (c, k)))
+        .collect();
+    // Whether text stands beside the block on its row, set a step smaller
+    // than it, or not.
+    let beside = |cols: &Vec<Vec<Block>>, p: (usize, usize), smaller: bool| {
+        let b = &cols[p.0][p.1];
+        let fs = b.font_size as f64;
+        at.iter().any(|&q| {
+            let o = &cols[q.0][q.1];
+            q != p
+                && o.bbox.x0 >= b.bbox.x1
+                && o.bbox.y1.min(b.bbox.y1) > o.bbox.y0.max(b.bbox.y0)
+                && (o.font_size as f64 * STACK_SIZE_RATIO <= fs) == smaller
+        })
+    };
+    // A one-line block of a few words, of letters, set over the page's
+    // text, with nothing as large beside it on its row. A drawing's labels
+    // (`Dimmer` over `Load Side`) are set at the text's size or under it.
+    let body = body_size(columns.iter().flatten().flat_map(|b| &b.lines));
+    let label = |cols: &Vec<Vec<Block>>, p: (usize, usize)| {
+        let b = &cols[p.0][p.1];
+        let t = b.text();
+        b.lines.len() == 1
+            && b.font_size as f64 > body * (1.0 + FONT_SIZE_TOLERANCE)
+            && b.marker.is_none()
+            && t.split_whitespace().count() <= MAX_SIDE_LABEL_WORDS
+            && !t.chars().any(|c| c.is_ascii_digit())
+            && t.chars().filter(|c| c.is_alphabetic()).count() >= 2
+            && !beside(cols, p, false)
+    };
+    // Each label line's next: the label line under it.
+    let mut next: Vec<((usize, usize), (usize, usize))> = Vec::new();
+    for &p in &at {
+        let a = &columns[p.0][p.1];
+        if !label(&columns, p) || crate::heading::division_label(&a.text()) {
+            continue;
+        }
+        let size = (a.font_size as f64).max(1.0);
+        let under = at.iter().copied().find(|&q| {
+            let b = &columns[q.0][q.1];
+            let gap = b.bbox.y0 - a.bbox.y1;
+            q != p
+                && (b.font_size - a.font_size).abs() as f64 <= size * FONT_SIZE_TOLERANCE
+                && b.bold == a.bold
+                && (b.bbox.x0 - a.bbox.x0).abs() <= size * 0.5
+                && gap > -size * 0.2
+                && gap <= size * 0.75
+        });
+        if let Some(q) = under.filter(|&q| label(&columns, q)) {
+            if !next.iter().any(|&(_, y)| y == q) {
+                next.push((p, q));
+            }
+        }
+    }
+    // A label is a chain of such lines, joined into its first, where smaller
+    // text stands beside one of them.
+    let mut gone: Vec<(usize, usize)> = Vec::new();
+    let heads: Vec<(usize, usize)> = next
+        .iter()
+        .map(|&(p, _)| p)
+        .filter(|p| !next.iter().any(|&(_, q)| q == *p))
+        .collect();
+    for head in heads {
+        let mut chain = vec![head];
+        while let Some(&(_, q)) = next.iter().find(|&&(p, _)| Some(&p) == chain.last()) {
+            chain.push(q);
+        }
+        if !chain.iter().any(|&p| beside(&columns, p, true)) {
+            continue;
+        }
+        for &q in &chain[1..] {
+            let b = columns[q.0][q.1].clone();
+            let a = &mut columns[head.0][head.1];
+            a.lines.extend(b.lines);
+            a.bbox = a.bbox.union(&b.bbox);
+            gone.push(q);
+        }
+    }
+    gone.sort_unstable_by(|x, y| y.cmp(x));
+    gone.dedup();
+    for (c, k) in gone {
+        columns[c].remove(k);
+    }
+    columns
+}
+
 pub fn read_side_heads(columns: Vec<Vec<Block>>, tables: &[BBox]) -> Vec<Vec<Block>> {
     let mut out: Vec<Vec<Block>> = Vec::with_capacity(columns.len());
     let mut columns = columns.into_iter().peekable();
@@ -2889,11 +3255,13 @@ pub fn split_structural_prefix(b: Block) -> Vec<Block> {
         return vec![b];
     }
     let marker = b.marker.clone();
+    let marker_x = b.marker_x;
     let gap_above = b.gap_above;
     let mut lines = b.lines;
     let tail = lines.split_off(1);
     let mut prefix = build(lines);
     prefix.marker = marker;
+    prefix.marker_x = marker_x;
     prefix.gap_above = gap_above;
     let mut remainder = build(tail);
     let gap = (remainder.bbox.y0 - prefix.bbox.y1) / remainder.font_size.max(1.0) as f64;
@@ -2920,12 +3288,63 @@ pub(crate) fn build(lines: Vec<Line>) -> Block {
         gap_above: None,
         lines,
         marker: None,
+        marker_x: None,
+        stacked: false,
+        field: false,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_side_labels_lines_read_apart_are_one_label() {
+        // `Sign` over `Here` at 12pt in the margin, each beside 7pt text,
+        // read in two cells; and a drawing's labels at the text's size.
+        let b = |text: &str, x: f64, y: f64, fs: f32| {
+            let mut line = l(text, x, y, fs);
+            line.bbox.x1 = x + text.len() as f64 * fs as f64 * 0.5;
+            build(vec![line])
+        };
+        let columns = vec![
+            vec![
+                b("Sign", 36.0, 100.0, 12.0),
+                b("Under penalties of perjury", 94.0, 101.0, 7.0),
+            ],
+            vec![
+                b("Here", 36.0, 112.0, 12.0),
+                b("they are true and complete", 94.0, 110.0, 7.0),
+                b("Body text runs on here", 94.0, 200.0, 7.0),
+                b("Body text runs on here", 94.0, 210.0, 7.0),
+            ],
+        ];
+        let out = join_side_labels(columns);
+        let texts: Vec<String> = out.iter().flatten().map(|b| b.text()).collect();
+        assert!(texts.iter().any(|t| t == "Sign Here"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "Here"), "{texts:?}");
+        // A clause's number under the label is no line of it.
+        let columns = vec![vec![
+            b("Means of", 36.0, 100.0, 12.0),
+            b("text beside it", 94.0, 101.0, 7.0),
+            b("Compliance", 36.0, 112.0, 12.0),
+            b("1410(1)", 36.0, 124.0, 12.0),
+            b("more text", 94.0, 125.0, 7.0),
+            b("Body text runs on here", 94.0, 200.0, 7.0),
+            b("Body text runs on here", 94.0, 210.0, 7.0),
+            b("Body text runs on here", 94.0, 220.0, 7.0),
+        ]];
+        let texts: Vec<String> = join_side_labels(columns)
+            .iter()
+            .flatten()
+            .map(|b| b.text())
+            .collect();
+        assert!(
+            texts.iter().any(|t| t == "Means of Compliance"),
+            "{texts:?}"
+        );
+        assert!(texts.iter().any(|t| t == "1410(1)"), "{texts:?}");
+    }
 
     fn l(text: &str, x: f64, y: f64, fs: f32) -> Line {
         Line {
@@ -2942,8 +3361,106 @@ mod tests {
             font_size: fs,
             bold: false,
             opens_with_script: false,
+            italic: false,
+            x_height: None,
+            compounds: Vec::new(),
             opens_bold: false,
         }
+    }
+
+    #[test]
+    fn a_break_at_a_compounds_own_hyphen_keeps_it() {
+        let mut first = l("The most frequent serious treatment-", 36.0, 100.0, 10.0);
+        let next = l("emergent adverse events were mild", 36.0, 112.0, 10.0);
+        let joined = |a: &Line| {
+            let blocks = assemble(&[a.clone(), next.clone()], 1.2);
+            assert_eq!(blocks.len(), 1);
+            blocks[0].text()
+        };
+        assert!(joined(&first).contains("treatmentemergent"));
+        first.compounds = vec!["emergent".into()];
+        assert!(joined(&first).contains("treatment-emergent adverse"));
+    }
+
+    #[test]
+    fn fields_set_one_per_line_are_parted() {
+        assert!(opens_field("Klantnummer: 6669263"));
+        assert!(opens_field("Ust-IdNr.: DE123456789"));
+        assert!(opens_field("Liefer- bzw. Leistungsdatum: 13.02.2014"));
+        // A sentence carried onto the line, a reference's volume, an entry
+        // run on from a list of abbreviations, a web address, a time.
+        assert!(!opens_field("subgrouped by age: older (≥65 years)"));
+        assert!(!opens_field("35(December):686-694."));
+        assert!(!opens_field("Sedimentation rate; IL: interleukin"));
+        assert!(!opens_field("https://example.org/page"));
+        assert!(!opens_field("Doors open at 10:30 daily"));
+        let at = |t: &str, y: f64| l(t, 45.0, y, 8.0);
+        let fields = build(vec![
+            at("Factuurnummer: 993548900", 150.0),
+            at("Klantnummer: 6669263", 164.0),
+            at("Factuurdatum: 19 april 2014", 178.0),
+        ]);
+        let parts = split_fields(fields);
+        assert_eq!(parts.len(), 3);
+        assert!(parts.iter().all(|p| p.field));
+        assert_eq!(parts[1].text(), "Klantnummer: 6669263");
+        // A value wrapped onto a line of its own stays with its field.
+        let wrapped = build(vec![
+            at("Results: the mean score was", 150.0),
+            at("higher in the second group.", 164.0),
+            at("Conclusions: the method works.", 178.0),
+        ]);
+        assert_eq!(split_fields(wrapped).len(), 2);
+        // A line ending on a word its phrase runs on from parts nothing.
+        let open = build(vec![
+            at("Note: the values are given in the", 150.0),
+            at("Annex: Table 2 lists them.", 164.0),
+        ]);
+        assert_eq!(split_fields(open).len(), 1);
+    }
+
+    #[test]
+    fn short_lines_stacked_by_hand_keep_their_breaks() {
+        let at = |t: &str, y: f64| l(t, 46.0, y, 10.0);
+        let stacked = |lines: Vec<Line>| {
+            let edge = Edge::of(&lines, 10.0);
+            split_stacked_lines(build(lines), &edge).remove(0)
+        };
+        // An address.
+        let address = stacked(vec![
+            at("Pino Bluebird", 100.0),
+            at("Sessamestreet 32", 114.0),
+            at("1025 RX Amsterdam", 128.0),
+        ]);
+        assert!(address.stacked);
+        assert_eq!(
+            address.text(),
+            "Pino Bluebird\nSessamestreet 32\n1025 RX Amsterdam"
+        );
+        // A contact block: a telephone line on a lower-case label, an e-mail
+        // address, a web address ending its block on a slash.
+        let contact = stacked(vec![
+            at("Ecke 12", 100.0),
+            at("fon (555) 23 78 -0", 114.0),
+            at("info@localhost.local", 128.0),
+            at("http://localhost/", 142.0),
+        ]);
+        assert!(contact.stacked);
+        // Prose in a narrow measure runs on from line to line.
+        let prose = stacked(vec![
+            at("The board met in", 100.0),
+            at("March to review", 114.0),
+            at("the plan again", 128.0),
+        ]);
+        assert!(!prose.stacked);
+        // A web address broken at its slash runs on.
+        let link = stacked(vec![
+            at("http://dx.doi.org/10.1016/", 100.0),
+            at("S2214-109X(18)30387-5", 114.0),
+        ]);
+        assert!(!link.stacked);
+        assert!(phone_line("fon (555) 23 78 -0"));
+        assert!(!phone_line("of 1,234,567 units"));
     }
 
     #[test]
@@ -2961,6 +3478,9 @@ mod tests {
             bold: false,
             gap_above: None,
             marker: None,
+            marker_x: None,
+            stacked: false,
+            field: false,
         };
         assert_eq!(
             block("deliver it to 青松纸业有限公", "司.").text(),
@@ -4738,6 +5258,25 @@ mod tests {
             Some(&title),
             150.0
         ));
+    }
+
+    #[test]
+    fn a_currency_sign_set_apart_is_its_figures_not_a_marker() {
+        // `Totaalbedrag  €  22,50`: the sign in a column of its own, a
+        // little left of its figure, at the figure's size.
+        let mut euro = l("€", 396.6, 437.0, 8.0);
+        euro.bbox.x1 = 402.3;
+        let figure = l("22,50", 438.7, 437.0, 8.0);
+        assert!(!is_marker(&euro, None, Some(&figure), 396.6));
+        for sign in ["$", "£", "¥", "₹", "€ "] {
+            let mut s = l(sign, 396.6, 437.0, 8.0);
+            s.bbox.x1 = 402.3;
+            assert!(!is_marker(&s, None, Some(&figure), 396.6), "{sign}");
+        }
+        // A bullet in the same place still marks its item.
+        let mut bullet = l("\u{2022}", 396.6, 437.0, 8.0);
+        bullet.bbox.x1 = 402.3;
+        assert!(is_marker(&bullet, None, Some(&figure), 396.6));
     }
 
     #[test]

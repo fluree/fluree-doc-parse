@@ -27,6 +27,18 @@
         "type": "doco:SectionTitle",
         "text": "4, 5 Who is a client?"
       }
+    },
+    {
+      "id": "lettered-items-nested",
+      "found": "2026-11-25",
+      "issue": "#295: a regulation's lettered items, set under the text of the paragraph that introduces them, were siblings of it.",
+      "nested": {
+        "under": "(1) There must, so far as is reasonably practicable, be suitable and sufficient safe access and egress from",
+        "holds": [
+          "(a) every construction site to every other place provided for the use of any person whilst at work; and",
+          "(b) every place construction work is being carried out to every other place to which workers have access within a construction site."
+        ]
+      }
     }
   ]
 }

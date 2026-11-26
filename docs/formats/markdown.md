@@ -17,7 +17,7 @@ read without tooling, and the one an LLM consumes best.
 | `doco:Paragraph` | a paragraph, blank-line separated |
 | a [transcript](../inputs/transcripts.md) turn | `**Ada Park** (04:32): words`, the speaker in bold and the turn's start time |
 | an [email](../inputs/email.md) message's header | one header line to a line, with `---` above each quoted message |
-| `doco:List` / `ListItem` | `- ` items |
+| `doco:List` / `ListItem` | `- ` items; a nested list is indented to where its parent item's text starts |
 | `doco:Table` | a pipe table with a header separator row |
 | `doco:Figure` | a paragraph (an [anchor](../integration/anchors.md) token, where enabled) |
 

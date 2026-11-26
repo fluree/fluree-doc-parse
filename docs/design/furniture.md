@@ -31,6 +31,15 @@ across twenty pages is unambiguous.
 So furniture is only identifiable **in aggregate**, which is why detection
 takes the whole document rather than working page by page.
 
+One text may run at two places. A classification marking is set over each
+page and again at its foot (`TLP:CLEAR`, `OFFICIAL`, `UNCONTROLLED COPY WHEN
+PRINTED`). Its copies are read as one group per place, so the head's copies
+run as well as the foot's. Read as one group, only the copies near the
+group's middle place ran, and the head's were each page's first heading.
+This holds only where every place that runs lies in the head or foot band.
+A form's answers (`Yes`, `No`) and a table's labels also repeat at fixed
+places down the page, and they are its content.
+
 ## Short documents
 
 Repetition alone needs at least three pages, and three is too many for the
@@ -228,6 +237,26 @@ adding signals:
   set off to its right is no column the label sits in, nor is a header
   block's own line over the next (`INSTALLATION INSTRUCTIONS` over
   `INSTRUCTIONS D’INSTALLATION`), each a label standing alone.
+- **A chart's own text.** A report that gives each country a page of its own
+  draws the same chart on each, and the chart's legend stands at one place
+  page after page, as a running head does: `Power Industry`, `Buildings`,
+  `Transport` beside their colour patches, near the head of two hundred
+  pages. A line set in a drawing on most of its pages is the drawing's, and
+  repetition takes none of it:
+  - **A legend's entry**, with a swatch standing alone directly before it on
+    its line: a patch no larger than the entry's text is tall and no thinner
+    than a third of it, its middle on the line, within an em.
+  - **An axis's label** at a tick mark: a stroke no longer than an em, over
+    or under the label within its width, or beside it within its height,
+    within an em.
+
+  Running lines sit on drawn shapes too, and the cues leave them alone. A
+  band behind a running head, a logo beside a running title, and a box round
+  a page number are larger than the text. A box's edge before the number is
+  a stroke, not a patch. A logo drawn as letter shapes sets them abutting on
+  their line, and the last of them is no swatch (a maker's name drawn so,
+  before a submittal form's `SPECIFICATION SUBMITTAL`). A series' line drawn as its legend's sample,
+  wider than the text is tall, is not read as a swatch.
 - **A short form of a title that varies.** A spec sheet titles some pages
   `DISHWASHER – ELECTRIC` or `DISHWASHER – GAS` and others `DISHWASHER`.
   Taken as a running line, the short form was cut out of the long ones and

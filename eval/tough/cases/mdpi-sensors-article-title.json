@@ -17,6 +17,12 @@
         "type": "doco:SectionTitle",
         "text": "Background Subtraction Based on Three-Dimensional Discrete Wavelet Transform"
       }
+    },
+    {
+      "id": "byline-no-heading",
+      "found": "2026-11-25",
+      "issue": "#367: the authors' line, names with affiliation marks, was a bold heading.",
+      "no_section": "Guang Han, Jinkuan Wang"
     }
   ]
 }

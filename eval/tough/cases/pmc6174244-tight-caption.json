@@ -1,0 +1,19 @@
+{
+  "document": {
+    "file": "pmc6174244.pdf",
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC6174244/",
+    "sha256": "45250f31d287bbd7c36c5bb2b22ed346c479a01f0538476820a8fc66c557babf",
+    "about": "Frontiers in Psychology (2018) article on the Perceived Stress Questionnaire, PMC6174244. Its table captions are set in a small face with tight word spaces and no space characters, under body text spaced wider. The PDF is linked from the PMC article page; PMC refuses scripted downloads."
+  },
+  "notes": [
+    "2026-11-26 (#346): the caption's words ran together (`ModelfitandmeasurementinvariancetestsacrossgenderfortheNorwegian`): its word spaces, 0.28 em, fell under the threshold the column's body text set. A line that writes no spaces now spaces its words by its own gaps where they part into letters and words."
+  ],
+  "checks": [
+    {
+      "id": "caption-words-spaced",
+      "found": "2026-11-26",
+      "issue": "#346: Table 2's caption read `TABLE2 | ModelfitandmeasurementinvariancetestsacrossgenderfortheNorwegian`.",
+      "text": "Model fit and measurement invariance tests across gender for the Norwegian"
+    }
+  ]
+}
