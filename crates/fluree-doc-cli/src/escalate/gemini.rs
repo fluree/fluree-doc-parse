@@ -21,6 +21,13 @@ const TOKEN_TTL_SECS: u64 = 3600;
 /// dies in flight.
 const REFRESH_MARGIN_SECS: u64 = 60;
 
+/// Longest one request may take, its response read whole, before it is
+/// given up and made again ([`with_retries`]). ureq sets no bound of its own,
+/// so a connection the network left hanging waited for ever. The slowest
+/// readings measured took about half a minute; four times that leaves a
+/// slow reading its time and still bounds a hang.
+const REQUEST_TIMEOUT_SECS: u64 = 120;
+
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
@@ -71,7 +78,10 @@ impl Reader {
             account,
             project,
             model: model.to_string(),
-            agent: ureq::Agent::new_with_defaults(),
+            agent: ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)))
+                .build()
+                .into(),
             token: std::sync::Mutex::new(None),
         })
     }
@@ -236,10 +246,10 @@ fn with_retries<T>(
 /// Whether a failed request is worth making again. Rate limits and the
 /// transient 5xx family are what a batch meets from the service. So is a
 /// transport that fails under the request: a timeout or a dropped
-/// connection, which says nothing about the request. ureq sets no timeout of
-/// its own here, but reports a socket the network timed out as one
-/// (`timeout: global`), and a reading the model takes half a minute over
-/// meets it. Anything else is a request a retry will not fix.
+/// connection, which says nothing about the request. ureq reports a socket
+/// the network timed out as a timeout (`timeout: global`), as it does a
+/// request that outlasts [`REQUEST_TIMEOUT_SECS`].
+/// Anything else is a request a retry will not fix.
 fn retryable(e: &ureq::Error) -> bool {
     match e {
         ureq::Error::StatusCode(c) => matches!(c, 429 | 500 | 502 | 503 | 504),
