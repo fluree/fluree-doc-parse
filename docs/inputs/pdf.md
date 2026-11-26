@@ -662,7 +662,14 @@ from its text:
 - A box diagram, a flowchart's steps or a system's blocks, is three boxes
   or more, each holding a label, standing apart and joined by two
   connectors or more: a line or an arrow crossing the gap between two boxes
-  where they face each other. Its labels are the ones set in its boxes, with
+  where they face each other. A connector may also be curved, outlined as a
+  shape, stopped short by an arrowhead drawn apart, or run across between
+  boxes set apart both ways. Then it meets exactly two boxes and holds no
+  text. Between boxes side by side or stacked, it is thin across the gap and
+  runs through the middle of the facing sides. Between boxes set apart both
+  ways, it stays within the pair's reach. So a table's cell dividers and
+  stripes, and a chart's shapes running on past its labels, join nothing.
+  Its labels are the ones set in its boxes, with
   its banner and side tabs standing against it and a caption over or under
   it; a panel of text beside it stays the page's. A table is no diagram: a
   box holds a label, not a row of figures; a band as wide as the page is a
