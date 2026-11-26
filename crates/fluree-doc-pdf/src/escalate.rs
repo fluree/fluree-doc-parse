@@ -2036,6 +2036,7 @@ mod tests {
             first_glyph: 1500,
             whole: false,
             regions: vec![0],
+            ..Default::default()
         });
         let (jobs, _) = reasons_with_doubts(&read, &[]);
         assert!(jobs.is_empty(), "{jobs:?}");
