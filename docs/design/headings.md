@@ -100,9 +100,28 @@ Weight and size never make a heading of these:
   nothing else (`(a) (b)`, `Yes No`), and a line's caption between its
   letter and its number (`b Refunded 37b`).
 - **A sentence that refers elsewhere:** `For Paperwork Reduction Act
-  Notice, see your tax return instructions.`, a form's footer. A title
-  that mentions the instructions keeps it in brackets, `Other Information
-  (see instructions)`, and stays.
+  Notice, see your tax return instructions.`, a form's footer. So is an
+  instruction opening on `See` and what it sends the reader to: `See the
+  separate instructions.`, `See page 2`. A title that mentions the
+  instructions keeps it in brackets, `Other Information (see
+  instructions)`, and stays. `See also` heads further reading and stays.
+- **A form's number or edition:** `OMB No. 1545-0074`, `Cat. No. 11358Z`,
+  `Schedule D (Form 1040) 2013`, `Form 8949 (2025)`. A part the form names,
+  `Schedule K`, has no edition beside it and stays.
+- **A label in a form's header band**, the grid not read as a table: bold
+  at the body's size or smaller, with short labels or figures beside it
+  within a line above or below. It needs labels on both sides, three or
+  more in all, or five or more on one side for the last column's head.
+  Columns' heads stack over their notes and start at different heights:
+  `Adjustment, if any, to gain or loss` over `If you enter an amount in
+  column (g),` beside `(e)` and `(h)`. A statement's row label before its
+  figures is one too. Not a label:
+  - a heading with a paragraph, a long line or a list's item directly under
+    it, as a heading in one of a page's columns has, beside the other
+    columns' heads (`PVC and phthalates`, a spec sheet's `Performance`
+    over its bullets);
+  - a slide's card titles, which are set larger than their text;
+  - another column's bullets, which don't count as labels.
 - **A chart's axis title:** a line set at an angle to the page's text, up a
   plot's side (`Concentration of PFHpS, in ng/L`), or set directly under a
   row of three or more bare values that reaches across it, its scale (`I -

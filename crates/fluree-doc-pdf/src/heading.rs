@@ -1481,7 +1481,7 @@ pub fn detect_with_body(
                     && b.lines.len() == 1
                     && b.marker.is_none()
                     && heads_prose(blocks, block_idx, body)
-                    && !form_text(&text, blocks, block_idx)
+                    && !form_text(&text, blocks, block_idx, body)
                     && !not_a_typographic_heading(&text, blocks, block_idx, body)
                 {
                     acronyms.push((b.page, block_idx, text, style_of(b)));
@@ -1492,7 +1492,7 @@ pub fn detect_with_body(
             // form's keys, captions and labels are its text. Not part of
             // `title_like`, which also counts the bold lines that decide
             // whether bold is used for headings at all.
-            let form = ends_mid_phrase(&text) || form_text(&text, blocks, block_idx);
+            let form = ends_mid_phrase(&text) || form_text(&text, blocks, block_idx, body);
             // A numbered title occurs once in a document: sections are not
             // repeated. A numbered line that recurs is a code — `03 —
             // Partial/Moderate assistance`, an assessment form's answer,
@@ -1813,12 +1813,15 @@ fn not_a_typographic_heading(text: &str, page: &[Block], i: usize, body: f32) ->
 }
 
 /// A form's or a chart's text set like a heading: a grid's keys and answer
-/// heads, a line's caption, a footer that refers elsewhere, a label over
-/// its value; an axis's title, set up its side or under its scale.
-fn form_text(text: &str, page: &[Block], i: usize) -> bool {
+/// heads, a line's caption, a footer that refers elsewhere, a form's
+/// number, a label over its value or among its header's labels; an axis's
+/// title, set up its side or under its scale.
+fn form_text(text: &str, page: &[Block], i: usize, body: f32) -> bool {
     let t = text.trim();
     keys_or_answers(t)
         || refers_elsewhere(t)
+        || form_number(t)
+        || in_header_band(page, i, body)
         || line_caption(t)
         || label_over_value(page, i)
         || stacked_field(page, i)
@@ -1850,8 +1853,139 @@ fn keys_or_answers(t: &str) -> bool {
 /// section is titled with a cross-reference; a title that only mentions
 /// one keeps it in brackets, `Other Information (see instructions)`.
 fn refers_elsewhere(t: &str) -> bool {
-    t.to_lowercase().contains(", see ")
+    let lower = t.to_lowercase();
+    if lower.contains(", see ") {
+        return true;
+    }
+    // An instruction to look elsewhere, `See the separate instructions.`,
+    // `See page 2`. A section of further reading is `See also`.
+    let mut words = lower.split_whitespace();
+    words.next() == Some("see")
+        && words
+            .next()
+            .is_some_and(|w| REFERRED_TO.contains(&w.trim_matches(|c: char| !c.is_alphanumeric())))
 }
+
+/// What an instruction sends the reader to, after `See`.
+const REFERRED_TO: &[&str] = &[
+    "the",
+    "instructions",
+    "page",
+    "pages",
+    "note",
+    "notes",
+    "separate",
+    "attached",
+    "below",
+    "above",
+    "schedule",
+    "form",
+    "line",
+    "lines",
+    "part",
+    "item",
+    "back",
+    "reverse",
+];
+
+/// A form's number or edition, set in its head or foot: `OMB No.
+/// 1545-0112`, `Cat. No. 37768Z`, `Schedule D (Form 1040) 2017`,
+/// `Form 8949 (2025)`. A part a form names, `Schedule K`, has no edition
+/// beside it.
+fn form_number(t: &str) -> bool {
+    let lower = t.to_lowercase();
+    if lower.starts_with("omb no")
+        || lower.starts_with("cat. no")
+        || lower.starts_with("omb control")
+    {
+        return true;
+    }
+    // The form it belongs to, in brackets: `Schedule D (Form 1040) 2017`.
+    let in_brackets = lower
+        .split_once("(form ")
+        .is_some_and(|(_, rest)| rest.starts_with(|c: char| c.is_ascii_digit()));
+    // A form's number and its edition: `Form 8949 (2025)`, `Form 1040 (Rev. 1-2024)`.
+    let words: Vec<&str> = t.split_whitespace().collect();
+    let edition = words.len() >= 3
+        && words[0] == "Form"
+        && words[1].starts_with(|c: char| c.is_ascii_digit())
+        && words[2].starts_with('(')
+        && (words[2][1..].starts_with(|c: char| c.is_ascii_digit())
+            || words[2].starts_with("(Rev"));
+    in_brackets || edition
+}
+
+/// Most words in one of the labels of a form's header band.
+const MAX_BAND_WORDS: usize = 8;
+
+/// Fewest labels set beside a form's header label, within a line of it.
+const MIN_BAND_LABELS: usize = 3;
+
+/// A label in a form's header band, its grid not read as a table: set
+/// bold at the body's size or smaller, with three or more short labels or
+/// figures beside it, within a line above or below. Columns' heads stack
+/// over several lines and start at different heights, `Adjustment, if
+/// any, to gain or loss` over `If you enter an amount in column (g),`
+/// beside `(e)`, `(h)` and `Cost or other basis`; a statement's
+/// `Subtotals` leads its row of figures. A slide's card titles, side by
+/// side, are set larger than the text under them, and a heading in one of
+/// a page's columns heads the paragraph under it.
+fn in_header_band(page: &[Block], i: usize, body: f32) -> bool {
+    let b = &page[i];
+    if b.font_size > body * 1.05 || b.text().split_whitespace().count() > MAX_BAND_WORDS {
+        return false;
+    }
+    let h = b.bbox.height().max(1.0) / b.lines.len().max(1) as f64;
+    // A list's item, its bullet set apart or in its text.
+    let listed = |o: &Block| o.marker.is_some() || block::strip_leading_bullet(&o.text()).is_some();
+    // A heading over its text: a paragraph of two lines or more, a long
+    // line or a list's item, directly under it in its column (`PVC and
+    // phthalates` over its paragraph, beside the other columns' heads;
+    // `Performance` over its bullets). A header's label has the next label
+    // or the grid under it.
+    let over_text = page
+        .iter()
+        .enumerate()
+        .filter(|(k, o)| {
+            *k != i
+                && o.bbox.y0 >= b.bbox.y1 - h * 0.2
+                && o.bbox.y0 - b.bbox.y1 <= h * 2.0
+                && o.bbox.x1.min(b.bbox.x1) > o.bbox.x0.max(b.bbox.x0)
+        })
+        .min_by(|(_, x), (_, y)| x.bbox.y0.total_cmp(&y.bbox.y0))
+        .is_some_and(|(_, o)| {
+            o.lines.len() >= 2 || o.text().split_whitespace().count() > MAX_BAND_WORDS || listed(o)
+        });
+    if over_text {
+        return false;
+    }
+    let (mut left, mut right) = (0, 0);
+    for (k, o) in page.iter().enumerate() {
+        // A list's items are no form's labels: another column's bullets.
+        if k == i
+            || listed(o)
+            || o.text().split_whitespace().count() > MAX_BAND_WORDS
+            || o.bbox.y1 <= b.bbox.y0 - h
+            || o.bbox.y0 >= b.bbox.y1 + h
+        {
+            continue;
+        }
+        if o.bbox.x1 <= b.bbox.x0 {
+            left += 1;
+        } else if o.bbox.x0 >= b.bbox.x1 {
+            right += 1;
+        }
+    }
+    // A band runs across the grid, on both sides of a label within it. At
+    // its edge, the last column's head has the band all on one side; a
+    // stamp or a sidebar beside a title has a line or three.
+    (left > 0 && right > 0 && left + right >= MIN_BAND_LABELS)
+        || left.max(right) >= MIN_EDGE_BAND_LABELS
+}
+
+/// Fewest labels beside a header label on one side alone: the band's
+/// edge column's head.
+const MIN_EDGE_BAND_LABELS: usize = 5;
 
 /// A form's line caption with its line's letter before it and its number
 /// after it: `b Refunded 37b`.
@@ -3059,6 +3193,67 @@ mod tests {
             ),
             "{hs:?}"
         );
+    }
+
+    #[test]
+    fn a_forms_numbers_instructions_and_header_labels_are_no_headings() {
+        for t in [
+            "OMB No. 1545-0074",
+            "Cat. No. 12345A",
+            "Schedule B (Form 1040) 2024",
+            "Form 2210 (2024)",
+            "Form 2210 (Rev. 1-2024)",
+        ] {
+            assert!(form_number(t), "{t}");
+        }
+        for t in ["Schedule K", "Form 1099-B", "Formation of the Committee"] {
+            assert!(!form_number(t), "{t}");
+        }
+        for t in [
+            "See the separate instructions.",
+            "See page 4",
+            "See instructions",
+        ] {
+            assert!(refers_elsewhere(t), "{t}");
+        }
+        for t in ["See also", "Seeing the Forest"] {
+            assert!(!refers_elsewhere(t), "{t}");
+        }
+        // A form's header: column heads stacked over their notes, keys and
+        // short labels around them, all at the body's size.
+        let cell = |t: &str, x0: f64, y0: f64, bold: bool| {
+            let mut b = at(t, 8.0, y0, bold);
+            b.bbox.x0 = x0;
+            b.bbox.x1 = x0 + 6.0 * t.len() as f64;
+            b
+        };
+        let page = vec![
+            cell("Fee or refund, if any", 400.0, 300.0, true),
+            cell("(c)", 360.0, 306.0, false),
+            cell("(f)", 560.0, 306.0, false),
+            cell("Cost", 300.0, 309.0, false),
+            cell("Enter a code in column (g).", 400.0, 310.0, false),
+        ];
+        assert!(in_header_band(&page, 0, 8.0));
+        // Over its paragraph, beside other columns' heads: a heading.
+        let mut para = blk(
+            "A paragraph of the column runs over two lines here.",
+            8.0,
+            2,
+        );
+        para.bbox = BBox {
+            x0: 400.0,
+            y0: 311.0,
+            x1: 520.0,
+            y1: 327.0,
+        };
+        let mut page2 = page.clone();
+        page2[4] = para;
+        assert!(!in_header_band(&page2, 0, 8.0));
+        // Set larger than the text, as a slide's card titles are: no label.
+        let mut big = page.clone();
+        big[0].font_size = 14.0;
+        assert!(!in_header_band(&big, 0, 8.0));
     }
 
     #[test]
