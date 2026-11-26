@@ -274,6 +274,47 @@ large, a long line must also be shaped as a title. These are not:
 - a formula holding `=`;
 - a line that opens with a bullet.
 
+## Levels
+
+Levels are set last, once every pass that reads a heading as text has run.
+Only the headings that stand are levelled, in reading order, and each one is
+set against the headings open above it:
+
+- **An outline entry** keeps its depth, the author's. The depth is counted
+  from the outline's shallowest one that a printed heading takes: an outline
+  that sets a paper's title over its sections has its sections at its second
+  depth, and the title is read as the title.
+- **A numbered heading** is a sibling of the nearest open heading numbered the
+  same way at its depth or deeper, and a child of one a part shorter: `2.1`
+  under `2`, and `3` beside `2.4`'s `2`. The same way means parts of the same
+  kinds, figures, numerals or letters. A bookmarked heading counts by its
+  number too.
+- **Any other heading**, and a numbered one with no heading numbered its way
+  open, is a child of the nearest open heading set stronger than it and a
+  sibling of the nearest set alike. Stronger is the order above: size, then
+  weight, case, slant and face.
+- **A bookmarked heading** is closed by no heading set stronger, only by
+  another bookmark, by its number or by a heading set alike. The outline's
+  span is the author's: an agreement sets its bookmarked sections in 8pt
+  small capitals over 10pt bold clauses.
+- **The document's title** is level 1 and heads no section: the sections
+  start at level 1 beside it. A Word document's title is held apart from its
+  sections, over its `Heading 1`s, and most outlines set a paper's sections
+  at their first depth.
+
+So a 10-K's notes, numbered afresh from `1.`, sit under its `Notes to
+consolidated financial statements`, and that under `Item 8`; a Beige Book
+district's topics sit one level under its `Summary of Economic Activity`.
+Before, the order of styles was itself the levels: the fifth style down was
+h5 wherever it stood, styles past the fifth all fell to h6, and a style a
+later pass read as text still held its level. A W-9's `Line 1` was h5
+directly under `Specific Instructions` at h1, and a 10-K's first note was h1
+above its Item at h2.
+
+Levels run as deep as the headings nest, to six, however many styles the
+document sets them in. A level the author's outline or numbering skips is
+kept: `8.` over `8.2.4`, where no `8.2` is printed as a heading.
+
 ## The body size
 
 "Larger than body" is measured against one body size per document: the size
