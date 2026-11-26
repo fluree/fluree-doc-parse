@@ -5,6 +5,7 @@ fluree-doc-cli          the fdoc binary
       │
       ├── fluree-doc-pdf      PDF: extraction, layout, routing, arbitration
       │      └── fluree-doc-vision  reading pixels: the OCR word format
+      ├── fluree-doc-image    bare images: decoded upright, read by OCR (uses the PDF layout)
       ├── fluree-doc-markdown  Markdown reader
       ├── fluree-doc-text      plain-text reader
       ├── fluree-doc-html      HTML reader
@@ -38,6 +39,7 @@ a PDF engine.**
 | `fluree-doc-transcript` | `parse(&[u8]) -> Result<Vec<Element>, TranscriptError>`, WebVTT or SubRip; `Format::sniff` |
 | `fluree-doc-email` | `parse(&[u8]) -> Result<Email, EmailError>`, `.eml` or `.msg`: elements, document info, attachments; `Format::sniff` |
 | `fluree-doc-pdf` | extraction, the layout pipeline, the router, the arbiter |
+| `fluree-doc-image` | `decode` (PNG, JPEG, TIFF, upright by EXIF, at most 128 million pixels), `header` and `upright_size` (size upright, one-bit, page count: header only), `document`, `read` and `elements`: a bare image read by an `OcrEngine` and laid out as a scanned page |
 | `fluree-doc-vision` | `WordReading`, `OcrWord`, `Coords`: the words an OCR engine read in one image, and the `--ocr-words` sidecar format (`from_json`, `to_json`); `OcrEngine` and `Pixels`, the engine interface. Feature `oar`: `oar::OarEngine` (PP-OCRv6 through oar-ocr, ONNX Runtime loaded at run time) and `assets`, the checked assets directory |
 | `fluree-doc-cli` | argument parsing and the commands |
 

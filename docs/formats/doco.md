@@ -187,8 +187,20 @@ saying 99% of it was missing.
 `reason` is the router's verdict: `Scanned`, `NearBlank` or `BrokenText`;
 or `OcrSparse`, a page an OCR reading (`--ocr-words`) read whole that still
 holds next to no text — an engine that gave a few words for a scan it could
-not read.
-Escalating the page clears the entry, because then something did read it.
+not read. Escalating the page clears the entry, because then something did
+read it.
+
+Or it is `LaterPage`: a page after the first of a multi-page image file (a
+TIFF), which nothing reads. Its `pageIndex` is the page's place in the input
+file, 0-based like every other, and by design it has **no entry in
+`doc:pages`**: that list holds the pages read, and this one was not, so
+nothing was measured to put there. A consumer joining `doc:unreadPages` to
+`doc:pages` on `pageIndex` finds no match for it, and should not expect
+one. A TIFF of many pages lists each; the warning `fdoc` prints gives them
+as a range (`pages 2–10050`).
+
+A consumer that validates `reason` against a fixed set should accept all
+six.
 
 Deliberately not an element. A marker element would have to carry text to be
 visible, and inventing text puts characters into the projection that every

@@ -319,6 +319,17 @@ impl CropReason {
     }
 }
 
+impl From<crate::route::Reason> for CropReason {
+    /// The router's verdict on a page read whole.
+    fn from(r: crate::route::Reason) -> Self {
+        match r {
+            crate::route::Reason::Scanned => CropReason::Scanned,
+            crate::route::Reason::NearBlank => CropReason::NearBlank,
+            crate::route::Reason::BrokenText => CropReason::BrokenText,
+        }
+    }
+}
+
 /// Why each whole page in a job list was asked for, by page index. Region
 /// crops carry theirs in their tag ([`CropReason::of_region_tag`]).
 pub type PageReasons = std::collections::BTreeMap<usize, CropReason>;
@@ -563,7 +574,7 @@ fn select(
     hints: &CropHints,
     at_anchors: bool,
 ) -> (CropJobs, PageReasons) {
-    use crate::route::{Reason, Route};
+    use crate::route::Route;
     let mut jobs: CropJobs = Vec::new();
     let mut reasons = PageReasons::new();
     // The region anchors by page, gathered in one pass over the elements.
@@ -598,14 +609,7 @@ fn select(
         match crate::route::decide(p).0 {
             Route::Vlm(r) => {
                 jobs.push((p.index, None));
-                reasons.insert(
-                    p.index,
-                    match r {
-                        Reason::Scanned => CropReason::Scanned,
-                        Reason::NearBlank => CropReason::NearBlank,
-                        Reason::BrokenText => CropReason::BrokenText,
-                    },
-                );
+                reasons.insert(p.index, CropReason::from(r));
             }
             route if at_anchors => match anchored.remove(&p.index) {
                 // What an OCR reading already read is not asked for again.

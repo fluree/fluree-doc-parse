@@ -1200,6 +1200,10 @@ pub(crate) fn render_routed(
     let (mut n_pages, mut n_crops) = (0usize, 0usize);
     let tiers = crate::commands::common::TierConfig::configured();
     let layout = tiers.layout_boxes.as_deref();
+    // Crops are named by stem: a second input of a stem already cropped
+    // (`report.pdf` and `report.png`) would overwrite the first's crops and
+    // take their readings.
+    let mut stems = std::collections::HashSet::new();
     // The limit `convert --ocr` reads under, from the same config.
     let max_ocr_crops = match ocr_regions.then(crate::config::load) {
         None => 0,
@@ -1216,6 +1220,31 @@ pub(crate) fn render_routed(
     let mut eopts = fluree_doc_pdf::ExtractOptions::default();
     eopts.probe_small_images = ocr_regions;
     for f in &files {
+        let stem = crate::commands::common::stem_of(f);
+        if !stems.insert(stem.to_string()) {
+            eprintln!(
+                "warning: {}: another input is named {stem}, and its crops would share names with this one's: skipped",
+                f.display()
+            );
+            continue;
+        }
+        // A bare image is one page of pixels: its crop is the image itself,
+        // decoded upright, at its own resolution. Its first bytes say so;
+        // nothing else is read twice.
+        if is_image_file(f) {
+            let stem = crate::commands::common::stem_of(f);
+            match std::fs::read(f)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| image_crop(&bytes, stem, outdir))
+            {
+                Ok(rec) => {
+                    n_pages += 1;
+                    writeln!(manifest, "{rec}").unwrap();
+                }
+                Err(e) => eprintln!("warning: {}: {e}", f.display()),
+            }
+            continue;
+        }
         let Ok(data) = std::fs::read(f) else { continue };
         let doc = match fluree_doc_pdf::extract_bytes_with(data.clone(), &eopts) {
             Ok(d) => d,
@@ -1492,6 +1521,67 @@ pub(crate) fn add_ocr_jobs(
     }
     jobs.extend(doubted);
     small
+}
+
+/// Whether a file starts like a PNG, JPEG or TIFF, by its first bytes.
+fn is_image_file(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    fluree_doc_pdf::image::Format::sniff(&head[..n]).is_some()
+}
+
+/// A bare image's one crop: the image decoded upright, over white where it
+/// is transparent (as the renderer draws a page), and written as PNG, with
+/// its manifest record. Its scale is 1: the page's units are its pixels.
+fn image_crop(bytes: &[u8], stem: &str, outdir: &Path) -> Result<serde_json::Value, String> {
+    let mut image = fluree_doc_image::decode(bytes)?;
+    // Written in the layout it was decoded in. A transparent screenshot is
+    // black ink on nothing: flattened by a reader that drops the alpha
+    // channel, it would be black on black, so it is laid on white here.
+    let color = match image.pixels.layout {
+        fluree_doc_vision::Layout::Luma8 => png::ColorType::Grayscale,
+        fluree_doc_vision::Layout::Rgb8 => png::ColorType::Rgb,
+        fluree_doc_vision::Layout::Rgba8 => {
+            for p in image.pixels.data.chunks_exact_mut(4) {
+                let a = u16::from(p[3]);
+                for c in &mut p[..3] {
+                    *c = ((u16::from(*c) * a + 255 * (255 - a)) / 255) as u8;
+                }
+                p[3] = 255;
+            }
+            png::ColorType::Rgba
+        }
+    };
+    let doc = fluree_doc_image::document(&image);
+    let reason = match fluree_doc_pdf::route::decide(&doc.pages[0]).0 {
+        fluree_doc_pdf::route::Route::Vlm(r) => fluree_doc_pdf::escalate::CropReason::from(r),
+        _ => fluree_doc_pdf::escalate::CropReason::Scanned,
+    };
+    if image.more_pages {
+        eprintln!("warning: {stem}: only the first page of a multi-page image is cropped");
+    }
+    if image.truncated {
+        eprintln!("warning: {stem}: the file ends before its image does; part of it may be blank");
+    }
+    let name = format!("{stem}_p0_full.png");
+    let file = std::fs::File::create(outdir.join(&name)).map_err(|e| e.to_string())?;
+    let mut enc = png::Encoder::new(
+        std::io::BufWriter::new(file),
+        image.pixels.width,
+        image.pixels.height,
+    );
+    enc.set_color(color);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header()
+        .and_then(|mut w| w.write_image_data(&image.pixels.data))
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "doc": stem, "page": 0, "kind": "page", "png": name,
+        "reason": reason.as_str(), "scale": 1.0,
+    }))
 }
 
 /// Render the crops a region manifest asks for, through

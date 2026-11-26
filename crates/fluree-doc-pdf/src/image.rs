@@ -13,10 +13,10 @@
 //! configured the honest answer is no content, and the caller is told so
 //! rather than handed an empty document.
 //!
-//! Dimensions are read from the file header rather than by decoding. A page
-//! size is four numbers, a decoder is a large dependency and a large attack
-//! surface, and nothing here needs the pixels — the reader gets the bytes
-//! exactly as they arrived.
+//! The page's size comes from the caller: `fluree_doc_image::header` reads
+//! it upright, by the image's EXIF orientation, without decoding the pixels.
+//! [`dimensions`] reads the size as stored, by hand, for a header the
+//! decoder will not take. The reader gets the bytes exactly as they arrived.
 
 use crate::extract::{Document, ImagePlacement, Page};
 use crate::geom::BBox;
@@ -49,7 +49,12 @@ impl Format {
         if bytes.starts_with(&[0xFF, 0xD8]) {
             return Some(Format::Jpeg);
         }
-        if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        // Classic TIFF (version 42) and BigTIFF (43).
+        if bytes.starts_with(b"II*\0")
+            || bytes.starts_with(b"MM\0*")
+            || bytes.starts_with(b"II+\0")
+            || bytes.starts_with(b"MM\0+")
+        {
             return Some(Format::Tiff);
         }
         None
@@ -59,7 +64,8 @@ impl Format {
 /// Extensions that name a raster image, for a caller routing by filename.
 pub const EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff"];
 
-/// The image's pixel size, read from its header.
+/// The image's pixel size as stored, read from its header by hand: a phone
+/// photo's EXIF orientation is not applied, nor a BigTIFF's size read.
 pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     match Format::sniff(bytes)? {
         Format::Png => png_size(bytes),
@@ -116,8 +122,14 @@ fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
 const MAX_JPEG_SEGMENTS: usize = 512;
 const MAX_TIFF_ENTRIES: usize = 512;
 
-/// Read `ImageWidth` (256) and `ImageLength` (257) from the first IFD.
+/// Read `ImageWidth` (256) and `ImageLength` (257) from the first IFD of a
+/// classic TIFF. A BigTIFF's layout is another (8-byte offsets): none.
 fn tiff_size(b: &[u8]) -> Option<(u32, u32)> {
+    if b.get(2..4)
+        .is_some_and(|v| v == [0x2B, 0x00] || v == [0x00, 0x2B])
+    {
+        return None;
+    }
     let little = b.starts_with(b"II*\0");
     let u16at = |o: usize| -> Option<u16> {
         let s = b.get(o..o + 2)?;
@@ -167,7 +179,7 @@ fn be32(b: &[u8]) -> u32 {
     u32::from_be_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// Build the one-page document an image stands for.
+/// The one-page document an image `width` × `height` pixels stands for.
 ///
 /// The page carries the image as its only content and no glyphs, which is
 /// what makes [`crate::route::decide`] return `Scanned` — the same verdict a
@@ -178,28 +190,31 @@ fn be32(b: &[u8]) -> u32 {
 /// choice: a bare image declares no physical size, and inventing one from an
 /// assumed DPI would put a wrong number in `doc:pages` for every consumer
 /// that scales by it.
-pub fn as_document(bytes: &[u8]) -> Option<Document> {
-    let (w, h) = dimensions(bytes)?;
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let (width, height) = (f64::from(w), f64::from(h));
+///
+/// Sized as the caller says: upright, by its EXIF orientation, is the size a
+/// reader sees, which `fluree_doc_image::header` gives without decoding the
+/// pixels ([`dimensions`], the size as stored, does not). `bitonal` says the
+/// image is one bit deep.
+pub fn page_of(width: u32, height: u32, bitonal: bool) -> Document {
+    let grid = (width, height);
+    let (width, height) = (f64::from(width), f64::from(height));
     let bbox = BBox {
         x0: 0.0,
         y0: 0.0,
         x1: width,
         y1: height,
     };
-    Some(Document {
+    Document {
         pages: vec![Page {
             index: 0,
             glyphs: Vec::new(),
             images: vec![ImagePlacement {
                 bbox,
                 texty: true,
-                ppi: None,
-                bitonal: false,
-                grid: (w, h),
+                // One pixel per unit: 72 per inch of the page's units.
+                ppi: Some(72.0),
+                bitonal,
+                grid,
             }],
             rules: Vec::new(),
             fills: Vec::new(),
@@ -211,7 +226,7 @@ pub fn as_document(bytes: &[u8]) -> Option<Document> {
             rotation: 0,
             ocr: None,
         }],
-    })
+    }
 }
 
 #[cfg(test)]
@@ -293,6 +308,13 @@ mod tests {
         pad.extend(std::iter::repeat_n(0xFFu8, 4096));
         assert_eq!(jpeg_size(&pad), None);
         assert_eq!(dimensions(b"II*\0"), None);
+        // A BigTIFF's first directory is laid out otherwise: no size read.
+        let mut big = b"II+\0".to_vec();
+        big.extend(8u16.to_le_bytes());
+        big.extend(0u16.to_le_bytes());
+        big.extend(16u64.to_le_bytes());
+        big.extend([0u8; 64]);
+        assert_eq!(dimensions(&big), None);
     }
 
     #[test]
@@ -304,7 +326,7 @@ mod tests {
 
     #[test]
     fn an_image_becomes_one_page_of_pixels_with_no_glyphs() {
-        let doc = as_document(&png(1224, 1584)).expect("document");
+        let doc = page_of(1224, 1584, false);
         assert_eq!(doc.pages.len(), 1);
         let p = &doc.pages[0];
         assert!(p.glyphs.is_empty());
@@ -316,16 +338,10 @@ mod tests {
     #[test]
     fn a_page_of_pixels_routes_to_a_full_reading() {
         // The same verdict a scanned PDF page gets, reached the same way.
-        let doc = as_document(&png(1224, 1584)).unwrap();
+        let doc = page_of(1224, 1584, false);
         assert!(matches!(
             crate::route::decide(&doc.pages[0]).0,
             crate::route::Route::Vlm(_)
         ));
-    }
-
-    #[test]
-    fn a_zero_sized_image_is_not_a_page() {
-        assert!(as_document(&png(0, 100)).is_none());
-        assert!(as_document(b"not an image").is_none());
     }
 }

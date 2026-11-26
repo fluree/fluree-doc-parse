@@ -22,7 +22,7 @@
 //! **Supported.** These follow semver and are what a consumer should build on:
 //!
 //! - [`extract_file`] / [`extract_bytes`] → [`Document`]
-//! - [`image::as_document`] — a bare raster image as a one-page document
+//! - [`image::page_of`] — a bare raster image as a one-page document
 //! - [`document::analyze_with`] → `Analysis`, plus [`document::to_markdown`]
 //!   and [`document::to_xhtml`]
 //! - [`doco::to_doco`] / [`doco::to_text`] and [`doco::DocoOptions`]

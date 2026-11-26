@@ -115,7 +115,11 @@ page, grids and all.
 **Filename:** `{stem}_p{page}_full.json` for a whole page, `{stem}_p{page}_r{i}.json`
 for routed region *i* — the names of the crops `fdoc dev render-routed`
 writes, with `.json` for `.png`. Other tags are ignored: a table crop is a
-question about structure, and an OCR engine reads text.
+question about structure, and an OCR engine reads text. A bare image also
+takes `{stem}.json`, the name `fdoc ocr` gives the words of an image file;
+of the two, it reads the one sized as it is. Readings are looked up by stem,
+so two inputs of one stem in a batch (`report.pdf` and `report.png`) are
+warned about, and `render-routed` crops only the first.
 
 A page's regions are numbered once glyphs drawn twice at one spot (faux bold)
 count once and a watermark laid over the text is taken out, as the analysis
@@ -160,7 +164,9 @@ what `render-routed` draws. Any resolution works: `width` and `height` scale
 the reading onto the crop, so an engine may read the same crop rendered
 finer, as `render-routed --stored-resolution` renders it. The image embedded
 in the page is not that crop: it may cover only part of the page, and a
-region crop includes its margin. On a page turned to read upright
+region crop includes its margin. For a bare image (PNG, JPEG, TIFF) the page
+is the image, so its `full` crop is the image itself, turned upright by its
+EXIF orientation, one pixel per unit. On a page turned to read upright
 (`/Rotate`, or text drawn sideways), a region crop is cut where the region
 shows on the page as displayed, which is where this mapping places it.
 

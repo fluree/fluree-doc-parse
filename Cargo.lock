@@ -934,6 +934,7 @@ dependencies = [
  "fluree-doc-docx",
  "fluree-doc-email",
  "fluree-doc-html",
+ "fluree-doc-image",
  "fluree-doc-markdown",
  "fluree-doc-model",
  "fluree-doc-pdf",
@@ -944,11 +945,13 @@ dependencies = [
  "fluree-doc-xlsx",
  "hayro",
  "hayro-syntax",
+ "image",
  "png 0.17.16",
  "rsa",
  "serde",
  "serde_json",
  "sha2",
+ "tiff",
  "toml",
  "toml_edit",
  "ureq",
@@ -982,6 +985,18 @@ dependencies = [
  "fluree-doc-model",
  "html5ever",
  "markup5ever_rcdom",
+]
+
+[[package]]
+name = "fluree-doc-image"
+version = "0.1.0"
+dependencies = [
+ "fluree-doc-model",
+ "fluree-doc-pdf",
+ "fluree-doc-vision",
+ "image",
+ "png 0.17.16",
+ "tiff",
 ]
 
 [[package]]

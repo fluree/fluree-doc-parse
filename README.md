@@ -160,6 +160,7 @@ Full documentation is in [`docs/`](docs/README.md) — an mdBook, so
 - `crates/fluree-doc-xlsx` — XLSX (OOXML) reader
 - `crates/fluree-doc-transcript` — WebVTT and SubRip transcript reader
 - `crates/fluree-doc-vision` — reading pixels: the OCR word format shared by the readers of images
+- `crates/fluree-doc-image` — bare images (PNG, JPEG, TIFF) read by OCR as one-page documents
 - `crates/fluree-doc-email` — email reader (`.eml`, `.msg`)
 - `crates/fluree-doc-pdf` — extraction, layout, routing, arbitration
 - `crates/fluree-doc-cli` — the `fdoc` binary
