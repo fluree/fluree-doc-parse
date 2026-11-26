@@ -737,7 +737,8 @@ fn split_at_gutters(group: Vec<Line>, h: f64, depth: usize, own: bool) -> Vec<(V
         .enumerate()
         .filter(|(i, l)| wide(l) && (*i == 0 || !wide(&group[i - 1])))
         .count();
-    let parts = lines_across <= allowed || (runs_across <= allowed && lines_across * 2 < group.len());
+    let parts =
+        lines_across <= allowed || (runs_across <= allowed && lines_across * 2 < group.len());
     if lines_across == 0 || !parts {
         return vec![(group, own)];
     }
@@ -1881,7 +1882,10 @@ mod tests {
                     && g.lines.iter().any(|l| l.text == "and its standby period.")
             }),
             "{:?}",
-            groups.iter().map(|g| texts(std::slice::from_ref(g))).collect::<Vec<_>>()
+            groups
+                .iter()
+                .map(|g| texts(std::slice::from_ref(g)))
+                .collect::<Vec<_>>()
         );
     }
 
